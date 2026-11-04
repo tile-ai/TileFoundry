@@ -276,7 +276,7 @@ def flatten_outputs(x, path: str = "output") -> list[tuple[str, torch.Tensor]]:
                 f"check: {path} is more than one program's data; take one program's "
                 "piece with local(placement) before comparing it against a reference"
             )
-        return flatten_outputs(x.tensor if x.packed else x.tensor[0][1], path)
+        return flatten_outputs(x.local(x.placements[0]) if x.placements else x.tensor, path)
     if isinstance(x, torch.Tensor):
         return [(path, x)]
     if isinstance(x, tuple):

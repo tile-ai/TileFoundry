@@ -173,6 +173,24 @@ def shard_layout_of(layout: object) -> "ShardLayout | None":
     return None
 
 
+def partial_reductions_by_axis(
+    layout: object,
+) -> tuple[str | None, ...]:
+    """Return each mesh axis's carried Partial reduction, if any.
+
+    The tuple index is the mesh-axis index in ``ShardLayout.attrs``. A
+    ``None`` entry denotes an attr that is not a ``Partial``; a non-sharded
+    layout returns an empty tuple.
+    """
+    layout = shard_layout_of(layout)
+    if layout is None:
+        return ()
+    return tuple(
+        attr.reduction if isinstance(attr, Partial) else None
+        for attr in layout.attrs
+    )
+
+
 def shard_layout_local_shape(sl: "ShardLayout", *, require_static: bool = True) -> tuple:
     """Derive one shard's local shape from its global layout.
 
@@ -386,6 +404,7 @@ def logical_layout_and_offset(shard: ShardLayout, tensor_shape: tuple, ids: tupl
 __all__ = [
     "local_layout",
     "local_layout_and_offset",
+    "partial_reductions_by_axis",
     "logical_layout_and_offset",
     "program_coordinates",
     "ShardAttr",

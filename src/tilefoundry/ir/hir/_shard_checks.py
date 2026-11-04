@@ -13,9 +13,9 @@ from tilefoundry.ir.types.shard_layout import (
     Dynamic,
     Partial,
     ShardLayout,
+    partial_reductions_by_axis,
     shard_layout_of,
 )
-from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 def reject_partials(ctx, call, arg_name, layout, commutes_with=frozenset()):

@@ -295,13 +295,6 @@ it is held, never off its data:
   op's axis then indexes that reshaped logical shape. `Reshard` only
   changes distribution / layout and never changes which values an op
   reduces or indexes.
-- `as_layout_view(value: TensorValue) -> torch.Tensor` reshapes `data`
-  from its logical shape to the element organisation of
-  `type.layout.shape` (for a `ShardLayout`, its `layout.shape`) under
-  default-contiguous ordering; `from_layout_view(data, type)` is the
-  inverse. These are provided for an op explicitly defined to compute in
-  the layout domain; no op in the current set is layout-domain, so none
-  of them call these helpers.
 - `Reshard` ([hir §1.3](./hir.md#13-op)) only retypes a packed value. A
   scattered one is gathered by the meaning of its type -- `Split` pieces side
   by side, any `Broadcast` piece, `Partial` pieces combined by their

@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 
 from tilefoundry.core import ShardTensor
 from tilefoundry.ir.types import DType, TensorType, TupleType
-from tilefoundry.ir.types.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard_layout import partial_reductions_by_axis
 from tilefoundry.utils.lazy import torch
 
 
@@ -33,6 +33,15 @@ class TensorValue(Value):
         if not self.tensor.packed:
             raise EvalError("value differs per unit, so it has no single tensor")
         return self.tensor.tensor
+
+
+def refuse_reduced_partial(tensor: ShardTensor) -> None:
+    """A packed Partial holds its reduced value, so the part each unit holds is gone."""
+    if tensor.packed and any(partial_reductions_by_axis(tensor.type.layout)):
+        raise EvalError(
+            "a Partial value is held reduced, so the part each unit holds is gone; "
+            "reshard it before it meets a value that differs per unit"
+        )
 
 
 @dataclass(frozen=True)
@@ -87,56 +96,3 @@ def from_torch_dtype(dtype: torch.dtype) -> DType:
 def tensor_type_of(data: torch.Tensor, *, like: TensorType) -> TensorType:
     """Describe a concrete tensor using the declaration's non-shape fields."""
     return replace(like, shape=tuple(data.shape), dtype=from_torch_dtype(data.dtype))
-
-
-def _flatten_ints(shape) -> tuple[int, ...]:
-    """Flatten a (possibly nested) IntTuple of static dims into plain ints."""
-    out: list[int] = []
-    for d in shape:
-        if isinstance(d, (tuple, list)):
-            out.extend(_flatten_ints(d))
-        else:
-            out.append(int(d))
-    return tuple(out)
-
-
-def _layout_shape(type) -> tuple[int, ...] | None:
-    """Layout shape.
-
-    The element organisation of ``type.layout`` as a flat int tuple, or
-    ``None`` when its shape is not statically projectable.
-    """
-    layout = type.layout
-    base = layout.layout if isinstance(layout, ShardLayout) else layout
-    shape = base.shape
-    try:
-        return _flatten_ints(shape)
-    except (TypeError, ValueError):
-        return None
-
-
-def as_layout_view(value: TensorValue) -> torch.Tensor:
-    """Project ``value.data`` from its logical shape to the layout-domain element organisation.
-
-    Project ``value.data`` from its logical shape to the layout-domain
-    element organisation. Returns ``data`` unchanged when there is no layout
-    or the element count does not match.
-    """
-    shape = _layout_shape(value.type)
-    if shape is None:
-        return value.data
-    numel = 1
-    for d in shape:
-        numel *= d
-    if value.data.numel() != numel:
-        return value.data
-    return value.data.reshape(shape)
-
-
-def from_layout_view(data: torch.Tensor, type: TensorType) -> torch.Tensor:
-    """Inverse of :func:`as_layout_view`.
-
-    Inverse of :func:`as_layout_view`: reshape a layout-domain tensor back
-    to the logical shape of ``type``.
-    """
-    return data.reshape(tuple(int(d) for d in type.shape))

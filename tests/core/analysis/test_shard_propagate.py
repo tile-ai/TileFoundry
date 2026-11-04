@@ -22,13 +22,10 @@ from tilefoundry.ir.types import (
     make_shard_tensor_type,
     make_tensor_type,
 )
-from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split
+from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split, partial_reductions_by_axis
 from tilefoundry.utils.isl_utils import as_multi_aff
 from tilefoundry.visitor_registry.access_relation import AccessRelation
-from tilefoundry.visitor_registry.shard_propagate import (
-    derive_output_shard_layout,
-    partial_reductions_by_axis,
-)
+from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 _GPU = Mesh((Topology("gpu", 8),), Layout((8,), (1,)), names=("g",))
 

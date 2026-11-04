@@ -42,11 +42,13 @@ def _device_of(values) -> str | None:
     """
     seen: dict[str, int] = {}
     for index, value in enumerate(values):
-        if isinstance(value, ShardTensor):
-            value = value.tensor if value.packed else value.tensor[0][1]
-        device = getattr(value, "device", None)
-        if device is not None:
-            seen.setdefault(str(device), index)
+        held = (
+            (value.tensor,) if value.packed else tuple(piece for _, piece in value.tensor)
+        ) if isinstance(value, ShardTensor) else (value,)
+        for data in held:
+            device = getattr(data, "device", None)
+            if device is not None:
+                seen.setdefault(str(device), index)
     if len(seen) > 1:
         spread = ", ".join(f"input {index} on {device}" for device, index in sorted(seen.items()))
         raise EvalError(

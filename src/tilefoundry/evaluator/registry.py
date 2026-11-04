@@ -7,9 +7,8 @@ from dataclasses import replace
 from typing import Callable
 
 from tilefoundry.core import ShardTensor, local_type
-from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue
+from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue, refuse_reduced_partial
 from tilefoundry.ir.types import TupleType
-from tilefoundry.ir.types.shard_layout import Partial, shard_layout_of
 from tilefoundry.visitor_registry.registries import DispatchRegistry
 
 eval_registry: DispatchRegistry = DispatchRegistry("eval")
@@ -79,27 +78,18 @@ def _unit_value(value, placement):
         return TupleValue(tuple(_unit_value(element, placement) for element in value.elements))
     if not isinstance(value, TensorValue):
         return value
-    shard = shard_layout_of(value.type.layout)
-    if value.tensor.packed and shard is not None and any(
-        isinstance(attr, Partial) for attr in shard.attrs
-    ):
-        raise EvalError(
-            "a Partial value meets one that differs per unit; its held value is "
-            "already reduced, so the parts each unit would combine are gone"
-        )
+    refuse_reduced_partial(value.tensor)
     return TensorValue(ShardTensor(local_type(value.type), value.tensor.local(placement)))
 
 
 def _scattered(type, placements, pieces):
     """Hold per-placement results as one value, piece by piece."""
-    first = pieces[0]
-    if isinstance(first, TupleValue):
-        fields = type.fields if isinstance(type, TupleType) else (None,) * len(first.elements)
+    if isinstance(pieces[0], TupleValue):
         return TupleValue(
             tuple(
                 _scattered(field, placements, [piece.elements[index] for piece in pieces])
-                for index, field in enumerate(fields)
+                for index, field in enumerate(type.fields)
             )
         )
     held = tuple((placement, piece.data) for placement, piece in zip(placements, pieces))
-    return TensorValue(ShardTensor(type if type is not None else first.type, held))
+    return TensorValue(ShardTensor(type, held))

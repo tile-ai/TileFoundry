@@ -15,7 +15,12 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
 from tilefoundry.ir.types.layout import Layout
-from tilefoundry.ir.types.shard_layout import Split, shard_layout_of, split_target_axes
+from tilefoundry.ir.types.shard_layout import (
+    Split,
+    partial_reductions_by_axis,
+    shard_layout_of,
+    split_target_axes,
+)
 from tilefoundry.ir.types.utils import i64_const, static_dim_value
 from tilefoundry.utils.lazy import F
 from tilefoundry.visitor_registry import register_typeinfer
@@ -25,10 +30,7 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
     relations_of,
 )
-from tilefoundry.visitor_registry.shard_propagate import (
-    derive_output_shard_layout,
-    partial_reductions_by_axis,
-)
+from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
 @register_op(dialect='tf', category='nn')

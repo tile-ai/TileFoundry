@@ -14,11 +14,12 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from tilefoundry.ir.types import Placement
+from tilefoundry.ir.types.mesh import _named
 from tilefoundry.ir.types.shard_layout import (
-    Partial,
     _local_readback,
     local_layout,
     logical_layout_and_offset,
+    partial_reductions_by_axis,
     program_coordinates,
     shard_layout_of,
 )
@@ -65,9 +66,8 @@ class ShardTensor:
         if shard is None:
             return self.tensor
         if placement is None:
-            levels = tuple(getattr(topology, "name", topology) for topology in shard.mesh.topologies)
             raise ValueError(
-                f"ShardTensor: {tuple(self.type.shape)} is sharded over {levels}, and "
+                f"ShardTensor: {tuple(self.type.shape)} is sharded over {_named(shard.mesh)}, and "
                 f"no Placement says which program this is; pass placement= to load()"
             )
         layout, offset = logical_layout_and_offset(
@@ -97,8 +97,9 @@ class ShardTensor:
                 "ShardTensor: a scattered value whose type has no ShardLayout has no "
                 "global value to gather"
             )
-        partial = [axis for axis, attr in enumerate(shard.attrs) if isinstance(attr, Partial)]
-        reductions = {shard.attrs[axis].reduction for axis in partial}
+        by_axis = partial_reductions_by_axis(shard)
+        partial = [axis for axis, kind in enumerate(by_axis) if kind is not None]
+        reductions = {kind for kind in by_axis if kind is not None}
         if len(reductions) > 1 or reductions - _COMBINE.keys():
             raise ValueError(f"ShardTensor: cannot combine Partial reductions {sorted(reductions)}")
         shape = tuple(self.type.shape)

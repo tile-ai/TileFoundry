@@ -493,9 +493,9 @@ def units(mesh: Mesh) -> tuple[tuple[tuple[int, ...], Placement], ...]: ...
     per ordered `Topology` by lookup. A level the mapping does not name is
     unfixed, which is what makes the answer's length the caller's business
     rather than the caller's arithmetic.
-  - `units(mesh)` lists every unit of a mesh, its coordinates in row-major
-    order beside the `Placement` naming it: each level's id is its coordinates
-    read through that level's arrangement, the inverse of
+  - `units(mesh)` lists every unit of a mesh, its coordinates beside the
+    `Placement` naming it: each level's ids are the values of that level's
+    arrangement, and the coordinates are those ids read back through
     `program_coordinates` ([§7.6](#76-local_layout)).
   - an unfixed level MUST be left undivided rather than read as `0`: the device
     chooses its own `cta` and `thread`, and a host that guessed would hand one

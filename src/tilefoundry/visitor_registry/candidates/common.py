@@ -1,6 +1,7 @@
 """Target-neutral HIR-to-TIR candidate pairings."""
 
 from dataclasses import replace
+from itertools import zip_longest
 
 from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
@@ -24,12 +25,9 @@ from tilefoundry.ir.tir.nn.relu import ReLU as TirReLU
 from tilefoundry.ir.tir.reduce import Reduce as TirReduce
 from tilefoundry.ir.tir.where import Where as TirWhere
 from tilefoundry.ir.types import Layout
-from tilefoundry.ir.types.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard_layout import ShardLayout, partial_reductions_by_axis
 from tilefoundry.visitor_registry.access_relation import relations_of
-from tilefoundry.visitor_registry.shard_propagate import (
-    derive_output_shard_layout,
-    partial_reductions_by_axis,
-)
+from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 from ..instruction import ScheduleRefusal
 from . import register_candidates
@@ -63,10 +61,13 @@ register_candidates(Reshard, (TirReduce,), when=combines_partial)
 
 def _resolved_reduction(source, result) -> str | None:
     """The reduction a reshard performs by dropping its source's Partial axes, if any."""
-    before = partial_reductions_by_axis(source.layout)
-    after = partial_reductions_by_axis(result.layout)
-    after = after + (None,) * (len(before) - len(after))
-    resolved = {kind for kind, kept in zip(before, after) if kind is not None and kept is None}
+    resolved = {
+        kind
+        for kind, kept in zip_longest(
+            partial_reductions_by_axis(source.layout), partial_reductions_by_axis(result.layout)
+        )
+        if kind is not None and kept is None
+    }
     if len(resolved) > 1:
         raise ScheduleRefusal(f"a reshard cannot combine Partial reductions {sorted(resolved)} at once")
     return resolved.pop() if resolved else None

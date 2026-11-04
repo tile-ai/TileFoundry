@@ -21,24 +21,6 @@ from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.ir.types.utils import participant_layout
 
 
-def partial_reductions_by_axis(
-    layout: object,
-) -> tuple[str | None, ...]:
-    """Return each mesh axis's carried Partial reduction, if any.
-
-    The tuple index is the mesh-axis index in ``ShardLayout.attrs``. A
-    ``None`` entry denotes an attr that is not a ``Partial``; a non-sharded
-    layout returns an empty tuple.
-    """
-    layout = shard_layout_of(layout)
-    if layout is None:
-        return ()
-    return tuple(
-        attr.reduction if isinstance(attr, Partial) else None
-        for attr in layout.attrs
-    )
-
-
 def _result_access(ma: isl.multi_aff) -> dict[int, tuple[str, int | None]]:
     """How each result axis of the Op-written affine reads the domain."""
     n_in = ma.dim(isl.dim_type.IN)
@@ -264,7 +246,7 @@ def derive_output_shard_layout(
                     f"input {i} mesh axis {p}: Split on a non-projection access "
                     "is not supported for shard propagation"
                 )
-            if ddim in complete_reduction_dims:
+            if ddim in complete_reduction_dims or ddim in partial_reduction_dims:
                 new_attr = Partial(reduction)
             elif ddim in domain_to_out_axis:
                 new_attr = Split(domain_to_out_axis[ddim])
@@ -273,8 +255,6 @@ def derive_output_shard_layout(
                     f"input {i} mesh axis {p}: domain dim survives only via a "
                     "non-projection output access; cannot derive output layout axis"
                 )
-            elif ddim in partial_reduction_dims:
-                new_attr = Partial(reduction)
             else:
                 new_attr = Broadcast()
             if not isinstance(attrs[p], Broadcast) and attrs[p] != new_attr:
@@ -311,4 +291,4 @@ def derive_output_shard_layout(
     return ShardLayout.default(output_shape, mesh, tuple(attrs), storage=storage, owners=owners)
 
 
-__all__ = ["derive_output_shard_layout", "partial_reductions_by_axis"]
+__all__ = ["derive_output_shard_layout"]

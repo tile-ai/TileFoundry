@@ -64,15 +64,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     kind = call.target.kind
 
-    commutes_with = (
-        frozenset({"sum"})
-        if kind in (ReduceKind.SUM, ReduceKind.MEAN)
-        else frozenset({"max"})
-        if kind is ReduceKind.MAX
-        else frozenset({"min"})
-        if kind is ReduceKind.MIN
-        else frozenset()
-    )
+    commutes_with = frozenset() if kind is ReduceKind.ABS_MAX else frozenset({_PARTIAL[kind]})
     reject_partials(ctx, call, "x", x_ty.layout, commutes_with=commutes_with)
     keepdim = call.target.keepdim
     rank = len(x_ty.shape)
@@ -151,14 +143,12 @@ def _greatest_representable(dtype: "torch.dtype"):
     return infinity if held.item() == infinity else torch.finfo(dtype).max
 
 
-def _reduced_count(ctx, axes) -> int | None:
+def _reduced_count(ctx, axes) -> int:
     """How many elements the reduction covers in the whole input, not in one unit's part.
 
     A mean over a split axis is Partial sum, so each unit holds its sum over the
     whole count rather than its own mean.
     """
-    if not ctx.arg_types:
-        return None
     shape = ctx.arg_types[0].shape
     return prod(resolve_dim(shape[axis], ctx.dim_bindings) for axis in axes)
 
@@ -186,7 +176,7 @@ def _eval_reduce(ctx):
         out = x.mean(dim=axes, keepdim=keepdim)
         whole = _reduced_count(ctx, axes)
         part = prod(x.shape[axis] for axis in axes)
-        if whole is not None and part != whole:
+        if part != whole:
             out = out * (part / whole)
     elif kind is ReduceKind.SUM:
         out = x.sum(dim=axes, keepdim=keepdim)

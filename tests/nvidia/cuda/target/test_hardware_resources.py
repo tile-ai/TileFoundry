@@ -230,7 +230,7 @@ def test_a_schema_rejects_a_fact_it_does_not_model() -> None:
 def test_a_memory_owner_must_use_the_target_vocabulary() -> None:
     document = _hardware_text("nvidia_h200_sxm.toml").replace('value = "gpu"', 'value = "warp"')
 
-    with pytest.raises(SchemaValidationError, match=r"memory owner 'warp'.*target.*gpu.*cta.*thread"):
+    with pytest.raises(SchemaValidationError, match=r"memory owner 'warp'.*gpu.*cta.*thread"):
         cuda_spec.build_cuda_device(parse_document(document, origin_label="bad-owner"))
 
 

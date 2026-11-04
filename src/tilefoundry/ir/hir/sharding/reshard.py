@@ -17,6 +17,7 @@ from tilefoundry.ir.types.layout_algebra import coalesce, domain_offset
 from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     Split,
+    partial_reductions_by_axis,
     shard_layout_of,
 )
 from tilefoundry.ir.types.storage import StorageKind
@@ -29,7 +30,6 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand, register_buffer_alias
-from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op(dialect='tf', category='sharding')

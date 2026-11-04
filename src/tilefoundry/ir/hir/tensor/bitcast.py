@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from functools import cache
-from itertools import product
 from math import prod
 
 import isl
@@ -25,7 +24,8 @@ from tilefoundry.ir.types import (
 from tilefoundry.ir.types.int_tuple import compatible_profile, flatten, mode_axes
 from tilefoundry.ir.types.layout import apply, unflatten
 from tilefoundry.ir.types.layout import flatten as flatten_layout
-from tilefoundry.ir.types.mesh import levels, starts
+from tilefoundry.ir.types.mesh import starts
+from tilefoundry.ir.types.placement import units
 from tilefoundry.ir.types.shard_layout import (
     local_layout_and_offset,
     shard_layout_of,
@@ -78,9 +78,8 @@ def _address_points(layout, count: int, logical_shape: tuple):
     layout = shard
     if len(whole) != count:
         raise ValueError(f"rmem layout address function is not injective: {layout!r}")
-    arrangements = levels(layout.mesh)
-    for coordinates in product(*(range(prod(flatten(level.shape))) for level in arrangements)):
-        ids = tuple(apply(level, coord) for level, coord in zip(arrangements, coordinates, strict=True))
+    for _, placement in units(layout.mesh):
+        ids = placement.program_ids(layout.mesh.topologies)
         unit = tuple(sorted(
             (topology.name, start + index)
             for topology, start, index in zip(layout.mesh.topologies, starts(layout.mesh), ids, strict=True)
