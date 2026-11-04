@@ -80,9 +80,9 @@ def test_weight_shard_per_card(tmp_path) -> None:
             again, _ = twin.forward(x, row, 2)
 
             here = Placement({"gpu": gpu})
-            assert first.local(here).device.index == gpu
-            assert replicated.local(here).device.index == gpu
-            assert again.local(here).data_ptr() == first.local(here).data_ptr(), (
+            assert first.to_local(here).device.index == gpu
+            assert replicated.to_local(here).device.index == gpu
+            assert again.to_local(here).data_ptr() == first.to_local(here).data_ptr(), (
                 "the second call read the weight again instead of the one it held"
             )
         except BaseException as error:  # noqa: BLE001 -- reported on the main thread
@@ -110,4 +110,4 @@ def test_weight_load_reads_noncanonical_axes(tmp_path, case):
     twin = twin_type()
     twin.load(SafetensorsResource(str(tmp_path), device="cpu"), placement=Placement({"gpu": 1}))
     expected = {"cyclic": [1.0, 5.0], "mesh_order": [8.0]}[case]
-    assert twin.read().local(Placement({"gpu": 1})).flatten().tolist() == expected
+    assert twin.read().to_local(Placement({"gpu": 1})).flatten().tolist() == expected

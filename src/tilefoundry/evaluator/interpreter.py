@@ -43,7 +43,7 @@ def _device_of(values) -> str | None:
     seen: dict[str, int] = {}
     for index, value in enumerate(values):
         held = (
-            (value.tensor,) if value.packed else tuple(piece for _, piece in value.tensor)
+            (value.tensor,) if value.is_global else tuple(piece for _, piece in value.tensor)
         ) if isinstance(value, ShardTensor) else (value,)
         for data in held:
             device = getattr(data, "device", None)
@@ -75,7 +75,7 @@ def _bind_dim_vars(params, values) -> dict[str, int]:
     binding: dict[str, int] = {}
     for p, v in zip(params, values):
         shape = getattr(p.type, "shape", None)
-        if shape is None or not isinstance(v, TensorValue) or not v.tensor.packed:
+        if shape is None or not isinstance(v, TensorValue) or not v.tensor.is_global:
             continue
         data = v.data
         for axis, dim in enumerate(shape):
@@ -320,7 +320,7 @@ def _run_selected(loaded_module, fn: Function, *activations, device: str | None)
 
 def _unwrap(value: Value) -> Any:
     if isinstance(value, TensorValue):
-        return value.data if value.tensor.packed else value.tensor
+        return value.data if value.tensor.is_global else value.tensor
     if isinstance(value, TupleValue):
         return tuple(_unwrap(v) for v in value.elements)
     return value

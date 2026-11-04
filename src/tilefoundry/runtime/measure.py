@@ -271,12 +271,12 @@ def flatten_outputs(x, path: str = "output") -> list[tuple[str, torch.Tensor]]:
     compared is that piece ([runtime §1.10](docs/spec/runtime.md#110-shardtensor)).
     """
     if isinstance(x, ShardTensor):
-        if len(x.placements) > 1 or (x.packed and shard_layout_of(x.type.layout) is not None):
+        if len(x.placements) > 1 or (x.is_global and shard_layout_of(x.type.layout) is not None):
             raise TypeError(
                 f"check: {path} is more than one program's data; take one program's "
                 "piece with local(placement) before comparing it against a reference"
             )
-        return flatten_outputs(x.local(x.placements[0]) if x.placements else x.tensor, path)
+        return flatten_outputs(x.to_local(x.placements[0]) if x.placements else x.tensor, path)
     if isinstance(x, torch.Tensor):
         return [(path, x)]
     if isinstance(x, tuple):

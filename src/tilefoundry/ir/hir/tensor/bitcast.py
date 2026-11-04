@@ -16,6 +16,7 @@ from tilefoundry.ir.types import (
     ComposedLayout,
     Layout,
     LayoutBase,
+    Placement,
     ShardLayout,
     Split,
     StorageKind,
@@ -25,9 +26,9 @@ from tilefoundry.ir.types.int_tuple import compatible_profile, flatten, mode_axe
 from tilefoundry.ir.types.layout import apply, unflatten
 from tilefoundry.ir.types.layout import flatten as flatten_layout
 from tilefoundry.ir.types.mesh import starts
-from tilefoundry.ir.types.placement import units
 from tilefoundry.ir.types.shard_layout import (
     local_layout_and_offset,
+    mesh_coords,
     shard_layout_of,
     split_target_axes,
 )
@@ -78,13 +79,15 @@ def _address_points(layout, count: int, logical_shape: tuple):
     layout = shard
     if len(whole) != count:
         raise ValueError(f"rmem layout address function is not injective: {layout!r}")
-    for _, placement in units(layout.mesh):
+    for placement in Placement.each(layout.mesh):
         ids = placement.program_ids(layout.mesh.topologies)
         unit = tuple(sorted(
             (topology.name, start + index)
             for topology, start, index in zip(layout.mesh.topologies, starts(layout.mesh), ids, strict=True)
         ))
-        local, offset = local_layout_and_offset(layout, tuple(layout.layout.shape), ids)
+        local, offset = local_layout_and_offset(
+            layout, tuple(layout.layout.shape), mesh_coords(layout.mesh, ids)
+        )
         for coord in range(prod(local.shape)):
             held = apply(local, coord)
             logical = whole.get(offset + held)

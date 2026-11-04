@@ -56,23 +56,15 @@ class Placement:
             )
         return cls({topology_level: int(rank)})
 
-
-def units(mesh: Mesh) -> tuple[tuple[tuple[int, ...], Placement], ...]:
-    """Every unit of *mesh*: its mesh coordinates, and the Placement naming it.
-
-    Each level's program ids are its arrangement's values; the coordinates are
-    those ids read back through ``program_coordinates``.
-    """
-    from tilefoundry.ir.types.shard_layout import program_coordinates  # noqa: PLC0415
-
-    arrangements = levels(mesh)
-    names = _named(mesh)
-    found = []
-    for at in product(*(range(product_of(level.shape)) for level in arrangements)):
-        ids = tuple(apply(level, index) for level, index in zip(arrangements, at, strict=True))
-        coordinates = program_coordinates(mesh, ids)
-        found.append((coordinates, Placement(dict(zip(names, ids, strict=True)))))
-    return tuple(found)
+    @classmethod
+    def each(cls, mesh: Mesh) -> "tuple[Placement, ...]":
+        """Every placement of *mesh*: each level's program ids are its arrangement's values."""
+        arrangements = levels(mesh)
+        names = _named(mesh)
+        return tuple(
+            cls(dict(zip(names, map(apply, arrangements, at), strict=True)))
+            for at in product(*(range(product_of(level.shape)) for level in arrangements))
+        )
 
 
-__all__ = ["Placement", "units"]
+__all__ = ["Placement"]

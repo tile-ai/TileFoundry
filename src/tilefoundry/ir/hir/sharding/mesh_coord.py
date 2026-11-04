@@ -9,10 +9,10 @@ from tilefoundry.ir.core import Constant, Op, Tuple
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.mesh_scope import covered_by_scope
-from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types import DType, Placement, TensorType, TupleType
 from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.mesh import Mesh
-from tilefoundry.ir.types.placement import units
+from tilefoundry.ir.types.shard_layout import mesh_coords
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.utils.lazy import torch
@@ -106,16 +106,24 @@ def _(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
 
 @register_eval(MeshCoord)
 def _eval_mesh_coord(ctx):
-    """Each unit's coordinates along the axes, held one piece per unit of the mesh."""
+    """Each placement's coordinates along the axes: a local view over the mesh."""
     axes = ctx.args[0]
     if isinstance(axes, TupleValue):
         axes = torch.stack([element.data.reshape(()) for element in axes.elements])
     else:
         axes = axes.data
     axes = axes.long()
+    mesh = ctx.op.mesh
     pieces = tuple(
-        (placement, torch.as_tensor(coordinates, dtype=torch.int64, device=axes.device)[axes])
-        for coordinates, placement in units(ctx.op.mesh)
+        (
+            placement,
+            torch.as_tensor(
+                mesh_coords(mesh, placement.program_ids(mesh.topologies)),
+                dtype=torch.int64,
+                device=axes.device,
+            )[axes],
+        )
+        for placement in Placement.each(mesh)
     )
     return TensorValue(ShardTensor(ctx.result_type, pieces))
 

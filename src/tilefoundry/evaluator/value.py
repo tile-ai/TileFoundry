@@ -5,7 +5,6 @@ from dataclasses import dataclass, replace
 
 from tilefoundry.core import ShardTensor
 from tilefoundry.ir.types import DType, TensorType, TupleType
-from tilefoundry.ir.types.shard_layout import partial_reductions_by_axis
 from tilefoundry.utils.lazy import torch
 
 
@@ -29,19 +28,10 @@ class TensorValue(Value):
 
     @property
     def data(self) -> torch.Tensor:
-        """The one global logical tensor; a value that differs per unit has none."""
-        if not self.tensor.packed:
-            raise EvalError("value differs per unit, so it has no single tensor")
+        """The one global logical tensor; a local view has none."""
+        if not self.tensor.is_global:
+            raise EvalError("value is a local view; this op reads only the global view")
         return self.tensor.tensor
-
-
-def refuse_reduced_partial(tensor: ShardTensor) -> None:
-    """A packed Partial holds its reduced value, so the part each unit holds is gone."""
-    if tensor.packed and any(partial_reductions_by_axis(tensor.type.layout)):
-        raise EvalError(
-            "a Partial value is held reduced, so the part each unit holds is gone; "
-            "reshard it before it meets a value that differs per unit"
-        )
 
 
 @dataclass(frozen=True)

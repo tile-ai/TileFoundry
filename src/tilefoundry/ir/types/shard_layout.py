@@ -366,8 +366,11 @@ def _local_readback(layout):
     return replace(result, outer=plain) if isinstance(result, ComposedLayout) else plain
 
 
-def program_coordinates(mesh: Mesh, ids: tuple[int | None, ...]) -> tuple[int | None, ...]:
-    """Each mesh axis's coordinate under per-level program ids; None where a level is unfixed."""
+def mesh_coords(mesh: Mesh, ids: tuple[int | None, ...]) -> tuple[int | None, ...]:
+    """Each mesh axis's coordinate under per-level program ids; None where a level is unfixed.
+
+    The host side of the CUDA runtime's ``mesh_coords(mesh, program_ids())``.
+    """
     from .mesh import levels  # noqa: PLC0415
 
     coords = []
@@ -382,31 +385,22 @@ def program_coordinates(mesh: Mesh, ids: tuple[int | None, ...]) -> tuple[int | 
     return tuple(coords)
 
 
-def local_layout_and_offset(shard: ShardLayout, tensor_shape: tuple, ids: tuple[int | None, ...]):
-    """Adapt topology program ids and read back the logical local Layout."""
+def local_layout_and_offset(shard: ShardLayout, tensor_shape: tuple, coord: tuple):
+    """The logical local Layout the instance at mesh *coord* holds, and where it begins.
+
+    The host side of the CUDA runtime's ``local_layout_and_offset(sl, coord)``.
+    """
     if any(not isinstance(size, int) or isinstance(size, bool) for size in tensor_shape):
         raise ValueError("local offset requires concrete bound tensor sizes")
-    layout, offset = local_layout(shard, tensor_shape, program_coordinates(shard.mesh, ids))
+    layout, offset = local_layout(shard, tensor_shape, coord)
     return _local_readback(layout), offset
-
-
-def logical_layout_and_offset(shard: ShardLayout, tensor_shape: tuple, ids: tuple[int | None, ...]):
-    """Where the piece *ids* select sits in the row-major logical tensor.
-
-    The same algebra as :func:`local_layout_and_offset`, applied to a row-major
-    layout of the same modes: host data is logical, while the address stride of
-    a private Split may be zero.
-    """
-    address = shard.layout.outer if isinstance(shard.layout, ComposedLayout) else shard.layout
-    return local_layout_and_offset(replace(shard, layout=Layout(address.shape)), tensor_shape, ids)
 
 
 __all__ = [
     "local_layout",
     "local_layout_and_offset",
     "partial_reductions_by_axis",
-    "logical_layout_and_offset",
-    "program_coordinates",
+    "mesh_coords",
     "ShardAttr",
     "Split",
     "Partial",

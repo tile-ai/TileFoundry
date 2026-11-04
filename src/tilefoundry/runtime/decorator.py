@@ -112,7 +112,7 @@ class _Twin(RuntimeModule):
         body. Named as ``DTensor.to_local``, which answers the same question.
         """
         if isinstance(value, ShardTensor):
-            return value.local(self._placement)
+            return value.to_local(self._placement)
         return value
 
     def _from_local(self, value, declared):
@@ -172,7 +172,7 @@ class _Twin(RuntimeModule):
                 f"{value.dtype}, declared {declared.dtype}; the way out is a weight "
                 "converter on the model, not a flag on the read side"
             )
-        local = ShardTensor(declared, value).local(self._placement)
+        local = ShardTensor(declared, value).to_local(self._placement)
         self._bound[key] = local if local is value else local.clone()
         return self._bound[key]
 

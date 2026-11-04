@@ -761,9 +761,10 @@ def check(
 `Module.prepare` writes one canonical tensor per weight and the HIR keeps the
 global `TensorType`, so a checkpoint read hands back every program's data at
 once. `ShardTensor` (in `tilefoundry.core`, exported as `tilefoundry.ShardTensor`)
-pairs a global type with its data, held packed -- one global logical tensor --
-or scattered -- one piece per `Placement`. The evaluator holds its values in the
-same class ([evaluator §1](evaluator.md#1-value)).
+pairs a global type with its data in a global view -- one global logical
+tensor -- or a local view -- one piece per `Placement`. The two names are
+OneFlow's. The evaluator holds its values in the same class
+([evaluator §1](evaluator.md#1-value)).
 
 <!-- generated: py-tensor -->
 ```python
@@ -777,46 +778,49 @@ class ShardTensor:
     tensor: "torch.Tensor | tuple[tuple[Placement, torch.Tensor], ...]"
 
     @property
-    def packed(self) -> bool: ...
+    def is_global(self) -> bool: ...
 
     @property
     def placements(self) -> tuple[Placement, ...]: ...
 
-    def local(self, placement: "Placement | None") -> "torch.Tensor": ...
+    def to_local(self, placement: "Placement | None") -> "torch.Tensor": ...
 
-    def scatter(self, placements: tuple[Placement, ...]) -> "ShardTensor": ...
-
-    def gather(self) -> "ShardTensor": ...
+    def to_global(self) -> "ShardTensor": ...
 
     def reshard(self, type: TensorType) -> "ShardTensor": ...
+
+
+def local_placements(*tensors: ShardTensor) -> tuple[Placement, ...]: ...
 ```
 <!-- /generated -->
 
 - constraints:
-  - a packed tensor carries no `Placement`: the program is an argument to
-    `local`, so one owning tensor serves every program a host dispatches.
-    Named as `DTensor.to_local`, which answers the same question.
-  - a scattered tensor holds one piece per `Placement`, each of
-    `local_type(type)`; `local` returns the piece its placement holds.
+  - a global view carries no `Placement`: the program is an argument to
+    `to_local`, so one owning tensor serves every program a host dispatches.
+  - a local view holds one piece per `Placement`, each of `local_type(type)`;
+    `to_local` returns the piece its placement holds.
   - a `type` with no `ShardLayout` is every program's whole tensor, and so is
-    an axis the mesh only broadcasts over or reduces across. A packed `Partial`
-    value is its reduced value.
-  - which part of a packed tensor is one program's MUST come from
-    `logical_layout_and_offset` ([shard §7](shard.md#7-shardlayout)): the
-    algebra the device side runs as `local_layout_and_offset`, applied to the
-    row-major layout of the same modes. Packed data is logical, while the
-    address stride of a private `Split` may be zero, so the address layout
-    cannot select a piece of it.
-  - `gather` reads a scattered tensor by the meaning of its type: `Split`
-    pieces sit side by side, any `Broadcast` piece serves, and `Partial` pieces
-    combine by their reduction. A type with no `ShardLayout`, or `Partial`
-    reductions that differ, MUST be refused.
+    an axis the mesh only broadcasts over. A global `Partial` value is its
+    reduced value, so `to_local` MUST refuse it: no program's own part is left.
+  - `to_local` on a global view is the host side of the CUDA runtime's
+    `local_tensor`: `mesh_coords` of the placement's program ids, then
+    `local_layout_and_offset` ([shard §7.6](shard.md#76-local_layout)) of the
+    shard with its layout replaced by the row-major layout of the same modes.
+    Host data is logical, while the address stride of a private `Split` may be
+    zero, so the address layout cannot select a piece of it.
+  - `to_global` reads a local view by the meaning of its type: `Split` pieces
+    sit side by side, any `Broadcast` piece serves, and `Partial` pieces combine
+    by their reduction. A type with no `ShardLayout`, or `Partial` reductions
+    that differ, MUST be refused.
+  - `local_placements` answers the placements the local views among its
+    arguments hold, empty when every one is global; local views held by
+    different placements MUST be refused.
   - a level whose id is unfixed MUST be left undivided
     ([shard §5.1](shard.md#51-placement)).
   - a `RuntimeModule`'s public boundary takes and returns `ShardTensor`, while
     a body -- a Python reference or a launched kernel alike -- only ever
     receives the local `torch.Tensor`. A returned tensor is already one
-    program's, so it is returned scattered: this program's piece under the
+    program's, so it is returned as a local view: this program's piece under the
     declared global type, never narrowed again.
   - a weight narrowed on first use is copied out of the read it came from, so
     the whole canonical tensor is released once every shard it contributes is

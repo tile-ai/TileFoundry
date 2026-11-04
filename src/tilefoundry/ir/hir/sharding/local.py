@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from tilefoundry.core import ShardTensor, local_type
 from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue, refuse_reduced_partial
+from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.placement import units
-from tilefoundry.ir.types.shard_layout import ShardLayout, Split, shard_layout_of
+from tilefoundry.ir.types import Placement, TensorType
+from tilefoundry.ir.types.shard_layout import Broadcast, ShardLayout, shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     readnone_relations,
@@ -37,13 +36,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(Local)
 def _eval_local(ctx):
-    """Each unit's own part: scattered over the mesh when an axis is Split."""
+    """Each placement's own part: a local view unless every placement holds the whole."""
     x = ctx.args[0].tensor
-    refuse_reduced_partial(x)
     shard = shard_layout_of(x.type.layout)
-    if x.packed and not any(isinstance(attr, Split) for attr in shard.attrs):
+    if not x.is_global or all(isinstance(attr, Broadcast) for attr in shard.attrs):
         return TensorValue(ShardTensor(ctx.result_type, x.tensor))
-    pieces = x.scatter(tuple(placement for _, placement in units(shard.mesh))).tensor
+    pieces = tuple((placement, x.to_local(placement)) for placement in Placement.each(shard.mesh))
     return TensorValue(ShardTensor(ctx.result_type, pieces))
 
 

@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import Callable
 
 from tilefoundry.core import ShardTensor, local_type
-from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue, refuse_reduced_partial
+from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue
 from tilefoundry.ir.types import TupleType
 from tilefoundry.visitor_registry.registries import DispatchRegistry
 
@@ -36,7 +36,7 @@ def per_unit(handler: Callable) -> Callable:
 
     @functools.wraps(handler)
     def run(ctx):
-        scattered = [leaf for leaf in _tensors(ctx.args) if not leaf.tensor.packed]
+        scattered = [leaf for leaf in _tensors(ctx.args) if not leaf.tensor.is_global]
         if not scattered:
             return handler(ctx)
         placements = scattered[0].tensor.placements
@@ -78,8 +78,7 @@ def _unit_value(value, placement):
         return TupleValue(tuple(_unit_value(element, placement) for element in value.elements))
     if not isinstance(value, TensorValue):
         return value
-    refuse_reduced_partial(value.tensor)
-    return TensorValue(ShardTensor(local_type(value.type), value.tensor.local(placement)))
+    return TensorValue(ShardTensor(local_type(value.type), value.tensor.to_local(placement)))
 
 
 def _scattered(type, placements, pieces):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from itertools import product
 from math import prod
 from pathlib import Path
@@ -16,14 +17,13 @@ from tilefoundry.ir.core.metadata import binding_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.placement import units
+from tilefoundry.ir.types import Placement, TensorType
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten
 from tilefoundry.ir.types.shard_layout import (
     Partial,
     Split,
     local_layout_and_offset,
-    logical_layout_and_offset,
+    mesh_coords,
     shard_layout_of,
     split_target_axes,
 )
@@ -58,14 +58,16 @@ def describe_tensor(held):
         domain=shard.layout.shape, address_map=str(shard.layout))
     tags = ShardTensor(held, torch.arange(prod(shape)).reshape(shape))
     local_shape = tuple(local_type(held).shape)
-    for coordinate, placement in units(shard.mesh):
-        ids = placement.program_ids(shard.mesh.topologies)
-        selected = tags.local(placement).flatten().sort().values
+    address = shard.layout.outer if isinstance(shard.layout, ComposedLayout) else shard.layout
+    host = replace(shard, layout=Layout(address.shape))
+    for placement in Placement.each(shard.mesh):
+        coordinate = mesh_coords(shard.mesh, placement.program_ids(shard.mesh.topologies))
+        selected = tags.to_local(placement).flatten().sort().values
         boundaries = torch.nonzero(selected[1:] != selected[:-1] + 1).flatten().tolist()
         starts, ends = [0, *(i + 1 for i in boundaries)], [*(i + 1 for i in boundaries), len(selected)]
         runs = [[int(selected[a]), int(selected[b - 1]) + 1] for a, b in zip(starts, ends, strict=True)]
-        logical, logical_offset = logical_layout_and_offset(shard, shape, ids)
-        physical, physical_offset = local_layout_and_offset(shard, shape, ids)
+        logical, logical_offset = local_layout_and_offset(host, shape, coordinate)
+        physical, physical_offset = local_layout_and_offset(shard, shape, coordinate)
         result["participants"].append({
             "coordinate": coordinate, "shape": local_shape, "runs": runs,
             "bytes": prod(local_shape) * held.dtype.bit_width // 8,
