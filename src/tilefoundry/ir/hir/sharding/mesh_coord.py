@@ -41,7 +41,7 @@ class MeshCoord(Op):
     axes = ParamDef(kind="input")
 
 
-def _literal_axes(axes) -> tuple[int, ...] | None:
+def literal_axes(axes) -> tuple[int, ...] | None:
     """The axes a literal operand names, or None when any of them is computed."""
     if isinstance(axes, Tuple):
         found = tuple(static_dim_value(axis) for axis in axes.elements)
@@ -83,7 +83,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
     if held_shape is None:
         ctx.error(call, "MeshCoord.axes must be an i64 scalar, vector, or tuple of scalars")
     shape = flatten(call.target.mesh.layout).shape
-    axes = _literal_axes(call.args[0])
+    axes = literal_axes(call.args[0])
     for axis in axes or ():
         if not 0 <= axis < len(shape):
             ctx.error(call, f"axis {axis} is out of range for rank-{len(shape)} mesh")
@@ -123,4 +123,4 @@ def _eval_mesh_coord(ctx):
 register_access_relation(MeshCoord)(readnone_relations(lambda types: ()))
 
 
-__all__ = ["MeshCoord"]
+__all__ = ["MeshCoord", "literal_axes"]
