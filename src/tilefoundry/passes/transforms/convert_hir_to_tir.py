@@ -1494,6 +1494,7 @@ class ConvertHIRToTIR(ModulePass):
 
     name = "convert-hir-to-tir"
     requires = ()
+    analyses = ("memory",)
 
     @classmethod
     def create(cls, target, options) -> ConvertHIRToTIR:

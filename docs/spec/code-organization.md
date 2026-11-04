@@ -41,7 +41,7 @@ truth for the directory's structure and invariants.
 | `analysis/visitor.py` | [analysis](./analysis.md) | The per-call `AnalyzeContext`, carrying the shared root/current `IterationScope` while a family traverses its work. |
 | `analysis/iteration_scope.py` | [analysis](./analysis.md) | The shared `IterationScope` tree built once from normalized HIR; families query it instead of constructing parallel structure. |
 | `analysis/access.py` | [analysis](./analysis.md) | Access relations resolved against authored iteration scopes, retaining each input's original boundary index. |
-| `analysis/emission.py` | [passes](./passes.md) | What lowering emits for each HIR event: the instruction a Call issues and the operands that instruction reads and writes, the copies lowering adds from accepted aliases, and the mesh each copy and instruction is issued on; `emission()` classifies a Call the way the lowering visitor dispatches it, for readers of what lowering emits. Decided once, so lowering and any reader of what it emits ask the same code. |
+| `analysis/emission.py` | [passes](./passes.md) | What lowering emits for an HIR call: whether a Call is a dimension, the instruction it issues and its operand types, the mesh that owns a copy or an instruction, and the accepted aliases lowering executes. Decided once, so lowering and a target analysis that follows it ask the same code. |
 | `analysis/loop_domain.py` | [analysis](./analysis.md) | isl iteration domains built from authored loop bounds. |
 | `analysis/loop_terms.py` | [analysis](./analysis.md) | IR-only resolution of constants, authored loop axes, strides, and bounded invariant offsets into `LoopTerm`; it has no isl dependency. |
 | `analysis/footprint.py` | [analysis](./analysis.md) | Reserved for future target-independent authored-loop footprint policy; access-relation construction stays in `analysis/access.py`. |
@@ -53,8 +53,7 @@ truth for the directory's structure and invariants.
 | `analysis/memory.py` | [analysis](./analysis.md) | The `memory` family: per-Call movement plus Function-wide movement, value lifetimes, per-level peaks, and non-fatal capacity errors for over-full addressable levels. |
 | `analysis/roofline.py` | [analysis](./analysis.md) | The `roofline` family: the recorded work divided by the target's published rates, per Call and aggregated per Function. Adds no count of its own. |
 | `analysis/performance.py` | [analysis](./analysis.md) | The `performance` family: occurrences projected from the shared `IterationScope` tree into flat timeline records and one function envelope, scaled by parallel capacity. It introduces no second scope tree. |
-| `analysis/sync.py` | [analysis](./analysis.md) | The `sync` family: the commits, waits and barriers lowering emits before shared memory accesses, keyed by liveness position, or a refusal when the ordering cannot be proved. It reads the shared `IterationScope`, the memory family's records, `analysis/emission.py` and the completion registry, and builds no scope tree of its own. |
-| `visitor_registry/` | [visitor-registry](./visitor-registry.md) | Shared registry instances and derived visitors: access-relation construction, completion declarations, contexts, ISL helpers, relation building, shard propagation, type inference, verification, code generation, and cost evaluation. |
+| `visitor_registry/` | [visitor-registry](./visitor-registry.md) | Shared registry instances and derived visitors: access-relation construction, contexts, ISL helpers, relation building, shard propagation, type inference, verification, code generation, and cost evaluation. |
 | `visitor_registry/op_cost.py` | [analysis](./analysis.md) | Each operation's per-instance flops and bytes, registered into the shared cost-evaluator registry. Owned here rather than by any target package, because the work an operation asks for follows from its own semantics and operand types on every backend. |
 | `inspection/analysis_report.py` | [inspection](./inspection.md) | Presentation of analysis-owned report data as text and annotated source. Analysis owns the structured report data and JSON dump; inspection owns how a human reads it. |
 | `target/<backend>/facts.py` | [target](./target.md) | One backend's Facts projections selected by its Target's `get_facts`. They restate installed documents in the shape a family declared and measure nothing. |
@@ -149,8 +148,8 @@ are not IR classes, so they go through Rule 1a.
 
 **Rule 1c — target-specific code lives in a plugin package.** A backend lives
 under `targets/<vendor>/tilefoundry_<vendor>/<name>/`.
-Its internal paths preserve the core categories: `target/`, `ir/hir/`,
-`ir/tir/`, `codegen/`, `passes/` and `visitor_registry/`. Target-owned IR
+Its internal paths preserve the core categories: `target/`, `analysis/`,
+`ir/hir/`, `ir/tir/`, `codegen/`, `passes/` and `visitor_registry/`. Target-owned IR
 nodes nest as `ir/{dialect}/{category}/<name>.py` within that package;
 target-neutral abstractions stay in core at `ir/{dialect}/{category}/`. A
 target-specific rule for a target-neutral Op follows the same dialect and

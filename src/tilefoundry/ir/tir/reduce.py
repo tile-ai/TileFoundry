@@ -31,7 +31,6 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.completion import on_return, register_completion
 
 __all__ = ["ReduceKind", "Reduce"]
 
@@ -128,9 +127,6 @@ def _workspace_slots(source) -> int:
             )
         threads *= value
     return -(-threads // WARP_SIZE)
-
-
-register_completion(Reduce, on_return)
 
 
 @register_access_relation(Reduce)

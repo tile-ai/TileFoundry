@@ -7,6 +7,7 @@ class CudaConvertHIRToTIR(ConvertHIRToTIR):
     """Lower scheduled HIR with the visitor that emits the sync steps."""
 
     visitor = CudaLowering
+    analyses = ("memory", "sync")
 
 
 class CudaLowering(Lowering):
@@ -27,11 +28,14 @@ class CudaLowering(Lowering):
   - CUDA binds the pass with `@bind(CudaTarget, ConvertHIRToTIR)`; finalization
     and compile obtain it through `Target.resolve`.
   - Every function the pass lowers MUST carry `SyncPlanMetadata`
-    ([analysis §1.2.5](../../../../../../docs/spec/analysis.md#125-sync));
-    otherwise lowering raises `LoweringError` and does not analyse again. A
-    caller prepares the Module with
+    ([analysis §1](./analysis.md#1-sync));
+    otherwise lowering raises `LoweringError` and does not analyse again. The
+    pass names both families in `analyses`: a caller prepares the Module with
     `analyze(module, entry, analysis=("memory", "sync"))` and passes the result
-    to `finalize`; `tilefoundry schedule finalize` does the same.
+    to `finalize`; `tilefoundry schedule finalize` reads `analyses`.
+  - Which copies the loop and `InsertSlice` visits add, which parameters a
+    Call's arguments supply and the mesh an instruction is issued on come from
+    `cuda/analysis/emission.py`, which the `sync` family also reads.
   - The visitor emits the steps a node's `SyncMetadata` holds for a tag, in
     order, where that tag's statements are lowered:
 

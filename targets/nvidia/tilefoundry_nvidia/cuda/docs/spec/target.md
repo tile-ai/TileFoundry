@@ -63,6 +63,9 @@ class CudaTarget(Target):
     getters. These selections MUST NOT use
     `Target.name`, an exact-concrete-type table, or a second extension
     registration.
+  - `get_analyzer("sync")` returns the `sync` family
+    ([analysis §1](./analysis.md#1-sync)), which requires `memory`; every other
+    selector is the base Target's.
   - CUDA's `ThroughputFacts` and `PerformanceServiceFacts` MUST both read
     `rates(target, unit, active)`, the one source of CUDA rates: what `active`
     units of `unit` get through together. A query is a level name or

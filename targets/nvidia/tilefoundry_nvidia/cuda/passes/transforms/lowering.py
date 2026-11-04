@@ -8,18 +8,6 @@ from __future__ import annotations
 from dataclasses import replace
 from math import prod
 
-from tilefoundry.analysis.emission import (
-    copies_carry_backedge,
-    copies_carry_entry,
-    copies_insert_slice_base,
-    copies_insert_slice_update,
-    issue_mesh,
-    operand_roles,
-    required_execution_mesh,
-    result_param,
-    staged_scalar,
-)
-from tilefoundry.analysis.sync import SyncMetadata, SyncPlanMetadata
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var, get_metadata
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.param_def import MemoryEffect
@@ -59,6 +47,17 @@ from tilefoundry.passes.transforms.convert_hir_to_tir import (
 )
 from tilefoundry.target import bind
 from tilefoundry_nvidia.cuda import CudaTarget
+from tilefoundry_nvidia.cuda.analysis.emission import (
+    copies_carry_backedge,
+    copies_carry_entry,
+    copies_insert_slice_base,
+    copies_insert_slice_update,
+    issue_mesh,
+    operand_roles,
+    required_execution_mesh,
+    result_param,
+)
+from tilefoundry_nvidia.cuda.analysis.sync import SyncMetadata, SyncPlanMetadata
 from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import (
     FenceProxyAsync,
     WgmmaCommitGroup,
@@ -74,6 +73,13 @@ _STEPS = {
     ("fence", "wgmma"): WgmmaFence,
     ("proxy_fence", None): FenceProxyAsync,
 }
+
+
+def staged_scalar(type_) -> bool:
+    """Whether lowering first fills an operand of *type_* into a register scalar."""
+    return (
+        isinstance(type_, TensorType) and type_.shape == () and type_.storage is StorageKind.UMAT
+    )
 
 
 class CudaLowering(Lowering):
@@ -370,6 +376,7 @@ class CudaConvertHIRToTIR(ConvertHIRToTIR):
     """Lower scheduled HIR with the visitor that emits the sync steps."""
 
     visitor = CudaLowering
+    analyses = ("memory", "sync")
 
 
 __all__ = ["CudaConvertHIRToTIR", "CudaLowering"]

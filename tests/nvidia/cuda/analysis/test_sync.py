@@ -7,12 +7,11 @@ from unittest.mock import patch
 
 import pytest
 
-import tilefoundry.analysis.sync as sync
+import tilefoundry_nvidia.cuda.analysis.sync as sync
 from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.analysis import AnalysisError
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
-from tilefoundry.analysis.sync import SyncMetadata, SyncPlanMetadata
 from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -23,6 +22,7 @@ from tilefoundry.ir.tir.sync import SyncBarrier
 from tilefoundry.ir.types import StorageKind
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
 from tilefoundry.schedule import finalize
+from tilefoundry_nvidia.cuda.analysis.sync import SyncMetadata, SyncPlanMetadata
 from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
 from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import WgmmaCommitGroup, WgmmaWaitGroup
 

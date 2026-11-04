@@ -242,7 +242,7 @@ path. Per-target emission dispatches on the atom ([target](./target.md)); the
 current CUDA emitter accepts the SM80 and SM89 declarations and rejects WGMMA
 because this stage provides no WGMMA runtime emitter.
 
-Completion ([visitor-registry §4.2](../../../../../../docs/spec/visitor-registry.md#42-completion-service--completion))
+Completion ([analysis §2](./analysis.md#2-completion-registry))
 follows the atom. The SM80 and SM89 MMAs complete on return. Every effect of a
 WGMMA completes in the `wgmma` group, with `WARPGROUP` as its unit: shared
 operands go through the async proxy, and register operands need
@@ -524,7 +524,7 @@ class MBarrierInvalidate(Op):
 ## WGMMA group and proxy fence Ops
 
 The steps the `sync` plan places around WGMMA and async proxy accesses
-([analysis §1.2.5](../../../../../../docs/spec/analysis.md#125-sync)). Each takes
+([analysis §1](./analysis.md#1-sync)). Each takes
 no operand and lowers to one PTX instruction written at the call site; the
 runtime publishes no entry for any of them.
 

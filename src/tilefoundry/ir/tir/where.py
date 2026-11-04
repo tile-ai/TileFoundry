@@ -17,7 +17,6 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.completion import on_return, register_completion
 
 _IN_RMEM = utils.tensor_in(StorageKind.RMEM)
 
@@ -42,9 +41,6 @@ class Where(Op):
 @register_typeinfer(Where)
 def _(call, ctx) -> UnitType:
     return UnitType()
-
-
-register_completion(Where, on_return)
 
 
 @register_access_relation(Where)

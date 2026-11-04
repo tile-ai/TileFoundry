@@ -3,7 +3,7 @@
 It walks a Function's actions in lowering's order over the shared
 ``IterationScope`` and plans the commits, waits, fences and barriers each
 access needs before it may follow an earlier one, or refuses the Function. See
-[analysis §1.2.5](docs/spec/analysis.md#125-sync).
+[analysis §1](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/analysis.md#1-sync).
 """
 
 from __future__ import annotations
@@ -12,6 +12,20 @@ from dataclasses import dataclass, replace
 from itertools import product
 from operator import mul
 
+from tilefoundry.analysis.access import AliasKind
+from tilefoundry.analysis.allocation import AllocationSummaryMetadata
+from tilefoundry.analysis.emission import (
+    accepted_aliases,
+    copy_mesh,
+    issue_owner,
+    lowers_to_dim,
+    operand_types,
+    selected_op,
+)
+from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.liveness import LivenessMetadata
+from tilefoundry.analysis.memory import owned_bytes
+from tilefoundry.analysis.visitor import AnalyzeContext
 from tilefoundry.ir.core import (
     Call,
     Constant,
@@ -24,44 +38,33 @@ from tilefoundry.ir.core import (
     get_metadata,
 )
 from tilefoundry.ir.core import attach_metadata as attach
+from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord, literal_axes
 from tilefoundry.ir.mesh_scope import device_layout
 from tilefoundry.ir.tir.memory import Copy, Fill
-from tilefoundry.ir.tir.sync import SyncBarrier, classify, participation, whole_groups
+from tilefoundry.ir.tir.sync import SyncBarrier, classify, participation
 from tilefoundry.ir.types import Mesh, ShardLayout, Split, StorageKind, TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.types.layout import ComposedLayout
 from tilefoundry.ir.types.mesh import axis_keys, separate, within_scope
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.visitor_registry.completion import Effect, Issued, completion_of
 from tilefoundry.visitor_registry.instruction import call_params
-
-from .allocation import AllocationSummaryMetadata
-from .emission import (
-    Emission,
-    accepted_aliases,
+from tilefoundry_nvidia.cuda.analysis.completion import Effect, Issued, completion_of
+from tilefoundry_nvidia.cuda.analysis.emission import (
     copies_carry_backedge,
     copies_carry_entry,
     copies_insert_slice_base,
     copies_insert_slice_update,
-    copy_mesh,
-    emission,
     issue_mesh,
-    issue_owner,
     operand_roles,
-    operand_types,
-    register_storage,
     required_execution_mesh,
-    selected_op,
+    result_param,
 )
-from .errors import AnalysisError
-from .liveness import LivenessMetadata
-from .memory import owned_bytes
-from .visitor import AnalyzeContext
+from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import whole_groups
 
 _DONE = -1
 _UNCOMMITTED = -2
@@ -394,36 +397,106 @@ class _Planner:
         """The register storages lowering gives these values."""
         return tuple(
             dict.fromkeys(
-                register_storage(leaf, self.aliases_of, self.context.target)
+                self.register_storage(leaf)
                 for leaf in leaves
                 if leaf in self.values and self.values[leaf].lifetime.memory_level == "rmem"
             )
         )
 
+    def register_storage(self, leaf: SSAValue) -> SSAValue:
+        """The value whose register storage lowering gives *leaf*.
+
+        An instruction written in place returns its argument's storage; any other
+        value follows its first accepted alias.
+        """
+        seen = set()
+        while leaf not in seen:
+            seen.add(leaf)
+            following = self._in_place(leaf)
+            if following is None:
+                following = next(
+                    (alias.target for alias in self.aliases_of(leaf) if alias.target != leaf), None
+                )
+            if following is None:
+                return leaf
+            leaf = following
+        raise AnalysisError(f"sync: the register storage links of {leaf} form a cycle")
+
+    def _in_place(self, leaf: SSAValue) -> SSAValue | None:
+        """The argument an instruction call writes in place, when *leaf* is its result.
+
+        A Call issues an instruction when its visit is ``visit_T``, or
+        ``visit_Reshard`` of a result that is not a view.
+        """
+        call = leaf.expr
+        if not isinstance(call, Call) or leaf.index != 0 or lowers_to_dim(call):
+            return None
+        visit = self.visit(call)
+        if visit != self.visit_T and (visit != self.visit_Reshard or self.viewed(call)):
+            return None
+        op = selected_op(call, self.context.target)
+        if op is None:
+            return None
+        params = call_params(op, len(operand_types(call, op)))
+        result = result_param(params)
+        supplied, _produced = operand_roles(call, params)
+        if not result.effect & MemoryEffect.READ or result not in supplied:
+            return None
+        return SSAValue(call.args[supplied.index(result)], 0)
+
     def call_actions(self, call: Call, event: int, scope) -> list[_Action]:
-        """Each instruction or retained call lowering emits for *call* at *event*, in order."""
+        """Each instruction or retained call lowering emits for *call* at *event*, in order.
+
+        A Call is dispatched as ``CudaLowering`` dispatches it.
+        """
+        if lowers_to_dim(call):
+            return []
         callee = scope.attachment(call)
-        kind = emission(call, retained=callee is not None)
-        if kind is Emission.CALL:
+        if callee is not None:
             return self.call(call, event, callee.owner)
-        if kind is Emission.FILL:
-            types = (call.type, None)
-            return [self.action(
-                (event, 0), call, None, Fill(), (call, None), types, "Fill", scope,
-                copy_mesh((call.type,)),
-            )]
-        if kind is Emission.INSERT_SLICE:
-            actions = []
-            for tag, source, copies in (
-                ("base", call.args[0], copies_insert_slice_base),
-                ("update", call.args[1], copies_insert_slice_update),
-            ):
-                if copies(call, self.aliases_of):
-                    position = (event, len(actions))
-                    name = f"InsertSlice {tag}"
-                    actions.append(self.copy(position, call, tag, source, call, scope, name))
-            return actions
-        op = selected_op(call, self.context.target) if kind is Emission.INSTRUCTION else None
+        return self.visit(call)(call, event, scope)
+
+    def visit(self, call: Call):
+        """The visit of *call*: ``visit_<HIR op>``, else ``visit_T``."""
+        return getattr(self, f"visit_{type(call.target).__name__}", self.visit_T)
+
+    def viewed(self, call: Call) -> bool:
+        """Whether memory accepted a VIEW alias on *call*'s result."""
+        return any(alias.kind is AliasKind.VIEW for alias in self.aliases_of(SSAValue(call)))
+
+    def visit_Empty(self, call: Call, event: int, scope) -> list[_Action]:
+        return []
+
+    visit_TupleGetItem = visit_Slice = visit_Reshape = visit_Bitcast = visit_Empty
+    visit_IndexSelect = visit_Empty
+
+    def visit_Reshard(self, call: Call, event: int, scope) -> list[_Action]:
+        return [] if self.viewed(call) else self.visit_T(call, event, scope)
+
+    def visit_Zeros(self, call: Call, event: int, scope) -> list[_Action]:
+        types = (call.type, None)
+        return [self.action(
+            (event, 0), call, None, Fill(), (call, None), types, "Fill", scope,
+            copy_mesh((call.type,)),
+        )]
+
+    visit_FullLike = visit_Zeros
+
+    def visit_InsertSlice(self, call: Call, event: int, scope) -> list[_Action]:
+        actions = []
+        for tag, source, copies in (
+            ("base", call.args[0], copies_insert_slice_base),
+            ("update", call.args[1], copies_insert_slice_update),
+        ):
+            if copies(call, self.aliases_of):
+                position = (event, len(actions))
+                name = f"InsertSlice {tag}"
+                actions.append(self.copy(position, call, tag, source, call, scope, name))
+        return actions
+
+    def visit_T(self, call: Call, event: int, scope) -> list[_Action]:
+        """The action that issues the TIR op selected for *call*."""
+        op = selected_op(call, self.context.target)
         if op is None:
             return []
         types = operand_types(call, op)

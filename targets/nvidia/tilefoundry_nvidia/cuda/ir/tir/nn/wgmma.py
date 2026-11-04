@@ -36,7 +36,6 @@ from tilefoundry.ir.types import (
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.layout_algebra import logical_divide
 from tilefoundry.ir.types.storage import StorageKind as S
-from tilefoundry.visitor_registry.completion import effects, register_completion
 
 from .mma_atom import MmaAtom, execution_mesh_pattern
 
@@ -336,29 +335,6 @@ class Wgmma(MmaAtom):
         ),
         layout=SwitchPattern("dtype", {dtype: _b_layout(dtype) for dtype in DTYPES}),
     )
-
-
-def _wgmma_effects(issued):
-    """Every operand completes at the warpgroup's wgmma wait.
-
-    Shared operands go through the async proxy. Registers need ``wgmma.fence``,
-    except between accumulator accesses of wgmmas of one shape (PTX wgmma.fence).
-    """
-    storage = dict(zip((param.name for param in issued.params), issued.types, strict=True))
-    shape = (issued.op.atom.bindings["n"], issued.op.atom.bindings["dtype"])
-
-    def declared(effect):
-        if storage[effect.param].storage is S.SMEM:
-            return replace(effect, proxy="async")
-        return replace(effect, fence=True, chain=shape if effect.param == "acc" else None)
-
-    return tuple(
-        declared(effect)
-        for effect in effects(issued, mechanism="group", group="wgmma", unit=WARPGROUP)
-    )
-
-
-register_completion(Wgmma, _wgmma_effects)
 
 
 __all__ = [

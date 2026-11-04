@@ -474,62 +474,6 @@ def register_access_relation(op_cls: type): ...
     at the rank of the value it describes, the result's own rank on the output
     side.
 
-### 4.2 Completion service — `completion`
-
-One registry over classes states when each memory effect of an issued
-instruction is complete for later accesses. The synchronisation analysis asks
-it for every action lowering emits.
-
-```python
-@dataclass(frozen=True)
-class Issued:
-    op: Op
-    params: tuple[ParamDef, ...]    # in issue order
-    types: tuple                    # one per parameter, None where none is known
-
-@dataclass(frozen=True)
-class Effect:
-    param: str
-    write: bool
-    mechanism: str                  # "on_return", "group" or "unknown"
-    group: str | None = None
-    proxy: str = "generic"          # "generic" or "async"
-    unit: Mesh | None = None
-    fence: bool = False
-    chain: object = None
-
-completion_registry: DispatchRegistry     # keyed by class
-def effects(issued: Issued, **fields) -> tuple[Effect, ...]: ...
-def on_return(issued: Issued) -> tuple[Effect, ...]: ...
-def register_completion(key: type, handler: Callable[[Issued], tuple[Effect, ...]]) -> None: ...
-def completion_of(issued: Issued, *, key: type | None = None) -> tuple[Effect, ...]: ...
-```
-
-- constraints:
-  - A handler answers one `Effect` per read and per write of the issued
-    parameters; `effects` builds them in that order, reads of a parameter
-    first. It sees the parameter types, so an effect can depend on where an
-    operand lives.
-  - `on_return` means the effect is complete for the issuing threads once the
-    statement returns. `group` means it completes when those threads wait on
-    the named group that holds it. `unknown` means no protocol states it; the
-    synchronisation analysis then orders the effect as `on_return`, so the
-    class's emitter MUST wait for it before the statement returns.
-  - `proxy` is the path the effect takes to shared memory. A `unit` names the
-    mesh of one group of threads that issue the instruction, and run its
-    group's steps, together. A `fence` effect on registers needs the group's
-    fence after any other access to those registers, except an earlier effect
-    with the same non-None `chain`.
-  - Lookup uses the exact class of `issued.op`, or `key`, as every
-    `DispatchRegistry` does. A class with no registration answers `unknown` for
-    every effect; a base class's answer is not inherited.
-  - The declaration sits next to the class's access relation registration, or
-    next to the class when its access relation comes from shared copy semantics
-    or a schedule projection.
-  - `TiledMma` answers with its atom's handler, looked up with `key`.
-  - `register_copy_semantics` registers no completion, because a transfer that
-    reuses Copy's rules may complete asynchronously.
-
 ## 5. Instance 2 — `verify`
 
 Context (extends `TypeInferContext` with the TIR traversal scope cache):

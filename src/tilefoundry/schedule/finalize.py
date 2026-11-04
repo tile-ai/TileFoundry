@@ -10,10 +10,11 @@ from tilefoundry.ir.core.module import Module
 def finalize(analyzed: AnalysisResult) -> Module:
     """Lower the root of one analysis through ``PassManager``.
 
-    *analyzed* carries at least the ``memory`` family. A Target whose lowering emits
-    the synchronisation plan also needs ``sync``::
+    *analyzed* carries the families the Target's lowering pass names in
+    ``analyses``::
 
-        finalize(analyze(module, entry, analysis=("memory", "sync")))
+        lowering = module.resolve_target().resolve(ConvertHIRToTIR, CodegenOptions())
+        finalize(analyze(module, entry, analysis=lowering.analyses))
     """
     return default_pipeline(analyzed.module).run(analyzed.module)
 

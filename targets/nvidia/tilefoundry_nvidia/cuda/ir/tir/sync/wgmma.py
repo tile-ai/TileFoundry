@@ -9,8 +9,8 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import WildcardPattern, utils
-from tilefoundry.ir.tir.sync import participation, whole_groups
-from tilefoundry.ir.types import UnitType
+from tilefoundry.ir.tir.sync import participation
+from tilefoundry.ir.types import Mesh, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
@@ -18,7 +18,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry_nvidia.cuda.ir.tir.nn.wgmma import WARPGROUP
 
-__all__ = ["FenceProxyAsync", "WgmmaCommitGroup", "WgmmaFence", "WgmmaWaitGroup"]
+__all__ = ["FenceProxyAsync", "WgmmaCommitGroup", "WgmmaFence", "WgmmaWaitGroup", "whole_groups"]
 
 
 @register_op(dialect="T", category="sync", name="wgmma_fence")
@@ -54,6 +54,18 @@ class FenceProxyAsync(Op):
     """Make this thread's earlier shared memory accesses visible to the async proxy."""
 
     execution_mesh = utils.thread_execution_mesh()
+
+
+def whole_groups(mesh: Mesh, size: int) -> bool:
+    """Whether ``mesh``'s threads are whole, aligned groups of ``size`` threads.
+
+    It reads which threads the mesh holds, not how its layout orders them: a
+    ``Layout((256,), (1,))`` thread mesh is two warpgroups here, while
+    ``execution_mesh_pattern(WARPGROUP, groups=True)`` matches only a layout
+    whose every group is laid out as ``WARPGROUP``.
+    """
+    held = participation(mesh)
+    return held.base % size == 0 and held.count % size == 0
 
 
 def _verify_warpgroups(call, ctx) -> None:

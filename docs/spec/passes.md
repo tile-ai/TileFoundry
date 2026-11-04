@@ -236,6 +236,7 @@ class ConvertHIRToTIR(ModulePass):
     options: CodegenOptions = CodegenOptions()
     name: str = "convert-hir-to-tir"
     requires: tuple[str, ...] = ()
+    analyses: tuple[str, ...] = ("memory",)
 
     @classmethod
     def create(cls, target: Target, options: CodegenOptions) -> ConvertHIRToTIR: ...
@@ -251,10 +252,12 @@ class ConvertHIRToTIR(ModulePass):
   - A Target MAY bind a subclass with `@bind(TargetClass, ConvertHIRToTIR)`;
     finalization obtains the pass through `Target.resolve(ConvertHIRToTIR)`. The
     entry function and every callee are lowered by the same `visitor` class.
-  - The instruction a Call issues and the operands that instruction reads and
-    writes, which copies lowering adds for the allocation's accepted aliases,
-    and the mesh a copy or an instruction is issued on, come from
-    `analysis/emission.py`.
+  - `analyses` names the analysis families the pass's visitor reads; a
+    subclass whose visitor reads more names them too. `tilefoundry schedule
+    finalize` runs exactly these on the pass `Target.resolve` gives.
+  - Whether a Call is a dimension, the instruction it issues and its operand
+    types, the mesh that owns a copy or an instruction, and the accepted
+    aliases lowering executes come from `analysis/emission.py`.
   - The visitor lowers each HIR node in its `visit_<Node>`. `visit_Call` lowers
     a Call that `lowers_to_dim` accepts as a dimension; for any other Call it
     lowers the values its storage's dimensions read, then its operands, and
