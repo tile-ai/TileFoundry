@@ -53,11 +53,11 @@ class CudaLowering(Lowering):
     `visit_T` also covers a `Reshard` that is not a view. The loop,
     `InsertSlice`, fill and instruction visits exist only here: the core
     visitor refuses those nodes ([passes §7.1](../../../../../../docs/spec/passes.md#71-converthirtotir)).
-  - For the `cp_async` group a commit is `cp_async_commit` and a wait
-    `cp_async_wait(n=0)`; for the `wgmma` group a commit is
-    `wgmma_commit_group`, a wait `wgmma_wait_group(n=0)` and a fence
-    `wgmma_fence`. A proxy fence is `fence_proxy_async` and a barrier `T.sync`
-    over the step's mesh.
+  - For `Group.CP_ASYNC` a commit is `cp_async_commit` and a wait
+    `cp_async_wait(n=0)`; for `Group.WGMMA` a commit is `wgmma_commit_group`,
+    a wait `wgmma_wait_group(n=0)` and a fence `wgmma_fence`. A
+    `StepKind.PROXY_FENCE` is `fence_proxy_async` and a `StepKind.BARRIER`
+    `T.sync` over the step's mesh.
   - `CopyAsyncTensor` and `CopyReduceAsyncTensor` declare no completion, so the
     plan orders them as complete once their statement returns. Their emitters
     MUST wait before returning: an mbarrier wait for a TMA load, a bulk wait

@@ -20,10 +20,17 @@ emits a node's steps where it lowers that node and analyses nothing itself
 ([passes §7.1](./passes.md#71-converthirtotir)).
 
 ```python
+class StepKind(Enum):          # under one tag, steps run in the members' order
+    COMMIT = auto()
+    WAIT = auto()
+    PROXY_FENCE = auto()
+    BARRIER = auto()
+    FENCE = auto()
+
 class SyncStep:
-    kind: str                  # "commit", "wait", "proxy_fence", "barrier" or "fence"
+    kind: StepKind
     mesh: Mesh | None = None   # the thread mesh a barrier runs over
-    group: str | None = None   # the completion group a commit, a wait or a fence is for
+    group: Group | None = None # the completion group a commit, a wait or a fence is for
 
 class SyncMetadata(IRMetadata):
     steps: tuple[tuple[object, tuple[SyncStep, ...]], ...] = ()   # (tag, steps)
@@ -41,10 +48,10 @@ class SyncPlanMetadata(IRMetadata):
     and `"after"` right after its issues, in the region that issues them. Any
     other tag names a copy lowering adds for the node: `"base"` and `"update"`
     of an InsertSlice, `("entry", slot)` and `("backedge", slot)` of a loop's
-    carried slot. Under one tag the steps run in the order commit, wait, proxy
-    fence, barrier, fence, and steps of one kind by group; a step is kept once
-    per tag, and steps for different groups are kept apart. Each analysis
-    replaces the `SyncMetadata` of every node of the Function.
+    carried slot. Under one tag the steps run in `StepKind`'s order, and steps
+    of one kind in `Group`'s; a step is kept once per tag, and steps for
+    different groups are kept apart. Each analysis replaces the `SyncMetadata`
+    of every node of the Function.
   - The actions of a node are the ones lowering emits: the selected
     instruction of a Call, the copies and fills lowering adds, and a retained
     call, which reads its arguments and writes its results. The family
@@ -159,15 +166,27 @@ class Issued:
     params: tuple[ParamDef, ...]    # in issue order
     types: tuple                    # one per parameter, None where none is known
 
+class Mechanism(Enum):
+    ON_RETURN = auto()
+    GROUP = auto()
+
+class Proxy(Enum):
+    GENERIC = auto()
+    ASYNC = auto()
+
+class Group(Enum):
+    CP_ASYNC = auto()
+    WGMMA = auto()
+
 class Effect:
     param: str
     write: bool
-    mechanism: str                  # "on_return" or "group"
-    group: str | None = None
-    proxy: str = "generic"          # "generic" or "async"
+    mechanism: Mechanism
+    group: Group | None = None
+    proxy: Proxy = Proxy.GENERIC
     unit: Mesh | None = None
     fence: bool = False
-    chain: object = None
+    chain: tuple[int, DType] | None = None   # a WGMMA's (n, dtype)
 
 completion_registry: DispatchRegistry     # keyed by class
 def effects(issued: Issued, **fields) -> tuple[Effect, ...]: ...
@@ -179,23 +198,23 @@ def completion_of(issued: Issued, *, key: type | None = None) -> tuple[Effect, .
     parameters; `effects` builds them in that order, reads of a parameter
     first. It sees the parameter types, so an effect can depend on where an
     operand lives.
-  - `on_return` means the effect is complete for the issuing threads once the
-    statement returns. `group` means it completes when those threads wait on
-    the named group that holds it.
+  - `Mechanism.ON_RETURN` means the effect is complete for the issuing threads
+    once the statement returns. `Mechanism.GROUP` means it completes when those
+    threads wait on the `group` that holds it.
   - `proxy` is the path the effect takes to shared memory. A `unit` names the
     mesh of one group of threads that issue the instruction, and run its
     group's steps, together. A `fence` effect on registers needs the group's
     fence after any other access to those registers, except an earlier effect
     with the same non-None `chain`.
   - Lookup uses the exact class of `issued.op`, or `key`, as every
-    `DispatchRegistry` does. A class with no registration answers `on_return`
-    for every effect; a base class's answer is not inherited. The emitter of
-    such a class MUST therefore complete its work before the statement
-    returns.
+    `DispatchRegistry` does. A class with no registration answers
+    `Mechanism.ON_RETURN` for every effect; a base class's answer is not
+    inherited. The emitter of such a class MUST therefore complete its work
+    before the statement returns.
   - The registry belongs to CUDA and only the `sync` family reads it.
     `cuda/analysis/completion.py` registers every handler when it is imported,
-    and `cuda/analysis/sync.py` imports it: `CopyAsync` completes in the
-    `cp_async` group, the WGMMA atom as
+    and `cuda/analysis/sync.py` imports it: `CopyAsync` completes in
+    `Group.CP_ASYNC`, the WGMMA atom as
     [tir MMA atoms](./tir.md#declarative-mma-atoms-and-ttiled_mma) states, and
     `TiledMma` answers with its atom's handler, looked up with `key`. No Op
     file registers a completion.

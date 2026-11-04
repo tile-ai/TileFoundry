@@ -47,6 +47,7 @@ from tilefoundry.passes.transforms.convert_hir_to_tir import (
 )
 from tilefoundry.target import bind
 from tilefoundry_nvidia.cuda import CudaTarget
+from tilefoundry_nvidia.cuda.analysis.completion import Group
 from tilefoundry_nvidia.cuda.analysis.emission import (
     copies_carry_backedge,
     copies_carry_entry,
@@ -57,7 +58,7 @@ from tilefoundry_nvidia.cuda.analysis.emission import (
     required_execution_mesh,
     result_param,
 )
-from tilefoundry_nvidia.cuda.analysis.sync import SyncMetadata, SyncPlanMetadata
+from tilefoundry_nvidia.cuda.analysis.sync import StepKind, SyncMetadata, SyncPlanMetadata
 from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import (
     FenceProxyAsync,
     WgmmaCommitGroup,
@@ -66,12 +67,12 @@ from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import (
 )
 
 _STEPS = {
-    ("commit", "cp_async"): CpAsyncCommit,
-    ("commit", "wgmma"): WgmmaCommitGroup,
-    ("wait", "cp_async"): lambda: CpAsyncWait(n=0),
-    ("wait", "wgmma"): lambda: WgmmaWaitGroup(n=0),
-    ("fence", "wgmma"): WgmmaFence,
-    ("proxy_fence", None): FenceProxyAsync,
+    (StepKind.COMMIT, Group.CP_ASYNC): CpAsyncCommit,
+    (StepKind.COMMIT, Group.WGMMA): WgmmaCommitGroup,
+    (StepKind.WAIT, Group.CP_ASYNC): lambda: CpAsyncWait(n=0),
+    (StepKind.WAIT, Group.WGMMA): lambda: WgmmaWaitGroup(n=0),
+    (StepKind.FENCE, Group.WGMMA): WgmmaFence,
+    (StepKind.PROXY_FENCE, None): FenceProxyAsync,
 }
 
 
@@ -97,7 +98,7 @@ class CudaLowering(Lowering):
         """Emit the steps *owner*'s ``SyncMetadata`` holds for *tag*, in order."""
         record = get_metadata(owner, SyncMetadata)
         for step in () if record is None else record.at(tag):
-            if step.kind == "barrier":
+            if step.kind is StepKind.BARRIER:
                 ctx.builder.add(Evaluate(Sync(mesh=step.mesh), ()))
             else:
                 ctx.builder.add(Evaluate(_STEPS[step.kind, step.group](), ()))

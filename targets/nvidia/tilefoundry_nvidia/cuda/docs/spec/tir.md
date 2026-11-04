@@ -244,7 +244,7 @@ because this stage provides no WGMMA runtime emitter.
 
 Completion ([analysis §2](./analysis.md#2-completion-registry))
 follows the atom. The SM80 and SM89 MMAs complete on return. Every effect of a
-WGMMA completes in the `wgmma` group, with `WARPGROUP` as its unit: shared
+WGMMA completes in `Group.WGMMA`, with `WARPGROUP` as its unit: shared
 operands go through the async proxy, and register operands need
 `wgmma_fence`. An accumulator access chains with an earlier one of the same
 `n` and `dtype`, as PTX exempts accumulator accesses of wgmmas of one shape

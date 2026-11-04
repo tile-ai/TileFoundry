@@ -9,6 +9,7 @@ access needs before it may follow an earlier one, or refuses the Function. See
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from enum import Enum, auto
 from itertools import product
 from operator import mul
 
@@ -46,14 +47,21 @@ from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord, literal_axes
 from tilefoundry.ir.mesh_scope import device_layout
 from tilefoundry.ir.tir.memory import Copy, Fill
 from tilefoundry.ir.tir.sync import SyncBarrier, classify, participation
-from tilefoundry.ir.types import Mesh, ShardLayout, Split, StorageKind, TensorType
+from tilefoundry.ir.types import DType, Mesh, ShardLayout, Split, StorageKind, TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.types.layout import ComposedLayout
 from tilefoundry.ir.types.mesh import axis_keys, separate, within_scope
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.visitor_registry.instruction import call_params
-from tilefoundry_nvidia.cuda.analysis.completion import Effect, Issued, completion_of
+from tilefoundry_nvidia.cuda.analysis.completion import (
+    Effect,
+    Group,
+    Issued,
+    Mechanism,
+    Proxy,
+    completion_of,
+)
 from tilefoundry_nvidia.cuda.analysis.emission import (
     copies_carry_backedge,
     copies_carry_entry,
@@ -69,21 +77,29 @@ from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import whole_groups
 _DONE = -1
 _UNCOMMITTED = -2
 _LOOP_LIMIT = 64
-_ORDER = ("commit", "wait", "proxy_fence", "barrier", "fence")
+
+
+class StepKind(Enum):
+    """The statement a ``SyncStep`` is; under one tag, steps run in the members' order."""
+
+    COMMIT = auto()
+    WAIT = auto()
+    PROXY_FENCE = auto()
+    BARRIER = auto()
+    FENCE = auto()
 
 
 @dataclass(frozen=True)
 class SyncStep:
     """One statement lowering emits.
 
-    ``kind`` is ``commit``, ``wait``, ``proxy_fence``, ``barrier`` or ``fence``. A
-    commit, a wait or a fence is for one completion ``group``; a barrier runs over
-    ``mesh``.
+    A commit, a wait or a fence is for one completion ``group``; a barrier runs
+    over ``mesh``.
     """
 
-    kind: str
+    kind: StepKind
     mesh: Mesh | None = None
-    group: str | None = None
+    group: Group | None = None
 
 
 @dataclass(frozen=True)
@@ -164,9 +180,9 @@ class _Access:
     register: SSAValue | None
     meshes: tuple[int, ...]
     state: int
-    group: str | None = None
-    proxy: str = "generic"
-    chain: object = None
+    group: Group | None = None
+    proxy: Proxy = Proxy.GENERIC
+    chain: tuple[int, DType] | None = None
     issuers: Mesh | None = None
     unit: Mesh | None = None
     threads: ShardLayout | None = None
@@ -532,12 +548,13 @@ class _Planner:
             **{f"argument {index}": SSAValue.leaves(arg) for index, arg in enumerate(call.args)},
             "result": SSAValue.leaves(call),
         }
-        effects = tuple(Effect(name, name == "result", "on_return") for name in leaves)
+        effects = tuple(Effect(name, name == "result", Mechanism.ON_RETURN) for name in leaves)
         uses = [use for use in self.uses(effects, leaves) if use.register is not None]
         plan = get_metadata(callee, SyncPlanMetadata)
         if plan is None or plan.shared:
             uses += [
-                _Use(Effect("callee", write, "group", "cp_async"), (None,)) for write in (False, True)
+                _Use(Effect("callee", write, Mechanism.GROUP, Group.CP_ASYNC), (None,))
+                for write in (False, True)
             ]
         if not uses:
             return []
@@ -643,9 +660,9 @@ class _Planner:
         """Commit and wait for *action*'s groups right after it issues, in its issuing region."""
         steps = self.after.setdefault(action.position, [])
         for group in dict.fromkeys(
-            use.effect.group for use in action.uses if use.effect.mechanism == "group"
+            use.effect.group for use in action.uses if use.effect.mechanism is Mechanism.GROUP
         ):
-            for kind in ("commit", "wait"):
+            for kind in (StepKind.COMMIT, StepKind.WAIT):
                 if SyncStep(kind, group=group) not in steps:
                     steps.append(SyncStep(kind, group=group))
         return frozenset(
@@ -659,7 +676,7 @@ class _Planner:
         An effect no protocol states is complete when its statement returns.
         """
         effect = use.effect
-        status = _UNCOMMITTED if effect.mechanism == "group" else _DONE
+        status = _UNCOMMITTED if effect.mechanism is Mechanism.GROUP else _DONE
         return _Access(
             action.position,
             effect.write,
@@ -696,12 +713,13 @@ class _Planner:
                         raise _Unplaced(access.position, str(error)) from None
                 group = access.group
                 if access.state == _UNCOMMITTED:
-                    state = self.plan(SyncStep("commit", group=group), meeting, position, state)
-                state = self.plan(SyncStep("wait", group=group), meeting, position, state)
+                    commit = SyncStep(StepKind.COMMIT, group=group)
+                    state = self.plan(commit, meeting, position, state)
+                state = self.plan(SyncStep(StepKind.WAIT, group=group), meeting, position, state)
             if access.register is None:
-                if use.effect.proxy == "async" and access.proxy == "generic":
-                    state = self.plan(SyncStep("proxy_fence"), meeting, position, state)
-                barrier = SyncStep("barrier", self.barrier_mesh(meeting))
+                if use.effect.proxy is Proxy.ASYNC and access.proxy is Proxy.GENERIC:
+                    state = self.plan(SyncStep(StepKind.PROXY_FENCE), meeting, position, state)
+                barrier = SyncStep(StepKind.BARRIER, self.barrier_mesh(meeting))
                 state = self.plan(barrier, meeting, position, state)
             same = (access.position, access.write, access.meshes, seq)
             if any(
@@ -736,7 +754,7 @@ class _Planner:
             return False
         if use.threads is not None and use.threads == access.threads and access.state == _DONE:
             return False
-        visible = use.effect.proxy == "generic" or access.proxy != "generic"
+        visible = use.effect.proxy is Proxy.GENERIC or access.proxy is not Proxy.GENERIC
         return not any(
             meshes[: len(tag)] == tag and (visible or published)
             for tag, published in access.ordered
@@ -760,7 +778,7 @@ class _Planner:
 
         if not every and not any(needed(use) for use in fenced):
             return state
-        step = SyncStep("fence", group=fenced[0].effect.group)
+        step = SyncStep(StepKind.FENCE, group=fenced[0].effect.group)
         placed = self.issues if every else self.planned
         steps = placed.setdefault(action.position, [])
         if step not in steps:
@@ -783,7 +801,9 @@ class _Planner:
         planned = self.planned.setdefault(position, [])
         if step not in planned:
             planned.append(step)
-            planned.sort(key=lambda item: (_ORDER.index(item.kind), item.group or ""))
+            planned.sort(
+                key=lambda item: (item.kind.value, 0 if item.group is None else item.group.value)
+            )
         return self.effect(step, scope, state, self.entered[position])
 
     def barrier_mesh(self, scope) -> Mesh:
@@ -880,22 +900,22 @@ class _Planner:
         meshes = _mesh_chain(scope)
         registers = (
             {use.register for use in action.uses if use.register is not None}
-            if step.kind == "fence" and action is not None
+            if step.kind is StepKind.FENCE and action is not None
             else set()
         )
         out = set()
         for access, seq in state:
             issued = seq < limit and access.meshes[: len(meshes)] == meshes
             grouped = access.group == step.group
-            if issued and step.kind == "commit" and grouped and access.state == _UNCOMMITTED:
+            if issued and step.kind is StepKind.COMMIT and grouped and access.state == _UNCOMMITTED:
                 access = replace(access, state=0)
-            elif issued and step.kind == "wait" and grouped and access.state >= 0:
+            elif issued and step.kind is StepKind.WAIT and grouped and access.state >= 0:
                 access = replace(access, state=_DONE)
-            elif issued and step.kind == "proxy_fence" and access.state == _DONE:
+            elif issued and step.kind is StepKind.PROXY_FENCE and access.state == _DONE:
                 access = replace(access, fenced=True)
-            elif issued and step.kind == "barrier" and access.state == _DONE:
+            elif issued and step.kind is StepKind.BARRIER and access.state == _DONE:
                 access = replace(access, ordered=access.ordered | {(meshes, access.fenced)})
-            elif step.kind == "fence" and seq < limit and access.register in registers:
+            elif step.kind is StepKind.FENCE and seq < limit and access.register in registers:
                 access = replace(access, group_fenced=True)
             out.add((access, seq))
         return frozenset(out)
@@ -919,6 +939,7 @@ def analyze_sync(function: Function, context: AnalyzeContext) -> None:
 
 
 __all__ = [
+    "StepKind",
     "SyncMetadata",
     "SyncPlanMetadata",
     "SyncStep",

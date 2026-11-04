@@ -22,15 +22,16 @@ from tilefoundry.ir.tir.sync import SyncBarrier
 from tilefoundry.ir.types import StorageKind
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
 from tilefoundry.schedule import finalize
-from tilefoundry_nvidia.cuda.analysis.sync import SyncMetadata, SyncPlanMetadata
+from tilefoundry_nvidia.cuda.analysis.completion import Group
+from tilefoundry_nvidia.cuda.analysis.sync import StepKind, SyncMetadata, SyncPlanMetadata
 from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
 from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import WgmmaCommitGroup, WgmmaWaitGroup
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 GEMM = FIXTURES / "schedule/hir/sm89_e4m3_gemm.py"
-_PUBLISHED = (("proxy_fence", None), ("barrier", None))
-_WAITED = (("commit", "wgmma"), ("wait", "wgmma"))
-_FENCE = (("fence", "wgmma"),)
+_PUBLISHED = ((StepKind.PROXY_FENCE, None), (StepKind.BARRIER, None))
+_WAITED = ((StepKind.COMMIT, Group.WGMMA), (StepKind.WAIT, Group.WGMMA))
+_FENCE = ((StepKind.FENCE, Group.WGMMA),)
 
 
 def _attached(function):
@@ -105,10 +106,10 @@ class CpAsyncGemm(SyncCase):
             for owner, tagged in attached
             for tag, steps in tagged
         ] == [
-            ("CopyAsync", None, ("barrier",)),
-            ("Copy", None, ("commit", "wait", "barrier")),
-            ("CopyAsync", None, ("barrier",)),
-            ("Copy", None, ("commit", "wait", "barrier")),
+            ("CopyAsync", None, (StepKind.BARRIER,)),
+            ("Copy", None, (StepKind.COMMIT, StepKind.WAIT, StepKind.BARRIER)),
+            ("CopyAsync", None, (StepKind.BARRIER,)),
+            ("Copy", None, (StepKind.COMMIT, StepKind.WAIT, StepKind.BARRIER)),
         ]
         (threads,) = _thread_regions(function)
         meshes = {
@@ -144,7 +145,7 @@ class NestedSubsets(SyncCase):
             (owner, tagged) for owner, tagged in attached if id(owner) in by_owner
         ]
         assert (between_tag, inner_tag) == (None, None)
-        assert (inner.kind, between.kind) == ("barrier", "barrier")
+        assert (inner.kind, between.kind) == (StepKind.BARRIER, StepKind.BARRIER)
         assert (inner.mesh, between.mesh) == (producer.mesh, threads.mesh)
         assert any(owner is expr for expr in collect_exprs(loop.body))
 
@@ -158,7 +159,7 @@ class CapturedInsertUpdate(SyncCase):
     def guard(self, state, problems):
         function, _attached = _planned(state)
         (loop,) = _of_kind(function, LoopRegion)
-        assert _kinds(get_metadata(loop, SyncMetadata).at()) == ("barrier",)
+        assert _kinds(get_metadata(loop, SyncMetadata).at()) == (StepKind.BARRIER,)
 
 
 @case
@@ -232,10 +233,14 @@ class WgmmaPartialWarpgroups(SyncCase):
         result = _analyzed(state)
         attached = _attached(result.function)
         assert _steps(attached) == [
-            (None, None, (("barrier", None),)),
+            (None, None, ((StepKind.BARRIER, None),)),
             ("TiledMma", None, _FENCE),
             ("TiledMma", "after", _WAITED),
-            (None, None, (("commit", "cp_async"), ("wait", "cp_async")) + _PUBLISHED),
+            (
+                None,
+                None,
+                ((StepKind.COMMIT, Group.CP_ASYNC), (StepKind.WAIT, Group.CP_ASYNC)) + _PUBLISHED,
+            ),
         ]
 
         issuing = []
