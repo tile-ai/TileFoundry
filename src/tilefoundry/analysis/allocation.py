@@ -22,7 +22,7 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord, literal_axes
 from tilefoundry.ir.isl_interop import shape_to_isl_set
 from tilefoundry.ir.types import (
     ComposedLayout,
@@ -281,13 +281,13 @@ def _visible_at(model, value, producer):
         if mesh is None:
             return False
         available = {getattr(held, "name", held) for held in mesh.topologies}
-        axis = static_dim_value(value.args[0])
+        axes = literal_axes(value.args[0])
         offset = 0
         for topology, layout in zip(
             value.target.mesh.topologies, levels(value.target.mesh), strict=True
         ):
             width = len(flatten(layout.shape))
-            if axis is None or offset <= axis < offset + width:
+            if axes is None or any(offset <= axis < offset + width for axis in axes):
                 if getattr(topology, "name", topology) not in available:
                     return False
             offset += width

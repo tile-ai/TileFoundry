@@ -28,11 +28,11 @@ source = "https://images.nvidia.com/content/volta-architecture/pdf/volta-archite
 conditions = "32 GB HBM2, decimal"
 
 [facts.memory.hbm.owner]
-value = "target"
+value = "gpu"
 unit = "name"
 origin = "derived"
 source = "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
-conditions = "the HBM2 capacity is one pool shared by all execution units of this single-device target"
+conditions = "the HBM2 capacity is one pool per card, held by that card alone"
 
 [facts.memory.hbm.bandwidth]
 value = 900000000000

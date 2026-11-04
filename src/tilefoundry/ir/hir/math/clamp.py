@@ -5,6 +5,7 @@ Element-wise clip: ``y = min(max(x, min_val), max_val)``.
 
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -46,8 +47,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(Clamp)
 def _eval_clamp(ctx):
-    out = torch.clamp(ctx.args[0].data, min=ctx.op.min_val, max=ctx.op.max_val)
-    return TensorValue(data=out, type=ctx.result_type)
+    def clamp(x):
+        return torch.clamp(x, min=ctx.op.min_val, max=ctx.op.max_val)
+
+    x = ctx.args[0].tensor
+    held = clamp(x.tensor) if x.is_global else tuple((p, clamp(t)) for p, t in x.tensor)
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 __all__ = ["Clamp"]

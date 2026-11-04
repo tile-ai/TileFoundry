@@ -10,8 +10,6 @@ from tilefoundry.evaluator.value import (
     TensorValue,
     TupleValue,
     Value,
-    as_layout_view,
-    from_layout_view,
     tensor_type_of,
     to_torch_dtype,
 )
@@ -26,8 +24,6 @@ __all__ = [
     "EvaluateContext",
     "EvalError",
     "to_torch_dtype",
-    "as_layout_view",
-    "from_layout_view",
     "tensor_type_of",
 ]
 

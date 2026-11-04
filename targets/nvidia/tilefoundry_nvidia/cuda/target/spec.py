@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from tilefoundry.ir.types import DType
-from tilefoundry.target.facts import TARGET_MEMORY_OWNER
 from tilefoundry.target.hardware.envelope import (
     HardwareDocument,
     SchemaValidationError,
@@ -26,7 +25,7 @@ _THROUGHPUT_DTYPE_NAMES = ("f32", "f16", "bf16", "fp8e4m3", "f4e2m1")
 def _memory_owner(reader: SchemaReader, path: str) -> str:
     """Read an owner in the CUDA target's topology vocabulary."""
     owner = reader.text(path)
-    allowed = (TARGET_MEMORY_OWNER, "cta", "thread")
+    allowed = ("gpu", "cta", "thread")
     if owner not in allowed:
         raise SchemaValidationError(
             f"{reader.document.id}: memory owner {owner!r} at {path!r} must be "

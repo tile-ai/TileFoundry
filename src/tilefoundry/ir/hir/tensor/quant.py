@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue, to_torch_dtype
 from tilefoundry.ir.core import Op
@@ -199,25 +200,33 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
 
 @register_eval(Quant)
 def _eval_quant(ctx):
-    x = ctx.args[0].data.float()
-    group = ctx.op.group
-    last = x.shape[-1]
-    if last % group:
-        raise EvalError(f"Quant: runtime last dim {last} not divisible by group={group}")
-    grouped = x.reshape(*x.shape[:-1], last // group, group)
-    absmax = grouped.abs().amax(dim=-1)
-    scale = torch.where(absmax == 0, torch.ones_like(absmax), absmax / 448.0)
-    quantized = (
-        (grouped / scale.unsqueeze(-1))
-        .clamp(-448.0, 448.0)
-        .reshape(x.shape)
-        .to(to_torch_dtype(DType.fp8e4m3))
-    )
-    return TupleValue(
-        elements=(
-            TensorValue(data=quantized, type=ctx.result_type.fields[0]),
-            TensorValue(data=scale, type=ctx.result_type.fields[1]),
+    fields = ctx.result_type.fields
+
+    def quant(x):
+        x = x.float()
+        group = ctx.op.group
+        last = x.shape[-1]
+        if last % group:
+            raise EvalError(f"Quant: runtime last dim {last} not divisible by group={group}")
+        grouped = x.reshape(*x.shape[:-1], last // group, group)
+        absmax = grouped.abs().amax(dim=-1)
+        scale = torch.where(absmax == 0, torch.ones_like(absmax), absmax / 448.0)
+        quantized = (
+            (grouped / scale.unsqueeze(-1))
+            .clamp(-448.0, 448.0)
+            .reshape(x.shape)
+            .to(to_torch_dtype(DType.fp8e4m3))
         )
+        return quantized, scale
+
+    x = ctx.args[0].tensor
+    if x.is_global:
+        held = quant(x.tensor)
+    else:
+        each = [(p, quant(t)) for p, t in x.tensor]
+        held = tuple(tuple((p, out[i]) for p, out in each) for i in range(len(fields)))
+    return TupleValue(
+        tuple(TensorValue(ShardTensor(field, data)) for field, data in zip(fields, held, strict=True))
     )
 
 

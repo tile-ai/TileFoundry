@@ -1060,7 +1060,7 @@ class IssuePlan:
         op = selected_op(call, target)
         if op is not None:
             return op
-        candidates = candidate_ops(type(call.target), target=target)
+        candidates = candidate_ops(type(call.target), target=target, call=call)
         if not candidates:
             raise LoweringError(
                 f"{_label(call)} uses unknown HIR call {type(call.target).__name__}"

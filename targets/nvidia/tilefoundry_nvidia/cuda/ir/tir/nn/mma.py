@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_schedule_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Call, Op, OpCapability
@@ -102,7 +103,10 @@ def _tiled_mma_access_relation(call: "Call", ctx) -> tuple[AccessRelation, ...]:
 def _eval_scheduled_mma(ctx):
     acc, lhs, rhs = (arg.data for arg in ctx.args)
     return TensorValue(
-        data=acc + torch.matmul(lhs.to(acc.dtype), rhs.to(acc.dtype)), type=ctx.result_type
+        ShardTensor(
+            ctx.result_type,
+            acc + torch.matmul(lhs.to(acc.dtype), rhs.to(acc.dtype)),
+        )
     )
 
 

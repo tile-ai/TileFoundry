@@ -15,8 +15,11 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from itertools import product
 
-from tilefoundry.ir.types.mesh import Topology
+from tilefoundry.ir.types.int_tuple import product as product_of
+from tilefoundry.ir.types.layout import apply
+from tilefoundry.ir.types.mesh import Mesh, Topology, _named, levels
 
 
 @dataclass(frozen=True)
@@ -33,9 +36,9 @@ class Placement:
 
     ids: Mapping[str, int]
 
-    def program_ids(self, topologies: tuple[Topology, ...]) -> tuple[int | None, ...]:
+    def program_ids(self, topologies: "tuple[Topology | str, ...]") -> tuple[int | None, ...]:
         """This invocation's program id at each of *topologies*, in that order."""
-        return tuple(self.ids.get(topology.name) for topology in topologies)
+        return tuple(self.ids.get(getattr(topology, "name", topology)) for topology in topologies)
 
     @classmethod
     def from_env(cls, topology_level: str = "gpu") -> "Placement":
@@ -52,6 +55,16 @@ class Placement:
                 "sets it, so pass Placement({topology_level!r}: rank) yourself instead"
             )
         return cls({topology_level: int(rank)})
+
+    @classmethod
+    def each(cls, mesh: Mesh) -> "tuple[Placement, ...]":
+        """Every placement of *mesh*: each level's program ids are its arrangement's values."""
+        arrangements = levels(mesh)
+        names = _named(mesh)
+        return tuple(
+            cls(dict(zip(names, map(apply, arrangements, at), strict=True)))
+            for at in product(*(range(product_of(level.shape)) for level in arrangements))
+        )
 
 
 __all__ = ["Placement"]

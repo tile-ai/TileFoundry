@@ -475,10 +475,13 @@ rather than of the model. `Placement` states exactly that and nothing else.
 class Placement:
     ids: Mapping[str, int]
 
-    def program_ids(self, topologies: tuple[Topology, ...]) -> tuple[int | None, ...]: ...
+    def program_ids(self, topologies: tuple[Topology | str, ...]) -> tuple[int | None, ...]: ...
 
     @classmethod
     def from_env(cls, topology_level: str = "gpu") -> "Placement": ...
+
+    @classmethod
+    def each(cls, mesh: Mesh) -> tuple["Placement", ...]: ...
 ```
 
 - constraints:
@@ -491,6 +494,9 @@ class Placement:
     per ordered `Topology` by lookup. A level the mapping does not name is
     unfixed, which is what makes the answer's length the caller's business
     rather than the caller's arithmetic.
+  - `Placement.each(mesh)` lists every placement of a mesh: each level's ids
+    are the values of that level's arrangement. Its coordinates are
+    `mesh_coords` of those ids ([§7.6](#76-local_layout)).
   - an unfixed level MUST be left undivided rather than read as `0`: the device
     chooses its own `cta` and `thread`, and a host that guessed would hand one
     thread's data back as the whole card's.
@@ -801,8 +807,9 @@ Which part of a sharded tensor one mesh instance holds, answered once and read
 by both sides of a launch.
 
 ```python
-def local_layout(shard, tensor_shape, ids) -> Layout: ...
-def local_layout_and_offset(shard, tensor_shape, ids) -> tuple[Layout, int]: ...
+def local_layout(shard, tensor_shape, coords) -> tuple[Layout, int]: ...
+def mesh_coords(mesh, ids) -> tuple[int | None, ...]: ...
+def local_layout_and_offset(shard, tensor_shape, coord) -> tuple[Layout, int]: ...
 ```
 
 - constraints:
@@ -829,9 +836,14 @@ def local_layout_and_offset(shard, tensor_shape, ids) -> tuple[Layout, int]: ...
     `local_layout` projection and its canonical check.
   - `local_layout` MUST keep the whole tensor's strides: what one instance
     holds is the same rows the same distance apart, begun further in.
-  - `local_layout_and_offset` counts its offset in exactly those strides, so a
-    host tensor laid out otherwise MUST be refused by name rather than read at
-    the offset's word: `as_strided` would silently read elsewhere.
+  - `local_layout_and_offset` counts its offset in exactly those strides. It
+    takes a mesh coord, as the CUDA runtime's `local_layout_and_offset(sl, coord)`
+    does; a host holding logical data passes the shard with its layout replaced
+    by the row-major layout of the same modes
+    ([runtime §1.10](runtime.md#110-shardtensor)).
+  - `mesh_coords` turns per-level program ids into mesh coordinates, as the
+    CUDA runtime's `mesh_coords(mesh, program_ids())` does; a level whose id is
+    `None` leaves its axes `None`.
   - the host states `tensor_shape` and `ids`, which the device reads off its
     own layout and its hardware: [§7.1.1](#711-layoutshape) factors a split
     axis, so the layout's rank is not the tensor's, and a `Placement` may leave

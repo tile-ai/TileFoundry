@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -68,9 +69,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(RepeatInterleave)
 def _eval_repeat_interleave(ctx):
+    def repeat_interleave(x):
+        return torch.repeat_interleave(x, ctx.op.repeats, dim=ctx.op.axis)
 
-    out = torch.repeat_interleave(ctx.args[0].data, ctx.op.repeats, dim=ctx.op.axis)
-    return TensorValue(data=out, type=ctx.result_type)
+    x = ctx.args[0].tensor
+    held = repeat_interleave(x.tensor) if x.is_global else tuple((p, repeat_interleave(t)) for p, t in x.tensor)
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 @register_access_relation(RepeatInterleave)

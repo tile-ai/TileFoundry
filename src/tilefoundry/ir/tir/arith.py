@@ -12,6 +12,7 @@ result value), matching the TIR convention shared with
 
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.kernels import binary
 from tilefoundry.evaluator.registry import register_schedule_eval
 from tilefoundry.evaluator.value import TensorValue
@@ -59,7 +60,10 @@ register_completion(Binary, on_return)
 @register_schedule_eval(Binary)
 def _eval_scheduled_binary(ctx):
     return TensorValue(
-        data=binary(ctx.op.kind, ctx.args[0].data, ctx.args[1].data), type=ctx.result_type
+        ShardTensor(
+            ctx.result_type,
+            binary(ctx.op.kind, ctx.args[0].data, ctx.args[1].data),
+        )
     )
 
 

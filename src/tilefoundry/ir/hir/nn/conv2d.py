@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Expr, Op
 from tilefoundry.ir.core.expr import Call, Constant
@@ -14,7 +16,12 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
 from tilefoundry.ir.types.layout import Layout
-from tilefoundry.ir.types.shard_layout import Split, shard_layout_of, split_target_axes
+from tilefoundry.ir.types.shard_layout import (
+    Split,
+    partial_reductions_by_axis,
+    shard_layout_of,
+    split_target_axes,
+)
 from tilefoundry.ir.types.utils import i64_const, static_dim_value
 from tilefoundry.utils.lazy import F
 from tilefoundry.visitor_registry import register_typeinfer
@@ -24,10 +31,7 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
     relations_of,
 )
-from tilefoundry.visitor_registry.shard_propagate import (
-    derive_output_shard_layout,
-    partial_reductions_by_axis,
-)
+from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
 @register_op(dialect='tf', category='nn')
@@ -303,17 +307,25 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(Conv2D)
 def _eval_conv2d(ctx):
-    input_, weight, bias = (arg.data for arg in ctx.args)
-    out = F.conv2d(
-        input_,
-        weight,
-        bias,
-        stride=ctx.op.stride,
-        padding=ctx.op.padding,
-        dilation=ctx.op.dilation,
-        groups=ctx.op.groups,
+    def conv2d(input_, weight, bias):
+        return F.conv2d(
+            input_,
+            weight,
+            bias,
+            stride=ctx.op.stride,
+            padding=ctx.op.padding,
+            dilation=ctx.op.dilation,
+            groups=ctx.op.groups,
+        )
+
+    xs = tuple(arg.tensor for arg in ctx.args)
+    placements = common_placements(*xs)
+    held = (
+        conv2d(*(x.tensor for x in xs))
+        if not placements
+        else tuple((p, conv2d(*(x.to_local(p) for x in xs))) for p in placements)
     )
-    return TensorValue(data=out, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 @register_access_relation(Conv2D)

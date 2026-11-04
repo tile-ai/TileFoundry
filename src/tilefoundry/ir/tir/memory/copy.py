@@ -8,6 +8,7 @@ Load / Store too. The Op is placed in Stmt position as
 
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_schedule_eval, schedule_eval_registry
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op, OpCapability
@@ -57,7 +58,7 @@ register_completion(Copy, on_return)
 
 @register_schedule_eval(Copy)
 def _eval_scheduled_copy(ctx):
-    return TensorValue(data=ctx.args[0].data, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, ctx.args[0].data))
 
 
 def register_copy_semantics(op, *, verify=True):

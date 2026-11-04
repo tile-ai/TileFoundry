@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.context import EvaluateContext
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import eval_registry
@@ -41,9 +42,13 @@ def _device_of(values) -> str | None:
     """
     seen: dict[str, int] = {}
     for index, value in enumerate(values):
-        device = getattr(value, "device", None)
-        if device is not None:
-            seen.setdefault(str(device), index)
+        held = (
+            (value.tensor,) if value.is_global else tuple(piece for _, piece in value.tensor)
+        ) if isinstance(value, ShardTensor) else (value,)
+        for data in held:
+            device = getattr(data, "device", None)
+            if device is not None:
+                seen.setdefault(str(device), index)
     if len(seen) > 1:
         spread = ", ".join(f"input {index} on {device}" for device, index in sorted(seen.items()))
         raise EvalError(
@@ -70,9 +75,9 @@ def _bind_dim_vars(params, values) -> dict[str, int]:
     binding: dict[str, int] = {}
     for p, v in zip(params, values):
         shape = getattr(p.type, "shape", None)
-        data = getattr(v, "data", None)
-        if shape is None or data is None:
+        if shape is None or not isinstance(v, TensorValue) or not v.tensor.is_global:
             continue
+        data = v.data
         for axis, dim in enumerate(shape):
             if isinstance(dim, DimVar) and axis < len(data.shape):
                 size = int(data.shape[axis])
@@ -108,7 +113,7 @@ class EvaluatorVisitor(ExprVisitor):
         data = torch.as_tensor(
             const.value, dtype=to_torch_dtype(const.type.dtype), device=ctx.device
         )
-        return TensorValue(data=data, type=const.type)
+        return TensorValue(ShardTensor(const.type, data))
 
     def visit_leaf_Tuple(self, tup: Tuple, operands, ctx: EvaluateContext) -> TupleValue:
         return TupleValue(operands)
@@ -161,7 +166,10 @@ class EvaluatorVisitor(ExprVisitor):
         given = iter(arg_values)
         args = [
             TensorValue(
-                data=_read_weight(child, param, ctx.device, callee=callee), type=param.type
+                ShardTensor(
+                    param.type,
+                    _read_weight(child, param, ctx.device, callee=callee),
+                )
             )
             if child is not None and param.is_const
             else next(given)
@@ -223,8 +231,10 @@ class EvaluatorVisitor(ExprVisitor):
                 id(iv): (
                     iv,
                     TensorValue(
-                        data=torch.as_tensor(i, dtype=iv_dtype, device=ctx.device),
-                        type=iv.type,
+                        ShardTensor(
+                            iv.type,
+                            torch.as_tensor(i, dtype=iv_dtype, device=ctx.device),
+                        )
                     ),
                 ),
             }
@@ -310,7 +320,7 @@ def _run_selected(loaded_module, fn: Function, *activations, device: str | None)
 
 def _unwrap(value: Value) -> Any:
     if isinstance(value, TensorValue):
-        return value.data
+        return value.data if value.tensor.is_global else value.tensor
     if isinstance(value, TupleValue):
         return tuple(_unwrap(v) for v in value.elements)
     return value
@@ -344,13 +354,19 @@ def _select_variant(callee: Function, arg_values) -> Function:
 
 def _bound_values(fn: Function, args) -> list[TensorValue]:
     """*args* as evaluator values, left exactly where they already live."""
-    return [
-        TensorValue(
-            data=torch.as_tensor(arg, dtype=to_torch_dtype(param.type.dtype)),
-            type=param.type,
-        )
-        for param, arg in zip(fn.params, args)
-    ]
+    return [_bound(param, arg) for param, arg in zip(fn.params, args)]
+
+
+def _bound(param, arg) -> TensorValue:
+    """A torch input is global logical data; a ``ShardTensor`` is taken as it is."""
+    if isinstance(arg, ShardTensor):
+        if not types_compatible(param.type, arg.type):
+            raise EvalError(
+                f"evaluator: {param.name!r} expects {param.type!r}, got {arg.type!r}"
+            )
+        return TensorValue(arg)
+    data = torch.as_tensor(arg, dtype=to_torch_dtype(param.type.dtype))
+    return TensorValue(ShardTensor(param.type, data))
 
 
 def _dim_bindings(fn: Function, args) -> dict[str, int]:

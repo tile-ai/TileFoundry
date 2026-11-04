@@ -157,6 +157,7 @@ def derive_output_shard_layout(
     *,
     partial_reduction_dims: frozenset[int] = frozenset(),
     complete_reduction_dims: frozenset[int] = frozenset(),
+    reduction: str = "sum",
     fresh_strides: bool = False,
     ctx=None,
     storage=None,
@@ -173,9 +174,11 @@ def derive_output_shard_layout(
     for a non-sharded layout.
   - With no real input sharding it returns `None`. Inputs with real sharding on
     different meshes MUST fail.
-  - `partial_reduction_dims` turns a reduced split into `Partial("sum")`;
-    `complete_reduction_dims` turns it into `Broadcast`. The sets MUST NOT
-    overlap.
+  - both sets turn a reduced split into `Partial(reduction)`: each unit holds
+    its part, and the whole value is an explicit `Reshard` away. A reduction
+    never turns a split into `Broadcast`, which would hide that communication.
+    `complete_reduction_dims` additionally collapses the reduced layout
+    positions to extent one. The sets MUST NOT overlap.
   - `fresh_strides=True` uses `default_layout` for fresh row-major strides;
     statically unit leaves have stride zero, and symbolic strides remain symbolic.
     Split modes owned per instance by `ctx.target` for the result `storage` also

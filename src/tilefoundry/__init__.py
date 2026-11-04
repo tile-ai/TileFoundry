@@ -57,6 +57,7 @@ from tilefoundry.ir.types import (
 
 
 from tilefoundry.ir.tir.stmt import Stmt
+from tilefoundry.core import ShardTensor
 
 
 from tilefoundry.ir.types import _register_dim_typeinfer
@@ -93,6 +94,7 @@ def view(root, *, port: int = 0, open_browser: bool = True) -> int:
 
 __all__ = [
     "__version__",
+    "ShardTensor",
     "Expr",
     "Var",
     "Constant",

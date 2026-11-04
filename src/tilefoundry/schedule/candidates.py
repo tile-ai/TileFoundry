@@ -66,7 +66,7 @@ def candidates(
             or not isinstance(call.type, TensorType)
         ):
             continue
-        instructions = candidate_ops(type(call.target))
+        instructions = candidate_ops(type(call.target), call=call)
         if not instructions or aliased_operand(call) is not None:
             continue
         if call.type.storage is StorageKind.UMAT and call.type.shape == ():

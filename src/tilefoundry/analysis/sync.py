@@ -27,7 +27,7 @@ from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord, literal_axes
 from tilefoundry.ir.mesh_scope import device_layout
 from tilefoundry.ir.tir.memory import Copy, Fill
 from tilefoundry.ir.tir.sync import SyncBarrier, classify, participation, whole_groups
@@ -794,9 +794,11 @@ class _Planner:
         if isinstance(expr, Var):
             return id(expr) in uniform or id(scope.capture_root(expr)) in uniform
         if isinstance(expr, Call) and isinstance(expr.target, MeshCoord):
-            axis = static_dim_value(expr.args[0])
+            axes = literal_axes(expr.args[0])
             count = len(axis_keys(expr.target.mesh))
-            return axis is not None and 0 <= axis < count and fixed(expr.target.mesh, axis)
+            return axes is not None and all(
+                0 <= axis < count and fixed(expr.target.mesh, axis) for axis in axes
+            )
         if isinstance(expr, Call) and is_dim_op_call(expr):
             return all(self.uniform(arg, uniform, fixed, scope) for arg in expr.args)
         return False

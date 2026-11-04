@@ -17,13 +17,15 @@ class RmsnormQuantSeq2Module:
                 a_reg = tf.reshard(a, (2 @ m.x, 12 @ m.y, 128 @ m.t), "rmem")
                 a_f32 = tf.cast(a_reg, "f32")
                 a_sq = tf.square(a_f32)
-                a_mean = tf.reduce(a_sq, (-1,), True, ReduceKind.MEAN)
+                a_mean = tf.reshard(tf.reduce(a_sq, (-1,), True, ReduceKind.MEAN), (2 @ m.x, 1), "rmem")
                 a_inv = tf.rsqrt(a_mean + 1e-6)
                 a_norm_f32 = a_f32 * a_inv
                 a_norm = tf.cast(a_norm_f32, "bf16")
                 a_norm_f32_for_quant = tf.cast(a_norm, "f32")
                 a_reshaped = tf.reshape(a_norm_f32_for_quant, (2, 12, 128))
-                a_amax = tf.reduce(a_reshaped, (-1,), True, ReduceKind.ABS_MAX)
+                a_amax = tf.reshard(
+                    tf.reduce(a_reshaped, (-1,), True, ReduceKind.ABS_MAX), (2 @ m.x, 12 @ m.y, 1), "rmem"
+                )
                 a_scale = a_amax * (0.002232142857142857)
                 a_quant = tf.cast(tf.clamp(a_reshaped / a_scale, -448.0, 448.0), "fp8e4m3")
                 return (

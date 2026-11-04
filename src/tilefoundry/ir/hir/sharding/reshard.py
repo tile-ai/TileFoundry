@@ -21,6 +21,7 @@ from tilefoundry.ir.types.shard_layout import (
     Dynamic,
     ShardLayout,
     Split,
+    partial_reductions_by_axis,
     register_strides,
     shard_layout_of,
 )
@@ -34,7 +35,6 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand, register_buffer_alias
-from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
 @register_op(dialect='tf', category='sharding')
@@ -228,5 +228,5 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(Reshard)
 def _eval_reshard(ctx):
-
-    return TensorValue(data=ctx.args[0].data, type=ctx.result_type)
+    """Retype a packed value; gather one that differs per unit by its own type."""
+    return TensorValue(ctx.args[0].tensor.reshard(ctx.result_type))

@@ -79,9 +79,10 @@ def test_weight_shard_per_card(tmp_path) -> None:
             first, replicated = twin.forward(x, row, 2)
             again, _ = twin.forward(x, row, 2)
 
-            assert first.tensor.device.index == gpu
-            assert replicated.tensor.device.index == gpu
-            assert again.tensor.data_ptr() == first.tensor.data_ptr(), (
+            here = Placement({"gpu": gpu})
+            assert first.to_local(here).device.index == gpu
+            assert replicated.to_local(here).device.index == gpu
+            assert again.to_local(here).data_ptr() == first.to_local(here).data_ptr(), (
                 "the second call read the weight again instead of the one it held"
             )
         except BaseException as error:  # noqa: BLE001 -- reported on the main thread
@@ -100,13 +101,13 @@ def test_weight_shard_per_card(tmp_path) -> None:
 
 
 @pytest.mark.parametrize("case", ("cyclic", "mesh_order"))
-def test_weight_load_refuses_noncanonical_axes(tmp_path, case):
-    """Reject two unsupported views instead of silently loading the wrong elements."""
+def test_weight_load_reads_noncanonical_axes(tmp_path, case):
+    """A split inside an axis, or mesh axes in the other order, still select the right elements."""
     root, size = {"cyclic": ("CyclicSplitWeight", 8), "mesh_order": ("MeshOrderWeight", 32)}[case]
     program = load_authored_ir(f"{PLACED / 'cyclic_split_weight.py'}:{root}")
     twin_type = load_namespace(str(PLACED / "cyclic_split_weight.py"))[0][f"{root}Twin"]
     program.prepare(DictResource({"weight": torch.arange(size, dtype=torch.float32)}), str(tmp_path))
     twin = twin_type()
     twin.load(SafetensorsResource(str(tmp_path), device="cpu"), placement=Placement({"gpu": 1}))
-    with pytest.raises(ValueError, match="ShardTensor: the tensor is laid out .* while its type says"):
-        twin.read()
+    expected = {"cyclic": [1.0, 5.0], "mesh_order": [8.0]}[case]
+    assert twin.read().to_local(Placement({"gpu": 1})).flatten().tolist() == expected

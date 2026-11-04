@@ -17,16 +17,16 @@ import pytest
 
 from tilefoundry.ir.types import DType, Layout, Mesh, Topology, make_shard_tensor_type
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.mesh import levels
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Split,
     _local_readback,
     local_layout,
     local_layout_and_offset,
+    mesh_coords,
     shard_layout_of,
 )
-from tilefoundry.ir.types.stride import idx2crd, try_compact_major
+from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.ir.types.utils import local_type_of
 
 _GPU, _THREAD = Topology("gpu", 2), Topology("thread", 32)
@@ -84,14 +84,7 @@ def test_the_layout_and_the_type_narrow_the_same_way(case: str) -> None:
     want = tuple(local_type_of(held).shape)
 
     for program_id in range(_instances(mesh)):
-        coordinates = tuple(
-            value
-            for arrangement in levels(mesh)
-            for value in idx2crd(
-                program_id, flatten(arrangement).shape, flatten(arrangement).strides
-            )
-        )
-        layout, _offset = local_layout(shard, shape, coordinates)
+        layout, _offset = local_layout(shard, shape, mesh_coords(mesh, (program_id,)))
         layout = _local_readback(layout)
         assert tuple(layout.shape) == want, (
             f"{case}: instance {program_id} holds {tuple(layout.shape)}, "
@@ -115,7 +108,7 @@ def test_every_instance_together_tile_the_tensor(case: str) -> None:
 
     covered: Counter[int] = Counter()
     for program_id in range(_instances(mesh)):
-        layout, offset = local_layout_and_offset(shard, shape, (program_id,))
+        layout, offset = local_layout_and_offset(shard, shape, mesh_coords(mesh, (program_id,)))
         covered.update(_elements(layout, offset))
 
     whole = 1
@@ -149,7 +142,9 @@ def test_the_outer_axis_steps_over_what_the_inner_one_holds() -> None:
     held = make_shard_tensor_type((32,), mesh=mesh, attrs=(Split(0), Split(0)), dtype=DType.f32)
     shard = shard_layout_of(held.layout)
 
-    offsets = [local_layout_and_offset(shard, (32,), (pid,))[1] for pid in range(32)]
+    offsets = [
+        local_layout_and_offset(shard, (32,), mesh_coords(mesh, (pid,)))[1] for pid in range(32)
+    ]
     assert offsets == list(range(32))
 
 
@@ -159,7 +154,7 @@ def test_a_level_with_no_id_is_left_whole() -> None:
     held = make_shard_tensor_type((8, 4), mesh=mesh, attrs=(Split(0), Split(1)), dtype=DType.f32)
     shard = shard_layout_of(held.layout)
 
-    layout, offset = local_layout_and_offset(shard, (8, 4), (None,))
+    layout, offset = local_layout_and_offset(shard, (8, 4), mesh_coords(mesh, (None,)))
     assert (tuple(layout.shape), offset) == ((8, 4), 0)
 
 

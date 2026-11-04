@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.hir.tensor.bitcast import _address_mapping, _address_relation, _eval_bitcast
 from tilefoundry.ir.types import DType, Layout, StorageKind, TensorType
@@ -20,5 +21,5 @@ def test_compact_and_factored_bitcasts_preserve_logical_elements(source_layout, 
     data = torch.arange(64, dtype=torch.float32)
     source = TensorType((64,), DType.f32, source_layout, StorageKind.RMEM)
     result = TensorType((64,), DType.f32, result_layout, StorageKind.RMEM)
-    actual = _eval_bitcast(SimpleNamespace(args=(TensorValue(data=data, type=source),), result_type=result))
+    actual = _eval_bitcast(SimpleNamespace(args=(TensorValue(ShardTensor(source, data)),), result_type=result))
     torch.testing.assert_close(actual.data, data, rtol=0, atol=0)

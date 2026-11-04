@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -115,12 +117,17 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(IndexAdd)
 def _eval_index_add(ctx):
-    dst, index, src = (arg.data for arg in ctx.args)
-    dim = _norm_dim(ctx.op.dim, dst.dim())
-    return TensorValue(
-        data=dst.clone().index_add_(dim, index, src),
-        type=ctx.result_type,
+    def index_add(dst, index, src):
+        return dst.clone().index_add_(_norm_dim(ctx.op.dim, dst.dim()), index, src)
+
+    xs = tuple(arg.tensor for arg in ctx.args)
+    placements = common_placements(*xs)
+    held = (
+        index_add(*(x.tensor for x in xs))
+        if not placements
+        else tuple((p, index_add(*(x.to_local(p) for x in xs))) for p in placements)
     )
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 __all__ = ["IndexAdd"]

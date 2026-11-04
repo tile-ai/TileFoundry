@@ -12,7 +12,7 @@ flowchart TB
     registry["<b>eval_registry</b><br/>register_eval(Op)"]
     handler["per-op handler<br/>(EvaluateContext → Value)"]
     Value["<b>Value</b>"]
-    TensorValue["<b>TensorValue</b><br/>(data, type)"]
+    TensorValue["<b>TensorValue</b><br/>(tensor)"]
     TupleValue["<b>TupleValue</b><br/>(elements)"]
 
     evaluate --> Evaluator
@@ -34,7 +34,8 @@ def evaluate(
 
 `evaluate` binds `inputs` to the selected `Function`'s parameters in
 order, walks the body, and returns the logical tensor for a single
-output or a tuple for a `TupleType` result. When passed a `LoadedModule`,
+output or a tuple for a `TupleType` result; an output in a local view is
+returned as its `ShardTensor`. When passed a `LoadedModule`,
 it binds only activation inputs; declared constants are loaded lazily from
 that reading at first use. A loaded module runs its declared `entry`; callers
 select another function or child on the `LoadedModule` before calling
@@ -62,20 +63,25 @@ class Value:
 
 ```python
 class TensorValue(Value):
-    """Pair a logical tensor value with its HIR type.
+    """Hold one ShardTensor; its type is the tensor's.
 
     Attributes:
-        data: attribute; Logical tensor value.
-        type: attribute; HIR tensor type, including layout.
+        tensor: attribute; The value, in a global or a local view.
+        type: property; ``tensor.type``.
+        data: property; The global view's tensor.
     """
 
-    data: torch.Tensor
-    type: TensorType
+    tensor: ShardTensor
 ```
 
 - constraints:
-  - `data` holds the value in its **logical shape** — the shape of
-    `type` ([types §2](./types.md#2-tensortype)), not a layout-domain shape.
+  - `tensor` is a `ShardTensor` ([runtime §1.10](./runtime.md#110-shardtensor)).
+    In a global view it holds the value in its **logical shape** -- the shape
+    of `type` ([types §2](./types.md#2-tensortype)), not a layout-domain shape --
+    and a `Partial` value as its reduced value, which every consumer type
+    inference admits commutes with. In a local view it holds one piece per
+    `Placement` ([§6](#6-layout-domain)).
+  - `data` MUST raise `EvalError` for a local view: it has no single tensor.
   - `type.layout`, when a `ShardLayout` or `Layout`, drives the
     layout-domain projection of [§6](#6-layout-domain).
   - A scalar value is a rank-0 `data` with a rank-0 `TensorType`.
@@ -96,14 +102,17 @@ class TupleValue(Value):
 - constraints:
   - `elements` are the per-field `Value`s; `tuple_get_item` projects one
     by static index.
+  - `type` is the `TupleType` of the element types, so a tuple argument is
+    checked at a Function boundary like any other.
 
 ## 2. Parameters and inputs
 
 `evaluate` binds each entry-`Function` parameter `Var` to the
 corresponding positional input:
 
-- An input MUST be convertible to a torch tensor; it is cast to the
-  parameter `TensorType`'s dtype.
+- An input MUST be a `ShardTensor` whose type is compatible with the
+  parameter's, or convertible to a torch tensor; a torch input is the global
+  view, cast to the parameter `TensorType`'s dtype.
 - Weights and activations are bound identically — a weight is an
   ordinary `Function` parameter, not a distinct constant carrier.
 - Each `DimVar` ([types §3](./types.md#3-dtype)) appearing in a parameter's
@@ -253,8 +262,32 @@ are evaluated once in the enclosing scope. With `k = len(yield_values)`:
 
 ## 6. Layout domain
 
-Evaluation models a **single mesh participant** and operates on logical
-values:
+A value is held in a global view -- one global logical tensor, a `Partial`
+one as its reduced value -- unless it differs per placement. Values differ
+per placement only downstream of `MeshCoord` or of `Local` on a cut input, and
+are then held in a local view, one piece per `Placement`. Which view a value is
+in is read off how it is held, never off its data:
+
+```python
+# src/tilefoundry/evaluator/utils.py
+def common_placements(*tensors: ShardTensor) -> tuple[Placement, ...]: ...
+```
+
+- each Op's handler handles both views itself: with every input in a global
+  view it computes once; otherwise it computes once per placement that
+  `common_placements` names, on each input's `to_local` piece, and holds the
+  results in a local view. A handler with no tensor input always answers a
+  global view.
+- `common_placements` answers the placements the local views among its
+  arguments hold in common, empty when every one is global; local views held
+  by different placements MUST raise `EvalError`.
+- a global `Partial` input meeting a local view MUST be refused: its reduced
+  value no longer holds the parts each placement would combine
+  ([runtime §1.10](./runtime.md#110-shardtensor)).
+- a handler that reads a size on a piece MUST read it from the piece or from
+  `local_type` of a type, never from an attribute stating a global shape. A
+  mean over a split axis holds, on each placement, its sum over the global
+  count, read from the input's global type.
 
 - An axis-bearing op (`Reduce`, `rms_norm`, …) addresses its `axis` /
   `axes` in the operand's **logical** `TensorType.shape`, regardless of
@@ -264,18 +297,11 @@ values:
   op's axis then indexes that reshaped logical shape. `Reshard` only
   changes distribution / layout and never changes which values an op
   reduces or indexes.
-- `as_layout_view(value: TensorValue) -> torch.Tensor` reshapes `data`
-  from its logical shape to the element organisation of
-  `type.layout.shape` (for a `ShardLayout`, its `layout.shape`) under
-  default-contiguous ordering; `from_layout_view(data, type)` is the
-  inverse. These are provided for an op explicitly defined to compute in
-  the layout domain; no op in the current set is layout-domain, so none
-  of them call these helpers.
-- `Reshard` ([hir §1.3](./hir.md#13-op)) preserves the logical value and MAY
-  reshape it into the target layout's shape; it performs no
-  cross-participant data movement.
-- `Local` ([hir §1.3](./hir.md#13-op)) returns its operand's value only when
-  its input `ShardLayout` has no `Split` attribute. For a split axis it MUST
-  raise `EvalError` saying that the evaluator models one mesh participant and
-  linking to this section, until the mesh evaluator models that path. An
-  unmodelled path MUST identify itself rather than leaking a torch exception.
+- `Reshard` ([hir §1.3](./hir.md#13-op)) only retypes a global view. A local
+  view is assembled by `to_global` by the meaning of its type -- `Split` pieces
+  side by side, any `Broadcast` piece, `Partial` pieces combined by their
+  reduction -- unless neither type has a `ShardLayout`, when each placement
+  keeps its own value.
+- `Local` ([hir §1.3](./hir.md#13-op)) answers a local view over
+  `Placement.each` of its mesh, and keeps an input every placement holds whole
+  in its global view. On a global `Partial` input it MUST be refused.

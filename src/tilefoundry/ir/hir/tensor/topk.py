@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import isl
 
+from tilefoundry.core import ShardTensor, local_type
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue, to_torch_dtype
@@ -248,41 +249,39 @@ def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> tuple[Access
     )
 
 
-def _local_dim_bindings(x: "TensorValue") -> dict:
-    """Recover bare ``DimVar`` bindings by pairing ``x``'s type and data shapes.
+def _local_dim_bindings(type, data) -> dict:
+    """Recover bare ``DimVar`` bindings by pairing *type*'s shape with *data*'s.
 
     This call-local evaluator cannot recover dimensions that occur only in
     another enclosing function argument.
     """
     bindings: dict = {}
-    for axis, dim in enumerate(x.type.shape):
-        if isinstance(dim, DimVar) and axis < len(x.data.shape):
-            bindings[dim.name] = int(x.data.shape[axis])
+    for axis, dim in enumerate(type.shape):
+        if isinstance(dim, DimVar) and axis < len(data.shape):
+            bindings[dim.name] = int(data.shape[axis])
     return bindings
 
 
 @register_eval(TopK)
 def _eval_topk(ctx):
-    x = ctx.args[0]
-    k = resolve_dim(ctx.op.k, _local_dim_bindings(x))
-    vals, idx = torch.topk(
-        x.data,
-        k,
-        dim=ctx.op.axis,
-        largest=ctx.op.largest,
-        sorted=ctx.op.sorted,
-    )
-    return TupleValue(
-        elements=(
-            TensorValue(
-                data=vals.to(to_torch_dtype(ctx.result_type.fields[0].dtype)),
-                type=ctx.result_type.fields[0],
-            ),
-            TensorValue(
-                data=idx.to(to_torch_dtype(ctx.result_type.fields[1].dtype)),
-                type=ctx.result_type.fields[1],
-            ),
+    fields = ctx.result_type.fields
+
+    def topk(x, type):
+        k = resolve_dim(ctx.op.k, _local_dim_bindings(type, x))
+        vals, idx = torch.topk(x, k, dim=ctx.op.axis, largest=ctx.op.largest, sorted=ctx.op.sorted)
+        return tuple(
+            out.to(to_torch_dtype(field.dtype)) for out, field in zip((vals, idx), fields, strict=True)
         )
+
+    x = ctx.args[0].tensor
+    if x.is_global:
+        held = topk(x.tensor, x.type)
+    else:
+        piece = local_type(x.type)
+        each = [(p, topk(t, piece)) for p, t in x.tensor]
+        held = tuple(tuple((p, out[i]) for p, out in each) for i in range(len(fields)))
+    return TupleValue(
+        tuple(TensorValue(ShardTensor(field, data)) for field, data in zip(fields, held, strict=True))
     )
 
 

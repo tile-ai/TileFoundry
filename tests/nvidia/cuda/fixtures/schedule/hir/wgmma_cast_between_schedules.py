@@ -124,8 +124,14 @@ class WGMMA_CAST_BETWEEN_SCHEDULES:
                             axes=(1,), keepdim=True, kind=ReduceKind.SUM
                         ),
                     )
-                    automatic = tf.reduce(
-                        acc, axes=(1,), keepdim=True, kind=ReduceKind.SUM
+                    automatic = tf.reshard(
+                        tf.reduce(acc, axes=(1,), keepdim=True, kind=ReduceKind.SUM),
+                        ShardLayout(
+                            layout=Layout((8, 2, 4, 1, 1, 1), (8, 4, 1, 0, 0, 0)),
+                            attrs=(S(2), S(0), B()),
+                            mesh=_compute,
+                        ),
+                        "rmem",
                     )
                     result = tf.cast(explicit + automatic, dtype="bf16")
                     result = tf.insert_slice(output, result, (0, 0))

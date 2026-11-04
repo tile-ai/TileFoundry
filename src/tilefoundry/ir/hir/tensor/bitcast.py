@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from functools import cache
-from itertools import product
 from math import prod
 
 import isl
 
+from tilefoundry.core import ShardTensor, local_type
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Call, Op
@@ -16,6 +16,7 @@ from tilefoundry.ir.types import (
     ComposedLayout,
     Layout,
     LayoutBase,
+    Placement,
     ShardLayout,
     Split,
     StorageKind,
@@ -24,9 +25,10 @@ from tilefoundry.ir.types import (
 from tilefoundry.ir.types.int_tuple import compatible_profile, flatten, mode_axes
 from tilefoundry.ir.types.layout import apply, unflatten
 from tilefoundry.ir.types.layout import flatten as flatten_layout
-from tilefoundry.ir.types.mesh import levels, starts
+from tilefoundry.ir.types.mesh import starts
 from tilefoundry.ir.types.shard_layout import (
     local_layout_and_offset,
+    mesh_coords,
     shard_layout_of,
     split_target_axes,
 )
@@ -77,14 +79,15 @@ def _address_points(layout, count: int, logical_shape: tuple):
     layout = shard
     if len(whole) != count:
         raise ValueError(f"rmem layout address function is not injective: {layout!r}")
-    arrangements = levels(layout.mesh)
-    for coordinates in product(*(range(prod(flatten(level.shape))) for level in arrangements)):
-        ids = tuple(apply(level, coord) for level, coord in zip(arrangements, coordinates, strict=True))
+    for placement in Placement.each(layout.mesh):
+        ids = placement.program_ids(layout.mesh.topologies)
         unit = tuple(sorted(
             (topology.name, start + index)
             for topology, start, index in zip(layout.mesh.topologies, starts(layout.mesh), ids, strict=True)
         ))
-        local, offset = local_layout_and_offset(layout, tuple(layout.layout.shape), ids)
+        local, offset = local_layout_and_offset(
+            layout, tuple(layout.layout.shape), mesh_coords(layout.mesh, ids)
+        )
         for coord in range(prod(local.shape)):
             held = apply(local, coord)
             logical = whole.get(offset + held)
@@ -305,21 +308,27 @@ def _bitcast_access(call: Call, ctx) -> tuple[AccessRelation, ...]:
 
 @register_eval(Bitcast)
 def _eval_bitcast(ctx):
-    source = ctx.args[0]
-    result = ctx.result_type
-    pairs = _address_mapping(
-        source.type.layout, result.layout, prod(result.shape), source.type.shape, result.shape
-    )
+    x = ctx.args[0].tensor
+    if x.is_global:
+        held = _bitcast(x.tensor, x.type, ctx.result_type)
+    else:
+        source, result = local_type(x.type), local_type(ctx.result_type)
+        held = tuple((p, _bitcast(t, source, result)) for p, t in x.tensor)
+    return TensorValue(ShardTensor(ctx.result_type, held))
+
+
+def _bitcast(data, source, result):
+    """*data* of type *source* read through the layout of *result*."""
+    pairs = _address_mapping(source.layout, result.layout, prod(result.shape), source.shape, result.shape)
     indices = [0] * len(pairs)
     for coord, source_coord in enumerate(pairs):
         result_index = source_index = 0
         for digit, extent in zip(idx2crd(coord, result.shape, compact_col_major(result.shape)), result.shape, strict=True):
             result_index = result_index * extent + digit
         for digit, extent in zip(
-            idx2crd(source_coord, source.type.shape, compact_col_major(source.type.shape)), source.type.shape, strict=True
+            idx2crd(source_coord, source.shape, compact_col_major(source.shape)), source.shape, strict=True
         ):
             source_index = source_index * extent + digit
         indices[result_index] = source_index
-    index = torch.tensor(indices, dtype=torch.int64, device=source.data.device)
-    data = source.data.reshape(-1).index_select(0, index).reshape(result.shape)
-    return TensorValue(data=data, type=result)
+    index = torch.tensor(indices, dtype=torch.int64, device=data.device)
+    return data.reshape(-1).index_select(0, index).reshape(result.shape)

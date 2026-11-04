@@ -30,7 +30,7 @@ def test_builtin_targets_own_their_facts_projections() -> None:
     }
     assert memory.explicit("gmem").capacity_bytes == cuda.device.hbm_capacity_bytes
     assert {level.name: level.owner for level in memory.explicit_levels} == {
-        "gmem": "target",
+        "gmem": "gpu",
         "smem": "cta",
         "rmem": "thread",
     }

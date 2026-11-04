@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_schedule_eval
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op, OpCapability
@@ -48,4 +49,4 @@ def _eval_arange(ctx):
         ctx.op.start, ctx.op.start + ctx.args[0].data.shape[0] * ctx.op.step, ctx.op.step,
         dtype=to_torch_dtype(ctx.result_type.dtype), device=ctx.device,
     )
-    return TensorValue(data=data, type=ctx.result_type)
+    return TensorValue(ShardTensor(ctx.result_type, data))

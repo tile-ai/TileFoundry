@@ -17,7 +17,7 @@ class RmsnormSeq2Module:
                 a_reg = tf.reshard(a, (2 @ m.x, 12 @ m.y, 128 @ m.t), "rmem")
                 a_f32 = tf.cast(a_reg, "f32")
                 a_sq = tf.square(a_f32)
-                a_mean = tf.reduce(a_sq, (-1,), True, ReduceKind.MEAN)
+                a_mean = tf.reshard(tf.reduce(a_sq, (-1,), True, ReduceKind.MEAN), (2 @ m.x, 1), "rmem")
                 a_inv = tf.rsqrt(a_mean + 1e-6)
                 a_norm_f32 = a_f32 * a_inv
                 a_norm = tf.cast(a_norm_f32, "bf16")

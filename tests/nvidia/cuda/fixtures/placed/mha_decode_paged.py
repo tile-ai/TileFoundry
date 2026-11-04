@@ -129,10 +129,22 @@ def _built(batch: int, heads: int, kv: int, dim: int, page: int, dtype: str):
                     tf.full_like(score, value=masked),
                 )
 
-                peak = tf.reduce(live, axes=(-3,), keepdim=True, kind="max")
+                peak = tf.reshard(
+                    tf.reduce(live, axes=(-3,), keepdim=True, kind="max"),
+                    (batch @ cta.seq, 1, 1, heads @ cta.head, 1),
+                    "rmem",
+                )
                 weight = tf.exp(live - peak)
-                total = tf.reduce(weight, axes=(-3,), keepdim=False, kind="sum")
-                blended = tf.reduce(weight * v32, axes=(-3,), keepdim=False, kind="sum")
+                total = tf.reshard(
+                    tf.reduce(weight, axes=(-3,), keepdim=False, kind="sum"),
+                    (batch @ cta.seq, 1, heads @ cta.head, 1),
+                    "rmem",
+                )
+                blended = tf.reshard(
+                    tf.reduce(weight * v32, axes=(-3,), keepdim=False, kind="sum"),
+                    (batch @ cta.seq, 1, heads @ cta.head, dim),
+                    "rmem",
+                )
                 out = tf.cast(blended / total, dtype=dtype)
 
                 return tf.reshard(
