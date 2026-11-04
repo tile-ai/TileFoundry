@@ -110,9 +110,17 @@ class SparseDecode:
                     live = tf.bitcast(live, Layout(((8, 8),), ((8, 1),)))
                     live = tf.reshape(live, (1, 64))
                     s = tf.where(live, s, NEG_INF)
-                    peak = tf.reduce(s, axes=(1,), keepdim=True, kind=ReduceKind.MAX)
+                    peak = tf.reshard(
+                        tf.reduce(s, axes=(1,), keepdim=True, kind=ReduceKind.MAX),
+                        (4 @ m.warp, 2, 8 @ m.lane8, 1),
+                        "rmem",
+                    )
                     p = tf.exp(s - peak)
-                    denom = tf.reduce(p, axes=(1,), keepdim=True, kind=ReduceKind.SUM)
+                    denom = tf.reshard(
+                        tf.reduce(p, axes=(1,), keepdim=True, kind=ReduceKind.SUM),
+                        (4 @ m.warp, 2, 8 @ m.lane8, 1),
+                        "rmem",
+                    )
                     p = tf.cast(p / denom, "bf16")
                     pr_dst = tf.empty(
                         Tensor[

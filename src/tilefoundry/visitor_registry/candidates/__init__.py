@@ -16,6 +16,10 @@ from tilefoundry.ir.pattern import PatternMatcher, SwitchPattern, TensorPattern
 from tilefoundry.ir.pattern.predicates import _same
 
 
+class Inapplicable(ScheduleRefusal):
+    """The instruction is not the kind of work a call needs, so it is no candidate for it."""
+
+
 @dataclass(frozen=True)
 class HirMatch:
     """A TIR declaration's HIR semantics, fixed modes and operand roles."""
@@ -173,6 +177,8 @@ def sole_candidate(hir_op: Op, *, target=None) -> Op | None:
     call = hir_op if isinstance(hir_op, Call) else None
     hir_target = call.target if call is not None else hir_op
     candidates = candidate_ops(type(hir_target), target=target)
+    if call is not None:
+        candidates = tuple(candidate for candidate in candidates if _applies(call, candidate))
     if len(candidates) != 1:
         return None
     if call is None:
@@ -186,6 +192,17 @@ def sole_candidate(hir_op: Op, *, target=None) -> Op | None:
     return candidates[0](**attributes)
 
 
+def _applies(call, op_type) -> bool:
+    """Whether *op_type* is the kind of work *call* needs; other refusals come later."""
+    try:
+        candidate_operands(call, op_type)
+    except Inapplicable:
+        return False
+    except ScheduleRefusal:
+        return True
+    return True
+
+
 def _auto_import(pkg_name: str) -> None:
     package = importlib.import_module(pkg_name)
     for _, module_name, _ in pkgutil.walk_packages(package.__path__, f"{pkg_name}."):
@@ -196,6 +213,7 @@ _auto_import(__name__)
 
 __all__ = [
     "HirMatch",
+    "Inapplicable",
     "candidate_bindings",
     "candidate_operands",
     "instruction_from_hir",

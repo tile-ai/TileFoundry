@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 
+from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.math.clamp import Clamp as HirClamp
 from tilefoundry.ir.hir.math.unary import Unary as HirUnary
@@ -25,16 +26,44 @@ from tilefoundry.ir.tir.where import Where as TirWhere
 from tilefoundry.ir.types import Layout
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.visitor_registry.access_relation import relations_of
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry.visitor_registry.shard_propagate import (
+    derive_output_shard_layout,
+    partial_reductions_by_axis,
+)
 
 from ..instruction import ScheduleRefusal
-from . import register_candidates
+from . import Inapplicable, register_candidates
 
 
-@register_candidates(Reshard, (Copy,))
+@register_candidates(Reshard, (Copy, TirReduce))
 def _reshard_operands(call, instruction):
-    """Reshard states both transfer types; its landing attributes are already in the result."""
-    return {}, (call.args[0].type, call.type)
+    """Reshard states both transfer types; its landing attributes are already in the result.
+
+    Resolving a Partial combines the units' parts, so only a reduction over no
+    tensor axis carries it, and a copy carries every other reshard.
+    """
+    source, result = call.args[0].type, call.type
+    reduction = _resolved_reduction(source, result)
+    if (instruction is TirReduce) != (reduction is not None):
+        raise Inapplicable(
+            "a reshard resolving a Partial is a reduction"
+            if reduction is not None
+            else "a reshard resolving no Partial is a copy"
+        )
+    if reduction is None:
+        return {}, (source, result)
+    return {"axes": (), "keepdim": True, "kind": ReduceKind(reduction)}, (source, result)
+
+
+def _resolved_reduction(source, result) -> str | None:
+    """The reduction a reshard performs by dropping its source's Partial axes, if any."""
+    before = partial_reductions_by_axis(source.layout)
+    after = partial_reductions_by_axis(result.layout)
+    after = after + (None,) * (len(before) - len(after))
+    resolved = {kind for kind, kept in zip(before, after) if kind is not None and kept is None}
+    if len(resolved) > 1:
+        raise ScheduleRefusal(f"a reshard cannot combine Partial reductions {sorted(resolved)} at once")
+    return resolved.pop() if resolved else None
 
 
 register_candidates(HirBinary, (TirBinary,))

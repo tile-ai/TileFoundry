@@ -245,7 +245,7 @@ def _region_records(records, placement):
         assert record.solver_status == "feasible"
         assert record.topologies == placement.topologies
         assert record.peaks
-        assert all(peak.memory_level in ("rmem", "smem") for peak in record.peaks)
+        assert all(peak.memory_level in ("gmem", "rmem", "smem") for peak in record.peaks)
         assert not record.traffic.storage.kinds
         assert not record.traffic.communication.kinds
         assert record.footprint is None
@@ -322,7 +322,11 @@ def _hir_candidates(report):
         schema = lookup(dialect, tuple(path), name)
         ops.append(get_registered_name(schema.alias_of or schema.op_class))
     assert "tf.matmul" not in ops
-    assert "tf.reshard" not in ops
+    assert all(
+        any(fit.get("default", False) for fit in row["candidates"])
+        for row, op in zip(report["lines"], ops, strict=True)
+        if op == "tf.reshard"
+    ), "a reshard left to lowering resolves a Partial, so its reduction is the default"
     assert any(
         op
         in {

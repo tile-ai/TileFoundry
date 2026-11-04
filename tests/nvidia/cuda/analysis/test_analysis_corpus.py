@@ -927,7 +927,7 @@ class RmsnormQuantSeq2(AnalysisCase):
             if isinstance(expr, Call) and isinstance(expr.target, Reshape)
         )
         liveness = get_metadata(result.function, LivenessMetadata)
-        assert liveness.interval_of(SSAValue(reshaped)).last_used_at == 19
+        assert liveness.interval_of(SSAValue(reshaped)).last_used_at == 21
         assert get_metadata(reshaped, MemoryMetadata).buffer_bytes is None
         assert not get_metadata(reshaped, MemoryMetadata).offsets
 
@@ -1151,7 +1151,7 @@ EXPECTED = {
     "square_cuda.Model.main[static]": dict(memory_peaks={"gmem": 676, "rmem": 4}),
     "tiny_tp_decoder.DecoderLayer.decode[static]": dict(memory_peaks={"gmem": 48, "rmem": 32}),
     "tiny_tp_decoder.DecoderLayer.project[static]": dict(memory_peaks={"gmem": 96}),
-    "tp_all_to_all.TransposeShard.transpose_shard[static]": dict(memory_peaks={"gmem": 128}),
+    "tp_all_to_all.TransposeShard.transpose_shard[static]": dict(memory_peaks={"gmem": 256}),
     "weighted_cuda.Weighted.scaled[static]": dict(memory_peaks={"gmem": 1_348, "rmem": 8}),
 }
 
