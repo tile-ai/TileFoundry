@@ -12,7 +12,15 @@ class CudaConvertHIRToTIR(ConvertHIRToTIR):
 class CudaLowering(Lowering):
     """The core lowering, emitting the steps the ``sync`` analysis attached to each node."""
 
-    def before(self, owner: Expr, ctx, tag=None) -> None: ...
+    def run(self) -> PrimFunction: ...
+    def visit_MeshRegion(self, region: MeshRegion, ctx): ...
+    def visit_callee(self, call: Call, operands, ctx) -> Expr | View: ...
+    def visit_T(self, call: Call, operands, ctx) -> Expr | View: ...
+    def visit_LoopRegion(self, loop: LoopRegion, ctx) -> Expr: ...
+    def visit_InsertSlice(self, call: Call, operands, ctx) -> Expr: ...
+    def visit_Zeros(self, call: Call, operands, ctx) -> Expr | View: ...
+    visit_FullLike = visit_Zeros
+    def default_visit_T(self, call: Call, op, operands, ctx) -> Expr: ...
 ```
 
 - constraints:
@@ -24,8 +32,24 @@ class CudaLowering(Lowering):
     caller prepares the Module with
     `analyze(module, entry, analysis=("memory", "sync"))` and passes the result
     to `finalize`; `tilefoundry schedule finalize` does the same.
-  - `before` emits the steps the node's `SyncMetadata` holds for the tag, in
-    order. For the `cp_async` group a commit is `cp_async_commit` and a wait
+  - The visitor emits the steps a node's `SyncMetadata` holds for a tag, in
+    order, where that tag's statements are lowered:
+
+    | Visit | Tag | Emitted |
+    |---|---|---|
+    | `visit_MeshRegion`, `visit_callee`, `visit_T` | None | first, then the core visit; the operands are already lowered |
+    | `visit_Zeros`, `visit_FullLike` | None | after the result storage is declared, before the `Fill` |
+    | `visit_LoopRegion` | `("entry", slot)` | before the slot's entry copy |
+    | `visit_LoopRegion` | None | after the entry copies, before the loop |
+    | `visit_LoopRegion` | `("backedge", slot)` | inside the loop, before the slot's backedge copy |
+    | `visit_InsertSlice` | `"base"`, `"update"` | before the base copy, before the update copy |
+    | `default_visit_T` | `"issue"` | before each issue |
+    | `default_visit_T` | `"after"` | after the issues, inside the region that issues them |
+
+    `visit_T` also covers a `Reshard` that is not a view. The loop,
+    `InsertSlice`, fill and instruction visits exist only here: the core
+    visitor refuses those nodes ([passes §7.1](../../../../../../docs/spec/passes.md#71-converthirtotir)).
+  - For the `cp_async` group a commit is `cp_async_commit` and a wait
     `cp_async_wait(n=0)`; for the `wgmma` group a commit is
     `wgmma_commit_group`, a wait `wgmma_wait_group(n=0)` and a fence
     `wgmma_fence`. A proxy fence is `fence_proxy_async` and a barrier `T.sync`

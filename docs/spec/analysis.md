@@ -1536,10 +1536,12 @@ class SyncPlanMetadata(IRMetadata):
   - The actions of a node are the ones lowering emits: the selected
     instruction of a Call, the copies and fills lowering adds, and a retained
     call, which reads its arguments and writes its results. Which
-    statements a Call emits, which instruction it issues, which operands that
-    instruction reads and writes and the mesh each action is issued on come
-    from `analysis/emission.py`, which lowering also calls; both call it on the
-    same analysed program. Each effect's completion comes from the completion
+    statements a Call emits come from `emission()` in `analysis/emission.py`,
+    which classifies a Call as the lowering visitor dispatches it
+    ([passes §7.1](./passes.md#71-converthirtotir)). Which instruction it
+    issues, which operands that instruction reads and writes and the mesh each
+    action is issued on come from the same module, which lowering also calls;
+    both call it on the same analysed program. Each effect's completion comes from the completion
     registry
     ([visitor-registry §4.2](./visitor-registry.md#42-completion-service--completion));
     a retained call's register effects complete on return, since the callee's

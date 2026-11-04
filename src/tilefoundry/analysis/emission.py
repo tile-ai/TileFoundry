@@ -52,18 +52,23 @@ class Emission(Enum):
     INSTRUCTION = auto()
 
 
-def emission(call: Call, *, retained: bool) -> Emission:
-    """What lowering emits for *call*; *retained* says it calls a retained function."""
+def lowers_to_dim(call: Call) -> bool:
+    """Whether *call* computes a dimension: a dim op, a mesh coordinate or scalar arithmetic."""
     target = call.target
-    if (
+    return (
         is_dim_op_call(call)
         or isinstance(target, MeshCoord)
         or (isinstance(target, HirBinary) and call.type.shape == ())
-    ):
+    )
+
+
+def emission(call: Call, *, retained: bool) -> Emission:
+    """What lowering emits for *call*; *retained* says it calls a retained function."""
+    if lowers_to_dim(call):
         return Emission.DIMENSION
     if retained:
         return Emission.CALL
-    name = type(target).__name__
+    name = type(call.target).__name__
     if name in _VIEWS or (name == "Reshard" and aliased_operand(call) is not None):
         return Emission.VIEW
     if name == "Empty":
@@ -262,6 +267,7 @@ __all__ = [
     "emission",
     "issue_mesh",
     "issue_owner",
+    "lowers_to_dim",
     "operand_roles",
     "operand_types",
     "register_storage",
