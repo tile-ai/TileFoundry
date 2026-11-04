@@ -56,17 +56,18 @@ def describe_tensor(held):
         for i, attr in enumerate(shard.attrs)
     ], pending=[axes[i] for i, attr in enumerate(shard.attrs) if isinstance(attr, Partial)],
         domain=shard.layout.shape, address_map=str(shard.layout))
-    tags = ShardTensor(held, torch.arange(prod(shape)).reshape(shape))
+    tags = torch.arange(prod(shape))
     local_shape = tuple(local_type(held).shape)
     address = shard.layout.outer if isinstance(shard.layout, ComposedLayout) else shard.layout
     host = replace(shard, layout=Layout(address.shape))
     for placement in Placement.each(shard.mesh):
         coordinate = mesh_coords(shard.mesh, placement.program_ids(shard.mesh.topologies))
-        selected = tags.to_local(placement).flatten().sort().values
+        logical, logical_offset = local_layout_and_offset(host, shape, coordinate)
+        selected = tags.as_strided(logical.shape, logical.strides, logical_offset)
+        selected = selected.flatten().sort().values
         boundaries = torch.nonzero(selected[1:] != selected[:-1] + 1).flatten().tolist()
         starts, ends = [0, *(i + 1 for i in boundaries)], [*(i + 1 for i in boundaries), len(selected)]
         runs = [[int(selected[a]), int(selected[b - 1]) + 1] for a, b in zip(starts, ends, strict=True)]
-        logical, logical_offset = local_layout_and_offset(host, shape, coordinate)
         physical, physical_offset = local_layout_and_offset(shard, shape, coordinate)
         result["participants"].append({
             "coordinate": coordinate, "shape": local_shape, "runs": runs,

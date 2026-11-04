@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="840" viewBox="0 0 1120 840" role="img" aria-labelledby="title description">
   <title id="title">block1.q · partial</title>
-  <desc id="description">Global element 64 has 16 holders. Pending reduction axes: replicate, shard. Colored numbered global cells map to logical mesh participants and a local tensor.</desc>
+  <desc id="description">Global element 0 has 16 holders. Pending reduction axes: replicate, shard. Colored numbered global cells map to logical mesh participants and a local tensor.</desc>
   <style>text{font-family:Arial,Helvetica,sans-serif;fill:#243040;font-size:14px}.heading{font-size:23px;font-weight:600}.label{font-size:16px;font-weight:600}.small{font-size:12px;fill:#4c5968}.number{font-size:12px;font-family:monospace}</style>
   <defs>
     <pattern id="pending" width="7" height="7" patternUnits="userSpaceOnUse">
@@ -34,6 +34,7 @@
   <rect x="70.0" y="171.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="70.0" y="171.0" width="28.0" height="25.0" fill="url(#pending)" />
   <text x="84.0" y="187.5" class="number" text-anchor="middle">0</text>
+  <rect x="71.0" y="172.0" width="26.0" height="23.0" fill="none" stroke="#243040" stroke-width="2" />
   <rect x="98.0" y="171.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="98.0" y="171.0" width="28.0" height="25.0" fill="url(#pending)" />
   <text x="112.0" y="187.5" class="number" text-anchor="middle">1</text>
@@ -230,7 +231,6 @@
   <rect x="70.0" y="271.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="70.0" y="271.0" width="28.0" height="25.0" fill="url(#pending)" />
   <text x="84.0" y="287.5" class="number" text-anchor="middle">64</text>
-  <rect x="71.0" y="272.0" width="26.0" height="23.0" fill="none" stroke="#243040" stroke-width="2" />
   <rect x="98.0" y="271.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="98.0" y="271.0" width="28.0" height="25.0" fill="url(#pending)" />
   <text x="112.0" y="287.5" class="number" text-anchor="middle">65</text>
@@ -825,7 +825,7 @@
   <text x="431" y="605" class="small">Rows 12–15</text>
   <text x="52" y="634" class="small">Numbers label global elements, not numerical values. Stronger</text>
   <text x="52" y="651" class="small">fill marks the selected participant's ownership.</text>
-  <text x="52" y="684" class="label">Selected element 64 · global (4, 0)</text>
+  <text x="52" y="684" class="label">Selected element 0 · global (0, 0)</text>
   <text x="52" y="711">16 holders; 16 distinct pending contributions. Sum</text>
   <text x="52" y="731">required on replicate, shard. Hatching marks incomplete</text>
   <text x="52" y="751">values.</text>
@@ -843,10 +843,10 @@
   <rect x="620.0" y="214.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="620.0" y="224.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="620.0" y="224.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="620.0" y="204.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="620.0" y="194.0" width="5.625" height="2.5" fill="#243040" />
   <rect x="724" y="169" width="102" height="70" fill="white" stroke="#243040" stroke-width="2" />
   <circle cx="734" cy="181" r="3" fill="#243040" stroke="#243040" />
-  <text x="777.0" y="186" class="small" text-anchor="middle">(0, 1)</text>
+  <text x="777.0" y="186" class="small" text-anchor="middle">(1, 0)</text>
   <rect x="730" y="194" width="90" height="40" fill="#f0f2f4" />
   <rect x="730.0" y="194.0" width="90.0" height="10.0" fill="#4c92cf" fill-opacity=".75" />
   <rect x="730.0" y="194.0" width="90.0" height="10.0" fill="url(#pending)" />
@@ -856,10 +856,10 @@
   <rect x="730.0" y="214.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="730.0" y="224.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="730.0" y="224.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="730.0" y="204.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="730.0" y="194.0" width="5.625" height="2.5" fill="#243040" />
   <rect x="834" y="169" width="102" height="70" fill="white" stroke="#a3acb5" stroke-width="1" />
   <circle cx="844" cy="181" r="3" fill="#243040" stroke="#243040" />
-  <text x="887.0" y="186" class="small" text-anchor="middle">(0, 2)</text>
+  <text x="887.0" y="186" class="small" text-anchor="middle">(2, 0)</text>
   <rect x="840" y="194" width="90" height="40" fill="#f0f2f4" />
   <rect x="840.0" y="194.0" width="90.0" height="10.0" fill="#4c92cf" fill-opacity=".75" />
   <rect x="840.0" y="194.0" width="90.0" height="10.0" fill="url(#pending)" />
@@ -869,10 +869,10 @@
   <rect x="840.0" y="214.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="840.0" y="224.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="840.0" y="224.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="840.0" y="204.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="840.0" y="194.0" width="5.625" height="2.5" fill="#243040" />
   <rect x="944" y="169" width="102" height="70" fill="white" stroke="#a3acb5" stroke-width="1" />
   <circle cx="954" cy="181" r="3" fill="#243040" stroke="#243040" />
-  <text x="997.0" y="186" class="small" text-anchor="middle">(0, 3)</text>
+  <text x="997.0" y="186" class="small" text-anchor="middle">(3, 0)</text>
   <rect x="950" y="194" width="90" height="40" fill="#f0f2f4" />
   <rect x="950.0" y="194.0" width="90.0" height="10.0" fill="#4c92cf" fill-opacity=".75" />
   <rect x="950.0" y="194.0" width="90.0" height="10.0" fill="url(#pending)" />
@@ -882,10 +882,10 @@
   <rect x="950.0" y="214.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="950.0" y="224.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="950.0" y="224.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="950.0" y="204.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="950.0" y="194.0" width="5.625" height="2.5" fill="#243040" />
   <rect x="614" y="247" width="102" height="70" fill="white" stroke="#a3acb5" stroke-width="1" />
   <circle cx="624" cy="259" r="3" fill="#243040" stroke="#243040" />
-  <text x="667.0" y="264" class="small" text-anchor="middle">(1, 0)</text>
+  <text x="667.0" y="264" class="small" text-anchor="middle">(0, 1)</text>
   <rect x="620" y="272" width="90" height="40" fill="#f0f2f4" />
   <rect x="620.0" y="272.0" width="90.0" height="10.0" fill="#4c92cf" fill-opacity=".75" />
   <rect x="620.0" y="272.0" width="90.0" height="10.0" fill="url(#pending)" />
@@ -895,7 +895,7 @@
   <rect x="620.0" y="292.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="620.0" y="302.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="620.0" y="302.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="620.0" y="282.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="620.0" y="272.0" width="5.625" height="2.5" fill="#243040" />
   <rect x="724" y="247" width="102" height="70" fill="white" stroke="#a3acb5" stroke-width="1" />
   <circle cx="734" cy="259" r="3" fill="#243040" stroke="#243040" />
   <text x="777.0" y="264" class="small" text-anchor="middle">(1, 1)</text>
@@ -908,10 +908,10 @@
   <rect x="730.0" y="292.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="730.0" y="302.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="730.0" y="302.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="730.0" y="282.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="730.0" y="272.0" width="5.625" height="2.5" fill="#243040" />
   <rect x="834" y="247" width="102" height="70" fill="white" stroke="#a3acb5" stroke-width="1" />
   <circle cx="844" cy="259" r="3" fill="#243040" stroke="#243040" />
-  <text x="887.0" y="264" class="small" text-anchor="middle">(1, 2)</text>
+  <text x="887.0" y="264" class="small" text-anchor="middle">(2, 1)</text>
   <rect x="840" y="272" width="90" height="40" fill="#f0f2f4" />
   <rect x="840.0" y="272.0" width="90.0" height="10.0" fill="#4c92cf" fill-opacity=".75" />
   <rect x="840.0" y="272.0" width="90.0" height="10.0" fill="url(#pending)" />
@@ -921,10 +921,10 @@
   <rect x="840.0" y="292.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="840.0" y="302.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="840.0" y="302.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="840.0" y="282.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="840.0" y="272.0" width="5.625" height="2.5" fill="#243040" />
   <rect x="944" y="247" width="102" height="70" fill="white" stroke="#a3acb5" stroke-width="1" />
   <circle cx="954" cy="259" r="3" fill="#243040" stroke="#243040" />
-  <text x="997.0" y="264" class="small" text-anchor="middle">(1, 3)</text>
+  <text x="997.0" y="264" class="small" text-anchor="middle">(3, 1)</text>
   <rect x="950" y="272" width="90" height="40" fill="#f0f2f4" />
   <rect x="950.0" y="272.0" width="90.0" height="10.0" fill="#4c92cf" fill-opacity=".75" />
   <rect x="950.0" y="272.0" width="90.0" height="10.0" fill="url(#pending)" />
@@ -934,10 +934,10 @@
   <rect x="950.0" y="292.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="950.0" y="302.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="950.0" y="302.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="950.0" y="282.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="950.0" y="272.0" width="5.625" height="2.5" fill="#243040" />
   <rect x="614" y="325" width="102" height="70" fill="white" stroke="#a3acb5" stroke-width="1" />
   <circle cx="624" cy="337" r="3" fill="#243040" stroke="#243040" />
-  <text x="667.0" y="342" class="small" text-anchor="middle">(2, 0)</text>
+  <text x="667.0" y="342" class="small" text-anchor="middle">(0, 2)</text>
   <rect x="620" y="350" width="90" height="40" fill="#f0f2f4" />
   <rect x="620.0" y="350.0" width="90.0" height="10.0" fill="#4c92cf" fill-opacity=".75" />
   <rect x="620.0" y="350.0" width="90.0" height="10.0" fill="url(#pending)" />
@@ -947,10 +947,10 @@
   <rect x="620.0" y="370.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="620.0" y="380.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="620.0" y="380.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="620.0" y="360.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="620.0" y="350.0" width="5.625" height="2.5" fill="#243040" />
   <rect x="724" y="325" width="102" height="70" fill="white" stroke="#a3acb5" stroke-width="1" />
   <circle cx="734" cy="337" r="3" fill="#243040" stroke="#243040" />
-  <text x="777.0" y="342" class="small" text-anchor="middle">(2, 1)</text>
+  <text x="777.0" y="342" class="small" text-anchor="middle">(1, 2)</text>
   <rect x="730" y="350" width="90" height="40" fill="#f0f2f4" />
   <rect x="730.0" y="350.0" width="90.0" height="10.0" fill="#4c92cf" fill-opacity=".75" />
   <rect x="730.0" y="350.0" width="90.0" height="10.0" fill="url(#pending)" />
@@ -960,7 +960,7 @@
   <rect x="730.0" y="370.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="730.0" y="380.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="730.0" y="380.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="730.0" y="360.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="730.0" y="350.0" width="5.625" height="2.5" fill="#243040" />
   <rect x="834" y="325" width="102" height="70" fill="white" stroke="#a3acb5" stroke-width="1" />
   <circle cx="844" cy="337" r="3" fill="#243040" stroke="#243040" />
   <text x="887.0" y="342" class="small" text-anchor="middle">(2, 2)</text>
@@ -973,10 +973,10 @@
   <rect x="840.0" y="370.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="840.0" y="380.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="840.0" y="380.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="840.0" y="360.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="840.0" y="350.0" width="5.625" height="2.5" fill="#243040" />
   <rect x="944" y="325" width="102" height="70" fill="white" stroke="#a3acb5" stroke-width="1" />
   <circle cx="954" cy="337" r="3" fill="#243040" stroke="#243040" />
-  <text x="997.0" y="342" class="small" text-anchor="middle">(2, 3)</text>
+  <text x="997.0" y="342" class="small" text-anchor="middle">(3, 2)</text>
   <rect x="950" y="350" width="90" height="40" fill="#f0f2f4" />
   <rect x="950.0" y="350.0" width="90.0" height="10.0" fill="#4c92cf" fill-opacity=".75" />
   <rect x="950.0" y="350.0" width="90.0" height="10.0" fill="url(#pending)" />
@@ -986,10 +986,10 @@
   <rect x="950.0" y="370.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="950.0" y="380.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="950.0" y="380.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="950.0" y="360.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="950.0" y="350.0" width="5.625" height="2.5" fill="#243040" />
   <rect x="614" y="403" width="102" height="70" fill="white" stroke="#a3acb5" stroke-width="1" />
   <circle cx="624" cy="415" r="3" fill="#243040" stroke="#243040" />
-  <text x="667.0" y="420" class="small" text-anchor="middle">(3, 0)</text>
+  <text x="667.0" y="420" class="small" text-anchor="middle">(0, 3)</text>
   <rect x="620" y="428" width="90" height="40" fill="#f0f2f4" />
   <rect x="620.0" y="428.0" width="90.0" height="10.0" fill="#4c92cf" fill-opacity=".75" />
   <rect x="620.0" y="428.0" width="90.0" height="10.0" fill="url(#pending)" />
@@ -999,10 +999,10 @@
   <rect x="620.0" y="448.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="620.0" y="458.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="620.0" y="458.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="620.0" y="438.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="620.0" y="428.0" width="5.625" height="2.5" fill="#243040" />
   <rect x="724" y="403" width="102" height="70" fill="white" stroke="#a3acb5" stroke-width="1" />
   <circle cx="734" cy="415" r="3" fill="#243040" stroke="#243040" />
-  <text x="777.0" y="420" class="small" text-anchor="middle">(3, 1)</text>
+  <text x="777.0" y="420" class="small" text-anchor="middle">(1, 3)</text>
   <rect x="730" y="428" width="90" height="40" fill="#f0f2f4" />
   <rect x="730.0" y="428.0" width="90.0" height="10.0" fill="#4c92cf" fill-opacity=".75" />
   <rect x="730.0" y="428.0" width="90.0" height="10.0" fill="url(#pending)" />
@@ -1012,10 +1012,10 @@
   <rect x="730.0" y="448.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="730.0" y="458.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="730.0" y="458.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="730.0" y="438.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="730.0" y="428.0" width="5.625" height="2.5" fill="#243040" />
   <rect x="834" y="403" width="102" height="70" fill="white" stroke="#a3acb5" stroke-width="1" />
   <circle cx="844" cy="415" r="3" fill="#243040" stroke="#243040" />
-  <text x="887.0" y="420" class="small" text-anchor="middle">(3, 2)</text>
+  <text x="887.0" y="420" class="small" text-anchor="middle">(2, 3)</text>
   <rect x="840" y="428" width="90" height="40" fill="#f0f2f4" />
   <rect x="840.0" y="428.0" width="90.0" height="10.0" fill="#4c92cf" fill-opacity=".75" />
   <rect x="840.0" y="428.0" width="90.0" height="10.0" fill="url(#pending)" />
@@ -1025,7 +1025,7 @@
   <rect x="840.0" y="448.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="840.0" y="458.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="840.0" y="458.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="840.0" y="438.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="840.0" y="428.0" width="5.625" height="2.5" fill="#243040" />
   <rect x="944" y="403" width="102" height="70" fill="white" stroke="#a3acb5" stroke-width="1" />
   <circle cx="954" cy="415" r="3" fill="#243040" stroke="#243040" />
   <text x="997.0" y="420" class="small" text-anchor="middle">(3, 3)</text>
@@ -1038,11 +1038,11 @@
   <rect x="950.0" y="448.0" width="90.0" height="10.0" fill="url(#pending)" />
   <rect x="950.0" y="458.0" width="90.0" height="10.0" fill="#ae88cb" fill-opacity=".75" />
   <rect x="950.0" y="458.0" width="90.0" height="10.0" fill="url(#pending)" />
-  <rect x="950.0" y="438.0" width="5.625" height="2.5" fill="#243040" />
+  <rect x="950.0" y="428.0" width="5.625" height="2.5" fill="#243040" />
   <text x="614" y="494" class="small">Filled dot: holds selected element · dashed frame: collective group</text>
   <text x="614" y="512" class="small">Miniatures show the same global window as the numbered grid.</text>
-  <text x="614" y="556" class="label">Local tensor · participant (0, 1)</text>
-  <text x="614" y="578" class="small">Shape 16 × 16 · rows 4–7, columns 0–15</text>
+  <text x="614" y="556" class="label">Local tensor · participant (1, 0)</text>
+  <text x="614" y="578" class="small">Shape 16 × 16 · rows 0–3, columns 0–15</text>
   <text x="650.0" y="598" class="small" text-anchor="middle">0</text>
   <text x="678.0" y="598" class="small" text-anchor="middle">1</text>
   <text x="706.0" y="598" class="small" text-anchor="middle">2</text>
@@ -1059,204 +1059,204 @@
   <text x="1014.0" y="598" class="small" text-anchor="middle">13</text>
   <text x="1042.0" y="598" class="small" text-anchor="middle">14</text>
   <text x="1070.0" y="598" class="small" text-anchor="middle">15</text>
-  <text x="627" y="623.5" class="small" text-anchor="end">4</text>
-  <rect x="636.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="627" y="623.5" class="small" text-anchor="end">0</text>
+  <rect x="636.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="636.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="650.0" y="623.5" class="number" text-anchor="middle">64</text>
+  <text x="650.0" y="623.5" class="number" text-anchor="middle">0</text>
   <rect x="637.0" y="608.0" width="26.0" height="23.0" fill="none" stroke="#243040" stroke-width="2" />
-  <rect x="664.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <rect x="664.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="664.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="678.0" y="623.5" class="number" text-anchor="middle">65</text>
-  <rect x="692.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="678.0" y="623.5" class="number" text-anchor="middle">1</text>
+  <rect x="692.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="692.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="706.0" y="623.5" class="number" text-anchor="middle">66</text>
-  <rect x="720.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="706.0" y="623.5" class="number" text-anchor="middle">2</text>
+  <rect x="720.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="720.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="734.0" y="623.5" class="number" text-anchor="middle">67</text>
-  <rect x="748.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="734.0" y="623.5" class="number" text-anchor="middle">3</text>
+  <rect x="748.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="748.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="762.0" y="623.5" class="number" text-anchor="middle">68</text>
-  <rect x="776.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="762.0" y="623.5" class="number" text-anchor="middle">4</text>
+  <rect x="776.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="776.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="790.0" y="623.5" class="number" text-anchor="middle">69</text>
-  <rect x="804.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="790.0" y="623.5" class="number" text-anchor="middle">5</text>
+  <rect x="804.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="804.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="818.0" y="623.5" class="number" text-anchor="middle">70</text>
-  <rect x="832.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="818.0" y="623.5" class="number" text-anchor="middle">6</text>
+  <rect x="832.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="832.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="846.0" y="623.5" class="number" text-anchor="middle">71</text>
-  <rect x="860.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="846.0" y="623.5" class="number" text-anchor="middle">7</text>
+  <rect x="860.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="860.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="874.0" y="623.5" class="number" text-anchor="middle">72</text>
-  <rect x="888.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="874.0" y="623.5" class="number" text-anchor="middle">8</text>
+  <rect x="888.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="888.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="902.0" y="623.5" class="number" text-anchor="middle">73</text>
-  <rect x="916.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="902.0" y="623.5" class="number" text-anchor="middle">9</text>
+  <rect x="916.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="916.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="930.0" y="623.5" class="number" text-anchor="middle">74</text>
-  <rect x="944.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="930.0" y="623.5" class="number" text-anchor="middle">10</text>
+  <rect x="944.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="944.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="958.0" y="623.5" class="number" text-anchor="middle">75</text>
-  <rect x="972.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="958.0" y="623.5" class="number" text-anchor="middle">11</text>
+  <rect x="972.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="972.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="986.0" y="623.5" class="number" text-anchor="middle">76</text>
-  <rect x="1000.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="986.0" y="623.5" class="number" text-anchor="middle">12</text>
+  <rect x="1000.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="1000.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="1014.0" y="623.5" class="number" text-anchor="middle">77</text>
-  <rect x="1028.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="1014.0" y="623.5" class="number" text-anchor="middle">13</text>
+  <rect x="1028.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="1028.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="1042.0" y="623.5" class="number" text-anchor="middle">78</text>
-  <rect x="1056.0" y="607.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="1042.0" y="623.5" class="number" text-anchor="middle">14</text>
+  <rect x="1056.0" y="607.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="1056.0" y="607.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="1070.0" y="623.5" class="number" text-anchor="middle">79</text>
-  <text x="627" y="648.5" class="small" text-anchor="end">5</text>
-  <rect x="636.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="1070.0" y="623.5" class="number" text-anchor="middle">15</text>
+  <text x="627" y="648.5" class="small" text-anchor="end">1</text>
+  <rect x="636.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="636.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="650.0" y="648.5" class="number" text-anchor="middle">80</text>
-  <rect x="664.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="650.0" y="648.5" class="number" text-anchor="middle">16</text>
+  <rect x="664.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="664.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="678.0" y="648.5" class="number" text-anchor="middle">81</text>
-  <rect x="692.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="678.0" y="648.5" class="number" text-anchor="middle">17</text>
+  <rect x="692.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="692.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="706.0" y="648.5" class="number" text-anchor="middle">82</text>
-  <rect x="720.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="706.0" y="648.5" class="number" text-anchor="middle">18</text>
+  <rect x="720.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="720.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="734.0" y="648.5" class="number" text-anchor="middle">83</text>
-  <rect x="748.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="734.0" y="648.5" class="number" text-anchor="middle">19</text>
+  <rect x="748.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="748.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="762.0" y="648.5" class="number" text-anchor="middle">84</text>
-  <rect x="776.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="762.0" y="648.5" class="number" text-anchor="middle">20</text>
+  <rect x="776.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="776.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="790.0" y="648.5" class="number" text-anchor="middle">85</text>
-  <rect x="804.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="790.0" y="648.5" class="number" text-anchor="middle">21</text>
+  <rect x="804.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="804.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="818.0" y="648.5" class="number" text-anchor="middle">86</text>
-  <rect x="832.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="818.0" y="648.5" class="number" text-anchor="middle">22</text>
+  <rect x="832.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="832.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="846.0" y="648.5" class="number" text-anchor="middle">87</text>
-  <rect x="860.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="846.0" y="648.5" class="number" text-anchor="middle">23</text>
+  <rect x="860.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="860.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="874.0" y="648.5" class="number" text-anchor="middle">88</text>
-  <rect x="888.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="874.0" y="648.5" class="number" text-anchor="middle">24</text>
+  <rect x="888.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="888.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="902.0" y="648.5" class="number" text-anchor="middle">89</text>
-  <rect x="916.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="902.0" y="648.5" class="number" text-anchor="middle">25</text>
+  <rect x="916.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="916.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="930.0" y="648.5" class="number" text-anchor="middle">90</text>
-  <rect x="944.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="930.0" y="648.5" class="number" text-anchor="middle">26</text>
+  <rect x="944.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="944.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="958.0" y="648.5" class="number" text-anchor="middle">91</text>
-  <rect x="972.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="958.0" y="648.5" class="number" text-anchor="middle">27</text>
+  <rect x="972.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="972.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="986.0" y="648.5" class="number" text-anchor="middle">92</text>
-  <rect x="1000.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="986.0" y="648.5" class="number" text-anchor="middle">28</text>
+  <rect x="1000.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="1000.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="1014.0" y="648.5" class="number" text-anchor="middle">93</text>
-  <rect x="1028.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="1014.0" y="648.5" class="number" text-anchor="middle">29</text>
+  <rect x="1028.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="1028.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="1042.0" y="648.5" class="number" text-anchor="middle">94</text>
-  <rect x="1056.0" y="632.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="1042.0" y="648.5" class="number" text-anchor="middle">30</text>
+  <rect x="1056.0" y="632.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="1056.0" y="632.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="1070.0" y="648.5" class="number" text-anchor="middle">95</text>
-  <text x="627" y="673.5" class="small" text-anchor="end">6</text>
-  <rect x="636.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="1070.0" y="648.5" class="number" text-anchor="middle">31</text>
+  <text x="627" y="673.5" class="small" text-anchor="end">2</text>
+  <rect x="636.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="636.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="650.0" y="673.5" class="number" text-anchor="middle">96</text>
-  <rect x="664.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="650.0" y="673.5" class="number" text-anchor="middle">32</text>
+  <rect x="664.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="664.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="678.0" y="673.5" class="number" text-anchor="middle">97</text>
-  <rect x="692.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="678.0" y="673.5" class="number" text-anchor="middle">33</text>
+  <rect x="692.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="692.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="706.0" y="673.5" class="number" text-anchor="middle">98</text>
-  <rect x="720.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="706.0" y="673.5" class="number" text-anchor="middle">34</text>
+  <rect x="720.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="720.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="734.0" y="673.5" class="number" text-anchor="middle">99</text>
-  <rect x="748.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="734.0" y="673.5" class="number" text-anchor="middle">35</text>
+  <rect x="748.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="748.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="762.0" y="673.5" class="number" text-anchor="middle">100</text>
-  <rect x="776.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="762.0" y="673.5" class="number" text-anchor="middle">36</text>
+  <rect x="776.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="776.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="790.0" y="673.5" class="number" text-anchor="middle">101</text>
-  <rect x="804.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="790.0" y="673.5" class="number" text-anchor="middle">37</text>
+  <rect x="804.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="804.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="818.0" y="673.5" class="number" text-anchor="middle">102</text>
-  <rect x="832.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="818.0" y="673.5" class="number" text-anchor="middle">38</text>
+  <rect x="832.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="832.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="846.0" y="673.5" class="number" text-anchor="middle">103</text>
-  <rect x="860.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="846.0" y="673.5" class="number" text-anchor="middle">39</text>
+  <rect x="860.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="860.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="874.0" y="673.5" class="number" text-anchor="middle">104</text>
-  <rect x="888.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="874.0" y="673.5" class="number" text-anchor="middle">40</text>
+  <rect x="888.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="888.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="902.0" y="673.5" class="number" text-anchor="middle">105</text>
-  <rect x="916.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="902.0" y="673.5" class="number" text-anchor="middle">41</text>
+  <rect x="916.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="916.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="930.0" y="673.5" class="number" text-anchor="middle">106</text>
-  <rect x="944.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="930.0" y="673.5" class="number" text-anchor="middle">42</text>
+  <rect x="944.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="944.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="958.0" y="673.5" class="number" text-anchor="middle">107</text>
-  <rect x="972.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="958.0" y="673.5" class="number" text-anchor="middle">43</text>
+  <rect x="972.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="972.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="986.0" y="673.5" class="number" text-anchor="middle">108</text>
-  <rect x="1000.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="986.0" y="673.5" class="number" text-anchor="middle">44</text>
+  <rect x="1000.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="1000.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="1014.0" y="673.5" class="number" text-anchor="middle">109</text>
-  <rect x="1028.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="1014.0" y="673.5" class="number" text-anchor="middle">45</text>
+  <rect x="1028.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="1028.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="1042.0" y="673.5" class="number" text-anchor="middle">110</text>
-  <rect x="1056.0" y="657.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="1042.0" y="673.5" class="number" text-anchor="middle">46</text>
+  <rect x="1056.0" y="657.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="1056.0" y="657.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="1070.0" y="673.5" class="number" text-anchor="middle">111</text>
-  <text x="627" y="698.5" class="small" text-anchor="end">7</text>
-  <rect x="636.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="1070.0" y="673.5" class="number" text-anchor="middle">47</text>
+  <text x="627" y="698.5" class="small" text-anchor="end">3</text>
+  <rect x="636.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="636.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="650.0" y="698.5" class="number" text-anchor="middle">112</text>
-  <rect x="664.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="650.0" y="698.5" class="number" text-anchor="middle">48</text>
+  <rect x="664.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="664.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="678.0" y="698.5" class="number" text-anchor="middle">113</text>
-  <rect x="692.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="678.0" y="698.5" class="number" text-anchor="middle">49</text>
+  <rect x="692.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="692.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="706.0" y="698.5" class="number" text-anchor="middle">114</text>
-  <rect x="720.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="706.0" y="698.5" class="number" text-anchor="middle">50</text>
+  <rect x="720.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="720.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="734.0" y="698.5" class="number" text-anchor="middle">115</text>
-  <rect x="748.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="734.0" y="698.5" class="number" text-anchor="middle">51</text>
+  <rect x="748.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="748.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="762.0" y="698.5" class="number" text-anchor="middle">116</text>
-  <rect x="776.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="762.0" y="698.5" class="number" text-anchor="middle">52</text>
+  <rect x="776.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="776.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="790.0" y="698.5" class="number" text-anchor="middle">117</text>
-  <rect x="804.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="790.0" y="698.5" class="number" text-anchor="middle">53</text>
+  <rect x="804.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="804.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="818.0" y="698.5" class="number" text-anchor="middle">118</text>
-  <rect x="832.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="818.0" y="698.5" class="number" text-anchor="middle">54</text>
+  <rect x="832.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="832.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="846.0" y="698.5" class="number" text-anchor="middle">119</text>
-  <rect x="860.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="846.0" y="698.5" class="number" text-anchor="middle">55</text>
+  <rect x="860.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="860.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="874.0" y="698.5" class="number" text-anchor="middle">120</text>
-  <rect x="888.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="874.0" y="698.5" class="number" text-anchor="middle">56</text>
+  <rect x="888.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="888.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="902.0" y="698.5" class="number" text-anchor="middle">121</text>
-  <rect x="916.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="902.0" y="698.5" class="number" text-anchor="middle">57</text>
+  <rect x="916.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="916.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="930.0" y="698.5" class="number" text-anchor="middle">122</text>
-  <rect x="944.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="930.0" y="698.5" class="number" text-anchor="middle">58</text>
+  <rect x="944.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="944.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="958.0" y="698.5" class="number" text-anchor="middle">123</text>
-  <rect x="972.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="958.0" y="698.5" class="number" text-anchor="middle">59</text>
+  <rect x="972.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="972.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="986.0" y="698.5" class="number" text-anchor="middle">124</text>
-  <rect x="1000.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="986.0" y="698.5" class="number" text-anchor="middle">60</text>
+  <rect x="1000.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="1000.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="1014.0" y="698.5" class="number" text-anchor="middle">125</text>
-  <rect x="1028.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="1014.0" y="698.5" class="number" text-anchor="middle">61</text>
+  <rect x="1028.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="1028.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="1042.0" y="698.5" class="number" text-anchor="middle">126</text>
-  <rect x="1056.0" y="682.0" width="28.0" height="25.0" fill="#e4ad50" fill-opacity=".5" stroke="white" stroke-width="1" />
+  <text x="1042.0" y="698.5" class="number" text-anchor="middle">62</text>
+  <rect x="1056.0" y="682.0" width="28.0" height="25.0" fill="#4c92cf" fill-opacity=".5" stroke="white" stroke-width="1" />
   <rect x="1056.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
-  <text x="1070.0" y="698.5" class="number" text-anchor="middle">127</text>
-  <text x="614" y="735">Element 64 → local (4, 0)</text>
+  <text x="1070.0" y="698.5" class="number" text-anchor="middle">63</text>
+  <text x="614" y="735">Element 0 → local (0, 0)</text>
   <text x="614" y="757" class="small">Logical base: 0 · storage base: 0 elements</text>
   <text x="30" y="823" class="small">Derived from checked HIR. Diagrams show logical ownership and declared value state; they do not model a physical network schedule.</text>
 </svg>
