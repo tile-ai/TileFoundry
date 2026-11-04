@@ -17,7 +17,6 @@ from tilefoundry.target import Target
 from tilefoundry.visitor_registry.access_relation import access_relation_registry
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.candidates import (
-    Inapplicable,
     candidate_bindings,
     candidate_ops,
     sole_candidate,
@@ -67,7 +66,7 @@ def candidates(
             or not isinstance(call.type, TensorType)
         ):
             continue
-        instructions = candidate_ops(type(call.target))
+        instructions = candidate_ops(type(call.target), call=call)
         if not instructions or aliased_operand(call) is not None:
             continue
         if call.type.storage is StorageKind.UMAT and call.type.shape == ():
@@ -95,8 +94,6 @@ def candidates(
                     raise rejection if isinstance(rejection, ScheduleRefusal) else ScheduleRefusal(
                         str(rejection) if rejection is not None else "no applicable HIR declaration"
                     )
-            except Inapplicable:
-                continue
             except ScheduleRefusal as error:
                 refused.append(
                     {"id": identifier, **pattern_printer.match_data((error.path,), error.reason)}

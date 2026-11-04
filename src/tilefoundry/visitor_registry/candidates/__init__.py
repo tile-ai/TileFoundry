@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import pkgutil
 from dataclasses import dataclass, field, replace
-from typing import Mapping
+from typing import Callable, Mapping
 
 from tilefoundry.ir.core.expr import Call
 from tilefoundry.ir.core.op import Op, supported_op_capabilities
@@ -14,10 +14,6 @@ from tilefoundry.ir.core.param_def import MemoryEffect, collect_param_defs
 from tilefoundry.ir.hir.schedule import ScheduleRefusal
 from tilefoundry.ir.pattern import PatternMatcher, SwitchPattern, TensorPattern
 from tilefoundry.ir.pattern.predicates import _same
-
-
-class Inapplicable(ScheduleRefusal):
-    """The instruction is not the kind of work a call needs, so it is no candidate for it."""
 
 
 @dataclass(frozen=True)
@@ -41,14 +37,21 @@ def _declarations(hir_op):
 
 _CANDIDATES: dict[type, list[type]] = {}
 _CALLBACKS: dict[type, object] = {}
+_WHEN: dict[tuple[type, type], Callable] = {}
 
 
-def register_candidates(hir_op: type, tir_ops: tuple[type, ...]):
-    """Append instructions; a decorated callback supplies attributes and operand types."""
+def register_candidates(hir_op: type, tir_ops: tuple[type, ...], *, when: Callable | None = None):
+    """Append instructions; a decorated callback supplies attributes and operand types.
+
+    *when* says which calls the instructions carry at all; on any other call
+    they are no candidate.
+    """
     registered = _CANDIDATES.setdefault(hir_op, [])
     for tir_op in tir_ops:
         if tir_op not in registered:
             registered.append(tir_op)
+        if when is not None:
+            _WHEN[(hir_op, tir_op)] = when
 
     def decorate(callback):
         if hir_op in _CALLBACKS:
@@ -59,12 +62,17 @@ def register_candidates(hir_op: type, tir_ops: tuple[type, ...]):
     return decorate
 
 
-def candidate_ops(hir_op: type, *, target=None) -> tuple[type, ...]:
-    """Return every registered TIR carrier for one HIR operation."""
+def candidate_ops(hir_op: type, *, target=None, call=None) -> tuple[type, ...]:
+    """Return every registered TIR carrier for one HIR operation, or for one *call* of it."""
     supported = None if target is None else {op for op, _ in supported_op_capabilities(target)}
     return tuple(op for op in dict.fromkeys(
         (*_CANDIDATES.get(hir_op, ()), *(op for op, _ in _declarations(hir_op)))
-    ) if supported is None or op in supported)
+    ) if (supported is None or op in supported)
+        and (call is None or _WHEN.get((hir_op, op), _always)(call)))
+
+
+def _always(call) -> bool:
+    return True
 
 
 def _instruction_attributes(hir_op: Op, op_type: type[Op]) -> dict:
@@ -176,9 +184,7 @@ def sole_candidate(hir_op: Op, *, target=None) -> Op | None:
     """Build the one registered instruction from same-named attributes, or None."""
     call = hir_op if isinstance(hir_op, Call) else None
     hir_target = call.target if call is not None else hir_op
-    candidates = candidate_ops(type(hir_target), target=target)
-    if call is not None:
-        candidates = tuple(candidate for candidate in candidates if _applies(call, candidate))
+    candidates = candidate_ops(type(hir_target), target=target, call=call)
     if len(candidates) != 1:
         return None
     if call is None:
@@ -192,17 +198,6 @@ def sole_candidate(hir_op: Op, *, target=None) -> Op | None:
     return candidates[0](**attributes)
 
 
-def _applies(call, op_type) -> bool:
-    """Whether *op_type* is the kind of work *call* needs; other refusals come later."""
-    try:
-        candidate_operands(call, op_type)
-    except Inapplicable:
-        return False
-    except ScheduleRefusal:
-        return True
-    return True
-
-
 def _auto_import(pkg_name: str) -> None:
     package = importlib.import_module(pkg_name)
     for _, module_name, _ in pkgutil.walk_packages(package.__path__, f"{pkg_name}."):
@@ -213,7 +208,6 @@ _auto_import(__name__)
 
 __all__ = [
     "HirMatch",
-    "Inapplicable",
     "candidate_bindings",
     "candidate_operands",
     "instruction_from_hir",

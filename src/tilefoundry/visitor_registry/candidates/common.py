@@ -32,27 +32,33 @@ from tilefoundry.visitor_registry.shard_propagate import (
 )
 
 from ..instruction import ScheduleRefusal
-from . import Inapplicable, register_candidates
+from . import register_candidates
 
 
-@register_candidates(Reshard, (Copy, TirReduce))
+def combines_partial(call) -> bool:
+    """Whether a reshard resolves a Partial, which combines the units' parts."""
+    return _resolved_reduction(call.args[0].type, call.type) is not None
+
+
+def only_moves(call) -> bool:
+    """Whether a reshard only moves data: it resolves no Partial."""
+    return not combines_partial(call)
+
+
+@register_candidates(Reshard, (Copy,), when=only_moves)
 def _reshard_operands(call, instruction):
     """Reshard states both transfer types; its landing attributes are already in the result.
 
-    Resolving a Partial combines the units' parts, so only a reduction over no
-    tensor axis carries it, and a copy carries every other reshard.
+    A reduction over no tensor axis combines the Partial the reshard resolves.
     """
     source, result = call.args[0].type, call.type
-    reduction = _resolved_reduction(source, result)
-    if (instruction is TirReduce) != (reduction is not None):
-        raise Inapplicable(
-            "a reshard resolving a Partial is a reduction"
-            if reduction is not None
-            else "a reshard resolving no Partial is a copy"
-        )
-    if reduction is None:
+    if instruction is not TirReduce:
         return {}, (source, result)
-    return {"axes": (), "keepdim": True, "kind": ReduceKind(reduction)}, (source, result)
+    kind = ReduceKind(_resolved_reduction(source, result))
+    return {"axes": (), "keepdim": True, "kind": kind}, (source, result)
+
+
+register_candidates(Reshard, (TirReduce,), when=combines_partial)
 
 
 def _resolved_reduction(source, result) -> str | None:
