@@ -7,7 +7,7 @@ sugar names (``neg`` / ``abs`` / ``rsqrt`` / ``logical_not``).
 from __future__ import annotations
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import per_unit, register_eval
+from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.kinds import UnaryKind
@@ -83,10 +83,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(Unary)
-@per_unit
 def _eval_unary(ctx):
-
-    fns = {
+    fn = {
         UnaryKind.NEG: torch.neg,
         UnaryKind.ABS: torch.abs,
         UnaryKind.NOT: torch.logical_not,
@@ -99,8 +97,10 @@ def _eval_unary(ctx):
         UnaryKind.ROUND: torch.round,
         UnaryKind.EXP2: torch.exp2,
         UnaryKind.LOG2: torch.log2,
-    }
-    return TensorValue(ShardTensor(ctx.result_type, fns[ctx.op.kind](ctx.args[0].data)))
+    }[ctx.op.kind]
+    x = ctx.args[0].tensor
+    held = fn(x.tensor) if x.is_global else tuple((p, fn(t)) for p, t in x.tensor)
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 __all__ = ["Unary"]

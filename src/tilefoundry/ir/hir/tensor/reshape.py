@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from tilefoundry.core import ShardTensor
+from tilefoundry.core import ShardTensor, local_type
 from tilefoundry.evaluator.dim import resolve_dim
-from tilefoundry.evaluator.registry import per_unit, register_eval
+from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -226,14 +226,24 @@ def _bound_or_inferred(dim, bindings):
 
 
 @register_eval(Reshape)
-@per_unit
 def _eval_reshape(ctx):
-    """Reshape to the result type, which is local when each unit runs on its own part."""
-    shape = tuple(_bound_or_inferred(d, ctx.dim_bindings) for d in ctx.result_type.shape)
-    if -1 in shape:
-        shape = tuple(_bound_or_inferred(d, ctx.dim_bindings) for d in ctx.op.new_shape)
-    if shape.count(-1) > 1:
-        raise EvalError(
-            f"reshape: at most one dynamic axis can be inferred, got new_shape={ctx.op.new_shape!r}"
-        )
-    return TensorValue(ShardTensor(ctx.result_type, ctx.args[0].data.reshape(shape)))
+    """Reshape to the result type; each piece of a local view to its local type."""
+
+    def shape_of(type):
+        shape = tuple(_bound_or_inferred(d, ctx.dim_bindings) for d in type.shape)
+        if -1 in shape:
+            shape = tuple(_bound_or_inferred(d, ctx.dim_bindings) for d in ctx.op.new_shape)
+        if shape.count(-1) > 1:
+            raise EvalError(
+                "reshape: at most one dynamic axis can be inferred, "
+                f"got new_shape={ctx.op.new_shape!r}"
+            )
+        return shape
+
+    x = ctx.args[0].tensor
+    if x.is_global:
+        held = x.tensor.reshape(shape_of(ctx.result_type))
+    else:
+        shape = shape_of(local_type(ctx.result_type))
+        held = tuple((p, t.reshape(shape)) for p, t in x.tensor)
+    return TensorValue(ShardTensor(ctx.result_type, held))

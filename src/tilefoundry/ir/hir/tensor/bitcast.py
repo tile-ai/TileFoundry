@@ -5,8 +5,8 @@ from math import prod
 
 import isl
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import per_unit, register_eval
+from tilefoundry.core import ShardTensor, local_type
+from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -307,23 +307,28 @@ def _bitcast_access(call: Call, ctx) -> tuple[AccessRelation, ...]:
 
 
 @register_eval(Bitcast)
-@per_unit
 def _eval_bitcast(ctx):
-    source = ctx.args[0]
-    result = ctx.result_type
-    pairs = _address_mapping(
-        source.type.layout, result.layout, prod(result.shape), source.type.shape, result.shape
-    )
+    x = ctx.args[0].tensor
+    if x.is_global:
+        held = _bitcast(x.tensor, x.type, ctx.result_type)
+    else:
+        source, result = local_type(x.type), local_type(ctx.result_type)
+        held = tuple((p, _bitcast(t, source, result)) for p, t in x.tensor)
+    return TensorValue(ShardTensor(ctx.result_type, held))
+
+
+def _bitcast(data, source, result):
+    """*data* of type *source* read through the layout of *result*."""
+    pairs = _address_mapping(source.layout, result.layout, prod(result.shape), source.shape, result.shape)
     indices = [0] * len(pairs)
     for coord, source_coord in enumerate(pairs):
         result_index = source_index = 0
         for digit, extent in zip(idx2crd(coord, result.shape, compact_col_major(result.shape)), result.shape, strict=True):
             result_index = result_index * extent + digit
         for digit, extent in zip(
-            idx2crd(source_coord, source.type.shape, compact_col_major(source.type.shape)), source.type.shape, strict=True
+            idx2crd(source_coord, source.shape, compact_col_major(source.shape)), source.shape, strict=True
         ):
             source_index = source_index * extent + digit
         indices[result_index] = source_index
-    index = torch.tensor(indices, dtype=torch.int64, device=source.data.device)
-    data = source.data.reshape(-1).index_select(0, index).reshape(result.shape)
-    return TensorValue(ShardTensor(result, data))
+    index = torch.tensor(indices, dtype=torch.int64, device=data.device)
+    return data.reshape(-1).index_select(0, index).reshape(result.shape)

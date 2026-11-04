@@ -8,7 +8,7 @@ import isl
 
 from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.dim import resolve_dim
-from tilefoundry.evaluator.registry import per_unit, register_eval
+from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.kinds import ReduceKind
@@ -149,46 +149,47 @@ def _reduced_count(ctx, axes) -> int:
     A mean over a split axis is Partial sum, so each unit holds its sum over the
     whole count rather than its own mean.
     """
-    shape = ctx.arg_types[0].shape
+    shape = ctx.args[0].type.shape
     return prod(resolve_dim(shape[axis], ctx.dim_bindings) for axis in axes)
 
 
 @register_eval(Reduce)
-@per_unit
 def _eval_reduce(ctx):
-    x = ctx.args[0].data
     axes = tuple(ctx.op.axes)
     keepdim = ctx.op.keepdim
     kind = ctx.op.kind
-    if kind in _EMPTY_IDENTITY and any(x.shape[axis] == 0 for axis in axes):
+    whole = _reduced_count(ctx, axes)
+
+    def reduce(x):
+        if kind in _EMPTY_IDENTITY and any(x.shape[axis] == 0 for axis in axes):
+            if kind is ReduceKind.ABS_MAX:
+                identity = 0
+            elif kind is ReduceKind.MIN:
+                identity = _greatest_representable(x.dtype)
+            else:
+                identity = _least_representable(x.dtype)
+            reduced = list(x.shape)
+            for axis in axes:
+                reduced[axis] = 1
+            out = torch.full(reduced, identity, dtype=x.dtype, device=x.device)
+            return out if keepdim else out.squeeze(dim=axes)
+        if kind is ReduceKind.MEAN:
+            out = x.mean(dim=axes, keepdim=keepdim)
+            part = prod(x.shape[axis] for axis in axes)
+            return out if part == whole else out * (part / whole)
+        if kind is ReduceKind.SUM:
+            return x.sum(dim=axes, keepdim=keepdim)
         if kind is ReduceKind.ABS_MAX:
-            identity = 0
-        elif kind is ReduceKind.MIN:
-            identity = _greatest_representable(x.dtype)
-        else:
-            identity = _least_representable(x.dtype)
-        reduced = list(x.shape)
-        for axis in axes:
-            reduced[axis] = 1
-        out = torch.full(reduced, identity, dtype=x.dtype, device=x.device)
-        return TensorValue(ShardTensor(ctx.result_type, out if keepdim else out.squeeze(dim=axes)))
-    if kind is ReduceKind.MEAN:
-        out = x.mean(dim=axes, keepdim=keepdim)
-        whole = _reduced_count(ctx, axes)
-        part = prod(x.shape[axis] for axis in axes)
-        if part != whole:
-            out = out * (part / whole)
-    elif kind is ReduceKind.SUM:
-        out = x.sum(dim=axes, keepdim=keepdim)
-    elif kind is ReduceKind.ABS_MAX:
-        out = x.abs().amax(dim=axes, keepdim=keepdim)
-    elif kind is ReduceKind.MAX:
-        out = x.amax(dim=axes, keepdim=keepdim)
-    elif kind is ReduceKind.MIN:
-        out = x.amin(dim=axes, keepdim=keepdim)
-    else:
+            return x.abs().amax(dim=axes, keepdim=keepdim)
+        if kind is ReduceKind.MAX:
+            return x.amax(dim=axes, keepdim=keepdim)
+        if kind is ReduceKind.MIN:
+            return x.amin(dim=axes, keepdim=keepdim)
         raise ValueError(f"evaluator: unsupported ReduceKind {kind}")
-    return TensorValue(ShardTensor(ctx.result_type, out))
+
+    x = ctx.args[0].tensor
+    held = reduce(x.tensor) if x.is_global else tuple((p, reduce(t)) for p, t in x.tensor)
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 def _kept(shape: tuple) -> int:

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import per_unit, register_eval
+from tilefoundry.core import ShardTensor, local_placements
+from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.core import Constant, Op, Tuple
 from tilefoundry.ir.core.param_def import ParamDef
@@ -163,28 +163,32 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(InsertSlice)
-@per_unit
 def _eval_insert_slice(ctx):
-    dst = ctx.args[0].data
-    upd = ctx.args[1].data
-    off_val = ctx.args[2]
-    if isinstance(off_val, TupleValue):
-        starts = [int(e.data.reshape(-1)[0].item()) for e in off_val.elements]
-    else:
-        starts = [int(off_val.data.reshape(-1)[0].item())]
-    sl = []
-    for ax, start in enumerate(starts):
-        n = upd.shape[ax]
-        if start < 0 or start + n > dst.shape[ax]:
-            raise ValueError(
-                f"insert_slice: window [{start}, {start + n}) out of bounds on axis "
-                f"{ax} for dst extent {dst.shape[ax]}"
-            )
-        sl.append(slice(start, start + n))
-    win = tuple(sl)
-    out = dst.clone()
-    out[win] = upd.reshape(out[win].shape).to(out.dtype)
-    return TensorValue(ShardTensor(ctx.result_type, out))
+    def insert_slice(dst, upd, *starts):
+        sl = []
+        for ax, start in enumerate(int(start.reshape(-1)[0].item()) for start in starts):
+            n = upd.shape[ax]
+            if start < 0 or start + n > dst.shape[ax]:
+                raise ValueError(
+                    f"insert_slice: window [{start}, {start + n}) out of bounds on axis "
+                    f"{ax} for dst extent {dst.shape[ax]}"
+                )
+            sl.append(slice(start, start + n))
+        win = tuple(sl)
+        out = dst.clone()
+        out[win] = upd.reshape(out[win].shape).to(out.dtype)
+        return out
+
+    offsets = ctx.args[2]
+    offsets = offsets.elements if isinstance(offsets, TupleValue) else (offsets,)
+    xs = tuple(arg.tensor for arg in (ctx.args[0], ctx.args[1], *offsets))
+    placements = local_placements(*xs)
+    held = (
+        insert_slice(*(x.tensor for x in xs))
+        if not placements
+        else tuple((p, insert_slice(*(x.to_local(p) for x in xs))) for p in placements)
+    )
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 __all__ = ["InsertSlice"]

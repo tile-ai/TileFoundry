@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import isl
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import per_unit, register_eval
+from tilefoundry.core import ShardTensor, local_placements
+from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue, to_torch_dtype
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -142,36 +142,32 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> tuple[Access
 
 
 @register_eval(RoPE)
-@per_unit
 def _eval_rope(ctx):
-
-    q = ctx.args[0].data.float()
-    k = ctx.args[1].data.float()
-    pos = ctx.args[4].data.reshape(-1).long()
-    cos = ctx.args[2].data[pos].float()[None, :, None, :]
-    sin = ctx.args[3].data[pos].float()[None, :, None, :]
+    fields = ctx.result_type.fields
 
     def _rotate_half(x):
         half = x.shape[-1] // 2
         return torch.cat((-x[..., half:], x[..., :half]), dim=-1)
 
-    q_out = q * cos + _rotate_half(q) * sin
-    k_out = k * cos + _rotate_half(k) * sin
-    return TupleValue(
-        elements=(
-            TensorValue(
-                ShardTensor(
-                    ctx.result_type.fields[0],
-                    q_out.to(to_torch_dtype(ctx.result_type.fields[0].dtype)),
-                )
-            ),
-            TensorValue(
-                ShardTensor(
-                    ctx.result_type.fields[1],
-                    k_out.to(to_torch_dtype(ctx.result_type.fields[1].dtype)),
-                )
-            ),
+    def rope(q, k, cos, sin, pos):
+        pos = pos.reshape(-1).long()
+        cos = cos[pos].float()[None, :, None, :]
+        sin = sin[pos].float()[None, :, None, :]
+        q, k = q.float(), k.float()
+        return tuple(
+            (x * cos + _rotate_half(x) * sin).to(to_torch_dtype(field.dtype))
+            for x, field in zip((q, k), fields, strict=True)
         )
+
+    xs = tuple(arg.tensor for arg in ctx.args)
+    placements = local_placements(*xs)
+    if not placements:
+        held = rope(*(x.tensor for x in xs))
+    else:
+        each = [(p, rope(*(x.to_local(p) for x in xs))) for p in placements]
+        held = tuple(tuple((p, out[i]) for p, out in each) for i in range(len(fields)))
+    return TupleValue(
+        tuple(TensorValue(ShardTensor(field, data)) for field, data in zip(fields, held, strict=True))
     )
 
 

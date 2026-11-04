@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import isl
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import per_unit, register_eval
+from tilefoundry.core import ShardTensor, local_placements
+from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Expr, Op
 from tilefoundry.ir.core.expr import Call, Constant
@@ -305,19 +305,26 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(Conv2D)
-@per_unit
 def _eval_conv2d(ctx):
-    input_, weight, bias = (arg.data for arg in ctx.args)
-    out = F.conv2d(
-        input_,
-        weight,
-        bias,
-        stride=ctx.op.stride,
-        padding=ctx.op.padding,
-        dilation=ctx.op.dilation,
-        groups=ctx.op.groups,
+    def conv2d(input_, weight, bias):
+        return F.conv2d(
+            input_,
+            weight,
+            bias,
+            stride=ctx.op.stride,
+            padding=ctx.op.padding,
+            dilation=ctx.op.dilation,
+            groups=ctx.op.groups,
+        )
+
+    xs = tuple(arg.tensor for arg in ctx.args)
+    placements = local_placements(*xs)
+    held = (
+        conv2d(*(x.tensor for x in xs))
+        if not placements
+        else tuple((p, conv2d(*(x.to_local(p) for x in xs))) for p in placements)
     )
-    return TensorValue(ShardTensor(ctx.result_type, out))
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 @register_access_relation(Conv2D)

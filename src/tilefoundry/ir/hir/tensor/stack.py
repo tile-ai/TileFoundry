@@ -4,8 +4,8 @@ from typing import Tuple
 
 import isl
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import per_unit, register_eval
+from tilefoundry.core import ShardTensor, local_placements
+from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -86,10 +86,18 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(Stack)
-@per_unit
 def _eval_stack(ctx):
-    data = torch.stack(tuple(arg.data for arg in ctx.args), dim=ctx.op.axis)
-    return TensorValue(ShardTensor(ctx.result_type, data))
+    def stack(*xs):
+        return torch.stack(xs, dim=ctx.op.axis)
+
+    xs = tuple(arg.tensor for arg in ctx.args)
+    placements = local_placements(*xs)
+    held = (
+        stack(*(x.tensor for x in xs))
+        if not placements
+        else tuple((p, stack(*(x.to_local(p) for x in xs))) for p in placements)
+    )
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 @register_access_relation(Stack)

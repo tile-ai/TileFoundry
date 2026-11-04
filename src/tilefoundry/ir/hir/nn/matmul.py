@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Literal
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import per_unit, register_eval
+from tilefoundry.core import ShardTensor, local_placements
+from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -182,23 +182,29 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(MatMul)
-@per_unit
 def _eval_matmul(ctx):
     """Multiply in the operand dtype, or widen to f32 and round once.
 
     The operand-dtype product serves when the result keeps that dtype and the
     operand is not an 8-bit float, which torch cannot multiply.
     """
-    lhs = ctx.args[0].data
-    rhs = ctx.args[1].data
-    if ctx.op.a_layout == "KM":
-        lhs = lhs.transpose(-1, -2)
-    if ctx.op.b_layout == "NK":
-        rhs = rhs.transpose(-1, -2)
     operand = ctx.args[0].type.dtype
     fp8 = isinstance(operand, FloatDType) and operand.bit_width == 8
-    if ctx.result_type.dtype == operand and not fp8:
-        out = torch.matmul(lhs, rhs)
-    else:
-        out = torch.matmul(lhs.float(), rhs.float()).to(to_torch_dtype(ctx.result_type.dtype))
-    return TensorValue(ShardTensor(ctx.result_type, out))
+
+    def matmul(lhs, rhs):
+        if ctx.op.a_layout == "KM":
+            lhs = lhs.transpose(-1, -2)
+        if ctx.op.b_layout == "NK":
+            rhs = rhs.transpose(-1, -2)
+        if ctx.result_type.dtype == operand and not fp8:
+            return torch.matmul(lhs, rhs)
+        return torch.matmul(lhs.float(), rhs.float()).to(to_torch_dtype(ctx.result_type.dtype))
+
+    xs = tuple(arg.tensor for arg in ctx.args)
+    placements = local_placements(*xs)
+    held = (
+        matmul(*(x.tensor for x in xs))
+        if not placements
+        else tuple((p, matmul(*(x.to_local(p) for x in xs))) for p in placements)
+    )
+    return TensorValue(ShardTensor(ctx.result_type, held))

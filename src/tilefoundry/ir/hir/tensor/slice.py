@@ -4,9 +4,9 @@ from dataclasses import replace
 
 import isl
 
-from tilefoundry.core import ShardTensor
+from tilefoundry.core import ShardTensor, local_placements
 from tilefoundry.evaluator.dim import resolve_dim
-from tilefoundry.evaluator.registry import per_unit, register_eval
+from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue
 from tilefoundry.ir.core import Expr, Op, Tuple
 from tilefoundry.ir.core.expr import Call, Constant
@@ -281,31 +281,42 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(Slice)
-@per_unit
 def _eval_slice(ctx):
     op = ctx.op
     starts = ctx.args[1]
     if not isinstance(starts, TupleValue):
         raise EvalError("Slice: starts must evaluate to a tuple")
-    start_values = [int(value.data.reshape(-1)[0].item()) for value in starts.elements]
     sizes = [resolve_dim(size, ctx.dim_bindings) for size in op.sizes]
     strides = [resolve_dim(stride, ctx.dim_bindings) for stride in op.strides]
-    if not (len(start_values) == len(sizes) == len(strides) == ctx.args[0].data.ndim):
-        raise EvalError("Slice: starts/sizes/strides rank must match input rank")
-    key = []
-    for axis, (start, size, stride) in enumerate(zip(start_values, sizes, strides)):
-        if start < 0 or size < 0 or stride <= 0:
-            raise EvalError(
-                f"Slice: invalid window on axis {axis}: start={start}, size={size}, stride={stride}"
-            )
-        last = start if size == 0 else start + (size - 1) * stride
-        if size and last >= ctx.args[0].data.shape[axis]:
-            raise EvalError(
-                f"Slice window exceeds axis {axis}: start={start}, size={size}, "
-                f"stride={stride}, extent={ctx.args[0].data.shape[axis]}"
-            )
-        key.append(slice(start, start + size * stride, stride))
-    return TensorValue(ShardTensor(ctx.result_type, ctx.args[0].data[tuple(key)]))
+
+    def slice_(x, *starts):
+        start_values = [int(value.reshape(-1)[0].item()) for value in starts]
+        if not (len(start_values) == len(sizes) == len(strides) == x.ndim):
+            raise EvalError("Slice: starts/sizes/strides rank must match input rank")
+        key = []
+        for axis, (start, size, stride) in enumerate(zip(start_values, sizes, strides)):
+            if start < 0 or size < 0 or stride <= 0:
+                raise EvalError(
+                    f"Slice: invalid window on axis {axis}: start={start}, size={size}, "
+                    f"stride={stride}"
+                )
+            last = start if size == 0 else start + (size - 1) * stride
+            if size and last >= x.shape[axis]:
+                raise EvalError(
+                    f"Slice window exceeds axis {axis}: start={start}, size={size}, "
+                    f"stride={stride}, extent={x.shape[axis]}"
+                )
+            key.append(slice(start, start + size * stride, stride))
+        return x[tuple(key)]
+
+    xs = tuple(arg.tensor for arg in (ctx.args[0], *starts.elements))
+    placements = local_placements(*xs)
+    held = (
+        slice_(*(x.tensor for x in xs))
+        if not placements
+        else tuple((p, slice_(*(x.to_local(p) for x in xs))) for p in placements)
+    )
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 __all__ = ["Slice", "slice_size"]

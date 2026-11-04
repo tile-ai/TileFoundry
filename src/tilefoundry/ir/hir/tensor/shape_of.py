@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import per_unit, register_eval
+from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.expr import Constant
@@ -30,10 +30,13 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(ShapeOf)
-@per_unit
 def _eval_shape_of(ctx):
-    data = torch.tensor(tuple(ctx.args[0].data.shape), dtype=torch.int64)
-    return TensorValue(ShardTensor(ctx.result_type, data))
+    def shape_of(x):
+        return torch.tensor(tuple(x.shape), dtype=torch.int64)
+
+    x = ctx.args[0].tensor
+    held = shape_of(x.tensor) if x.is_global else tuple((p, shape_of(t)) for p, t in x.tensor)
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 register_access_relation(ShapeOf)(readnone_relations(lambda types: (len(types[0].shape),)))

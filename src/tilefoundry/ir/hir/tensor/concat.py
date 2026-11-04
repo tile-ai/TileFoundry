@@ -4,8 +4,8 @@ from typing import Tuple
 
 import isl
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import per_unit, register_eval
+from tilefoundry.core import ShardTensor, local_placements
+from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Expr, Op
 from tilefoundry.ir.core.expr import Call
@@ -167,8 +167,15 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(Concat)
-@per_unit
 def _eval_concat(ctx):
+    def concat(*xs):
+        return torch.cat(xs, dim=ctx.op.axis)
 
-    out = torch.cat([v.data for v in ctx.args], dim=ctx.op.axis)
-    return TensorValue(ShardTensor(ctx.result_type, out))
+    xs = tuple(arg.tensor for arg in ctx.args)
+    placements = local_placements(*xs)
+    held = (
+        concat(*(x.tensor for x in xs))
+        if not placements
+        else tuple((p, concat(*(x.to_local(p) for x in xs))) for p in placements)
+    )
+    return TensorValue(ShardTensor(ctx.result_type, held))

@@ -3,7 +3,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import per_unit, register_eval
+from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -59,8 +59,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(SoftMax)
-@per_unit
 def _eval_softmax(ctx):
+    def softmax(x):
+        out = torch.softmax(x.float(), dim=ctx.op.axis)
+        return out.to(to_torch_dtype(ctx.result_type.dtype))
 
-    out = torch.softmax(ctx.args[0].data.float(), dim=ctx.op.axis)
-    return TensorValue(ShardTensor(ctx.result_type, out.to(to_torch_dtype(ctx.result_type.dtype))))
+    x = ctx.args[0].tensor
+    held = softmax(x.tensor) if x.is_global else tuple((p, softmax(t)) for p, t in x.tensor)
+    return TensorValue(ShardTensor(ctx.result_type, held))

@@ -34,8 +34,8 @@ def evaluate(
 
 `evaluate` binds `inputs` to the selected `Function`'s parameters in
 order, walks the body, and returns the logical tensor for a single
-output or a tuple for a `TupleType` result; an output that differs per unit
-is returned as its scattered `ShardTensor`. When passed a `LoadedModule`,
+output or a tuple for a `TupleType` result; an output in a local view is
+returned as its `ShardTensor`. When passed a `LoadedModule`,
 it binds only activation inputs; declared constants are loaded lazily from
 that reading at first use. A loaded module runs its declared `entry`; callers
 select another function or child on the `LoadedModule` before calling
@@ -66,9 +66,9 @@ class TensorValue(Value):
     """Hold one ShardTensor; its type is the tensor's.
 
     Attributes:
-        tensor: attribute; The value, packed or one piece per unit.
+        tensor: attribute; The value, in a global or a local view.
         type: property; ``tensor.type``.
-        data: property; The packed global tensor.
+        data: property; The global view's tensor.
     """
 
     tensor: ShardTensor
@@ -76,13 +76,12 @@ class TensorValue(Value):
 
 - constraints:
   - `tensor` is a `ShardTensor` ([runtime §1.10](./runtime.md#110-shardtensor)).
-    Packed, it holds the value in its **logical shape** -- the shape of
-    `type` ([types §2](./types.md#2-tensortype)), not a layout-domain shape --
+    In a global view it holds the value in its **logical shape** -- the shape
+    of `type` ([types §2](./types.md#2-tensortype)), not a layout-domain shape --
     and a `Partial` value as its reduced value, which every consumer type
-    inference admits commutes with. Scattered, it holds one piece per unit
-    ([§6](#6-layout-domain)).
-  - `data` MUST raise `EvalError` for a scattered value: it has no single
-    tensor.
+    inference admits commutes with. In a local view it holds one piece per
+    `Placement` ([§6](#6-layout-domain)).
+  - `data` MUST raise `EvalError` for a local view: it has no single tensor.
   - `type.layout`, when a `ShardLayout` or `Layout`, drives the
     layout-domain projection of [§6](#6-layout-domain).
   - A scalar value is a rank-0 `data` with a rank-0 `TensorType`.
@@ -112,8 +111,8 @@ class TupleValue(Value):
 corresponding positional input:
 
 - An input MUST be a `ShardTensor` whose type is compatible with the
-  parameter's, or convertible to a torch tensor; a torch input is the packed
-  global value, cast to the parameter `TensorType`'s dtype.
+  parameter's, or convertible to a torch tensor; a torch input is the global
+  view, cast to the parameter `TensorType`'s dtype.
 - Weights and activations are bound identically — a weight is an
   ordinary `Function` parameter, not a distinct constant carrier.
 - Each `DimVar` ([types §3](./types.md#3-dtype)) appearing in a parameter's
@@ -149,10 +148,6 @@ eval_registry: DispatchRegistry[type[Op]]
 def register_eval(op_cls: type[Op]):
     """Return the evaluator registration decorator for an Op class."""
     ...
-
-def per_unit(handler):
-    """Let a handler take inputs that differ per unit."""
-    ...
 ```
 
 Instruction-backed HIR scheduling uses a parallel registry:
@@ -179,7 +174,6 @@ class EvaluateContext:
     Attributes:
         op: attribute; Operation instance.
         args: attribute; Evaluated operands in Call-argument order.
-        arg_types: attribute; The operands' global types.
         result_type: attribute; Call result type.
         loaded_module: attribute; Runtime module reading, when one is active.
         device: attribute; Where the inputs are, or None to leave it to torch.
@@ -188,7 +182,6 @@ class EvaluateContext:
 
     op: Any = None
     args: tuple[Any, ...] = ()
-    arg_types: tuple[Any, ...] = ()
     result_type: Any = None
     loaded_module: Any | None = None
     device: str | None = None
@@ -269,23 +262,25 @@ are evaluated once in the enclosing scope. With `k = len(yield_values)`:
 
 ## 6. Layout domain
 
-A value is held packed -- one global logical tensor, a `Partial` one as its
-reduced value -- unless it differs per unit. Values differ per unit only
-downstream of `MeshCoord` or of `Local` on a `Split` input, and are then held
-scattered, one piece per `Placement`. Whether a value differs is read off how
-it is held, never off its data:
+A value is held in a global view -- one global logical tensor, a `Partial`
+one as its reduced value -- unless it differs per placement. Values differ
+per placement only downstream of `MeshCoord` or of `Local` on a cut input, and
+are then held in a local view, one piece per `Placement`. Which view a value is
+in is read off how it is held, never off its data:
 
-- a handler decorated with `per_unit` runs once when every input is packed,
-  and once per placement when any is scattered: on that unit's piece of each
-  input, under the local result type, with `arg_types` still the global input
-  types. Its results are held scattered.
-- a packed `Partial` input meeting a scattered one MUST raise `EvalError`: its
-  reduced value no longer holds the parts each unit would combine. Scattered
-  inputs held by different units MUST raise `EvalError`.
-- a handler that reads a size MUST read it from a type, never from an
-  attribute stating a global shape, so that it means the same on a unit's
-  piece. A mean over a split axis holds, on each unit, its sum over the
-  global count.
+- each Op's handler handles both views itself: with every input in a global
+  view it computes once; otherwise it computes once per placement that
+  `local_placements` names, on each input's `to_local` piece, and holds the
+  results in a local view. A handler with no tensor input always answers a
+  global view.
+- a global `Partial` input meeting a local view MUST be refused: its reduced
+  value no longer holds the parts each placement would combine
+  ([runtime §1.10](./runtime.md#110-shardtensor)). Local views held by
+  different placements MUST be refused.
+- a handler that reads a size on a piece MUST read it from the piece or from
+  `local_type` of a type, never from an attribute stating a global shape. A
+  mean over a split axis holds, on each placement, its sum over the global
+  count, read from the input's global type.
 
 - An axis-bearing op (`Reduce`, `rms_norm`, …) addresses its `axis` /
   `axes` in the operand's **logical** `TensorType.shape`, regardless of
@@ -295,11 +290,11 @@ it is held, never off its data:
   op's axis then indexes that reshaped logical shape. `Reshard` only
   changes distribution / layout and never changes which values an op
   reduces or indexes.
-- `Reshard` ([hir §1.3](./hir.md#13-op)) only retypes a packed value. A
-  scattered one is gathered by the meaning of its type -- `Split` pieces side
-  by side, any `Broadcast` piece, `Partial` pieces combined by their
-  reduction -- unless neither type has a `ShardLayout`, when each unit keeps
-  its own value.
-- `Local` ([hir §1.3](./hir.md#13-op)) scatters an input with a `Split` over the
-  units of its mesh, and keeps one without a `Split` packed. On a packed
-  `Partial` input it MUST raise `EvalError`.
+- `Reshard` ([hir §1.3](./hir.md#13-op)) only retypes a global view. A local
+  view is assembled by `to_global` by the meaning of its type -- `Split` pieces
+  side by side, any `Broadcast` piece, `Partial` pieces combined by their
+  reduction -- unless neither type has a `ShardLayout`, when each placement
+  keeps its own value.
+- `Local` ([hir §1.3](./hir.md#13-op)) answers a local view over
+  `Placement.each` of its mesh, and keeps an input every placement holds whole
+  in its global view. On a global `Partial` input it MUST be refused.

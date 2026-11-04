@@ -5,8 +5,8 @@ Contract and constraints: `spec hir § CacheUpdate`.
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import per_unit, register_eval
+from tilefoundry.core import ShardTensor, local_placements
+from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -220,24 +220,31 @@ def _reject_split_rows(ctx, call: "Call", cache_ty, new_ty) -> None:
 
 
 @register_eval(CacheUpdate)
-@per_unit
 def _eval_cache_update(ctx):
-    cache = ctx.args[0].data
-    cur_pos = int(ctx.args[1].data.reshape(-1)[0].item())
-    s = int(ctx.args[2].data.reshape(-1)[0].item())
-    new = ctx.args[3].data
-    capacity, s_cap = cache.shape[1], new.shape[1]
-    if cur_pos < 0:
-        raise EvalError(f"cache_update: cur_pos {cur_pos} must be >= 0")
-    if not (1 <= s <= s_cap):
-        raise EvalError(f"cache_update: s {s} must satisfy 1 <= s <= {s_cap}")
-    if cur_pos + s > capacity:
-        raise EvalError(
-            f"cache_update: cur_pos + s ({cur_pos + s}) exceeds cache capacity {capacity}"
-        )
-    out = cache.clone()
-    out[:, cur_pos : cur_pos + s] = new[:, :s].to(out.dtype)
-    return TensorValue(ShardTensor(ctx.result_type, out))
+    def cache_update(cache, cur_pos, s, new):
+        cur_pos = int(cur_pos.reshape(-1)[0].item())
+        s = int(s.reshape(-1)[0].item())
+        capacity, s_cap = cache.shape[1], new.shape[1]
+        if cur_pos < 0:
+            raise EvalError(f"cache_update: cur_pos {cur_pos} must be >= 0")
+        if not (1 <= s <= s_cap):
+            raise EvalError(f"cache_update: s {s} must satisfy 1 <= s <= {s_cap}")
+        if cur_pos + s > capacity:
+            raise EvalError(
+                f"cache_update: cur_pos + s ({cur_pos + s}) exceeds cache capacity {capacity}"
+            )
+        out = cache.clone()
+        out[:, cur_pos : cur_pos + s] = new[:, :s].to(out.dtype)
+        return out
+
+    xs = tuple(arg.tensor for arg in ctx.args)
+    placements = local_placements(*xs)
+    held = (
+        cache_update(*(x.tensor for x in xs))
+        if not placements
+        else tuple((p, cache_update(*(x.to_local(p) for x in xs))) for p in placements)
+    )
+    return TensorValue(ShardTensor(ctx.result_type, held))
 
 
 __all__ = ["CacheUpdate"]

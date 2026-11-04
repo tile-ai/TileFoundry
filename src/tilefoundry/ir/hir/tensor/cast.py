@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import per_unit, register_eval
+from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -44,8 +44,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 
 @register_eval(Cast)
-@per_unit
 def _eval_cast(ctx):
+    def cast(x):
+        return x.to(to_torch_dtype(ctx.op.dtype))
 
-    out = ctx.args[0].data.to(to_torch_dtype(ctx.op.dtype))
-    return TensorValue(ShardTensor(ctx.result_type, out))
+    x = ctx.args[0].tensor
+    held = cast(x.tensor) if x.is_global else tuple((p, cast(t)) for p, t in x.tensor)
+    return TensorValue(ShardTensor(ctx.result_type, held))
