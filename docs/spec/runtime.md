@@ -788,9 +788,6 @@ class ShardTensor:
     def to_global(self) -> "ShardTensor": ...
 
     def reshard(self, type: TensorType) -> "ShardTensor": ...
-
-
-def local_placements(*tensors: ShardTensor) -> tuple[Placement, ...]: ...
 ```
 <!-- /generated -->
 
@@ -812,9 +809,6 @@ def local_placements(*tensors: ShardTensor) -> tuple[Placement, ...]: ...
     sit side by side, any `Broadcast` piece serves, and `Partial` pieces combine
     by their reduction. A type with no `ShardLayout`, or `Partial` reductions
     that differ, MUST be refused.
-  - `local_placements` answers the placements the local views among its
-    arguments hold, empty when every one is global; local views held by
-    different placements MUST be refused.
   - a level whose id is unfixed MUST be left undivided
     ([shard §5.1](shard.md#51-placement)).
   - a `RuntimeModule`'s public boundary takes and returns `ShardTensor`, while

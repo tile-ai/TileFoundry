@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor, local_placements
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -113,7 +114,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 @register_eval(Where)
 def _eval_where(ctx):
     xs = tuple(arg.tensor for arg in ctx.args)
-    placements = local_placements(*xs)
+    placements = common_placements(*xs)
     held = (
         torch.where(*(x.tensor for x in xs))
         if not placements

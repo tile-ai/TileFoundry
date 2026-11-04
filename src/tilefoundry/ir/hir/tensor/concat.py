@@ -4,8 +4,9 @@ from typing import Tuple
 
 import isl
 
-from tilefoundry.core import ShardTensor, local_placements
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Expr, Op
 from tilefoundry.ir.core.expr import Call
@@ -172,7 +173,7 @@ def _eval_concat(ctx):
         return torch.cat(xs, dim=ctx.op.axis)
 
     xs = tuple(arg.tensor for arg in ctx.args)
-    placements = local_placements(*xs)
+    placements = common_placements(*xs)
     held = (
         concat(*(x.tensor for x in xs))
         if not placements

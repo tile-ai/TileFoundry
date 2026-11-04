@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor, local_placements
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.kernels import gather
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -125,7 +126,7 @@ def _eval_index_select(ctx):
         return gather(x, index, _norm_dim(ctx.op.dim, x.dim()), ctx.op.fill_value)
 
     xs = tuple(arg.tensor for arg in ctx.args)
-    placements = local_placements(*xs)
+    placements = common_placements(*xs)
     held = (
         index_select(*(x.tensor for x in xs))
         if not placements

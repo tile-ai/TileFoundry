@@ -268,15 +268,22 @@ per placement only downstream of `MeshCoord` or of `Local` on a cut input, and
 are then held in a local view, one piece per `Placement`. Which view a value is
 in is read off how it is held, never off its data:
 
+```python
+# src/tilefoundry/evaluator/utils.py
+def common_placements(*tensors: ShardTensor) -> tuple[Placement, ...]: ...
+```
+
 - each Op's handler handles both views itself: with every input in a global
   view it computes once; otherwise it computes once per placement that
-  `local_placements` names, on each input's `to_local` piece, and holds the
+  `common_placements` names, on each input's `to_local` piece, and holds the
   results in a local view. A handler with no tensor input always answers a
   global view.
+- `common_placements` answers the placements the local views among its
+  arguments hold in common, empty when every one is global; local views held
+  by different placements MUST raise `EvalError`.
 - a global `Partial` input meeting a local view MUST be refused: its reduced
   value no longer holds the parts each placement would combine
-  ([runtime §1.10](./runtime.md#110-shardtensor)). Local views held by
-  different placements MUST be refused.
+  ([runtime §1.10](./runtime.md#110-shardtensor)).
 - a handler that reads a size on a piece MUST read it from the piece or from
   `local_type` of a type, never from an attribute stating a global shape. A
   mean over a split axis holds, on each placement, its sum over the global

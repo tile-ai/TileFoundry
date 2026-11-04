@@ -5,8 +5,9 @@ Contract and constraints: `spec hir § CacheUpdate`.
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor, local_placements
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -238,7 +239,7 @@ def _eval_cache_update(ctx):
         return out
 
     xs = tuple(arg.tensor for arg in ctx.args)
-    placements = local_placements(*xs)
+    placements = common_placements(*xs)
     held = (
         cache_update(*(x.tensor for x in xs))
         if not placements

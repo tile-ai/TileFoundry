@@ -13,8 +13,9 @@ from __future__ import annotations
 
 from typing import Callable
 
-from tilefoundry.core import ShardTensor, local_placements
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Call, Constant
 from tilefoundry.ir.types.dim import (
@@ -114,7 +115,7 @@ def _dim_op_eval(op_cls: type, fold: Callable[[int, int], int]):
             return held[0].new_tensor(int(fold(*operands)))
 
         a, b = ctx.args[0].tensor, ctx.args[1].tensor
-        placements = local_placements(a, b)
+        placements = common_placements(a, b)
         held = (
             apply(a.tensor, b.tensor)
             if not placements

@@ -4,9 +4,10 @@ from dataclasses import replace
 
 import isl
 
-from tilefoundry.core import ShardTensor, local_placements
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue
 from tilefoundry.ir.core import Expr, Op, Tuple
 from tilefoundry.ir.core.expr import Call, Constant
@@ -310,7 +311,7 @@ def _eval_slice(ctx):
         return x[tuple(key)]
 
     xs = tuple(arg.tensor for arg in (ctx.args[0], *starts.elements))
-    placements = local_placements(*xs)
+    placements = common_placements(*xs)
     held = (
         slice_(*(x.tensor for x in xs))
         if not placements

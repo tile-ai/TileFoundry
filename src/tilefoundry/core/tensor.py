@@ -144,12 +144,4 @@ class ShardTensor:
         return whole.as_strided(layout.shape, layout.strides, whole.storage_offset() + offset)
 
 
-def local_placements(*tensors: ShardTensor) -> tuple[Placement, ...]:
-    """The placements the local views among *tensors* hold; empty when every one is global."""
-    held = [tensor.placements for tensor in tensors if not tensor.is_global]
-    if any(placements != held[0] for placements in held[1:]):
-        raise ValueError("ShardTensor: local-view inputs are held by different placements")
-    return held[0] if held else ()
-
-
-__all__ = ["ShardTensor", "local_placements", "local_type"]
+__all__ = ["ShardTensor", "local_type"]

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import isl
 
-from tilefoundry.core import ShardTensor, local_placements
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
@@ -106,7 +107,7 @@ def _eval_rms_norm(ctx):
         return out.to(to_torch_dtype(ctx.result_type.dtype))
 
     xs = tuple(arg.tensor for arg in ctx.args)
-    placements = local_placements(*xs)
+    placements = common_placements(*xs)
     held = (
         rms_norm(*(x.tensor for x in xs))
         if not placements

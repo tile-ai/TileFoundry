@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor, local_placements
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.core import Constant, Op, Tuple
 from tilefoundry.ir.core.param_def import ParamDef
@@ -182,7 +183,7 @@ def _eval_insert_slice(ctx):
     offsets = ctx.args[2]
     offsets = offsets.elements if isinstance(offsets, TupleValue) else (offsets,)
     xs = tuple(arg.tensor for arg in (ctx.args[0], ctx.args[1], *offsets))
-    placements = local_placements(*xs)
+    placements = common_placements(*xs)
     held = (
         insert_slice(*(x.tensor for x in xs))
         if not placements
