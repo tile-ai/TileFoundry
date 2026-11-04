@@ -956,7 +956,7 @@
   <rect x="1056.0" y="682.0" width="28.0" height="25.0" fill="url(#pending)" />
   <text x="1070.0" y="698.5" class="number" text-anchor="middle">127</text>
   <text x="614" y="735">Element 64 → local (0, 0)</text>
-  <text x="614" y="757" class="small">Logical base: 64 · storage base: 64 elements</text>
+  <text x="614" y="757" class="small">Logical base: 64 · storage base: 0 elements</text>
   <text x="30" y="798">reduce-scatter on shard: holders of selected element in highlighted group: 4 before → 1 after.</text>
   <text x="30" y="823" class="small">Derived from checked HIR. Diagrams show logical ownership and declared value state; they do not model a physical network schedule.</text>
 </svg>

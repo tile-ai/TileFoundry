@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 
 from tilefoundry.analysis.check import check_program
+from tilefoundry.core import ShardTensor, local_type
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
 from tilefoundry.ir.core.metadata import binding_name
 from tilefoundry.ir.hir.function import Function
@@ -17,10 +18,16 @@ from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.shard_layout import Partial, Split, shard_layout_of, split_target_axes
-from tilefoundry.ir.types.shard_projection import axis_layout, logical_projection, project_domain
+from tilefoundry.ir.types.placement import units
+from tilefoundry.ir.types.shard_layout import (
+    Partial,
+    Split,
+    local_layout_and_offset,
+    logical_layout_and_offset,
+    shard_layout_of,
+    split_target_axes,
+)
 from tilefoundry.ir.types.utils import leaf_span, leaves_of
-from tilefoundry.runtime.tensor import logical_local_view
 
 from .model import PARAMETER_NAMES, SUPPORTED_MESHES, T, training_program
 from .ownership_svg import render_svg
@@ -49,19 +56,19 @@ def describe_tensor(held):
         for i, attr in enumerate(shard.attrs)
     ], pending=[axes[i] for i, attr in enumerate(shard.attrs) if isinstance(attr, Partial)],
         domain=shard.layout.shape, address_map=str(shard.layout))
-    tags = torch.arange(prod(shape)).reshape(shape)
-    for coordinate in product(*(range(n) for n in mesh_shape)):
-        projection = project_domain(shard.layout.shape, shape, mesh_shape, shard.attrs, coordinate)
-        selected = logical_local_view(tags, held, coordinate).flatten().sort().values
+    tags = ShardTensor(held, torch.arange(prod(shape)).reshape(shape))
+    local_shape = tuple(local_type(held).shape)
+    for coordinate, placement in units(shard.mesh):
+        ids = placement.program_ids(shard.mesh.topologies)
+        selected = tags.local(placement).flatten().sort().values
         boundaries = torch.nonzero(selected[1:] != selected[:-1] + 1).flatten().tolist()
         starts, ends = [0, *(i + 1 for i in boundaries)], [*(i + 1 for i in boundaries), len(selected)]
         runs = [[int(selected[a]), int(selected[b - 1]) + 1] for a, b in zip(starts, ends, strict=True)]
-        logical, logical_offset = logical_projection(shard.layout.shape, shape, mesh_shape, shard.attrs, coordinate)
-        physical, physical_offset = projection.apply(shard.layout)
-        physical = axis_layout(physical)
+        logical, logical_offset = logical_layout_and_offset(shard, shape, ids)
+        physical, physical_offset = local_layout_and_offset(shard, shape, ids)
         result["participants"].append({
-            "coordinate": coordinate, "shape": projection.local_shape, "runs": runs,
-            "bytes": prod(projection.local_shape) * held.dtype.bit_width // 8,
+            "coordinate": coordinate, "shape": local_shape, "runs": runs,
+            "bytes": prod(local_shape) * held.dtype.bit_width // 8,
             "logical_offset": int(logical_offset), "logical_strides": str(logical.strides),
             "physical_offset": int(physical_offset), "physical_map": str(physical),
             "index_map": {"shape": logical.shape, "strides": logical.strides},

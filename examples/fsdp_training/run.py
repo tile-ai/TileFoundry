@@ -7,6 +7,7 @@ import json
 from math import prod
 
 from tilefoundry.analysis import RegionMemoryMetadata, analyze
+from tilefoundry.core import local_type
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.analysis.check import check_program
 from tilefoundry.ir.core import Call, Tuple, Var, get_metadata
@@ -17,7 +18,6 @@ from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split, shard_layout_of
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.shard_projection import project_domain
 from tilefoundry.ir.types.utils import leaf_span, leaves_of
 from tilefoundry.ir.visitor import collect_exprs
 
@@ -53,12 +53,7 @@ def _transition(call):
 
 
 def _local_bytes(held):
-    shard = shard_layout_of(held.layout)
-    shape = held.shape if shard is None else project_domain(
-        shard.layout.shape, held.shape, flatten(shard.mesh.layout).shape,
-        shard.attrs, (0,) * len(shard.attrs),
-    ).local_shape
-    return prod(shape) * held.dtype.bit_width // 8
+    return prod(local_type(held).shape) * held.dtype.bit_width // 8
 
 
 def _gathered_leaf(value, bindings=None):

@@ -935,6 +935,8 @@ class RmsnormQuantSeq2(AnalysisCase):
 EXPECTED = {
     "cyclic_split_weight.CyclicSplitWeight.read[static]": dict(memory_peaks={"gmem": 8 * 4 // 4}),
     "cyclic_split_weight.MeshOrderWeight.read[static]": dict(memory_peaks={"gmem": 32 * 4 // 32}),
+    "fsdp_mlp.Training.release_step[static]": dict(memory_peaks={"gmem": 1_348, "rmem": 0}),
+    "fsdp_mlp.Training.retain_step[static]": dict(memory_peaks={"gmem": 1_348, "rmem": 0}),
     "two_dimvar_reshape.TwoDimVarReshape.squeeze[C=128,T=128]": dict(
         memory_peaks={"gmem": 128 * 128 * 4}
     ),
