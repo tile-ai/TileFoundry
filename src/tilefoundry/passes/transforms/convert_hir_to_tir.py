@@ -1281,6 +1281,15 @@ class Lowering(ValuationVisitor[Expr | View]):
             ctx.parameters[id(param)] = physical
             self._memo[id(param)] = (param, physical)
 
+    def before(self, owner: Expr, ctx, tag=None) -> None:
+        """Emit what runs before the statements lowered for *owner*.
+
+        *owner* is a ``Call``, ``MeshRegion`` or ``LoopRegion``; *tag* names a
+        copy lowering adds for it: ``"base"`` or ``"update"`` of an InsertSlice,
+        ``("entry", slot)`` or ``("backedge", slot)`` of a loop. A target that
+        orders shared memory overrides this.
+        """
+
     def run(self) -> PrimFunction:
         ctx = self.context
         if ctx.function.body is None:
@@ -1319,6 +1328,7 @@ class Lowering(ValuationVisitor[Expr | View]):
         binding = Var(
             ctx.names.fresh("cta" if region is ctx.function.body else "scope"), type=_BINDING
         )
+        self.before(region, ctx)
         with ctx.builder.region(mesh=mesh, binding=binding, owner=region) as scope:
             result = self.visit(region.body, self.on_region_start(region, ctx))
             scope.result = result
@@ -1330,12 +1340,14 @@ class Lowering(ValuationVisitor[Expr | View]):
             initial = self.visit(loop.args[slot], ctx=ctx)
             carried = ctx.result(param)
             if copies_carry_entry(loop, slot, ctx.storage.aliases_of):
+                self.before(loop, ctx, ("entry", slot))
                 ctx.builder.transfer(initial, carried, ctx=ctx, source_type=loop.args[slot].type)
             self._memo[id(param)] = (param, carried)
             carried_values.append(carried)
         init = tuple(carried_values)
         induction = Var(loop.induction_var.name, type=_INDEX)
         self._memo[id(loop.induction_var)] = (loop.induction_var, induction)
+        self.before(loop, ctx)
         with ctx.builder.region(
             loop=(
                 induction,
@@ -1352,6 +1364,7 @@ class Lowering(ValuationVisitor[Expr | View]):
                 zip(loop.yield_values, init, yielded, strict=False)
             ):
                 if copies_carry_backedge(loop, slot, ctx.storage.aliases_of):
+                    self.before(loop, ctx, ("backedge", slot))
                     ctx.builder.transfer(value, carried, ctx=ctx, source_type=source.type)
             for counter, one in (
                 values for key, values in ctx.builder.stage_counters.items() if key[-1] == id(loop)
@@ -1379,6 +1392,7 @@ class Lowering(ValuationVisitor[Expr | View]):
             }
         operands = tuple(self.visit(arg, ctx=ctx) for arg in call.args)
         if kind is Emission.CALL:
+            self.before(call, ctx)
             return self._lower_call(call, operands, ctx=ctx)
         if kind is Emission.VIEW:
             if type(target).__name__ == "TupleGetItem":
@@ -1401,6 +1415,7 @@ class Lowering(ValuationVisitor[Expr | View]):
                 scalar = Constant(
                     getattr(target, "value", 0.0), type=TensorType.scalar(call.type.dtype)
                 )
+                self.before(call, ctx)
                 ctx.builder.transfer(scalar, result, op=Fill(), ctx=ctx)
             return result
         if kind is Emission.UNSCHEDULED:
@@ -1411,6 +1426,7 @@ class Lowering(ValuationVisitor[Expr | View]):
         if kind is Emission.INSERT_SLICE:
             return self.visit_InsertSlice(call, operands, ctx)
         op = ctx.issues.op(call, target=ctx.target)
+        self.before(call, ctx)
         return getattr(self, f"visit_{type(op).__name__}", self.instruction)(
             call, op, operands, ctx
         )
@@ -1460,6 +1476,7 @@ class Lowering(ValuationVisitor[Expr | View]):
         target, update = operands[:2]
         result = ctx.result(call)
         if copies_insert_slice_base(call, ctx.storage.aliases_of):
+            self.before(call, ctx, "base")
             ctx.builder.transfer(target, result, ctx=ctx, source_type=call.args[0].type)
         if not copies_insert_slice_update(call, ctx.storage.aliases_of):
             return result
@@ -1475,6 +1492,7 @@ class Lowering(ValuationVisitor[Expr | View]):
                 )
             ),
         )
+        self.before(call, ctx, "update")
         ctx.builder.transfer(
             update,
             result,

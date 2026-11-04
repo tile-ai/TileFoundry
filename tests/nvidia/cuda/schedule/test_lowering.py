@@ -83,7 +83,7 @@ def _m1_analysis():
         module,
         analyze(
             *check_program(module, module.entry_function()),
-            analysis=("memory",),
+            analysis=("memory", "sync"),
         ),
     )
 
@@ -623,7 +623,7 @@ def test_retained_insert_keeps_parameter_storage(later_use, nested):
         ("caller", True): VARIANTS / "retained_caller_returns_output_via_relay.py",
     }[later_use, nested]
     module = load_authored_ir(str(path))
-    result = analyze(*check_program(module, module.entry_function()), analysis="memory")
+    result = analyze(*check_program(module, module.entry_function()), analysis=("memory", "sync"))
     call = next(
         value
         for value in collect_exprs(result.function.body)

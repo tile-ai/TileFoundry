@@ -46,13 +46,17 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
             ),
         )
     if selector == "sync":
-        from tilefoundry.analysis.sync import SyncPlanMetadata, analyze_sync  # noqa: PLC0415
+        from tilefoundry.analysis.sync import (  # noqa: PLC0415
+            SyncMetadata,
+            SyncPlanMetadata,
+            analyze_sync,
+        )
 
         return Analyzer(
             "sync",
             analyze_sync,
             requires=("memory",),
-            produces=(SyncPlanMetadata,),
+            produces=(SyncPlanMetadata, SyncMetadata),
         )
     if selector == "roofline":
         from tilefoundry.analysis.metadata import RooflineMetadata  # noqa: PLC0415

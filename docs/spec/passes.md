@@ -255,6 +255,13 @@ class ConvertHIRToTIR(ModulePass):
     instruction reads and writes, which copies lowering adds for the
     allocation's accepted aliases, and the mesh a copy or an instruction is
     issued on, come from `analysis/emission.py`.
+  - Immediately before the statements it lowers for an HIR node, the visitor
+    calls `before(owner, ctx, tag)`, with the node and the tag
+    [analysis §1.2.5](./analysis.md#125-sync) names those statements by: None
+    for a Call's instruction, fill or retained call and for entering a region,
+    `"base"` or `"update"` for an InsertSlice's added copies, and
+    `("entry", slot)` or `("backedge", slot)` for a loop's carry copies. The
+    core visitor emits nothing there; a target visitor MAY emit statements.
   - The pass lowers the device root: the callee of the `Launch` in `Module.entry`
     when that entry is a CPU host, otherwise `Module.entry` itself. It returns the
     Module unchanged under `CodegenOptions(emit="skeleton")` or when the Module

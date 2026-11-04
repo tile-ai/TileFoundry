@@ -1,5 +1,38 @@
 # TileFoundry CUDA Spec — Passes
 
+### 7.1 `ConvertHIRToTIR`
+
+```python
+class CudaConvertHIRToTIR(ConvertHIRToTIR):
+    """Lower scheduled HIR with the visitor that emits the sync steps."""
+
+    visitor = CudaLowering
+
+
+class CudaLowering(Lowering):
+    """The core lowering, emitting the steps the ``sync`` analysis attached to each node."""
+
+    def before(self, owner: Expr, ctx, tag=None) -> None: ...
+```
+
+- constraints:
+  - CUDA binds the pass with `@bind(CudaTarget, ConvertHIRToTIR)`; finalization
+    and compile obtain it through `Target.resolve`.
+  - Every function the pass lowers MUST carry `SyncPlanMetadata`
+    ([analysis §1.2.5](../../../../../../docs/spec/analysis.md#125-sync));
+    otherwise lowering raises `LoweringError` and does not analyse again. A
+    caller prepares the Module with
+    `analyze(module, entry, analysis=("memory", "sync"))` and passes the result
+    to `finalize`; `tilefoundry schedule finalize` does the same.
+  - `before` emits the steps the node's `SyncMetadata` holds for the tag, in
+    order: `cp_async_commit` for a commit, `cp_async_wait(n=0)` for a wait and
+    `T.sync` over the step's mesh for a barrier.
+  - `CopyAsyncTensor`, `CopyReduceAsyncTensor` and `TiledMma` with a wgmma atom
+    declare no completion, so the plan orders them as complete once their
+    statement returns. Their emitters MUST wait before returning: an mbarrier
+    wait for a TMA load, a bulk wait for a TMA store or reduction, and a wgmma
+    commit followed by `wait_group 0`.
+
 ### 7.3 `insert_default_host_entry`
 
 ```python
