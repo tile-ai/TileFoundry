@@ -11,7 +11,7 @@ from tilefoundry.target.hardware.schema import SchemaReader
 from tilefoundry_nvidia.cuda.target.architecture import CudaArchitecture
 from tilefoundry_nvidia.cuda.target.device import CudaDevice
 
-ARCHITECTURE_SCHEMA = "tilefoundry.cuda.architecture/v3"
+ARCHITECTURE_SCHEMA = "tilefoundry.cuda.architecture/v4"
 DEVICE_SCHEMA = "tilefoundry.cuda.device/v3"
 
 SM90_ID = "nvidia.sm90"
@@ -53,6 +53,8 @@ def build_cuda_architecture(document: HardwareDocument) -> CudaArchitecture:
     max_warps_per_cta = reader.integer("compute.max_warps_per_cta", unit="count")
     architecture = CudaArchitecture(
         name=reader.text("identity.name"),
+        gpu_architecture=reader.text("identity.gpu_architecture"),
+        gpu_code=reader.names("identity.gpu_code"),
         supported_compute_dtypes=_dtypes(reader.names("instruction.compute_dtypes"), document),
         capabilities=reader.names("capabilities"),
         max_threads_per_cta=max_threads_per_cta,

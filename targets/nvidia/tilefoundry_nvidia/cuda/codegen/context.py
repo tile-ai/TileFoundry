@@ -95,8 +95,6 @@ class CudaCodegenContext(EmitContext):
         self._next_barrier_id = 1
         self.needs_grid_barrier_state = False
         """Set while emitting a grid barrier, which the module declares state for."""
-        self.architecture_specific = False
-        """Whether an emitted instruction needs the architecture's ``a`` variant."""
         self._names_smem_base = False
 
     def declare_smem_base(self, write: Callable[[CudaCodegenContext], None]) -> None:

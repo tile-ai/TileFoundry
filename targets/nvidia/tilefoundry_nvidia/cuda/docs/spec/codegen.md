@@ -81,16 +81,16 @@ tier or attach tier selection to an op. See
 ## 4. Linking
 
 `CudaLinkableModule.link` adds `device_<index>.cu`, enables the CUDA language,
-and owns architecture selection, compiler flags and packaged runtime includes.
+and owns compiler flags and packaged runtime includes.
 Runtime headers are resolved with `importlib.resources` and included directly;
 there is no umbrella header or target-selection macro.
 
 - constraints:
-  - Each CUDA source MUST retain its own compilation architecture. Emitting a
-    WGMMA group step requires the architecture-specific `a` variant, so an
-    SM90 unit containing one MUST compile for `sm_90a`. Other units keep the
-    target's architecture name. This requirement MUST NOT change the hardware
-    identity or be overwritten by another unit in the same project.
+  - Each CUDA source MUST compile with `--gpu-architecture` and `--gpu-code` set
+    to its target architecture's `gpu_architecture` and `gpu_code`
+    ([target §4.1](./target.md#41-cudaarchitecture)), as per-source options
+    with `CUDA_ARCHITECTURES OFF`, so no unit's options reach another unit in
+    the same project.
   - Device headers require C++20. Set per-source `-std=c++20` instead of
     `CUDA_STANDARD 20`: older CMake versions reject that dialect and nvcc uses
     the last `-std` option.

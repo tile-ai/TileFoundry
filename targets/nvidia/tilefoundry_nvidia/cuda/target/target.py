@@ -221,7 +221,7 @@ class CudaTarget(Target):
 
     @property
     def arch(self) -> str:
-        """Return the architecture name used by compilation."""
+        """Return the architecture's identity name."""
         return self.architecture.name
 
     def topology_limit(self, name: str) -> int:

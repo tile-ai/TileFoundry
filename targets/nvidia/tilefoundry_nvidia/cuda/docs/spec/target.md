@@ -164,6 +164,8 @@ class CudaArchitecture(Architecture):
     """What one CUDA architecture states about itself."""
 
     name: str
+    gpu_architecture: str
+    gpu_code: tuple[str, ...]
     supported_compute_dtypes: tuple[DType, ...]
     capabilities: tuple[str, ...]
     max_threads_per_cta: int
@@ -192,7 +194,12 @@ class CudaArchitecture(Architecture):
     [§4.1.2](#412-sm100), [§4.1.3](#413-sm89)), so an architecture MUST NOT be
     given a type of its own: a class holding no number would restate an
     identity the value already carries.
-  - `name` MUST be the architecture identity CUDA compilation uses.
+  - `name` MUST be the architecture identity. `gpu_architecture` and
+    `gpu_code` MUST be the values CUDA compilation passes verbatim to nvcc
+    `--gpu-architecture` and `--gpu-code`. They are recorded apart from `name`
+    because an architecture may need a feature set its identity does not name,
+    and nvcc's single-option shorthand for that feature set also emits the
+    portable PTX, which cannot hold its instructions.
   - A CUDA architecture MUST own supported compute DTypes, instruction
     capabilities, and the thread/CTA structural limits. `capabilities` MUST use
     instruction-family names from the emitted ISA, such as `mma.sync`,
@@ -233,7 +240,9 @@ class CudaArchitecture(Architecture):
 The installed `nvidia.sm90` architecture document.
 
 - constraints:
-  - Its recorded identity MUST be `sm_90`.
+  - Its recorded identity MUST be `sm_90`. It MUST compile with
+    `gpu_architecture` `compute_90a` and `gpu_code` `sm_90a`, `compute_90a`:
+    wgmma and setmaxnreg exist only in the `sm_90a` feature set.
   - Storage and scale DTypes `f4e2m1` and `f8e8m0` MUST NOT be recorded as
     compute DTypes.
   - It MUST record no tensor-memory capacity: the SM90 MMA accumulates in the
@@ -244,7 +253,8 @@ The installed `nvidia.sm90` architecture document.
 The installed `nvidia.sm100` architecture document.
 
 - constraints:
-  - Its recorded identity MUST be `sm_100`.
+  - Its recorded identity MUST be `sm_100`. It MUST compile with
+    `gpu_architecture` `compute_100` and `gpu_code` `sm_100`, `compute_100`.
   - It MUST record `f4e2m1` as a compute DType, because the SM100 MMA takes
     4-bit operands directly. `f8e8m0` MUST NOT be recorded as one: it scales
     those operands rather than being multiplied.
@@ -257,7 +267,8 @@ The installed `nvidia.sm100` architecture document.
 The installed `nvidia.sm89` architecture document.
 
 - constraints:
-  - Its recorded identity MUST be `sm_89`.
+  - Its recorded identity MUST be `sm_89`. It MUST compile with
+    `gpu_architecture` `compute_89` and `gpu_code` `sm_89`, `compute_89`.
   - Its instruction capabilities MUST NOT name `wgmma.mma_async`,
     `cp.async.bulk`, `cp.async.bulk.tensor`, `mbarrier.expect_tx` or
     `mbarrier.try_wait`: this architecture runs none of them, so its MMA is
