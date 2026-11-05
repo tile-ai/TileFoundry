@@ -257,7 +257,9 @@ class ConvertHIRToTIR(ModulePass):
     finalize` runs exactly these on the pass `Target.resolve` gives.
   - Whether a Call is a dimension, the instruction it issues and its operand
     types, the mesh that owns a copy or an instruction, and the accepted
-    aliases lowering executes come from `analysis/emission.py`.
+    aliases lowering executes come from the module-level functions of
+    `passes/transforms/convert_hir_to_tir.py`. A target analysis that follows
+    lowering imports the same functions.
   - The visitor lowers each HIR node in its `visit_<Node>`. `visit_Call` lowers
     a Call that `lowers_to_dim` accepts as a dimension; for any other Call it
     lowers the values its storage's dimensions read, then its operands, and

@@ -66,7 +66,7 @@ class SyncPlanMetadata(IRMetadata):
     `copies_insert_slice_base` and `copies_insert_slice_update` name; and
     `visit_T` issues the instruction `selected_op` names.
   - Which instruction a Call issues, its operand types and the mesh that owns
-    it come from `analysis/emission.py`; which copies lowering adds, which
+    it come from `passes/transforms/convert_hir_to_tir.py`; which copies lowering adds, which
     parameters a Call's arguments supply and the mesh an instruction is issued
     on come from `cuda/analysis/emission.py`. Lowering calls the same functions on
     the same analysed program. Each effect's completion comes from the

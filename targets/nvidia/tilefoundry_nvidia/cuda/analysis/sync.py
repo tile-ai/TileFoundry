@@ -15,14 +15,6 @@ from operator import mul
 
 from tilefoundry.analysis.access import AliasKind
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata
-from tilefoundry.analysis.emission import (
-    accepted_aliases,
-    copy_mesh,
-    issue_owner,
-    lowers_to_dim,
-    operand_types,
-    selected_op,
-)
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.liveness import LivenessMetadata
 from tilefoundry.analysis.memory import owned_bytes
@@ -53,6 +45,14 @@ from tilefoundry.ir.types.layout import ComposedLayout
 from tilefoundry.ir.types.mesh import axis_keys, separate, within_scope
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import collect_exprs
+from tilefoundry.passes.transforms.convert_hir_to_tir import (
+    accepted_aliases,
+    copy_mesh,
+    issue_owner,
+    lowers_to_dim,
+    operand_types,
+    selected_op,
+)
 from tilefoundry.visitor_registry.instruction import call_params
 from tilefoundry_nvidia.cuda.analysis.completion import (
     Effect,
@@ -480,23 +480,44 @@ class _Planner:
         """Whether memory accepted a VIEW alias on *call*'s result."""
         return any(alias.kind is AliasKind.VIEW for alias in self.aliases_of(SSAValue(call)))
 
-    def visit_Empty(self, call: Call, event: int, scope) -> list[_Action]:
+    def _no_action(self) -> list[_Action]:
+        """Lowering emits no access for a tuple item, a view, an allocation or a refused Call."""
         return []
 
-    visit_TupleGetItem = visit_Slice = visit_Reshape = visit_Bitcast = visit_Empty
-    visit_IndexSelect = visit_Empty
+    def visit_TupleGetItem(self, call: Call, event: int, scope) -> list[_Action]:
+        return self._no_action()
+
+    def visit_Slice(self, call: Call, event: int, scope) -> list[_Action]:
+        return self._no_action()
+
+    def visit_Reshape(self, call: Call, event: int, scope) -> list[_Action]:
+        return self._no_action()
+
+    def visit_Bitcast(self, call: Call, event: int, scope) -> list[_Action]:
+        return self._no_action()
+
+    def visit_Empty(self, call: Call, event: int, scope) -> list[_Action]:
+        return self._no_action()
+
+    def visit_IndexSelect(self, call: Call, event: int, scope) -> list[_Action]:
+        return self._no_action()
 
     def visit_Reshard(self, call: Call, event: int, scope) -> list[_Action]:
         return [] if self.viewed(call) else self.visit_T(call, event, scope)
 
-    def visit_Zeros(self, call: Call, event: int, scope) -> list[_Action]:
+    def _fill(self, call: Call, event: int, scope) -> list[_Action]:
+        """The one ``Fill`` lowering emits into *call*'s result."""
         types = (call.type, None)
         return [self.action(
             (event, 0), call, None, Fill(), (call, None), types, "Fill", scope,
             copy_mesh((call.type,)),
         )]
 
-    visit_FullLike = visit_Zeros
+    def visit_Zeros(self, call: Call, event: int, scope) -> list[_Action]:
+        return self._fill(call, event, scope)
+
+    def visit_FullLike(self, call: Call, event: int, scope) -> list[_Action]:
+        return self._fill(call, event, scope)
 
     def visit_InsertSlice(self, call: Call, event: int, scope) -> list[_Action]:
         actions = []

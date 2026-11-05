@@ -190,7 +190,8 @@ class CudaLowering(Lowering):
         )
         return result
 
-    def visit_Zeros(self, call: Call, operands, ctx) -> Expr | View:
+    def _fill(self, call: Call, ctx) -> Expr:
+        """Declare *call*'s result and fill it with the call's value, else zero."""
         result = ctx.result(call)
         scalar = Constant(
             getattr(call.target, "value", 0.0), type=TensorType.scalar(call.type.dtype)
@@ -199,7 +200,11 @@ class CudaLowering(Lowering):
         ctx.builder.transfer(scalar, result, op=Fill(), ctx=ctx)
         return result
 
-    visit_FullLike = visit_Zeros
+    def visit_Zeros(self, call: Call, operands, ctx) -> Expr | View:
+        return self._fill(call, ctx)
+
+    def visit_FullLike(self, call: Call, operands, ctx) -> Expr | View:
+        return self._fill(call, ctx)
 
     def default_visit_T(self, call: Call, op, operands, ctx) -> Expr:
         mesh = ctx.enclosing_mesh()

@@ -17,22 +17,15 @@ from typing import ClassVar
 import isl
 
 from tilefoundry.analysis import MemoryMetadata
-from tilefoundry.analysis.access import AliasKind, buffer_alias, forwarded_leaves
-from tilefoundry.analysis.allocation import AllocationSummaryMetadata
-from tilefoundry.analysis.emission import (
-    accepted_aliases,
-    copy_mesh,
-    issue_owner,
-    lowers_to_dim,
-    operand_types,
-    selected_op,
-)
+from tilefoundry.analysis.access import AliasKind, BufferAlias, buffer_alias, forwarded_leaves
+from tilefoundry.analysis.allocation import AllocationSummaryMetadata, AllocationValue
 from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
     Constant,
     Expr,
+    Op,
     Tuple,
     Var,
     get_metadata,
@@ -57,10 +50,12 @@ from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, For, LetStmt, MeshScope, Sequential
 from tilefoundry.ir.tir.symbol_ref import symbol_ref
 from tilefoundry.ir.types import (
+    Broadcast,
     ComposedLayout,
     DType,
     Layout,
     Mesh,
+    Partial,
     PointerType,
     ShardLayout,
     StorageKind,
@@ -102,7 +97,11 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.candidates import candidate_ops
+from tilefoundry.visitor_registry.candidates import (
+    candidate_operands,
+    candidate_ops,
+    sole_candidate,
+)
 from tilefoundry.visitor_registry.contexts import TypeInferContext, ValuationContext
 from tilefoundry.visitor_registry.instruction import ScheduleRefusal, project
 from tilefoundry.visitor_registry.registries import typeinfer_registry
@@ -152,6 +151,70 @@ def _cut(base, starts, sizes, loops=()) -> Call:
     )
     window.type = getattr(inferred, "type", inferred)
     return window
+
+
+def lowers_to_dim(call: Call) -> bool:
+    """Whether *call* computes a dimension: a dim op, a mesh coordinate or scalar arithmetic."""
+    target = call.target
+    return (
+        is_dim_op_call(call)
+        or isinstance(target, MeshCoord)
+        or (isinstance(target, HirBinary) and call.type.shape == ())
+    )
+
+
+def selected_op(call: Call, target) -> Op | None:
+    """The instruction *call* issues on *target*: its schedule's, else the sole candidate."""
+    if isinstance(call.target, ScheduleOp):
+        return call.target.op
+    return sole_candidate(call, target=target)
+
+
+def operand_types(call: Call, op: Op) -> tuple:
+    """The types *op* is issued with, one per parameter it takes for *call*."""
+    if isinstance(call.target, ScheduleOp):
+        return tuple(arg.type for arg in call.args)
+    return candidate_operands(call, type(op))[1]
+
+
+def _participants(layouts) -> Mesh | None:
+    """The participant mesh of the first ``ShardLayout`` among *layouts*, if any."""
+    return next(
+        (participant_layout(layout).mesh for layout in layouts if isinstance(layout, ShardLayout)),
+        None,
+    )
+
+
+def copy_mesh(types) -> Mesh | None:
+    """The mesh a copy between operands of *types* runs on, None for the enclosing one."""
+    return _participants(type_.layout for type_ in types)
+
+
+def issue_owner(types) -> Mesh | None:
+    """The mesh that owns an instruction issued with operands of *types*, if one does.
+
+    ``Partial`` attributes count as ``Broadcast`` here.
+    """
+    return _participants(
+        replace(
+            type_.layout,
+            attrs=tuple(
+                Broadcast() if isinstance(attr, Partial) else attr for attr in type_.layout.attrs
+            ),
+        )
+        if isinstance(type_.layout, ShardLayout)
+        else type_.layout
+        for type_ in types
+    )
+
+
+def accepted_aliases(value: AllocationValue) -> tuple[BufferAlias, ...]:
+    """Accepted links that lowering executes; a register IN_PLACE tie shares no storage."""
+    return tuple(
+        alias
+        for alias in value.aliases
+        if value.lifetime.memory_level != "rmem" or alias.kind is not AliasKind.IN_PLACE
+    )
 
 
 @dataclass
@@ -1393,10 +1456,18 @@ class Lowering(ValuationVisitor[Expr | View]):
             else Call(call.target, (source, index), type=call.type)
         )
 
-    def visit_Slice(self, call: Call, operands, ctx) -> View:
+    def _view(self, call: Call, operands, ctx) -> View:
+        """The view *call* authors of its aliased operand."""
         return ctx.storage.hir_view(call, operands, self._runtime_values(call, ctx))
 
-    visit_Reshape = visit_Bitcast = visit_Slice
+    def visit_Slice(self, call: Call, operands, ctx) -> View:
+        return self._view(call, operands, ctx)
+
+    def visit_Reshape(self, call: Call, operands, ctx) -> View:
+        return self._view(call, operands, ctx)
+
+    def visit_Bitcast(self, call: Call, operands, ctx) -> View:
+        return self._view(call, operands, ctx)
 
     def visit_Reshard(self, call: Call, operands, ctx) -> Expr | View:
         """A view where memory accepted its result's VIEW alias, else a copy."""
@@ -1404,7 +1475,7 @@ class Lowering(ValuationVisitor[Expr | View]):
         if leaf in ctx.storage.answers and any(
             alias.kind is AliasKind.VIEW for alias in ctx.storage.aliases_of(leaf)
         ):
-            return ctx.storage.hir_view(call, operands, self._runtime_values(call, ctx))
+            return self._view(call, operands, ctx)
         return self.visit_T(call, operands, ctx)
 
     def visit_Empty(self, call: Call, operands, ctx) -> Expr | View:
