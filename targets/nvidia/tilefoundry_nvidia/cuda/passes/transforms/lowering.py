@@ -5,7 +5,7 @@ See [passes §7.1](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/passes.md#71
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from math import prod
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var, get_metadata
@@ -24,6 +24,7 @@ from tilefoundry.ir.tir.sync import Sync
 from tilefoundry.ir.types import (
     Broadcast,
     ComposedLayout,
+    Mesh,
     PointerType,
     ShardLayout,
     Split,
@@ -46,6 +47,7 @@ from tilefoundry.passes.transforms.convert_hir_to_tir import (
     _label,
 )
 from tilefoundry.target import bind
+from tilefoundry.visitor_registry.instruction import Projection
 from tilefoundry_nvidia.cuda import CudaTarget
 from tilefoundry_nvidia.cuda.analysis.completion import Group
 from tilefoundry_nvidia.cuda.analysis.emission import (
@@ -81,6 +83,23 @@ def staged_scalar(type_) -> bool:
     return (
         isinstance(type_, TensorType) and type_.shape == () and type_.storage is StorageKind.UMAT
     )
+
+
+@dataclass(frozen=True)
+class _Issue:
+    """What ``default_visit_T`` issues an instruction with, before it issues it.
+
+    ``operands`` pairs each parameter's name with its value, in parameter
+    order; ``types`` are the types the instruction is issued with.
+    """
+
+    plan: Projection
+    types: tuple
+    operands: tuple[tuple[str, Expr], ...]
+    read_values: dict[str, Expr]
+    written: Expr | None
+    enclosing: Mesh | None
+    issuers: Mesh | None
 
 
 class CudaLowering(Lowering):
@@ -207,6 +226,21 @@ class CudaLowering(Lowering):
         return self._fill(call, ctx)
 
     def default_visit_T(self, call: Call, op, operands, ctx) -> Expr:
+        issue = self._prepare_operands(call, op, operands, ctx)
+        if required_execution_mesh(op) is None:
+            self._issue_in_owner(call, op, issue, ctx)
+        else:
+            locals_ = self._local_operands(op, issue, ctx)
+            self._issue_at_points(call, op, issue, locals_, ctx)
+        result = result_param(issue.plan.params)
+        if result.effect & MemoryEffect.READ:
+            return issue.read_values[result.name]
+        if issue.written is None:
+            raise LoweringError(f"{_label(call)} produced no addressable result")
+        return issue.written
+
+    def _prepare_operands(self, call: Call, op, operands, ctx) -> _Issue:
+        """Project *op*, lower the operands it takes and stage each scalar in a register."""
         mesh = ctx.enclosing_mesh()
         plan, types, owner = ctx.issues.plan(call, op, mesh)
         params = plan.params
@@ -253,43 +287,49 @@ class CudaLowering(Lowering):
             else type_
             for type_ in types
         )
-        required = required_execution_mesh(op)
         issuers = issue_mesh(op, owner, mesh)
-        if required is None:
-            if mesh is None:
-                raise LoweringError(f"{_label(call)} instruction issue has no lexical mesh")
-            with ctx.builder.region(
-                mesh=issuers, binding=Var(ctx.names.fresh("threads"), type=_BINDING)
-            ):
-                issued = []
-                for param, (role, value) in zip(params, issued_operands, strict=True):
-                    desired = types[params.index(param)]
-                    issued.append(
-                        ctx.builder.value(
-                            ctx.storage.operand(value, desired, stem=f"{role}_view"), ctx=ctx
-                        )
+        return _Issue(plan, types, tuple(issued_operands), read_values, written, mesh, issuers)
+
+    def _issue_in_owner(self, call: Call, op, issue: _Issue, ctx) -> None:
+        """Issue *op* once with its attributes, in the region of its owner mesh."""
+        if issue.enclosing is None:
+            raise LoweringError(f"{_label(call)} instruction issue has no lexical mesh")
+        params, types = issue.plan.params, issue.types
+        with ctx.builder.region(
+            mesh=issue.issuers, binding=Var(ctx.names.fresh("threads"), type=_BINDING)
+        ):
+            issued = []
+            for param, (role, value) in zip(params, issue.operands, strict=True):
+                desired = types[params.index(param)]
+                issued.append(
+                    ctx.builder.value(
+                        ctx.storage.operand(value, desired, stem=f"{role}_view"), ctx=ctx
                     )
-                attributes = {
-                    param.name: getattr(op, param.name)
-                    for param in type(op)._op_schema.signature
-                    if param.kind == "attribute"
-                    and (
-                        not param.has_default
-                        or getattr(op, param.name) != param.default
-                        or param.name == "fill"
-                    )
-                }
-                self._emit_steps(call, "issue", ctx)
-                ctx.builder.add(Evaluate(type(op)(**attributes), tuple(issued)))
-                self._emit_steps(call, "after", ctx)
-            result = result_param(params)
-            return read_values[result.name] if result.effect & MemoryEffect.READ else written
+                )
+            attributes = {
+                param.name: getattr(op, param.name)
+                for param in type(op)._op_schema.signature
+                if param.kind == "attribute"
+                and (
+                    not param.has_default
+                    or getattr(op, param.name) != param.default
+                    or param.name == "fill"
+                )
+            }
+            self._emit_steps(call, "issue", ctx)
+            ctx.builder.add(Evaluate(type(op)(**attributes), tuple(issued)))
+            self._emit_steps(call, "after", ctx)
+
+    def _local_operands(self, op, issue: _Issue, ctx) -> list:
+        """Each operand as one point of *op*'s execution mesh sees it, in parameter order."""
+        plan, types, issuers = issue.plan, issue.types, issue.issuers
+        required = required_execution_mesh(op)
         for region in ctx.builder.blocks[:-1]:
             for key, value in region.views.items():
                 ctx.builder.blocks[-1].views.setdefault(key, value)
         locals_ = []
         unit_coordinates = {}
-        for (role, value), type_, rest in zip(issued_operands, types, plan.rests, strict=True):
+        for (role, value), type_, rest in zip(issue.operands, types, plan.rests, strict=True):
             base = ctx.builder.value(ctx.storage.operand(value, type_, whole_tensor=True), ctx=ctx)
             binding_mesh = rest.mesh if isinstance(rest, ShardLayout) else issuers
             _frame, dropped = _participant_frame(binding_mesh, required)
@@ -348,17 +388,23 @@ class CudaLowering(Lowering):
                 )
                 base = Call(TensorView(layout=local, shape=local_shape), (pointer,), type=local_type)
             locals_.append(base)
-        with ctx.builder.region(mesh=issuers, binding=Var(ctx.names.fresh("threads"), type=_BINDING)):
+        return locals_
+
+    def _issue_at_points(self, call: Call, op, issue: _Issue, locals_, ctx) -> None:
+        """Issue *op* at each point ``IssuePlan.points`` enumerates, in the issuing region."""
+        with ctx.builder.region(
+            mesh=issue.issuers, binding=Var(ctx.names.fresh("threads"), type=_BINDING)
+        ):
             locals_ = [
                 ctx.builder.bind(Var(ctx.names.fresh(f"{role}_local"), type=base.type), base)
                 if isinstance(base, Call) and isinstance(base.target, TensorView)
                 else base
-                for (role, _value), base in zip(issued_operands, locals_, strict=True)
+                for (role, _value), base in zip(issue.operands, locals_, strict=True)
             ]
-            for windows in ctx.issues.points(plan):
+            for windows in ctx.issues.points(issue.plan):
                 issued = []
                 for (role, _value), base, desired, starts in zip(
-                    issued_operands, locals_, plan.tiles, windows, strict=True
+                    issue.operands, locals_, issue.plan.tiles, windows, strict=True
                 ):
                     item = ctx.storage.issue_window(base, desired, starts, ctx.builder.loops)
                     issued.append(
@@ -369,12 +415,6 @@ class CudaLowering(Lowering):
                 self._emit_steps(call, "issue", ctx)
                 ctx.builder.add(Evaluate(op, tuple(issued)))
             self._emit_steps(call, "after", ctx)
-        result = result_param(params)
-        if result.effect & MemoryEffect.READ:
-            return read_values[result.name]
-        if written is None:
-            raise LoweringError(f"{_label(call)} produced no addressable result")
-        return written
 
 
 @bind(CudaTarget, ConvertHIRToTIR)
