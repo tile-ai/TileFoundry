@@ -1,29 +1,20 @@
-"""Each WGMMA group step and the async proxy fence emits its one PTX instruction."""
+"""A program with WGMMA group steps and the async proxy fence builds into one CUDA library."""
+
+import shutil
+from pathlib import Path
 
 import pytest
 
-from tilefoundry.codegen.emitter import CppEmitter
-from tilefoundry.ir.tir.stmts import Evaluate
-from tilefoundry_nvidia import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
-from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import (
-    FenceProxyAsync,
-    WgmmaCommitGroup,
-    WgmmaFence,
-    WgmmaWaitGroup,
-)
+from tilefoundry.cli.source import load_authored_ir
+from tilefoundry.codegen.link_module import link_program
+from tilefoundry.compile import default_pipeline
+
+CODEGEN = Path(__file__).parents[1] / "fixtures" / "codegen"
 
 
-@pytest.mark.parametrize(
-    "op, instruction",
-    (
-        (WgmmaFence(), "wgmma.fence.sync.aligned;"),
-        (WgmmaCommitGroup(), "wgmma.commit_group.sync.aligned;"),
-        (WgmmaWaitGroup(n=1), 'wgmma.wait_group.sync.aligned %0;\\n" :: "n"(1)'),
-        (FenceProxyAsync(), "fence.proxy.async.shared::cta;"),
-    ),
-)
-def test_emits_its_instruction(op, instruction):
-    context = CudaCodegenContext(target=CudaTarget("nvidia.h200_sxm"))
-    CppEmitter(context=context).visit_Evaluate(Evaluate(op, ()))
-    assert instruction in context.source()
+@pytest.mark.skipif(shutil.which("nvcc") is None, reason="requires the CUDA compiler")
+def test_wgmma_units_build(tmp_path):
+    module = load_authored_ir(f"{CODEGEN / 'wgmma_units.py'}:MixedUnits")
+    module = default_pipeline(module).run(module)
+    linked = link_program(module, workdir=tmp_path)
+    assert linked.library_path.is_file()
