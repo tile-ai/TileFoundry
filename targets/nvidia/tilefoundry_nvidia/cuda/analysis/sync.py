@@ -794,7 +794,9 @@ class _Planner:
         def needed(use) -> bool:
             seen = [access for access, _seq in state if access.register == use.register]
             return not seen or any(
-                not access.group_fenced and access.chain != use.effect.chain for access in seen
+                not access.group_fenced
+                and (access.group is not use.effect.group or access.chain != use.effect.chain)
+                for access in seen
             )
 
         if not every and not any(needed(use) for use in fenced):
