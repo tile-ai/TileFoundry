@@ -81,6 +81,42 @@ class InvariantGemmOperands(FamilyCase):
         assert gmem.total == TrafficBytes(read=18_824_036_352, write=2_214_592_512)
 
 
+@case
+class PartialReshard(FamilyCase):
+    """Resolving partials communicates even when all Split axes stay unchanged."""
+
+    path: Path = ANALYSIS / "partial_reshard.py"
+    name: str | None = "PartialReshard"
+
+    def guard(self, state, problems):
+        by_group_size = {}
+        for replicas, shards in ((1, 1), (2, 1), (4, 1), (1, 2), (2, 2), (4, 4)):
+            result = analyze(
+                *check_program(
+                    state, state.entry_function(), dims={"replicas": replicas, "shards": shards}
+                ),
+                analysis="memory",
+            )
+            completed, unchanged = (
+                get_metadata(expr, MemoryMetadata)
+                for expr in collect_exprs(result.function.body)
+                if isinstance(expr, Call) and isinstance(expr.target, Reshard)
+            )
+            assert unchanged.traffic.communication.of("gpu") is None
+            moved = completed.traffic.communication.of("gpu")
+            if replicas == 1:
+                assert moved is None
+            else:
+                assert moved is not None
+                per_gpu = moved.per_unit[completed.topologies.index("gpu")]
+                assert per_gpu.read == per_gpu.write > 0
+                assert per_gpu == by_group_size.setdefault(replicas, per_gpu)
+                assert moved.total == TrafficBytes(
+                    read=per_gpu.read * replicas * shards,
+                    write=per_gpu.write * replicas * shards,
+                )
+
+
 def test_reshard_across_cards_is_communication() -> None:
     TransposeShard = load_authored_ir(f"{PLACED / 'tp_all_to_all.py'}:TransposeShard")
     result = analyze(
