@@ -21,7 +21,6 @@ from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.completion import Completion, register_completion
 from tilefoundry.visitor_registry.registries import typeinfer_registry, verify_stmt_registry
 
 
@@ -53,7 +52,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 
 register_access_relation(Copy)(identity_relations)
-register_completion(Copy, Completion.ON_RETURN)
 
 
 @register_schedule_eval(Copy)

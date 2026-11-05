@@ -23,6 +23,8 @@ class CudaArchitecture(Architecture):
     """
 
     name: str
+    gpu_architecture: str
+    gpu_code: tuple[str, ...]
     supported_compute_dtypes: tuple[DType, ...]
     capabilities: tuple[str, ...]
     max_threads_per_cta: int

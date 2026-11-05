@@ -237,9 +237,10 @@ def _cutlass_include() -> Path:
 @bind(CudaTarget, LinkableModule)
 @dataclass(frozen=True, kw_only=True)
 class CudaLinkableModule(LinkableModule):
-    """A device translation unit and the architecture used to compile it."""
+    """A device translation unit and the nvcc architecture options that compile it."""
 
-    arch: str
+    gpu_architecture: str
+    gpu_code: tuple[str, ...]
 
     emits = frozenset({"full", "skeleton"})
 
@@ -283,7 +284,12 @@ class CudaLinkableModule(LinkableModule):
             grid_barrier_state=ctx.needs_grid_barrier_state,
         )
         return cls(
-            target="cuda", language="cu", preamble=preamble, functions=functions, arch=target.arch
+            target="cuda",
+            language="cu",
+            preamble=preamble,
+            functions=functions,
+            gpu_architecture=target.architecture.gpu_architecture,
+            gpu_code=target.architecture.gpu_code,
         )
 
     def link(self, project: "CMakeProject") -> None:
@@ -297,10 +303,11 @@ class CudaLinkableModule(LinkableModule):
         project.include(files(__package__).joinpath("include"), _cutlass_include())
         project.append(
             "set_target_properties(${PROJECT_NAME} PROPERTIES\n"
-            f'  CUDA_ARCHITECTURES "{self.arch.removeprefix("sm_")}"\n'
+            "  CUDA_ARCHITECTURES OFF\n"
             "  CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON CUDA_EXTENSIONS OFF)\n"
             f"set_source_files_properties({source} PROPERTIES\n"
             "  # Device headers need C++20; older CMake rejects the CUDA20 dialect.\n"
             "  # A per-source option follows the standard flag; nvcc uses the last -std.\n"
-            '  COMPILE_OPTIONS "-std=c++20;-Wno-deprecated-gpu-targets")\n'
+            '  COMPILE_OPTIONS "-std=c++20;-Wno-deprecated-gpu-targets;'
+            f'--gpu-architecture={self.gpu_architecture};--gpu-code={",".join(self.gpu_code)}")\n'
         )

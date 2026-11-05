@@ -18,7 +18,6 @@ from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.completion import Completion, register_completion
 
 
 @register_op(dialect="T", category="arith", name="arange")
@@ -40,7 +39,6 @@ def _(call, ctx) -> UnitType:
 
 
 register_access_relation(Arange)(identity_relations)
-register_completion(Arange, Completion.ON_RETURN)
 
 
 @register_schedule_eval(Arange)

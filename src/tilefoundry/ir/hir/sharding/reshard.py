@@ -9,15 +9,18 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.mesh_scope import device_layout
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import ComposedLayout, TensorType
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten
 from tilefoundry.ir.types.layout_algebra import coalesce, domain_offset
 from tilefoundry.ir.types.shard_layout import (
+    Dynamic,
     ShardLayout,
     Split,
     partial_reductions_by_axis,
+    register_strides,
     shard_layout_of,
 )
 from tilefoundry.ir.types.storage import StorageKind
@@ -45,6 +48,12 @@ class Reshard(Op):
 
 @register_buffer_alias(Reshard)
 def _buffer_alias(call: Call) -> int | None:
+    """0 when both sides' structural boxes agree, so the result is a view; None for a copy.
+
+    Each thread holds its registers privately, so the box of an ``rmem`` ShardLayout also
+    holds the threads its mesh numbers, and steps by register, where every Split steps 0
+    and is recorded with its mesh axis.
+    """
     source, result = call.args[0].type, call.type
     if result.storage is not source.storage or not is_literal_shape(result.shape):
         return None
@@ -83,7 +92,18 @@ def _buffer_alias(call: Call) -> int | None:
         physical = shard.layout if shard is not None else layout
         if shard is not None and isinstance(layout, ComposedLayout):
             physical = replace(layout, outer=physical)
-        flat = flatten(physical)
+        flat, threads = flatten(physical), None
+        if held.storage is StorageKind.RMEM and shard is not None:
+            mesh = shard.mesh
+            start = mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0
+            threads = (mesh.topologies, device_layout(mesh), start)
+            sizes = (getattr(topology, "size", 1) for topology in mesh.topologies)
+            if any(isinstance(attr, Dynamic) for attr in shard.attrs) or not all(
+                isinstance(value, int)
+                for value in (start, *sizes, *threads[1].shape, *threads[1].strides)
+            ):
+                return None
+        steps = flat.strides if threads is None else register_strides(shard)
         profile = compatible_profile(flat.shape, held.shape)
         axes = mode_axes(profile)
         independent, splits = set(), []
@@ -92,7 +112,7 @@ def _buffer_alias(call: Call) -> int | None:
                 if (
                     isinstance(attr, Split)
                     and static_dim_value(tuple(flatten(shard.mesh.layout.shape))[mesh_axis]) != 1
-                    and flat.strides[attr.axis] == 0
+                    and steps[attr.axis] == 0
                 ):
                     position = attr.axis
                     suffix = prod(flat.shape[index] for index in range(position + 1, len(axes))
@@ -101,7 +121,7 @@ def _buffer_alias(call: Call) -> int | None:
                     independent.add(position)
         kept = tuple(
             (extent, step)
-            for index, (extent, step) in enumerate(zip(flat.shape, flat.strides, strict=True))
+            for index, (extent, step) in enumerate(zip(flat.shape, steps, strict=True))
             if index not in independent
         )
         shape, strides = zip(*kept) if kept else ((1,), (0,))
@@ -110,7 +130,7 @@ def _buffer_alias(call: Call) -> int | None:
             physical.inner is not None or physical.offset != 0
         ):
             address = replace(physical, outer=address)
-        boxes.append((tuple(splits), address))
+        boxes.append((tuple(splits), address, threads))
     return 0 if boxes[0] == boxes[1] else None
 
 

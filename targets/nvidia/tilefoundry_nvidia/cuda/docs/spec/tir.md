@@ -242,6 +242,14 @@ path. Per-target emission dispatches on the atom ([target](./target.md)); the
 current CUDA emitter accepts the SM80 and SM89 declarations and rejects WGMMA
 because this stage provides no WGMMA runtime emitter.
 
+Completion ([analysis §2](./analysis.md#2-completion-registry))
+follows the atom. The SM80 and SM89 MMAs complete on return. Every effect of a
+WGMMA completes in `Group.WGMMA`, with `WARPGROUP` as its unit: shared
+operands go through the async proxy, and register operands need
+`wgmma_fence`. An accumulator access chains with an earlier one of the same
+`n` and `dtype`, as PTX exempts accumulator accesses of wgmmas of one shape
+from the fence; an A read from registers does not chain.
+
 ## Async copy lowering
 
 Shared `CopyAsync`, `CpAsyncCommit`, and `CpAsyncWait` are defined in
@@ -512,3 +520,39 @@ class MBarrierInvalidate(Op):
   - `barrier` is smem.
   - Lowers to `mbarrier.inval.shared::cta.b64`, written at the call site: the
     runtime publishes no entry for it.
+
+## WGMMA group and proxy fence Ops
+
+The steps the `sync` plan places around WGMMA and async proxy accesses
+([analysis §1](./analysis.md#1-sync)). Each takes
+no operand and lowers to one PTX instruction written at the call site; the
+runtime publishes no entry for any of them.
+
+```python
+class WgmmaFence(Op):
+    """Effect form; order earlier register accesses before the warpgroup's next wgmma."""
+
+class WgmmaCommitGroup(Op):
+    """Effect form; close the warpgroup's uncommitted wgmmas into one group."""
+
+class WgmmaWaitGroup(Op):
+    """Effect form; wait until all but the newest n committed wgmma groups complete.
+
+    Attributes:
+        n: attribute; groups that may stay in flight.
+    """
+
+    n: int = 0
+
+class FenceProxyAsync(Op):
+    """Effect form; make this thread's earlier shared memory accesses visible to the async proxy."""
+```
+- constraints:
+  - The three WGMMA Ops are `.sync.aligned`: every thread of each warpgroup
+    involved runs them together. The `sync` plan places them only where whole
+    warpgroups reach that point alike, and verification refuses one whose
+    scope's threads are not whole, aligned warpgroups. `FenceProxyAsync` acts
+    per thread and runs on any threads.
+  - `n` is a non-negative compile-time count.
+  - They lower to `wgmma.fence.sync.aligned`, `wgmma.commit_group.sync.aligned`,
+    `wgmma.wait_group.sync.aligned n` and `fence.proxy.async.shared::cta`.

@@ -24,6 +24,7 @@ from tilefoundry.target.facts import (
     facts_result,
 )
 from tilefoundry.target.hardware.envelope import HardwareDocument
+from tilefoundry.target.services import Analyzer
 from tilefoundry.utils.python_source import PythonExpr
 from tilefoundry_nvidia.cuda.target.architecture import CudaArchitecture
 from tilefoundry_nvidia.cuda.target.device import CudaDevice
@@ -151,6 +152,23 @@ class CudaTarget(Target):
             parallel_level="cta",
         )
 
+    def get_analyzer(self, selector: str) -> Analyzer:
+        """Add the ``sync`` family to the core analyses."""
+        if selector == "sync":
+            from tilefoundry_nvidia.cuda.analysis.sync import (  # noqa: PLC0415
+                SyncMetadata,
+                SyncPlanMetadata,
+                analyze_sync,
+            )
+
+            return Analyzer(
+                "sync",
+                analyze_sync,
+                requires=("memory",),
+                produces=(SyncPlanMetadata, SyncMetadata),
+            )
+        return super().get_analyzer(selector)
+
     def get_facts(self, facts_type: type, query: object | None = None):
         """Project CUDA hardware through the facts this Target owns."""
         if facts_type is TopologyFacts and query is None:
@@ -203,7 +221,7 @@ class CudaTarget(Target):
 
     @property
     def arch(self) -> str:
-        """Return the architecture name used by compilation."""
+        """Return the architecture's identity name."""
         return self.architecture.name
 
     def topology_limit(self, name: str) -> int:

@@ -17,31 +17,15 @@ from typing import ClassVar
 import isl
 
 from tilefoundry.analysis import MemoryMetadata
-from tilefoundry.analysis.access import AliasKind, buffer_alias, forwarded_leaves
-from tilefoundry.analysis.allocation import AllocationSummaryMetadata
-from tilefoundry.analysis.emission import (
-    Emission,
-    accepted_aliases,
-    copies_carry_backedge,
-    copies_carry_entry,
-    copies_insert_slice_base,
-    copies_insert_slice_update,
-    copy_mesh,
-    emission,
-    issue_mesh,
-    issue_owner,
-    operand_roles,
-    operand_types,
-    required_execution_mesh,
-    selected_op,
-    staged_scalar,
-)
+from tilefoundry.analysis.access import AliasKind, BufferAlias, buffer_alias, forwarded_leaves
+from tilefoundry.analysis.allocation import AllocationSummaryMetadata, AllocationValue
 from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
     Constant,
     Expr,
+    Op,
     Tuple,
     Var,
     get_metadata,
@@ -50,7 +34,6 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module, resolve_symbol
-from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
@@ -61,7 +44,6 @@ from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import isl_to_dim, layout_to_isl_map
 from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.tir.arith import Binary as TirBinary
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import AllocTensor, Copy, Fill, PtrOf, TensorView
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -73,9 +55,9 @@ from tilefoundry.ir.types import (
     DType,
     Layout,
     Mesh,
+    Partial,
     PointerType,
     ShardLayout,
-    Split,
     StorageKind,
     Swizzle,
     TensorType,
@@ -94,19 +76,18 @@ from tilefoundry.ir.types.int_tuple import flatten as flatten_tuple
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.layout import get as get_layout
 from tilefoundry.ir.types.layout_algebra import composition
-from tilefoundry.ir.types.mesh import axis_keys
-from tilefoundry.ir.types.shard_layout import local_layout, shard_layout_of, split_target_axes
+from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.ir.types.stride import compact_row_major, crd2idx
 from tilefoundry.ir.types.utils import (
-    _participant_frame,
     i64_const,
     leaves_of,
     participant_layout,
     static_dim_value,
 )
-from tilefoundry.ir.visitor import StmtMutator, collect_exprs, expr_children
+from tilefoundry.ir.visitor import ExprVisitor, StmtMutator, collect_exprs, expr_children
 from tilefoundry.passes.pass_base import ModulePass
 from tilefoundry.target import CpuTarget
+from tilefoundry.target.base import target_summary
 from tilefoundry.utils.isl_utils import as_multi_aff
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -116,7 +97,11 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.candidates import candidate_ops
+from tilefoundry.visitor_registry.candidates import (
+    candidate_operands,
+    candidate_ops,
+    sole_candidate,
+)
 from tilefoundry.visitor_registry.contexts import TypeInferContext, ValuationContext
 from tilefoundry.visitor_registry.instruction import ScheduleRefusal, project
 from tilefoundry.visitor_registry.registries import typeinfer_registry
@@ -166,6 +151,70 @@ def _cut(base, starts, sizes, loops=()) -> Call:
     )
     window.type = getattr(inferred, "type", inferred)
     return window
+
+
+def lowers_to_dim(call: Call) -> bool:
+    """Whether *call* computes a dimension: a dim op, a mesh coordinate or scalar arithmetic."""
+    target = call.target
+    return (
+        is_dim_op_call(call)
+        or isinstance(target, MeshCoord)
+        or (isinstance(target, HirBinary) and call.type.shape == ())
+    )
+
+
+def selected_op(call: Call, target) -> Op | None:
+    """The instruction *call* issues on *target*: its schedule's, else the sole candidate."""
+    if isinstance(call.target, ScheduleOp):
+        return call.target.op
+    return sole_candidate(call, target=target)
+
+
+def operand_types(call: Call, op: Op) -> tuple:
+    """The types *op* is issued with, one per parameter it takes for *call*."""
+    if isinstance(call.target, ScheduleOp):
+        return tuple(arg.type for arg in call.args)
+    return candidate_operands(call, type(op))[1]
+
+
+def _participants(layouts) -> Mesh | None:
+    """The participant mesh of the first ``ShardLayout`` among *layouts*, if any."""
+    return next(
+        (participant_layout(layout).mesh for layout in layouts if isinstance(layout, ShardLayout)),
+        None,
+    )
+
+
+def copy_mesh(types) -> Mesh | None:
+    """The mesh a copy between operands of *types* runs on, None for the enclosing one."""
+    return _participants(type_.layout for type_ in types)
+
+
+def issue_owner(types) -> Mesh | None:
+    """The mesh that owns an instruction issued with operands of *types*, if one does.
+
+    ``Partial`` attributes count as ``Broadcast`` here.
+    """
+    return _participants(
+        replace(
+            type_.layout,
+            attrs=tuple(
+                Broadcast() if isinstance(attr, Partial) else attr for attr in type_.layout.attrs
+            ),
+        )
+        if isinstance(type_.layout, ShardLayout)
+        else type_.layout
+        for type_ in types
+    )
+
+
+def accepted_aliases(value: AllocationValue) -> tuple[BufferAlias, ...]:
+    """Accepted links that lowering executes; a register IN_PLACE tie shares no storage."""
+    return tuple(
+        alias
+        for alias in value.aliases
+        if value.lifetime.memory_level != "rmem" or alias.kind is not AliasKind.IN_PLACE
+    )
 
 
 @dataclass
@@ -1221,10 +1270,18 @@ class LoweringContext(TypeInferContext):
 
 @dataclass
 class Lowering(ValuationVisitor[Expr | View]):
-    """Mechanical lowering of one analyzed HIR function."""
+    """Mechanical lowering of one analyzed HIR function.
+
+    ``visit_Call`` dispatches a Call to ``visit_<HIR op>``, else to ``visit_T``,
+    which dispatches the selected TIR op to ``visit_T_<Name>``, else to
+    ``default_visit_T``. A target lowering overrides the visits it changes. A node
+    without a visit goes to ``default_visit``, which refuses it: the visitor keeps
+    ``ExprVisitor.default_visit_leaf``, so it never walks such a node's operands.
+    """
 
     context: TypeInferContext
     callees: dict[int, Lowering] = field(default_factory=dict)
+    default_visit_leaf = ExprVisitor.default_visit_leaf
 
     def visit(self, expr, ctx=None, *, dimension=False):
         if ctx is None:
@@ -1234,12 +1291,7 @@ class Lowering(ValuationVisitor[Expr | View]):
         if dimension:
             if isinstance(expr, Expr):
                 for value in collect_exprs(expr):
-                    if isinstance(value, Call) and not (
-                        is_dim_op_call(value)
-                        or isinstance(value.target, MeshCoord)
-                        or isinstance(value.target, HirBinary)
-                        and value.type.shape == ()
-                    ):
+                    if isinstance(value, Call) and not lowers_to_dim(value):
                         self.visit(value, ctx=ctx)
             return ctx.dim(expr, self._memo)
         known = ctx.memo.get(id(expr))
@@ -1281,15 +1333,6 @@ class Lowering(ValuationVisitor[Expr | View]):
             ctx.parameters[id(param)] = physical
             self._memo[id(param)] = (param, physical)
 
-    def before(self, owner: Expr, ctx, tag=None) -> None:
-        """Emit what runs before the statements lowered for *owner*.
-
-        *owner* is a ``Call``, ``MeshRegion`` or ``LoopRegion``; *tag* names a
-        copy lowering adds for it: ``"base"`` or ``"update"`` of an InsertSlice,
-        ``("entry", slot)`` or ``("backedge", slot)`` of a loop. A target that
-        orders shared memory overrides this.
-        """
-
     def run(self) -> PrimFunction:
         ctx = self.context
         if ctx.function.body is None:
@@ -1323,115 +1366,48 @@ class Lowering(ValuationVisitor[Expr | View]):
             target=self.context.target,
         )
 
+    def default_visit(self, expr, ctx):
+        raise LoweringError(f"{type(expr).__name__} has no lowering on {target_summary(ctx.target)}")
+
     def visit_MeshRegion(self, region: MeshRegion, ctx):
         mesh = region.mesh
         binding = Var(
             ctx.names.fresh("cta" if region is ctx.function.body else "scope"), type=_BINDING
         )
-        self.before(region, ctx)
         with ctx.builder.region(mesh=mesh, binding=binding, owner=region) as scope:
             result = self.visit(region.body, self.on_region_start(region, ctx))
             scope.result = result
         return result
 
-    def visit_LoopRegion(self, loop: LoopRegion, ctx) -> Expr:
-        carried_values = []
-        for slot, param in enumerate(loop.params[: len(loop.yield_values)]):
-            initial = self.visit(loop.args[slot], ctx=ctx)
-            carried = ctx.result(param)
-            if copies_carry_entry(loop, slot, ctx.storage.aliases_of):
-                self.before(loop, ctx, ("entry", slot))
-                ctx.builder.transfer(initial, carried, ctx=ctx, source_type=loop.args[slot].type)
-            self._memo[id(param)] = (param, carried)
-            carried_values.append(carried)
-        init = tuple(carried_values)
-        induction = Var(loop.induction_var.name, type=_INDEX)
-        self._memo[id(loop.induction_var)] = (loop.induction_var, induction)
-        self.before(loop, ctx)
-        with ctx.builder.region(
-            loop=(
-                induction,
-                self.visit(loop.start, ctx=ctx, dimension=True),
-                self.visit(loop.extent, ctx=ctx, dimension=True),
-                self.visit(loop.step, ctx=ctx, dimension=True),
-            ),
-            owner=loop,
-        ) as scope:
-            inner = self.on_region_start(loop, ctx)
-            self.visit(loop.body, inner)
-            yielded = tuple(self.visit(value, inner) for value in loop.yield_values)
-            for slot, (source, carried, value) in enumerate(
-                zip(loop.yield_values, init, yielded, strict=False)
-            ):
-                if copies_carry_backedge(loop, slot, ctx.storage.aliases_of):
-                    self.before(loop, ctx, ("backedge", slot))
-                    ctx.builder.transfer(value, carried, ctx=ctx, source_type=source.type)
-            for counter, one in (
-                values for key, values in ctx.builder.stage_counters.items() if key[-1] == id(loop)
-            ):
-                ctx.builder.add(Evaluate(TirBinary(kind=BinaryKind.ADD), (counter, one, counter)))
-            scope.result = (
-                init[0]
-                if len(init) == 1
-                else Tuple(init, type=TupleType(tuple(value.type for value in init)))
-            )
-        return scope.result
-
     def visit_Call(self, call: Call, ctx) -> Expr:
-        target = call.target
-        kind = emission(call, retained=ctx._callee_context(call) is not None)
-        if kind is Emission.DIMENSION:
+        if lowers_to_dim(call):
             return self.visit(call, ctx=ctx, dimension=True)
-        values = {}
         if SSAValue(call) in ctx.storage.answers:
             if (refusal := ctx.storage.answers[SSAValue(call)].refusal) is not None:
                 raise LoweringError(refusal)
-            values = {
-                id(value): self.visit(value, ctx=ctx, dimension=True)
-                for value in ctx.storage.runtime_values(call, ctx.memo)
-            }
+            self._runtime_values(call, ctx)
         operands = tuple(self.visit(arg, ctx=ctx) for arg in call.args)
-        if kind is Emission.CALL:
-            self.before(call, ctx)
-            return self._lower_call(call, operands, ctx=ctx)
-        if kind is Emission.VIEW:
-            if type(target).__name__ == "TupleGetItem":
-                source, index = operands
-                return (
-                    source.elements[index.value]
-                    if isinstance(source, Tuple) and isinstance(index, Constant)
-                    else Call(target, (source, index), type=call.type)
-                )
-            return ctx.storage.hir_view(call, operands, values)
-        if kind in (Emission.ALLOCATE, Emission.FILL):
-            if (
-                kind is Emission.ALLOCATE
-                and call.type.storage is StorageKind.RMEM
-                and target.buffers != 1
-            ):
-                raise LoweringError(f"{_label(call)} staged buffer has no owning scope")
-            result = ctx.result(call)
-            if kind is Emission.FILL:
-                scalar = Constant(
-                    getattr(target, "value", 0.0), type=TensorType.scalar(call.type.dtype)
-                )
-                self.before(call, ctx)
-                ctx.builder.transfer(scalar, result, op=Fill(), ctx=ctx)
-            return result
-        if kind is Emission.UNSCHEDULED:
-            raise LoweringError(
-                f"{_label(call)} is an unscheduled IndexSelect; write "
-                "tf.schedule((x, tf.empty(...), idx), op=T.copy_async(fill=...))"
-            )
-        if kind is Emission.INSERT_SLICE:
-            return self.visit_InsertSlice(call, operands, ctx)
-        op = ctx.issues.op(call, target=ctx.target)
-        self.before(call, ctx)
-        return getattr(self, f"visit_{type(op).__name__}", self.instruction)(
-            call, op, operands, ctx
+        if ctx._callee_context(call) is not None:
+            return self.visit_callee(call, operands, ctx)
+        return getattr(self, f"visit_{type(call.target).__name__}", self.visit_T)(
+            call, operands, ctx
         )
 
-    def _lower_call(self, call: Call, args, *, ctx) -> Expr | View:
+    def _runtime_values(self, call: Call, ctx) -> dict:
+        """Lower the values the dimensions of *call*'s storage read, by HIR value.
+
+        ``visit_Call`` lowers them before the operands; a view asks again for the
+        lowered values, which adds no statement.
+        """
+        if SSAValue(call) not in ctx.storage.answers:
+            return {}
+        return {
+            id(value): self.visit(value, ctx=ctx, dimension=True)
+            for value in ctx.storage.runtime_values(call, ctx.memo)
+        }
+
+    def visit_callee(self, call: Call, operands, ctx) -> Expr | View:
+        """Call the retained function *call* names, lowering it once."""
         frame = ctx._callee_context(call)
         lowering = self.callees.get(id(frame.function))
         if lowering is None:
@@ -1460,7 +1436,7 @@ class Lowering(ValuationVisitor[Expr | View]):
             if isinstance(call.target, Function) or not param.is_const
         )
         passed = []
-        for value, param in zip((*args, *scratch, destination), params, strict=True):
+        for value, param in zip((*operands, *scratch, destination), params, strict=True):
             passed.append(
                 ctx.builder.value(
                     ctx.storage.operand(value, param.type, whole_tensor=True, stem="argument"),
@@ -1472,207 +1448,59 @@ class Lowering(ValuationVisitor[Expr | View]):
         ctx.builder.add(Evaluate(target, tuple(passed)))
         return destination
 
-    def visit_InsertSlice(self, call: Call, operands, ctx) -> Expr:
-        target, update = operands[:2]
-        result = ctx.result(call)
-        if copies_insert_slice_base(call, ctx.storage.aliases_of):
-            self.before(call, ctx, "base")
-            ctx.builder.transfer(target, result, ctx=ctx, source_type=call.args[0].type)
-        if not copies_insert_slice_update(call, ctx.storage.aliases_of):
-            return result
-        starts, desired = ctx.storage.window(
-            result,
-            update.type,
-            tuple(
-                self.visit(value, ctx=ctx, dimension=True)
-                for value in (
-                    call.args[2].elements
-                    if isinstance(call.args[2], Tuple)
-                    else (call.args[2], *(i64_const(0) for _ in result.type.shape[1:]))
-                )
-            ),
-        )
-        self.before(call, ctx, "update")
-        ctx.builder.transfer(
-            update,
-            result,
-            starts=starts,
-            sizes=tuple(update.type.shape),
-            desired=desired,
-            ctx=ctx,
-            source_type=call.args[1].type,
-        )
-        return result
-
-    def instruction(self, call: Call, op, operands, ctx) -> Expr:
-        mesh = ctx.enclosing_mesh()
-        plan, types, owner = ctx.issues.plan(call, op, mesh)
-        params = plan.params
-        supplied, produced = operand_roles(call, params)
-        destination_operand = (
-            call.args[params.index(produced[0])]
-            if isinstance(call.target, ScheduleOp) and produced
-            else None
+    def visit_TupleGetItem(self, call: Call, operands, ctx) -> Expr:
+        source, index = operands
+        return (
+            source.elements[index.value]
+            if isinstance(source, Tuple) and isinstance(index, Constant)
+            else Call(call.target, (source, index), type=call.type)
         )
 
-        written = ctx.result(call) if produced else None
-        read_values = {}
-        for index, (param, operand) in enumerate(zip(supplied, call.args, strict=True)):
-            value = written if operand is destination_operand else operands[index]
-            if (
-                not isinstance(call.target, ScheduleOp)
-                and operand.type != types[params.index(param)]
-            ):
-                value = ctx.storage.operand(value, types[params.index(param)], whole_tensor=True)
-            if staged_scalar(value.type):
-                scalar_type = replace(value.type, storage=StorageKind.RMEM)
-                scalar = Var(ctx.names.fresh("scalar"), type=scalar_type)
-                with ctx.builder.region():
-                    ctx.builder.bind(
-                        scalar, Call(AllocTensor(tensor_type=scalar_type), (), type=scalar_type)
-                    )
-                ctx.builder.add(Evaluate(Fill(), (scalar, ctx.builder.value(value, ctx=ctx))))
-                value = scalar
-            read_values[param.name] = value
-        issued_operands: list[tuple[str, Expr | None]] = []
-        for param in params:
-            value = (
-                read_values[param.name]
-                if isinstance(call.target, ScheduleOp) or param.effect & MemoryEffect.READ
-                else written
-            )
-            if value is None:
-                raise LoweringError(f"{_label(call)} has no storage for {param.name}")
-            issued_operands.append((param.name, value))
+    def _view(self, call: Call, operands, ctx) -> View:
+        """The view *call* authors of its aliased operand."""
+        return ctx.storage.hir_view(call, operands, self._runtime_values(call, ctx))
 
-        types = tuple(
-            replace(type_, storage=StorageKind.RMEM)
-            if type_.shape == () and type_.storage is StorageKind.UMAT
-            else type_
-            for type_ in types
+    def visit_Slice(self, call: Call, operands, ctx) -> View:
+        return self._view(call, operands, ctx)
+
+    def visit_Reshape(self, call: Call, operands, ctx) -> View:
+        return self._view(call, operands, ctx)
+
+    def visit_Bitcast(self, call: Call, operands, ctx) -> View:
+        return self._view(call, operands, ctx)
+
+    def visit_Reshard(self, call: Call, operands, ctx) -> Expr | View:
+        """A view where memory accepted its result's VIEW alias, else a copy."""
+        leaf = SSAValue(call)
+        if leaf in ctx.storage.answers and any(
+            alias.kind is AliasKind.VIEW for alias in ctx.storage.aliases_of(leaf)
+        ):
+            return self._view(call, operands, ctx)
+        return self.visit_T(call, operands, ctx)
+
+    def visit_Empty(self, call: Call, operands, ctx) -> Expr | View:
+        if call.type.storage is StorageKind.RMEM and call.target.buffers != 1:
+            raise LoweringError(f"{_label(call)} staged buffer has no owning scope")
+        return ctx.result(call)
+
+    def visit_IndexSelect(self, call: Call, operands, ctx) -> Expr:
+        raise LoweringError(
+            f"{_label(call)} is an unscheduled IndexSelect; write "
+            "tf.schedule((x, tf.empty(...), idx), op=T.copy_async(fill=...))"
         )
-        required = required_execution_mesh(op)
-        issuers = issue_mesh(op, owner, mesh)
-        if required is None:
-            if mesh is None:
-                raise LoweringError(f"{_label(call)} instruction issue has no lexical mesh")
-            with ctx.builder.region(
-                mesh=issuers, binding=Var(ctx.names.fresh("threads"), type=_BINDING)
-            ):
-                issued = []
-                for param, (role, value) in zip(params, issued_operands, strict=True):
-                    desired = types[params.index(param)]
-                    issued.append(
-                        ctx.builder.value(
-                            ctx.storage.operand(value, desired, stem=f"{role}_view"), ctx=ctx
-                        )
-                    )
-                attributes = {
-                    param.name: getattr(op, param.name)
-                    for param in type(op)._op_schema.signature
-                    if param.kind == "attribute"
-                    and (
-                        not param.has_default
-                        or getattr(op, param.name) != param.default
-                        or param.name == "fill"
-                    )
-                }
-                ctx.builder.add(Evaluate(type(op)(**attributes), tuple(issued)))
-            result_param = next(param for param in params if param.effect & MemoryEffect.WRITE)
-            return (
-                read_values[result_param.name]
-                if result_param.effect & MemoryEffect.READ
-                else written
-            )
-        for region in ctx.builder.blocks[:-1]:
-            for key, value in region.views.items():
-                ctx.builder.blocks[-1].views.setdefault(key, value)
-        locals_ = []
-        unit_coordinates = {}
-        for (role, value), type_, rest in zip(issued_operands, types, plan.rests, strict=True):
-            base = ctx.builder.value(ctx.storage.operand(value, type_, whole_tensor=True), ctx=ctx)
-            binding_mesh = rest.mesh if isinstance(rest, ShardLayout) else issuers
-            _frame, dropped = _participant_frame(binding_mesh, required)
-            source = shard_layout_of(base.type.layout)
-            attrs = (
-                list(source.attrs)
-                if source is not None
-                else [Broadcast()] * len(axis_keys(binding_mesh))
-            )
-            coords = [None] * len(attrs)
-            for mesh_axis, (topology, _name) in enumerate(axis_keys(binding_mesh)[:dropped]):
-                attr = rest.attrs[mesh_axis]
-                attrs[mesh_axis] = attr
-                coordinate = 0
-                if isinstance(attr, Split) and not ctx.target.storage_owners.private(
-                    type_.storage, topology
-                ):
-                    key = id(binding_mesh), mesh_axis
-                    if key not in unit_coordinates:
-                        coord = Call(
-                            MeshCoord(mesh=binding_mesh), (i64_const(mesh_axis),), type=_BINDING
-                        )
-                        unit_coordinates[key] = ctx.builder.bind(
-                            Var(ctx.names.fresh("unit"), type=_BINDING), coord
-                        )
-                    coordinate = unit_coordinates[key]
-                coords[mesh_axis] = coordinate
-            address = source.layout if source is not None else base.type.layout
-            local, offset = local_layout(
-                ShardLayout(address, tuple(attrs), binding_mesh), base.type.shape, tuple(coords)
-            )
-            if any(isinstance(attr, Split) for attr in attrs[:dropped]):
-                primitive = local.layout if isinstance(local, ShardLayout) else local
-                outer = primitive.outer if isinstance(primitive, ComposedLayout) else primitive
-                local_shape = tuple(prod(flatten_tuple(mode)) for mode in outer.shape)
-                original = address.outer if isinstance(address, ComposedLayout) else address
-                if not any(isinstance(mode, tuple) for mode in original.shape):
-                    flat = flatten(outer)
-                    primitive = (
-                        replace(primitive, outer=flat)
-                        if isinstance(primitive, ComposedLayout)
-                        else flat
-                    )
-                if static_dim_value(offset) != 0:
-                    primitive = ComposedLayout(None, offset, primitive)
-                local = (
-                    replace(local, layout=primitive)
-                    if source is not None and isinstance(local, ShardLayout)
-                    else primitive
-                )
-                local_type = replace(base.type, shape=local_shape, layout=local)
-                pointer_type = PointerType(base.type.dtype, base.type.storage)
-                pointer = ctx.builder.bind(
-                    Var(ctx.names.fresh(f"{role}_pointer"), type=pointer_type),
-                    Call(PtrOf(), (base,), type=pointer_type),
-                )
-                base = Call(TensorView(layout=local, shape=local_shape), (pointer,), type=local_type)
-            locals_.append(base)
-        with ctx.builder.region(mesh=issuers, binding=Var(ctx.names.fresh("threads"), type=_BINDING)):
-            locals_ = [
-                ctx.builder.bind(Var(ctx.names.fresh(f"{role}_local"), type=base.type), base)
-                if isinstance(base, Call) and isinstance(base.target, TensorView)
-                else base
-                for (role, _value), base in zip(issued_operands, locals_, strict=True)
-            ]
-            for windows in ctx.issues.points(plan):
-                issued = []
-                for (role, _value), base, desired, starts in zip(
-                    issued_operands, locals_, plan.tiles, windows, strict=True
-                ):
-                    item = ctx.storage.issue_window(base, desired, starts, ctx.builder.loops)
-                    issued.append(
-                        ctx.builder.bind(Var(ctx.names.fresh(f"{role}_view"), type=item.type), item)
-                        if isinstance(item, Call)
-                        else item
-                    )
-                ctx.builder.add(Evaluate(op, tuple(issued)))
-        result_param = next(param for param in params if param.effect & MemoryEffect.WRITE)
-        if result_param.effect & MemoryEffect.READ:
-            return read_values[result_param.name]
-        if written is None:
-            raise LoweringError(f"{_label(call)} produced no addressable result")
-        return written
+
+    def visit_T(self, call: Call, operands, ctx) -> Expr | View:
+        """Issue the TIR op selected for *call* through ``visit_T_<Name>``."""
+        op = ctx.issues.op(call, target=ctx.target)
+        return getattr(self, f"visit_T_{type(op).__name__}", self.default_visit_T)(
+            call, op, operands, ctx
+        )
+
+    def default_visit_T(self, call: Call, op, operands, ctx) -> Expr | View:
+        raise LoweringError(
+            f"{_label(call)} has no lowering for {type(op).__name__} "
+            f"on {target_summary(ctx.target)}"
+        )
 
 
 def _relaunch(fn, launches):
@@ -1737,6 +1565,7 @@ class ConvertHIRToTIR(ModulePass):
 
     name = "convert-hir-to-tir"
     requires = ()
+    analyses = ("memory",)
 
     @classmethod
     def create(cls, target, options) -> ConvertHIRToTIR:

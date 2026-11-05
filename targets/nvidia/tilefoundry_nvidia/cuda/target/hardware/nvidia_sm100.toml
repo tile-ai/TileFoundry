@@ -1,5 +1,5 @@
 [spec]
-schema = "tilefoundry.cuda.architecture/v3"
+schema = "tilefoundry.cuda.architecture/v4"
 kind = "architecture"
 id = "nvidia.sm100"
 
@@ -8,7 +8,21 @@ value = "sm_100"
 unit = "name"
 origin = "vendor"
 source = "https://docs.nvidia.com/cuda/blackwell-tuning-guide/index.html"
-conditions = "compilation architecture identity of compute capability 10.0"
+conditions = "architecture identity of compute capability 10.0"
+
+[facts.identity.gpu_architecture]
+value = "compute_100"
+unit = "name"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html"
+conditions = "virtual architecture passed verbatim to nvcc --gpu-architecture: compute capability 10.0"
+
+[facts.identity.gpu_code]
+value = ["sm_100", "compute_100"]
+unit = "name"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html"
+conditions = "code images passed verbatim to nvcc --gpu-code: sm_100 machine code and compute_100 PTX"
 
 [facts.capabilities]
 value = ["mma.sync", "ldmatrix", "tcgen05", "cp.async", "cp.async.bulk.tensor", "cp.async.bulk", "mbarrier.expect_tx", "mbarrier.try_wait"]

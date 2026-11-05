@@ -40,8 +40,10 @@ describes the whole function.
 
 ### 1.2 Analysis families
 
-The first families are `compute-cost`, `memory`, `roofline`, `performance`, and `sync`.
-Each owns its record types and declares its dependencies and output additions.
+The core families are `compute-cost`, `memory`, `roofline` and `performance`; a
+Target adds its own through `get_analyzer`
+([§2.2](#22-target-selected-analyzers)). Each owns its record types and declares
+its dependencies and output additions.
 
 | Selector | Requires | Owns | Attaches to | Rests on | Text summary adds | Annotates equations |
 |---|---|---|---|---|---|---|
@@ -49,7 +51,6 @@ Each owns its record types and declares its dependencies and output additions.
 | `memory` | - | `MemoryMetadata`, `RegionMemoryMetadata` | `MemoryMetadata` on every measured Call; `RegionMemoryMetadata` on the Function and each occupied `MeshRegion` | the authored program, `MemoryHierarchyFacts`, `TopologyFacts` | `memory`, `advisory` | every measured Call |
 | `roofline` | `compute-cost`, `memory` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | `roofline` | every measured Call |
 | `performance` | `compute-cost`, `memory` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `TopologyFacts`, `MemoryHierarchyFacts` | `performance` | every Call with a modeled duration |
-| `sync` | `memory` | `SyncPlanMetadata`, `SyncMetadata` | `SyncPlanMetadata` on the Function; `SyncMetadata` on each Call, `MeshRegion` or `LoopRegion` whose statements need steps | the memory family's records and the completion registry | - | - |
 
 Every compact text summary begins with these two lines:
 
@@ -1496,97 +1497,6 @@ model.
     two capacities that both admit a placement MUST produce the same intervals.
   - Performance is a modeled plan and MUST NOT be read as a guarantee about
     lowering, physical occupancy, or runtime performance.
-
-#### 1.2.5 `sync`
-
-The `sync` family decides where lowering emits `cp_async_commit`,
-`cp_async_wait` and `T.sync`, so that every shared memory access follows the
-earlier accesses it depends on, or refuses the Function. It attaches
-`SyncMetadata` to each HIR node whose statements need steps, and
-`SyncPlanMetadata` to every analysed Function to mark it planned. A target
-lowering emits a node's steps where it lowers that node and analyses nothing
-itself ([passes §7.1](./passes.md#71-converthirtotir)).
-
-```python
-class SyncStep:
-    kind: str                  # "commit", "wait" or "barrier"
-    mesh: Mesh | None = None   # the thread mesh a barrier runs over
-
-class SyncMetadata(IRMetadata):
-    steps: tuple[tuple[object, tuple[SyncStep, ...]], ...] = ()   # (tag, steps)
-    def at(self, tag=None) -> tuple[SyncStep, ...]: ...
-
-class SyncPlanMetadata(IRMetadata):
-    shared: bool = False       # whether any of its actions touches shared memory
-```
-
-- constraints:
-  - Steps belong to the HIR node lowering emits statements for: a `Call`, a
-    `MeshRegion` or a `LoopRegion`. The tag None is the node's own statements:
-    the instruction, fill or retained call a Call emits, or entering a region.
-    Any other tag names a copy lowering adds for the node: `"base"` and
-    `"update"` of an InsertSlice, `("entry", slot)` and `("backedge", slot)` of
-    a loop's carried slot. Steps run immediately before those statements, in
-    the order commit, wait, barrier. Each analysis replaces the `SyncMetadata`
-    of every node of the Function.
-  - The actions of a node are the ones lowering emits: the selected
-    instruction of a Call, the copies and fills lowering adds, and a retained
-    call. Which
-    statements a Call emits, which instruction it issues, which operands that
-    instruction reads and writes and the mesh each action is issued on come
-    from `analysis/emission.py`, which lowering also calls; both call it on the
-    same analysed program. Each action's completion comes from the completion
-    registry
-    ([visitor-registry §4.2](./visitor-registry.md#42-completion-service--completion)).
-  - Scopes are those of the Function's `IterationScope`
-    ([§2.1](#21-shared-iterationscope-and-access)): the scope an expression sits in is its
-    recorded location. The family builds no scope tree of its own. It orders
-    each scope's children by their events on the Function's liveness
-    timeline, the order lowering emits them in; no position leaves the
-    family.
-  - An access owns the shared memory bytes of its value's allocation leaf, as
-    the memory family places it: each stage's offset and the stage size, all
-    stages together, or for a Tuple result the leaf's own offset and size. A
-    leaf without a placed offset, or whose allocation the Function returns and
-    so may live in the output its caller passes, owns unknown bytes, which
-    overlap everything.
-    The plan orders whole allocations, so it says nothing about which stage or
-    window an access selects.
-  - An action whose completion is `UNKNOWN` is ordered as `ON_RETURN`: its
-    emitter waits for it before the statement returns
-    ([visitor-registry §4.2](./visitor-registry.md#42-completion-service--completion)).
-    The reads and writes of a `CP_ASYNC_GROUP` action complete once committed
-    and waited on.
-  - Two accesses conflict when one of them writes and their bytes overlap. A
-    later access follows an earlier one once a barrier has run over a scope
-    whose mesh chain is a prefix of the later access's; before that barrier,
-    an earlier `cp.async` access is committed and waited on in that scope.
-  - An instruction without an execution mesh is issued by each thread on its
-    own shard, so an operand whose type is a shared memory `ShardLayout`
-    splitting along every mesh axis whose units share shared memory has each
-    byte touched by one thread. Two accesses with the same such layout touch
-    every byte from the same thread, so once the earlier one is complete the
-    later one follows it in that thread's program order and needs no step.
-  - An action runs on the mesh lowering issues it on, or on its lexical
-    scope's mesh when that is None. That mesh MUST lie within its lexical
-    scope's mesh (`within_scope`). Steps are placed in the innermost scope that
-    holds both accesses, before the child that holds the later one, so the
-    issuing threads of both run them; a barrier runs over that scope's mesh.
-    That mesh MUST be a thread mesh `classify` supports, and every loop around
-    the position MUST have bounds every thread sees alike: constants, kernel
-    parameters and their captures, induction variables of such loops, and
-    coordinates of mesh levels the barrier's mesh does not span.
-  - Loops are analysed to a fixed point: the head state joins every body end
-    until it repeats.
-  - Callees are planned before their callers, and each orders its own
-    accesses. A retained call is no action when the callee's plan says none
-    of its actions touches shared memory. Otherwise, or when the callee has no
-    plan, the call is one action that reads and writes unknown bytes and
-    completes as a `cp.async` group, since the callee may leave groups in
-    flight: whatever conflicts with it waits for them all.
-  - The family raises `AnalysisError` for an action whose mesh is not provably
-    within its scope, for a barrier no supported uniform scope can hold, and
-    for a loop whose state does not settle within its limit.
 
 ## 2. Composed analysis
 

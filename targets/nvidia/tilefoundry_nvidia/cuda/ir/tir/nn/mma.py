@@ -16,7 +16,6 @@ from tilefoundry.visitor_registry.access_relation import (
     matmul_relations,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.completion import completion_of, register_completion
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 from .mma_atom import AtomPattern, FromAtom, MmaAtom
@@ -87,9 +86,6 @@ class TiledMma(Op):
 @register_typeinfer(TiledMma)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
-
-
-register_completion(TiledMma, lambda op: completion_of(op.atom))
 
 
 @register_access_relation(TiledMma)

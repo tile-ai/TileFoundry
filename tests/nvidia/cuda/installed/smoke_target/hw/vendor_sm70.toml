@@ -1,5 +1,5 @@
 [spec]
-schema = "tilefoundry.cuda.architecture/v3"
+schema = "tilefoundry.cuda.architecture/v4"
 kind = "architecture"
 id = "vendor.sm70"
 
@@ -9,6 +9,20 @@ unit = "name"
 origin = "vendor"
 source = "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
 conditions = "Volta compute capability 7.0 compilation identity"
+
+[facts.identity.gpu_architecture]
+value = "compute_70"
+unit = "name"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html"
+conditions = "virtual architecture passed verbatim to nvcc --gpu-architecture: compute capability 7.0"
+
+[facts.identity.gpu_code]
+value = ["sm_70", "compute_70"]
+unit = "name"
+origin = "vendor"
+source = "https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html"
+conditions = "code images passed verbatim to nvcc --gpu-code: sm_70 machine code and compute_70 PTX"
 
 [facts.capabilities]
 value = ["tensor_core"]

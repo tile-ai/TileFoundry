@@ -134,7 +134,7 @@ class Architecture:
     document of that backend's schema; a further backend implements `Target`
     and `get_facts` directly.
   - Concrete backend architecture values MUST be immutable.
-  - `name` MUST be the stable architecture identity used by compilation.
+  - `name` MUST be the stable architecture identity.
   - `max_threads_per_cta` MUST describe the architecture's static CTA thread
     limit when the architecture has a CTA thread level.
 

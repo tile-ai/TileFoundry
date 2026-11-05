@@ -70,6 +70,7 @@ from tilefoundry.visitor_registry.instruction import ScheduleRefusal, project
 from tilefoundry.visitor_registry.verify import verify_module, verify_prim_function
 from tilefoundry_nvidia import CudaTarget
 from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
+from tilefoundry_nvidia.cuda.passes.transforms.lowering import CudaLowering
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 VARIANTS = FIXTURES / "schedule" / "variants"
@@ -493,14 +494,16 @@ def test_projection_names_bad_repeat_mode(failure):
 def test_lowering_issues_statically_without_readmission(name, issues, monkeypatch):
     source = Path(__file__).parents[1] / f"fixtures/schedule/hir/{name}.py"
     module = load_authored_ir(str(source))
-    result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
+    result = analyze(
+        *check_program(module, module.entry_function()), analysis=("memory", "sync")
+    )
 
     def reject(*args, **kwargs):
         raise AssertionError("lowering repeated instruction admission")
 
     monkeypatch.setattr(schedules, "check_call", reject)
     monkeypatch.setattr(instructions, "check_call", reject)
-    lowered = lowering_module.Lowering(
+    lowered = CudaLowering(
         TypeInferContext(module=result.module, function=result.function, owner=result.function),
     ).run()
     statements = _RetainedStatements()

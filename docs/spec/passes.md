@@ -236,6 +236,7 @@ class ConvertHIRToTIR(ModulePass):
     options: CodegenOptions = CodegenOptions()
     name: str = "convert-hir-to-tir"
     requires: tuple[str, ...] = ()
+    analyses: tuple[str, ...] = ("memory",)
 
     @classmethod
     def create(cls, target: Target, options: CodegenOptions) -> ConvertHIRToTIR: ...
@@ -251,17 +252,31 @@ class ConvertHIRToTIR(ModulePass):
   - A Target MAY bind a subclass with `@bind(TargetClass, ConvertHIRToTIR)`;
     finalization obtains the pass through `Target.resolve(ConvertHIRToTIR)`. The
     entry function and every callee are lowered by the same `visitor` class.
-  - What a Call emits, the instruction it issues and the operands that
-    instruction reads and writes, which copies lowering adds for the
-    allocation's accepted aliases, and the mesh a copy or an instruction is
-    issued on, come from `analysis/emission.py`.
-  - Immediately before the statements it lowers for an HIR node, the visitor
-    calls `before(owner, ctx, tag)`, with the node and the tag
-    [analysis §1.2.5](./analysis.md#125-sync) names those statements by: None
-    for a Call's instruction, fill or retained call and for entering a region,
-    `"base"` or `"update"` for an InsertSlice's added copies, and
-    `("entry", slot)` or `("backedge", slot)` for a loop's carry copies. The
-    core visitor emits nothing there; a target visitor MAY emit statements.
+  - `analyses` names the analysis families the pass's visitor reads; a
+    subclass whose visitor reads more names them too. `tilefoundry schedule
+    finalize` runs exactly these on the pass `Target.resolve` gives.
+  - Whether a Call is a dimension, the instruction it issues and its operand
+    types, the mesh that owns a copy or an instruction, and the accepted
+    aliases lowering executes come from the module-level functions of
+    `passes/transforms/convert_hir_to_tir.py`. A target analysis that follows
+    lowering imports the same functions.
+  - The visitor lowers each HIR node in its `visit_<Node>`. `visit_Call` lowers
+    a Call that `lowers_to_dim` accepts as a dimension; for any other Call it
+    lowers the values its storage's dimensions read, then its operands, and
+    dispatches a retained call to `visit_callee`, else to `visit_<HIR op>`, else
+    to `visit_T`, which dispatches the selected TIR op to `visit_T_<Name>`, else
+    to `default_visit_T`. `visit_<HIR op>` and the Expr visits share one name
+    space, so the visitor MUST NOT define a visit for an HIR op whose class name
+    is also an Expr class (for example `ShapeOf`).
+  - The core visitor lowers mesh regions, retained calls, the views
+    `TupleGetItem`, `Slice`, `Reshape` and `Bitcast`, a `Reshard` whose result
+    has an accepted VIEW alias, and `Empty`; any other `Reshard` goes to
+    `visit_T`, and an unscheduled `IndexSelect` raises `LoweringError`. Its
+    `default_visit_T` raises `LoweringError` naming the Call, the TIR op and the
+    Target, and a node without a visit raises `LoweringError` naming the node
+    and the Target. A target visitor overrides the visits it changes and
+    implements the rest: loops, `InsertSlice`, `Zeros`, `FullLike` and
+    instruction issue.
   - The pass lowers the device root: the callee of the `Launch` in `Module.entry`
     when that entry is a CPU host, otherwise `Module.entry` itself. It returns the
     Module unchanged under `CodegenOptions(emit="skeleton")` or when the Module

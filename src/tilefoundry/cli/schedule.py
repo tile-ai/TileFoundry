@@ -9,7 +9,9 @@ from typing import Sequence
 from tilefoundry.analysis import analyze
 from tilefoundry.cli.source import checked_program
 from tilefoundry.cli.target import target_by_identity
+from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.inspection import as_script
+from tilefoundry.passes.transforms import ConvertHIRToTIR
 from tilefoundry.schedule import (
     candidates,
     finalize,
@@ -33,7 +35,8 @@ def run_finalize(
 ) -> int:
     """Finalize ``source`` and write the sole requested representation."""
     program = checked_program(source, dims, command="schedule finalize")
-    analyzed = analyze(program.module, program.entry, analysis=("memory", "sync"))
+    lowering = program.module.resolve_target().resolve(ConvertHIRToTIR, CodegenOptions())
+    analyzed = analyze(program.module, program.entry, analysis=lowering.analyses)
     module = finalize(analyzed)
     rendered = as_script(module)
     text = json.dumps({"source": rendered}, indent=2) if as_json else rendered

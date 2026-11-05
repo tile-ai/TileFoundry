@@ -1618,7 +1618,17 @@ class Reshard(Op):
   - Supplied `layout` is a `LayoutBase` (`Layout` / `ComposedLayout` / `ShardLayout`).
   - Memory analysis and lowering MUST treat a Reshard as a view iff storage
     is unchanged, the shape is literal, both structural address boxes agree,
-    and the conversion does not change any mesh axis's `Partial` state.
+    and the conversion does not change any mesh axis's `Partial` state. Each
+    thread holds register storage privately, so an `rmem` Reshard with a
+    `ShardLayout` is a view only when every logical element keeps the threads
+    that hold it and its register on each. The box of an `rmem` `ShardLayout`
+    therefore also holds the mesh's thread numbering -- its topology levels,
+    its `device_layout`, and the mesh offset, 0 for a mesh stated without one
+    -- and steps by `register_strides` instead of the physical strides, so
+    every Split keeps its mesh axis even where its physical stride is not 0.
+    Such a value whose mesh is not static, or that carries a `Dynamic` attr,
+    is a copy. The rule is conservative: two notations of one thread numbering
+    may be judged a copy.
     A Split on a mesh axis of extent 1 places nothing: the box neither records
     it nor treats its tensor mode as independent. A box records every other
     zero-stride Split's mesh axis, logical tensor axis, position within that
