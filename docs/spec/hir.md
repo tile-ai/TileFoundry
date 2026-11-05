@@ -1621,12 +1621,14 @@ class Reshard(Op):
     and the conversion does not change any mesh axis's `Partial` state. Each
     thread holds register storage privately, so an `rmem` Reshard with a
     `ShardLayout` is a view only when every logical element keeps the threads
-    that hold it, on the same topology levels, and its register on each. That
-    is the register relation `Dot` pairs operands by (`layout_to_isl_map`
-    numbered by `register_strides`), each divided mesh coordinate read as a
-    thread through `device_layout` and the mesh offset, and every coordinate
-    of an undivided mesh axis holding a copy. Otherwise the structural boxes
-    below decide.
+    that hold it and its register on each. The box of an `rmem` `ShardLayout`
+    therefore also holds the mesh's thread numbering -- its topology levels,
+    its `device_layout`, and the mesh offset, 0 for a mesh stated without one
+    -- and steps by `register_strides` instead of the physical strides, so
+    every Split keeps its mesh axis even where its physical stride is not 0.
+    Such a value whose mesh is not static, or that carries a `Dynamic` attr,
+    is a copy. The rule is conservative: two notations of one thread numbering
+    may be judged a copy.
     A Split on a mesh axis of extent 1 places nothing: the box neither records
     it nor treats its tensor mode as independent. A box records every other
     zero-stride Split's mesh axis, logical tensor axis, position within that

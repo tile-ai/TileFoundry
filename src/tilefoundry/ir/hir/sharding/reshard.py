@@ -4,8 +4,6 @@ from dataclasses import replace
 from itertools import zip_longest
 from math import prod
 
-import isl
-
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Call, Op
@@ -48,60 +46,14 @@ class Reshard(Op):
     storage = ParamDef(kind="attribute", default=None)
 
 
-def _placement(held: TensorType):
-    """The threads holding each logical coordinate of a register tensor, and its register there.
-
-    It is the register relation ``Dot`` pairs operands by, ``layout_to_isl_map``
-    numbered by ``register_strides``, with each divided digit's mesh coordinate
-    read as a thread on the mesh's own levels. Every coordinate of an undivided
-    mesh axis holds a copy. None when the mesh is not static.
-    """
-    from tilefoundry.ir.isl_interop import layout_to_isl_map, shape_to_isl_set  # noqa: PLC0415
-
-    shard = shard_layout_of(held.layout)
-    if (
-        shard is None
-        or shard_layout_of(shard.layout) is not None
-        or any(isinstance(attr, Dynamic) for attr in shard.attrs)
-    ):
-        return None
-    mesh = device_layout(shard.mesh)
-    start = shard.mesh.layout.offset if isinstance(shard.mesh.layout, ComposedLayout) else 0
-    if not all(isinstance(value, int) for value in (start, *mesh.shape, *mesh.strides)):
-        return None
-    values = {}
-    try:
-        coordinates = layout_to_isl_map(
-            tuple(held.shape), shard, values, divided=lambda layer: range(len(layer.attrs))
-        )
-    except ValueError:
-        return None
-    count = coordinates.dim(isl.dim_type.PARAM)
-    divided = [
-        static_dim_value(values[coordinates.get_dim_name(isl.dim_type.PARAM, index)].args[0])
-        for index in range(count)
-    ]
-    strides = register_strides(shard)
-    held_by = coordinates.move_dims(isl.dim_type.OUT, len(strides), isl.dim_type.PARAM, 0, count)
-    copies = [axis for axis, attr in enumerate(shard.attrs) if not isinstance(attr, Split)]
-    modes = [f"p{axis}" for axis in range(len(strides))] + [f"q{axis}" for axis in divided]
-    thread = " + ".join(
-        [str(start)] + [f"{mesh.strides[axis]} * q{axis}" for axis in divided]
-        + [f"{mesh.strides[axis]} * b{axis}" for axis in copies]
-    )
-    register = " + ".join(f"{step} * p{axis}" for axis, step in enumerate(strides) if step) or "0"
-    bounds = "".join(f" and 0 <= b{axis} < {mesh.shape[axis]}" for axis in copies)
-    names = ", ".join(f"b{axis}" for axis in copies)
-    holding = f"exists ({names} : t = {thread}{bounds})" if copies else f"t = {thread}"
-    numbering = isl.map(f"{{ [{', '.join(modes)}] -> [t, r] : {holding} and r = {register} }}")
-    relation = held_by.apply_range(numbering)
-    return tuple(shard.mesh.topologies), relation.intersect_domain(
-        shape_to_isl_set(tuple(held.shape), {})
-    )
-
-
 @register_buffer_alias(Reshard)
 def _buffer_alias(call: Call) -> int | None:
+    """0 when both sides' structural boxes agree, so the result is a view; None for a copy.
+
+    Each thread holds its registers privately, so the box of an ``rmem`` ShardLayout also
+    holds the threads its mesh numbers, and steps by register, where every Split steps 0
+    and is recorded with its mesh axis.
+    """
     source, result = call.args[0].type, call.type
     if result.storage is not source.storage or not is_literal_shape(result.shape):
         return None
@@ -113,13 +65,6 @@ def _buffer_alias(call: Call) -> int | None:
         )
     ):
         return None
-    if result.storage is StorageKind.RMEM and any(
-        shard_layout_of(held.layout) is not None for held in (source, result)
-    ):
-        before, after = _placement(source), _placement(result)
-        if before is None or after is None or before[0] != after[0]:
-            return None
-        return 0 if before[1].is_equal(after[1]) else None
     from tilefoundry.ir.hir.tensor.slice import Slice  # noqa: PLC0415
 
     offset, view = 0, call.args[0]
@@ -147,7 +92,18 @@ def _buffer_alias(call: Call) -> int | None:
         physical = shard.layout if shard is not None else layout
         if shard is not None and isinstance(layout, ComposedLayout):
             physical = replace(layout, outer=physical)
-        flat = flatten(physical)
+        flat, threads = flatten(physical), None
+        if held.storage is StorageKind.RMEM and shard is not None:
+            mesh = shard.mesh
+            start = mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0
+            threads = (mesh.topologies, device_layout(mesh), start)
+            sizes = (getattr(topology, "size", 1) for topology in mesh.topologies)
+            if any(isinstance(attr, Dynamic) for attr in shard.attrs) or not all(
+                isinstance(value, int)
+                for value in (start, *sizes, *threads[1].shape, *threads[1].strides)
+            ):
+                return None
+        steps = flat.strides if threads is None else register_strides(shard)
         profile = compatible_profile(flat.shape, held.shape)
         axes = mode_axes(profile)
         independent, splits = set(), []
@@ -156,7 +112,7 @@ def _buffer_alias(call: Call) -> int | None:
                 if (
                     isinstance(attr, Split)
                     and static_dim_value(tuple(flatten(shard.mesh.layout.shape))[mesh_axis]) != 1
-                    and flat.strides[attr.axis] == 0
+                    and steps[attr.axis] == 0
                 ):
                     position = attr.axis
                     suffix = prod(flat.shape[index] for index in range(position + 1, len(axes))
@@ -165,7 +121,7 @@ def _buffer_alias(call: Call) -> int | None:
                     independent.add(position)
         kept = tuple(
             (extent, step)
-            for index, (extent, step) in enumerate(zip(flat.shape, flat.strides, strict=True))
+            for index, (extent, step) in enumerate(zip(flat.shape, steps, strict=True))
             if index not in independent
         )
         shape, strides = zip(*kept) if kept else ((1,), (0,))
@@ -174,7 +130,7 @@ def _buffer_alias(call: Call) -> int | None:
             physical.inner is not None or physical.offset != 0
         ):
             address = replace(physical, outer=address)
-        boxes.append((tuple(splits), address))
+        boxes.append((tuple(splits), address, threads))
     return 0 if boxes[0] == boxes[1] else None
 
 

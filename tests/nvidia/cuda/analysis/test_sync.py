@@ -264,7 +264,6 @@ class WgmmaDivergentLoop(SyncCase):
     """A WGMMA in a loop bounded by the warp cannot be issued by the whole warpgroup together."""
 
     path: Path = FIXTURES / "analysis/sync_wgmma_divergent.py"
-    name: str | None = "WgmmaDivergent"
 
     def guard(self, state, problems):
         with pytest.raises(AnalysisError, match="collective step is needed inside loop '_j'"):
@@ -278,8 +277,7 @@ class WgmmaGroupLoop(SyncCase):
     So each warpgroup issues its chained WGMMAs together, and the loop holds no step.
     """
 
-    path: Path = FIXTURES / "analysis/sync_wgmma_divergent.py"
-    name: str | None = "WgmmaGroupLoop"
+    path: Path = FIXTURES / "analysis/sync_wgmma_group_loop.py"
 
     def guard(self, state, problems):
         _function, attached = _planned(state)
