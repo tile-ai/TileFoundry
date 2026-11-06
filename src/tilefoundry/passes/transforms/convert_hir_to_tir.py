@@ -77,7 +77,7 @@ from tilefoundry.ir.types.int_tuple import flatten as flatten_tuple
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.layout import get as get_layout
 from tilefoundry.ir.types.layout_algebra import composition
-from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
+from tilefoundry.ir.types.shard_layout import physical_attr, shard_layout_of, split_target_axes
 from tilefoundry.ir.types.stride import compact_row_major, crd2idx
 from tilefoundry.ir.types.utils import (
     i64_const,
@@ -181,7 +181,8 @@ def operand_types(call: Call, op: Op) -> tuple:
 def _participants(layouts) -> Mesh | None:
     """The participant mesh of the first ``ShardLayout`` among *layouts*, if any."""
     return next(
-        (participant_layout(layout).mesh for layout in layouts if isinstance(layout, ShardLayout)),
+        (participant_layout(replace(layout, attrs=tuple(map(physical_attr, layout.attrs)))).mesh
+         for layout in layouts if isinstance(layout, ShardLayout)),
         None,
     )
 
@@ -885,7 +886,9 @@ class StoragePlan:
             actual = (
                 held
                 if whole_tensor
-                else replace(held, layout=participant_layout(held.layout))
+                else replace(held, layout=participant_layout(replace(
+                    held.layout, attrs=tuple(map(physical_attr, held.layout.attrs))
+                )))
                 if isinstance(held.layout, ShardLayout)
                 else held
             )

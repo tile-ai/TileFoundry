@@ -21,8 +21,13 @@ from tilefoundry.ir.types.callable_type import bind_annotation, callable_type_fo
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.dtype import IntegerDType
 from tilefoundry.ir.types.int_tuple import compatible_profile
-from tilefoundry.ir.types.mesh import axis_keys
-from tilefoundry.ir.types.shard_layout import Broadcast, ShardAttr, Varying, shard_layout_of
+from tilefoundry.ir.types.shard_layout import (
+    Broadcast,
+    ShardAttr,
+    Varying,
+    attrs_by_axis,
+    shard_layout_of,
+)
 from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type
@@ -333,14 +338,7 @@ class TypeInferVisitor(ValuationVisitor[Type]):
                 hint = ""
                 for entry, yielded in zip(tensor_types(entry_type), tensor_types(yield_type)):
                     shards = tuple(shard_layout_of(t.layout) for t in (entry, yielded))
-                    states = tuple(
-                        {
-                            (level, sum(key[0] == level for key in axis_keys(sl.mesh)[:axis])):
-                                sl.attrs[axis] if axis < len(sl.attrs) else Broadcast()
-                            for axis, (level, _name) in enumerate(axis_keys(sl.mesh))
-                        } if sl is not None else None
-                        for sl in shards
-                    )
+                    states = tuple(attrs_by_axis(sl) for sl in shards)
                     for key in set().union(*(state or {} for state in states)):
                         before, after = (
                             ShardAttr.of(state.get(key, Broadcast()) if state is not None else None,
@@ -350,8 +348,10 @@ class TypeInferVisitor(ValuationVisitor[Type]):
                         if before != after:
                             labels = {Broadcast(): "B", Varying(): "V"}
                             hint = (f": axis {key} enters {labels.get(before, repr(before))} "
-                                    f"and leaves {labels.get(after, repr(after))}; "
-                                    "reshard the entry to V or the yield to B")
+                                    f"and leaves {labels.get(after, repr(after))}")
+                            if before in labels and after in labels:
+                                hint += (f"; reshard the entry to {labels[after]} "
+                                         f"or the yield to {labels[before]}")
                             break
                     if hint:
                         break

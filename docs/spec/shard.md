@@ -641,6 +641,11 @@ Partial axes always separate contributions, including axes finer than the storag
 owner. A plain layout is Varying on every axis. An unstated axis of a
 `ShardLayout`, and a level its mesh omits, is Broadcast.
 
+Value frames retain Varying levels. An explicit instruction frame may omit
+outside levels that contain neither Split nor Partial; checks inside that frame
+still distinguish Broadcast from Varying. Coordinate and execution queries read
+Varying as Broadcast without changing the stored value type.
+
 `ShardAttr.of(attr, private)` reads `None` (plain) as Varying. On an axis that
 does not separate copies, Broadcast and Varying both read as Broadcast; Split
 and Partial remain unchanged. Dynamic is unresolved and raises `ValueError` in

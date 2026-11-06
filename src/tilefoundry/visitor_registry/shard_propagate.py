@@ -16,13 +16,14 @@ import isl
 
 from tilefoundry.ir.types import Layout, ShardLayout
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
-from tilefoundry.ir.types.mesh import axis_keys
+from tilefoundry.ir.types.mesh import axis_keys, make_mesh, separate
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Partial,
     ShardAttr,
     Split,
     Varying,
+    attrs_by_axis,
     shard_layout_of,
 )
 from tilefoundry.ir.types.storage import StorageOwners
@@ -206,27 +207,43 @@ def derive_output_shard_layout(
         for layout in (shard_layout_of(type_.layout),)
     )
     frame_levels = {level for layout in layouts if layout is not None for level, _name in axis_keys(layout.mesh)}
+    states = tuple(attrs_by_axis(layout) for layout in layouts)
     required = {
-        getattr(topology, "name", topology)
-        for layout in (participant_layout(item) for item in layouts if item is not None)
-        if any(isinstance(attr, (Split, Partial)) for attr in layout.attrs)
-        for topology in layout.mesh.topologies
+        level
+        for type_, state in zip(input_types, states, strict=True)
+        for level in frame_levels
+        if any(attr != Broadcast() for (at, _axis), attr in (state or {}).items() if at == level)
+        or (state is None and ShardAttr.of(None, owners.private(type_.storage, level)) != Broadcast())
     }
-    input_types = tuple(
-        type_ if layout is None else replace(type_, layout=participant_layout(layout, required or None))
-        for type_, layout in zip(input_types, layouts, strict=True)
-    )
-    sharded = [
-        (i, t.layout)
-        for i, t in enumerate(input_types)
-        if isinstance(t.layout, ShardLayout)
-    ]
-    if not sharded:
+    parts, active = {}, set()
+    for layout, state in zip(layouts, states, strict=True):
+        if layout is None:
+            continue
+        for part in separate(layout.mesh):
+            level = axis_keys(part)[0][0]
+            nonbroadcast = any(attr != Broadcast() for (at, _axis), attr in state.items() if at == level)
+            if nonbroadcast and level in active and parts[level] != part:
+                raise ValueError("inputs distribute over different meshes; their mesh axes do not align")
+            if level not in parts or (nonbroadcast and level not in active):
+                parts[level] = part
+            if nonbroadcast:
+                active.add(level)
+    if not parts:
         return None
-    distributed = [(i, sl) for i, sl in sharded if any(isinstance(a, (Split, Partial, Varying)) for a in sl.attrs)]
-    mesh = (distributed or sharded)[0][1].mesh
-    if any(layout.mesh != mesh for _index, layout in distributed):
-        raise ValueError("inputs distribute over different meshes; their mesh axes do not align")
+    order = tuple(dict.fromkeys((*owners.order, *parts)))
+    mesh = (
+        make_mesh(*(parts[level] for level in order if level in required))
+        if required else participant_layout(next(layout for layout in layouts if layout is not None)).mesh
+    )
+    mesh = next((layout.mesh for layout in layouts if layout is not None and layout.mesh == mesh), mesh)
+    keys = tuple(attrs_by_axis(ShardLayout(Layout(()), (), mesh)))
+    input_types = tuple(
+        type_ if state is None else replace(type_, layout=ShardLayout(
+            layout.layout, tuple(state.get(key, Broadcast()) for key in keys), mesh
+        ))
+        for type_, layout, state in zip(input_types, layouts, states, strict=True)
+    )
+    sharded = [(i, t.layout) for i, t in enumerate(input_types) if isinstance(t.layout, ShardLayout)]
 
     if any(access.affine is None for access in relations):
         raise ValueError("shard propagation requires a single Op-written affine per boundary")

@@ -35,9 +35,11 @@ from tilefoundry.ir.types.layout_algebra import zipped_divide
 from tilefoundry.ir.types.mesh import axis_keys
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
+    Partial,
     ShardAttr,
     ShardLayout,
     Varying,
+    physical_attr,
     shard_layout_of,
 )
 from tilefoundry.ir.types.storage import StorageOwners
@@ -155,7 +157,7 @@ def check_input_reachability(op, operand_types, mesh):
         layout = shard_layout_of(getattr(type_, "layout", None))
         if layout is None:
             continue
-        projected = participant_layout(layout)
+        projected = participant_layout(replace(layout, attrs=tuple(map(physical_attr, layout.attrs))))
         if not covered_by_scope(projected.mesh, mesh):
             raise ValueError(
                 f"input {index} is laid out more finely than the scope it runs in; write it inside that scope, or reshard it back first"
@@ -326,7 +328,7 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
                 tile = Layout(
                     tuple(flat.shape[i] for i in kept), tuple(flat.strides[i] for i in kept)
                 )
-            broadcast = shard is None or all(ShardAttr.of(attr, True) == Broadcast() for attr in shard.attrs)
+            broadcast = shard is None or not any(isinstance(attr, (Split, Partial)) for attr in shard.attrs)
             if isinstance(address, ComposedLayout):
                 tile = replace(address, outer=tile, offset=0 if broadcast else address.offset)
             if top is not None and top.inner is not None:
@@ -595,7 +597,8 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
         match_type = type_ if view is None else view(param.name, type_)
         if pattern is not None and not matcher.match(pattern, match_type):
             refusal = _pattern_refusal(matcher, op, param.name)
-            if isinstance(pattern, TensorPattern) and isinstance(pattern.layout, ShardLayoutPattern):
+            if (isinstance(pattern, TensorPattern) and isinstance(pattern.layout, ShardLayoutPattern)
+                    and isinstance(pattern.layout.attrs, tuple)):
                 shard = shard_layout_of(match_type.layout)
                 keys = axis_keys(matcher.mesh) if matcher.mesh is not None else ()
                 for axis, (required, (level, _name)) in enumerate(zip(pattern.layout.attrs, keys)):

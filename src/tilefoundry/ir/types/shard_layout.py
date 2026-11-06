@@ -9,7 +9,7 @@ from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.stride import idx2crd
 
 from .layout import ComposedLayout, LayoutBase
-from .mesh import Mesh
+from .mesh import Mesh, axis_keys
 from .stride import compact_row_major, crd2idx
 
 
@@ -262,6 +262,28 @@ def shard_layout_of(layout: object) -> "ShardLayout | None":
     return None
 
 
+def physical_attr(attr: ShardAttr) -> ShardAttr:
+    """Read value variation as Broadcast for coordinate and execution queries."""
+    return Broadcast() if isinstance(attr, Varying) else attr
+
+
+def attrs_by_axis(layout: object) -> dict[tuple[str, int], ShardAttr] | None:
+    """Read attrs by topology level and ordinal; None denotes a plain layout.
+
+    Missing attrs in a shard frame read as Broadcast. Authored axis names do
+    not identify physical axes, so unnamed or renamed axes remain distinct.
+    """
+    shard = shard_layout_of(layout)
+    if shard is None:
+        return None
+    result, counts = {}, {}
+    for axis, (level, _name) in enumerate(axis_keys(shard.mesh)):
+        ordinal = counts.get(level, 0)
+        result[level, ordinal] = shard.attrs[axis] if axis < len(shard.attrs) else Broadcast()
+        counts[level] = ordinal + 1
+    return result
+
+
 def partial_reductions_by_axis(
     layout: object,
 ) -> tuple[str | None, ...]:
@@ -489,6 +511,8 @@ __all__ = [
     "local_layout",
     "local_layout_and_offset",
     "partial_reductions_by_axis",
+    "attrs_by_axis",
+    "physical_attr",
     "mesh_coords",
     "ShardAttr",
     "Split",
