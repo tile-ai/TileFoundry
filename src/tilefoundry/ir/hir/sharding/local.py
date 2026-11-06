@@ -8,7 +8,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import Placement, TensorType
-from tilefoundry.ir.types.shard_layout import Broadcast, ShardLayout, shard_layout_of
+from tilefoundry.ir.types.shard_layout import Partial, ShardLayout, Split, shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     readnone_relations,
@@ -39,7 +39,7 @@ def _eval_local(ctx):
     """Each placement's own part: a local view unless every placement holds the whole."""
     x = ctx.args[0].tensor
     shard = shard_layout_of(x.type.layout)
-    if not x.is_global or all(isinstance(attr, Broadcast) for attr in shard.attrs):
+    if not x.is_global or not any(isinstance(attr, (Split, Partial)) for attr in shard.attrs):
         return TensorValue(ShardTensor(ctx.result_type, x.tensor))
     pieces = tuple((placement, x.to_local(placement)) for placement in Placement.each(shard.mesh))
     return TensorValue(ShardTensor(ctx.result_type, pieces))

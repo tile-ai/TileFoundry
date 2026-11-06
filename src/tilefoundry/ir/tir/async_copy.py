@@ -21,7 +21,7 @@ from tilefoundry.ir.pattern.pattern import WildcardPattern
 from tilefoundry.ir.pattern.predicates import WholeVectors
 from tilefoundry.ir.types import DType, Layout, UnitType
 from tilefoundry.ir.types.layout import ComposedLayout, Swizzle
-from tilefoundry.ir.types.shard_layout import Broadcast, ShardLayout
+from tilefoundry.ir.types.shard_layout import Partial, ShardLayout, Split
 from tilefoundry.ir.types.storage import StorageKind as S
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
@@ -78,7 +78,7 @@ def _indexed_layout(layout) -> bool:
     if isinstance(layout, Layout):
         return True
     if isinstance(layout, ShardLayout):
-        return all(isinstance(attr, Broadcast) for attr in layout.attrs) and _indexed_layout(
+        return not any(isinstance(attr, (Split, Partial)) for attr in layout.attrs) and _indexed_layout(
             layout.layout
         )
     if isinstance(layout, ComposedLayout):

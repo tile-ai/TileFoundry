@@ -13,7 +13,7 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.shard_layout import (
-    Broadcast,
+    Partial,
     ShardLayout,
     Split,
 )
@@ -178,7 +178,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_shape = tuple(call.target.new_shape)
 
     genuine_sharding = isinstance(x_ty.layout, ShardLayout) and any(
-        not isinstance(attr, Broadcast) for attr in x_ty.layout.attrs
+        isinstance(attr, (Split, Partial)) for attr in x_ty.layout.attrs
     )
     if x_ty.storage is StorageKind.UMAT and new_shape == () and not genuine_sharding:
         return TensorType.umat_scalar(x_ty.dtype)

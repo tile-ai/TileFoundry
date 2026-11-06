@@ -7,6 +7,7 @@ from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
+from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
@@ -127,7 +128,7 @@ def matmul_result_shape_and_layout(call: "Call", ctx: "TypeInferContext") -> tup
             "MatMul contraction dim K must be split on the same mesh axes for both operands",
         )
 
-    check_multilinear_partials(ctx, call, (("lhs", lhs), ("rhs", rhs)))
+    check_multilinear_partials(ctx, call, (("lhs", lhs), ("rhs", rhs)), kind=BinaryKind.MUL)
 
     relation = relations_of(call, ctx)
 

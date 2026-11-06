@@ -27,6 +27,7 @@ from tilefoundry.ir.types.shard_layout import (
     Dynamic,
     Partial,
     Split,
+    Varying,
     register_strides,
     shard_layout_local_shape,
 )
@@ -158,7 +159,7 @@ def _render_attr(a) -> str:
     """Single ShardAttr to C++ type string."""
     if isinstance(a, Split):
         return f"tilefoundry::shard::S<{a.axis}>"
-    if isinstance(a, Broadcast):
+    if isinstance(a, (Broadcast, Varying)):
         return "tilefoundry::shard::B"
     if isinstance(a, Partial):
         return f"tilefoundry::shard::P<{_partial_reduction_tag(a.reduction)}>"

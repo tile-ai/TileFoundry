@@ -8,6 +8,7 @@ from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Expr, Op
 from tilefoundry.ir.core.expr import Call, Constant
+from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
@@ -203,7 +204,7 @@ def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
     ]
     mesh = placed[0][1].mesh if placed else None
 
-    check_multilinear_partials(ctx, call, (("input", x), ("weight", weight)))
+    check_multilinear_partials(ctx, call, (("input", x), ("weight", weight)), kind=BinaryKind.MUL)
     contraction_splits: dict[int, tuple[str, int]] = {}
     channel_split_axes: dict[str, set[int]] = {"input": set(), "weight": set()}
     for name, type_, axes in (

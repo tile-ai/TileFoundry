@@ -597,9 +597,10 @@ class BufferAlias:
     literal, and every logical element retains its complete set of storage
     instances and addresses. Gmem has one instance per device; smem has one
     per device and CTA; rmem has one per thread. Broadcast replicas MUST be included: removing a
-    replica changes the set. A plain end has a copy on every
-    instance of the other end's mesh; two sharded ends retain their own mesh
-    selections. Every other Reshard MUST retain its independent buffer.
+    replica changes the set. Which copies each end holds follows
+    [shard §6.1](./shard.md#61-placement-semantics); two ends holding the same
+    copies at the same addresses alias. Every other Reshard MUST retain its
+    independent buffer.
   - Bitcast MUST alias its source and allocate no independent buffer. Its
     declared access relation MUST bijectively map result coordinates to source
     coordinates with the same physical address, requiring the source's
