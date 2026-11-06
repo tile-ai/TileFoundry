@@ -91,7 +91,7 @@ def require_matching_partial_state(ctx, call, dst, update, dst_name, update_name
             axis, reduction = dst_partials[0]
             ctx.error(
                 call,
-                f"{dst_name} carries a Partial({reduction}) on mesh axis {axis[1]} ({axis[0]}); "
+                f"{dst_name} carries a Partial({reduction}) on mesh axis {axis}; "
                 f"{update_name} must carry the identical per-mesh-axis state. "
                 f"Insert Reshard({update_name}, Broadcast) or match {dst_name} "
                 "before this consumer",

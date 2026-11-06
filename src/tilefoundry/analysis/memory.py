@@ -465,7 +465,8 @@ def values_in_region(
             if not private:
                 continue
             layout = shard_layout_of(getattr(held, "layout", None))
-            if layout is None or not held_in_region(participant_layout(physical_layout(layout)).mesh, region.mesh):
+            layout = shard_layout_of(physical_layout(layout)) if layout is not None else None
+            if layout is None or not held_in_region(participant_layout(layout).mesh, region.mesh):
                 continue
         result.append(item)
     return tuple(result)
