@@ -113,7 +113,7 @@ def test_special_instruction_patterns():
         mesh=simd_mesh(2,width)
         target=None if isinstance(op,(LdMatrix16,StMatrix16,MatMul16x32x16,Mma16x32x16)) else MetalTarget("apple.m2_pro.gpu")
         check_call(op,types,mesh,frame=VerifyContext(target=target,current_mesh=mesh))
-        _evaluate_zero_case(op,types)
+        _evaluate_declared_case(op,types)
         if isinstance(op,(LdMatrix,StMatrix,MatMul,Mma8x8x8,LdMatrix16,StMatrix16,MatMul16x32x16,Mma16x32x16)):
             for t in types:
                 if isinstance(t.layout,ShardLayout): _check_mlx(t,2,isinstance(op,(LdMatrix16,StMatrix16,MatMul16x32x16,Mma16x32x16)))
@@ -158,7 +158,7 @@ def test_rejected_contracts():
         check_call(op,tuple(args),mesh,frame=frame)
 
 
-def _evaluate_zero_case(op,types):
+def _evaluate_declared_case(op,types):
     """Evaluate all declarations and compare declared writes and read-only inputs."""
     params=tuple(p for p in collect_param_defs(type(op)) if p.kind=="input")
     args=tuple(TensorValue(torch.zeros(t.shape,dtype=to_torch_dtype(t.dtype)),t) for t in types)
@@ -172,12 +172,21 @@ def _evaluate_zero_case(op,types):
         args[1].data.view(torch.int32).fill_(0x7fc00001)
         args[2].data.view(torch.int32).fill_(0x7fc00001)
         args[3].data.fill_(9)
+    if isinstance(op,(MatMul16x32x16,Mma16x32x16)):
+        args[1].data.copy_(torch.eye(16,dtype=args[1].data.dtype).expand_as(args[1].data)*2)
+        args[2].data.copy_(torch.arange(args[2].data.numel(),dtype=torch.float32).reshape(args[2].data.shape))
+        if isinstance(op,Mma16x32x16):
+            args[0].data.fill_(3)
     before=tuple(v.data.clone() for v in args)
     handler=schedule_eval_registry.lookup(type(op))
     assert handler is not None
     result=handler(EvaluateContext(op=op,args=args,result_type=types[0] if types else UnitType()))
     for index,(param,value,old) in enumerate(zip(params,args,before,strict=True)):
         expected=old
+        if isinstance(op,(MatMul16x32x16,Mma16x32x16)) and index==0:
+            expected=before[2].float()*2
+            if isinstance(op,Mma16x32x16):
+                expected=expected+before[0]
         if isinstance(op,AtomicRmw):
             count=args[-1].data.numel()
             if param.name=="dst":
