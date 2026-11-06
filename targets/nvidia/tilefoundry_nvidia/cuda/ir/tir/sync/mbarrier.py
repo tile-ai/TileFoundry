@@ -9,7 +9,7 @@ from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import WildcardPattern, is_scalar_tensor, utils
-from tilefoundry.ir.types import UnitType
+from tilefoundry.ir.types import DType, Layout, TensorType, UnitType
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -20,11 +20,21 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 __all__ = [
+    "MBARRIER_BYTES",
     "MBarrierInit",
     "MBarrierArriveExpectTx",
     "MBarrierWaitParity",
     "MBarrierInvalidate",
+    "mbarrier_words",
 ]
+
+MBARRIER_DTYPE = DType.i64
+MBARRIER_BYTES = MBARRIER_DTYPE.bit_width // 8
+
+
+def mbarrier_words(count: int) -> TensorType:
+    """The shared memory type of *count* mbarrier objects, one 64-bit word each."""
+    return TensorType((count,), MBARRIER_DTYPE, Layout((count,), (1,)), StorageKind.SMEM)
 
 
 @register_op(dialect="T", category="sync", name="mbarrier_init")

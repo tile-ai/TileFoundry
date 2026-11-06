@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from enum import Enum, auto
 from itertools import product
+from math import prod
 from operator import mul
 
 from tilefoundry.analysis.access import AliasKind
@@ -18,6 +19,8 @@ from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.liveness import LivenessMetadata
 from tilefoundry.analysis.memory import owned_bytes
+from tilefoundry.analysis.metadata import RegionMemoryMetadata
+from tilefoundry.analysis.report import declare_record
 from tilefoundry.analysis.visitor import AnalyzeContext
 from tilefoundry.ir.core import (
     Call,
@@ -36,14 +39,12 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord, literal_axes
-from tilefoundry.ir.mesh_scope import device_layout
 from tilefoundry.ir.tir.memory import Copy, Fill
 from tilefoundry.ir.tir.sync import SyncBarrier, classify, participation
 from tilefoundry.ir.types import DType, Mesh, ShardLayout, Split, StorageKind, TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
-from tilefoundry.ir.types.layout import ComposedLayout
-from tilefoundry.ir.types.mesh import axis_keys, separate, within_scope
-from tilefoundry.ir.types.utils import static_dim_value
+from tilefoundry.ir.types.mesh import axis_keys, within_scope
+from tilefoundry.ir.types.utils import leaves_of, static_dim_value
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.passes.transforms.convert_hir_to_tir import (
     accepted_aliases,
@@ -53,6 +54,7 @@ from tilefoundry.passes.transforms.convert_hir_to_tir import (
     operand_types,
     selected_op,
 )
+from tilefoundry.utils.units import format_bytes
 from tilefoundry.visitor_registry.instruction import call_params
 from tilefoundry_nvidia.cuda.analysis.completion import (
     Effect,
@@ -62,6 +64,7 @@ from tilefoundry_nvidia.cuda.analysis.completion import (
     Proxy,
     completion_of,
 )
+from tilefoundry_nvidia.cuda.analysis.ctas import axis_numbering, refuse_cta_overlaps
 from tilefoundry_nvidia.cuda.analysis.emission import (
     copies_carry_backedge,
     copies_carry_entry,
@@ -71,7 +74,9 @@ from tilefoundry_nvidia.cuda.analysis.emission import (
     operand_roles,
     required_execution_mesh,
     result_param,
+    tensor_map_load,
 )
+from tilefoundry_nvidia.cuda.ir.tir.sync.mbarrier import MBARRIER_BYTES
 from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import whole_groups
 
 _DONE = -1
@@ -94,12 +99,14 @@ class SyncStep:
     """One statement lowering emits.
 
     A commit, a wait or a fence is for one completion ``group``; a barrier runs
-    over ``mesh``.
+    over ``mesh``; a proxy fence publishes accesses to ``storage``, None for
+    shared memory.
     """
 
     kind: StepKind
     mesh: Mesh | None = None
     group: Group | None = None
+    storage: StorageKind | None = None
 
 
 @dataclass(frozen=True)
@@ -127,23 +134,34 @@ class SyncPlanMetadata(IRMetadata):
     """Marks a Function the ``sync`` family planned; the steps sit on its nodes.
 
     ``shared`` is whether any of its actions touches shared memory.
+    ``barriers`` is the offset and count of the per-warp mbarrier words that its
+    tensor-map loads, or a callee's, complete on; None when there are none.
+    ``global_async`` is whether any of its actions reaches global memory through
+    the async proxy. ``errors`` are non-fatal: the words ending above capacity.
     """
 
     shared: bool = False
+    barriers: tuple[int, int] | None = None
+    global_async: bool = False
+    errors: tuple[str, ...] = ()
+
+
+declare_record(SyncPlanMetadata, family="sync")
 
 
 @dataclass(frozen=True)
 class _Use:
-    """One effect of an action on shared memory bytes or on one register storage.
+    """One effect of an action on shared memory bytes, global memory roots or one register storage.
 
     ``threads`` is the layout that gives each of those bytes to one issuing
-    thread, when there is one.
+    thread, when there is one. A root of None in ``global_roots`` is unknown.
     """
 
     effect: Effect
     spans: tuple = ()
     register: SSAValue | None = None
     threads: ShardLayout | None = None
+    global_roots: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -189,6 +207,7 @@ class _Access:
     ordered: frozenset = frozenset()
     fenced: bool = False
     group_fenced: bool = False
+    global_roots: tuple = ()
 
 
 class _Unplaced(Exception):
@@ -257,19 +276,11 @@ def _one_coordinate(mesh: Mesh, axis: int, size: int, bases: range) -> bool:
     ``((thread - start) // stride) % extent`` on an axis of its level, as the
     runtime's ``mesh_coords`` does.
     """
-    first = 0
-    for level in separate(mesh):
-        layout = device_layout(level)
-        if axis < first + len(layout.shape):
-            break
-        first += len(layout.shape)
-    else:
+    numbering = axis_numbering(mesh, axis)
+    if numbering is None:
         return False
-    start = level.layout.offset if isinstance(level.layout, ComposedLayout) else 0
-    extents, strides = layout.shape, layout.strides
-    if not all(isinstance(value, int) for value in (start, *extents, *strides)):
-        return False
-    extent, stride = extents[axis - first], strides[axis - first]
+    start, extents, strides, index = numbering
+    extent, stride = extents[index], strides[index]
     if extent > 1 and stride <= 0:
         return False
     held = {start + sum(map(mul, point, strides)) for point in product(*map(range, extents))}
@@ -316,6 +327,7 @@ class _Planner:
         self.after: dict[tuple[int, int], list[SyncStep]] = {}
         self.entered: dict[tuple[int, int], int] = {}
         self.seq = 0
+        self.loads = False
         self.build()
 
     def aliases_of(self, leaf):
@@ -394,20 +406,39 @@ class _Planner:
         return _Action(position, owner, tag, uses, name, mesh)
 
     def uses(self, effects, leaves, threads=None) -> tuple[_Use, ...]:
-        """Each effect on the shared memory bytes and on each register storage it touches."""
+        """Each effect on the shared memory bytes, the global memory roots and each register."""
         threads = threads or {}
-        return tuple(
-            use
-            for effect in effects
-            for spans in (self.spans(leaves[effect.param]),)
-            for use in (
-                *((_Use(effect, spans, threads=threads.get(effect.param)),) if spans else ()),
-                *(
-                    _Use(effect, register=register)
-                    for register in self.registers(leaves[effect.param])
-                ),
-            )
-        )
+        found = []
+        for effect in effects:
+            touched = leaves[effect.param]
+            spans, roots = self.spans(touched), self.global_roots(touched)
+            if spans:
+                found.append(_Use(effect, spans, threads=threads.get(effect.param)))
+            if roots:
+                found.append(_Use(effect, global_roots=roots))
+            found.extend(_Use(effect, register=register) for register in self.registers(touched))
+        return tuple(found)
+
+    def global_roots(self, leaves) -> tuple:
+        """The global memory allocation roots these values live in; None stands for unknown.
+
+        A Function other than the entry may return a value in storage its caller
+        also passes it. A global value the memory family did not record has an
+        unknown root.
+        """
+        entry = self.context.entry is None or self.function is self.context.entry
+        roots = []
+        for leaf in leaves:
+            if leaf not in self.values:
+                types = leaves_of(leaf.expr.type)
+                stored = types[leaf.index] if leaf.index < len(types) else None
+                if getattr(stored, "storage", None) is StorageKind.GMEM:
+                    roots.append(None)
+                continue
+            root = self.summary.root(leaf)
+            if root.lifetime.memory_level == "gmem":
+                roots.append(None if root.value in self.returned and not entry else root.value)
+        return tuple(dict.fromkeys(roots))
 
     def registers(self, leaves) -> tuple[SSAValue, ...]:
         """The register storages lowering gives these values."""
@@ -537,6 +568,8 @@ class _Planner:
         if op is None:
             return []
         types = operand_types(call, op)
+        if tensor_map_load(op, types):
+            self.loads = True
         params = call_params(op, len(types))
         supplied, produced = operand_roles(call, params)
         given = dict(zip((param.name for param in supplied), call.args, strict=True))
@@ -563,18 +596,34 @@ class _Planner:
         complete them before returning. Unless the callee's plan touches no
         shared memory, the call also reads and writes unknown shared memory bytes
         and may leave ``cp.async`` groups in flight, so whatever conflicts with it
-        waits for all of them.
+        waits for all of them. Unless the callee's plan reaches global memory only
+        through the generic proxy, the call also reads and writes unknown global
+        memory through the async proxy, its own temporaries included.
         """
         leaves = {
             **{f"argument {index}": SSAValue.leaves(arg) for index, arg in enumerate(call.args)},
             "result": SSAValue.leaves(call),
         }
         effects = tuple(Effect(name, name == "result", Mechanism.ON_RETURN) for name in leaves)
-        uses = [use for use in self.uses(effects, leaves) if use.register is not None]
+        uses = [
+            use
+            for use in self.uses(effects, leaves)
+            if use.register is not None or use.global_roots
+        ]
         plan = get_metadata(callee, SyncPlanMetadata)
+        if plan is not None and plan.barriers is not None:
+            self.loads = True
         if plan is None or plan.shared:
             uses += [
                 _Use(Effect("callee", write, Mechanism.GROUP, Group.CP_ASYNC), (None,))
+                for write in (False, True)
+            ]
+        if plan is None or plan.global_async:
+            uses += [
+                _Use(
+                    Effect("callee", write, Mechanism.ON_RETURN, proxy=Proxy.ASYNC),
+                    global_roots=(None,),
+                )
                 for write in (False, True)
             ]
         if not uses:
@@ -631,8 +680,48 @@ class _Planner:
                 steps.setdefault(id(owner), (owner, []))[1].append((tag, tuple(planned)))
         for owner, tagged in steps.values():
             attach(owner, SyncMetadata(tuple(tagged)))
-        shared = any(use.spans for action in self.actions.values() for use in action.uses)
-        attach(self.function, SyncPlanMetadata(shared))
+        uses = [use for action in self.actions.values() for use in action.uses]
+        shared = any(use.spans for use in uses)
+        global_async = any(use.global_roots and use.effect.proxy is Proxy.ASYNC for use in uses)
+        words = self.barrier_words() if self.loads else None
+        errors = () if words is None else self.word_errors(*words)
+        attach(self.function, SyncPlanMetadata(shared, words, global_async, errors))
+
+    def entry_peak(self):
+        """The shared memory peak the memory family placed for the entry, if any.
+
+        Only the entry places shared memory, so every Function it reaches shares it.
+        """
+        entry = self.context.entry or self.function
+        region = get_metadata(entry, RegionMemoryMetadata)
+        peaks = () if region is None else region.peaks
+        return next((level for level in peaks if level.memory_level == "smem"), None)
+
+    def barrier_words(self) -> tuple[int, int]:
+        """The offset and count of one mbarrier word per warp, above the entry's shared peak."""
+        peak = self.entry_peak()
+        topologies = self.context.topologies or ()
+        threads = prod(topology.size for topology in topologies if topology.name == "thread")
+        warp = self.context.target.architecture.max_threads_per_warp
+        end = 0 if peak is None else peak.peak_bytes
+        return -(-end // MBARRIER_BYTES) * MBARRIER_BYTES, -(-threads // warp)
+
+    def word_errors(self, offset: int, count: int) -> tuple[str, ...]:
+        """A non-fatal error when the words end above a capacity the placed peak fits in.
+
+        A peak already above capacity is the memory family's error, and an unknown
+        capacity bounds nothing; neither adds one.
+        """
+        peak = self.entry_peak()
+        if peak is None or peak.capacity_bytes is None or peak.exceeds_capacity:
+            return ()
+        end = offset + MBARRIER_BYTES * count
+        if end <= peak.capacity_bytes:
+            return ()
+        return (
+            f"the mbarrier words end smem at {format_bytes(end)}, above capacity "
+            f"{format_bytes(peak.capacity_bytes)}",
+        )
 
     def walk(self, scope, state):
         for position, child in self.kids[id(scope)]:
@@ -711,6 +800,7 @@ class _Planner:
             action.mesh or _region_mesh(scope),
             effect.unit,
             use.threads,
+            global_roots=use.global_roots,
         )
 
     def order(self, action: _Action, use: _Use, scope, state):
@@ -739,7 +829,9 @@ class _Planner:
                 state = self.plan(SyncStep(StepKind.WAIT, group=group), meeting, position, state)
             if access.register is None:
                 if use.effect.proxy is Proxy.ASYNC and access.proxy is Proxy.GENERIC:
-                    state = self.plan(SyncStep(StepKind.PROXY_FENCE), meeting, position, state)
+                    storage = StorageKind.GMEM if access.global_roots else None
+                    fence = SyncStep(StepKind.PROXY_FENCE, storage=storage)
+                    state = self.plan(fence, meeting, position, state)
                 barrier = SyncStep(StepKind.BARRIER, self.barrier_mesh(meeting))
                 state = self.plan(barrier, meeting, position, state)
             same = (access.position, access.write, access.meshes, seq)
@@ -760,7 +852,8 @@ class _Planner:
         group's wait (PTX wgmma.wait_group); later effects of the same group only
         conflict when one writes and their chains differ. A completed access
         whose bytes the same threads touched, by the same layout, is behind *use*
-        in each thread's own program order.
+        in each thread's own program order. Global memory roots only conflict
+        when one of the two accesses goes through the async proxy.
         """
         if use.register is not None or access.register is not None:
             if use.register != access.register or access.state == _DONE:
@@ -771,7 +864,14 @@ class _Planner:
             return (use.effect.write or access.write) and not chained
         if not (use.effect.write or access.write):
             return False
-        if not any(_overlap(a, b) for a in use.spans for b in access.spans):
+        if use.global_roots or access.global_roots:
+            if Proxy.ASYNC not in (use.effect.proxy, access.proxy) or not any(
+                a is None or b is None or a == b
+                for a in use.global_roots
+                for b in access.global_roots
+            ):
+                return False
+        elif not any(_overlap(a, b) for a in use.spans for b in access.spans):
             return False
         if use.threads is not None and use.threads == access.threads and access.state == _DONE:
             return False
@@ -825,7 +925,11 @@ class _Planner:
         if step not in planned:
             planned.append(step)
             planned.sort(
-                key=lambda item: (item.kind.value, 0 if item.group is None else item.group.value)
+                key=lambda item: (
+                    item.kind.value,
+                    0 if item.group is None else item.group.value,
+                    0 if item.storage is None else item.storage.value,
+                )
             )
         return self.effect(step, scope, state, self.entered[position])
 
@@ -934,7 +1038,12 @@ class _Planner:
                 access = replace(access, state=0)
             elif issued and step.kind is StepKind.WAIT and grouped and access.state >= 0:
                 access = replace(access, state=_DONE)
-            elif issued and step.kind is StepKind.PROXY_FENCE and access.state == _DONE:
+            elif (
+                issued
+                and step.kind is StepKind.PROXY_FENCE
+                and access.state == _DONE
+                and (step.storage is StorageKind.GMEM) == bool(access.global_roots)
+            ):
                 access = replace(access, fenced=True)
             elif issued and step.kind is StepKind.BARRIER and access.state == _DONE:
                 access = replace(access, ordered=access.ordered | {(meshes, access.fenced)})
@@ -948,17 +1057,23 @@ def analyze_sync(function: Function, context: AnalyzeContext) -> None:
     """Attach the synchronisation plan lowering emits for *function*.
 
     An asynchronous action one of whose steps has no place completes right after
-    it issues instead, and the Function is planned again.
+    it issues instead, and the Function is planned again. The entry is refused
+    when two of its CTAs may reach one global element unordered; a retained
+    call's reaches count as unknown.
     """
     in_place: frozenset = frozenset()
+    planner = _Planner(function, context, in_place)
+    if context.entry is None or function is context.entry:
+        refuse_cta_overlaps(planner)
     while True:
         try:
-            _Planner(function, context, in_place).run()
+            planner.run()
             return
         except _Unplaced as unplaced:
             if unplaced.position in in_place:
                 raise AnalysisError(f"sync: {unplaced}") from None
             in_place |= {unplaced.position}
+            planner = _Planner(function, context, in_place)
 
 
 __all__ = [

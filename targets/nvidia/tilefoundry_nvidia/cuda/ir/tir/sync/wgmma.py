@@ -10,7 +10,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import WildcardPattern, utils
 from tilefoundry.ir.tir.sync import participation
-from tilefoundry.ir.types import Mesh, UnitType
+from tilefoundry.ir.types import Mesh, StorageKind, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
@@ -51,9 +51,15 @@ class WgmmaWaitGroup(Op):
 
 @register_op(dialect="T", category="sync", name="fence_proxy_async")
 class FenceProxyAsync(Op):
-    """Make this thread's earlier shared memory accesses visible to the async proxy."""
+    """Make this thread's earlier ``storage`` accesses visible to the async proxy.
+
+    ``storage`` is global memory, or None for shared memory: the two the async
+    proxy reaches.
+    """
 
     execution_mesh = utils.thread_execution_mesh()
+
+    storage = ParamDef(kind="attribute", annotation=StorageKind, optional=True, default=None)
 
 
 def whole_groups(mesh: Mesh, size: int) -> bool:
@@ -78,9 +84,15 @@ def _verify_warpgroups(call, ctx) -> None:
         ctx.error(call, f"{type(call.target).__name__} needs whole warpgroups, got {mesh}")
 
 
+@register_verify_stmt(FenceProxyAsync)
+def _verify_proxy_storage(call, ctx) -> None:
+    storage = call.target.storage
+    if storage not in (None, StorageKind.GMEM):
+        ctx.error(call, f"FenceProxyAsync storage is gmem, or None for smem; got {storage}")
+
+
 for _op in (WgmmaFence, WgmmaCommitGroup, WgmmaWaitGroup, FenceProxyAsync):
     register_typeinfer(_op)(lambda call, ctx: UnitType())
     register_access_relation(_op)(identity_relations)
 for _op in (WgmmaFence, WgmmaCommitGroup, WgmmaWaitGroup):
     register_verify_stmt(_op)(_verify_warpgroups)
-register_verify_stmt(FenceProxyAsync)(lambda call, ctx: None)

@@ -254,6 +254,8 @@ The complete program below makes the structural decisions explicit:
 - `Wgmma(n=256, dtype=bf16, form=SS, a_major=K)` with `repeat=(2, 1, 4)` states eight K16 atoms.
 - `tf.empty(Tensor[..., OUT_SMEM, "smem"])` keeps the 64 KiB output staging tile outside all six
   load-ring slots, then `T.copy_async_tensor` writes it to global memory.
+- `out` starts as `tf.empty`: each tile is written once, by the CTA that owns it. Clearing the
+  whole output from every CTA would race with the other CTAs' tile stores.
 
 <!-- tilefoundry-source: optimal.py -->
 
@@ -300,7 +302,7 @@ class GEMM_8192X17408X5120_OPTIMAL:
                 wgmma = T.cuda.sm90.Wgmma(
                     n=256, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
 
-                out = tf.zeros(Tensor[(M, N), "bf16"])
+                out = tf.empty(Tensor[(M, N), "bf16"])
                 for task in range(cta.persistent, GM * GN, CTAS):
                     g = task // (GN * GROUP_M)
                     bn = (task // GROUP_M) % GN
@@ -398,7 +400,6 @@ class GEMM_8192X17408X5120_OPTIMAL:
             with Mesh(
                 (Topology("thread", 384),), layout=(3, 128), names=("warpgroup", "participant")
             ) as scope:
-                T.fill(out, 0.0)
                 lhs_ring_1 = T.tensor_view(
                     98304,
                     dtype="bf16",
@@ -477,25 +478,24 @@ class GEMM_8192X17408X5120_OPTIMAL:
                         T.wgmma_wait_group(n=0)
                         T.sync(scope)
                         with scope[:1, :32] as scope_2:
+                            mbarriers = T.tensor_view(
+                                212992, dtype="i64", storage="smem", layout=(12,), shape=(12,)
+                            )
                             value = T.tensor_view(
                                 T.ptr_of(a[(((task // (68 * 16)) * 16) + (task % 16)) * 128:(((task // (68 * 16)) * 16) + (task % 16)) * 128 + 1, k:k + 1]),
                                 layout=((128, 64), (5120, 1)),
                                 shape=(128, 64),
                             )
                             lhs_ring_4 = lhs_ring_stages[((((task - cta.persistent) // 132) * 80) + (k // 64)) % 3]
-                            T.copy_async_tensor(value, lhs_ring_4)
-                            value_1 = T.tensor_view(
-                                T.ptr_of(b[k:k + 1, ((task // 16) % 68) * 256:((task // 16) % 68) * 256 + 1]),
+                            T.copy_async_tensor_tx(value, lhs_ring_4, mbarriers)
 ```
 
 The three `g / bn / mi` loops and `cta.d0` survive lowering. The three RHS slots
 occupy [0, 98304), the three LHS slots occupy [98304, 147456), and output staging
-occupies [147456, 212992). The report and views expose those disjoint intervals;
-the TIR continues with the WGMMA issues and writeback.
-
-The initial `T.fill(out, 0.0)` follows this page's `tf.zeros` plus `insert_slice`
-representation of the output; a CUDA implementation need not clear the whole output
-before overwriting every tile.
+occupies [147456, 212992). The report and views expose those disjoint intervals.
+Lowering places twelve mbarrier words after them, one per warp, at [212992, 213088);
+a TMA load completes on its issuing warp's word. The TIR continues with the WGMMA
+issues and writeback.
 
 ## 7. Implement the TIR for a concrete backend
 
@@ -503,8 +503,10 @@ TIR settles value ownership, layouts, tile order, instruction atoms, and allocat
 A backend implementation preserves those decisions while supplying instruction
 encoding and synchronization.
 
-For CUDA on H200, that protocol includes tensor maps and shared-memory descriptors,
-full/empty mbarriers and phases, WGMMA fence/commit/wait, register fences and
-`setmaxnreg`, and the proxy fence before TMA stores. These are not reasons to
-silently change the schedule. Then `check` establishes agreement and measurement
-decides whether the implementation is fast.
+For CUDA on H200, the finalized TIR already says where synchronization happens:
+barriers, WGMMA fence/commit/wait, the proxy fence before each TMA store, and the
+mbarrier words each TMA load completes on. The protocol the backend supplies includes
+tensor maps and shared-memory descriptors, mbarrier initialization, phases and waits,
+register fences and `setmaxnreg`. These are not reasons to silently change the
+schedule. Then `check` establishes agreement and measurement decides whether the
+implementation is fast.
