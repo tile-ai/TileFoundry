@@ -45,6 +45,7 @@ from tilefoundry.passes.transforms.convert_hir_to_tir import (
     LoweringError,
     View,
     _label,
+    operand_types,
 )
 from tilefoundry.target import bind
 from tilefoundry.visitor_registry.instruction import Projection
@@ -59,8 +60,11 @@ from tilefoundry_nvidia.cuda.analysis.emission import (
     operand_roles,
     required_execution_mesh,
     result_param,
+    tensor_map_load,
 )
 from tilefoundry_nvidia.cuda.analysis.sync import StepKind, SyncMetadata, SyncPlanMetadata
+from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import CopyAsyncTensorTx
+from tilefoundry_nvidia.cuda.ir.tir.sync.mbarrier import mbarrier_words
 from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import (
     FenceProxyAsync,
     WgmmaCommitGroup,
@@ -74,7 +78,6 @@ _STEPS = {
     (StepKind.WAIT, Group.CP_ASYNC): lambda: CpAsyncWait(n=0),
     (StepKind.WAIT, Group.WGMMA): lambda: WgmmaWaitGroup(n=0),
     (StepKind.FENCE, Group.WGMMA): WgmmaFence,
-    (StepKind.PROXY_FENCE, None): FenceProxyAsync,
 }
 
 
@@ -119,6 +122,8 @@ class CudaLowering(Lowering):
         for step in () if record is None else record.at(tag):
             if step.kind is StepKind.BARRIER:
                 ctx.builder.add(Evaluate(Sync(mesh=step.mesh), ()))
+            elif step.kind is StepKind.PROXY_FENCE:
+                ctx.builder.add(Evaluate(FenceProxyAsync(storage=step.storage), ()))
             else:
                 ctx.builder.add(Evaluate(_STEPS[step.kind, step.group](), ()))
 
@@ -225,13 +230,47 @@ class CudaLowering(Lowering):
     def visit_FullLike(self, call: Call, operands, ctx) -> Expr | View:
         return self._fill(call, ctx)
 
-    def default_visit_T(self, call: Call, op, operands, ctx) -> Expr:
+    def default_visit_T(self, call: Call, op, operands, ctx, emit=None) -> Expr:
+        """Issue *op* once in its owner region, or at each point of its execution mesh.
+
+        *emit* adds one issue from the op and its operands in place of a bare
+        ``Evaluate``.
+        """
+        emit = emit or (lambda issued_op, issued: ctx.builder.add(Evaluate(issued_op, issued)))
         issue = self._prepare_operands(call, op, operands, ctx)
         if required_execution_mesh(op) is None:
-            self._issue_in_owner(call, op, issue, ctx)
+            self._issue_in_owner(call, op, issue, ctx, emit)
         else:
             locals_ = self._local_operands(op, issue, ctx)
-            self._issue_at_points(call, op, issue, locals_, ctx)
+            self._issue_at_points(call, op, issue, locals_, ctx, emit)
+        return self._result(call, issue)
+
+    def visit_T_CopyAsyncTensor(self, call: Call, op, operands, ctx) -> Expr:
+        """Issue a tensor-map load as ``CopyAsyncTensorTx`` on the mbarrier words.
+
+        The words are the ones ``SyncPlanMetadata.barriers`` places. A store
+        keeps ``CopyAsyncTensor``. Either emitter completes the copy before the
+        operation ends.
+        """
+        if not tensor_map_load(op, operand_types(call, op)):
+            return self.default_visit_T(call, op, operands, ctx)
+        plan = get_metadata(self.context.function, SyncPlanMetadata)
+        if plan is None or plan.barriers is None:
+            raise LoweringError(f"{_label(call)} has no mbarrier words to complete on")
+        offset, count = plan.barriers
+        type_ = mbarrier_words(count)
+        words = ctx.builder.bind(
+            Var(ctx.names.fresh("mbarriers"), type=type_), ctx.storage.view(offset, None, type_)
+        )
+
+        def emit(load, issued) -> None:
+            tx = CopyAsyncTensorTx(execution_mesh=load.execution_mesh)
+            ctx.builder.add(Evaluate(tx, (*issued, words)))
+
+        return self.default_visit_T(call, op, operands, ctx, emit)
+
+    def _result(self, call: Call, issue: _Issue) -> Expr:
+        """The value lowering gives *call*: the operand written in place, else its result."""
         result = result_param(issue.plan.params)
         if result.effect & MemoryEffect.READ:
             return issue.read_values[result.name]
@@ -290,8 +329,8 @@ class CudaLowering(Lowering):
         issuers = issue_mesh(op, owner, mesh)
         return _Issue(plan, types, tuple(issued_operands), read_values, written, mesh, issuers)
 
-    def _issue_in_owner(self, call: Call, op, issue: _Issue, ctx) -> None:
-        """Issue *op* once with its attributes, in the region of its owner mesh."""
+    def _issue_in_owner(self, call: Call, op, issue: _Issue, ctx, emit) -> None:
+        """Issue *op* once with its attributes through *emit*, in the region of its owner mesh."""
         if issue.enclosing is None:
             raise LoweringError(f"{_label(call)} instruction issue has no lexical mesh")
         params, types = issue.plan.params, issue.types
@@ -317,7 +356,7 @@ class CudaLowering(Lowering):
                 )
             }
             self._emit_steps(call, "issue", ctx)
-            ctx.builder.add(Evaluate(type(op)(**attributes), tuple(issued)))
+            emit(type(op)(**attributes), tuple(issued))
             self._emit_steps(call, "after", ctx)
 
     def _local_operands(self, op, issue: _Issue, ctx) -> list:
@@ -390,8 +429,8 @@ class CudaLowering(Lowering):
             locals_.append(base)
         return locals_
 
-    def _issue_at_points(self, call: Call, op, issue: _Issue, locals_, ctx) -> None:
-        """Issue *op* at each point ``IssuePlan.points`` enumerates, in the issuing region."""
+    def _issue_at_points(self, call: Call, op, issue: _Issue, locals_, ctx, emit) -> None:
+        """Issue *op* through *emit* at each ``IssuePlan.points`` point, in the issuing region."""
         with ctx.builder.region(
             mesh=issue.issuers, binding=Var(ctx.names.fresh("threads"), type=_BINDING)
         ):
@@ -413,7 +452,7 @@ class CudaLowering(Lowering):
                         else item
                     )
                 self._emit_steps(call, "issue", ctx)
-                ctx.builder.add(Evaluate(op, tuple(issued)))
+                emit(op, tuple(issued))
             self._emit_steps(call, "after", ctx)
 
 

@@ -81,7 +81,10 @@ from tilefoundry.target import CpuTarget
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.verify import verify_module
 from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
-from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import CopyAsyncTensor
+from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import (
+    CopyAsyncTensor,
+    CopyAsyncTensorTx,
+)
 from tilefoundry_nvidia.cuda.ir.tir.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
 from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
 from tilefoundry_nvidia.cuda.ir.tir.nn.wgmma import Wgmma
@@ -114,6 +117,7 @@ class ScheduleCase(Case):
     finalize_refusal: str | None = None
     candidates_refusal: str | None = None
     smem_peak: int = 0
+    mbarriers: int = 0
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType({})
     sites: SiteCounts | None = None
     child_regions: bool = False
@@ -271,7 +275,8 @@ def _memory_report(case, program, report):
     peaks = {item["memory_level"]: item["peak_bytes"] for item in memory["peaks"]}
     has_smem = any(
         isinstance(expr.type, TensorType) and expr.type.storage is StorageKind.SMEM
-        for expr in collect_exprs(program.entry_function().body)
+        for function in program.functions
+        for expr in collect_exprs(function.body)
     )
     if has_smem:
         assert peaks["smem"] == case.smem_peak
@@ -390,7 +395,10 @@ def _host_launch(case, lowered, function):
             )
     if launchable(return_type):
         assert len(launches) == 1
-        assert launches[0].callable.dynamic_smem == case.smem_peak
+        expected = case.smem_peak
+        if case.mbarriers:
+            expected = -(-case.smem_peak // 8) * 8 + 8 * case.mbarriers
+        assert launches[0].callable.dynamic_smem == expected
         assert isinstance(lowered.entry_function().target, CpuTarget)
     else:
         assert not launches
@@ -530,8 +538,8 @@ class PhysicalSlots(ScheduleCase):
 
 
 @case
-class BulkReduceStore(ScheduleCase):
-    path: Path = ROOT / "hir/bulk_reduce_store.py"
+class BulkReduceIntoInput(ScheduleCase):
+    path: Path = ROOT / "hir/bulk_reduce_into_input.py"
     smem_peak: int = 16_384
     candidates_refusal: str | None = "source has no unscheduled candidate site"
 
@@ -588,6 +596,7 @@ class CapturedInsertUpdate(ScheduleCase):
 class Fp8BlockScaledGemm(ScheduleCase):
     path: Path = ROOT / "hir/fp8_block_scaled_gemm.py"
     smem_peak: int = 65_536
+    mbarriers: int = 12
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
             "cta@0:1#0": RmemPeak(
@@ -630,6 +639,7 @@ class Fp8BlockScaledGemm(ScheduleCase):
 class GemmRegisterStore(WgmmaPrice):
     path: Path = ROOT / "hir/gemm_8192x17408x5120_register_store.py"
     smem_peak: int = 196_608
+    mbarriers: int = 12
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
             "thread@128:256#0": RmemPeak(131_072, "128x256 f32 zero accumulator"),
@@ -646,6 +656,7 @@ class GemmRegisterStore(WgmmaPrice):
 class GemmTmaStore(ScheduleCase):
     path: Path = ROOT / "hir/gemm_8192x17408x5120_tma_store.py"
     smem_peak: int = 212_992
+    mbarriers: int = 12
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
             "thread@128:256#0": RmemPeak(131_072, "128x256 f32 zero accumulator"),
@@ -679,11 +690,48 @@ class GemmTmaStore(ScheduleCase):
 class GroupedPersistentStore(ScheduleCase):
     path: Path = ROOT / "hir/grouped_persistent_store.py"
     smem_peak: int = 16_384
+    mbarriers: int = 2
     candidates_refusal: str | None = "source has no unscheduled candidate site"
 
     def guard(self, state, problems):
         kernel = state.lowered.lookup(state.result.function.name)
         assert [param.name for param in kernel.params] == ["x", "out"]
+
+
+@case
+class TmaPeakOverCapacity(ScheduleCase):
+    path: Path = ROOT / "hir/tma_peak_over_capacity.py"
+    smem_peak: int = 233_472
+    mbarriers: int = 1
+    candidates_refusal: str | None = "source has no unscheduled candidate site"
+
+    def guard(self, state, problems):
+        module = state.module
+        checked = check_program(module, module.entry_function())
+        result = analyze(*checked, analysis=("memory", "sync"))
+        records = render_analysis(result).data["functions"][0]["function_records"]
+        assert records["memory"]["errors"] == [
+            "smem placement peak 228.00KiB exceeds capacity 227.00KiB"
+        ]
+        assert records["sync"]["errors"] == []
+
+
+@case
+class TmaWordsOverCapacity(ScheduleCase):
+    path: Path = ROOT / "hir/tma_words_over_capacity.py"
+    smem_peak: int = 232_448
+    mbarriers: int = 1
+    candidates_refusal: str | None = "source has no unscheduled candidate site"
+
+    def guard(self, state, problems):
+        module = state.module
+        checked = check_program(module, module.entry_function())
+        result = analyze(*checked, analysis=("memory", "sync"))
+        records = render_analysis(result).data["functions"][0]["function_records"]
+        assert records["sync"]["errors"] == [
+            "the mbarrier words end smem at 227.01KiB, above capacity 227.00KiB"
+        ]
+        assert records["memory"]["errors"] == []
 
 
 @case
@@ -840,6 +888,7 @@ class WgmmaBMnMajorWindowUnitMode(PhysicalSlots):
 class WgmmaCastBetweenSchedules(ScheduleCase):
     path: Path = ROOT / "hir/wgmma_cast_between_schedules.py"
     smem_peak: int = 6_144
+    mbarriers: int = 8
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
@@ -866,6 +915,7 @@ class WgmmaCastBetweenSchedules(ScheduleCase):
 class WgmmaN16WithinWarpgroupShare(ScheduleCase):
     path: Path = ROOT / "hir/wgmma_n16_within_warpgroup_share.py"
     smem_peak: int = 61_440
+    mbarriers: int = 12
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
             "thread@128:256#0": RmemPeak(
@@ -968,7 +1018,7 @@ class WgmmaN16WithinWarpgroupShare(ScheduleCase):
         copied_k = next(
             stmt.args[1]
             for stmt in visitor.statements
-            if isinstance(stmt.callable, CopyAsyncTensor) and stmt.args[0] is function.params[1]
+            if isinstance(stmt.callable, CopyAsyncTensorTx) and stmt.args[0] is function.params[1]
         )
         assert isinstance(b_root, Constant)
         assert b_root.value == pointer_root(copied_k).value
@@ -998,6 +1048,7 @@ class WgmmaN16WithinWarpgroupShare(ScheduleCase):
 class WgmmaRepeatAlongNOrder(WgmmaPrice):
     path: Path = ROOT / "hir/wgmma_repeat_along_n_order.py"
     smem_peak: int = 24_576
+    mbarriers: int = 12
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
             "thread@128:256#0": RmemPeak(131_072, "128x256 f32 zero accumulator"),
@@ -1014,6 +1065,7 @@ class WgmmaRepeatAlongNOrder(WgmmaPrice):
 class WgmmaRsAFromAccumulator(WgmmaPrice):
     path: Path = ROOT / "hir/wgmma_rs_a_from_accumulator.py"
     smem_peak: int = 5_120
+    mbarriers: int = 8
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
             "thread@128:128#0": RmemPeak(4_096, "64x16 f32 p initializer"),
@@ -1037,6 +1089,7 @@ class WgmmaRsAFromAccumulator(WgmmaPrice):
 class WgmmaTma3Stage(ScheduleCase):
     path: Path = ROOT / "hir/wgmma_tma_3stage.py"
     smem_peak: int = 13_824
+    mbarriers: int = 12
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
             "thread@128:256#0": RmemPeak(8_192, "128x16 f32 zero accumulator"),
@@ -1113,6 +1166,11 @@ class ZeroTripInsertSlice(ScheduleCase):
 
 
 EXPECTED = {
+    "hir/bulk_reduce_store": dict(
+        sync_refusal="Fill tensor and CopyReduceAsyncTensor dst reach one global element",
+        smem_peak=16_384,
+        candidates_refusal="source has no unscheduled candidate site",
+    ),
     "hir/child_weight": dict(
         rmem_peaks={
             "thread@0:32#0": RmemPeak(384, "independent live Buffers: 3 * 128B"),
@@ -1185,6 +1243,7 @@ EXPECTED = {
         smem_peak=128, candidates_refusal="source has no unscheduled candidate site"
     ),
     "hir/persistent_tile_union_count": dict(
+        sync_refusal="CopyAsyncTensor dst and CopyAsyncTensor dst reach one global element",
         smem_peak=163_840,
         rmem_peaks={
             "thread@128:256#0": RmemPeak(131_072, "128x256 f32 zero accumulator"),
@@ -1251,6 +1310,7 @@ EXPECTED = {
     ),
     "hir/sm80_mma_ldmatrix": dict(
         smem_peak=1_536,
+        mbarriers=2,
         rmem_peaks={
             "thread@32:32#0": RmemPeak(512, "16x8 f32 zero accumulator"),
             "thread@32:32#1": RmemPeak(
@@ -1307,8 +1367,79 @@ EXPECTED = {
     "hir/submesh_slice_in_sibling": dict(
         smem_peak=32, candidates_refusal="source has no unscheduled candidate site"
     ),
+    "hir/tma_load_from_input_copies": dict(
+        sync_refusal="InsertSlice base and CopyAsyncTensor src reach one global element",
+        smem_peak=16_384,
+        rmem_peaks={
+            "thread@0:32#0": RmemPeak(8, "the row index"),
+            "cta@0:4#0": RmemPeak(8, "parent envelope of the row index"),
+        },
+    ),
+    "hir/tma_scratch_in_callee": dict(
+        sync_refusal="the call to 'round_trip' and the call to 'round_trip' may reach one global",
+        smem_peak=512,
+        rmem_peaks={
+            "thread@0:32#0": RmemPeak(512, "the 32x8 bf16 tile the callee returns in registers"),
+            "cta@0:4#0": RmemPeak(512, "parent envelope of the returned tile"),
+        },
+    ),
+    "hir/tma_store_carried_input": dict(
+        sync_refusal="CopyAsyncTensor dst and carry entry copy may reach one global element",
+        smem_peak=16_384,
+        candidates_refusal="source has no unscheduled candidate site",
+    ),
+    "hir/tma_store_cta_rows": dict(
+        sync_refusal="CopyAsyncTensor dst and CopyAsyncTensor dst reach one global element",
+        smem_peak=16_384,
+        candidates_refusal="source has no unscheduled candidate site",
+    ),
+    "hir/tma_store_cta_slice": dict(
+        smem_peak=16_384,
+        mbarriers=1,
+        candidates_refusal="source has no unscheduled candidate site",
+    ),
+    "hir/tma_store_cta_windows": dict(
+        smem_peak=16_384,
+        mbarriers=1,
+        candidates_refusal="source has no unscheduled candidate site",
+    ),
+    "hir/tma_store_in_callee": dict(
+        sync_refusal="the call to 'window' and the call to 'window' may reach one global element",
+        smem_peak=16_384,
+        candidates_refusal="source has no unscheduled candidate site",
+    ),
+    "hir/tma_store_neighbor_exchange": dict(
+        sync_refusal="CopyAsyncTensor dst and InsertSlice update reach one global element",
+        smem_peak=16_384,
+        rmem_peaks={
+            "thread@0:32#0": RmemPeak(16, "the row and neighbour row indices"),
+            "cta@0:4#0": RmemPeak(16, "parent envelope of the two indices"),
+        },
+    ),
+    "hir/tma_store_rotating_windows": dict(
+        sync_refusal="CopyAsyncTensor dst and CopyAsyncTensor dst reach one global element",
+        smem_peak=16_384,
+        rmem_peaks={
+            "thread@0:32#0": RmemPeak(8, "the rotating row index"),
+            "cta@0:4#0": RmemPeak(8, "parent envelope of the row index"),
+        },
+    ),
+    "hir/tma_store_then_gather": dict(
+        sync_refusal="CopyAsyncTensor dst and CopyAsync src may reach one global element",
+        smem_peak=16_384,
+        rmem_peaks={
+            "thread@0:32#0": RmemPeak(8, "the row index"),
+            "cta@0:4#0": RmemPeak(8, "parent envelope of the row index"),
+        },
+    ),
+    "hir/tma_store_wrapped_cta_mesh": dict(
+        sync_refusal="CopyAsyncTensor dst and CopyAsyncTensor dst reach one global element",
+        smem_peak=16_384,
+        candidates_refusal="source has no unscheduled candidate site",
+    ),
     "hir/wgmma_a_k_major": dict(
         smem_peak=6_144,
+        mbarriers=8,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
             "thread@128:128#1": RmemPeak(8_192, "f32 phi/mma alias chain"),
@@ -1318,6 +1449,7 @@ EXPECTED = {
     ),
     "hir/wgmma_a_mn_major": dict(
         smem_peak=6_144,
+        mbarriers=8,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
             "thread@128:128#1": RmemPeak(8_192, "f32 phi/mma alias chain"),
@@ -1335,6 +1467,7 @@ EXPECTED = {
     ),
     "hir/wgmma_b_mn_major_one_atom_column_slice": dict(
         smem_peak=49_152,
+        mbarriers=8,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(16384, "64x64 f32 accumulator; MMA aliases acc"),
             "thread@0:256#0": RmemPeak(16384, "parent envelope of the accumulator"),
@@ -1343,6 +1476,7 @@ EXPECTED = {
     ),
     "hir/wgmma_b_mn_major_two_atom_column_slice": dict(
         smem_peak=49_152,
+        mbarriers=8,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(32768, "64x128 f32 accumulator; MMA aliases acc"),
             "thread@0:256#0": RmemPeak(32768, "parent envelope of the accumulator"),
@@ -1368,6 +1502,7 @@ EXPECTED = {
     ),
     "hir/wgmma_cta_grid_4x17": dict(
         smem_peak=13_824,
+        mbarriers=12,
         rmem_peaks={
             "thread@128:256#0": RmemPeak(8_192, "128x16 f32 zero accumulator"),
             "thread@128:256#1": RmemPeak(8_192, "f32 phi/mma alias chain"),
@@ -1377,6 +1512,7 @@ EXPECTED = {
     ),
     "hir/wgmma_explicit_windows": dict(
         smem_peak=6_144,
+        mbarriers=8,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
             "thread@128:128#1": RmemPeak(8_192, "f32 phi/mma alias chain"),
@@ -1386,6 +1522,7 @@ EXPECTED = {
     ),
     "hir/wgmma_k_slices_of_wide_run": dict(
         smem_peak=12_288,
+        mbarriers=8,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
             "thread@128:128#1": RmemPeak(8_192, "f32 phi/mma alias chain"),
@@ -1395,6 +1532,7 @@ EXPECTED = {
     ),
     "hir/wgmma_one_tile_of_larger_output": dict(
         smem_peak=6_144,
+        mbarriers=8,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
             "thread@128:128#1": RmemPeak(8_192, "f32 phi/mma alias chain"),
@@ -1404,6 +1542,7 @@ EXPECTED = {
     ),
     "hir/wgmma_repeat_along_k": dict(
         smem_peak=36_864,
+        mbarriers=12,
         rmem_peaks={
             "thread@128:256#0": RmemPeak(8_192, "128x16 f32 zero accumulator"),
             "thread@128:256#1": RmemPeak(8_192, "f32 phi/mma alias chain"),
@@ -1413,6 +1552,7 @@ EXPECTED = {
     ),
     "hir/wgmma_rs_a_from_smem": dict(
         smem_peak=6_144,
+        mbarriers=8,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
             "thread@128:128#1": RmemPeak(
@@ -1425,6 +1565,7 @@ EXPECTED = {
     ),
     "hir/wgmma_swizzled_smem": dict(
         smem_peak=6_144,
+        mbarriers=8,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
             "thread@128:128#1": RmemPeak(8_192, "f32 phi/mma alias chain"),
@@ -1434,6 +1575,7 @@ EXPECTED = {
     ),
     "hir/wgmma_two_schedules": dict(
         smem_peak=12_288,
+        mbarriers=8,
         rmem_peaks={
             "thread@128:128#0": RmemPeak(8_192, "64x32 f32 zero accumulator"),
             "thread@128:128#1": RmemPeak(8_192, "phi/first mma alias chain"),

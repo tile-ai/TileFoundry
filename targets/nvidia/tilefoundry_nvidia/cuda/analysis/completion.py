@@ -14,6 +14,8 @@ from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.tir.async_copy import CopyAsync
 from tilefoundry.ir.types import DType, Mesh, StorageKind
 from tilefoundry.visitor_registry.registries import DispatchRegistry
+from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import CopyAsyncTensor
+from tilefoundry_nvidia.cuda.ir.tir.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
 from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
 from tilefoundry_nvidia.cuda.ir.tir.nn.wgmma import WARPGROUP, Wgmma
 
@@ -54,8 +56,8 @@ class Effect:
 
     ``ON_RETURN`` effects are complete for the issuing threads when the statement
     returns, ``GROUP`` ones once those threads wait for ``group``. ``proxy`` is
-    the path to shared memory. ``unit`` is the mesh of one group of threads that
-    run the group's steps, and the issue itself, together. A ``fence`` effect on
+    the path to shared or global memory. ``unit`` is the mesh of one group of
+    threads that run the group's steps, and the issue itself, together. A ``fence`` effect on
     registers needs the group's fence since any other access to them, except an
     earlier one with the same ``chain``.
     """
@@ -109,10 +111,21 @@ def _wgmma_effects(issued: Issued) -> tuple[Effect, ...]:
     )
 
 
+def _tensor_map_effects(issued: Issued) -> tuple[Effect, ...]:
+    """Every operand completes on return, through the async proxy.
+
+    The emitter finishes each copy before the operation ends, so no completion
+    group stays in flight.
+    """
+    return effects(issued, mechanism=Mechanism.ON_RETURN, proxy=Proxy.ASYNC)
+
+
 completion_registry.register(
     CopyAsync, lambda issued: effects(issued, mechanism=Mechanism.GROUP, group=Group.CP_ASYNC)
 )
 completion_registry.register(Wgmma, _wgmma_effects)
+completion_registry.register(CopyAsyncTensor, _tensor_map_effects)
+completion_registry.register(CopyReduceAsyncTensor, _tensor_map_effects)
 completion_registry.register(
     TiledMma, lambda issued: completion_of(issued, key=type(issued.op.atom))
 )

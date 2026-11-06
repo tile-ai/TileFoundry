@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tilefoundry.ir.types import StorageKind
 from tilefoundry.visitor_registry.registries import Role, register_codegen
 from tilefoundry_nvidia.cuda import CudaTarget
 from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
@@ -31,4 +32,5 @@ def _emit_wait(call, ctx: CudaCodegenContext) -> None:
 
 @register_codegen(CudaTarget, Role.EMIT, FenceProxyAsync)
 def _emit_proxy_fence(call, ctx: CudaCodegenContext) -> None:
-    ctx.emit('asm volatile("fence.proxy.async.shared::cta;\\n" ::: "memory");')
+    space = "global" if call.target.storage is StorageKind.GMEM else "shared::cta"
+    ctx.emit(f'asm volatile("fence.proxy.async.{space};\\n" ::: "memory");')

@@ -333,6 +333,30 @@ class CopyAsyncTensor(Op):
     CUDA codegen MUST reject it until host-encoded tensor-map construction
     exists; this stage does not silently lower it to another copy instruction.
 
+### CopyAsyncTensorTx
+
+```python
+class CopyAsyncTensorTx(Op):
+    src: Tensor      # gmem
+    dst: Tensor      # smem
+    barrier: Tensor  # smem, one mbarrier word per warp of the CTA
+    execution_mesh: Mesh | None = None
+```
+
+- constraints:
+  - It is the load form of `CopyAsyncTensor` with the mbarrier words its bytes
+    complete on. CUDA lowering emits it ([passes §7.1](./passes.md#71-converthirtotir));
+    schedules never name it, and it declares no capability.
+  - `src`, `dst` and `execution_mesh` follow the `CopyAsyncTensor` rules with
+    `src` in gmem and `dst` in smem.
+  - It is one whole operation: the box is in `dst` for every issuing thread
+    when it ends. Its emitter MUST, on the first issuing thread `t`, take word
+    `t // W` of `barrier`, `W` the target's `architecture.max_threads_per_warp`,
+    initialise it for one arrival, expect the box's
+    bytes, issue the copy on it, wait for phase 0 and invalidate it, and then
+    meet the issuing threads.
+  - CUDA codegen MUST reject it until host-encoded tensor-map construction exists.
+
 ### CopyReduceAsyncTensor
 
 ```python
@@ -545,7 +569,8 @@ class WgmmaWaitGroup(Op):
     n: int = 0
 
 class FenceProxyAsync(Op):
-    """Effect form; make this thread's earlier shared memory accesses visible to the async proxy."""
+    """Effect form; make this thread's earlier accesses to ``storage`` visible to the async proxy."""
+    storage: StorageKind | None = None   # GMEM, or None for smem
 ```
 - constraints:
   - The three WGMMA Ops are `.sync.aligned`: every thread of each warpgroup
@@ -555,4 +580,6 @@ class FenceProxyAsync(Op):
     per thread and runs on any threads.
   - `n` is a non-negative compile-time count.
   - They lower to `wgmma.fence.sync.aligned`, `wgmma.commit_group.sync.aligned`,
-    `wgmma.wait_group.sync.aligned n` and `fence.proxy.async.shared::cta`.
+    `wgmma.wait_group.sync.aligned n` and `fence.proxy.async.shared::cta`, or
+    `fence.proxy.async.global` for a `FenceProxyAsync` over gmem. Verification
+    refuses a `storage` other than None and GMEM.
