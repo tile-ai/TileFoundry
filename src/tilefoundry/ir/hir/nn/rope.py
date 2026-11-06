@@ -18,6 +18,7 @@ from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import TensorValue, TupleValue, to_torch_dtype
 from tilefoundry.ir.core import Op
+from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials, reject_partials
@@ -71,12 +72,14 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
         ctx,
         call,
         (("q", q_ty), ("cos_cache", cos_ty), ("sin_cache", sin_ty)),
+        kind=BinaryKind.MUL,
         anchor="q",
     )
     check_multilinear_partials(
         ctx,
         call,
         (("k", k_ty), ("cos_cache", cos_ty), ("sin_cache", sin_ty)),
+        kind=BinaryKind.MUL,
         anchor="k",
     )
 

@@ -21,6 +21,7 @@ from tilefoundry.ir.types import (
     Split,
     StorageKind,
     TensorType,
+    Varying,
 )
 from tilefoundry.ir.types.int_tuple import compatible_profile, flatten, mode_axes
 from tilefoundry.ir.types.layout import apply, unflatten
@@ -58,6 +59,8 @@ def _address_points(layout, count: int, logical_shape: tuple):
 
     Both byte reinterpretation and storage aliasing read the same factored
     shard domain; their reducers decide whether repeated locations are legal.
+    Varying axes use a representative copy at coordinate zero; every copy uses
+    the same mapping within its own registers.
     """
     shard = shard_layout_of(layout)
     base = shard.layout if shard is not None else layout
@@ -81,12 +84,21 @@ def _address_points(layout, count: int, logical_shape: tuple):
         raise ValueError(f"rmem layout address function is not injective: {layout!r}")
     for placement in Placement.each(layout.mesh):
         ids = placement.program_ids(layout.mesh.topologies)
-        unit = tuple(sorted(
-            (topology.name, start + index)
-            for topology, start, index in zip(layout.mesh.topologies, starts(layout.mesh), ids, strict=True)
-        ))
+        coordinates = mesh_coords(layout.mesh, ids)
+        if any(isinstance(attr, Varying) and coord != 0
+               for attr, coord in zip(layout.attrs, coordinates, strict=True)):
+            continue
+        if any(isinstance(attr, Varying) for attr in layout.attrs):
+            unit = tuple((axis, coord) for axis, (attr, coord) in enumerate(
+                zip(layout.attrs, coordinates, strict=True)
+            ) if not isinstance(attr, Varying))
+        else:
+            unit = tuple(sorted(
+                (topology.name, start + index)
+                for topology, start, index in zip(layout.mesh.topologies, starts(layout.mesh), ids, strict=True)
+            ))
         local, offset = local_layout_and_offset(
-            layout, tuple(layout.layout.shape), mesh_coords(layout.mesh, ids)
+            layout, tuple(layout.layout.shape), coordinates
         )
         for coord in range(prod(local.shape)):
             held = apply(local, coord)
@@ -99,7 +111,7 @@ def _address_points(layout, count: int, logical_shape: tuple):
 
 
 def _addresses(layout, count: int, logical_shape: tuple):
-    """Require one unique address per logical element for a Bitcast."""
+    """Require one unique address per element within each Varying copy."""
     if not isinstance(layout, ShardLayout):
         return tuple(point[2] for point in _address_points(layout, count, logical_shape))
     layout = participant_layout(layout)
@@ -117,7 +129,16 @@ def _addresses(layout, count: int, logical_shape: tuple):
 def _address_mapping(
     source, result, count: int, source_shape: tuple, result_shape: tuple
 ) -> tuple[int, ...]:
-    """Result colex coordinates mapped bijectively to source colex coordinates."""
+    """Result colex coordinates mapped bijectively within the same units' copies."""
+    shards = tuple(shard_layout_of(layout) for layout in (source, result))
+    varying = tuple(
+        tuple(axis for axis, attr in enumerate(shard.attrs) if isinstance(attr, Varying))
+        if shard is not None else () for shard in shards
+    )
+    if varying[0] != varying[1]:
+        raise ValueError("source and result Varying axes must match")
+    if varying[0] and shards[0].mesh != shards[1].mesh:
+        raise ValueError("source and result Varying copies must use the same mesh")
     source_at = {
         address: coord for coord, address in enumerate(_addresses(source, count, source_shape))
     }
@@ -163,8 +184,8 @@ def _(call: Call, ctx) -> TensorType:
                     call,
                     f"{end} rmem layout requires an inner Layout with flat stated strides: {held!r}",
                 )
-            if not all(isinstance(attr, Split) for attr in held.attrs):
-                ctx.error(call, f"{end} rmem layout must contain only Split attributes")
+            if not all(isinstance(attr, (Split, Varying)) for attr in held.attrs):
+                ctx.error(call, f"{end} rmem layout must contain only Split or Varying attributes")
             try:
                 axes = mode_axes(compatible_profile(held.layout.shape, source.shape))
                 split_target_axes(held, source.shape)
@@ -308,6 +329,7 @@ def _bitcast_access(call: Call, ctx) -> tuple[AccessRelation, ...]:
 
 @register_eval(Bitcast)
 def _eval_bitcast(ctx):
+    """Apply the proven local mapping independently to each placement's data."""
     x = ctx.args[0].tensor
     if x.is_global:
         held = _bitcast(x.tensor, x.type, ctx.result_type)

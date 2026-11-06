@@ -426,8 +426,10 @@ parameter to its argument's type; a region parameter has no type of its own,
 so a type stored on it by an earlier inference does not constrain the entry
 value. It seeds the inner visitor with the induction binding and all parameter
 bindings, then derives the body and yields. Every yield MUST satisfy
-`types_compatible(entry_type, yield_type)` for the parameter it carries into,
-and `k > len(params)` is an error. The carry result is the entry type of the
+`types_compatible(entry_type, yield_type, owners=target.storage_owners)` for
+the parameter it carries into, and `k > len(params)` is an error. A carried
+value whose state changes between Broadcast and Varying is rejected with its
+axis and an explicit entry-to-Varying or yield-to-Broadcast Reshard remedy. The carry result is the entry type of the
 first `k` parameters: a more specific yield does not narrow it, and a loop that
 runs no iteration has that type. There is no fixed-point iteration.
 
@@ -580,6 +582,11 @@ class Binary(Op):
     non-sharded operands produce `layout=None`; broadcasting differently shaped
     views does not make either operand's layout describe the result. This
     fallback MUST NOT accept an incompatible `ShardLayout` pair.
+  - Sharded results merge value states using
+    [shard §6.1](./shard.md#61-placement-semantics), including plain inputs.
+    All-Broadcast inputs retain Broadcast. A result may use plain layout for
+    Varying only when plain reads back to the same states on every axis of the
+    original input frame, including omitted Broadcast levels.
   - If that fallback result is a shaped value in `rmem` or `smem`, Binary MUST
     give the newly produced value its own C-order `Layout`; a concrete local
     result cannot reach authored analysis with an unresolved layout.
@@ -588,17 +595,19 @@ class Binary(Op):
     (`op(reduction(x)) == reduction(op(x))`); typeinfer rejects otherwise,
     naming the offending operand and the fix (an explicit `Reshard` to
     `Broadcast`).
+    States follow [shard §6.1](./shard.md#61-placement-semantics). A Varying
+    peer is rejected with an explicit `reshard(..., @ {B()})` remedy.
     Decisions are made independently for each mesh axis. `Partial` states on
     different axes are not interchangeable; `ADD` rejects two Partial inputs
     when their states occupy different mesh axes.
     - `ADD` with both operands `Partial`: commutes (passes) only when both
       carry the same `reduction="sum"` on that mesh axis (`max`/`min` reject
       — `max(x)+max(y)` is not `max(x+y)`).
-    - `ADD` with one `Partial` operand and the other plain/`Broadcast`:
+    - `ADD` with one `Partial` operand and the other `Broadcast` on that axis:
       commutes (passes) for `reduction` in `{"max", "min"}` (adding a
       replicated constant is order-preserving) and rejects for `"sum"`
       (`sum(x)+b != sum(x+b)`).
-    - `MUL` with one `Partial` operand and the other plain/`Broadcast`:
+    - `MUL` with one `Partial` operand and the other `Broadcast` on that axis:
       commutes (passes) only for `reduction="sum"` (scaling by a replicated
       constant distributes over `sum`); rejects for `"max"`/`"min"` (the
       constant's sign is not statically provable, and a negative scale flips
@@ -706,12 +715,16 @@ second presentation of the result.
   for that logical shape under the existing layout-position-to-tensor-axis rules.
   Both layouts MUST be plain `Layout` / `ComposedLayout` without `ShardLayout`
   components, or both MUST be rmem `ShardLayout` on the same mesh containing
-  only `Split` attributes. Omitted authored strides MUST be materialized at
+  only `Split` and `Varying` attributes
+  ([shard §6.1](./shard.md#61-placement-semantics)). Omitted authored strides MUST be materialized at
   Bitcast type inference using the same default and storage-owner rules as
   Reshard and TensorView; every resulting `Layout` component has concrete strides.
   For rmem shards, an address is the owning mesh coordinate paired with the
-  offset within that unit; the two address sets MUST be equal, so every element
-  stays in its original unit and register. `Broadcast` and `Partial` shards
+  offset within that unit. Varying axes do not enter that unit coordinate:
+  each unit proves the bijection within its own copy, as for a plain layout.
+  Both ends MUST have Varying on the same mesh axes; Varying against Split is
+  rejected. The two address sets MUST be equal, so every element stays in its
+  original unit and register. `Broadcast` and `Partial` shards
   MUST be rejected. Rmem shards MUST have an underlying `Layout` with stated,
   non-nested strides; composed underlying layouts MUST be rejected. Ownership
   MUST use `local_layout_and_offset` on the layout's factored domain. Both shapes
@@ -1618,7 +1631,8 @@ class Reshard(Op):
   - Supplied `layout` is a `LayoutBase` (`Layout` / `ComposedLayout` / `ShardLayout`).
   - Memory analysis and lowering MUST treat a Reshard as a view iff storage
     is unchanged, the shape is literal, both structural address boxes agree,
-    and the conversion does not change any mesh axis's `Partial` state. Each
+    and every mesh axis with a `Partial` end converts as NONE or VIEW
+    ([shard §6.1](./shard.md#61-placement-semantics)). Each
     thread holds register storage privately, so an `rmem` Reshard with a
     `ShardLayout` is a view only when every logical element keeps the threads
     that hold it and its register on each. The box of an `rmem` `ShardLayout`
