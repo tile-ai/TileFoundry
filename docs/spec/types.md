@@ -793,7 +793,10 @@ stands for travel in that dictionary, from isl parameter name to IR value.
   - `dim_to_isl_pw_aff(dim, values, *, coords)` MUST return one dimension
     expression as an `isl.pw_aff`. `coords` maps the identity of a value that is
     a coordinate of the space, such as an induction variable, to that dimension's
-    name; those values are dimensions of the result, not parameters.
+    name; those values are dimensions of the result, not parameters. A
+    `DimFloorDiv` or `DimMod` divisor MUST have one value, read the way a
+    constant `DimMul` operand is read, a product of constants included; a
+    divisor with more than one value raises `NotImplementedError`.
     `isl_to_dim` MUST decode an isl affine expression using `values`.
     `shape_to_isl_set(shape, values)` MUST return one shape's coordinate set over
     dimensions `d0` to `d{rank-1}`; every `Call` extent, dimension arithmetic

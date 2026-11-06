@@ -392,7 +392,7 @@ from tilefoundry_nvidia import CudaTarget
 class GEMM_8192X17408X5120_OPTIMAL:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def gemm(
-        a: Tensor[(8192, 5120), "bf16"], b: Tensor[(5120, 17408), "bf16"], scratch: Tensor[(32768,), "bf16"], scratch_1: Tensor[(142606336,), "bf16"], out: Tensor[(8192, 17408), "bf16"]
+        a: Tensor[(8192, 5120), "bf16"], b: Tensor[(5120, 17408), "bf16"], out: Tensor[(8192, 17408), "bf16"]
     ):
         with Mesh((Topology("cta", 132),), layout=(132,), names=("persistent",)) as cta:
             with Mesh(
