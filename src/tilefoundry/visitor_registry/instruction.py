@@ -157,7 +157,10 @@ def check_input_reachability(op, operand_types, mesh):
         layout = shard_layout_of(getattr(type_, "layout", None))
         if layout is None:
             continue
-        projected = participant_layout(physical_layout(layout))
+        layout = shard_layout_of(physical_layout(layout))
+        if layout is None:
+            continue
+        projected = participant_layout(layout)
         if not covered_by_scope(projected.mesh, mesh):
             raise ValueError(
                 f"input {index} is laid out more finely than the scope it runs in; write it inside that scope, or reshard it back first"
@@ -256,6 +259,8 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
             name = param.name
             top = type_.layout if isinstance(type_.layout, ComposedLayout) else None
             outer = top.outer if top is not None else type_.layout
+            if isinstance(outer, ShardLayout):
+                outer = physical_layout(outer)
             shard = outer if isinstance(outer, ShardLayout) else None
             address = shard.layout if shard is not None else outer
             primitive = address.outer if isinstance(address, ComposedLayout) else address
@@ -587,11 +592,23 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
         raise ScheduleRefusal(str(error), path=matcher.bindings, op=op) from error
     declaration = getattr(op, "atom", op)
     participant = getattr(declaration, "required_execution_mesh", getattr(declaration, "execution_mesh", None))
-    if isinstance(participant, Mesh) and mesh is not None:
+    needs_frame = any(
+        isinstance(pattern, TensorPattern)
+        and isinstance(pattern.layout, ShardLayoutPattern)
+        and shard_layout_of(type_.layout) is None
+        for pattern, type_ in zip(tiles.patterns, tiles.tiles, strict=True)
+    )
+    if needs_frame and isinstance(participant, Mesh) and mesh is not None:
         selected = participant_layout(ShardLayout(
             Layout(()), tuple(Broadcast() for _ in flatten(mesh.layout.shape)), mesh
         ), participant).mesh
-        matcher.mesh, _dropped = _participant_frame(selected, participant)
+        try:
+            matcher.mesh, _dropped = _participant_frame(selected, participant)
+        except ValueError as error:
+            raise ScheduleRefusal(
+                f"scope {mesh!r} does not contain participant frame {participant!r}",
+                path=matcher.bindings, op=op,
+            ) from error
     view = getattr(atom, "match_view", None)
     for param, pattern, type_ in zip(params, tiles.patterns, tiles.tiles, strict=True):
         match_type = type_ if view is None else view(param.name, type_)

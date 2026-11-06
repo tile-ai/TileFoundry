@@ -645,8 +645,10 @@ A plain layout is Varying on every axis. An unstated axis of a
 
 Value frames retain Varying levels. An explicit instruction frame may omit
 outside levels that contain neither Split nor Partial; checks inside that frame
-still distinguish Broadcast from Varying. Coordinate and execution queries read
-Varying as Broadcast without changing the stored value type.
+still distinguish Broadcast from Varying. Physical projection first omits levels
+containing Varying but no Split or Partial, then reads remaining Varying as
+Broadcast without changing the stored value type. An entirely omitted physical
+frame uses the plain layout; levels containing only Broadcast retain their frame.
 
 `ShardAttr.of(attr, private)` reads `None` (plain) as Varying. On an axis that
 does not separate copies, Broadcast and Varying both read as Broadcast; Split

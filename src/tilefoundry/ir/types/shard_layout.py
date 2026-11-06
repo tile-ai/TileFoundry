@@ -9,7 +9,7 @@ from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.stride import idx2crd
 
 from .layout import ComposedLayout, LayoutBase
-from .mesh import Mesh, axis_keys
+from .mesh import Mesh, axis_keys, make_mesh, separate
 from .stride import compact_row_major, crd2idx
 
 
@@ -267,9 +267,29 @@ def physical_attr(attr: ShardAttr) -> ShardAttr:
     return Broadcast() if isinstance(attr, Varying) else attr
 
 
-def physical_layout(layout: ShardLayout) -> ShardLayout:
-    """Read a shard's attrs for physical queries while retaining its address map."""
-    return replace(layout, attrs=tuple(map(physical_attr, layout.attrs)))
+def physical_layout(layout: ShardLayout) -> LayoutBase:
+    """Drop value-only levels, then read remaining variation as Broadcast."""
+    if not any(isinstance(attr, Varying) for attr in layout.attrs):
+        return layout
+    selected, attrs = [], []
+    offset = 0
+    levels = separate(layout.mesh)
+    for level in levels:
+        rank = len(flatten(level.layout).shape)
+        states = layout.attrs[offset:offset + rank]
+        offset += rank
+        if any(isinstance(attr, Varying) for attr in states) and not any(
+            isinstance(attr, (Split, Partial)) for attr in states
+        ):
+            continue
+        selected.append(level)
+        attrs.extend(map(physical_attr, states))
+    if not selected:
+        return layout.layout
+    return replace(
+        layout, attrs=tuple(attrs),
+        mesh=layout.mesh if len(selected) == len(levels) else make_mesh(*selected),
+    )
 
 
 def attrs_by_axis(layout: object) -> dict[tuple[str, int], ShardAttr] | None:
