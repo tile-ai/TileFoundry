@@ -23,6 +23,7 @@ def test_target_resources(tmp_path):
     assert memory.explicit("rmem").owner == "thread"
     assert memory.explicit("rmem").capacity_bytes is None
     assert memory.explicit("smem").owner == "threadgroup"
+    assert memory.explicit("smem").scope == "threadgroup"
     assert memory.explicit("smem").capacity_bytes == 32768
     assert target.get_facts(ThroughputFacts).peak_flops_per_second == ()
     assert target in MetalTarget.available()

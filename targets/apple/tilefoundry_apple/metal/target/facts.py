@@ -8,7 +8,7 @@ def memory_hierarchy(target, query=None):
     return MemoryHierarchyFacts(
         explicit_levels=(
             ExplicitMemoryLevelFacts("gmem", d.unified_memory_bytes, "device", "target"),
-            ExplicitMemoryLevelFacts("smem", d.threadgroup_memory_bytes, "group", "threadgroup"),
+            ExplicitMemoryLevelFacts("smem", d.threadgroup_memory_bytes, "threadgroup", "threadgroup"),
             ExplicitMemoryLevelFacts("rmem", d.register_bytes_per_thread, "thread", "thread"),
         ), implicit_levels=(), relations=(),
     )
