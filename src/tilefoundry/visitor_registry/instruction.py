@@ -39,7 +39,7 @@ from tilefoundry.ir.types.shard_layout import (
     ShardAttr,
     ShardLayout,
     Varying,
-    physical_attr,
+    physical_layout,
     shard_layout_of,
 )
 from tilefoundry.ir.types.storage import StorageOwners
@@ -157,7 +157,7 @@ def check_input_reachability(op, operand_types, mesh):
         layout = shard_layout_of(getattr(type_, "layout", None))
         if layout is None:
             continue
-        projected = participant_layout(replace(layout, attrs=tuple(map(physical_attr, layout.attrs))))
+        projected = participant_layout(physical_layout(layout))
         if not covered_by_scope(projected.mesh, mesh):
             raise ValueError(
                 f"input {index} is laid out more finely than the scope it runs in; write it inside that scope, or reshard it back first"
