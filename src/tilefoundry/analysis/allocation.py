@@ -34,7 +34,9 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.mesh import levels
+from tilefoundry.ir.types.mesh import axis_keys, levels
+from tilefoundry.ir.types.shard_layout import partial_reductions_by_axis, shard_layout_of
+from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.ir.types.utils import (
     bytes_by_storage,
     is_literal_shape,
@@ -770,7 +772,9 @@ class AllocationConstraintVisitor(ValuationVisitor[None]):
             )
             if quantity is not None:
                 level, amount = quantity
-                quantities[key] = level, amount * result_copies(key.expr)
+                quantities[key] = level, amount * result_copies(key.expr) * partial_copies(
+                    held, context.target.storage_owners
+                )
             if any(key.expr is param for param in function.params):
                 persistent.add(key)
         self.quantities, self.persistent = quantities, frozenset(persistent)
@@ -1012,6 +1016,26 @@ def _build_interference_graph(values, windows, by_value):
             for b in intervals[values[j]]
         )
     }
+
+
+def partial_copies(held: TensorType, owners: StorageOwners) -> int:
+    """Count Partial contributions not already separated by storage ownership."""
+    layout = shard_layout_of(held.layout)
+    if layout is None:
+        return 1
+    copies = 1
+    for (level, _), reduction, extent in zip(
+        axis_keys(layout.mesh), partial_reductions_by_axis(layout), flatten(layout.mesh.layout).shape
+    ):
+        if reduction is None or owners.private(held.storage, level):
+            continue
+        amount = static_dim_value(extent)
+        if amount is None:
+            raise AnalysisError(
+                f"allocation: Partial copies at level {level!r} need a static extent, got {extent!r}"
+            )
+        copies *= amount
+    return copies
 
 
 def storage_bytes(held: TensorType, *, topology_level=None, topologies=()) -> int:

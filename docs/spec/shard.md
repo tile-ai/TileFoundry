@@ -638,7 +638,9 @@ levels containing Split or Partial remain part of the distribution.
 
 An axis separates copies when `StorageOwners.private(storage, level)` holds.
 Partial axes always separate contributions, including axes finer than the storage
-owner. A plain layout is Varying on every axis. An unstated axis of a
+owner. A Partial on such an axis holds one copy per unit of that axis, each at
+its own base address; completing the reduction leaves one copy.
+A plain layout is Varying on every axis. An unstated axis of a
 `ShardLayout`, and a level its mesh omits, is Broadcast.
 
 Value frames retain Varying levels. An explicit instruction frame may omit
