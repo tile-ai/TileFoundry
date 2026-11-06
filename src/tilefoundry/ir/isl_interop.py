@@ -53,12 +53,6 @@ _INTEGER_BINARY_DIM_OP = {
 }
 
 
-def _is_const(node) -> bool:
-    if isinstance(node, bool):
-        return False
-    return isinstance(node, int) or isinstance(node, Constant)
-
-
 def _fresh_name(values: IslParamValues, taken: set[str]) -> str:
     """A parameter name no value in *values* and no coordinate in *taken* has.
 
@@ -271,23 +265,26 @@ def _dim_visitor_type():
                     self.bounds[name] = bound
                 return name
 
+            def _divided(self, dim: Call, ctx, op: str) -> tuple[str, int]:
+                """The rendered dividend and the divisor's value, when it is constant.
+
+                The divisor may be any expression with one value, as for ``DimMul``.
+                """
+                with self._speculative_state() as commit:
+                    sa, sb = self._render_operands(dim, ctx)
+                    divisor = _constant_value_of(sb, self._range_params())
+                    if divisor is not None:
+                        commit()
+                        return sa, divisor
+                raise NotImplementedError(f"{op} by a symbolic divisor has no isl representation")
+
             def visit_DimFloorDiv(self, dim: Call, ctx=None) -> str:
-                _, b = dim.args
-                if not _is_const(b):
-                    raise NotImplementedError(
-                        "DimFloorDiv by a symbolic divisor has no isl representation"
-                    )
-                sa, sb = self._render_operands(dim, ctx)
-                return f"floor({sa}/{sb})"
+                sa, divisor = self._divided(dim, ctx, "DimFloorDiv")
+                return f"floor({sa}/{divisor})"
 
             def visit_DimMod(self, dim: Call, ctx=None) -> str:
-                _, b = dim.args
-                if not _is_const(b):
-                    raise NotImplementedError(
-                        "DimMod by a symbolic divisor has no isl representation"
-                    )
-                sa, sb = self._render_operands(dim, ctx)
-                return f"({sa} mod {sb})"
+                sa, divisor = self._divided(dim, ctx, "DimMod")
+                return f"({sa} mod {divisor})"
 
             def visit_DimMax(self, dim: Call, ctx=None) -> str:
                 sa, sb = self._render_operands(dim, ctx)

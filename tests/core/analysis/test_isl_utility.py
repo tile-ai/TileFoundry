@@ -5,7 +5,9 @@ from __future__ import annotations
 import isl
 import pytest
 
-from tilefoundry.ir.core.expr import Call, Var
+from tilefoundry.ir.core.expr import Call, Constant, Var
+from tilefoundry.ir.core.kinds import BinaryKind
+from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.isl_interop import (
     dim_range,
     isl_to_dim,
@@ -132,6 +134,18 @@ def test_dim_range_symbolic_divisor_unsupported():
         dim_range(simplify_dim(DimFloorDiv, (P, n)))
     with pytest.raises(NotImplementedError, match="symbolic divisor"):
         dim_range(simplify_dim(DimMod, (P, n)))
+
+
+def test_dim_range_reads_a_constant_product_as_a_divisor():
+    """HIR keeps ``GN * GROUP_M`` as a product of constants; it divides like its value."""
+    scalar = TensorType.umat_scalar()
+    six = Call(
+        type=scalar,
+        target=Binary(kind=BinaryKind.MUL),
+        args=(Constant(value=3, type=scalar), Constant(value=2, type=scalar)),
+    )
+    assert dim_range(simplify_dim(DimFloorDiv, (P, six))) == (P.lo // 6, P.hi // 6 + 1)
+    assert dim_range(simplify_dim(DimMod, (P, six))) == (0, 6)
 
 
 def test_cardinality_maximizes_small_parameter_boxes_exactly():

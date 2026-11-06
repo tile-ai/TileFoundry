@@ -676,6 +676,17 @@ class GemmTmaStore(ScheduleCase):
 
 
 @case
+class GroupedPersistentStore(ScheduleCase):
+    path: Path = ROOT / "hir/grouped_persistent_store.py"
+    smem_peak: int = 16_384
+    candidates_refusal: str | None = "source has no unscheduled candidate site"
+
+    def guard(self, state, problems):
+        kernel = state.lowered.lookup(state.result.function.name)
+        assert [param.name for param in kernel.params] == ["x", "out"]
+
+
+@case
 class LoopOutputs(ScheduleCase):
     path: Path = ROOT / "hir/loop_outputs.py"
     smem_peak: int = 8
