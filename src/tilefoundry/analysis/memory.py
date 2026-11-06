@@ -20,7 +20,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.mesh import Mesh, separate, within_scope
-from tilefoundry.ir.types.shard_layout import shard_layout_of
+from tilefoundry.ir.types.shard_layout import physical_attr, shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import (
     bytes_by_storage,
@@ -465,7 +465,9 @@ def values_in_region(
             if not private:
                 continue
             layout = shard_layout_of(getattr(held, "layout", None))
-            if layout is None or not held_in_region(participant_layout(layout).mesh, region.mesh):
+            if layout is None or not held_in_region(participant_layout(replace(
+                layout, attrs=tuple(map(physical_attr, layout.attrs))
+            )).mesh, region.mesh):
                 continue
         result.append(item)
     return tuple(result)

@@ -12,7 +12,15 @@ from .dtype import DType
 from .layout import ComposedLayout, apply
 from .layout_algebra import size
 from .mesh import Mesh, Topology, axis_keys, make_mesh, separate
-from .shard_layout import Broadcast, ShardAttr, Split, shard_layout_of, split_target_axes
+from .shard_layout import (
+    Broadcast,
+    Partial,
+    ShardAttr,
+    Split,
+    attrs_by_axis,
+    shard_layout_of,
+    split_target_axes,
+)
 from .tensor_type import TensorType, TupleType, Type
 
 
@@ -22,9 +30,9 @@ def participant_layout(
     """Select participating levels while keeping their mesh axes and attrs aligned.
 
     An instruction retains all axes of its required levels, including Broadcast.
-    Other levels may be omitted only when every attribute is Broadcast. Without
-    an instruction frame, retain distributed levels, or the innermost level for
-    an entirely broadcast value.
+    Outside an instruction's required levels, only Split and Partial prevent
+    omission. Without an instruction frame, retain value-varying levels too,
+    or the innermost level for an entirely broadcast value.
     """
 
     def topology_name(topology):
@@ -65,7 +73,7 @@ def participant_layout(
         if name in required_names:
             selected.append(level)
             selected_attrs.extend(attrs)
-        elif any(not isinstance(attr, Broadcast) for attr in attrs):
+        elif any(isinstance(attr, (Split, Partial)) for attr in attrs):
             raise ValueError(f"non-Broadcast placement outside participant level {name!r}")
     if not selected:
         raise ValueError("shard layout has no participant level")
@@ -173,14 +181,7 @@ def types_compatible(
         if not isinstance(actual, TensorType):
             return False
         shards = tuple(shard_layout_of(t.layout) for t in (declared, actual))
-        states = tuple(
-            {
-                (level, sum(key[0] == level for key in axis_keys(sl.mesh)[:axis])):
-                    sl.attrs[axis] if axis < len(sl.attrs) else Broadcast()
-                for axis, (level, _name) in enumerate(axis_keys(sl.mesh))
-            } if sl is not None else None
-            for sl in shards
-        )
+        states = tuple(attrs_by_axis(sl) for sl in shards)
         if declared.layout is not None and actual.layout is not None:
             for key in set().union(*(state or {} for state in states)):
                 held = tuple(

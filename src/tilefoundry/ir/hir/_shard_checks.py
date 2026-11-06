@@ -9,13 +9,13 @@ See [shard §8](docs/spec/shard.md#8-layout-propagation).
 from __future__ import annotations
 
 from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.types.mesh import axis_keys
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Dynamic,
     Partial,
     ShardAttr,
     ShardLayout,
+    attrs_by_axis,
     partial_reductions_by_axis,
     shard_layout_of,
 )
@@ -41,30 +41,29 @@ def reject_partials(ctx, call, arg_name, layout, commutes_with=frozenset()):
 
 def check_multilinear_partials(ctx, call, named_operands, *, kind=BinaryKind.MUL, anchor=None):
     """Check each Partial axis using the op's combination rule and storage owners."""
-    layouts = [(name, ty, shard_layout_of(ty.layout)) for name, ty in named_operands]
+    layouts = [(name, ty, attrs_by_axis(ty.layout)) for name, ty in named_operands]
     target = getattr(ctx, "target", None)
     owners = target.storage_owners if target else StorageOwners((), {})
     for name, ty, layout in layouts:
         if layout is None:
             continue
-        for axis, attr in enumerate(layout.attrs):
+        for axis, attr in layout.items():
             if not isinstance(attr, Partial):
                 continue
             if anchor is not None and name != anchor:
-                ctx.error(call, f"{name} carries {attr!r} on mesh axis {axis}; "
+                ctx.error(call, f"{name} carries {attr!r} on mesh axis {axis[1]} ({axis[0]}); "
                           f"reshard({name}, @ {{B()}}) before this consumer")
             state = None
-            level = axis_keys(layout.mesh)[axis][0]
+            level = axis[0]
             for other_name, other_ty, other in layouts:
                 other_attr = (
-                    other.attrs[axis] if other is not None and other.mesh == layout.mesh
-                    else None if other is None else Broadcast()
+                    other.get(axis, Broadcast()) if other is not None else None
                 )
                 held = ShardAttr.of(other_attr, owners.private(other_ty.storage, level))
                 try:
                     state = held if state is None else ShardAttr.combine(kind, state, held)
                 except ValueError as error:
-                    ctx.error(call, f"{name} carries Partial({attr.reduction}) on mesh axis {axis}; "
+                    ctx.error(call, f"{name} carries Partial({attr.reduction}) on mesh axis {axis[1]} ({axis[0]}); "
                               f"operand {other_name}: operands do not commute: {error}")
 
 
@@ -92,7 +91,7 @@ def require_matching_partial_state(ctx, call, dst, update, dst_name, update_name
             axis, reduction = dst_partials[0]
             ctx.error(
                 call,
-                f"{dst_name} carries a Partial({reduction}) on mesh axis {axis}; "
+                f"{dst_name} carries a Partial({reduction}) on mesh axis {axis[1]} ({axis[0]}); "
                 f"{update_name} must carry the identical per-mesh-axis state. "
                 f"Insert Reshard({update_name}, Broadcast) or match {dst_name} "
                 "before this consumer",
