@@ -1,0 +1,1 @@
+"""Installed Metal hardware documents."""

@@ -449,3 +449,69 @@ class MemoryExecutionFacts:
     state. It only converts what the specification already records.
   - There MUST be no public Facts registration step or global Target Facts
     table. A custom Target provider registers only its Target class.
+
+## Target provider structure
+
+This is a module ownership model, not a sequence for adding a target. A new
+hardware product normally supplies documents to an existing backend; a backend
+adds language/operation semantics and services. Backend-specific layout and
+precision restrictions belong to that backend's spec.
+
+```text
+targets/<vendor>/pyproject.toml           distribution, entry points, resources
+tilefoundry_<vendor>/<backend>/
+  __init__.py                           exports and registration imports
+  target/
+    __init__.py                         public Target/Architecture/Device
+    architecture.py                     immutable programming model
+    device.py                           immutable physical resource values
+    target.py                           composition, identity, service selection
+    spec.py                             schema readers and typed builders
+    facts.py                            projections into existing Facts
+    hardware/                           installed architecture/device documents
+  ir/
+    __init__.py                         makes HIR/TIR registration reachable
+    hir/                                necessary target-specific refinements
+    tir/                                Op declarations and owned semantics
+  docs/spec/{target,tir}.md              concrete public contracts
+  codegen/                              optional emission/linking/runtime
+  passes/                               optional target-specific lowering
+tests/<vendor>/<backend>/
+  target/                               construction, Facts, diagnostics
+  ir/atoms/                             independent layout/type references
+  schedule/                             candidates, instructions, finalize
+  fixtures/                             DSL and Facts examples
+```
+
+A backend without compilation has a complete shape without empty codegen,
+runtime or passes packages. Installed validation follows the repository's
+existing organization; this tree does not require another test layer.
+
+| Owner | Input → output and invariant |
+| --- | --- |
+| Distribution | Entry point → importable backend; core does not hardcode plugins; packaged resources remain accessible after installation. |
+| Schema | HardwareDocument → typed Architecture/Device or diagnostic; required facts cannot be replaced by invented Python defaults, unknown fields cannot be silently swallowed. |
+| Architecture/Device | Validated facts → immutable values; programming capabilities and physical resources remain distinct; unknown values remain explicit. |
+| Target | Values or document IDs/paths → compatible composition, identity/digest, topology and standard services; not instruction execution or source emission. |
+| Facts | Target plus query → existing Facts protocol; projects known facts without introducing analyses or invented rates. |
+| TIR | ParamDef/Pattern/effects/mesh and capabilities → registered Op; each operand owns its type/layout contract. |
+| Op semantics | Op class → typeinfer, verifier, access and evaluator handlers through the existing registries; exact protocols belong to their respective specs. |
+| HIR refinement | Legal HIR inputs → result type; generic logical rules remain authoritative and target rules add only necessary refinements. |
+| Candidate/check/finalize | HIR semantics, operands and Target → matched declaration or rejection; existing registry and Pattern protocols own this path. |
+| Optional compilation | Target-bound TIR → declared compiler/linker interfaces; absence is explicit. |
+| Spec/tests | Contracts → checkable examples; distinguish type matching, logical evaluation, compiler acceptance and hardware execution. |
+
+Dependency direction is distribution → backend imports → owned registrations;
+Target → schema/immutable hardware → Facts; Op declarations/semantics → registry;
+candidate/check/finalize → registered declarations. Algorithms consume Facts
+rather than private backend fields. A Target must not establish a special binding
+by importing every concrete instruction. Backend-specific semantic reuse is
+allowed within the existing registry protocols; this structure does not impose
+Metal's particular instruction/profile choices on other backends.
+
+Precise protocols remain in [TIR](tir.md), [visitor registry](visitor-registry.md)
+and [evaluator](evaluator.md). Backend specs specialize these contracts rather
+than copying a competing protocol. Existing import-registration, plugin ownership
+and hardware-versus-policy requirements already apply: a source-only pseudo-device
+or duplicated integration layer is an implementation error, not justified by this
+additional directory description.

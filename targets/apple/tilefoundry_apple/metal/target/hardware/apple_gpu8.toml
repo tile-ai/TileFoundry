@@ -1,0 +1,32 @@
+[spec]
+schema = "tilefoundry.metal.architecture/v1"
+kind = "architecture"
+id = "apple.gpu8"
+
+[facts.identity.name]
+value = "apple_gpu8"
+unit = "name"
+origin = "reference"
+source = "https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf"
+conditions = "Apple GPU family 8; this initial profile admits only the listed cooperative MSL instructions, not a complete machine ISA."
+
+[facts.capabilities]
+value = ["metal_reduce", "metal_shuffle", "metal_shuffle_fill", "metal_ballot", "metal_prefix_sum", "metal_prefix_product", "metal_barrier", "metal_ldmatrix", "metal_stmatrix", "metal_matmul", "metal_mma_m8n8k8", "metal_atom_load", "metal_atom_store", "metal_atom", "metal_atom_cas", "metal_fence_system", "metal_system_coherence"]
+unit = "name"
+origin = "reference"
+source = "https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf"
+conditions = "MSL cooperative matrix, SIMD-group and synchronization contracts. Ordinary scalar operators are not separately registered. Matrix lane layout follows Apple MLX b45363d699c0d80c244da121a94feb6de2441c09, mlx/backend/metal/kernels/steel/gemm/mma.h; f32 mapping checked on the local M2 Pro. Not a portable MSL lane ABI."
+
+[facts.simd.width]
+value = 32
+unit = "count"
+origin = "measured"
+source = "ANE-Research/artifacts/v0.0.4/metal-tir-support/mapping-probe/guard-attempt03/stdout.log"
+conditions = "One f32 SIMD-group matrix pipeline reports threadExecutionWidth=32; fixed SIMD32 profile, not a claim about all Metal GPUs."
+
+[facts.language.version]
+value = 400
+unit = "version"
+origin = "reference"
+source = "MLX a21f892a6e8e83afb117cef1d1ceae3e82f48c32; local SDK signature probes"
+conditions = "This compilation profile requires Metal4 for the private coherent(system)/system-fence API. The local macOS26.6.2 compiler accepts it; this does not enable NAX on M2. Other listed primitives compile in Metal3.1."
