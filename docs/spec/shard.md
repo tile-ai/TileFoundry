@@ -661,7 +661,8 @@ Unary operations check their own Partial commutativity separately.
 | S | S | S | a | Error |
 | P(r) | Symmetric with B row | Error | Error | ADD and both reductions = sum: P(sum); otherwise error |
 
-Error cells raise `ValueError` including the kind and both attrs, with an
+`combine` rejects `None` with `ValueError`: callers must first read plain layouts
+through `ShardAttr.of`. Error cells raise `ValueError` including the kind and both attrs, with an
 explicit `reshard(..., @ {B()})` remedy where equal values are required.
 Only B → V is implicit. V → B is an explicit view: the author promises equal
 values, with no communication or runtime check. V → P is also an explicit view.
@@ -677,10 +678,11 @@ values, with no communication or runtime check. V → P is also an explicit view
 | S | GATHER | GATHER | Same position: NONE; different position: ALL_TO_ALL | Error |
 | P(r) | REDUCE | REDUCE | REDUCE_SCATTER | Same reduction: NONE; different reduction: error |
 
-For `private=False`, changes among B, V, and S are VIEW (identical attrs: NONE).
-The P row and B → P / S → P errors remain unchanged. Callers first apply `of`,
-so V on a shared axis has already become B. Error cells raise `ValueError`;
-converting between different Partial reductions is forbidden.
+`convert` first reads both src and dst through `of(..., private)`, including
+`None` (plain). For `private=False`, V becomes B; changes among B and S are VIEW
+(identical attrs: NONE). Thus B ↔ V is NONE, and V → P raises `ValueError` on a
+shared axis. The P row and B → P / S → P errors remain unchanged. Error cells
+raise `ValueError`; converting between different Partial reductions is forbidden.
 
 ### Surface syntax sugar
 
