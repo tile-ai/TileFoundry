@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from enum import Enum
 
+from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.stride import idx2crd
@@ -11,10 +13,87 @@ from .mesh import Mesh
 from .stride import compact_row_major, crd2idx
 
 
+class Conversion(Enum):
+    """What a Reshard does on one mesh axis.
+
+    See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+    """
+
+    NONE = "none"
+    VIEW = "view"
+    GATHER = "gather"
+    ALL_TO_ALL = "all_to_all"
+    REDUCE = "reduce"
+    REDUCE_SCATTER = "reduce_scatter"
+
+
 class ShardAttr:
     """Base for per-mesh-axis sharding attributes."""
 
-    pass
+    @staticmethod
+    def of(attr: ShardAttr | None, private: bool) -> ShardAttr:
+        """Read plain as Varying; shared Broadcast/Varying as Broadcast.
+
+        See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+        """
+        if attr is None:
+            attr = Varying()
+        if isinstance(attr, (Broadcast, Varying)):
+            return attr if private else Broadcast()
+        if isinstance(attr, (Split, Partial)):
+            return attr
+        raise ValueError(f"unresolved placement attr {attr!r}; resolve Dynamic before lowering")
+
+    @staticmethod
+    def combine(kind: BinaryKind | None, a: ShardAttr, b: ShardAttr) -> ShardAttr:
+        """Merge of-results before access relations map Split attrs.
+
+        See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+        """
+        ShardAttr.of(a, True)
+        ShardAttr.of(b, True)
+        if isinstance(a, Partial) or isinstance(b, Partial):
+            if isinstance(a, Partial) and isinstance(b, Partial):
+                if kind is BinaryKind.ADD and a.reduction == b.reduction == "sum":
+                    return a
+            else:
+                partial, other = (a, b) if isinstance(a, Partial) else (b, a)
+                if isinstance(other, Broadcast) and (
+                    (kind is BinaryKind.MUL and partial.reduction == "sum")
+                    or (kind is BinaryKind.ADD and partial.reduction in {"max", "min"})
+                ):
+                    return partial
+            raise ValueError(
+                f"cannot combine {kind!r}: {a!r} and {b!r}; "
+                "reshard(..., @ {B()}) to declare equal values where required"
+            )
+        if isinstance(a, Split):
+            return a
+        if isinstance(b, Split):
+            return b
+        return Varying() if isinstance(a, Varying) or isinstance(b, Varying) else Broadcast()
+
+    @staticmethod
+    def convert(src: ShardAttr, dst: ShardAttr, private: bool) -> Conversion:
+        """Classify one Reshard axis; reject invalid or unresolved attrs.
+
+        See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+        """
+        ShardAttr.of(src, True)
+        ShardAttr.of(dst, True)
+        if src == dst:
+            return Conversion.NONE
+        if isinstance(src, Partial):
+            if isinstance(dst, Partial):
+                raise ValueError(f"cannot convert {src!r} to {dst!r}: reductions differ")
+            return Conversion.REDUCE_SCATTER if isinstance(dst, Split) else Conversion.REDUCE
+        if isinstance(dst, Partial):
+            if isinstance(src, Varying):
+                return Conversion.VIEW
+            raise ValueError(f"cannot convert {src!r} to {dst!r}; only Varying may become Partial")
+        if not private or not isinstance(src, Split):
+            return Conversion.VIEW
+        return Conversion.ALL_TO_ALL if isinstance(dst, Split) else Conversion.GATHER
 
 
 @dataclass(frozen=True)
@@ -33,6 +112,11 @@ class Broadcast(ShardAttr):
 
 
 @dataclass(frozen=True)
+class Varying(ShardAttr):
+    """Every copy holds the whole axis; values may differ between units."""
+
+
+@dataclass(frozen=True)
 class Dynamic(ShardAttr):
     pass
 
@@ -47,6 +131,10 @@ def P(reduction: str = "sum") -> Partial:
 
 def B() -> Broadcast:
     return Broadcast()
+
+
+def V() -> Varying:
+    return Varying()
 
 
 def _factor_axis(axis_size, mesh_shape, splitting_mesh_axes, logical_axis):
@@ -405,10 +493,13 @@ __all__ = [
     "Split",
     "Partial",
     "Broadcast",
+    "Varying",
+    "Conversion",
     "Dynamic",
     "S",
     "P",
     "B",
+    "V",
     "ShardLayout",
     "shard_layout_of",
     "shard_layout_local_shape",

@@ -217,8 +217,8 @@ composed-layout       ::= (placed-layout | plain-layout | expression) '+' dim-ex
 placement-operand     ::= '(' layout-dims ',' layout-strides ')'
                           | layout-dims
 value-states          ::= '{' 'B' '(' ')' '}'
-                          | '{' mesh-axis '@' 'P' '(' string-literal ')' (',' mesh-axis '@' 'P' '('
-                            string-literal ')')* '}'
+                          | '{' mesh-axis '@' ('P' '(' string-literal ')' | 'V' '(' ')') (','
+                            mesh-axis '@' ('P' '(' string-literal ')' | 'V' '(' ')'))* '}'
 stated-layout         ::= (composed-layout | placement-operand | expression) '@' value-states
 shape                 ::= '(' (dim-expr (',' dim-expr)*)? ')'
                           | identifier
@@ -395,7 +395,7 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | storage | call_attribute, tensor_optional_slot | StorageValueRule | Storage must resolve to a StorageKind. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, call_attribute, expression, slice_endpoint, subscript_index, type_annotation, variadic_input | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, call_attribute, expression, slice_endpoint, subscript_index, type_annotation, variadic_input | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |
-| value_states | call_attribute, tensor_optional_slot, tensor_shape | ValueStatesFormRule | Layout states are either a single B() or one or more axis @ P(nonempty string) entries; empty states, axis @ B(), and mixing B() with other entries are rejected. | src/tilefoundry/parser/pattern_nodes.py |
+| value_states | call_attribute, tensor_optional_slot, tensor_shape | ValueStatesFormRule | Layout states are either a single B() or one or more axis @ P(nonempty string) or axis @ V() entries; empty states, axis @ B(), and mixing B() with other entries are rejected. | src/tilefoundry/parser/pattern_nodes.py |
 | where_annotation | annotation | WhereTopologyStatesRule | Where layout states constrain named topologies with topology @ B() or topology @ P(nonempty string); they do not bind lexical mesh axes. | src/tilefoundry/parser/pattern_nodes.py |
 <!-- parser-constraints:end -->
 

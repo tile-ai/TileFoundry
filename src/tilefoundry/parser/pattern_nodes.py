@@ -44,6 +44,7 @@ from tilefoundry.ir.types import (
     Split,
     Swizzle,
     TensorType,
+    Varying,
 )
 from tilefoundry.ir.types.dim import DimVar, ceildiv
 from tilefoundry.ir.types.layout import flatten, normalize_layout
@@ -520,7 +521,7 @@ def _state_call(name: str, *args) -> AstPattern[Any]:
 
 
 def _value_states() -> AstPattern[Any]:
-    """One Broadcast call, or axis-bound Partial calls."""
+    """One Broadcast call, or axis-bound Partial/Varying calls."""
     pattern = ChoicePattern(
         AstNodePattern(ast.Set, FieldPattern("elts", SequencePattern(_state_call("B")))),
         AstNodePattern(
@@ -530,9 +531,12 @@ def _value_states() -> AstPattern[Any]:
                     ast.BinOp,
                     FieldPattern("op", AstNodePattern(ast.MatMult)),
                     FieldPattern("left", MeshAxisPattern()),
-                    FieldPattern("right", _state_call("P", AstNodePattern(
-                        ast.Constant, FieldPattern("value", LiteralPattern(value_type=str)),
-                    ))),
+                    FieldPattern("right", ChoicePattern(
+                        _state_call("P", AstNodePattern(
+                            ast.Constant, FieldPattern("value", LiteralPattern(value_type=str)),
+                        )),
+                        _state_call("V"),
+                    )),
                 ),
                 minimum=1,
             )),
@@ -546,6 +550,7 @@ def _value_states() -> AstPattern[Any]:
 class ValueStatesFormRule:
     STATEMENT: ClassVar[str] = (
         "Layout states are either a single B() or one or more axis @ P(nonempty string) "
+        "or axis @ V() "
         "entries; empty states, axis @ B(), and mixing B() with other entries are rejected."
     )
 
@@ -560,7 +565,7 @@ class ValueStatesFormRule:
         ):
             return value
         raise ParseError.from_node(
-            node, context, 'layout states must be {B()} or {axis @ P("reduction"), ...}'
+            node, context, 'layout states must be {B()} or {axis @ P("reduction") | axis @ V(), ...}'
         )
 
 
@@ -586,12 +591,14 @@ def _layout_sugar_parts(node: object):
 
 
 def _value_state_parts(node: ast.AST):
-    """Read ``axis @ P("reduction")`` as axis node and state."""
+    """Read ``axis @ P("reduction")`` or ``axis @ V()`` as axis node and state."""
     if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.MatMult):
         return None
     call = node.right
     if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name) or call.keywords:
         return None
+    if call.func.id == "V" and not call.args:
+        return node.left, "V", None
     if call.func.id == "P" and len(call.args) == 1:
         reduction = call.args[0]
         if isinstance(reduction, ast.Constant) and isinstance(reduction.value, str):
@@ -713,7 +720,7 @@ class PlacementScopeRule:
                 attr = runtime.Split(state[0])
             else:
                 kind, reduction = state
-                attr = runtime.Broadcast() if kind == "B" else runtime.Partial(reduction)
+                attr = Varying() if kind == "V" else runtime.Partial(reduction)
             attrs[targets[0]] = attr
         return dataclasses.replace(value, mesh=mesh, attrs=tuple(attrs))
 
