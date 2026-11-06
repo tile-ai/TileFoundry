@@ -1,11 +1,17 @@
 # Metal Target contract
 
 ```python
-MetalTarget(device: Device | str | Path,
-            architecture: Architecture | str | Path | None = None)
-MetalTarget.available() -> tuple[MetalTarget, ...]
-target.get_facts(facts_type: type, query: object | None = None)
-target.to_python() -> PythonExpr
+from __future__ import annotations
+
+class MetalTarget(Target):
+    def __init__(self, device: Device | str | Path,
+                 architecture: Architecture | str | Path | None = None) -> None: ...
+
+    @classmethod
+    def available(cls) -> tuple[MetalTarget, ...]: ...
+
+    def get_facts(self, facts_type: type, query: object | None = None): ...
+    def to_python(self) -> PythonExpr: ...
 ```
 
 Construction requires an explicit device. IDs and paths are resolved through
@@ -42,7 +48,7 @@ ThroughputFacts contains no compute rates and records vendor package bandwidth
 provides no invented rates and rejects unknown topology names. Register capacity,
 residency and compute rates stay unknown, rather than zero or guessed values.
 
-Capabilities gate the normal instruction registry. The real M2 inventory does
+Capabilities gate the normal instruction registry. The real `apple.m2_pro.gpu` inventory does
 not advertise 16×32×16 operations. Their static/logic contracts do not prove
 hardware availability. MSL language requirements and source conditions live in
 the hardware documents. No codegen, self-authored runtime, submission service or

@@ -104,7 +104,7 @@ col = 4 * ((q & 2) | (l & 1)) + (s & 3) + 16 * (s >> 3)
 ```
 
 A interprets row/col as m/k, B as k/n and C as m/n. This is the fixed MLX
-steel/gemm/nax.h profile (lines 53–59, 401–455), not an M2 capability.
+steel/gemm/nax.h profile (lines 53–59, 401–455), not an `apple.m2_pro.gpu` capability.
 The TIR accumulator-first order maps to SDK run(left,right,destination).
 Unsupported tuples, transpose and layouts are rejected by Pattern/check_call.
 

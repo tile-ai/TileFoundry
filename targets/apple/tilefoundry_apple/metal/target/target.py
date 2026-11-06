@@ -23,7 +23,7 @@ from tilefoundry.target.facts import (
     TopologyLevelFacts,
     facts_result,
 )
-from tilefoundry.target.hardware.envelope import HardwareDocument
+from tilefoundry.target.hardware.envelope import HardwareDocument, UnknownDocumentError
 from tilefoundry.utils.python_source import PythonExpr
 from tilefoundry_apple.metal.target.architecture import MetalArchitecture
 from tilefoundry_apple.metal.target.device import MetalDevice
@@ -151,10 +151,17 @@ class MetalTarget(Target):
 
     def to_python(self) -> PythonExpr:
         if type(self) is MetalTarget and self.architecture_id and self.device_id:
-            return PythonExpr(
-                ("from tilefoundry_apple import MetalTarget",),
-                f'MetalTarget("{self.device_id}")',
-            )
+            try:
+                architecture = self.hardware.resolve(self.architecture_id)
+                device = self.hardware.resolve(self.device_id)
+            except UnknownDocumentError:
+                return super().to_python()
+            if (architecture.digest == self.architecture_digest
+                    and device.digest == self.device_digest):
+                return PythonExpr(
+                    ("from tilefoundry_apple import MetalTarget",),
+                    f'MetalTarget("{self.device_id}", architecture="{self.architecture_id}")',
+                )
         return super().to_python()
 
     @property
