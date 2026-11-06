@@ -267,6 +267,11 @@ def physical_attr(attr: ShardAttr) -> ShardAttr:
     return Broadcast() if isinstance(attr, Varying) else attr
 
 
+def physical_layout(layout: ShardLayout) -> ShardLayout:
+    """Read a shard's attrs for physical queries while retaining its address map."""
+    return replace(layout, attrs=tuple(map(physical_attr, layout.attrs)))
+
+
 def attrs_by_axis(layout: object) -> dict[tuple[str, int], ShardAttr] | None:
     """Read attrs by topology level and ordinal; None denotes a plain layout.
 
@@ -513,6 +518,7 @@ __all__ = [
     "partial_reductions_by_axis",
     "attrs_by_axis",
     "physical_attr",
+    "physical_layout",
     "mesh_coords",
     "ShardAttr",
     "Split",
