@@ -42,7 +42,7 @@ from tilefoundry.ir.types.dim import (
 )
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, Swizzle, flatten
 from tilefoundry.ir.types.mesh import Mesh
-from tilefoundry.ir.types.shard_layout import Broadcast, Partial, ShardLayout, Split
+from tilefoundry.ir.types.shard_layout import Broadcast, Partial, ShardLayout, Split, Varying
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import participant_layout, static_dim_value
@@ -497,7 +497,7 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
                 if isinstance(layout, ComposedLayout) or attr.axis >= len(layout.shape):
                     return None
                 splits.setdefault(attr.axis, []).append(ref)
-            elif isinstance(attr, Partial):
+            elif isinstance(attr, (Partial, Varying)):
                 partials.append(f"{ref} @ {self.visit(attr, ctx)}")
             elif not isinstance(attr, Broadcast):
                 return None
@@ -721,6 +721,9 @@ class PythonPrinter(PrinterBase, ExprFunctor[str], TypeFunctor[str]):
             f"{child}mesh={mesh_text},\n"
             f"{outer})"
         )
+
+    def visit_Varying(self, value: Varying, ctx=None) -> str:
+        return "V()"
 
     def visit_Broadcast(self, value: Broadcast, ctx=None) -> str:
         return "B()"
