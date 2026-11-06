@@ -10,6 +10,7 @@ algorithms read the one registry they fill.
 from __future__ import annotations
 
 import math
+from itertools import zip_longest
 
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
@@ -70,6 +71,7 @@ from tilefoundry.ir.types.dim import (
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes, repeat_like
 from tilefoundry.ir.types.layout import ComposedLayout, flatten
 from tilefoundry.ir.types.shard_layout import (
+    partial_reductions_by_axis,
     shard_layout_of,
     split_target_axes,
 )
@@ -528,20 +530,26 @@ def _split_axes(type_) -> "dict[int, int] | None":
 
 
 def _sent(source, destination, *, logical_source=None, logical_destination=None) -> tuple[tuple[str, TrafficBytes], ...]:
-    """What each level's boundary carries when a reshard changes its shards.
+    """Count boundary movement for split changes and completed partial reductions.
 
-    A unit keeps what both shards give it and sends the rest, so splitting the
-    same data two ways over ``n`` units leaves each one ``1/n`` of the ``1/n``
-    it held. Every unit sends and receives the same amount, and the level
-    named is the one owning the mesh axes whose split changed. Where the
-    exchange lands is a separate question this does not answer: the storage
-    charge remains the source read and destination write. Ownership
-    uses whole logical layouts; byte counts use the cost context's projected source.
+    Whole logical layouts select communicating mesh axes; projected types
+    supply each unit's source bytes. At each boundary, retain one uniform
+    share across the selected axes and charge the remaining bytes.
     """
-    before = _split_axes(source if logical_source is None else logical_source)
-    after = _split_axes(destination if logical_destination is None else logical_destination)
-    if before is None or after is None or before == after:
+    logical_source = source if logical_source is None else logical_source
+    logical_destination = destination if logical_destination is None else logical_destination
+    before = _split_axes(logical_source)
+    after = _split_axes(logical_destination)
+    if before is None or after is None:
         return ()
+    completed = {
+        axis
+        for axis, (pending, remaining) in enumerate(zip_longest(
+            partial_reductions_by_axis(logical_source.layout),
+            partial_reductions_by_axis(logical_destination.layout),
+        ))
+        if pending is not None and remaining is None
+    }
     mesh = shard_layout_of(source.layout).mesh
     extents = flatten(flatten(mesh.layout).shape)
     stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
@@ -558,7 +566,7 @@ def _sent(source, destination, *, logical_source=None, logical_destination=None)
         for mesh_axis, level in enumerate(levels):
             if level != topology.name:
                 continue
-            if before.get(mesh_axis) != after.get(mesh_axis):
+            if before.get(mesh_axis) != after.get(mesh_axis) or mesh_axis in completed:
                 units *= extents[mesh_axis]
         if units > 1:
             moved[topology.name] = held - held // units
