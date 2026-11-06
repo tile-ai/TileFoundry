@@ -9,6 +9,8 @@ CUDA. All tensor operands are ordinary TensorType/Layout/ShardLayout/Mesh;
 there is no opaque matrix, cooperative-tensor or atomic-word IR type.
 
 Matrix and SIMD profiles assume32 lanes. Complete quads are four-thread meshes.
+Matrix and non-reduction SIMD declarations admit groups in 1..32. Reduce
+admits groups in 1..256 with groups times width <=1024 and width in {4,32}.
 Slots1/2/4 describe scalar or vector payloads held locally by each lane. A
 runtime selector is a u16 scalar when uniform, or a lane-distributed u16 tensor
 for INDEX. Its runtime value must identify a valid active lane; uniform masks
@@ -94,6 +96,8 @@ the write. Mixed tuples are rejected by the normal instruction checker.
 16×32×16 uses A16×16/B16×32/C16×32, SIMD32, A8/B16/C16 slots.
 Allowed (A,B,C) tuples are (f16,f16,f32), (bf16,bf16,f32),
 (f32,f32,f32), (f32,f16,f32), (f32,bf16,f32).
+Sixteen-row transfers require row_stride >= columns and batch_stride >=
+16 times row_stride, for columns in {16,32}; these are layout bindings.
 Only non-transpose and explicit relaxed_precision=True are admitted: f32
 multiplication may truncate mantissas. For lane l and local slot s:
 

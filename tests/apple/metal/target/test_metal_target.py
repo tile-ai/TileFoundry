@@ -52,3 +52,9 @@ def test_target_resources(tmp_path):
         namespace = {}
         exec("\n".join(expr.imports), namespace)
         assert eval(expr.text, namespace) == value
+
+    for projection in (MemoryHierarchyFacts, ThroughputFacts):
+        with pytest.raises(ValueError, match="accepts no query"):
+            target.get_facts(projection, "thread")
+    for value in (target, values, loaded):
+        assert repr(value) == value.to_python().text

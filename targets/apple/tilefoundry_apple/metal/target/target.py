@@ -141,6 +141,8 @@ class MetalTarget(Target):
                 return facts_result(self, facts_type, level)
             return super().get_facts(facts_type, query)
 
+        if facts_type in (MemoryHierarchyFacts, ThroughputFacts) and query is not None:
+            raise ValueError(f"{self.identity}: {facts_type.__name__} is hardware-only and accepts no query")
         if facts_type is MemoryHierarchyFacts:
             return facts_result(self, facts_type, memory_hierarchy(self, query))
         if facts_type is PerformanceServiceFacts:
@@ -163,6 +165,9 @@ class MetalTarget(Target):
                     f'MetalTarget("{self.device_id}", architecture="{self.architecture_id}")',
                 )
         return super().to_python()
+
+    def __repr__(self) -> str:
+        return self.to_python().text
 
     @property
     def arch(self) -> str:

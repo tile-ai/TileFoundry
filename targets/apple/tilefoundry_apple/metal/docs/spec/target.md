@@ -45,7 +45,8 @@ select the named level; unsupported queries follow the base Target contract.
 There is no second host pool. Shared DRAM is not an allocation budget.
 ThroughputFacts contains no compute rates and records vendor package bandwidth
 200000000000 byte/s, not measured GPU throughput. PerformanceServiceFacts
-provides no invented rates and rejects unknown topology names. Register capacity,
+provides no invented rates and rejects unknown topology names. Hardware-only
+MemoryHierarchyFacts and ThroughputFacts reject a non-None query. Register capacity,
 residency and compute rates stay unknown, rather than zero or guessed values.
 
 Capabilities gate the normal instruction registry. The real `apple.m2_pro.gpu` inventory does
