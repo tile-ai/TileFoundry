@@ -157,14 +157,20 @@ def test_placement_semantics():
                 expected = P("sum")
             assert _outcome(ShardAttr.combine, kind, a, b) == expected, (kind, a, b)
         for private in (False, True):
-            expected = convert[categories[i]][categories[j]]
+            src_category, dst_category = categories[i], categories[j]
+            if not private:
+                src_category = 0 if src_category == 1 else src_category
+                dst_category = 0 if dst_category == 1 else dst_category
+            expected = convert[src_category][dst_category]
             if expected == "split":
                 expected = "all_to_all"
             if expected == "partial":
                 expected = "error"
-            if not private and categories[i] < 3 and categories[j] < 3:
+            if not private and src_category < 3 and dst_category < 3:
                 expected = "view"
-            if a == b:
+            normalized_a = B() if not private and a == V() else a
+            normalized_b = B() if not private and b == V() else b
+            if normalized_a == normalized_b:
                 expected = "none"
             actual = _outcome(ShardAttr.convert, a, b, private)
             assert (actual if actual == "error" else actual.value) == expected, (a, b, private)
@@ -173,12 +179,24 @@ def test_placement_semantics():
             expected = B() if not private and attr in (B(), V(), None) else V() if attr is None else attr
             assert ShardAttr.of(attr, private) == expected
         assert _outcome(ShardAttr.of, Dynamic(), private) == "error"
-        for attr in (*states, Dynamic()):
+        for attr in (*states, Dynamic(), None):
             assert _outcome(ShardAttr.convert, Dynamic(), attr, private) == "error"
             assert _outcome(ShardAttr.convert, attr, Dynamic(), private) == "error"
             for kind in (*BinaryKind, None):
-                assert _outcome(ShardAttr.combine, kind, Dynamic(), attr) == "error"
-                assert _outcome(ShardAttr.combine, kind, attr, Dynamic()) == "error"
+                for unresolved in (Dynamic(), None):
+                    assert _outcome(ShardAttr.combine, kind, unresolved, attr) == "error"
+                    assert _outcome(ShardAttr.combine, kind, attr, unresolved) == "error"
+        for src, dst, expected in (
+            (None, None, "none"),
+            (None, B(), "view" if private else "none"),
+            (B(), None, "view" if private else "none"),
+            (None, S(0), "view"),
+            (S(0), None, "gather" if private else "view"),
+            (None, P(), "view" if private else "error"),
+            (P(), None, "reduce"),
+        ):
+            actual = _outcome(ShardAttr.convert, src, dst, private)
+            assert (actual if actual == "error" else actual.value) == expected, (src, dst, private)
 
     cases = list(product(product((1, 2), repeat=3), STORAGES, (*product(ATTRS, repeat=3), ())))
     workers = min(8, os.cpu_count() or 1)

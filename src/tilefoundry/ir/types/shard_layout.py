@@ -50,6 +50,8 @@ class ShardAttr:
 
         See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
         """
+        if a is None or b is None:
+            raise ValueError("combine requires resolved attrs; call ShardAttr.of first")
         ShardAttr.of(a, True)
         ShardAttr.of(b, True)
         if isinstance(a, Partial) or isinstance(b, Partial):
@@ -74,13 +76,12 @@ class ShardAttr:
         return Varying() if isinstance(a, Varying) or isinstance(b, Varying) else Broadcast()
 
     @staticmethod
-    def convert(src: ShardAttr, dst: ShardAttr, private: bool) -> Conversion:
+    def convert(src: ShardAttr | None, dst: ShardAttr | None, private: bool) -> Conversion:
         """Classify one Reshard axis; reject invalid or unresolved attrs.
 
         See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
         """
-        ShardAttr.of(src, True)
-        ShardAttr.of(dst, True)
+        src, dst = ShardAttr.of(src, private), ShardAttr.of(dst, private)
         if src == dst:
             return Conversion.NONE
         if isinstance(src, Partial):
