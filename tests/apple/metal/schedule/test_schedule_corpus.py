@@ -91,6 +91,12 @@ class Explicit(MetalCase):
     def guard(self, state, problems):
         module, entry, report = state
         assert report is None
+        a = torch.eye(8).repeat(4,1,1) * 2
+        b = torch.arange(256, dtype=torch.float32).reshape(4,8,8)
+        c = torch.full_like(b, 3)
+        actual = evaluate(entry, torch.zeros_like(b), a, b, c)
+        assert torch.equal(actual, 2*b+c)
+        assert torch.equal(c, torch.full_like(c, 3))
         assert [(t.name, t.size) for t in module.topologies] == [("threadgroup",2), ("thread",128)]
         lowered=finalize(analyze(module,entry,analysis=("memory",)))
         verify_module(lowered)
