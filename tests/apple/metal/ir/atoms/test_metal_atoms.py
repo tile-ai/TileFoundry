@@ -5,6 +5,7 @@ import isl
 import pytest
 from tilefoundry.ir.core import Call,Var,Constant
 from tilefoundry.ir.core.param_def import collect_param_defs,MemoryEffect as E
+from tilefoundry.core import ShardTensor
 from tilefoundry.evaluator import EvaluateContext,TensorValue,to_torch_dtype
 from tilefoundry.evaluator.registry import schedule_eval_registry
 from tilefoundry.utils.lazy import torch
@@ -161,7 +162,7 @@ def test_rejected_contracts():
 def _evaluate_declared_case(op,types):
     """Evaluate all declarations and compare declared writes and read-only inputs."""
     params=tuple(p for p in collect_param_defs(type(op)) if p.kind=="input")
-    args=tuple(TensorValue(torch.zeros(t.shape,dtype=to_torch_dtype(t.dtype)),t) for t in types)
+    args=tuple(TensorValue(ShardTensor(t,torch.zeros(t.shape,dtype=to_torch_dtype(t.dtype)))) for t in types)
     if isinstance(op,AtomicRmw):
         args[-1].data.copy_(torch.arange(args[-1].data.numel(),dtype=args[-1].data.dtype))
         initial=(2**32-1 if op.dtype==DType.u32 else 2**31-1) if op.kind is A.ADD and op.dtype!=DType.f32 else 7
@@ -221,13 +222,13 @@ def test_memory_bounds_and_cas():
     from tilefoundry.evaluator import EvalError
     for declaration in (AtomicLoad,AtomicStore,AtomicRmw,AtomicCas):
         op=declaration();types=_types(op)
-        args=tuple(TensorValue(torch.zeros(t.shape,dtype=to_torch_dtype(t.dtype)),t) for t in types)
+        args=tuple(TensorValue(ShardTensor(t,torch.zeros(t.shape,dtype=to_torch_dtype(t.dtype)))) for t in types)
         args[-1].data.fill_(256)
         handler=schedule_eval_registry.lookup(declaration)
         with pytest.raises(EvalError):
             handler(EvaluateContext(op=op,args=args,result_type=types[0]))
     op=AtomicCas();types=_types(op)
-    args=tuple(TensorValue(torch.zeros(t.shape,dtype=to_torch_dtype(t.dtype)),t) for t in types)
+    args=tuple(TensorValue(ShardTensor(t,torch.zeros(t.shape,dtype=to_torch_dtype(t.dtype)))) for t in types)
     args[-1].data.copy_(torch.arange(args[-1].data.numel(),dtype=args[-1].data.dtype))
     args[1].data.fill_(7)
     args[2].data.fill_(3)
@@ -251,7 +252,7 @@ def test_mma_alias_and_effects(alias):
     if alias:
         data[0]=data[3]
     before=[t.clone() for t in data]
-    args=tuple(TensorValue(t,ty) for t,ty in zip(data,types,strict=True))
+    args=tuple(TensorValue(ShardTensor(ty,t)) for t,ty in zip(data,types,strict=True))
     result=schedule_eval_registry.lookup(Mma8x8x8)(EvaluateContext(op=op,args=args,result_type=types[0]))
     expected=before[1]@before[2]+before[3]
     assert torch.equal(result.data,expected)
@@ -267,7 +268,7 @@ def test_nonzero_semantics(declaration):
     op=declaration(dtype=DType.i32) if declaration in (AtomicLoad,AtomicStore) else declaration()
     types=_types(op)
     params=tuple(p for p in collect_param_defs(declaration) if p.kind=="input")
-    args=tuple(TensorValue(torch.zeros(t.shape,dtype=to_torch_dtype(t.dtype)),t) for t in types)
+    args=tuple(TensorValue(ShardTensor(t,torch.zeros(t.shape,dtype=to_torch_dtype(t.dtype)))) for t in types)
     data=[v.data for v in args]
     if declaration is Reduce:
         data[1].copy_(torch.arange(data[1].numel(),dtype=data[1].dtype).reshape(data[1].shape))
@@ -312,7 +313,7 @@ def test_precision_and_selector_rejections():
             check_call(op,_types(cls()),mesh,frame=VerifyContext(target=None,current_mesh=mesh))
     for cls in (Shuffle,ShuffleFill):
         op=cls();types=_types(op)
-        args=tuple(TensorValue(torch.zeros(t.shape,dtype=to_torch_dtype(t.dtype)),t) for t in types)
+        args=tuple(TensorValue(ShardTensor(t,torch.zeros(t.shape,dtype=to_torch_dtype(t.dtype)))) for t in types)
         args[0].data.fill_(123)
         args[-1].data.fill_(33)
         before=tuple(v.data.clone() for v in args)
