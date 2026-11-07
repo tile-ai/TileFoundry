@@ -1,19 +1,21 @@
 """CUDA-style authored Case/guard checks of Metal candidate admission."""
 from dataclasses import dataclass
 from pathlib import Path
+
 import pytest
+
 from tests.core._corpus import Case, Problems, case, cases
+from tilefoundry.analysis import analyze
 from tilefoundry.analysis.check import check_program
+from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, get_registered_name
 from tilefoundry.ir.types.layout import size
-from tilefoundry.ir.visitor import collect_exprs, StmtVisitor
-from tilefoundry.visitor_registry.verify import verify_module
+from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
 from tilefoundry.schedule import candidates, finalize
-from tilefoundry.analysis import analyze
-from tilefoundry.evaluator import evaluate
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.valuation import ValuationVisitor
+from tilefoundry.visitor_registry.verify import verify_module
 
 ROOT = Path(__file__).parents[1] / "fixtures"
 
@@ -48,6 +50,11 @@ def refuse(report, label, name):
     assert all(c["id"] != "T.metal." + name for c in row["candidates"]), row
     assert any(c["id"] == "T.metal." + name and c["reason"] for c in row["refused"]), row
 
+def local_reduce(report, label):
+    row, = [r for r in report["lines"] if r["line"].split(":")[0] == label]
+    assert row["op"] == "tf.reduce"
+    assert all(c["id"] != "T.metal.reduce" for c in row["candidates"]), row
+
 @case
 class Matrix(MetalCase):
     path: Path = ROOT / "hir_matmul.py"
@@ -66,10 +73,11 @@ class Collectives(MetalCase):
     def guard(self, state, problems):
         report = super().guard(state, problems)
         for label, kind in (("total", "SUM"), ("maximum", "MAX"), ("minimum", "MIN")):
-            matches = require(report, label, "reduce")
+            local_reduce(report, label)
+            matches = require(report, "complete_" + label, "reduce")
             assert any(kind in str(m["path"]) for m in matches), matches
         for label in ("mean", "ordinary_sum"):
-            refuse(report, label, "reduce")
+            local_reduce(report, label)
 
 @case
 class Memory(MetalCase):
@@ -104,6 +112,11 @@ class Explicit(MetalCase):
         class Ops(StmtVisitor):
             def visit_Evaluate(self,stmt,ctx=None):
                 names.append(get_registered_name(type(stmt.callable)))
+                if names[-1] == "T.metal.matmul":
+                    assert len(stmt.args) == 3
+                elif names[-1] == "T.metal.mma_m8n8k8":
+                    assert len(stmt.args) == 4
+                    assert stmt.args[0] != stmt.args[3]
         Ops().visit(lowered.entry_function().body)
         assert names==["T.metal.matmul","T.metal.mma_m8n8k8"]
 
@@ -136,7 +149,8 @@ class Quad(MetalCase):
 
     def guard(self,state,problems):
         report=super().guard(state,problems)
-        matches=require(report,"total","reduce")
+        local_reduce(report, "total")
+        matches=require(report,"complete_total","reduce")
         assert any(any(p["name"]=="width" and p["value"]=="4" for p in m["path"]) for m in matches)
 
 CASES = cases(ROOT, case_type=MetalCase)

@@ -1,21 +1,37 @@
 """8x8 matrix primitives with fully specified Apple GPU8 lane layouts."""
 import isl
+
 from tilefoundry.evaluator.registry import register_schedule_eval
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation, identity_access, iterating, matmul_relations, register_access_relation,
-)
-from .common import infer, cpu_args, write_result
 from tilefoundry.ir.core import Op, OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect as E, ParamDef
+from tilefoundry.ir.core.param_def import MemoryEffect as E
+from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.nn.matmul import MatMul as HirMatMul
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.types import DType
-from tilefoundry.visitor_registry.candidates import HirMatch
-from .common import MATRIX_EXECUTION, attribute, dtype_attribute, matrix, memory_matrix
 from tilefoundry.ir.pattern import OrPattern, WildcardPattern
+from tilefoundry.ir.types import DType
+from tilefoundry.utils.lazy import torch
+from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelation,
+    identity_access,
+    iterating,
+    matmul_relations,
+    register_access_relation,
+)
+from tilefoundry.visitor_registry.candidates import HirMatch
+
+from .common import (
+    MATRIX_EXECUTION,
+    attribute,
+    cpu_args,
+    dtype_attribute,
+    infer,
+    matrix,
+    memory_matrix,
+    write_result,
+)
+
 
 @register_op(dialect="T", category="memory", namespace="metal", name="ldmatrix")
 class LdMatrix(Op):

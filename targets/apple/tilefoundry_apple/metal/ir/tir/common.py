@@ -1,10 +1,16 @@
 """Shared pure-layout patterns and binding for Metal primitives."""
+from tilefoundry.evaluator.value import EvalError, to_torch_dtype
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.pattern import (
-    LayoutPattern, MeshPattern, OrPattern, RangePattern,
-    ShardLayoutPattern, SwitchPattern, TensorPattern, WildcardPattern,
+    LayoutPattern,
+    MeshPattern,
+    OrPattern,
+    RangePattern,
+    ShardLayoutPattern,
+    SwitchPattern,
+    TensorPattern,
+    WildcardPattern,
 )
-from tilefoundry.evaluator.value import EvalError, to_torch_dtype
 from tilefoundry.ir.types import Broadcast, DType, Split, StorageKind, UnitType
 
 G = WildcardPattern("groups", predicates=(RangePattern(lo=1, hi=32),))

@@ -1,23 +1,50 @@
 """MLX-used native collectives and typed runtime lane selectors."""
 from enum import Enum
+
 import isl
-from tilefoundry.ir.core import Op, Constant
-from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
-from tilefoundry.visitor_registry.access_relation import register_access_relation, AccessRelation, identity_access, iterating
+
 from tilefoundry.evaluator.registry import register_schedule_eval
 from tilefoundry.evaluator.value import EvalError
-from tilefoundry.utils.lazy import torch
-from .common import infer, cpu_args, write_result, SIMD_MESH
-
-from tilefoundry.ir.core import OpCapability
-from tilefoundry.ir.core.kinds import ReduceKind as HirReduceKind
-from tilefoundry.ir.core.param_def import MemoryEffect as E, ParamDef
+from tilefoundry.ir.core import Constant, Op, OpCapability
+from tilefoundry.ir.core.param_def import MemoryEffect as E
+from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op, register_type
-from tilefoundry.ir.hir.tensor.reduce import Reduce as HirReduce
-from tilefoundry.ir.pattern import LayoutPattern, MeshPattern, OrPattern, RangePattern, SwitchPattern, WildcardPattern
-from tilefoundry.ir.types import DType
+from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.pattern import (
+    LayoutPattern,
+    MeshPattern,
+    OrPattern,
+    RangePattern,
+    ShardLayoutPattern,
+    SwitchPattern,
+    TensorPattern,
+    WildcardPattern,
+)
+from tilefoundry.ir.types import DType, Partial, Split
+from tilefoundry.utils.lazy import torch
+from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelation,
+    identity_access,
+    iterating,
+    register_access_relation,
+)
 from tilefoundry.visitor_registry.candidates import HirMatch
-from .common import G, INT, NUM, attribute, dtype_attribute, lanes, selector, vectors
+
+from .common import (
+    INT,
+    NUM,
+    SIMD_MESH,
+    attribute,
+    cpu_args,
+    dtype_attribute,
+    infer,
+    lanes,
+    selector,
+    vectors,
+    write_result,
+)
+
 
 @register_type(dialect="T", namespace="metal")
 class ReductionKind(Enum):
@@ -51,20 +78,33 @@ _REDUCTION_TYPES = {k: (DType.bool if k in (ReductionKind.ALL, ReductionKind.ANY
     else OrPattern(*INT) if k in (ReductionKind.AND, ReductionKind.OR, ReductionKind.XOR)
     else OrPattern(*NUM)) for k in ReductionKind}
 
+def _reduce_source(slots):
+    native = dict(vectors(width=WIDTH, groups=GROUPS, predicates=(QUAD,)).branches)[slots]
+    if slots != 1:
+        return native
+    partial = SwitchPattern("kind", {
+        kind: ShardLayoutPattern(LayoutPattern((GROUPS, 1), (0, 0)),
+            (Split(0), Partial(kind.value)), COLLECTIVE_MESH)
+        for kind in (ReductionKind.SUM, ReductionKind.MIN, ReductionKind.MAX)})
+    return TensorPattern(shape=(GROUPS, WildcardPattern("source_width", predicates=(OrPattern(1, WIDTH),))),
+        dtype=native.dtype, storage=native.storage,
+        layout=SwitchPattern("source_width", {1: partial, 4: native.layout, 32: native.layout}),
+        predicates=(QUAD,))
+
+
 @register_op(dialect="T", category="arith", namespace="metal", name="reduce")
 class Reduce(Op):
     capability = OpCapability("metal_reduce")
     execution_mesh = COLLECTIVE_MESH
-    hir_matches = tuple(HirMatch(HirReduce,
-        when={"axes": OrPattern((-1,), (1,)), "keepdim": True, "kind": hk},
-        attributes={"kind": mk, "slots": 1}, operands={"dst":"result", "src":"x"})
-        for hk,mk in ((HirReduceKind.SUM,ReductionKind.SUM),
-                      (HirReduceKind.MIN,ReductionKind.MIN), (HirReduceKind.MAX,ReductionKind.MAX)))
+    hir_matches = tuple(HirMatch(Reshard, attributes={"slots": 1, "kind": kind},
+        operands={"dst": "result", "src": "x"})
+        for kind in (ReductionKind.SUM, ReductionKind.MIN, ReductionKind.MAX))
     kind = attribute(ReductionKind, OrPattern(*ReductionKind), ReductionKind.SUM, name="kind")
     dtype = attribute(DType, WildcardPattern("dtype", predicates=(SwitchPattern("kind", _REDUCTION_TYPES),)), DType.f32)
     slots = attribute(int, SwitchPattern("kind", {k: 1 if k in (ReductionKind.ALL,ReductionKind.ANY) else OrPattern(1,2,4) for k in ReductionKind}), 1, name="slots")
     dst = ParamDef(kind="input", effect=E.WRITE, pattern=vectors(broadcast=True, width=WIDTH, groups=GROUPS))
-    src = ParamDef(kind="input", effect=E.READ, pattern=vectors(width=WIDTH, groups=GROUPS, predicates=(QUAD,)))
+    src = ParamDef(kind="input", effect=E.READ, pattern=SwitchPattern("slots", {
+        slots: _reduce_source(slots) for slots in (1, 2, 4)}))
 
 @register_op(dialect="T", category="arith", namespace="metal", name="shuffle")
 class Shuffle(Op):
@@ -125,38 +165,58 @@ S = ShuffleKind
 @register_schedule_eval(Reduce)
 def eval_reduce(ctx):
     op = ctx.op
+    if any(isinstance(attr, Partial) for attr in getattr(ctx.args[1].type.layout, "attrs", ())):
+        return write_result(ctx, ctx.args[1].tensor.to_global().tensor)
     a = cpu_args(ctx)
     data=a[1].to(torch.float64) if a[1].is_floating_point() else a[1].to(torch.int64)
-    if op.kind is K.SUM: result=data.sum(1,keepdim=True)
-    elif op.kind is K.PRODUCT: result=data.prod(1,keepdim=True)
-    elif op.kind is K.MIN: result=data.amin(1,keepdim=True)
-    elif op.kind is K.MAX: result=data.amax(1,keepdim=True)
-    elif op.kind is K.ALL: result=data.bool().all(1,keepdim=True)
-    elif op.kind is K.ANY: result=data.bool().any(1,keepdim=True)
+    if op.kind is K.SUM:
+        result=data.sum(1,keepdim=True)
+    elif op.kind is K.PRODUCT:
+        result=data.prod(1,keepdim=True)
+    elif op.kind is K.MIN:
+        result=data.amin(1,keepdim=True)
+    elif op.kind is K.MAX:
+        result=data.amax(1,keepdim=True)
+    elif op.kind is K.ALL:
+        result=data.bool().all(1,keepdim=True)
+    elif op.kind is K.ANY:
+        result=data.bool().any(1,keepdim=True)
     else:
         result=data[:,:1].clone()
         for lane in range(1,data.shape[1]):
-            if op.kind is K.AND: result &= data[:,lane:lane+1]
-            elif op.kind is K.OR: result |= data[:,lane:lane+1]
-            else: result ^= data[:,lane:lane+1]
+            if op.kind is K.AND:
+                result &= data[:,lane:lane+1]
+            elif op.kind is K.OR:
+                result |= data[:,lane:lane+1]
+            else:
+                result ^= data[:,lane:lane+1]
     return write_result(ctx, result)
 
 @register_schedule_eval(Shuffle)
 def eval_shuffle(ctx):
     op = ctx.op
     a = cpu_args(ctx)
-    data=a[1]; groups=data.shape[0]
+    data=a[1]
+    groups=data.shape[0]
     amount=a[-1].to(torch.int64)
-    if op.uniform: amount=amount.expand(groups,32)
+    if op.uniform:
+        amount=amount.expand(groups,32)
     limit=32
-    if bool(((amount<0)|(amount>=limit)).any()): raise EvalError("shuffle selector outside lane/vector range")
+    if bool(((amount<0)|(amount>=limit)).any()):
+        raise EvalError("shuffle selector outside lane/vector range")
     lanes=torch.arange(32).expand(groups,32)
-    if op.kind in (S.INDEX,S.BROADCAST): source=amount
-    elif op.kind is S.XOR: source=lanes^amount
-    elif op.kind in (S.UP,S.ROTATE_UP): source=lanes-amount
-    else: source=lanes+amount
-    if op.kind in (S.ROTATE_UP,S.ROTATE_DOWN): source%=32
-    elif op.kind in (S.UP,S.DOWN): source=torch.where((source<0)|(source>=32),lanes,source)
+    if op.kind in (S.INDEX,S.BROADCAST):
+        source=amount
+    elif op.kind is S.XOR:
+        source=lanes^amount
+    elif op.kind in (S.UP,S.ROTATE_UP):
+        source=lanes-amount
+    else:
+        source=lanes+amount
+    if op.kind in (S.ROTATE_UP,S.ROTATE_DOWN):
+        source%=32
+    elif op.kind in (S.UP,S.DOWN):
+        source=torch.where((source<0)|(source>=32),lanes,source)
     result=data[torch.arange(groups)[:,None],source]
     return write_result(ctx, result)
 
@@ -164,17 +224,23 @@ def eval_shuffle(ctx):
 def eval_shufflefill(ctx):
     op = ctx.op
     a = cpu_args(ctx)
-    data=a[1]; groups=data.shape[0]
+    data=a[1]
+    groups=data.shape[0]
     amount=a[-1].to(torch.int64)
-    if op.uniform: amount=amount.expand(groups,32)
+    if op.uniform:
+        amount=amount.expand(groups,32)
     limit=op.modulo+1
-    if bool(((amount<0)|(amount>=limit)).any()): raise EvalError("shuffle selector outside lane/vector range")
+    if bool(((amount<0)|(amount>=limit)).any()):
+        raise EvalError("shuffle selector outside lane/vector range")
     lanes=torch.arange(32).expand(groups,32)
-    width=op.modulo; relative=lanes%width
+    width=op.modulo
+    relative=lanes%width
     if op.kind is S.UP:
-        src=relative-amount; fill_src=src+width
+        src=relative-amount
+        fill_src=src+width
     else:
-        src=relative+amount; fill_src=src-width
+        src=relative+amount
+        fill_src=src-width
     in_source=(src>=0)&(src<width)
     base=lanes-relative
     source=(base+src.clamp(0,width-1)).long()
@@ -216,6 +282,8 @@ def eval_prefixproduct(ctx):
 
 def reduction_access(call, ctx):
     shape = ctx.type_of(call.args[1]).shape
+    if any(isinstance(attr, Partial) for attr in getattr(ctx.type_of(call.args[1]).layout, "attrs", ())):
+        return iterating(shape, (identity_access(len(shape)),) * 3)
     vector = len(shape) == 3
     domain = 'g,l,s' if vector else 'g,l'
     result = 'g,0,s' if vector else 'g,0'

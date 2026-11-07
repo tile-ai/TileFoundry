@@ -1,6 +1,7 @@
 """Exact hardware document schemas for Metal."""
-from tilefoundry.target.hardware.schema import SchemaReader
 from tilefoundry.target.hardware.envelope import SchemaValidationError
+from tilefoundry.target.hardware.schema import SchemaReader
+
 from .architecture import MetalArchitecture
 from .device import MetalDevice
 

@@ -124,7 +124,19 @@ T.metal.reduce
            slots=2: Tensor(shape=(groups where 1 <= dst.shape[0] <= 256, 1, 2), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, 1, 2), (0, 0, 1)), (S(0), B()), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 256; one of {4; 32}; groups * width <= 1024)
            slots=4: Tensor(shape=(groups where 1 <= dst.shape[0] <= 256, 1, 4), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, 1, 4), (0, 0, 1)), (S(0), B()), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 256; one of {4; 32}; groups * width <= 1024)
     src  switch slots:
-           slots=1: Tensor(shape=(groups where 1 <= src.shape[0] <= 256, width where one of {4; 32}), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, width), (0, 0)), (S(0), S(1)), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 256; one of {4; 32}; groups * width <= 1024) where (width == 32) | (kind == T.metal.ReductionKind.SUM)
+           slots=1: Tensor:
+               shape=(groups where 1 <= src.shape[0] <= 256, source_width where one of {1; width where one of {4; 32}})
+               dtype=dtype
+               storage=rmem
+               layout=switch source_width:
+                   source_width=1: switch kind:
+                       kind=T.metal.ReductionKind.SUM: ShardLayout(Layout((groups, 1), (0, 0)), (S(0), Partial(reduction='sum')), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 256; one of {4; 32}; groups * width <= 1024
+                       kind=T.metal.ReductionKind.MIN: ShardLayout(Layout((groups, 1), (0, 0)), (S(0), Partial(reduction='min')), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 256; one of {4; 32}; groups * width <= 1024
+                       kind=T.metal.ReductionKind.MAX: ShardLayout(Layout((groups, 1), (0, 0)), (S(0), Partial(reduction='max')), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 256; one of {4; 32}; groups * width <= 1024
+                   source_width=4: ShardLayout(Layout((groups, width), (0, 0)), (S(0), S(1)), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 256; one of {4; 32}; groups * width <= 1024
+                   source_width=32: ShardLayout(Layout((groups, width), (0, 0)), (S(0), S(1)), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 256; one of {4; 32}; groups * width <= 1024
+               predicates:
+                 (width == 32) | (kind == T.metal.ReductionKind.SUM)
            slots=2: Tensor(shape=(groups where 1 <= src.shape[0] <= 256, width where one of {4; 32}, 2), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, width, 2), (0, 0, 1)), (S(0), S(1)), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 256; one of {4; 32}; groups * width <= 1024) where (width == 32) | (kind == T.metal.ReductionKind.SUM)
            slots=4: Tensor(shape=(groups where 1 <= src.shape[0] <= 256, width where one of {4; 32}, 4), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, width, 4), (0, 0, 1)), (S(0), S(1)), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 256; one of {4; 32}; groups * width <= 1024) where (width == 32) | (kind == T.metal.ReductionKind.SUM)
 

@@ -5,25 +5,44 @@ steel/gemm/nax.h:401-454. All descriptors use relaxed_precision=true;
 F32 input multiplication may truncate mantissas. No native 16x16x16 claim.
 Availability requires a separate target capability, not MetalArchitecture inference.
 """
-from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.evaluator.registry import register_schedule_eval
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import register_access_relation, identity_access, iterating, matmul_relations
-from tilefoundry.utils.lazy import torch
-from .common import infer, cpu_args, write_result
-from .matrix import product_access, product_eval
-from tilefoundry.ir.core.param_def import MemoryEffect as E, ParamDef
+from tilefoundry.ir.core import Op, OpCapability
+from tilefoundry.ir.core.param_def import MemoryEffect as E
+from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.hir.nn.matmul import MatMul as HirMatMul
+from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.pattern import (
-    LayoutPattern, OrPattern, RangePattern, ShardLayoutPattern,
-    SwitchPattern, TensorPattern, WildcardPattern,
+    LayoutPattern,
+    OrPattern,
+    ShardLayoutPattern,
+    SwitchPattern,
+    TensorPattern,
+    WildcardPattern,
 )
 from tilefoundry.ir.pattern.predicates import variable
 from tilefoundry.ir.types import DType, Split, StorageKind
-from tilefoundry.ir.hir.nn.matmul import MatMul as HirMatMul
-from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.utils.lazy import torch
+from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    identity_access,
+    iterating,
+    matmul_relations,
+    register_access_relation,
+)
 from tilefoundry.visitor_registry.candidates import HirMatch
-from .common import G, MATRIX_EXECUTION, MATRIX_MESH, attribute, dtype_attribute
+
+from .common import (
+    MATRIX_EXECUTION,
+    MATRIX_MESH,
+    G,
+    attribute,
+    cpu_args,
+    dtype_attribute,
+    infer,
+    write_result,
+)
+from .matrix import product_access, product_eval
 
 FLOATS = (DType.f16, DType.bf16, DType.f32)
 

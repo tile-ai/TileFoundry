@@ -6,6 +6,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
+from tilefoundry.analysis.facts import (
+    MemoryHierarchyFacts,
+    PerformanceServiceFacts,
+    ThroughputFacts,
+)
 from tilefoundry.target.base import (
     Architecture,
     Device,
@@ -27,6 +32,11 @@ from tilefoundry.target.hardware.envelope import HardwareDocument, UnknownDocume
 from tilefoundry.utils.python_source import PythonExpr
 from tilefoundry_apple.metal.target.architecture import MetalArchitecture
 from tilefoundry_apple.metal.target.device import MetalDevice
+from tilefoundry_apple.metal.target.facts import (
+    memory_hierarchy,
+    performance_service,
+    throughput,
+)
 from tilefoundry_apple.metal.target.spec import (
     ARCHITECTURE_SCHEMA,
     DEVICE_SCHEMA,
@@ -34,17 +44,6 @@ from tilefoundry_apple.metal.target.spec import (
     build_device,
 )
 
-
-from tilefoundry.analysis.facts import (
-    MemoryHierarchyFacts,
-    PerformanceServiceFacts,
-    ThroughputFacts,
-)
-from tilefoundry_apple.metal.target.facts import (
-    memory_hierarchy,
-    performance_service,
-    throughput,
-)
 
 @register_target
 @dataclass(frozen=True, init=False)

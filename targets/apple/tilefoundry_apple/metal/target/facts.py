@@ -1,7 +1,11 @@
 """Metal memory ownership and explicitly unknown compute service rates."""
 from tilefoundry.analysis.facts import (
-    ExplicitMemoryLevelFacts, MemoryHierarchyFacts, PerformanceServiceFacts, ThroughputFacts,
+    ExplicitMemoryLevelFacts,
+    MemoryHierarchyFacts,
+    PerformanceServiceFacts,
+    ThroughputFacts,
 )
+
 
 def memory_hierarchy(target, query=None):
     d = target.device

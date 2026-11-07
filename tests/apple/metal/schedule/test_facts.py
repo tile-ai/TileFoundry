@@ -1,5 +1,6 @@
 """One installed Metal facts text golden, using the shared CLI Case runner."""
 from pathlib import Path
+
 from tests.core.schedule._fixtures import FactsCase, check_facts_case
 
 

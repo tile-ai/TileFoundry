@@ -237,3 +237,17 @@ Barrier admits NONE/THREADGROUP/DEVICE/ALL memory flags; its verifier requires
 complete contiguous valid participants (whole threadgroup or aligned complete
 SIMD32 group). Fence admits only DEVICE/SEQ_CST/SYSTEM and no rendezvous.
 Both use the current thread execution mesh; neither invents tensor tokens.
+
+### HIR reduction completion
+
+HIR `tf.reduce` reduces each participant locally and leaves `Partial(tag)` on
+reduced split mesh axes. Metal Reduce therefore matches the subsequent
+`tf.reshard` from Partial to Broadcast, not the local Reduce. Its scalar
+Partial source has logical shape `(groups, 1)`, zero local strides, and shard
+attributes `(Split(0), Partial(tag))`; tag must agree with SUM/MIN/MAX.
+The existing native `(groups, width[, slots])` Split source remains supported.
+The Partial branch requires slots=1 and preserves width-4 SUM-only admission.
+Its logical access relation is identity; the layout represents communication
+between participants. The evaluator combines local ShardTensor pieces using
+`to_global`; a global Partial already holds its reduced value under the public
+ShardTensor contract and is copied without reducing it again.

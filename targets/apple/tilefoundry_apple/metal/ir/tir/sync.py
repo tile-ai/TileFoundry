@@ -1,16 +1,23 @@
 """Mesh-scoped barriers and memory fences, without tensor tokens."""
 from enum import Enum
+
+from tilefoundry.evaluator.registry import register_schedule_eval
 from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.register import register_op, register_type
-from tilefoundry.ir.pattern import LayoutPattern, OrPattern, matched, predicates as P
+from tilefoundry.ir.pattern import LayoutPattern, OrPattern, matched
+from tilefoundry.ir.pattern import predicates as P
 from tilefoundry.ir.pattern.utils import thread_execution_mesh
-from tilefoundry.ir.types.layout import size, ComposedLayout
+from tilefoundry.ir.types.layout import ComposedLayout, size
 from tilefoundry.ir.types.layout_algebra import cosize
 from tilefoundry.ir.types.mesh import separate
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
-from tilefoundry.visitor_registry.access_relation import register_access_relation, identity_access, iterating
-from tilefoundry.evaluator.registry import register_schedule_eval
-from .common import attribute, infer, cpu_args
+from tilefoundry.visitor_registry.access_relation import (
+    identity_access,
+    iterating,
+    register_access_relation,
+)
+
+from .common import attribute, cpu_args, infer
 from .memory import AtomicOrder
 
 

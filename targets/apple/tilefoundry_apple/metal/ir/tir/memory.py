@@ -4,26 +4,37 @@ Source inventory: MLX a21f892a6e8e83afb117cef1d1ceae3e82f48c32.
 All request indices are runtime checked; no opaque atomic tensor type is used.
 """
 from enum import Enum
+
 import isl
-from tilefoundry.ir.core import OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect as E, ParamDef
+
+from tilefoundry.evaluator.registry import register_schedule_eval
+from tilefoundry.evaluator.value import EvalError
+from tilefoundry.ir.core import Op, OpCapability
+from tilefoundry.ir.core.param_def import MemoryEffect as E
+from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op, register_type
-from tilefoundry.ir.pattern import (LayoutPattern, MeshPattern, OrPattern,
-    RangePattern, ShardLayoutPattern, TensorPattern, WildcardPattern)
+from tilefoundry.ir.pattern import (
+    LayoutPattern,
+    MeshPattern,
+    OrPattern,
+    RangePattern,
+    ShardLayoutPattern,
+    TensorPattern,
+    WildcardPattern,
+)
 from tilefoundry.ir.pattern.predicates import variable
 from tilefoundry.ir.pattern.utils import thread_execution_mesh
 from tilefoundry.ir.types import DType, Split, StorageKind
-from tilefoundry.visitor_registry.access_relation import AccessRelation, identity_access, iterating
-from .common import attribute, dtype_attribute
-import isl
-from tilefoundry.ir.core import Op, Constant
-from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
-from tilefoundry.visitor_registry.access_relation import register_access_relation, AccessRelation, identity_access, iterating
-from tilefoundry.evaluator.registry import register_schedule_eval
-from tilefoundry.evaluator.value import EvalError
 from tilefoundry.utils.lazy import torch
-from .common import infer, cpu_args, write_result, SIMD_MESH
+from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelation,
+    identity_access,
+    iterating,
+    register_access_relation,
+)
 
+from .common import attribute, cpu_args, dtype_attribute, infer
 
 
 @register_type(dialect="T", namespace="metal")

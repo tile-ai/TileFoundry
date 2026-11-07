@@ -3,10 +3,11 @@ from tilefoundry.ir.core.param_def import collect_param_defs
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir.nn.matmul import MatMul, matmul_result_dtype, matmul_result_shape_and_layout
 from tilefoundry.ir.pattern import PatternMatcher
-from tilefoundry.ir.pattern.utils import selected_pattern, variants, fixed_pattern_value
-from tilefoundry.ir.types import DType, StorageKind, TensorType
+from tilefoundry.ir.pattern.utils import fixed_pattern_value, selected_pattern, variants
+from tilefoundry.ir.types import StorageKind, TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.candidates import candidate_ops
+
 from ...target import MetalTarget
 
 

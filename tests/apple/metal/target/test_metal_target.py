@@ -1,10 +1,12 @@
 """Hardware facts and the actual scalar coordinates of pure matrix layouts."""
-import pytest
 from importlib.resources import files
-from tilefoundry.target.hardware.envelope import UnknownDocumentError
+
+import pytest
+
 from tilefoundry.analysis.facts import MemoryHierarchyFacts, ThroughputFacts
 from tilefoundry.ir.types import Topology
 from tilefoundry.target import TopologyFacts
+from tilefoundry.target.hardware.envelope import UnknownDocumentError
 from tilefoundry_apple import MetalTarget
 
 
@@ -17,8 +19,10 @@ def test_target_resources(tmp_path):
     assert topology.level("thread").max_logical_units == 1024
     target.validate_program_topology(Topology("threadgroup", 4))
     target.validate_program_topology(Topology("thread", 128))
-    with pytest.raises(ValueError): target.validate_program_topology(Topology("thread", 1025))
-    with pytest.raises(ValueError): target.validate_program_topology(Topology("simdgroup", 2))
+    with pytest.raises(ValueError):
+        target.validate_program_topology(Topology("thread", 1025))
+    with pytest.raises(ValueError):
+        target.validate_program_topology(Topology("simdgroup", 2))
     memory = target.get_facts(MemoryHierarchyFacts)
     assert memory.explicit("rmem").owner == "thread"
     assert memory.explicit("rmem").capacity_bytes is None

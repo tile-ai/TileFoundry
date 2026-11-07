@@ -54,3 +54,10 @@ not advertise 16×32×16 operations. Their static/logic contracts do not prove
 hardware availability. MSL language requirements and source conditions live in
 the hardware documents. No codegen, self-authored runtime, submission service or
 calibration is implied by this description-only target.
+
+Finalize currently supports the explicit/scheduled 8×8 `T.metal.matmul` and
+`T.metal.mma_m8n8k8` matrix paths through a Metal-bound ConvertHIRToTIR visitor.
+Operands are projected and viewed on their owning mesh using the core memory
+plan. Other Metal instructions retain their analysis/evaluator contracts but
+have no finalize lowering and are explicitly refused by the base visitor.
+This pass emits TIR only; it does not provide code generation or GPU execution.

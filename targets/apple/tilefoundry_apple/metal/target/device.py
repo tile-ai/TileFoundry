@@ -1,6 +1,8 @@
 """Device resources read from the installed hardware document."""
 from dataclasses import dataclass
+
 from tilefoundry.target.base import Device
+
 
 @dataclass(frozen=True)
 class MetalDevice(Device):

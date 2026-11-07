@@ -1,33 +1,77 @@
+
 """Representative MLX-native contracts; no numerical C++ simulation."""
 from dataclasses import replace
 from math import prod
+
 import isl
 import pytest
-from tilefoundry.ir.core import Call,Var,Constant
-from tilefoundry.ir.core.param_def import collect_param_defs,MemoryEffect as E
+
 from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator import EvaluateContext,TensorValue,to_torch_dtype
+from tilefoundry.evaluator import EvalError, EvaluateContext, TensorValue, to_torch_dtype
 from tilefoundry.evaluator.registry import schedule_eval_registry
-from tilefoundry.utils.lazy import torch
-from tilefoundry.ir.isl_interop import layout_to_isl_map,shape_to_isl_set
-from tilefoundry.ir.pattern import OrPattern,ShardLayoutPattern,PatternMatcher
-from tilefoundry.ir.pattern.utils import fixed_pattern_value,selected_pattern
-from tilefoundry.ir.types import DType,Layout,Mesh,ShardLayout,StorageKind,TensorType,Topology,UnitType
+from tilefoundry.ir.core import Call, Constant, Var
+from tilefoundry.ir.core.param_def import MemoryEffect as E
+from tilefoundry.ir.core.param_def import collect_param_defs
+from tilefoundry.ir.isl_interop import layout_to_isl_map, shape_to_isl_set
+from tilefoundry.ir.pattern import OrPattern, PatternMatcher, ShardLayoutPattern
+from tilefoundry.ir.pattern.utils import fixed_pattern_value, selected_pattern
+from tilefoundry.ir.types import (
+    DType,
+    Layout,
+    Mesh,
+    Partial,
+    Placement,
+    ShardLayout,
+    Split,
+    StorageKind,
+    TensorType,
+    Topology,
+    UnitType,
+)
 from tilefoundry.ir.types.int_tuple import flatten
+from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry.contexts import VerifyContext
 from tilefoundry.visitor_registry.instruction import check_call
 from tilefoundry.visitor_registry.typeinfer import inference_type
 from tilefoundry_apple import MetalTarget
 from tilefoundry_apple.metal.ir.tir import (
-    METAL_OPS,LdMatrix,StMatrix,MatMul,Mma8x8x8,Reduce,ReductionKind as K,Shuffle,
-    ShuffleKind as S,ShuffleFill,PrefixSum,PrefixProduct,Barrier,Fence,MemoryFence,
-    AtomicLoad,AtomicStore,AtomicRmw,AtomicCas,AtomicKind as A,AtomicOrder,
-    LdMatrix16,StMatrix16,MatMul16x32x16,Mma16x32x16,
+    METAL_OPS,
+    AtomicCas,
+    AtomicLoad,
+    AtomicOrder,
+    AtomicRmw,
+    AtomicStore,
+    Barrier,
+    LdMatrix,
+    LdMatrix16,
+    MatMul,
+    MatMul16x32x16,
+    MemoryFence,
+    Mma8x8x8,
+    Mma16x32x16,
+    PrefixProduct,
+    PrefixSum,
+    Reduce,
+    Shuffle,
+    ShuffleFill,
+    StMatrix,
+    StMatrix16,
 )
+from tilefoundry_apple.metal.ir.tir import (
+    AtomicKind as A,
+)
+from tilefoundry_apple.metal.ir.tir import (
+    ReductionKind as K,
+)
+from tilefoundry_apple.metal.ir.tir import (
+    ShuffleKind as S,
+)
+
+
 def simd_mesh(groups=2,width=32):
     return Mesh((Topology("thread",groups*width),),Layout((groups,width),(width,1)))
 
-# Every Op plus one case per material native mode/precision/layout boundary.
+
 CASES=tuple((op,{},32) for op in METAL_OPS)+(
     (LdMatrix,{"dtype":DType.f16,"transpose":True},32),
     (AtomicRmw,{"dtype":DType.i32},32), (Mma8x8x8,dict.fromkeys(("lhs_dtype","rhs_dtype","acc_dtype","dst_dtype"),DType.f16),32),
@@ -58,16 +102,19 @@ CASES=tuple((op,{},32) for op in METAL_OPS)+(
 def _bound(param,bindings):
     p=selected_pattern(param.pattern,bindings)
     def value(x):
-        if isinstance(x,(DType,StorageKind)): return x
-        if isinstance(x,OrPattern): return value(x.patterns[0])
+        if isinstance(x,(DType,StorageKind)):
+            return x
+        if isinstance(x,OrPattern):
+            return value(x.patterns[0])
         return fixed_pattern_value(x,bindings)
-    layout=p.layout
+    layout=selected_pattern(p.layout,bindings)
     if isinstance(layout,ShardLayoutPattern):
         inner,mesh=layout.layout,layout.mesh.layout
         shape,strides=value(mesh.shape),value(mesh.strides)
         layout=ShardLayout(Layout(value(inner.shape),value(inner.strides)),layout.attrs,
             Mesh(tuple(Topology(n,prod(flatten(shape))) for n in layout.mesh.topologies),Layout(shape,strides)))
-    else: layout=Layout(value(layout.shape),value(layout.strides))
+    else:
+        layout=Layout(value(layout.shape),value(layout.strides))
     return TensorType(value(p.shape),value(p.dtype),layout,value(p.storage))
 
 
@@ -80,7 +127,7 @@ def _types(op,groups=2,width=32):
             value=getattr(op,param.name)
             matcher.match(param.pattern,value)
             matcher.bindings[param.name]=value
-    bindings={"groups":groups,"width":width,"requests":groups*width,"capacity":256,
+    bindings={"groups":groups,"width":width,"source_width":width,"requests":groups*width,"capacity":256,
         "row_stride":columns,"batch_stride":(16 if nax else 8)*columns,**matcher.bindings}
     return tuple(_bound(p,bindings) for p in collect_param_defs(type(op)) if p.kind=="input")
 
@@ -99,7 +146,8 @@ def _check_mlx(t,groups,nax):
         count=8 if t.shape[-1]==16 else 16
         row="4*o4+o2+8*((s floord 4) mod 2)".replace("s floord 4","floor(s/4)")
         col="8*o3+4*o1+(s mod 4)+16*floor(s/8)"
-    else: count,row,col=2,"4*o4+o2","4*o3+2*o1+s"
+    else:
+        count,row,col=2,"4*o4+o2","4*o3+2*o1+s"
     expected=isl.map(f"""[o0,o1,o2,o3,o4] -> {{[g,r,c] -> [s]:
         g=o0 and r={row} and c={col} and 0<=s<{count}
         and 0<=o0<{groups} and 0<=o1<2 and 0<=o2<4 and 0<=o3<2 and 0<=o4<2 }}""")
@@ -108,7 +156,8 @@ def _check_mlx(t,groups,nax):
 
 def test_special_instruction_patterns():
     for declaration,attrs,width in CASES:
-        op=declaration(**attrs);types=_types(op,width=width)
+        op=declaration(**attrs)
+        types=_types(op,width=width)
         args=tuple(Var(f"v{i}",type=t) for i,t in enumerate(types))
         assert isinstance(inference_type(Call(op,args,type=None)),UnitType)
         mesh=simd_mesh(2,width)
@@ -117,7 +166,8 @@ def test_special_instruction_patterns():
         _evaluate_declared_case(op,types)
         if isinstance(op,(LdMatrix,StMatrix,MatMul,Mma8x8x8,LdMatrix16,StMatrix16,MatMul16x32x16,Mma16x32x16)):
             for t in types:
-                if isinstance(t.layout,ShardLayout): _check_mlx(t,2,isinstance(op,(LdMatrix16,StMatrix16,MatMul16x32x16,Mma16x32x16)))
+                if isinstance(t.layout,ShardLayout):
+                    _check_mlx(t,2,isinstance(op,(LdMatrix16,StMatrix16,MatMul16x32x16,Mma16x32x16)))
     selected=Mesh((Topology("thread",64),),Layout((32,),(1,)))
     check_call(Barrier(),(),selected,frame=VerifyContext(target=MetalTarget("apple.m2_pro.gpu")))
 
@@ -140,7 +190,8 @@ def test_rejected_contracts():
         types=_types(cls())
         with pytest.raises((TypeError,ValueError)):
             check_call(op,types,mesh,frame=frame)
-    op=MatMul();types=_types(op)
+    op=MatMul()
+    types=_types(op)
     with pytest.raises((TypeError,ValueError)):
         check_call(op,(replace(types[0],layout=Layout((2,8,8))),*types[1:]),mesh,frame=frame)
     with pytest.raises((TypeError,ValueError)):
@@ -152,7 +203,8 @@ def test_rejected_contracts():
     for layout in (Layout((16,),(1,)),Layout((32,),(2,))):
         with pytest.raises(ValueError):
             check_call(Barrier(),(),Mesh((Topology("thread",64),),layout),frame=frame)
-    op=Shuffle();types=_types(op)
+    op=Shuffle()
+    types=_types(op)
     args=[Var(str(i),type=t) for i,t in enumerate(types)]
     args[-1]=Constant(32,type=types[-1])
     with pytest.raises(ValueError):
@@ -195,14 +247,17 @@ def _evaluate_declared_case(op,types):
             elif param.name=="object":
                 expected=old.clone()
                 for r in range(count):
-                    left=before[1][r].item();right=before[2][r].item()
+                    left=before[1][r].item()
+                    right=before[2][r].item()
                     new={A.ADD:lambda:left+right,A.AND:lambda:int(left)&int(right),A.OR:lambda:int(left)|int(right),A.MIN:lambda:min(left,right),A.MAX:lambda:max(left,right)}[op.kind]()
                     if op.dtype!=DType.f32:
                         new=int(new)&0xffffffff
-                        if op.dtype==DType.i32 and new>=2**31:new-=2**32
+                        if op.dtype==DType.i32 and new>=2**31:
+                            new-=2**32
                     expected[r]=new
         if isinstance(op,AtomicCas) and op.dtype==DType.f32 and param.name=="object":
-            expected=old.clone();expected[:args[-1].data.numel()]=9
+            expected=old.clone()
+            expected[:args[-1].data.numel()]=9
         if isinstance(op,PrefixProduct) and not op.inclusive and param.name=="dst":
             expected=old.clone()
             expected[:,0]=1
@@ -219,15 +274,16 @@ def _evaluate_declared_case(op,types):
 
 
 def test_memory_bounds_and_cas():
-    from tilefoundry.evaluator import EvalError
     for declaration in (AtomicLoad,AtomicStore,AtomicRmw,AtomicCas):
-        op=declaration();types=_types(op)
+        op=declaration()
+        types=_types(op)
         args=tuple(TensorValue(ShardTensor(t,torch.zeros(t.shape,dtype=to_torch_dtype(t.dtype)))) for t in types)
         args[-1].data.fill_(256)
         handler=schedule_eval_registry.lookup(declaration)
         with pytest.raises(EvalError):
             handler(EvaluateContext(op=op,args=args,result_type=types[0]))
-    op=AtomicCas();types=_types(op)
+    op=AtomicCas()
+    types=_types(op)
     args=tuple(TensorValue(ShardTensor(t,torch.zeros(t.shape,dtype=to_torch_dtype(t.dtype)))) for t in types)
     args[-1].data.copy_(torch.arange(args[-1].data.numel(),dtype=args[-1].data.dtype))
     args[1].data.fill_(7)
@@ -244,7 +300,8 @@ def test_memory_bounds_and_cas():
 
 @pytest.mark.parametrize("alias",(False,True))
 def test_mma_alias_and_effects(alias):
-    op=Mma8x8x8();types=_types(op)
+    op=Mma8x8x8()
+    types=_types(op)
     data=[torch.zeros(t.shape,dtype=to_torch_dtype(t.dtype)) for t in types]
     data[1].copy_(torch.arange(128,dtype=torch.float32).reshape(2,8,8)/16)
     data[2].copy_(torch.eye(8).expand(2,8,8)*2)
@@ -283,26 +340,45 @@ def test_nonzero_semantics(declaration):
             wanted=torch.arange(32,dtype=data[1].dtype).expand_as(data[1]).clone()
         else:
             data[1][:,0]=2
-            wanted=torch.full_like(data[1],2);wanted[:,0]=1
+            wanted=torch.full_like(data[1],2)
+            wanted[:,0]=1
     else:
-        idx=data[-1];idx.copy_(torch.arange(idx.numel(),dtype=idx.dtype).flip(0))
+        idx=data[-1]
+        idx.copy_(torch.arange(idx.numel(),dtype=idx.dtype).flip(0))
         if declaration is AtomicLoad:
             data[1].copy_(torch.arange(data[1].numel(),dtype=data[1].dtype))
             wanted=data[1][idx.long()].clone()
         else:
             data[1].fill_(5)
-            wanted=data[0].clone();wanted[idx.long()]=5
+            wanted=data[0].clone()
+            wanted[idx.long()]=5
     before=[x.clone() for x in data]
     result=schedule_eval_registry.lookup(declaration)(EvaluateContext(op=op,args=args,result_type=types[0]))
     assert torch.equal(result.data,wanted)
     for p,x,old in zip(params,data,before,strict=True):
         if not p.effect&E.WRITE:
             assert torch.equal(x,old)
+    if declaration is Reduce:
+        source = replace(types[0], layout=replace(types[0].layout,
+            attrs=(Split(0), Partial("sum"))))
+        pieces = tuple((Placement({"thread": lane}),
+                        torch.tensor([[float(lane + 1)]])) for lane in range(64))
+        partial = TensorValue(ShardTensor(source, pieces))
+        mesh = simd_mesh()
+        check_call(op, (types[0], source), mesh,
+                   frame=VerifyContext(target=MetalTarget("apple.m2_pro.gpu"), current_mesh=mesh))
+        actual = schedule_eval_registry.lookup(Reduce)(EvaluateContext(
+            op=op, args=(args[0], partial), result_type=types[0]))
+        assert torch.equal(actual.data, torch.tensor([[528.], [1552.]]))
+        assert all(piece.item() == lane + 1 for lane, (_, piece) in enumerate(pieces))
+        with pytest.raises((TypeError, ValueError)):
+            check_call(Reduce(kind=K.MIN), (types[0], source), mesh,
+                       frame=VerifyContext(target=MetalTarget("apple.m2_pro.gpu"), current_mesh=mesh))
 
 
 def test_precision_and_selector_rejections():
-    from tilefoundry.evaluator import EvalError
-    mesh=simd_mesh();frame=VerifyContext(target=MetalTarget("apple.m2_pro.gpu"),current_mesh=mesh)
+    mesh=simd_mesh()
+    frame=VerifyContext(target=MetalTarget("apple.m2_pro.gpu"),current_mesh=mesh)
     for name in ("lhs_dtype","rhs_dtype","acc_dtype","dst_dtype"):
         op=Mma8x8x8(**{name:DType.f16})
         with pytest.raises((TypeError,ValueError)):
@@ -312,7 +388,8 @@ def test_precision_and_selector_rejections():
         with pytest.raises((TypeError,ValueError)):
             check_call(op,_types(cls()),mesh,frame=VerifyContext(target=None,current_mesh=mesh))
     for cls in (Shuffle,ShuffleFill):
-        op=cls();types=_types(op)
+        op=cls()
+        types=_types(op)
         args=tuple(TensorValue(ShardTensor(t,torch.zeros(t.shape,dtype=to_torch_dtype(t.dtype)))) for t in types)
         args[0].data.fill_(123)
         args[-1].data.fill_(33)
