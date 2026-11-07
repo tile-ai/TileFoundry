@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import MISSING, replace
 
+from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.expr import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.metadata import (
     RangeMetadata,
@@ -185,7 +186,12 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         fn = self._target_rule(op_cls, ctx) or typeinfer_registry.lookup(op_cls)
         if fn is None:
             ctx.error(call, f"no typeinfer registered for {op_cls.__name__}")
-        return fn(call, ctx)
+        try:
+            return fn(call, ctx)
+        except VerifyError:
+            raise
+        except ValueError as error:
+            ctx.error(call, str(error))
 
     @staticmethod
     def _target_rule(op_cls: type, ctx: TypeInferContext):

@@ -11,7 +11,6 @@ from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
-from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, FloatDType, StorageKind, TensorType
 from tilefoundry.ir.types.layout import Layout
@@ -21,6 +20,7 @@ from tilefoundry.ir.types.shard_layout import (
     split_target_axes,
 )
 from tilefoundry.ir.types.storage import StorageOwners
+from tilefoundry.ir.types.utils import check_multilinear_partials
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -128,7 +128,7 @@ def matmul_result_shape_and_layout(call: "Call", ctx: "TypeInferContext") -> tup
             "MatMul contraction dim K must be split on the same mesh axes for both operands",
         )
 
-    check_multilinear_partials(ctx, call, (("lhs", lhs), ("rhs", rhs)), kind=BinaryKind.MUL)
+    check_multilinear_partials((("lhs", lhs), ("rhs", rhs)), ctx.target, kind=BinaryKind.MUL)
 
     relation = relations_of(call, ctx)
 

@@ -14,7 +14,6 @@ from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue, to_t
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, ShardLayout, TensorType, TupleType
 from tilefoundry.ir.types.dim import DimFloorDiv, simplify_dim
@@ -26,7 +25,7 @@ from tilefoundry.ir.types.shard_layout import (
     split_target_axes,
 )
 from tilefoundry.ir.types.storage import StorageOwners
-from tilefoundry.ir.types.utils import static_dim_value
+from tilefoundry.ir.types.utils import reject_partials, static_dim_value
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -170,7 +169,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
             f"target_dtype must be fp8e4m3, got {op.target_dtype}",
         )
 
-    reject_partials(ctx, call, "x", x_ty.layout)
+    reject_partials("x", x_ty.layout)
     last = x_ty.shape[-1]
     if isinstance(last, int):
         if last % group != 0:

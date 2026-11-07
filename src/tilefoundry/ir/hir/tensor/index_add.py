@@ -9,11 +9,11 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.hir.tensor.index_select import _norm_dim
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard_layout import Split, shard_layout_of
+from tilefoundry.ir.types.utils import reject_partials
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -79,7 +79,7 @@ def _infer_index_write(
         )
 
     for name, ty in (("dst", dst_ty), ("index", index_ty), ("src", src_ty)):
-        reject_partials(ctx, call, name, ty.layout)
+        reject_partials(name, ty.layout)
         _reject_splits(ctx, call, op_name, name, ty)
     return dst_ty
 

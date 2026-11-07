@@ -12,13 +12,13 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
-from tilefoundry.ir.hir._shard_checks import (
-    reject_dynamic_shards,
-    require_uniform_partial_slices,
-)
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.layout import Layout
+from tilefoundry.ir.types.utils import (
+    reject_dynamic_shards,
+    require_uniform_partial_slices,
+)
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -62,7 +62,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_shape = list(base.shape)
     new_shape.insert(axis, len(call.args))
     new_shape = tuple(new_shape)
-    reject_dynamic_shards(ctx, call, types, "Stack")
+    reject_dynamic_shards(types, "Stack")
     try:
         relation = relations_of(call, ctx)
         layout = derive_output_shard_layout(
@@ -79,7 +79,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             f"cannot derive input ownership: {error}; use an explicit Reshard before Stack",
         )
     if layout is not None:
-        require_uniform_partial_slices(ctx, call, types, layout, "Stack")
+        require_uniform_partial_slices(types, layout, "Stack")
     else:
         layout = Layout(new_shape)
     storage = resolve_anchor_storage(ctx, call, *(t.storage for t in types))

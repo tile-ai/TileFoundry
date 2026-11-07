@@ -19,13 +19,13 @@ from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
-from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import TensorPattern
 from tilefoundry.ir.types import DType, ShardLayout, TensorType
 from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import (
     shard_layout_of,
 )
+from tilefoundry.ir.types.utils import check_multilinear_partials
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     broadcast_shapes,
@@ -110,9 +110,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     )
     la, lb = lhs_ty.layout, rhs_ty.layout
 
-    check_multilinear_partials(
-        ctx, call, (("lhs", lhs_ty), ("rhs", rhs_ty)), kind=op.kind
-    )
+    check_multilinear_partials((("lhs", lhs_ty), ("rhs", rhs_ty)), ctx.target, kind=op.kind)
     storage = resolve_anchor_storage(ctx, call, lhs_ty.storage, rhs_ty.storage)
     try:
         relation = relations_of(call, ctx)

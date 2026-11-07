@@ -10,11 +10,11 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
-from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.hir.math.binary import _merge_layout
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import Partial, Split, shard_layout_of
+from tilefoundry.ir.types.utils import reject_partials
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -61,7 +61,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             f"data branch dtype mismatch ({input_.dtype.name} vs {other.dtype.name})",
         )
     for name, type_ in (("condition", condition), ("input", input_), ("other", other)):
-        reject_partials(ctx, call, name, type_.layout)
+        reject_partials(name, type_.layout)
 
     storage = resolve_anchor_storage(ctx, call, input_.storage, other.storage)
     try:

@@ -17,7 +17,6 @@ from tilefoundry.evaluator.value import TensorValue, TupleValue, to_torch_dtype
 from tilefoundry.ir.core import Call, Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
@@ -39,6 +38,7 @@ from tilefoundry.ir.types.shard_layout import (
 )
 from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.ir.types.tensor_type import ShapeDim
+from tilefoundry.ir.types.utils import reject_partials
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
@@ -178,7 +178,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
         if any(isinstance(a, Split) and la2ta[a.axis] == axis for a in source_shard.attrs):
             ctx.error(call, f"selected axis {axis} must not be Split-sharded")
 
-    reject_partials(ctx, call, "x", x_ty.layout)
+    reject_partials("x", x_ty.layout)
     out_shape = list(x_ty.shape)
     out_shape[axis] = k
     out_shape = tuple(out_shape)

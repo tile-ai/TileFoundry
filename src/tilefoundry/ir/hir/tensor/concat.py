@@ -13,16 +13,16 @@ from tilefoundry.ir.core.expr import Call
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
-from tilefoundry.ir.hir._shard_checks import (
-    reject_dynamic_shards,
-    require_uniform_partial_slices,
-)
 from tilefoundry.ir.isl_interop import normalize_dim_entries
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import Split, TensorType
 from tilefoundry.ir.types.dim import DimAdd, simplify_dim
 from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
+from tilefoundry.ir.types.utils import (
+    reject_dynamic_shards,
+    require_uniform_partial_slices,
+)
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -142,7 +142,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         new_shape[axis] = _sum_dim(new_shape[axis], t.shape[axis])
     new_shape = normalize_dim_entries(tuple(new_shape))
 
-    reject_dynamic_shards(ctx, call, types, "Concat")
+    reject_dynamic_shards(types, "Concat")
     _reject_concat_axis_splits(call, ctx, types, axis)
     try:
         relation = relations_of(call, ctx)
@@ -160,7 +160,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             f"cannot derive input ownership: {error}; use an explicit Reshard before Concat",
         )
     if layout is not None:
-        require_uniform_partial_slices(ctx, call, types, layout, "Concat")
+        require_uniform_partial_slices(types, layout, "Concat")
     else:
         layout = Layout(new_shape)
     storage = resolve_anchor_storage(ctx, call, *(t.storage for t in types))

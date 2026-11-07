@@ -9,10 +9,9 @@ from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.core import Constant, Op, Tuple
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
 from tilefoundry.ir.pattern import is_ranked_tensor, is_scalar_tensor
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.utils import static_dim_value
+from tilefoundry.ir.types.utils import require_matching_partial_state, static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -134,7 +133,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ctx.error(call, f"update rank {len(upd_ty.shape)} must equal dst rank {rank}")
     if dst_ty.dtype != upd_ty.dtype:
         ctx.error(call, f"dst/update dtype mismatch {dst_ty.dtype} vs {upd_ty.dtype}")
-    require_matching_partial_state(ctx, call, dst_ty, upd_ty, "dst", "update")
+    require_matching_partial_state(dst_ty, upd_ty, "dst", "update")
     if isinstance(off_expr, Tuple):
         if len(off_expr.elements) != rank:
             ctx.error(

@@ -15,7 +15,6 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.layout import Layout
@@ -26,6 +25,7 @@ from tilefoundry.ir.types.shard_layout import (
     split_target_axes,
 )
 from tilefoundry.ir.types.storage import StorageOwners
+from tilefoundry.ir.types.utils import reject_partials
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -68,7 +68,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 f"reduction axis {axis} must not be Split-sharded; use an "
                 "explicit Reshard before ArgMax",
             )
-    reject_partials(ctx, call, "x", x_ty.layout)
+    reject_partials("x", x_ty.layout)
     out_shape = tuple(d for i, d in enumerate(x_ty.shape) if i != axis)
     new_layout = Layout(out_shape)
     if source_shard is not None:

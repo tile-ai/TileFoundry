@@ -9,10 +9,10 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard_layout import ShardLayout, split_target_axes
+from tilefoundry.ir.types.utils import reject_partials
 from tilefoundry.utils.lazy import F
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -86,7 +86,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         )
 
     for arg, ty in (("x", x_ty), ("weight", weight_ty), ("bias", bias_ty)):
-        reject_partials(ctx, call, arg, ty.layout)
+        reject_partials(arg, ty.layout)
     _reject_normalized_splits(call, ctx, "x", x_ty, axis)
     _reject_normalized_splits(call, ctx, "weight", weight_ty, 0)
     _reject_normalized_splits(call, ctx, "bias", bias_ty, 0)

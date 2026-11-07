@@ -13,9 +13,9 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.kinds import UnaryKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.pattern import TensorPattern
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.utils import reject_partials
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -73,7 +73,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         commutes_with = frozenset({"sum"})
     else:
         commutes_with = frozenset()
-    reject_partials(ctx, call, "x", x_ty.layout, commutes_with=commutes_with)
+    reject_partials("x", x_ty.layout, commutes_with=commutes_with)
     return TensorType(
         shape=x_ty.shape,
         dtype=x_ty.dtype,

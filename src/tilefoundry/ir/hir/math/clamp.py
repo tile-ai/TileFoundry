@@ -11,9 +11,9 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.utils import reject_partials
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -36,7 +36,7 @@ class Clamp(Op):
 @register_typeinfer(Clamp)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
-    reject_partials(ctx, call, "x", x_ty.layout, commutes_with=_COMMUTES_WITH)
+    reject_partials("x", x_ty.layout, commutes_with=_COMMUTES_WITH)
     return TensorType(
         shape=x_ty.shape,
         dtype=x_ty.dtype,
