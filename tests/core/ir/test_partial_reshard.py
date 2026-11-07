@@ -16,6 +16,7 @@ from tilefoundry.ir.types import (
     StorageKind,
     TensorType,
     Topology,
+    Varying,
 )
 from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 
@@ -54,3 +55,22 @@ def test_broadcast_to_plain_aliases():
     dst = replace(src, layout=src.layout.layout)
     call = Call(Reshard(layout=dst.layout, storage=dst.storage), (Var("src", type=src),), type=dst)
     assert aliased_operand(call) == 0
+
+
+@pytest.mark.parametrize(
+    "before,after,expected",
+    (
+        (Partial("sum"), Partial("sum"), 0),
+        (Varying(), Partial("sum"), 0),
+        (None, Partial("sum"), 0),
+        (Partial("sum"), Partial("max"), None),
+        (Broadcast(), Partial("sum"), None),
+    ),
+)
+def test_partial_alias_states(before, after, expected):
+    src, _ = _types()
+    layout = src.layout
+    src = replace(src, layout=layout.layout if before is None else replace(layout, attrs=(before,)))
+    dst = replace(src, layout=replace(layout, attrs=(after,)))
+    call = Call(Reshard(layout=dst.layout, storage=dst.storage), (Var("src", type=src),), type=dst)
+    assert aliased_operand(call) == expected

@@ -77,12 +77,13 @@ from tilefoundry.ir.types.int_tuple import flatten as flatten_tuple
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.layout import get as get_layout
 from tilefoundry.ir.types.layout_algebra import composition
-from tilefoundry.ir.types.shard_layout import physical_layout, shard_layout_of, split_target_axes
+from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.ir.types.stride import compact_row_major, crd2idx
 from tilefoundry.ir.types.utils import (
     i64_const,
     leaves_of,
     participant_layout,
+    physical_layout,
     static_dim_value,
 )
 from tilefoundry.ir.visitor import ExprVisitor, StmtMutator, collect_exprs, expr_children

@@ -19,6 +19,7 @@ from tilefoundry.ir.types import (
     S,
     ShardAttr,
     ShardLayout,
+    Split,
     StorageKind,
     TensorType,
     Topology,
@@ -26,7 +27,7 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.storage import StorageOwners
-from tilefoundry.ir.types.utils import local_type_of
+from tilefoundry.ir.types.utils import attrs_by_axis, local_type_of
 
 LEVELS = ("gpu", "cta", "thread")
 STORAGES = (StorageKind.GMEM, StorageKind.SMEM, StorageKind.RMEM)
@@ -44,8 +45,11 @@ def reference(extents, attrs, selected):
     ):
         raise ValueError("split extents do not divide the logical shape")
     divisors = tuple(
-        prod(n for i, (n, a) in enumerate(zip(extents, attrs, strict=True))
-             if a == S(axis) and i <= selected)
+        prod(
+            n
+            for i, (n, a) in enumerate(zip(extents, attrs, strict=True))
+            if a == S(axis) and i <= selected
+        )
         for axis in range(2)
     )
     held = {}
@@ -62,12 +66,19 @@ def reference(extents, attrs, selected):
                 accepted &= coord[axis] // width == index
             if accepted:
                 coordinates.add(coord)
-        held[unit] = (coordinates, tuple(
-            ("partial", a.reduction) if isinstance(a, type(P()))
-            else "same" if a == B() or (a == V() and i > selected)
-            else "varying" if a == V() else "split"
-            for i, a in enumerate(attrs)
-        ))
+        held[unit] = (
+            coordinates,
+            tuple(
+                ("partial", a.reduction)
+                if isinstance(a, type(P()))
+                else "same"
+                if a == B() or (a == V() and i > selected)
+                else "varying"
+                if a == V()
+                else "split"
+                for i, a in enumerate(attrs)
+            ),
+        )
     return held
 
 
@@ -89,7 +100,8 @@ def _check_chunk(cases):
         try:
             layout = (
                 ShardLayout.default(SHAPE, mesh, attrs, storage=storage, owners=OWNERS)
-                if attrs else Layout(SHAPE)
+                if attrs
+                else Layout(SHAPE)
             )
             tensor = TensorType(shape=SHAPE, dtype=DType.f32, layout=layout, storage=storage)
             actual = local_type_of(tensor, topology_level=LEVELS[selected], topologies=topologies)
@@ -109,15 +121,20 @@ def _check_chunk(cases):
         if expected == "error":
             failures.append(f"{extents, storage, attrs}: implementation accepted an invalid case")
             continue
-        value_kinds = {B(): "same", V(): "varying", S(0): "split", S(1): "split",
-                       P("sum"): ("partial", "sum")}
+        value_kinds = {
+            B(): "same",
+            V(): "varying",
+            S(0): "split",
+            S(1): "split",
+            P("sum"): ("partial", "sum"),
+        }
         actual_states = tuple(
-            value_kinds[ShardAttr.of(a, OWNERS.private(storage, level))]
-            for a, level in zip(attrs or (None,) * 3, LEVELS, strict=True)
+            "split" if isinstance(a, Split) else value_kinds[a]
+            for a in attrs_by_axis(tensor, mesh, OWNERS).values()
         )
         for coordinates, states in expected.values():
             if actual_states != states:
-                failures.append(f"{storage, attrs}: of {actual_states} != {states}")
+                failures.append(f"{storage, attrs}: attrs {actual_states} != {states}")
                 break
             shape = tuple(len({c[axis] for c in coordinates}) for axis in range(2))
             if owner_shape != shape:
@@ -134,14 +151,12 @@ def _check_chunk(cases):
 
 def test_placement_semantics():
     """Literal table indices are B, V, S, P; coordinate cases run in separate processes."""
-    combine = (("b", "v", "s", "partial"),
-               ("v", "v", "s", "error"),
-               ("s", "s", "s", "error"),
-               ("partial", "error", "error", "joint"))
-    convert = (("none", "view", "view", "error"),
-               ("view", "none", "view", "view"),
-               ("gather", "gather", "split", "error"),
-               ("reduce", "reduce", "reduce_scatter", "partial"))
+    combine = (
+        ("b", "v", "s", "partial"),
+        ("v", "v", "s", "error"),
+        ("s", "s", "s", "error"),
+        ("partial", "error", "error", "joint"),
+    )
     states = (B(), V(), S(0), S(1), P("sum"), P("max"), P("min"))
     categories = (0, 1, 2, 2, 3, 3, 3)
     for (i, a), (j, b) in product(enumerate(states), repeat=2):
@@ -156,47 +171,11 @@ def test_placement_semantics():
             if cell == "joint" and kind is BinaryKind.ADD and a == b == P("sum"):
                 expected = P("sum")
             assert _outcome(ShardAttr.combine, kind, a, b) == expected, (kind, a, b)
-        for private in (False, True):
-            src_category, dst_category = categories[i], categories[j]
-            if not private:
-                src_category = 0 if src_category == 1 else src_category
-                dst_category = 0 if dst_category == 1 else dst_category
-            expected = convert[src_category][dst_category]
-            if expected == "split":
-                expected = "all_to_all"
-            if expected == "partial":
-                expected = "error"
-            if not private and src_category < 3 and dst_category < 3:
-                expected = "view"
-            normalized_a = B() if not private and a == V() else a
-            normalized_b = B() if not private and b == V() else b
-            if normalized_a == normalized_b:
-                expected = "none"
-            actual = _outcome(ShardAttr.convert, a, b, private)
-            assert (actual if actual == "error" else actual.value) == expected, (a, b, private)
-    for private in (False, True):
-        for attr in (*states, None):
-            expected = B() if not private and attr in (B(), V(), None) else V() if attr is None else attr
-            assert ShardAttr.of(attr, private) == expected
-        assert _outcome(ShardAttr.of, Dynamic(), private) == "error"
-        for attr in (*states, Dynamic(), None):
-            assert _outcome(ShardAttr.convert, Dynamic(), attr, private) == "error"
-            assert _outcome(ShardAttr.convert, attr, Dynamic(), private) == "error"
-            for kind in (*BinaryKind, None):
-                for unresolved in (Dynamic(), None):
-                    assert _outcome(ShardAttr.combine, kind, unresolved, attr) == "error"
-                    assert _outcome(ShardAttr.combine, kind, attr, unresolved) == "error"
-        for src, dst, expected in (
-            (None, None, "none"),
-            (None, B(), "view" if private else "none"),
-            (B(), None, "view" if private else "none"),
-            (None, S(0), "view"),
-            (S(0), None, "gather" if private else "view"),
-            (None, P(), "view" if private else "error"),
-            (P(), None, "reduce"),
-        ):
-            actual = _outcome(ShardAttr.convert, src, dst, private)
-            assert (actual if actual == "error" else actual.value) == expected, (src, dst, private)
+    for attr in (*states, Dynamic(), None):
+        for kind in (*BinaryKind, None):
+            for unresolved in (Dynamic(), None):
+                assert _outcome(ShardAttr.combine, kind, unresolved, attr) == "error"
+                assert _outcome(ShardAttr.combine, kind, attr, unresolved) == "error"
 
     cases = list(product(product((1, 2), repeat=3), STORAGES, (*product(ATTRS, repeat=3), ())))
     workers = min(8, os.cpu_count() or 1)

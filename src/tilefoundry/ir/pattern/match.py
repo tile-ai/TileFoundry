@@ -5,11 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from tilefoundry.ir.types import (
-    Broadcast,
     ComposedLayout,
     Layout,
     Mesh,
-    ShardAttr,
     ShardLayout,
     StorageKind,
     Swizzle,
@@ -19,10 +17,10 @@ from tilefoundry.ir.types import (
 from tilefoundry.ir.types.dim import DimVar, is_dim_op_call
 from tilefoundry.ir.types.int_tuple import congruent
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.mesh import axis_keys, separate
+from tilefoundry.ir.types.mesh import separate
 from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.ir.types.substitute import DimSubstitutionError, substitute_shape_dim
-from tilefoundry.ir.types.utils import participant_layout
+from tilefoundry.ir.types.utils import attrs_by_axis, participant_layout
 
 OPAQUE = object()
 
@@ -462,14 +460,11 @@ class PatternMatcher:
             if mesh is None or layout is None:
                 return self._fail(pattern.layout, layout)
             if shard is None and isinstance(pattern.layout.mesh.topologies, tuple):
-                mesh = participant_layout(ShardLayout(
-                    layout, tuple(Broadcast() for _ in axis_keys(mesh)), mesh
-                ), pattern.layout.mesh.topologies).mesh
-            attrs = tuple(
-                ShardAttr.of(shard.attrs[axis] if shard and axis < len(shard.attrs) else Broadcast() if shard else None,
-                             self.owners.private(subject.storage, level))
-                for axis, (level, _name) in enumerate(axis_keys(mesh))
-            )
+                mesh = participant_layout(
+                    ShardLayout(layout, tuple(attrs_by_axis(subject, mesh).values()), mesh),
+                    pattern.layout.mesh.topologies,
+                ).mesh
+            attrs = tuple(attrs_by_axis(subject, mesh, self.owners).values())
             layout = ShardLayout(shard.layout if shard else layout, attrs, mesh)
         return pattern.layout is None or self.match(pattern.layout, layout)
 

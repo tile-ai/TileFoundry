@@ -23,15 +23,18 @@ from tilefoundry.ir.types.dtype import IntegerDType
 from tilefoundry.ir.types.int_tuple import compatible_profile
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
-    ShardAttr,
     Varying,
-    attrs_by_axis,
     shard_layout_of,
 )
 from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type
-from tilefoundry.ir.types.utils import static_dim_value, tensor_types, types_compatible
+from tilefoundry.ir.types.utils import (
+    attrs_by_axis,
+    static_dim_value,
+    tensor_types,
+    types_compatible,
+)
 from tilefoundry.ir.visitor import expr_children
 from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
@@ -338,24 +341,30 @@ class TypeInferVisitor(ValuationVisitor[Type]):
                 hint = ""
                 for entry, yielded in zip(tensor_types(entry_type), tensor_types(yield_type)):
                     shards = tuple(shard_layout_of(t.layout) for t in (entry, yielded))
-                    states = tuple(attrs_by_axis(sl) for sl in shards)
-                    for key in set().union(*(state or {} for state in states)):
-                        before, after = (
-                            ShardAttr.of(state.get(key, Broadcast()) if state is not None else None,
-                                         owners.private(t.storage, key[0]))
-                            for state, t in zip(states, (entry, yielded), strict=True)
-                        )
+                    frame = next((shard.mesh for shard in shards if shard is not None), None)
+                    states = tuple(
+                        attrs_by_axis(t, None if shard is not None else frame)
+                        for t, shard in zip((entry, yielded), shards)
+                    )
+                    for key in states[0].keys() | states[1].keys():
+                        before, after = (state.get(key, Broadcast()) for state in states)
                         if before != after:
                             labels = {Broadcast(): "B", Varying(): "V"}
-                            hint = (f": axis {key} enters {labels.get(before, repr(before))} "
-                                    f"and leaves {labels.get(after, repr(after))}")
+                            hint = (
+                                f": axis {key} enters {labels.get(before, repr(before))} "
+                                f"and leaves {labels.get(after, repr(after))}"
+                            )
                             if before in labels and after in labels:
-                                hint += (f"; reshard the entry to {labels[after]} "
-                                         f"or the yield to {labels[before]}")
+                                hint += (
+                                    f"; reshard the entry to {labels[after]} "
+                                    f"or the yield to {labels[before]}"
+                                )
                             break
                     if hint:
                         break
-                ctx.error(region, f"LoopRegion yield {index} type mismatch for param {phi.name!r}{hint}")
+                ctx.error(
+                    region, f"LoopRegion yield {index} type mismatch for param {phi.name!r}{hint}"
+                )
         if not carried:
             return body_type
         if len(carried) == 1:

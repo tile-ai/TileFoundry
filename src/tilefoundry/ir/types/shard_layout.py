@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from enum import Enum
 
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
@@ -9,51 +8,28 @@ from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.stride import idx2crd
 
 from .layout import ComposedLayout, LayoutBase
-from .mesh import Mesh, axis_keys, make_mesh, separate
+from .mesh import Mesh
 from .stride import compact_row_major, crd2idx
-
-
-class Conversion(Enum):
-    """What a Reshard does on one mesh axis.
-
-    See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
-    """
-
-    NONE = "none"
-    VIEW = "view"
-    GATHER = "gather"
-    ALL_TO_ALL = "all_to_all"
-    REDUCE = "reduce"
-    REDUCE_SCATTER = "reduce_scatter"
 
 
 class ShardAttr:
     """Base for per-mesh-axis sharding attributes."""
 
     @staticmethod
-    def of(attr: ShardAttr | None, private: bool) -> ShardAttr:
-        """Read plain as Varying; shared Broadcast/Varying as Broadcast.
-
-        See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
-        """
-        if attr is None:
-            attr = Varying()
-        if isinstance(attr, (Broadcast, Varying)):
-            return attr if private else Broadcast()
-        if isinstance(attr, (Split, Partial)):
-            return attr
-        raise ValueError(f"unresolved placement attr {attr!r}; resolve Dynamic before lowering")
-
-    @staticmethod
     def combine(kind: BinaryKind | None, a: ShardAttr, b: ShardAttr) -> ShardAttr:
-        """Merge of-results before access relations map Split attrs.
+        """Merge value states before access relations map Split attrs.
 
         See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
         """
         if a is None or b is None:
-            raise ValueError("combine requires resolved attrs; call ShardAttr.of first")
-        ShardAttr.of(a, True)
-        ShardAttr.of(b, True)
+            raise ValueError(
+                "combine requires resolved attrs; read states with attrs_by_axis first"
+            )
+        for attr in (a, b):
+            if not isinstance(attr, (Broadcast, Varying, Split, Partial)):
+                raise ValueError(
+                    f"unresolved placement attr {attr!r}; resolve Dynamic before lowering"
+                )
         if isinstance(a, Partial) or isinstance(b, Partial):
             if isinstance(a, Partial) and isinstance(b, Partial):
                 if kind is BinaryKind.ADD and a.reduction == b.reduction == "sum":
@@ -74,27 +50,6 @@ class ShardAttr:
         if isinstance(b, Split):
             return b
         return Varying() if isinstance(a, Varying) or isinstance(b, Varying) else Broadcast()
-
-    @staticmethod
-    def convert(src: ShardAttr | None, dst: ShardAttr | None, private: bool) -> Conversion:
-        """Classify one Reshard axis; reject invalid or unresolved attrs.
-
-        See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
-        """
-        src, dst = ShardAttr.of(src, private), ShardAttr.of(dst, private)
-        if src == dst:
-            return Conversion.NONE
-        if isinstance(src, Partial):
-            if isinstance(dst, Partial):
-                raise ValueError(f"cannot convert {src!r} to {dst!r}: reductions differ")
-            return Conversion.REDUCE_SCATTER if isinstance(dst, Split) else Conversion.REDUCE
-        if isinstance(dst, Partial):
-            if isinstance(src, Varying):
-                return Conversion.VIEW
-            raise ValueError(f"cannot convert {src!r} to {dst!r}; only Varying may become Partial")
-        if not private or not isinstance(src, Split):
-            return Conversion.VIEW
-        return Conversion.ALL_TO_ALL if isinstance(dst, Split) else Conversion.GATHER
 
 
 @dataclass(frozen=True)
@@ -265,48 +220,6 @@ def shard_layout_of(layout: object) -> "ShardLayout | None":
 def physical_attr(attr: ShardAttr) -> ShardAttr:
     """Read value variation as Broadcast for coordinate and execution queries."""
     return Broadcast() if isinstance(attr, Varying) else attr
-
-
-def physical_layout(layout: ShardLayout) -> LayoutBase:
-    """Drop value-only levels, then read remaining variation as Broadcast."""
-    if not any(isinstance(attr, Varying) for attr in layout.attrs):
-        return layout
-    selected, attrs = [], []
-    offset = 0
-    levels = separate(layout.mesh)
-    for level in levels:
-        rank = len(flatten(level.layout).shape)
-        states = layout.attrs[offset:offset + rank]
-        offset += rank
-        if any(isinstance(attr, Varying) for attr in states) and not any(
-            isinstance(attr, (Split, Partial)) for attr in states
-        ):
-            continue
-        selected.append(level)
-        attrs.extend(map(physical_attr, states))
-    if not selected:
-        return layout.layout
-    return replace(
-        layout, attrs=tuple(attrs),
-        mesh=layout.mesh if len(selected) == len(levels) else make_mesh(*selected),
-    )
-
-
-def attrs_by_axis(layout: object) -> dict[tuple[str, int], ShardAttr] | None:
-    """Read attrs by topology level and ordinal; None denotes a plain layout.
-
-    Missing attrs in a shard frame read as Broadcast. Authored axis names do
-    not identify physical axes, so unnamed or renamed axes remain distinct.
-    """
-    shard = shard_layout_of(layout)
-    if shard is None:
-        return None
-    result, counts = {}, {}
-    for axis, (level, _name) in enumerate(axis_keys(shard.mesh)):
-        ordinal = counts.get(level, 0)
-        result[level, ordinal] = shard.attrs[axis] if axis < len(shard.attrs) else Broadcast()
-        counts[level] = ordinal + 1
-    return result
 
 
 def partial_reductions_by_axis(
@@ -536,16 +449,13 @@ __all__ = [
     "local_layout",
     "local_layout_and_offset",
     "partial_reductions_by_axis",
-    "attrs_by_axis",
     "physical_attr",
-    "physical_layout",
     "mesh_coords",
     "ShardAttr",
     "Split",
     "Partial",
     "Broadcast",
     "Varying",
-    "Conversion",
     "Dynamic",
     "S",
     "P",

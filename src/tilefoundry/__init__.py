@@ -39,7 +39,6 @@ from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types import (
     B,
     Broadcast,
-    Conversion,
     V,
     Varying,
     ComposedLayout,
@@ -133,7 +132,6 @@ __all__ = [
     "Split",
     "Partial",
     "Broadcast",
-    "Conversion",
     "V",
     "Varying",
     "Dynamic",

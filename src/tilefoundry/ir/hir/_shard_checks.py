@@ -10,16 +10,15 @@ from __future__ import annotations
 
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.types.shard_layout import (
-    Broadcast,
     Dynamic,
     Partial,
     ShardAttr,
     ShardLayout,
-    attrs_by_axis,
     partial_reductions_by_axis,
     shard_layout_of,
 )
 from tilefoundry.ir.types.storage import StorageOwners
+from tilefoundry.ir.types.utils import attrs_by_axis
 
 
 def reject_partials(ctx, call, arg_name, layout, commutes_with=frozenset()):
@@ -41,7 +40,7 @@ def reject_partials(ctx, call, arg_name, layout, commutes_with=frozenset()):
 
 def check_multilinear_partials(ctx, call, named_operands, *, kind=BinaryKind.MUL, anchor=None):
     """Check each Partial axis using the op's combination rule and storage owners."""
-    layouts = [(name, ty, attrs_by_axis(ty.layout)) for name, ty in named_operands]
+    layouts = [(name, ty, attrs_by_axis(ty)) for name, ty in named_operands]
     target = getattr(ctx, "target", None)
     owners = target.storage_owners if target else StorageOwners((), {})
     for name, ty, layout in layouts:
@@ -51,20 +50,23 @@ def check_multilinear_partials(ctx, call, named_operands, *, kind=BinaryKind.MUL
             if not isinstance(attr, Partial):
                 continue
             if anchor is not None and name != anchor:
-                ctx.error(call, f"{name} carries {attr!r} on mesh axis {axis[1]} ({axis[0]}); "
-                          f"reshard({name}, @ {{B()}}) before this consumer")
-            state = None
-            level = axis[0]
-            for other_name, other_ty, other in layouts:
-                other_attr = (
-                    other.get(axis, Broadcast()) if other is not None else None
+                ctx.error(
+                    call,
+                    f"{name} carries {attr!r} on mesh axis {axis[1]} ({axis[0]}); "
+                    f"reshard({name}, @ {{B()}}) before this consumer",
                 )
-                held = ShardAttr.of(other_attr, owners.private(other_ty.storage, level))
+            state = None
+            for other_name, other_ty, other in layouts:
+                mesh = shard_layout_of(ty.layout).mesh
+                held = attrs_by_axis(other_ty, mesh, owners)[axis]
                 try:
                     state = held if state is None else ShardAttr.combine(kind, state, held)
                 except ValueError as error:
-                    ctx.error(call, f"{name} carries Partial({attr.reduction}) on mesh axis {axis[1]} ({axis[0]}); "
-                              f"operand {other_name}: operands do not commute: {error}")
+                    ctx.error(
+                        call,
+                        f"{name} carries Partial({attr.reduction}) on mesh axis {axis[1]} ({axis[0]}); "
+                        f"operand {other_name}: operands do not commute: {error}",
+                    )
 
 
 def require_matching_partial_state(ctx, call, dst, update, dst_name, update_name):

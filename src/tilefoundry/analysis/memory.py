@@ -20,13 +20,14 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.mesh import Mesh, separate, within_scope
-from tilefoundry.ir.types.shard_layout import physical_layout, shard_layout_of
+from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import (
     bytes_by_storage,
     is_unsharded_layout,
     leaves_of,
     participant_layout,
+    physical_layout,
 )
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.units import format_bytes

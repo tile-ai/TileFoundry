@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from typing import Optional
 
 from tilefoundry.ir.types.int_tuple import repeat_like
@@ -9,7 +10,7 @@ from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind, StorageOwners
 
 from .dtype import DType
-from .layout import ComposedLayout, apply
+from .layout import ComposedLayout, LayoutBase, apply
 from .layout_algebra import size
 from .mesh import Mesh, Topology, axis_keys, make_mesh, separate
 from .shard_layout import (
@@ -17,11 +18,60 @@ from .shard_layout import (
     Partial,
     ShardAttr,
     Split,
-    attrs_by_axis,
+    Varying,
+    physical_attr,
     shard_layout_of,
     split_target_axes,
 )
 from .tensor_type import TensorType, TupleType, Type
+
+
+def attrs_by_axis(
+    type_: TensorType, mesh: Mesh | None = None, owners: StorageOwners | None = None
+) -> dict[tuple[str, int], ShardAttr]:
+    """Read mesh-axis states keyed by level and ordinal.
+
+    See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+
+    Args:
+        type_: Tensor whose plain layout reads as Varying.
+        mesh: Frame to read; defaults to the tensor's shard mesh.
+        owners: Target facts used to normalize shared copies. None reads attrs
+            as written; empty facts instead normalize Broadcast and Varying alike.
+
+    Returns:
+        States in frame order; omitted shard axes and levels read as Broadcast.
+
+    Raises:
+        ValueError: An axis carries an unresolved placement state.
+    """
+    shard = shard_layout_of(type_.layout)
+    stated, counts = {}, {}
+    if shard is not None:
+        for axis, (level, _name) in enumerate(axis_keys(shard.mesh)):
+            ordinal = counts.get(level, 0)
+            counts[level] = ordinal + 1
+            stated[level, ordinal] = shard.attrs[axis] if axis < len(shard.attrs) else Broadcast()
+    keys = stated
+    if mesh is not None:
+        keys, counts = {}, {}
+        for level, _name in axis_keys(mesh):
+            ordinal = counts.get(level, 0)
+            counts[level] = ordinal + 1
+            keys[level, ordinal] = None
+    result = {}
+    for key in keys:
+        attr = stated.get(key, Broadcast()) if shard is not None else Varying()
+        if not isinstance(attr, (Broadcast, Varying, Split, Partial)):
+            raise ValueError(f"unresolved placement attr {attr!r}; resolve Dynamic before lowering")
+        if (
+            owners is not None
+            and isinstance(attr, (Broadcast, Varying))
+            and not owners.private(type_.storage, key[0])
+        ):
+            attr = Broadcast()
+        result[key] = attr
+    return result
 
 
 def participant_layout(
@@ -82,6 +132,27 @@ def participant_layout(
     return ShardLayout(layout.layout, tuple(selected_attrs), make_mesh(*selected))
 
 
+def physical_layout(layout: ShardLayout) -> LayoutBase:
+    """Omit value-only levels, then read remaining variation as Broadcast."""
+    if not any(isinstance(attr, Varying) for attr in layout.attrs):
+        return layout
+    by_level = {level: [] for level, _name in axis_keys(layout.mesh)}
+    for attr, (level, _name) in zip(layout.attrs, axis_keys(layout.mesh)):
+        by_level[level].append(attr)
+    kept = tuple(
+        level
+        for level, attrs in by_level.items()
+        if not (
+            any(isinstance(attr, Varying) for attr in attrs)
+            and not any(isinstance(attr, (Split, Partial)) for attr in attrs)
+        )
+    )
+    if not kept:
+        return layout.layout
+    selected = participant_layout(layout, kept)
+    return ShardLayout(selected.layout, tuple(map(physical_attr, selected.attrs)), selected.mesh)
+
+
 def _participant_frame(source: Mesh, required: Mesh) -> tuple[Mesh, int]:
     """Find a physical suffix; its dropped count indexes the full source layout."""
     assert len(required.topologies) == 1, "participant frames require one topology level"
@@ -126,7 +197,7 @@ def is_unsharded_layout(layout: object) -> bool:
     """Recognize the three tensor layout forms that carry no distribution."""
     shard = shard_layout_of(layout)
     if shard is not None:
-        return all(ShardAttr.of(attr, False) == Broadcast() for attr in shard.attrs)
+        return all(isinstance(attr, (Broadcast, Varying)) for attr in shard.attrs)
     return isinstance(layout, (Layout, ComposedLayout))
 
 
@@ -164,11 +235,12 @@ def types_compatible(
             if not isinstance(actual_layout, ShardLayout):
                 return False
             declared_layout, actual_layout = (
-                participant_layout(ShardLayout(layout.layout, tuple(
-                    ShardAttr.of(attr, owners.private(tensor.storage, level))
-                    for attr, (level, _name) in zip(layout.attrs, axis_keys(layout.mesh), strict=True)
-                ), layout.mesh))
-                for layout, tensor in zip((declared_layout, actual_layout), (declared, actual), strict=True)
+                participant_layout(
+                    replace(layout, attrs=tuple(attrs_by_axis(tensor, owners=owners).values()))
+                )
+                for layout, tensor in zip(
+                    (declared_layout, actual_layout), (declared, actual), strict=True
+                )
             )
             return (
                 field_compatible(declared_layout.mesh, actual_layout.mesh)
@@ -181,14 +253,15 @@ def types_compatible(
         if not isinstance(actual, TensorType):
             return False
         shards = tuple(shard_layout_of(t.layout) for t in (declared, actual))
-        states = tuple(attrs_by_axis(sl) for sl in shards)
+        states = tuple(attrs_by_axis(t, owners=owners) for t in (declared, actual))
         if declared.layout is not None and actual.layout is not None:
-            for key in set().union(*(state or {} for state in states)):
-                held = tuple(
-                    ShardAttr.of(state.get(key, Broadcast()) if state is not None else None,
-                                 owners.private(t.storage, key[0]))
-                    for state, t in zip(states, (declared, actual), strict=True)
+            for key in set().union(*states):
+                mesh = next(
+                    shard.mesh
+                    for shard, state in zip(shards, states)
+                    if shard is not None and key in state
                 )
+                held = tuple(attrs_by_axis(t, mesh, owners)[key] for t in (declared, actual))
                 if held[0] != held[1]:
                     return False
         if is_unsharded_layout(declared.layout) and is_unsharded_layout(actual.layout):

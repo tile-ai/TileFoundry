@@ -9,7 +9,6 @@ from .layout import ComposedLayout, Layout, LayoutBase, Swizzle
 from .shard_layout import (
     B,
     Broadcast,
-    Conversion,
     V,
     Varying,
     Dynamic,
@@ -32,7 +31,6 @@ __all__ = [
     "B",
     "BoolDType",
     "Broadcast",
-    "Conversion",
     "V",
     "Varying",
     "CallableType",

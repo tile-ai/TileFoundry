@@ -636,7 +636,7 @@ levels containing Split or Partial remain part of the distribution.
 | `Partial` | Every copy holds one contribution (always separates copies) | — |
 | `Varying` | Every copy holds all coordinates; values may differ | One shared copy |
 
-An axis separates copies when `StorageOwners.private(storage, level)` holds.
+An axis separates copies when its level is the storage owner's level or coarser.
 Partial axes always separate contributions, including axes finer than the storage
 owner. A Partial on such an axis holds one copy per unit of that axis, each at
 its own base address; completing the reduction leaves one copy.
@@ -650,12 +650,14 @@ containing Varying but no Split or Partial, then reads remaining Varying as
 Broadcast without changing the stored value type. An entirely omitted physical
 frame uses the plain layout; levels containing only Broadcast retain their frame.
 
-`ShardAttr.of(attr, private)` reads `None` (plain) as Varying. On an axis that
-does not separate copies, Broadcast and Varying both read as Broadcast; Split
-and Partial remain unchanged. Dynamic is unresolved and raises `ValueError` in
-all three methods below.
+`attrs_by_axis(type_, mesh=None, owners=None)` reads states keyed by topology
+level and axis ordinal. Without owners it reads placements as written: plain is
+Varying, and omitted shard axes and levels are Broadcast. With target owners,
+Broadcast and Varying on axes finer than their storage owner both read as
+Broadcast. An empty owner mapping is not the same as omitting owners: it states
+no separate storage copies. Dynamic raises `ValueError`.
 
-`ShardAttr.combine(kind, a, b)` merges two `of` results **before** access relations
+`ShardAttr.combine(kind, a, b)` merges two read states **before** access relations
 map Split placements. Elementwise operations pass their `BinaryKind`;
 multilinear operations (matmul, conv2d, rope) pass `BinaryKind.MUL`; other
 operations pass `None`. Here B, V, S, and P denote Broadcast, Varying, Split,
@@ -671,27 +673,15 @@ Unary operations check their own Partial commutativity separately.
 | P(r) | Symmetric with B row | Error | Error | ADD and both reductions = sum: P(sum); otherwise error |
 
 `combine` rejects `None` with `ValueError`: callers must first read plain layouts
-through `ShardAttr.of`. Error cells raise `ValueError` including the kind and both attrs, with an
+through `attrs_by_axis`. Error cells raise `ValueError` including the kind and both attrs, with an
 explicit `reshard(..., @ {B()})` remedy where equal values are required.
 Only B → V is implicit. V → B is an explicit view: the author promises equal
 values, with no communication or runtime check. V → P is also an explicit view.
 
-`ShardAttr.convert(src, dst, private)` classifies a Reshard on one mesh axis.
-`Conversion` has NONE, VIEW, GATHER, ALL_TO_ALL, REDUCE, and REDUCE_SCATTER members
-(with lowercase string values). For `private=True`:
-
-| src \ dst | B | V | S | P |
-| --- | --- | --- | --- | --- |
-| B | NONE | VIEW | VIEW (local slice) | Error |
-| V | VIEW | NONE | VIEW (slice own copy) | VIEW (reinterpret as contribution) |
-| S | GATHER | GATHER | Same position: NONE; different position: ALL_TO_ALL | Error |
-| P(r) | REDUCE | REDUCE | REDUCE_SCATTER | Same reduction: NONE; different reduction: error |
-
-`convert` first reads both src and dst through `of(..., private)`, including
-`None` (plain). For `private=False`, V becomes B; changes among B and S are VIEW
-(identical attrs: NONE). Thus B ↔ V is NONE, and V → P raises `ValueError` on a
-shared axis. The P row and B → P / S → P errors remain unchanged. Error cells
-raise `ValueError`; converting between different Partial reductions is forbidden.
+A Reshard reads both ends' value states and checks each mesh axis: a Partial
+end must come from the same Partial or from Varying; a Partial source may become
+any state, completing its reduction. Which collective moves data is chosen by
+lowering for the whole Reshard.
 
 ### Surface syntax sugar
 

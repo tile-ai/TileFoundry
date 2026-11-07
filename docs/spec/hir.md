@@ -1631,7 +1631,8 @@ class Reshard(Op):
   - Supplied `layout` is a `LayoutBase` (`Layout` / `ComposedLayout` / `ShardLayout`).
   - Memory analysis and lowering MUST treat a Reshard as a view iff storage
     is unchanged, the shape is literal, both structural address boxes agree,
-    and every mesh axis with a `Partial` end converts as NONE or VIEW
+    and on every mesh axis with a `Partial` end both ends are equal, or a
+    Varying (or plain) source becomes Partial
     ([shard §6.1](./shard.md#61-placement-semantics)). Each
     thread holds register storage privately, so an `rmem` Reshard with a
     `ShardLayout` is a view only when every logical element keeps the threads
