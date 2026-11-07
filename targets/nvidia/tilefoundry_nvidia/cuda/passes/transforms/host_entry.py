@@ -19,6 +19,8 @@ from tilefoundry.ir.types.layout import Layout
 from tilefoundry.passes.transforms.host_entry import InsertHostEntryPass
 from tilefoundry.target import CpuTarget, bind
 from tilefoundry_nvidia.cuda import CudaTarget
+from tilefoundry_nvidia.cuda.analysis.sync import SyncPlanMetadata
+from tilefoundry_nvidia.cuda.ir.tir.sync.mbarrier import MBARRIER_BYTES
 
 
 def _product(values: tuple[object, ...]) -> object:
@@ -48,10 +50,18 @@ def insert_default_host_entry(module: Module) -> Module:
 
 
 def _smem_peak(fn: Function) -> int:
-    """The analyzed shared-memory high-water mark of *fn*, and 0 before analysis."""
+    """The analyzed shared-memory high-water mark of *fn*, and 0 before analysis.
+
+    It ends after the per-warp mbarrier words when the ``sync`` plan places them.
+    """
     region = get_metadata(fn, RegionMemoryMetadata)
     peaks = () if region is None else region.peaks
-    return next((peak.peak_bytes for peak in peaks if peak.memory_level == "smem"), 0)
+    peak = next((peak.peak_bytes for peak in peaks if peak.memory_level == "smem"), 0)
+    plan = get_metadata(fn, SyncPlanMetadata)
+    if plan is None or plan.barriers is None:
+        return peak
+    offset, words = plan.barriers
+    return offset + MBARRIER_BYTES * words
 
 
 def _launchable(ty) -> bool:

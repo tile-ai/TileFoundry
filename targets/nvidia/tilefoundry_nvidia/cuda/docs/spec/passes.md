@@ -21,7 +21,8 @@ class CudaLowering(Lowering):
     def visit_InsertSlice(self, call: Call, operands, ctx) -> Expr: ...
     def visit_Zeros(self, call: Call, operands, ctx) -> Expr | View: ...
     def visit_FullLike(self, call: Call, operands, ctx) -> Expr | View: ...
-    def default_visit_T(self, call: Call, op, operands, ctx) -> Expr: ...
+    def visit_T_CopyAsyncTensor(self, call: Call, op, operands, ctx) -> Expr: ...
+    def default_visit_T(self, call: Call, op, operands, ctx, emit=None) -> Expr: ...
 ```
 
 - constraints:
@@ -47,8 +48,8 @@ class CudaLowering(Lowering):
     | `visit_LoopRegion` | None | after the entry copies, before the loop |
     | `visit_LoopRegion` | `("backedge", slot)` | inside the loop, before the slot's backedge copy |
     | `visit_InsertSlice` | `"base"`, `"update"` | before the base copy, before the update copy |
-    | `default_visit_T` | `"issue"` | before each issue |
-    | `default_visit_T` | `"after"` | after the issues, inside the region that issues them |
+    | `default_visit_T`, `visit_T_CopyAsyncTensor` | `"issue"` | before each issue |
+    | `default_visit_T`, `visit_T_CopyAsyncTensor` | `"after"` | after the issues, inside the region that issues them |
 
     `visit_T` also covers a `Reshard` that is not a view. The loop,
     `InsertSlice`, fill and instruction visits exist only here: the core
@@ -56,12 +57,18 @@ class CudaLowering(Lowering):
   - For `Group.CP_ASYNC` a commit is `cp_async_commit` and a wait
     `cp_async_wait(n=0)`; for `Group.WGMMA` a commit is `wgmma_commit_group`,
     a wait `wgmma_wait_group(n=0)` and a fence `wgmma_fence`. A
-    `StepKind.PROXY_FENCE` is `fence_proxy_async` and a `StepKind.BARRIER`
-    `T.sync` over the step's mesh.
-  - `CopyAsyncTensor` and `CopyReduceAsyncTensor` declare no completion, so the
-    plan orders them as complete once their statement returns. Their emitters
-    MUST wait before returning: an mbarrier wait for a TMA load, a bulk wait
-    for a TMA store or reduction.
+    `StepKind.PROXY_FENCE` is `fence_proxy_async` over the step's `storage` and
+    a `StepKind.BARRIER` `T.sync` over the step's mesh.
+  - `CopyAsyncTensor` and `CopyReduceAsyncTensor` register no asynchronous
+    completion group: their effects complete on return, the shared operand
+    through the async proxy ([analysis §2](./analysis.md#2-completion-registry)).
+    Their emitters MUST finish each copy before the operation ends: an mbarrier
+    wait for a load, a full bulk wait (not `.read`) for a store or reduction,
+    each followed by a meeting of the issuing threads.
+  - `visit_T_CopyAsyncTensor` lowers a load from global to shared memory to
+    `CopyAsyncTensorTx` wherever `default_visit_T` would issue the load, with
+    the words `SyncPlanMetadata.barriers` places as `barrier`: `count` words of
+    8 bytes from `offset`. A store is lowered by `default_visit_T`.
 
 ### 7.3 `insert_default_host_entry`
 
@@ -121,7 +128,8 @@ def insert_default_host_entry(module: Module) -> Module:
     because a host cannot pass that storage.
   - Each synthesized `Launch` MUST state the entry function's analyzed
     shared-memory peak as `dynamic_smem`, and 0 when it carries no memory
-    analysis.
+    analysis. When the entry's `SyncPlanMetadata.barriers` is `(offset, count)`,
+    it states `offset + 8 * count` instead.
   - Mixed HIR/TIR device trees MUST be rejected.
   - A TIR Module MUST pass through unchanged; it supplies its own CPU entry.
   - It MUST NOT rewrite the Target any function records. Which target a

@@ -31,6 +31,7 @@ class SyncStep:
     kind: StepKind
     mesh: Mesh | None = None   # the thread mesh a barrier runs over
     group: Group | None = None # the completion group a commit, a wait or a fence is for
+    storage: StorageKind | None = None   # the memory a proxy fence publishes: GMEM, or None for smem
 
 class SyncMetadata(IRMetadata):
     steps: tuple[tuple[object, tuple[SyncStep, ...]], ...] = ()   # (tag, steps)
@@ -38,12 +39,16 @@ class SyncMetadata(IRMetadata):
 
 class SyncPlanMetadata(IRMetadata):
     shared: bool = False       # whether any of its actions touches shared memory
+    barriers: tuple[int, int] | None = None   # (offset, count) of the per-warp mbarrier words
+    global_async: bool = False # whether any of its actions reaches gmem through the async proxy
+    errors: tuple[str, ...] = ()   # non-fatal: the mbarrier words ending above capacity
 ```
 
 - constraints:
   - **Steps.** Each analysis replaces the `SyncMetadata` of every node of the
     Function. Under one tag, steps run in the order of `StepKind`, then of
-    `Group`. A tag holds each step once. Steps for different groups stay apart.
+    `Group`, then of `storage`. A tag holds each step once. Steps for different
+    groups or storages stay apart.
     The tag tells where its steps run:
 
     | Tag | Node | Steps run |
@@ -74,7 +79,7 @@ class SyncPlanMetadata(IRMetadata):
     | Fact | Source |
     |---|---|
     | the instruction a Call issues, its operand types, the mesh that owns it | `passes/transforms/convert_hir_to_tir.py` |
-    | the copies lowering adds, the parameters a Call's arguments supply, the mesh an instruction is issued on | `cuda/analysis/emission.py` |
+    | the copies lowering adds, the parameters a Call's arguments supply, the mesh an instruction is issued on, whether it is a tensor-map load | `cuda/analysis/emission.py` |
     | the completion of each effect | the completion registry, see [§2](#2-completion-registry) |
   - **Register storage.** Every register read and write of an action touches
     the storage that lowering gives its value. `register_storage` follows the
@@ -92,15 +97,25 @@ class SyncPlanMetadata(IRMetadata):
     and size. A leaf owns unknown bytes when it has no placed offset or when
     the Function returns its allocation. Unknown bytes overlap all bytes. The
     plan orders whole allocations, not stages or windows.
+  - **Global memory roots.** An access to global memory touches the
+    allocation root of its value. A Function other than the entry touches an
+    unknown root for a value it returns, and any Function for a global value
+    the memory family did not record. Unknown roots match all roots.
   - **Order.** A later access conflicts with an earlier one and follows it
     after steps, as this table states:
 
-    | | Shared memory | Register storage |
-    |---|---|---|
-    | Conflict | one of the two writes and their bytes overlap | the earlier access is in flight |
-    | Conflict in one group | as above | only when one of the two writes and they share no non-None `chain` |
-    | No conflict | the earlier access is complete, and both are operands of instructions without an execution mesh, with one `ShardLayout` that splits along each mesh axis whose threads share shared memory | - |
-    | Steps | a commit and a wait for an earlier group effect, a proxy fence for an async access after a generic one, then a barrier over a scope whose mesh chain is a prefix of the later access's | a commit and a wait for the group of the earlier access, and no barrier |
+    | | Shared memory | Global memory | Register storage |
+    |---|---|---|---|
+    | Conflict | one of the two writes and their bytes overlap | one of the two writes, one of the two goes through the async proxy, and their roots match | the earlier access is in flight |
+    | Conflict in one group | as above | as above | only when one of the two writes and they share no non-None `chain` |
+    | No conflict | the earlier access is complete, and both are operands of instructions without an execution mesh, with one `ShardLayout` that splits along each mesh axis whose threads share shared memory | - | - |
+    | Steps | a commit and a wait for an earlier group effect, a proxy fence for an async access after a generic one, then a barrier over a scope whose mesh chain is a prefix of the later access's | as for shared memory, with a proxy fence over global memory | a commit and a wait for the group of the earlier access, and no barrier |
+
+    A proxy fence runs on every thread of its scope before the barrier, so
+    the threads that made the generic accesses publish them before the async
+    access issues. An async access needs no fence before a later generic one:
+    the completion of a tensor-map copy is followed by an implicit
+    generic-async proxy fence (PTX `cp.async.bulk`).
   - **Group fence.** A `fence` effect needs the fence of its group before the
     action in two cases. First, its registers have no access yet. Second, an
     access to its registers since the last fence is not an effect of that group
@@ -135,10 +150,55 @@ class SyncPlanMetadata(IRMetadata):
     on return. A retained call also reads and writes unknown shared memory
     bytes, unless the callee has a plan in which no action touches shared
     memory. These effects complete as a `cp.async` group. An access that
-    conflicts with them waits for every `cp.async` group in flight.
+    conflicts with them waits for every `cp.async` group in flight. Unless the
+    callee has a plan whose `global_async` is False, the call also reads and
+    writes unknown global memory through the async proxy, the callee's own
+    temporaries included.
+  - **Barrier words.** A Function with a `CopyAsyncTensor` load from global to
+    shared memory, or a retained call whose callee plan has `barriers`, gets
+    `barriers = (offset, count)`: one 8-byte mbarrier word per warp of the CTA,
+    `count = ceil(threads / W)` with `W` the target's
+    `architecture.max_threads_per_warp`, at `offset`, the entry's shared-memory peak
+    rounded up to 8. Only the entry places shared memory, so every Function it
+    reaches shares the offset. Words that end above the target's capacity
+    refuse nothing, as a peak above it refuses nothing. When the placed peak
+    fits the capacity and the words do not, `errors` says so; a peak already
+    above capacity is the memory family's error, and an unknown capacity adds
+    none. `SyncPlanMetadata` is a structured record of the `sync` report
+    family, so a JSON report that requests `sync` carries it.
+  - **CTAs.** No step orders two CTAs of one launch. In an entry launched on
+    more than one CTA, `ctas.py` pairs the global memory reads and writes of
+    its actions where one of the two goes through the async proxy, one of the
+    two writes and their roots match; each pairs with itself too. Each side is
+    the device access relation of its action, constrained by the loops around
+    it. The second side renames every coordinate except the entry's own
+    parameters and module dimensions, so two iterations of one action pair as
+    well. Each execution runs in one physical CTA of the launch, and every CTA
+    coordinate its relation names is the coordinate that CTA reads, as the
+    runtime's `mesh_coords` reads it; the two CTAs differ. A coordinate that
+    cannot be bound this way leaves the pair unproven. Only the sliced CTA
+    meshes around an access keep a CTA from running it, as the runtime's
+    `contains` guard does; a mesh smaller than its topology repeats over the
+    launch. A slice whose positions are not static keeps no CTA out. For two
+    different CTAs, the first row that holds decides a pair:
+
+    | Pair | Outcome |
+    |---|---|
+    | both are the same `CopyReduceAsyncTensor` kind | accepted |
+    | a relation is unknown or only an upper bound of what it may access, the two relations are over different targets, or a CTA coordinate cannot be bound | refused: they may reach one element; an upper bound cannot confirm a conflict |
+    | the two relations reach no common element | accepted |
+    | they reach a common element and every name keeps its source | refused: they reach one element |
+    | they reach a common element and a renamed name loses its source | refused: they may reach one element |
+
+    A retained call's relations are unknown.
+  - **Word users.** The word of warp `k` has one user, thread `W * k`: a
+    `CopyAsyncTensor` is issued by whole aligned warps, as its execution mesh
+    pattern states ([tir](./tir.md#copyasynctensor)), so its first issuing
+    thread starts a warp. The plan orders no word.
   - **Refusals.** The family raises `AnalysisError` when an action or a barrier
     breaks a MUST of **Units** or **Placement**. It also raises it for a loop
-    whose state does not settle within its limit.
+    whose state does not settle within its limit, and for a pair that
+    **CTAs** refuses.
 
 ## 2. Completion registry
 
@@ -206,3 +266,4 @@ def completion_of(issued: Issued, *, key: type | None = None) -> tuple[Effect, .
     | `CopyAsync` | in `Group.CP_ASYNC` |
     | the WGMMA atom | as [tir MMA atoms](./tir.md#declarative-mma-atoms-and-ttiled_mma) states |
     | `TiledMma` | as the handler of its atom states, looked up with `key` |
+    | `CopyAsyncTensor`, `CopyReduceAsyncTensor` | on return; the shared operand through `Proxy.ASYNC` ([passes §7.1](./passes.md#71-converthirtotir)) |

@@ -11,13 +11,22 @@ from tests.nvidia.cuda.analysis.sync_cases import FIXTURES, GEMM, SyncCase, _ana
 from tests.nvidia.cuda.schedule._support import _RetainedStatements
 from tilefoundry.ir.tir import CpAsyncCommit, CpAsyncWait
 from tilefoundry.ir.tir.async_copy import CopyAsync
-from tilefoundry.ir.tir.memory import Copy
+from tilefoundry.ir.tir.memory import Copy, Fill
 from tilefoundry.ir.tir.sync import Sync
+from tilefoundry.ir.types import StorageKind
 from tilefoundry.passes.transforms import LoweringError
 from tilefoundry.schedule import finalize
-from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import CopyAsyncTensor
+from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import (
+    CopyAsyncTensor,
+    CopyAsyncTensorTx,
+)
 from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
-from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import WgmmaCommitGroup, WgmmaFence, WgmmaWaitGroup
+from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import (
+    FenceProxyAsync,
+    WgmmaCommitGroup,
+    WgmmaFence,
+    WgmmaWaitGroup,
+)
 
 
 def _lowered(module):
@@ -67,21 +76,80 @@ class LaneRows(SyncCase):
 
 @case
 class TmaLoadsBeforeWgmma(SyncCase):
-    """A TMA load declares no completion, so it is done when it returns: a barrier suffices.
+    """A TMA load is done when it returns, so a barrier suffices before the WGMMA reads it.
 
-    The barrier at the loop head keeps the next loads behind the last iteration's read.
+    The warp publishes its plain copy into the load's global source with a global proxy
+    fence and meets before the load. The barrier at the loop head keeps the next loads
+    behind the last iteration's read.
     """
 
     path: Path = FIXTURES / "schedule/hir/wgmma_a_k_major.py"
 
     def guard(self, state, problems):
         kinds = [
-            type(op)
+            (type(op), op.storage) if isinstance(op, FenceProxyAsync) else type(op)
             for op in _loop_operations(state)
-            if isinstance(op, (Sync, CopyAsyncTensor, TiledMma))
+            if isinstance(op, (Sync, FenceProxyAsync, CopyAsyncTensorTx, TiledMma))
         ]
         first = kinds.index(TiledMma)
-        assert kinds[: first + 1] == [Sync, CopyAsyncTensor, CopyAsyncTensor, Sync, TiledMma]
+        assert kinds[: first + 1] == [
+            Sync,
+            (FenceProxyAsync, StorageKind.GMEM),
+            Sync,
+            CopyAsyncTensorTx,
+            CopyAsyncTensorTx,
+            Sync,
+            TiledMma,
+        ]
+
+
+@case
+class TmaStoreAfterPlainWrites(SyncCase):
+    """A TMA store follows plain writes to both of its ends, each published to the async proxy.
+
+    The kernel zeroes the output first, so a global proxy fence and a barrier follow the fill.
+    The epilogue's plain copy into the staging tile takes a shared proxy fence and a barrier
+    before the store reads the tile.
+    """
+
+    path: Path = FIXTURES / "schedule/hir/gemm_8192x17408x5120_tma_store.py"
+
+    def guard(self, state, problems):
+        kinds = [
+            (type(op), op.storage) if isinstance(op, FenceProxyAsync) else type(op)
+            for op in _lowered(state).operations
+            if isinstance(op, (Fill, Copy, FenceProxyAsync, Sync, CopyAsyncTensor))
+        ]
+        fill = kinds.index(Fill)
+        assert kinds[fill : fill + 3] == [Fill, (FenceProxyAsync, StorageKind.GMEM), Sync]
+        store = kinds.index(CopyAsyncTensor)
+        assert kinds[store - 3 : store] == [Copy, (FenceProxyAsync, None), Sync]
+
+
+@case
+class TmaStoreBetweenReads(SyncCase):
+    """Plain accesses to a global tile are published before a TMA store overwrites it.
+
+    They take a global proxy fence and a barrier before the store; the read after
+    the store takes a barrier alone.
+    """
+
+    path: Path = FIXTURES / "passes/sync_tma_store_between_reads.py"
+
+    def guard(self, state, problems):
+        kinds = [
+            (type(op), op.storage) if isinstance(op, FenceProxyAsync) else type(op)
+            for op in _lowered(state).operations
+            if isinstance(op, (Copy, FenceProxyAsync, Sync, CopyAsyncTensor))
+        ]
+        store = kinds.index(CopyAsyncTensor)
+        assert kinds[store - 2 : store + 3] == [
+            (FenceProxyAsync, StorageKind.GMEM),
+            Sync,
+            CopyAsyncTensor,
+            Sync,
+            Copy,
+        ]
 
 
 @case

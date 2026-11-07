@@ -27,6 +27,7 @@ class _Plain:
     def device(x: Tensor[(32,), "f32"], out: Tensor[(32,), "f32"]):
         with Mesh((Topology("thread", 32),), Layout((32,), (1,))) as thread:
             T.fence_proxy_async()
+            T.fence_proxy_async(storage="gmem")
             layout = ShardLayout(Layout((32,), (1,)), (Split(0),), thread)
             src = T.tensor_view(T.ptr_of(x), layout=layout)
             dst = T.tensor_view(T.ptr_of(out), layout=layout)

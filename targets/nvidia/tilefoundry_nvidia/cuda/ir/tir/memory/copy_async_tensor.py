@@ -25,8 +25,15 @@ from tilefoundry.ir.pattern import (
     predicates as P,
 )
 from tilefoundry.ir.tir.memory.copy import register_copy_semantics
-from tilefoundry.ir.types import Mesh, Swizzle
+from tilefoundry.ir.types import Mesh, Swizzle, UnitType
 from tilefoundry.ir.types.storage import StorageKind as S
+from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    identity_access,
+    iterating,
+    register_access_relation,
+    state_access,
+)
 
 TMA_RANK = 5
 BOX_EXTENT = 256
@@ -186,9 +193,67 @@ class CopyAsyncTensor(Op):
 
 register_copy_semantics(CopyAsyncTensor, verify=False)
 
+
+@register_op(dialect="T", category="async", name="copy_async_tensor_tx")
+class CopyAsyncTensorTx(Op):
+    """Load one tensor-map box into shared memory, completing its bytes on an mbarrier word.
+
+    Lowering emits it for a selected ``CopyAsyncTensor`` from global to shared
+    memory; a schedule never names it. ``barrier`` holds one word per warp; the
+    first issuing thread completes the load on its own warp's word. The box is
+    in ``dst`` for every issuing thread when the operation ends.
+    """
+
+    src = ParamDef(
+        kind="input",
+        effect=MemoryEffect.READ,
+        pattern=utils.operand_tile(
+            0, S.GMEM, TmaOperandPattern(utils.storage_place(0), utils.dtype_place(0))
+        ),
+    )
+    dst = ParamDef(
+        kind="input",
+        effect=MemoryEffect.WRITE,
+        pattern=utils.operand_tile(
+            1, S.SMEM, TmaOperandPattern(utils.storage_place(1), utils.dtype_place(1))
+        ),
+    )
+    barrier = ParamDef(
+        kind="input",
+        effect=MemoryEffect.READ | MemoryEffect.WRITE,
+        pattern=utils.tensor_in(S.SMEM),
+    )
+    between = (
+        SameConstraint("shape", "src", "dst"),
+        SameConstraint("dtype", "src", "dst"),
+        SameModesConstraint("src", "dst"),
+    )
+    execution_mesh = ParamDef(
+        kind="attribute",
+        annotation=Mesh,
+        pattern=_warp_scope(),
+        optional=True,
+        default=None,
+    )
+
+
+@register_typeinfer(CopyAsyncTensorTx)
+def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
+    return UnitType()
+
+
+@register_access_relation(CopyAsyncTensorTx)
+def _tensor_tx_access(call, ctx):
+    source = ctx.type_of(call.args[0])
+    data = identity_access(len(source.shape))
+    barrier = state_access(ctx.type_of(call.args[2]), len(source.shape))
+    return iterating(source.shape, (data, data, barrier, data))
+
+
 __all__ = [
     "BOX_EXTENT",
     "CopyAsyncTensor",
+    "CopyAsyncTensorTx",
     "SWIZZLE_PLACE",
     "TMA_RANK",
     "TMA_STORAGES",

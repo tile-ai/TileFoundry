@@ -14,8 +14,9 @@ from tilefoundry.ir.core import Call, Op, SSAValue
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp
-from tilefoundry.ir.types import Mesh
+from tilefoundry.ir.types import Mesh, StorageKind
 from tilefoundry.ir.types.utils import _participant_frame
+from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import CopyAsyncTensor
 
 type AliasesOf = Callable[[SSAValue], Sequence[BufferAlias]]
 
@@ -94,6 +95,14 @@ def copies_insert_slice_update(call: Call, aliases_of: AliasesOf) -> bool:
     return not _tied(aliases_of(SSAValue(call.args[1])), AliasKind.WINDOW, SSAValue(call))
 
 
+def tensor_map_load(op: Op, types) -> bool:
+    """Whether *op*, issued with operand *types*, loads a tensor-map box into shared memory.
+
+    Lowering issues such a load on the mbarrier words the ``sync`` plan places.
+    """
+    return isinstance(op, CopyAsyncTensor) and types[1].storage is StorageKind.SMEM
+
+
 __all__ = [
     "AliasesOf",
     "copies_carry_backedge",
@@ -104,4 +113,5 @@ __all__ = [
     "operand_roles",
     "required_execution_mesh",
     "result_param",
+    "tensor_map_load",
 ]
