@@ -21,14 +21,11 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import TensorPattern
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import DType, ShardLayout, TensorType
 from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import (
-    Broadcast,
-    ShardLayout,
     shard_layout_of,
 )
-from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     broadcast_shapes,
@@ -79,56 +76,9 @@ class Binary(Op):
     kind = ParamDef(kind="attribute", annotation=BinaryKind)
 
 
-def _merge_layout(a: object, b: object, out_shape: tuple, *, ctx=None, storage=None) -> object:
-    """Merge two non-sharded operand layouts.
-
-    Equal layouts pass through. Two fully-replicated (all-``Broadcast``)
-    ``ShardLayout``s are mesh-agnostic, so the first is kept.
-    Any other genuine mismatch raises — there is no silent lhs pick; a real
-    shard mismatch is propagated through the shard engine, not merged here.
-    """
-    if a == b:
-        layout = a
-    elif not isinstance(a, ShardLayout) and not isinstance(b, ShardLayout):
-        return None
-    else:
-        layout = None
-    if layout is not None:
-        if isinstance(layout, ShardLayout):
-            if all(isinstance(attr, Broadcast) for attr in layout.attrs):
-                return ShardLayout.default(
-                    out_shape,
-                    layout.mesh,
-                    layout.attrs,
-                    storage=storage,
-                    owners=ctx.target.storage_owners
-                    if ctx is not None and ctx.target is not None
-                    else StorageOwners((), {}),
-                )
-            return layout
-        if tuple(layout.shape) == out_shape:
-            return layout
-        return None
-    replicated = [
-        layout
-        for layout in (a, b)
-        if isinstance(layout, ShardLayout)
-        and all(isinstance(attr, Broadcast) for attr in layout.attrs)
-    ]
-    if replicated and all(
-        not isinstance(layout, ShardLayout) or layout in replicated for layout in (a, b)
-    ):
-        first = replicated[0]
-        return ShardLayout.default(
-            out_shape,
-            first.mesh,
-            first.attrs,
-            storage=storage,
-            owners=ctx.target.storage_owners
-            if ctx is not None and ctx.target is not None
-            else StorageOwners((), {}),
-        )
-    raise ValueError(f"incompatible operand layouts {a!r} vs {b!r}")
+def _merge_layout(a: object, b: object, out_shape: tuple) -> object:
+    """Keep equal plain layouts when their shape already matches the result."""
+    return a if a == b and a is not None and not isinstance(a, ShardLayout) and tuple(a.shape) == out_shape else None
 
 
 register_access_relation(Binary)(identity_relations)
@@ -160,18 +110,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     )
     la, lb = lhs_ty.layout, rhs_ty.layout
 
-    if op.kind is BinaryKind.ADD:
-        allowed_reduction, commutes_jointly = frozenset({"max", "min"}), frozenset({"sum"})
-    elif op.kind is BinaryKind.MUL:
-        allowed_reduction, commutes_jointly = frozenset({"sum"}), frozenset()
-    else:
-        allowed_reduction, commutes_jointly = frozenset(), frozenset()
     check_multilinear_partials(
-        ctx,
-        call,
-        (("lhs", lhs_ty), ("rhs", rhs_ty)),
-        allowed_reduction=allowed_reduction,
-        commutes_jointly=commutes_jointly,
+        ctx, call, (("lhs", lhs_ty), ("rhs", rhs_ty)), kind=op.kind
     )
     storage = resolve_anchor_storage(ctx, call, lhs_ty.storage, rhs_ty.storage)
     try:
@@ -191,8 +131,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 shard_layout_of(la) or la,
                 shard_layout_of(lb) or lb,
                 out_shape,
-                ctx=ctx,
-                storage=storage,
             )
         )
     except ValueError as e:

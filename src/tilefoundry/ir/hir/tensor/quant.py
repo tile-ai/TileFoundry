@@ -21,7 +21,6 @@ from tilefoundry.ir.types.dim import DimFloorDiv, simplify_dim
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.shard_layout import (
-    Broadcast,
     Split,
     shard_layout_local_shape,
     split_target_axes,
@@ -114,8 +113,6 @@ def _logical_shard_attrs(call, ctx, x_ty, group: int):
 
 def _result_layouts(call, ctx, x_ty, scale_shape, group: int):
     if isinstance(x_ty.layout, ShardLayout):
-        if all(isinstance(attr, Broadcast) for attr in x_ty.layout.attrs):
-            return Layout(x_ty.shape), Layout(scale_shape)
         attrs = _logical_shard_attrs(call, ctx, x_ty, group)
         try:
             return (

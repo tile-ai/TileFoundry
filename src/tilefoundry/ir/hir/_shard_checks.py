@@ -8,14 +8,18 @@ See [shard §8](docs/spec/shard.md#8-layout-propagation).
 
 from __future__ import annotations
 
+from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Dynamic,
     Partial,
+    ShardAttr,
     ShardLayout,
+    attrs_by_axis,
     partial_reductions_by_axis,
     shard_layout_of,
 )
+from tilefoundry.ir.types.storage import StorageOwners
 
 
 def reject_partials(ctx, call, arg_name, layout, commutes_with=frozenset()):
@@ -35,78 +39,32 @@ def reject_partials(ctx, call, arg_name, layout, commutes_with=frozenset()):
         )
 
 
-def _is_replicated_at(layout, axis: int) -> bool:
-    layout = shard_layout_of(layout)
-    if layout is None or axis >= len(layout.attrs):
-        return True
-    return isinstance(layout.attrs[axis], Broadcast)
-
-
-def check_multilinear_partials(
-    ctx,
-    call,
-    named_operands,
-    allowed_reduction="sum",
-    *,
-    anchor=None,
-    commutes_jointly=frozenset(),
-):
-    """Check Partial commutation across multilinear operands per mesh axis.
-
-    Normally one permitted Partial may combine with replicated peers. Multiple
-    operands may participate only for a shared ``commutes_jointly`` reduction;
-    ``anchor`` restricts which operand's state the output preserves.
-    """
-    allowed = {allowed_reduction} if isinstance(allowed_reduction, str) else set(allowed_reduction)
-    states = {name: partial_reductions_by_axis(ty.layout) for name, ty in named_operands}
-    axis_count = max((len(s) for s in states.values()), default=0)
-    for axis in range(axis_count):
-        partials = [
-            (name, states[name][axis])
-            for name, _ in named_operands
-            if axis < len(states[name]) and states[name][axis] is not None
-        ]
-        if not partials:
+def check_multilinear_partials(ctx, call, named_operands, *, kind=BinaryKind.MUL, anchor=None):
+    """Check each Partial axis using the op's combination rule and storage owners."""
+    layouts = [(name, ty, attrs_by_axis(ty.layout)) for name, ty in named_operands]
+    target = getattr(ctx, "target", None)
+    owners = target.storage_owners if target else StorageOwners((), {})
+    for name, ty, layout in layouts:
+        if layout is None:
             continue
-        if anchor is not None:
-            for name, reduction in partials:
-                if name != anchor:
-                    ctx.error(
-                        call,
-                        f"{name} carries Partial({reduction}) on mesh axis {axis}; "
-                        "the output cannot preserve this secondary state. Use "
-                        f"reshard({name}, Broadcast) before this consumer",
-                    )
-        if len(partials) > 1:
-            reductions_here = {reduction for _, reduction in partials}
-            if len(reductions_here) == 1 and next(iter(reductions_here)) in commutes_jointly:
+        for axis, attr in layout.items():
+            if not isinstance(attr, Partial):
                 continue
-            details = ", ".join(f"{name}=Partial({reduction})" for name, reduction in partials)
-            ctx.error(
-                call,
-                f"multiple value-carrying Partials on mesh axis {axis} "
-                f"({details}) do not commute here; reshard to Broadcast "
-                "before this consumer",
-            )
-        name, reduction = partials[0]
-        if reduction not in allowed:
-            allowed_text = " or ".join(sorted(allowed)) if allowed else "no reduction"
-            ctx.error(
-                call,
-                f"{name} carries Partial({reduction}) on mesh axis {axis}; "
-                f"commutes with {allowed_text} only. Insert reshard({name}, "
-                "Broadcast) before this consumer",
-            )
-        for other_name, other_ty in named_operands:
-            if other_name == name:
-                continue
-            if not _is_replicated_at(other_ty.layout, axis):
-                ctx.error(
-                    call,
-                    f"{name} carries Partial({reduction}) on mesh axis {axis}, but "
-                    f"{other_name} is not Broadcast/replicated on that axis. "
-                    f"Reshard {other_name} to Broadcast before this consumer",
+            if anchor is not None and name != anchor:
+                ctx.error(call, f"{name} carries {attr!r} on mesh axis {axis[1]} ({axis[0]}); "
+                          f"reshard({name}, @ {{B()}}) before this consumer")
+            state = None
+            level = axis[0]
+            for other_name, other_ty, other in layouts:
+                other_attr = (
+                    other.get(axis, Broadcast()) if other is not None else None
                 )
+                held = ShardAttr.of(other_attr, owners.private(other_ty.storage, level))
+                try:
+                    state = held if state is None else ShardAttr.combine(kind, state, held)
+                except ValueError as error:
+                    ctx.error(call, f"{name} carries Partial({attr.reduction}) on mesh axis {axis[1]} ({axis[0]}); "
+                              f"operand {other_name}: operands do not commute: {error}")
 
 
 def require_matching_partial_state(ctx, call, dst, update, dst_name, update_name):

@@ -14,7 +14,7 @@ from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.hir.math.binary import _merge_layout
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.layout import Layout
-from tilefoundry.ir.types.shard_layout import Broadcast, shard_layout_of
+from tilefoundry.ir.types.shard_layout import Partial, Split, shard_layout_of
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -80,14 +80,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 shard_layout_of(input_.layout) or input_.layout,
                 shard_layout_of(other.layout) or other.layout,
                 out_shape,
-                ctx=ctx,
-                storage=storage,
             )
         )
 
         condition_shard = shard_layout_of(condition.layout)
         if condition_shard is not None and any(
-            not isinstance(attr, Broadcast) for attr in condition_shard.attrs
+            isinstance(attr, (Split, Partial)) for attr in condition_shard.attrs
         ):
             combined = derive_output_shard_layout(
                 (condition, input_, other), relation, out_shape, ctx=ctx, storage=storage
@@ -98,6 +96,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                     "condition sharding does not match the data branches; "
                     "reshard the condition to their distribution",
                 )
+        elif condition_shard is not None or data_shard is not None:
+            layout = derive_output_shard_layout(
+                (condition, input_, other), relation, out_shape, ctx=ctx, storage=storage
+            )
     except ValueError as error:
         ctx.error(call, f"Where: {error}")
 

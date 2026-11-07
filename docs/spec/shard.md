@@ -529,6 +529,9 @@ class Split(ShardAttr):
 class Broadcast(ShardAttr):
     """Mark the value replicated across this mesh axis."""
 
+class Varying(ShardAttr):
+    """Every copy holds the whole axis; values may differ between units."""
+
 class Dynamic(ShardAttr):
     """Mark the distribution policy unresolved on this mesh axis."""
 
@@ -566,6 +569,11 @@ def P(reduction: str = "sum") -> Partial:
     ...
 
 
+def V() -> Varying:
+    """Build a varying attribute."""
+    ...
+
+
 def B() -> Broadcast:
     """Build a broadcast attribute.
 
@@ -581,7 +589,7 @@ def B() -> Broadcast:
 
 Each entry of `ShardLayout.attrs` describes one **mesh axis** (by its
 position in the tuple); the attr says what that mesh axis does. `Split`
-binds a mesh axis to a layout axis (placement); `Broadcast` and `Partial`
+binds a mesh axis to a layout axis (placement); `Broadcast`, `Varying`, and `Partial`
 are **value states** on a mesh axis and carry no layout axis.
 
 Field meanings:
@@ -597,6 +605,9 @@ Field meanings:
   unfactorized form.
 - `Broadcast` — the current mesh axis does not participate in
   splitting; the value is replicated across this mesh axis.
+- `Varying` — the current mesh axis does not split the value; every copy holds
+  all coordinates and values may differ between units. A plain layout is
+  Varying on every axis ([shard §6.1](./shard.md#61-placement-semantics)).
 - `Dynamic` — the distribution policy of the current mesh axis is not
   yet resolved. `Dynamic` MAY appear during analysis / intermediate
   inference but MUST be resolved to `Split` or `Broadcast` before
@@ -616,6 +627,72 @@ that keeps mesh axes aligned with their attributes without rewriting stored type
 It omits all-Broadcast levels except an instruction's required participant levels;
 levels containing Split or Partial remain part of the distribution.
 
+### 6.1 Placement semantics
+
+| attr | axis separates copies | axis inside one copy |
+| --- | --- | --- |
+| `Split` | Copies hold different coordinates | One copy; units divide the work |
+| `Broadcast` | Every copy holds all coordinates; values are the same | One shared copy |
+| `Partial` | Every copy holds one contribution (always separates copies) | — |
+| `Varying` | Every copy holds all coordinates; values may differ | One shared copy |
+
+An axis separates copies when `StorageOwners.private(storage, level)` holds.
+Partial axes always separate contributions, including axes finer than the storage
+owner. A Partial on such an axis holds one copy per unit of that axis, each at
+its own base address; completing the reduction leaves one copy.
+A plain layout is Varying on every axis. An unstated axis of a
+`ShardLayout`, and a level its mesh omits, is Broadcast.
+
+Value frames retain Varying levels. An explicit instruction frame may omit
+outside levels that contain neither Split nor Partial; checks inside that frame
+still distinguish Broadcast from Varying. Physical projection first omits levels
+containing Varying but no Split or Partial, then reads remaining Varying as
+Broadcast without changing the stored value type. An entirely omitted physical
+frame uses the plain layout; levels containing only Broadcast retain their frame.
+
+`ShardAttr.of(attr, private)` reads `None` (plain) as Varying. On an axis that
+does not separate copies, Broadcast and Varying both read as Broadcast; Split
+and Partial remain unchanged. Dynamic is unresolved and raises `ValueError` in
+all three methods below.
+
+`ShardAttr.combine(kind, a, b)` merges two `of` results **before** access relations
+map Split placements. Elementwise operations pass their `BinaryKind`;
+multilinear operations (matmul, conv2d, rope) pass `BinaryKind.MUL`; other
+operations pass `None`. Here B, V, S, and P denote Broadcast, Varying, Split,
+and Partial. S cells retain the Split operand (both S: retain `a`); access
+relations subsequently check placement consistency and map reduction dimensions.
+Unary operations check their own Partial commutativity separately.
+
+| a \ b | B | V | S | P(r) |
+| --- | --- | --- | --- | --- |
+| B | B | V | S | MUL and r = sum: P(r); ADD and r in {max, min}: P(r); otherwise error |
+| V | V | V | S | Error |
+| S | S | S | a | Error |
+| P(r) | Symmetric with B row | Error | Error | ADD and both reductions = sum: P(sum); otherwise error |
+
+`combine` rejects `None` with `ValueError`: callers must first read plain layouts
+through `ShardAttr.of`. Error cells raise `ValueError` including the kind and both attrs, with an
+explicit `reshard(..., @ {B()})` remedy where equal values are required.
+Only B → V is implicit. V → B is an explicit view: the author promises equal
+values, with no communication or runtime check. V → P is also an explicit view.
+
+`ShardAttr.convert(src, dst, private)` classifies a Reshard on one mesh axis.
+`Conversion` has NONE, VIEW, GATHER, ALL_TO_ALL, REDUCE, and REDUCE_SCATTER members
+(with lowercase string values). For `private=True`:
+
+| src \ dst | B | V | S | P |
+| --- | --- | --- | --- | --- |
+| B | NONE | VIEW | VIEW (local slice) | Error |
+| V | VIEW | NONE | VIEW (slice own copy) | VIEW (reinterpret as contribution) |
+| S | GATHER | GATHER | Same position: NONE; different position: ALL_TO_ALL | Error |
+| P(r) | REDUCE | REDUCE | REDUCE_SCATTER | Same reduction: NONE; different reduction: error |
+
+`convert` first reads both src and dst through `of(..., private)`, including
+`None` (plain). For `private=False`, V becomes B; changes among B and S are VIEW
+(identical attrs: NONE). Thus B ↔ V is NONE, and V → P raises `ValueError` on a
+shared axis. The P row and B → P / S → P errors remain unchanged. Error cells
+raise `ValueError`; converting between different Partial reductions is forbidden.
+
 ### Surface syntax sugar
 
 | Written form | Meaning |
@@ -625,14 +702,16 @@ levels containing Split or Partial remain part of the distribution.
 | `(8 @ t.w, 16)` | `ShardLayout` splitting a tensor dimension over `t.w` |
 | `(8, 16) @ {B()}` | All-Broadcast `ShardLayout` |
 | `((8, 16) + 4 \| Swizzle(2, 4, 3)) @ {B()}` | All-Broadcast `ShardLayout` based on a `ComposedLayout` |
+| `(8 @ t.w, 16) @ {t.l @ V()}` | Split placement with Varying values on `t.l` |
 | `(8 @ t.w, 16) @ {t.l @ P("sum")}` | Split placement with Partial values on `t.l` |
 | `((8 @ t.w, 16), (16, 1)) @ {t.l @ P("sum")}` | Placement with explicit strides and Partial values |
 | `where(layout=(_, _, dim) @ {cta @ B()})` | Broadcast constraint on the named topology `cta` |
 
 Placement covers the current composed mesh scope, or the function mesh in a
 signature; unstated axes are Broadcast. An annotation with `layout=None`
-imposes no layout constraint. Plain `Layout` and an all-Broadcast `ShardLayout`
-are compatible forms without a split; written shape and stride constraints remain.
+imposes no layout constraint. Plain `Layout` and an all-Broadcast `ShardLayout` state different facts on an axis
+that separates copies: Varying and Broadcast ([shard §6.1](./shard.md#61-placement-semantics)). Written shape and stride
+constraints remain.
 Shared-memory distribution belongs to CTA or coarser levels; author-written tiles
 in thread scope use plain layouts. A `where` clause constrains named topologies;
 acceptance rules are generated in [parser §2](./parser.md#2-syntax-and-rules).

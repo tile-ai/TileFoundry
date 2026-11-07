@@ -11,8 +11,16 @@ from tilefoundry.ir.types.storage import StorageKind, StorageOwners
 from .dtype import DType
 from .layout import ComposedLayout, apply
 from .layout_algebra import size
-from .mesh import Mesh, Topology, make_mesh, separate
-from .shard_layout import Broadcast, Split, shard_layout_of, split_target_axes
+from .mesh import Mesh, Topology, axis_keys, make_mesh, separate
+from .shard_layout import (
+    Broadcast,
+    Partial,
+    ShardAttr,
+    Split,
+    attrs_by_axis,
+    shard_layout_of,
+    split_target_axes,
+)
 from .tensor_type import TensorType, TupleType, Type
 
 
@@ -22,9 +30,9 @@ def participant_layout(
     """Select participating levels while keeping their mesh axes and attrs aligned.
 
     An instruction retains all axes of its required levels, including Broadcast.
-    Other levels may be omitted only when every attribute is Broadcast. Without
-    an instruction frame, retain distributed levels, or the innermost level for
-    an entirely broadcast value.
+    Outside an instruction's required levels, only Split and Partial prevent
+    omission. Without an instruction frame, retain value-varying levels too,
+    or the innermost level for an entirely broadcast value.
     """
 
     def topology_name(topology):
@@ -65,7 +73,7 @@ def participant_layout(
         if name in required_names:
             selected.append(level)
             selected_attrs.extend(attrs)
-        elif any(not isinstance(attr, Broadcast) for attr in attrs):
+        elif any(isinstance(attr, (Split, Partial)) for attr in attrs):
             raise ValueError(f"non-Broadcast placement outside participant level {name!r}")
     if not selected:
         raise ValueError("shard layout has no participant level")
@@ -118,7 +126,7 @@ def is_unsharded_layout(layout: object) -> bool:
     """Recognize the three tensor layout forms that carry no distribution."""
     shard = shard_layout_of(layout)
     if shard is not None:
-        return all(isinstance(attr, Broadcast) for attr in shard.attrs)
+        return all(ShardAttr.of(attr, False) == Broadcast() for attr in shard.attrs)
     return isinstance(layout, (Layout, ComposedLayout))
 
 
@@ -129,12 +137,15 @@ def strip_broadcast_layout(layout):
     return layout
 
 
-def types_compatible(declared: Type, actual: Type) -> bool:
+def types_compatible(
+    declared: Type, actual: Type, *, owners: StorageOwners = StorageOwners((), {})
+) -> bool:
     """Return whether *actual* may bind a position declared as *declared*.
 
     Every non-``None`` declared field constrains the corresponding actual
     field. ``UMAT`` is the storage field's undecided value. Layout descriptors
-    apply the same rule recursively.
+    apply the same rule recursively. ``owners`` determines which axes distinguish
+    plain Varying values from Broadcast; the default has no private axes.
     """
 
     def field_compatible(declared_field, actual_field) -> bool:
@@ -152,8 +163,13 @@ def types_compatible(declared: Type, actual: Type) -> bool:
         if isinstance(declared_layout, ShardLayout):
             if not isinstance(actual_layout, ShardLayout):
                 return False
-            declared_layout = participant_layout(declared_layout)
-            actual_layout = participant_layout(actual_layout)
+            declared_layout, actual_layout = (
+                participant_layout(ShardLayout(layout.layout, tuple(
+                    ShardAttr.of(attr, owners.private(tensor.storage, level))
+                    for attr, (level, _name) in zip(layout.attrs, axis_keys(layout.mesh), strict=True)
+                ), layout.mesh))
+                for layout, tensor in zip((declared_layout, actual_layout), (declared, actual), strict=True)
+            )
             return (
                 field_compatible(declared_layout.mesh, actual_layout.mesh)
                 and field_compatible(declared_layout.attrs, actual_layout.attrs)
@@ -164,6 +180,17 @@ def types_compatible(declared: Type, actual: Type) -> bool:
     if isinstance(declared, TensorType):
         if not isinstance(actual, TensorType):
             return False
+        shards = tuple(shard_layout_of(t.layout) for t in (declared, actual))
+        states = tuple(attrs_by_axis(sl) for sl in shards)
+        if declared.layout is not None and actual.layout is not None:
+            for key in set().union(*(state or {} for state in states)):
+                held = tuple(
+                    ShardAttr.of(state.get(key, Broadcast()) if state is not None else None,
+                                 owners.private(t.storage, key[0]))
+                    for state, t in zip(states, (declared, actual), strict=True)
+                )
+                if held[0] != held[1]:
+                    return False
         if is_unsharded_layout(declared.layout) and is_unsharded_layout(actual.layout):
             declared_layout = strip_broadcast_layout(declared.layout)
             actual_layout = strip_broadcast_layout(actual.layout)
@@ -187,7 +214,7 @@ def types_compatible(declared: Type, actual: Type) -> bool:
             isinstance(actual, TupleType)
             and len(declared.fields) == len(actual.fields)
             and all(
-                types_compatible(declared_field, actual_field)
+                types_compatible(declared_field, actual_field, owners=owners)
                 for declared_field, actual_field in zip(declared.fields, actual.fields)
             )
         )

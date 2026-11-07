@@ -32,12 +32,17 @@ from tilefoundry.ir.types.int_tuple import unflatten as unflatten_tuple
 from tilefoundry.ir.types.layout import flatten as flatten_layout
 from tilefoundry.ir.types.layout import get, unflatten
 from tilefoundry.ir.types.layout_algebra import zipped_divide
-from tilefoundry.ir.types.mesh import separate
+from tilefoundry.ir.types.mesh import axis_keys
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
+    Partial,
+    ShardAttr,
     ShardLayout,
+    Varying,
+    physical_layout,
     shard_layout_of,
 )
+from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import (
     _participant_frame,
@@ -152,6 +157,9 @@ def check_input_reachability(op, operand_types, mesh):
         layout = shard_layout_of(getattr(type_, "layout", None))
         if layout is None:
             continue
+        layout = shard_layout_of(physical_layout(layout))
+        if layout is None:
+            continue
         projected = participant_layout(layout)
         if not covered_by_scope(projected.mesh, mesh):
             raise ValueError(
@@ -248,14 +256,11 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
         for param, type_, shape, pattern, boundary in zip(
             params, whole_types, shapes, patterns, single[: len(params)], strict=True
         ):
-            attrs = (
-                pattern.layout.attrs
-                if pattern is not None and isinstance(pattern.layout, ShardLayoutPattern)
-                else None
-            )
             name = param.name
             top = type_.layout if isinstance(type_.layout, ComposedLayout) else None
             outer = top.outer if top is not None else type_.layout
+            if isinstance(outer, ShardLayout):
+                outer = physical_layout(outer)
             shard = outer if isinstance(outer, ShardLayout) else None
             address = shard.layout if shard is not None else outer
             primitive = address.outer if isinstance(address, ComposedLayout) else address
@@ -328,7 +333,7 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
                 tile = Layout(
                     tuple(flat.shape[i] for i in kept), tuple(flat.strides[i] for i in kept)
                 )
-            broadcast = shard is None or all(isinstance(attr, Broadcast) for attr in shard.attrs)
+            broadcast = shard is None or not any(isinstance(attr, (Split, Partial)) for attr in shard.attrs)
             if isinstance(address, ComposedLayout):
                 tile = replace(address, outer=tile, offset=0 if broadcast else address.offset)
             if top is not None and top.inner is not None:
@@ -357,10 +362,6 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
                     ),
                     shard.mesh,
                 )
-            elif attrs is not None:
-                frame = separate(participant if mesh is None else mesh)[-1]
-                selected, _dropped = _participant_frame(frame, participant)
-                tile = ShardLayout(tile, attrs, selected)
             tile = TensorType(shape, type_.dtype, tile, type_.storage)
             mapped = projected_axes(boundary)
             physical = rest.layout if isinstance(rest, ShardLayout) else rest
@@ -570,7 +571,10 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
         )
     whole = tuple(value.type if isinstance(value, Expr) else value for value in operands)
     atom = getattr(op, "atom", None)
-    matcher = PatternMatcher(dict(getattr(atom, "bindings", {})))
+    matcher = PatternMatcher(
+        dict(getattr(atom, "bindings", {})), mesh=mesh,
+        owners=frame.target.storage_owners if frame is not None and frame.target is not None else StorageOwners((), {}),
+    )
     admit_fields(op, whole, mesh, matcher, target=None if frame is None else frame.target)
     try:
         tiles = (
@@ -586,11 +590,45 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
         check_input_reachability(op, whole, mesh)
     except ValueError as error:
         raise ScheduleRefusal(str(error), path=matcher.bindings, op=op) from error
+    declaration = getattr(op, "atom", op)
+    participant = getattr(declaration, "required_execution_mesh", getattr(declaration, "execution_mesh", None))
+    needs_frame = any(
+        isinstance(pattern, TensorPattern)
+        and isinstance(pattern.layout, ShardLayoutPattern)
+        and shard_layout_of(type_.layout) is None
+        for pattern, type_ in zip(tiles.patterns, tiles.tiles, strict=True)
+    )
+    if needs_frame and isinstance(participant, Mesh) and mesh is not None:
+        selected = participant_layout(ShardLayout(
+            Layout(()), tuple(Broadcast() for _ in flatten(mesh.layout.shape)), mesh
+        ), participant).mesh
+        try:
+            matcher.mesh, _dropped = _participant_frame(selected, participant)
+        except ValueError as error:
+            raise ScheduleRefusal(
+                f"scope {mesh!r} does not contain participant frame {participant!r}",
+                path=matcher.bindings, op=op,
+            ) from error
     view = getattr(atom, "match_view", None)
     for param, pattern, type_ in zip(params, tiles.patterns, tiles.tiles, strict=True):
         match_type = type_ if view is None else view(param.name, type_)
         if pattern is not None and not matcher.match(pattern, match_type):
-            raise _pattern_refusal(matcher, op, param.name)
+            refusal = _pattern_refusal(matcher, op, param.name)
+            if (isinstance(pattern, TensorPattern) and isinstance(pattern.layout, ShardLayoutPattern)
+                    and isinstance(pattern.layout.attrs, tuple)):
+                shard = shard_layout_of(match_type.layout)
+                keys = axis_keys(matcher.mesh) if matcher.mesh is not None else ()
+                for axis, (required, (level, _name)) in enumerate(zip(pattern.layout.attrs, keys)):
+                    attr = shard.attrs[axis] if shard is not None and axis < len(shard.attrs) else None if shard is None else Broadcast()
+                    held = ShardAttr.of(attr, matcher.owners.private(match_type.storage, level))
+                    if required == Broadcast() and isinstance(held, Varying):
+                        refusal = ScheduleRefusal(
+                            f"{refusal.reason}; mesh axis {axis} ({level}) is Varying; "
+                            f"reshard({param.name}, @ {{B()}}) to declare equal values",
+                            path=refusal.path, op=op,
+                        )
+                        break
+            raise refusal
     named = dict(zip((p.name for p in params), tiles.tiles, strict=True))
     for rule in between_rules(type(op)):
         if not rule.holds(named):

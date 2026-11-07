@@ -11,7 +11,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.layout import Layout
-from tilefoundry.ir.types.shard_layout import Broadcast, ShardLayout
+from tilefoundry.ir.types.shard_layout import Partial, ShardLayout, Split
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -52,7 +52,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
     new_layout = Layout(tuple(shape))
     if isinstance(x_ty.layout, ShardLayout) and any(
-        not isinstance(a, Broadcast) for a in x_ty.layout.attrs
+        isinstance(a, (Split, Partial)) for a in x_ty.layout.attrs
     ):
         ctx.error(
             call,

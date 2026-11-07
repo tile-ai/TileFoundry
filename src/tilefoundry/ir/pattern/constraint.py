@@ -5,7 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import prod
 
-from tilefoundry.ir.types import Broadcast, ComposedLayout, Layout, Partial, ShardLayout, Swizzle
+from tilefoundry.ir.types import (
+    Broadcast,
+    ComposedLayout,
+    Layout,
+    Partial,
+    ShardAttr,
+    ShardLayout,
+    Swizzle,
+)
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.tensor_type import TensorType
 
@@ -16,7 +24,7 @@ def strided_arrangement(layout, *, allow_partial=False):
     """Read a strided address layout beneath permitted value-state wrappers."""
     if isinstance(layout, ShardLayout):
         if not all(
-            isinstance(attr, Broadcast) or (allow_partial and isinstance(attr, Partial))
+            ShardAttr.of(attr, False) == Broadcast() or (allow_partial and isinstance(attr, Partial))
             for attr in layout.attrs
         ):
             return None
