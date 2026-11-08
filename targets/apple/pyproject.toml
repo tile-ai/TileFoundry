@@ -13,6 +13,7 @@ license-files = ["LICENSE"]
 
 [project.entry-points."tilefoundry.targets"]
 amx = "tilefoundry_apple.amx"
+metal = "tilefoundry_apple.metal"
 
 [tool.setuptools_scm]
 root = "../.."
@@ -29,3 +30,6 @@ include = ["tilefoundry_apple", "tilefoundry_apple.*"]
 "tilefoundry_apple.amx.target.hardware" = [
     "*.toml",
 ]
+
+"tilefoundry_apple.metal" = ["docs/spec/*.md"]
+"tilefoundry_apple.metal.target.hardware" = ["*.toml"]

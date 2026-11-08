@@ -1,0 +1,57 @@
+[spec]
+schema = "tilefoundry.metal.device/v1"
+kind = "device"
+id = "apple.m2_pro.gpu"
+
+[compatibility]
+architectures = ["apple.gpu8"]
+
+[facts.identity.name]
+value = "apple_m2_pro_gpu"
+unit = "name"
+origin = "measured"
+source = "ANE-Research/artifacts/v0.0.4/metal-tir-support/mapping-probe/guard-attempt03/stdout.log"
+conditions = "MTLDevice.name reports Apple M2 Pro."
+
+[facts.compute.gpu_cores]
+value = 19
+unit = "count"
+origin = "vendor"
+source = "https://support.apple.com/en-us/111340"
+conditions = "19-core GPU M2 Pro configuration; this metadata is not the number of simultaneously resident threadgroups."
+
+[facts.compute.max_threads_per_threadgroup]
+value = 1024
+unit = "count"
+origin = "measured"
+source = "ANE-Research/artifacts/v0.0.4/metal-tir-support/mapping-probe/guard-attempt03/stdout.log"
+conditions = "MTLDevice.maxThreadsPerThreadgroup; each actual pipeline may impose a smaller limit."
+
+[facts.memory.threadgroup]
+value = 32768
+unit = "byte"
+origin = "measured"
+source = "ANE-Research/artifacts/v0.0.4/metal-tir-support/mapping-probe/guard-attempt03/stdout.log"
+conditions = "MTLDevice.maxThreadgroupMemoryLength, per threadgroup."
+
+[facts.memory.unified]
+value = 34359738368
+unit = "byte"
+origin = "measured"
+source = "sysctl hw.memsize"
+conditions = "Shared system DRAM pool, not a Metal allocation budget or recommended working set."
+
+[facts.memory.bandwidth]
+value = 200000000000
+unit = "byte/s"
+origin = "vendor"
+source = "https://support.apple.com/en-us/111340"
+conditions = "Published decimal 200 GB/s shared package bandwidth; not measured GPU bandwidth."
+
+[facts.compute.resident_threadgroups]
+status = "unavailable"
+conditions = "No sourced per-device residency count; 19 GPU cores do not establish it."
+
+[facts.memory.register_per_thread]
+status = "unavailable"
+conditions = "No sourced register allocation capacity."

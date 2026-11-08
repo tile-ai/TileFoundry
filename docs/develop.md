@@ -184,8 +184,6 @@ short bullet list — keep it that way.
 
 ## 6. Writing a target
 
-Use [targets/apple](../targets/apple) as a minimal example and
-[targets/nvidia](../targets/nvidia) as the complete compiler/runtime reference.
-Follow the [target loading and extension contract](spec/target.md#13-target-loading-and-extensions)
-in §1.3 for packaging, entry points, and registration.
-Keep tests in `tests/<vendor>/<target>/`.
+See the [Target provider structure and contracts](spec/target.md#target-provider-structure)
+for module ownership and dependencies. Existing implementations are
+[Apple](../targets/apple) and [NVIDIA](../targets/nvidia).
