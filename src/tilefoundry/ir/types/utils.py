@@ -3,17 +3,234 @@ from __future__ import annotations
 import math
 from typing import Optional
 
+from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.types.int_tuple import repeat_like
 from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind, StorageOwners
 
 from .dtype import DType
-from .layout import ComposedLayout, apply
+from .layout import ComposedLayout, LayoutBase, apply
 from .layout_algebra import size
-from .mesh import Mesh, Topology, make_mesh, separate
-from .shard_layout import Broadcast, Split, shard_layout_of, split_target_axes
+from .mesh import Mesh, Topology, axis_keys, make_mesh, separate
+from .shard_layout import (
+    Broadcast,
+    Partial,
+    ShardAttr,
+    Split,
+    Varying,
+    partial_reductions_by_axis,
+    physical_attr,
+    shard_layout_of,
+    split_target_axes,
+)
 from .tensor_type import TensorType, TupleType, Type
+
+
+def attrs_by_axis(
+    type_: TensorType, mesh: Mesh | None = None, owners: StorageOwners | None = None
+) -> dict[tuple[str, int], ShardAttr]:
+    """Read mesh-axis states keyed by level and ordinal.
+
+    See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+
+    Args:
+        type_: Tensor whose plain layout reads as Varying.
+        mesh: Frame to read; defaults to the tensor's shard mesh.
+        owners: Target facts used to normalize shared copies. None reads attrs
+            as written; empty facts instead normalize Broadcast and Varying alike.
+
+    Returns:
+        States in frame order; omitted shard axes and levels read as Broadcast.
+    """
+    shard = shard_layout_of(type_.layout)
+    stated, counts = {}, {}
+    if shard is not None:
+        for axis, (level, _name) in enumerate(axis_keys(shard.mesh)):
+            ordinal = counts.get(level, 0)
+            counts[level] = ordinal + 1
+            stated[level, ordinal] = shard.attrs[axis] if axis < len(shard.attrs) else Broadcast()
+    keys = stated
+    if mesh is not None:
+        keys, counts = {}, {}
+        for level, _name in axis_keys(mesh):
+            ordinal = counts.get(level, 0)
+            counts[level] = ordinal + 1
+            keys[level, ordinal] = None
+    result = {}
+    for key in keys:
+        attr = stated.get(key, Broadcast()) if shard is not None else Varying()
+        if (
+            owners is not None
+            and isinstance(attr, (Broadcast, Varying))
+            and not owners.private(type_.storage, key[0])
+        ):
+            attr = Broadcast()
+        result[key] = attr
+    return result
+
+
+def reject_partials(
+    name: str, layout: LayoutBase | None, commutes_with: frozenset[str] = frozenset()
+) -> None:
+    """Reject Partial states that do not commute with this operation.
+
+    See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+
+    Args:
+        name: Operand name used in the diagnostic.
+        layout: Operand's distribution and address layout.
+        commutes_with: Partial reduction kinds the operation preserves.
+
+    Raises:
+        ValueError: An axis carries a noncommuting Partial state.
+    """
+    for axis, reduction in enumerate(partial_reductions_by_axis(layout)):
+        if reduction is None or reduction in commutes_with:
+            continue
+        raise ValueError(
+            f"{name} carries Partial({reduction}) on mesh axis {axis}, "
+            f"which does not commute; insert reshard({name}, @ {{B()}}) before this consumer"
+        )
+
+
+def check_multilinear_partials(
+    operands: tuple[tuple[str, TensorType], ...],
+    target,
+    *,
+    kind: BinaryKind = BinaryKind.MUL,
+    anchor: str | None = None,
+) -> None:
+    """Check Partial combinations using each operand's precomputed states.
+
+    See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+    Plain operands merge states from existing meshes before checking keys;
+    the state at a shared key depends only on storage and topology level.
+
+    Args:
+        operands: Operand names and types in combination order.
+        target: Target holding storage owner facts, or None.
+        kind: Operation's combination kind.
+        anchor: Only this operand may carry Partial when specified.
+
+    Raises:
+        ValueError: Partial states cannot be preserved by the operation.
+    """
+    owners = target.storage_owners if target else StorageOwners((), {})
+    layouts = tuple(shard_layout_of(type_.layout) for _name, type_ in operands)
+    meshes = []
+    for layout in layouts:
+        if layout is not None and layout.mesh not in meshes:
+            meshes.append(layout.mesh)
+    states = tuple(
+        attrs_by_axis(type_, owners=owners)
+        if layout is not None
+        else {
+            key: attr for mesh in meshes for key, attr in attrs_by_axis(type_, mesh, owners).items()
+        }
+        for (_name, type_), layout in zip(operands, layouts)
+    )
+    for (name, _type), source in zip(operands, states):
+        for axis, (key, attr) in enumerate(source.items()):
+            if not isinstance(attr, Partial):
+                continue
+            if anchor is not None and name != anchor:
+                raise ValueError(
+                    f"{name} carries {attr!r} on mesh axis {axis}; "
+                    f"reshard({name}, @ {{B()}}) before this consumer"
+                )
+            state = None
+            for (other_name, _other_type), other in zip(operands, states):
+                held = other.get(key, Broadcast())
+                try:
+                    state = held if state is None else ShardAttr.combine(kind, state, held)
+                except ValueError as error:
+                    raise ValueError(
+                        f"{name} carries Partial({attr.reduction}) on mesh axis {axis}; "
+                        f"operand {other_name}: operands do not commute: {error}"
+                    ) from error
+
+
+def require_matching_partial_state(
+    dst: TensorType, update: TensorType, dst_name: str, update_name: str
+) -> None:
+    """Require identical Partial state for an in-place-style write.
+
+    See [shard §8](docs/spec/shard.md#8-layout-propagation).
+
+    Args:
+        dst: Destination tensor type.
+        update: Tensor type being inserted into the destination.
+        dst_name: Destination name used in the diagnostic.
+        update_name: Update name used in the diagnostic.
+
+    Raises:
+        ValueError: Destination and update carry different Partial states.
+    """
+    dst_partials = [
+        (axis, reduction)
+        for axis, reduction in enumerate(partial_reductions_by_axis(dst.layout))
+        if reduction is not None
+    ]
+    update_partials = [
+        (axis, reduction)
+        for axis, reduction in enumerate(partial_reductions_by_axis(update.layout))
+        if reduction is not None
+    ]
+    dst_layout = shard_layout_of(dst.layout)
+    update_layout = shard_layout_of(update.layout)
+    if dst_partials:
+        if not (
+            dst_layout is not None
+            and update_layout is not None
+            and update_layout.mesh == dst_layout.mesh
+            and update_layout.attrs == dst_layout.attrs
+        ):
+            axis, reduction = dst_partials[0]
+            raise ValueError(
+                f"{dst_name} carries a Partial({reduction}) on mesh axis {axis}; "
+                f"{update_name} must carry the identical per-mesh-axis state. "
+                f"Insert reshard({update_name}, @ {{B()}}) or match {dst_name} before this consumer"
+            )
+    elif update_partials:
+        axis, reduction = update_partials[0]
+        raise ValueError(
+            f"{update_name} carries Partial({reduction}) on mesh axis {axis}, "
+            f"but {dst_name} is complete; insert reshard({update_name}, @ {{B()}}) before this consumer"
+        )
+
+
+def require_uniform_partial_slices(
+    types: tuple[TensorType, ...], output: ShardLayout, op_name: str
+) -> None:
+    """Require every input slice to carry the output's Partial state.
+
+    See [shard §8](docs/spec/shard.md#8-layout-propagation).
+
+    Args:
+        types: Input tensor types contributing slices.
+        output: Distribution derived for their assembled result.
+        op_name: Consumer name used in the diagnostic.
+
+    Raises:
+        ValueError: An input lacks the Partial state required by the output.
+    """
+    for axis, output_attr in enumerate(output.attrs):
+        if not isinstance(output_attr, Partial):
+            continue
+        for index, type_ in enumerate(types):
+            layout = shard_layout_of(type_.layout)
+            input_attr = (
+                layout.attrs[axis]
+                if layout is not None and layout.mesh == output.mesh and axis < len(layout.attrs)
+                else None
+            )
+            if input_attr != output_attr:
+                raise ValueError(
+                    f"input {index} does not carry {output_attr!r} on mesh axis "
+                    f"{axis}; every input must carry the same Partial state: "
+                    f"reshard the Partial inputs with @ {{B()}} before {op_name}"
+                )
 
 
 def participant_layout(
@@ -22,9 +239,9 @@ def participant_layout(
     """Select participating levels while keeping their mesh axes and attrs aligned.
 
     An instruction retains all axes of its required levels, including Broadcast.
-    Other levels may be omitted only when every attribute is Broadcast. Without
-    an instruction frame, retain distributed levels, or the innermost level for
-    an entirely broadcast value.
+    Outside an instruction's required levels, only Split and Partial prevent
+    omission. Without an instruction frame, retain value-varying levels too,
+    or the innermost level for an entirely broadcast value.
     """
 
     def topology_name(topology):
@@ -65,13 +282,34 @@ def participant_layout(
         if name in required_names:
             selected.append(level)
             selected_attrs.extend(attrs)
-        elif any(not isinstance(attr, Broadcast) for attr in attrs):
+        elif any(isinstance(attr, (Split, Partial)) for attr in attrs):
             raise ValueError(f"non-Broadcast placement outside participant level {name!r}")
     if not selected:
         raise ValueError("shard layout has no participant level")
     if len(selected) == len(levels):
         return layout
     return ShardLayout(layout.layout, tuple(selected_attrs), make_mesh(*selected))
+
+
+def physical_layout(layout: ShardLayout) -> LayoutBase:
+    """Omit value-only levels, then read remaining variation as Broadcast."""
+    if not any(isinstance(attr, Varying) for attr in layout.attrs):
+        return layout
+    by_level = {level: [] for level, _name in axis_keys(layout.mesh)}
+    for attr, (level, _name) in zip(layout.attrs, axis_keys(layout.mesh)):
+        by_level[level].append(attr)
+    kept = tuple(
+        level
+        for level, attrs in by_level.items()
+        if not (
+            any(isinstance(attr, Varying) for attr in attrs)
+            and not any(isinstance(attr, (Split, Partial)) for attr in attrs)
+        )
+    )
+    if not kept:
+        return layout.layout
+    selected = participant_layout(layout, kept)
+    return ShardLayout(selected.layout, tuple(map(physical_attr, selected.attrs)), selected.mesh)
 
 
 def _participant_frame(source: Mesh, required: Mesh) -> tuple[Mesh, int]:
@@ -118,15 +356,8 @@ def is_unsharded_layout(layout: object) -> bool:
     """Recognize the three tensor layout forms that carry no distribution."""
     shard = shard_layout_of(layout)
     if shard is not None:
-        return all(isinstance(attr, Broadcast) for attr in shard.attrs)
+        return all(isinstance(attr, (Broadcast, Varying)) for attr in shard.attrs)
     return isinstance(layout, (Layout, ComposedLayout))
-
-
-def strip_broadcast_layout(layout):
-    """Remove a top-level all-Broadcast wrapper, retaining its address function."""
-    if isinstance(layout, ShardLayout) and is_unsharded_layout(layout):
-        return layout.layout
-    return layout
 
 
 def types_compatible(declared: Type, actual: Type) -> bool:
@@ -164,18 +395,9 @@ def types_compatible(declared: Type, actual: Type) -> bool:
     if isinstance(declared, TensorType):
         if not isinstance(actual, TensorType):
             return False
-        if is_unsharded_layout(declared.layout) and is_unsharded_layout(actual.layout):
-            declared_layout = strip_broadcast_layout(declared.layout)
-            actual_layout = strip_broadcast_layout(actual.layout)
-            compatible_layout = declared_layout is None or layout_compatible(
-                declared_layout,
-                actual_layout,
-            )
-        else:
-            compatible_layout = declared.layout is None or layout_compatible(
-                declared.layout,
-                actual.layout,
-            )
+        compatible_layout = declared.layout is None or layout_compatible(
+            declared.layout, actual.layout
+        )
         return (
             declared.shape == actual.shape
             and declared.dtype == actual.dtype

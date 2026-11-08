@@ -251,7 +251,7 @@ def test_local_type_does_not_divide_replicated_or_partial_values(attr) -> None:
         pytest.param(None, Layout((8, 16), (16, 1)), True, id="none-to-plain"),
         pytest.param(
             ShardLayout(Layout((8, 16), (16, 1)), (Broadcast(),), Mesh((Topology("thread", 8),), (8,), ("lane",))),
-            Layout((8, 16), (16, 1)), True, id="broadcast-to-plain",
+            Layout((8, 16), (16, 1)), False, id="broadcast-to-plain",
         ),
         pytest.param(
             ShardLayout(Layout((8, 16), (16, 1)), (Broadcast(),), Mesh((Topology("thread", 8),), (8,), ("lane",))),

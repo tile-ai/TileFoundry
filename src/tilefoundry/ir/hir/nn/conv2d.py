@@ -8,9 +8,9 @@ from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Expr, Op
 from tilefoundry.ir.core.expr import Call, Constant
+from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.isl_interop import normalize_dim
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
@@ -22,7 +22,7 @@ from tilefoundry.ir.types.shard_layout import (
     shard_layout_of,
     split_target_axes,
 )
-from tilefoundry.ir.types.utils import i64_const, static_dim_value
+from tilefoundry.ir.types.utils import check_multilinear_partials, i64_const, static_dim_value
 from tilefoundry.utils.lazy import F
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -203,7 +203,7 @@ def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
     ]
     mesh = placed[0][1].mesh if placed else None
 
-    check_multilinear_partials(ctx, call, (("input", x), ("weight", weight)))
+    check_multilinear_partials((("input", x), ("weight", weight)), ctx.target, kind=BinaryKind.MUL)
     contraction_splits: dict[int, tuple[str, int]] = {}
     channel_split_axes: dict[str, set[int]] = {"input": set(), "weight": set()}
     for name, type_, axes in (

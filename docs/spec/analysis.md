@@ -329,7 +329,7 @@ counts one slice per index as an upper bound.
 | `MemoryMetadata.topologies` | The effective Module topology levels, coarsest first. | No |
 | `MemoryMetadata.traffic` | One occurrence's per-boundary movement, grouped by storage and communication boundary. | No; projection reads resolved Mesh and topology extents. |
 | `MemoryMetadata.operands` | One occurrence's movement in order `(*call.args, call)`. | No |
-| `MemoryMetadata.buffer_bytes` | The bytes in one physical copy of an address-placed `gmem` or `smem` tensor result, including a carried phi. `None` for tuple results or results that are not address-placed. | No |
+| `MemoryMetadata.buffer_bytes` | The bytes in one physical copy of an address-placed `gmem` or `smem` tensor result, including a carried phi and all contributions on Partial axes finer than its storage owner. `None` for tuple results or results that are not address-placed. | No |
 | `MemoryMetadata.offsets` | The byte offset of each physical result slot: each copy of a staged tensor in copy order, or each tuple `AllocationValue` in flattened result-index order. An `rmem` result has no reported offsets. Staged tuple results MUST raise `AnalysisError`. | No |
 | `RegionMemoryMetadata.topologies` | The same effective Module topology levels. | No |
 | `RegionMemoryMetadata.traffic` | Every reachable occurrence. `logical` multiplies only loops the value varies in; `total` and `per_unit` multiply every enclosing loop. | No |
@@ -597,13 +597,17 @@ class BufferAlias:
     literal, and every logical element retains its complete set of storage
     instances and addresses. Gmem has one instance per device; smem has one
     per device and CTA; rmem has one per thread. Broadcast replicas MUST be included: removing a
-    replica changes the set. A plain end has a copy on every
-    instance of the other end's mesh; two sharded ends retain their own mesh
-    selections. Every other Reshard MUST retain its independent buffer.
+    replica changes the set. Which copies each end holds follows
+    [shard §6.1](./shard.md#61-placement-semantics); two ends holding the same
+    copies at the same addresses alias. Every other Reshard MUST retain its
+    independent buffer.
   - Bitcast MUST alias its source and allocate no independent buffer. Its
     declared access relation MUST bijectively map result coordinates to source
     coordinates with the same physical address, requiring the source's
     address and recording zero traffic.
+  - `buffer_bytes` of a value with a Partial axis finer than its storage owner
+    MUST count one copy per unit of that axis. Multiple such axes multiply
+    their copy counts; an unresolved extent MUST raise `AnalysisError`.
   - Fresh smem allocations MUST reserve a byte span covering the physical
     layout's addresses within the selected topology unit, including stride holes
     and composition offsets. Splits at coarser levels restrict the local domain;

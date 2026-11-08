@@ -27,6 +27,7 @@ from tilefoundry.ir.types.utils import (
     is_unsharded_layout,
     leaves_of,
     participant_layout,
+    physical_layout,
 )
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.units import format_bytes
@@ -465,6 +466,7 @@ def values_in_region(
             if not private:
                 continue
             layout = shard_layout_of(getattr(held, "layout", None))
+            layout = shard_layout_of(physical_layout(layout)) if layout is not None else None
             if layout is None or not held_in_region(participant_layout(layout).mesh, region.mesh):
                 continue
         result.append(item)

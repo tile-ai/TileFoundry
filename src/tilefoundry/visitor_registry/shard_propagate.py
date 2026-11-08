@@ -10,15 +10,23 @@ shapes.
 from __future__ import annotations
 
 from dataclasses import replace
+from functools import reduce
 
 import isl
 
 from tilefoundry.ir.types import Layout, ShardLayout
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
-from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split, shard_layout_of
+from tilefoundry.ir.types.mesh import make_mesh, separate
+from tilefoundry.ir.types.shard_layout import (
+    Broadcast,
+    Partial,
+    ShardAttr,
+    Split,
+    Varying,
+    shard_layout_of,
+)
 from tilefoundry.ir.types.storage import StorageOwners
-from tilefoundry.ir.types.utils import participant_layout
+from tilefoundry.ir.types.utils import attrs_by_axis, participant_layout
 
 
 def _result_access(ma: isl.multi_aff) -> dict[int, tuple[str, int | None]]:
@@ -71,7 +79,6 @@ def _carrier_layout(
     output_map,
     output_shape,
     mesh,
-    mesh_rank,
     propagated_attrs,
     complete_reduction_dims,
     reduction,
@@ -131,7 +138,9 @@ def _carrier_layout(
             src_pos.append(None if reduced else p)
     new_strides = [0 if p is None else layout.strides[p] for p in src_pos]
 
-    out_attrs: list = [Broadcast() for _ in range(mesh_rank)]
+    out_attrs: list = [
+        attr if not isinstance(attr, Split) else Broadcast() for attr in propagated_attrs
+    ]
     for p_mesh, attr in enumerate(sl.attrs):
         if isinstance(attr, Split) and attr.axis in new_pos_of:
             out_attrs[p_mesh] = (
@@ -146,7 +155,7 @@ def _carrier_layout(
         la2ta_out = mode_axes(compatible_profile(tuple(new_shape), tuple(output_shape)))
     except ValueError:
         return None
-    mapped: list = [Broadcast() for _ in range(mesh_rank)]
+    mapped: list = list(out_attrs)
     for p_mesh, attr in enumerate(out_attrs):
         if isinstance(attr, Split):
             mapped[p_mesh] = Split(la2ta_out[attr.axis])
@@ -187,31 +196,65 @@ def derive_output_shard_layout(
     Every input is projected onto the same participating levels -- each level
     any input distributes -- so mesh axes keep one index across the inputs.
     """
-    layouts = tuple(shard_layout_of(type_.layout) for type_ in input_types)
-    required = {
-        getattr(topology, "name", topology)
-        for layout in (participant_layout(item) for item in layouts if item is not None)
-        if any(not isinstance(attr, Broadcast) for attr in layout.attrs)
-        for topology in layout.mesh.topologies
-    }
-    input_types = tuple(
-        type_ if layout is None else replace(type_, layout=participant_layout(layout, required or None))
-        for type_, layout in zip(input_types, layouts, strict=True)
-    )
-    sharded = [
-        (i, t.layout)
-        for i, t in enumerate(input_types)
-        if isinstance(t.layout, ShardLayout)
-        and any(isinstance(a, (Split, Partial)) for a in t.layout.attrs)
-    ]
-    if not sharded:
-        return None
     target = getattr(ctx, "target", None)
     owners = target.storage_owners if target else StorageOwners((), {})
-    mesh = sharded[0][1].mesh
-    if any(layout.mesh != mesh for _index, layout in sharded):
-        raise ValueError("inputs distribute over different meshes; their mesh axes do not align")
-    mesh_rank = len(flatten(mesh.layout).shape)
+    states = tuple(attrs_by_axis(type_, owners=owners) for type_ in input_types)
+    layouts = tuple(
+        replace(layout, attrs=tuple(state.values())) if layout is not None else None
+        for type_, state in zip(input_types, states, strict=True)
+        for layout in (shard_layout_of(type_.layout),)
+    )
+    frame_levels = {level for state in states for level, _axis in state}
+    required = {
+        level
+        for type_, layout, state in zip(input_types, layouts, states)
+        for level in frame_levels
+        if any(attr != Broadcast() for (at, _axis), attr in state.items() if at == level)
+        or (layout is None and owners.private(type_.storage, level))
+    }
+    parts, active = {}, set()
+    for layout, state in zip(layouts, states, strict=True):
+        if layout is None:
+            continue
+        for part in separate(layout.mesh):
+            level = part.topologies[0].name
+            nonbroadcast = any(
+                attr != Broadcast() for (at, _axis), attr in state.items() if at == level
+            )
+            if nonbroadcast and level in active and parts[level] != part:
+                raise ValueError(
+                    "inputs distribute over different meshes; their mesh axes do not align"
+                )
+            if level not in parts or (nonbroadcast and level not in active):
+                parts[level] = part
+            if nonbroadcast:
+                active.add(level)
+    if not parts:
+        return None
+    order = tuple(dict.fromkeys((*owners.order, *parts)))
+    mesh = (
+        make_mesh(*(parts[level] for level in order if level in required))
+        if required
+        else participant_layout(next(layout for layout in layouts if layout is not None)).mesh
+    )
+    mesh = next(
+        (layout.mesh for layout in layouts if layout is not None and layout.mesh == mesh), mesh
+    )
+    keys = tuple(attrs_by_axis(input_types[0], mesh, owners))
+    input_types = tuple(
+        type_
+        if layout is None
+        else replace(
+            type_,
+            layout=ShardLayout(
+                layout.layout, tuple(state.get(key, Broadcast()) for key in keys), mesh
+            ),
+        )
+        for type_, layout, state in zip(input_types, layouts, states, strict=True)
+    )
+    sharded = [
+        (i, t.layout) for i, t in enumerate(input_types) if isinstance(t.layout, ShardLayout)
+    ]
 
     if any(access.affine is None for access in relations):
         raise ValueError("shard propagation requires a single Op-written affine per boundary")
@@ -222,14 +265,28 @@ def derive_output_shard_layout(
     }
     out_all_dims = involved_dims(output_map)
 
-    attrs: list = [Broadcast() for _ in range(mesh_rank)]
+    attrs = []
+    states = tuple(attrs_by_axis(type_, mesh, owners) for type_ in input_types)
+    for key in keys:
+        held = [state[key] for state in states]
+        merged = reduce(
+            lambda a, b: ShardAttr.combine(None, a, b),
+            (a for a in held if not isinstance(a, Partial)),
+            Broadcast(),
+        )
+        fallback = reduce(
+            lambda a, b: ShardAttr.combine(None, a, b),
+            (a for a in held if not isinstance(a, (Split, Partial))),
+            Broadcast(),
+        )
+        attrs.append(fallback if isinstance(merged, Split) else merged)
     for i, sl in sharded:
         la2ta = mode_axes(compatible_profile(sl.layout.shape, input_types[i].shape))
         in_access = _result_access(input_maps[i])
         for p, attr in enumerate(sl.attrs):
             if isinstance(attr, Partial):
                 new_attr: object = Partial(attr.reduction)
-                if not isinstance(attrs[p], Broadcast) and attrs[p] != new_attr:
+                if isinstance(attrs[p], (Split, Partial)) and attrs[p] != new_attr:
                     raise ValueError(
                         f"input {i} mesh axis {p}: incompatible output shard "
                         f"{attrs[p]} vs {new_attr}"
@@ -256,13 +313,18 @@ def derive_output_shard_layout(
                     "non-projection output access; cannot derive output layout axis"
                 )
             else:
-                new_attr = Broadcast()
-            if not isinstance(attrs[p], Broadcast) and attrs[p] != new_attr:
+                continue
+            if isinstance(attrs[p], (Split, Partial)) and attrs[p] != new_attr:
                 raise ValueError(
                     f"input {i} mesh axis {p}: incompatible output shard "
                     f"{attrs[p]} vs {new_attr}"
                 )
             attrs[p] = new_attr
+
+    if all(isinstance(attr, Varying) for attr in attrs):
+        kept_levels = {level for level, _axis in keys}
+        if all((level in kept_levels) == owners.private(storage, level) for level in frame_levels):
+            return None
 
     carriers = [
         layout
@@ -274,7 +336,6 @@ def derive_output_shard_layout(
                 output_map,
                 output_shape,
                 mesh,
-                mesh_rank,
                 attrs,
                 complete_reduction_dims,
                 reduction,

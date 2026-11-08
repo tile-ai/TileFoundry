@@ -12,11 +12,11 @@ from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Constant, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.shard_layout import Split, shard_layout_of, split_target_axes
+from tilefoundry.ir.types.utils import require_matching_partial_state
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -148,7 +148,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ctx.error(call, "cache and new must be rank-4 [B, len, kv_heads, head_dim]")
     if cache_ty.dtype != new_ty.dtype:
         ctx.error(call, f"cache/new dtype mismatch {cache_ty.dtype} vs {new_ty.dtype}")
-    require_matching_partial_state(ctx, call, cache_ty, new_ty, "cache", "new")
+    require_matching_partial_state(cache_ty, new_ty, "cache", "new")
     for ax, label in ((0, "B"), (2, "kv_heads"), (3, "head_dim")):
         if cache_ty.shape[ax] != new_ty.shape[ax]:
             ctx.error(

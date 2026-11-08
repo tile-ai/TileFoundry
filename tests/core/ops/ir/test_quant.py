@@ -130,7 +130,7 @@ def test_quant_accepts_factorized_groups() -> None:
     assert split_target_axes(scale.layout, scale.shape) == (1,)
 
 
-def test_quant_drops_broadcast_ownership() -> None:
+def test_quant_preserves_broadcast_ownership() -> None:
     source = make_shard_tensor_type(
         (2, 256),
         _BF,
@@ -138,8 +138,8 @@ def test_quant_drops_broadcast_ownership() -> None:
         attrs=(Broadcast(),),
     )
     quantized, scale = infer_call(Quant(group=128), source).fields
-    assert quantized.layout == Layout(quantized.shape)
-    assert scale.layout == Layout(scale.shape)
+    assert quantized.layout == ShardLayout(Layout(quantized.shape), source.layout.attrs, source.layout.mesh)
+    assert scale.layout == ShardLayout(Layout(scale.shape), source.layout.attrs, source.layout.mesh)
 
 
 _SYMBOLIC_LAST = DimVar("quant_symbolic_last", 1, 1024)

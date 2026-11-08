@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.stride import idx2crd
@@ -14,7 +15,36 @@ from .stride import compact_row_major, crd2idx
 class ShardAttr:
     """Base for per-mesh-axis sharding attributes."""
 
-    pass
+    @staticmethod
+    def combine(kind: BinaryKind | None, a: ShardAttr, b: ShardAttr) -> ShardAttr:
+        """Merge value states before access relations map Split attrs.
+
+        See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+        """
+        if a is None or b is None:
+            raise ValueError(
+                "combine requires resolved attrs; read states with attrs_by_axis first"
+            )
+        if isinstance(a, Partial) or isinstance(b, Partial):
+            if isinstance(a, Partial) and isinstance(b, Partial):
+                if kind is BinaryKind.ADD and a.reduction == b.reduction == "sum":
+                    return a
+            else:
+                partial, other = (a, b) if isinstance(a, Partial) else (b, a)
+                if isinstance(other, Broadcast) and (
+                    (kind is BinaryKind.MUL and partial.reduction == "sum")
+                    or (kind is BinaryKind.ADD and partial.reduction in {"max", "min"})
+                ):
+                    return partial
+            raise ValueError(
+                f"cannot combine {kind!r}: {a!r} and {b!r}; "
+                "reshard(..., @ {B()}) to declare equal values where required"
+            )
+        if isinstance(a, Split):
+            return a
+        if isinstance(b, Split):
+            return b
+        return Varying() if isinstance(a, Varying) or isinstance(b, Varying) else Broadcast()
 
 
 @dataclass(frozen=True)
@@ -33,8 +63,8 @@ class Broadcast(ShardAttr):
 
 
 @dataclass(frozen=True)
-class Dynamic(ShardAttr):
-    pass
+class Varying(ShardAttr):
+    """Every copy holds the whole axis; values may differ between units."""
 
 
 def S(axis: int) -> Split:
@@ -47,6 +77,10 @@ def P(reduction: str = "sum") -> Partial:
 
 def B() -> Broadcast:
     return Broadcast()
+
+
+def V() -> Varying:
+    return Varying()
 
 
 def _factor_axis(axis_size, mesh_shape, splitting_mesh_axes, logical_axis):
@@ -171,6 +205,11 @@ def shard_layout_of(layout: object) -> "ShardLayout | None":
     ):
         return layout.outer
     return None
+
+
+def physical_attr(attr: ShardAttr) -> ShardAttr:
+    """Read value variation as Broadcast for coordinate and execution queries."""
+    return Broadcast() if isinstance(attr, Varying) else attr
 
 
 def partial_reductions_by_axis(
@@ -400,15 +439,17 @@ __all__ = [
     "local_layout",
     "local_layout_and_offset",
     "partial_reductions_by_axis",
+    "physical_attr",
     "mesh_coords",
     "ShardAttr",
     "Split",
     "Partial",
     "Broadcast",
-    "Dynamic",
+    "Varying",
     "S",
     "P",
     "B",
+    "V",
     "ShardLayout",
     "shard_layout_of",
     "shard_layout_local_shape",

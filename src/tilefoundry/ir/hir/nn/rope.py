@@ -18,13 +18,13 @@ from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.utils import common_placements
 from tilefoundry.evaluator.value import TensorValue, TupleValue, to_torch_dtype
 from tilefoundry.ir.core import Op
+from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._shard_checks import check_multilinear_partials, reject_partials
 from tilefoundry.ir.isl_interop import shape_to_isl_set
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TupleType
-from tilefoundry.ir.types.utils import is_literal_shape
+from tilefoundry.ir.types.utils import check_multilinear_partials, is_literal_shape, reject_partials
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -68,19 +68,19 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
         ctx.error(call, f"q head_dim {head_dim_q} != k head_dim {head_dim_k}")
 
     check_multilinear_partials(
-        ctx,
-        call,
         (("q", q_ty), ("cos_cache", cos_ty), ("sin_cache", sin_ty)),
+        ctx.target,
+        kind=BinaryKind.MUL,
         anchor="q",
     )
     check_multilinear_partials(
-        ctx,
-        call,
         (("k", k_ty), ("cos_cache", cos_ty), ("sin_cache", sin_ty)),
+        ctx.target,
+        kind=BinaryKind.MUL,
         anchor="k",
     )
 
-    reject_partials(ctx, call, "pos_ids", pos_ty.layout)
+    reject_partials("pos_ids", pos_ty.layout)
     return TupleType(fields=(q_ty, k_ty))
 
 

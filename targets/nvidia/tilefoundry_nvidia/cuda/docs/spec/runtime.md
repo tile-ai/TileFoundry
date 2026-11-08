@@ -175,8 +175,6 @@ template <class Reduction> struct P {
     using reduction = Reduction;
 };
 
-struct Dynamic {};
-
 template <size_t Ax, class L, class A, class M>
 CUTE_HOST_DEVICE constexpr auto stride(ShardLayout<L, A, M> const &sl);
 

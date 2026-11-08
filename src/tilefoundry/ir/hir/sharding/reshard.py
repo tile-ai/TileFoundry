@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from itertools import zip_longest
 from math import prod
 
 from tilefoundry.evaluator.registry import register_eval
@@ -16,15 +15,16 @@ from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
 from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten
 from tilefoundry.ir.types.layout_algebra import coalesce, domain_offset
 from tilefoundry.ir.types.shard_layout import (
-    Dynamic,
+    Broadcast,
+    Partial,
     ShardLayout,
     Split,
-    partial_reductions_by_axis,
+    Varying,
     register_strides,
     shard_layout_of,
 )
-from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.types.utils import is_literal_shape, static_dim_value
+from tilefoundry.ir.types.storage import StorageKind, StorageOwners
+from tilefoundry.ir.types.utils import attrs_by_axis, is_literal_shape, static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelation,
@@ -52,19 +52,25 @@ def _buffer_alias(call: Call) -> int | None:
 
     Each thread holds its registers privately, so the box of an ``rmem`` ShardLayout also
     holds the threads its mesh numbers, and steps by register, where every Split steps 0
-    and is recorded with its mesh axis.
+    and is recorded with its mesh axis. A plain register end reads as Varying
+    on the other end's mesh while comparing those boxes.
     """
     source, result = call.args[0].type, call.type
     if result.storage is not source.storage or not is_literal_shape(result.shape):
         return None
-    if any(
-        before != after
-        for before, after in zip_longest(
-            partial_reductions_by_axis(source.layout),
-            partial_reductions_by_axis(result.layout),
-        )
-    ):
-        return None
+    layouts = tuple(shard_layout_of(held.layout) for held in (source, result))
+    frame = next((layout.mesh for layout in layouts if layout is not None), None)
+    states = tuple(
+        attrs_by_axis(held, None if layout is not None else frame)
+        for held, layout in zip((source, result), layouts)
+    )
+    for key in states[0].keys() | states[1].keys():
+        before, after = (state.get(key, Broadcast()) for state in states)
+        if isinstance(before, Partial) or isinstance(after, Partial):
+            if not (
+                before == after or (isinstance(before, Varying) and isinstance(after, Partial))
+            ):
+                return None
     from tilefoundry.ir.hir.tensor.slice import Slice  # noqa: PLC0415
 
     offset, view = 0, call.args[0]
@@ -89,6 +95,11 @@ def _buffer_alias(call: Call) -> int | None:
     for held in (source, result):
         layout = held.layout
         shard = shard_layout_of(layout)
+        if shard is None and held.storage is StorageKind.RMEM:
+            peer = next((sl for sl in layouts if sl is not None), None)
+            if peer is not None:
+                shard = ShardLayout(layout, tuple(Varying() for _ in peer.attrs), peer.mesh)
+                layout = shard
         physical = shard.layout if shard is not None else layout
         if shard is not None and isinstance(layout, ComposedLayout):
             physical = replace(layout, outer=physical)
@@ -98,7 +109,7 @@ def _buffer_alias(call: Call) -> int | None:
             start = mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0
             threads = (mesh.topologies, device_layout(mesh), start)
             sizes = (getattr(topology, "size", 1) for topology in mesh.topologies)
-            if any(isinstance(attr, Dynamic) for attr in shard.attrs) or not all(
+            if not all(
                 isinstance(value, int)
                 for value in (start, *sizes, *threads[1].shape, *threads[1].strides)
             ):
@@ -179,7 +190,23 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         )
     new_storage = op.storage if op.storage is not None else x_ty.storage
     new_layout = op.layout
-    return TensorType(shape=x_ty.shape, dtype=x_ty.dtype, layout=new_layout, storage=new_storage)
+    target = getattr(ctx, "target", None)
+    owners = target.storage_owners if target else StorageOwners((), {})
+    layouts = tuple(shard_layout_of(layout) for layout in (x_ty.layout, new_layout))
+    result = TensorType(shape=x_ty.shape, dtype=x_ty.dtype, layout=new_layout, storage=new_storage)
+    frame = next((layout.mesh for layout in layouts if layout is not None), None)
+    states = tuple(
+        attrs_by_axis(held, None if layout is not None else frame, owners)
+        for held, layout in zip((x_ty, result), layouts)
+    )
+    for key in states[0].keys() | states[1].keys():
+        src, dst = (state.get(key, Broadcast()) for state in states)
+        if isinstance(dst, Partial) and src != dst and not isinstance(src, Varying):
+            ctx.error(
+                call,
+                f"Reshard mesh axis {key}: {src!r} cannot become {dst!r}; only Varying or the same Partial becomes Partial",
+            )
+    return result
 
 
 @register_eval(Reshard)

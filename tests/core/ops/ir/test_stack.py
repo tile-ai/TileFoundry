@@ -112,7 +112,7 @@ CASES = (
             ),
             make_tensor_type((8, 8)),
         ),
-        error=ExpectedError(match="input 1 does not carry Partial.*Reshard"),
+        error=ExpectedError(match="input 1 does not carry Partial.*reshard"),
     ),
     OpCase(
         "axis_out_of_range",

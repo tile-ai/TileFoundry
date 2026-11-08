@@ -83,6 +83,7 @@ from tilefoundry.ir.types.utils import (
     i64_const,
     leaves_of,
     participant_layout,
+    physical_layout,
     static_dim_value,
 )
 from tilefoundry.ir.visitor import ExprVisitor, StmtMutator, collect_exprs, expr_children
@@ -179,11 +180,13 @@ def operand_types(call: Call, op: Op) -> tuple:
 
 
 def _participants(layouts) -> Mesh | None:
-    """The participant mesh of the first ``ShardLayout`` among *layouts*, if any."""
-    return next(
-        (participant_layout(layout).mesh for layout in layouts if isinstance(layout, ShardLayout)),
-        None,
-    )
+    """The first physical participant mesh among *layouts*, if any."""
+    for layout in layouts:
+        if isinstance(layout, ShardLayout):
+            physical = physical_layout(layout)
+            if isinstance(physical, ShardLayout):
+                return participant_layout(physical).mesh
+    return None
 
 
 def copy_mesh(types) -> Mesh | None:
@@ -882,14 +885,16 @@ class StoragePlan:
         if starts is not None and _covers(starts, sizes, held.shape):
             starts = None
         if starts is None:
-            actual = (
-                held
-                if whole_tensor
-                else replace(held, layout=participant_layout(held.layout))
-                if isinstance(held.layout, ShardLayout)
-                else held
-            )
-            if actual == desired or (
+            def physical_type(type_):
+                if whole_tensor or not isinstance(type_.layout, ShardLayout):
+                    return type_
+                layout = physical_layout(type_.layout)
+                if isinstance(layout, ShardLayout):
+                    layout = participant_layout(layout)
+                return replace(type_, layout=layout)
+
+            actual, requested = physical_type(held), physical_type(desired)
+            if actual == requested or (
                 not whole_tensor
                 and not isinstance(desired.layout, ShardLayout)
                 and held.shape == desired.shape

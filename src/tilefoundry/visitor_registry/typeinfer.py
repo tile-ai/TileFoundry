@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import MISSING, replace
 
+from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.expr import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.metadata import (
     RangeMetadata,
@@ -21,9 +22,19 @@ from tilefoundry.ir.types.callable_type import bind_annotation, callable_type_fo
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.dtype import IntegerDType
 from tilefoundry.ir.types.int_tuple import compatible_profile
+from tilefoundry.ir.types.shard_layout import (
+    Broadcast,
+    Varying,
+    shard_layout_of,
+)
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type
-from tilefoundry.ir.types.utils import static_dim_value, tensor_types, types_compatible
+from tilefoundry.ir.types.utils import (
+    attrs_by_axis,
+    static_dim_value,
+    tensor_types,
+    types_compatible,
+)
 from tilefoundry.ir.visitor import expr_children
 from tilefoundry.visitor_registry.valuation import ValuationVisitor
 
@@ -174,7 +185,12 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         fn = self._target_rule(op_cls, ctx) or typeinfer_registry.lookup(op_cls)
         if fn is None:
             ctx.error(call, f"no typeinfer registered for {op_cls.__name__}")
-        return fn(call, ctx)
+        try:
+            return fn(call, ctx)
+        except VerifyError:
+            raise
+        except ValueError as error:
+            ctx.error(call, str(error))
 
     @staticmethod
     def _target_rule(op_cls: type, ctx: TypeInferContext):
@@ -324,10 +340,34 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         carried = region.params[: len(region.yield_values)]
         for index, (phi, y) in enumerate(zip(carried, region.yield_values, strict=True)):
             entry_type = memo[id(phi)][1]
-            if not types_compatible(entry_type, inner.visit(y, ctx)):
+            yield_type = inner.visit(y, ctx)
+            if not types_compatible(entry_type, yield_type):
+                hint = ""
+                for entry, yielded in zip(tensor_types(entry_type), tensor_types(yield_type)):
+                    shards = tuple(shard_layout_of(t.layout) for t in (entry, yielded))
+                    frame = next((shard.mesh for shard in shards if shard is not None), None)
+                    states = tuple(
+                        attrs_by_axis(t, None if shard is not None else frame)
+                        for t, shard in zip((entry, yielded), shards)
+                    )
+                    for key in states[0].keys() | states[1].keys():
+                        before, after = (state.get(key, Broadcast()) for state in states)
+                        if before != after:
+                            labels = {Broadcast(): "B", Varying(): "V"}
+                            hint = (
+                                f": axis {key} enters {labels.get(before, repr(before))} "
+                                f"and leaves {labels.get(after, repr(after))}"
+                            )
+                            if before in labels and after in labels:
+                                hint += (
+                                    f"; reshard the entry to {labels[after]} "
+                                    f"or the yield to {labels[before]}"
+                                )
+                            break
+                    if hint:
+                        break
                 ctx.error(
-                    region,
-                    f"LoopRegion yield {index} type mismatch for param {phi.name!r}",
+                    region, f"LoopRegion yield {index} type mismatch for param {phi.name!r}{hint}"
                 )
         if not carried:
             return body_type

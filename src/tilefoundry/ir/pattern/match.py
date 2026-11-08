@@ -18,8 +18,9 @@ from tilefoundry.ir.types.dim import DimVar, is_dim_op_call
 from tilefoundry.ir.types.int_tuple import congruent
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import separate
+from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.ir.types.substitute import DimSubstitutionError, substitute_shape_dim
-from tilefoundry.ir.types.utils import participant_layout
+from tilefoundry.ir.types.utils import attrs_by_axis, participant_layout
 
 OPAQUE = object()
 
@@ -56,7 +57,9 @@ class _Bindings(dict):
 class PatternMatcher:
     """Match one pattern tree while retaining bindings and match evidence."""
 
-    def __init__(self, bindings=None):
+    def __init__(self, bindings=None, *, owners=StorageOwners((), {}), mesh=None):
+        self.owners = owners
+        self.mesh = mesh
         self.bindings: _Bindings = _Bindings(bindings or {})
         self.bindings.matcher = self
         self.memo: dict[int, object] = {}
@@ -450,7 +453,20 @@ class PatternMatcher:
         ):
             return False
 
-        return pattern.layout is None or self.match(pattern.layout, subject.layout)
+        layout = subject.layout
+        if isinstance(pattern.layout, _shard_layout_pattern_type()):
+            shard = layout if isinstance(layout, ShardLayout) else None
+            mesh = shard.mesh if shard is not None else self.mesh
+            if mesh is None or layout is None:
+                return self._fail(pattern.layout, layout)
+            if shard is None and isinstance(pattern.layout.mesh.topologies, tuple):
+                mesh = participant_layout(
+                    ShardLayout(layout, tuple(attrs_by_axis(subject, mesh).values()), mesh),
+                    pattern.layout.mesh.topologies,
+                ).mesh
+            attrs = tuple(attrs_by_axis(subject, mesh, self.owners).values())
+            layout = ShardLayout(shard.layout if shard else layout, attrs, mesh)
+        return pattern.layout is None or self.match(pattern.layout, layout)
 
     def visit_ShardLayoutPattern(self, pattern, subject) -> bool:
         if not isinstance(subject, ShardLayout):

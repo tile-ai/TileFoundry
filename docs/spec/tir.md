@@ -902,7 +902,9 @@ rejected by name rather than treated as running on arbitrary threads.
 An operand that carries a `ShardLayout` and executes element-wise MUST use that
 same execution-mesh pattern in `ShardLayoutPattern.mesh`. Unsharded gmem and
 smem operands carry no holder mesh; the execution declaration does not invent
-one for them.
+one for them. Plain operands read their state through
+[shard §6.1](./shard.md#61-placement-semantics) and match Broadcast only on
+axes that do not separate storage copies.
 
 #### Async copy Ops (`tir.async.*`)
 

@@ -14,12 +14,12 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import ShardLayout, shard_layout_of
 from tilefoundry.ir.types.storage import StorageOwners
+from tilefoundry.ir.types.utils import reject_partials
 from tilefoundry.utils.lazy import torch
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -65,7 +65,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     kind = call.target.kind
 
     commutes_with = frozenset() if kind is ReduceKind.ABS_MAX else frozenset({_PARTIAL[kind]})
-    reject_partials(ctx, call, "x", x_ty.layout, commutes_with=commutes_with)
+    reject_partials("x", x_ty.layout, commutes_with=commutes_with)
     keepdim = call.target.keepdim
     rank = len(x_ty.shape)
     reduced = _reduced_axes(call, rank)
