@@ -643,6 +643,9 @@ containing Varying but no Split or Partial, then reads remaining Varying as
 Broadcast without changing the stored value type. An entirely omitted physical
 frame uses the plain layout; levels containing only Broadcast retain their frame.
 
+Type compatibility compares placements as written and reads no storage owner:
+plain, Broadcast, and Varying are distinct; an omitted level reads as Broadcast.
+
 `attrs_by_axis(type_, mesh=None, owners=None)` reads states keyed by topology
 level and axis ordinal. Without owners it reads placements as written: plain is
 Varying, and omitted shard axes and levels are Broadcast. With target owners,

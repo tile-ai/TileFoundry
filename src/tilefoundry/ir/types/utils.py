@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-from dataclasses import replace
 from typing import Optional
 
 from tilefoundry.ir.core.kinds import BinaryKind
@@ -361,22 +360,12 @@ def is_unsharded_layout(layout: object) -> bool:
     return isinstance(layout, (Layout, ComposedLayout))
 
 
-def strip_broadcast_layout(layout):
-    """Remove a top-level all-Broadcast wrapper, retaining its address function."""
-    if isinstance(layout, ShardLayout) and is_unsharded_layout(layout):
-        return layout.layout
-    return layout
-
-
-def types_compatible(
-    declared: Type, actual: Type, *, owners: StorageOwners = StorageOwners((), {})
-) -> bool:
+def types_compatible(declared: Type, actual: Type) -> bool:
     """Return whether *actual* may bind a position declared as *declared*.
 
     Every non-``None`` declared field constrains the corresponding actual
     field. ``UMAT`` is the storage field's undecided value. Layout descriptors
-    apply the same rule recursively. ``owners`` determines which axes distinguish
-    plain Varying values from Broadcast; the default has no private axes.
+    apply the same rule recursively.
     """
 
     def field_compatible(declared_field, actual_field) -> bool:
@@ -394,14 +383,8 @@ def types_compatible(
         if isinstance(declared_layout, ShardLayout):
             if not isinstance(actual_layout, ShardLayout):
                 return False
-            declared_layout, actual_layout = (
-                participant_layout(
-                    replace(layout, attrs=tuple(attrs_by_axis(tensor, owners=owners).values()))
-                )
-                for layout, tensor in zip(
-                    (declared_layout, actual_layout), (declared, actual), strict=True
-                )
-            )
+            declared_layout = participant_layout(declared_layout)
+            actual_layout = participant_layout(actual_layout)
             return (
                 field_compatible(declared_layout.mesh, actual_layout.mesh)
                 and field_compatible(declared_layout.attrs, actual_layout.attrs)
@@ -412,30 +395,9 @@ def types_compatible(
     if isinstance(declared, TensorType):
         if not isinstance(actual, TensorType):
             return False
-        shards = tuple(shard_layout_of(t.layout) for t in (declared, actual))
-        states = tuple(attrs_by_axis(t, owners=owners) for t in (declared, actual))
-        if declared.layout is not None and actual.layout is not None:
-            for key in set().union(*states):
-                mesh = next(
-                    shard.mesh
-                    for shard, state in zip(shards, states)
-                    if shard is not None and key in state
-                )
-                held = tuple(attrs_by_axis(t, mesh, owners)[key] for t in (declared, actual))
-                if held[0] != held[1]:
-                    return False
-        if is_unsharded_layout(declared.layout) and is_unsharded_layout(actual.layout):
-            declared_layout = strip_broadcast_layout(declared.layout)
-            actual_layout = strip_broadcast_layout(actual.layout)
-            compatible_layout = declared_layout is None or layout_compatible(
-                declared_layout,
-                actual_layout,
-            )
-        else:
-            compatible_layout = declared.layout is None or layout_compatible(
-                declared.layout,
-                actual.layout,
-            )
+        compatible_layout = declared.layout is None or layout_compatible(
+            declared.layout, actual.layout
+        )
         return (
             declared.shape == actual.shape
             and declared.dtype == actual.dtype
@@ -447,7 +409,7 @@ def types_compatible(
             isinstance(actual, TupleType)
             and len(declared.fields) == len(actual.fields)
             and all(
-                types_compatible(declared_field, actual_field, owners=owners)
+                types_compatible(declared_field, actual_field)
                 for declared_field, actual_field in zip(declared.fields, actual.fields)
             )
         )

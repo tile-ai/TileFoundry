@@ -426,10 +426,10 @@ parameter to its argument's type; a region parameter has no type of its own,
 so a type stored on it by an earlier inference does not constrain the entry
 value. It seeds the inner visitor with the induction binding and all parameter
 bindings, then derives the body and yields. Every yield MUST satisfy
-`types_compatible(entry_type, yield_type, owners=target.storage_owners)` for
-the parameter it carries into, and `k > len(params)` is an error. A carried
-value whose state changes between Broadcast and Varying is rejected with its
-axis and an explicit entry-to-Varying or yield-to-Broadcast Reshard remedy. The carry result is the entry type of the
+`types_compatible(entry_type, yield_type)` for the parameter it carries into,
+and `k > len(params)` is an error. A carried value whose state changes between
+Broadcast and Varying is rejected with its axis and an explicit entry-to-Varying
+or yield-to-Broadcast Reshard remedy. The carry result is the entry type of the
 first `k` parameters: a more specific yield does not narrow it, and a loop that
 runs no iteration has that type. There is no fixed-point iteration.
 

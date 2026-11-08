@@ -27,7 +27,6 @@ from tilefoundry.ir.types.shard_layout import (
     Varying,
     shard_layout_of,
 )
-from tilefoundry.ir.types.storage import StorageOwners
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type
 from tilefoundry.ir.types.utils import (
@@ -342,8 +341,7 @@ class TypeInferVisitor(ValuationVisitor[Type]):
         for index, (phi, y) in enumerate(zip(carried, region.yield_values, strict=True)):
             entry_type = memo[id(phi)][1]
             yield_type = inner.visit(y, ctx)
-            owners = ctx.target.storage_owners if ctx.target else StorageOwners((), {})
-            if not types_compatible(entry_type, yield_type, owners=owners):
+            if not types_compatible(entry_type, yield_type):
                 hint = ""
                 for entry, yielded in zip(tensor_types(entry_type), tensor_types(yield_type)):
                     shards = tuple(shard_layout_of(t.layout) for t in (entry, yielded))
