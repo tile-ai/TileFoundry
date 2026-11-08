@@ -31,6 +31,7 @@ setup(
             "pytest-cov>=7",
         ],
         "dev": [
+            "import-linter==2.16",
             "pre-commit>=3",
             "ruff>=0.14",
             "clang-format==18.1.8",

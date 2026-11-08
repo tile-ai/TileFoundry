@@ -43,16 +43,18 @@ def test_python_prose_comments_are_rejected(lint, tmp_path, text) -> None:
 
 
 @pytest.mark.parametrize(
-    "text",
+    ("text", "allowed"),
     [
-        "#!/usr/bin/env python3\nvalue = 1\n",
-        "value = call()  # noqa: F841\n",
-        "value = call()  # type: ignore[arg-type]\n",
-        "# ruff: noqa\nvalue = 1\n",
+        ("#!/usr/bin/env python3\nvalue = 1\n", True),
+        ("value = call()  # noqa: F841\n", False),
+        ("value = call()  # type: ignore[arg-type]\n", False),
+        ("# ruff: noqa\nvalue = 1\n", False),
     ],
 )
-def test_tool_directives_and_the_first_line_shebang_are_allowed(lint, tmp_path, text) -> None:
-    assert _find(lint, tmp_path, text) == []
+def test_tool_directives_are_rejected_and_the_shebang_is_allowed(
+    lint, tmp_path, text, allowed
+) -> None:
+    assert (_find(lint, tmp_path, text) == []) is allowed
 
 
 def test_docstring_prose_budget_is_eight_lines(lint, tmp_path) -> None:
@@ -67,14 +69,13 @@ def test_google_sections_do_not_spend_prose_lines(lint, tmp_path) -> None:
     assert _find(lint, tmp_path, text) == []
 
 
-def test_docstring_and_directive_width_is_limited(lint, tmp_path) -> None:
+def test_docstring_width_is_limited(lint, tmp_path) -> None:
     assert _find(lint, tmp_path, f'"""{"x" * 95}"""\n')
-    assert _find(lint, tmp_path, f"value = 1  # noqa: {'x' * 90}\n")
 
 
-def test_hygiene_only_excuses_narration(lint, tmp_path) -> None:
+def test_hygiene_marker_does_not_excuse_narration(lint, tmp_path) -> None:
     escaped = '"""The docs/plans/x.md name is required here. hygiene: generated path"""\n'
-    assert _find(lint, tmp_path, escaped) == []
+    assert _find(lint, tmp_path, escaped)
     assert _find(lint, tmp_path, "# hygiene: generated path\n")
     assert _find(lint, tmp_path, f'"""{"x" * 101} hygiene:"""\n')
 

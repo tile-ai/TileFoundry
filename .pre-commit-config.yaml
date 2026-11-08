@@ -59,6 +59,20 @@ repos:
         entry: python scripts/comment_hygiene_lint.py
         language: system
         files: \.(py|h|hpp|cuh|cu|cpp|cc)$
+      # docs/spec/code-organization.md §0. Both read the whole tree: an import or a
+      # registration is checked against modules that were not staged.
+      - id: code-organization
+        name: code-organization
+        entry: python scripts/code_organization_lint.py
+        language: system
+        pass_filenames: false
+        files: ^(src|targets)/.*\.py$
+      - id: import-linter
+        name: import-linter
+        entry: env PYTHONPATH=scripts lint-imports
+        language: system
+        pass_filenames: false
+        files: ^(src|targets)/.*\.py$
       - id: no-machine-paths
         name: no-machine-paths
         entry: python scripts/no_machine_paths_lint.py

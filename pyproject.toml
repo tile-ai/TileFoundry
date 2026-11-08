@@ -91,10 +91,17 @@ target-version = "py312"
 #   E, W  pycodestyle (PEP 8 errors / warnings)
 #   F     pyflakes    (unused / undefined / shadowed)
 #   I     isort       (import order)
-# Plus targeted rules from pylint and flake8-tidy-imports:
-#   PLC0415  import-outside-top-level
-#   TID251   banned-api
-select = ["E", "F", "W", "I", "D2", "D3", "D4", "PLC0415", "TID251"]
+#   N     pep8-naming (docs/spec/code-organization.md S10)
+# Plus targeted rules:
+#   D100 D104      module and package docstrings (C9)
+#   B006 B008      no mutable or call parameter defaults (S6)
+#   PLC0415        import-outside-top-level (C1)
+#   PLR6301        a method that does not use self is a function (S3; preview)
+#   TID251         banned-api
+select = ["E", "F", "W", "I", "D2", "D3", "D4", "D100", "D104", "B006", "B008", "N", "PLC0415", "PLR6301", "TID251"]
+# Preview only for the rules selected by exact code (PLR6301), not whole families.
+preview = true
+explicit-preview-rules = true
 
 # Ignored rules:
 #   E501  line-too-long — long strings / compact code stay on one line.
@@ -114,7 +121,84 @@ ignore = ["E501", "F821", "E741"]
 # DSL tests use `from tilefoundry.dsl import *` as part of the
 # authoring-surface ergonomics. Internal implementation code in
 # `src/` uses explicit imports except for the curated DSL re-exports.
-"tests/**/*.py" = ["F403", "F405"]
+# The source rules of docs/spec/code-organization.md §0 bind src and targets only.
+"tests/**/*.py" = ["F403", "F405", "D100", "D104", "B008", "N", "PLR6301"]
+"scripts/**/*.py" = ["D100", "D104", "B008", "N", "PLR6301"]
 "src/tilefoundry/dsl/__init__.py" = ["F403"]
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.ruff.lint.pep8-naming]
+# S10: method names dispatched by reflection on a class name.
+ignore-names = ["visit_*", "visit_leaf_*", "print_*"]
+
+[tool.code_organization]
+# docs/spec/code-organization.md §0: the rules scripts/code_organization_lint.py checks.
+roots = ["src/tilefoundry", "targets/nvidia/tilefoundry_nvidia", "targets/apple/tilefoundry_apple"]
+exclude = ["src/tilefoundry/orchestrator/*", "*/models/*"]
+# S5: plugin loading points that import modules by name.
+dynamic_import_modules = ["tilefoundry.target.base", "tilefoundry.cli.target"]
+# S8: value classes whose subclasses are frozen dataclasses.
+value_bases = ["tilefoundry.ir.types.tensor_type.Type", "tilefoundry.ir.types.layout.LayoutBase"]
+# C7: the module that calls check_registries, the registry class, and key owners.
+composition_root = "tilefoundry"
+registry_classes = ["tilefoundry.visitor_registry.registries.DispatchRegistry"]
+target_base = "tilefoundry.target.base.Target"
+core_node_packages = ["tilefoundry.ir.core"]
+
+[tool.comment_hygiene]
+# docs/spec/code-organization.md C8 and the documentation rules of scripts/comment_hygiene_lint.py.
+max_prose_lines = 8
+max_columns = 100
+max_assert_message = 100
+# Paths outside the placement and size checks.
+exempt = [
+    "tests/nvidia/cuda/models/",
+    "tests/core/models/decode_oracle.py",
+    "tests/core/models/dense_decode.py",
+    "targets/nvidia/tilefoundry_nvidia/cuda/models/",
+    "examples/",
+]
+# Comment prefixes that address a tool; every one is a violation (C8).
+directive_prefixes = ["noqa", "type:", "pragma:", "ruff:", "pylint:", "pyright:", "mypy:", "fmt:", "isort:", "hygiene:"]
+# Process narration that documentation must not carry: [pattern, what it is].
+narration = [
+    ['\bAC-\d+-\d+\b', "an acceptance-criterion id"],
+    ['(?i)\bmilestones?\s+M\d+\b', "a milestone reference"],
+    ['(?i)\bplans?\s+`?\d+`?\b', "a plan reference"],
+    ['docs/plans/', "a plan path"],
+    ['(?i)\b(?:PR|pull request|issue)\s*#?\d+\b', "a PR/issue reference"],
+    ['(?i)\bcommit\s+[0-9a-f]{7,40}\b', "a commit hash"],
+    ['(?i)\b(?:as discussed|per review|review(?:er)? (?:said|asked|wants|requested)|address(?:ed|ing) (?:the )?(?:review|feedback)|as agreed)\b', "review narration"],
+]
+
+[tool.importlinter]
+# docs/spec/code-organization.md C2: the layer table of §0.5 and an acyclic import graph.
+root_packages = ["tilefoundry", "tilefoundry_nvidia", "tilefoundry_apple"]
+contract_types = ["acyclic: importlinter_acyclic.AcyclicContract"]
+
+[[tool.importlinter.contracts]]
+name = "C2 layers of tilefoundry (top row first)"
+type = "layers"
+containers = ["tilefoundry"]
+layers = [
+    "compile | module | script | dsl | cli",
+    "schedule | runtime",
+    "inspection | passes | codegen",
+    "analysis | parser",
+    "ir.hir | ir.tir",
+    "(interfaces)",
+    "ir.core | ir.clause | ir.pattern | core | target",
+    "ir.types",
+    "(dispatch) | (services) | utils | dump",
+]
+
+[[tool.importlinter.contracts]]
+name = "C2 target packages sit above tilefoundry"
+type = "layers"
+layers = ["tilefoundry_nvidia | tilefoundry_apple", "tilefoundry"]
+
+[[tool.importlinter.contracts]]
+name = "C2 acyclic module graph"
+type = "acyclic"
+ignore = ["tilefoundry.orchestrator", "tilefoundry.orchestrator.*", "tilefoundry_*.models", "tilefoundry_*.models.*"]
