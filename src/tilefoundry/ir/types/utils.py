@@ -16,7 +16,6 @@ from .layout_algebra import size
 from .mesh import Mesh, Topology, axis_keys, make_mesh, separate
 from .shard_layout import (
     Broadcast,
-    Dynamic,
     Partial,
     ShardAttr,
     Split,
@@ -44,9 +43,6 @@ def attrs_by_axis(
 
     Returns:
         States in frame order; omitted shard axes and levels read as Broadcast.
-
-    Raises:
-        ValueError: An axis carries an unresolved placement state.
     """
     shard = shard_layout_of(type_.layout)
     stated, counts = {}, {}
@@ -65,8 +61,6 @@ def attrs_by_axis(
     result = {}
     for key in keys:
         attr = stated.get(key, Broadcast()) if shard is not None else Varying()
-        if not isinstance(attr, (Broadcast, Varying, Split, Partial)):
-            raise ValueError(f"unresolved placement attr {attr!r}; resolve Dynamic before lowering")
         if (
             owners is not None
             and isinstance(attr, (Broadcast, Varying))
@@ -205,30 +199,6 @@ def require_matching_partial_state(
             f"{update_name} carries Partial({reduction}) on mesh axis {axis}, "
             f"but {dst_name} is complete; insert reshard({update_name}, @ {{B()}}) before this consumer"
         )
-
-
-def reject_dynamic_shards(types: tuple[TensorType, ...], op_name: str) -> None:
-    """Reject ownership that cannot be propagated statically.
-
-    See [shard §8](docs/spec/shard.md#8-layout-propagation).
-
-    Args:
-        types: Input tensor types.
-        op_name: Consumer name used in the diagnostic.
-
-    Raises:
-        ValueError: An input has unresolved Dynamic shard ownership.
-    """
-    for index, type_ in enumerate(types):
-        layout = shard_layout_of(type_.layout)
-        if layout is None:
-            continue
-        for axis, attr in enumerate(layout.attrs):
-            if isinstance(attr, Dynamic):
-                raise ValueError(
-                    f"input {index} has dynamic shard ownership on mesh axis {axis}; "
-                    f"use reshard(input_{index}, @ {{B()}}) before {op_name}"
-                )
 
 
 def require_uniform_partial_slices(

@@ -801,7 +801,7 @@ Type inference derives fresh output ownership from those access maps. A
 propagation proves a zero-offset projection. A `Split` on the concatenated axis
 MUST be rejected, including when it appears only on the zero-offset first
 input, and the diagnostic MUST require an explicit `Reshard` before `Concat`.
-Dynamic ownership, incompatible meshes, and nonuniform `Partial` states MUST
+Incompatible meshes and nonuniform `Partial` states MUST
 likewise fail with the `Reshard` remedy. Compatible propagated ownership receives
 concrete default strides; the input's physical layout need not be reused.
 An output with no real sharding receives a fresh C-order `Layout`.
@@ -1641,9 +1641,8 @@ class Reshard(Op):
     its `device_layout`, and the mesh offset, 0 for a mesh stated without one
     -- and steps by `register_strides` instead of the physical strides, so
     every Split keeps its mesh axis even where its physical stride is not 0.
-    Such a value whose mesh is not static, or that carries a `Dynamic` attr,
-    is a copy. The rule is conservative: two notations of one thread numbering
-    may be judged a copy.
+    Such a value whose mesh is not static is a copy. The rule is conservative:
+    two notations of one thread numbering may be judged a copy.
     A Split on a mesh axis of extent 1 places nothing: the box neither records
     it nor treats its tensor mode as independent. A box records every other
     zero-stride Split's mesh axis, logical tensor axis, position within that

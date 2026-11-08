@@ -15,7 +15,7 @@ flowchart TB
     ShardAttr["<b>ShardAttr</b>"]
     Split["<b>Split</b>"]
     Broadcast["<b>Broadcast</b>"]
-    Dynamic["<b>Dynamic</b>"]
+    Varying["<b>Varying</b>"]
     Partial["<b>Partial</b>"]
 
     LayoutBase --> Layout
@@ -30,7 +30,7 @@ flowchart TB
 
     ShardAttr --> Split
     ShardAttr --> Broadcast
-    ShardAttr --> Dynamic
+    ShardAttr --> Varying
     ShardAttr --> Partial
 
     Layout -. layout .-> ShardLayout
@@ -532,9 +532,6 @@ class Broadcast(ShardAttr):
 class Varying(ShardAttr):
     """Every copy holds the whole axis; values may differ between units."""
 
-class Dynamic(ShardAttr):
-    """Mark the distribution policy unresolved on this mesh axis."""
-
 class Partial(ShardAttr):
     """Mark an unreduced partial value.
 
@@ -608,10 +605,6 @@ Field meanings:
 - `Varying` — the current mesh axis does not split the value; every copy holds
   all coordinates and values may differ between units. A plain layout is
   Varying on every axis ([shard §6.1](./shard.md#61-placement-semantics)).
-- `Dynamic` — the distribution policy of the current mesh axis is not
-  yet resolved. `Dynamic` MAY appear during analysis / intermediate
-  inference but MUST be resolved to `Split` or `Broadcast` before
-  final lowering.
 - `Partial(reduction)` — the current mesh axis carries an **un-reduced
   partial value**: the full result over this mesh axis is the
   `reduction` (`sum` / `max` / `min`) of the per-shard values, and a
@@ -655,7 +648,7 @@ level and axis ordinal. Without owners it reads placements as written: plain is
 Varying, and omitted shard axes and levels are Broadcast. With target owners,
 Broadcast and Varying on axes finer than their storage owner both read as
 Broadcast. An empty owner mapping is not the same as omitting owners: it states
-no separate storage copies. Dynamic raises `ValueError`.
+no separate storage copies.
 
 `ShardAttr.combine(kind, a, b)` merges two read states **before** access relations
 map Split placements. Elementwise operations pass their `BinaryKind`;
@@ -815,7 +808,7 @@ relevant mesh axis.
 
 ### 7.2 `attrs`
 
-Per-mesh-axis attributes (`Split | Broadcast | Dynamic | Partial`),
+Per-mesh-axis attributes (`Split | Broadcast | Varying | Partial`),
 ordered by mesh axis. `len(attrs)` MUST equal `rank(mesh)`.
 
 A `Split(k)` substitutes the current `mesh_coord` into layout dim `k` of

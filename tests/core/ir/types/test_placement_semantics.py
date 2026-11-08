@@ -12,7 +12,6 @@ from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.types import (
     B,
     DType,
-    Dynamic,
     Layout,
     Mesh,
     P,
@@ -171,11 +170,10 @@ def test_placement_semantics():
             if cell == "joint" and kind is BinaryKind.ADD and a == b == P("sum"):
                 expected = P("sum")
             assert _outcome(ShardAttr.combine, kind, a, b) == expected, (kind, a, b)
-    for attr in (*states, Dynamic(), None):
+    for attr in (*states, None):
         for kind in (*BinaryKind, None):
-            for unresolved in (Dynamic(), None):
-                assert _outcome(ShardAttr.combine, kind, unresolved, attr) == "error"
-                assert _outcome(ShardAttr.combine, kind, attr, unresolved) == "error"
+            assert _outcome(ShardAttr.combine, kind, None, attr) == "error"
+            assert _outcome(ShardAttr.combine, kind, attr, None) == "error"
 
     cases = list(product(product((1, 2), repeat=3), STORAGES, (*product(ATTRS, repeat=3), ())))
     workers = min(8, os.cpu_count() or 1)

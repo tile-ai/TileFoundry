@@ -20,7 +20,6 @@ from tilefoundry.ir.types.dim import DimAdd, simplify_dim
 from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.ir.types.utils import (
-    reject_dynamic_shards,
     require_uniform_partial_slices,
 )
 from tilefoundry.utils.lazy import torch
@@ -142,7 +141,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         new_shape[axis] = _sum_dim(new_shape[axis], t.shape[axis])
     new_shape = normalize_dim_entries(tuple(new_shape))
 
-    reject_dynamic_shards(types, "Concat")
     _reject_concat_axis_splits(call, ctx, types, axis)
     try:
         relation = relations_of(call, ctx)

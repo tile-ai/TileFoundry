@@ -222,22 +222,6 @@ void use() { (void)&k<>; }
 }
 #endif
 
-#if CASE == 6 || CASE == ALL
-namespace case_6 {
-/// mesh_axis_term: a Dynamic attr, which used to be dropped as a broadcast.
-template <class D = void> __global__ void k(float *p) {
-    dep_t<decltype(tmesh<256>()), D> mesh = tmesh<256>();
-    auto layout = cute::make_layout(cute::make_shape(cute::Int<256>{}));
-    auto t = cute::make_tensor(cute::make_gmem_ptr(p), layout);
-    ShardLayout<decltype(layout), cute::tuple<shard::Dynamic>, decltype(mesh)>
-        sl{layout, mesh};
-    auto st = make_shard_tensor(t, layout, sl);
-    tilefoundry::local_tensor(st)(0) = 1.f;
-}
-void use() { (void)&k<>; }
-}
-#endif
-
 #if CASE == 7 || CASE == ALL
 namespace case_7 {
 /// Item 1 at the entry: a mesh spanning 8 warps, reduced with no workspace.

@@ -16,7 +16,6 @@ from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten
 from tilefoundry.ir.types.layout_algebra import coalesce, domain_offset
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
-    Dynamic,
     Partial,
     ShardLayout,
     Split,
@@ -110,7 +109,7 @@ def _buffer_alias(call: Call) -> int | None:
             start = mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0
             threads = (mesh.topologies, device_layout(mesh), start)
             sizes = (getattr(topology, "size", 1) for topology in mesh.topologies)
-            if any(isinstance(attr, Dynamic) for attr in shard.attrs) or not all(
+            if not all(
                 isinstance(value, int)
                 for value in (start, *sizes, *threads[1].shape, *threads[1].strides)
             ):

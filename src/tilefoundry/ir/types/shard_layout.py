@@ -25,11 +25,6 @@ class ShardAttr:
             raise ValueError(
                 "combine requires resolved attrs; read states with attrs_by_axis first"
             )
-        for attr in (a, b):
-            if not isinstance(attr, (Broadcast, Varying, Split, Partial)):
-                raise ValueError(
-                    f"unresolved placement attr {attr!r}; resolve Dynamic before lowering"
-                )
         if isinstance(a, Partial) or isinstance(b, Partial):
             if isinstance(a, Partial) and isinstance(b, Partial):
                 if kind is BinaryKind.ADD and a.reduction == b.reduction == "sum":
@@ -70,11 +65,6 @@ class Broadcast(ShardAttr):
 @dataclass(frozen=True)
 class Varying(ShardAttr):
     """Every copy holds the whole axis; values may differ between units."""
-
-
-@dataclass(frozen=True)
-class Dynamic(ShardAttr):
-    pass
 
 
 def S(axis: int) -> Split:
@@ -456,7 +446,6 @@ __all__ = [
     "Partial",
     "Broadcast",
     "Varying",
-    "Dynamic",
     "S",
     "P",
     "B",

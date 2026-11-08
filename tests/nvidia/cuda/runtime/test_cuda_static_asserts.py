@@ -26,7 +26,6 @@ CASES: dict[int, str | None] = {
     3: "a shard layout must say what each of its mesh's axes does with the tensor",
     4: "make_shard_layout: one attr per mesh axis",
     5: "one attr per mesh axis: this layout has one stride per attr",
-    6: "this attr neither names a tensor axis",
     7: "these shard layouts spread one value over more than one warp",
     8: "ops::reduce (intra-warp tier): this reduce mesh spreads one value",
     9: "the element type must be one float holds exactly",

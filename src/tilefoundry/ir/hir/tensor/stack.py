@@ -16,7 +16,6 @@ from tilefoundry.ir.pattern import is_ranked_tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.utils import (
-    reject_dynamic_shards,
     require_uniform_partial_slices,
 )
 from tilefoundry.utils.lazy import torch
@@ -62,7 +61,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_shape = list(base.shape)
     new_shape.insert(axis, len(call.args))
     new_shape = tuple(new_shape)
-    reject_dynamic_shards(types, "Stack")
     try:
         relation = relations_of(call, ctx)
         layout = derive_output_shard_layout(

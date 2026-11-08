@@ -2,14 +2,9 @@
 
 import pytest
 
-from tests.core.ops.ir.op_case import infer_call
-from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import (
-    B,
     DType,
-    Dynamic,
     Layout,
     Mesh,
     P,
@@ -42,12 +37,3 @@ def test_plain_multilinear_operand_reads_every_frame(levels):
             target,
             kind=BinaryKind.ADD,
         )
-
-
-def test_reshard_dynamic_source_keeps_verify_error():
-    mesh = Mesh((Topology("gpu", 2),), Layout((2,), (1,)))
-    address = Layout((8,), (1,))
-    source = TensorType((8,), DType.f32, ShardLayout(address, (Dynamic(),), mesh), StorageKind.GMEM)
-    operation = Reshard(layout=ShardLayout(address, (B(),), mesh))
-    with pytest.raises(VerifyError, match="^Reshard: unresolved placement attr Dynamic"):
-        infer_call(operation, source, target=CudaTarget("nvidia.h200_sxm"))

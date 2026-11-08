@@ -21,7 +21,6 @@ struct B {};
 template <class Reduction> struct P {
     using reduction = Reduction;
 };
-struct Dynamic {};
 }
 
 namespace detail {

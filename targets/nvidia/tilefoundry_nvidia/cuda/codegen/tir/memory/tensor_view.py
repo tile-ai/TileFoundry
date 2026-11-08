@@ -24,7 +24,6 @@ from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten
 from tilefoundry.ir.types.mesh import flattened_levels
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
-    Dynamic,
     Partial,
     Split,
     physical_attr,
@@ -164,8 +163,6 @@ def _render_attr(a) -> str:
         return "tilefoundry::shard::B"
     if isinstance(a, Partial):
         return f"tilefoundry::shard::P<{_partial_reduction_tag(a.reduction)}>"
-    if isinstance(a, Dynamic):
-        return "tilefoundry::shard::Dynamic"
     return f"/* unknown attr {type(a).__name__} */"
 
 
