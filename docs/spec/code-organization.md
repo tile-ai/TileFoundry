@@ -1,7 +1,135 @@
 # TileFoundry Spec — Code Organization
 
 Implementation guide (not an architecture spec). Defines the Python
-source tree layout.
+source rules and the source tree layout.
+
+## 0. Python source rules
+
+These rules bind every Python module under `src/tilefoundry/` and
+`targets/<vendor>/tilefoundry_<vendor>/`, except `src/tilefoundry/orchestrator/`
+and the `models/` trees. A rule exists only where a checker enforces it; a
+convention no tool can check is not listed. No source line carries a tool
+directive: every exception is written in `pyproject.toml`
+([§0.6](#06-exceptions)).
+
+### 0.1 Reference style
+
+The [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html)
+is the reference for anything the rules below leave open. It is not a rule
+itself, because conformance to the whole guide cannot be checked. This spec
+overrides the guide in three places: "import modules only" and "no relative
+imports" are replaced by C3, and the `_` prefix for internal names is replaced
+by C3 visibility and C4.
+
+### 0.2 Style rules
+
+| Rule | Statement | Checker |
+|---|---|---|
+| S1 | No `@staticmethod`; write a module function. | `scripts/code_organization_lint.py` |
+| S2 | `@classmethod` is used only for a named constructor: `from_<source>`, or `create` for a factory protocol whose subclass decides the implementation. | `scripts/code_organization_lint.py` |
+| S3 | A method that does not use `self` is a module function. A method that overrides its base class is marked `@typing.override`. | ruff `PLR6301` |
+| S4 | No nested function or class, unless it closes over a local of the enclosing function other than `self` / `cls`. | `scripts/code_organization_lint.py` |
+| S5 | No custom metaclass, `__del__`, `__import__` or `importlib.import_module`. The plugin loading points that import dynamically are listed in configuration. `getattr` / `hasattr` are allowed for dispatch. | `scripts/code_organization_lint.py` |
+| S6 | A parameter default is neither a mutable value nor a function call. | ruff `B006`, `B008` |
+| S7 | A `@property` body is not only `return self.<field>`; a setter body is not only `self.<field> = value`. | `scripts/code_organization_lint.py` |
+| S8 | A subclass of a configured value base is `@dataclass(frozen=True)`. Its `__post_init__` writes only through `object.__setattr__(self, "<own field>", ...)`. | `scripts/code_organization_lint.py` |
+| S9 | A named constructor that uses only its class's layer and lower ones is a `@classmethod` `from_<source>` (S2). One that uses a higher layer is a module function `make_<name>` whose return type is defined in another module. | `scripts/code_organization_lint.py`; the layer half by C2 |
+| S10 | Classes are `CapWords`; functions, methods and variables are `snake_case`; constants are `UPPER_CASE`; an exception class name ends in `Error`. Method names dispatched by reflection (`visit_*`, `visit_leaf_*`, `print_*`) are configured exceptions. | ruff `N` |
+| S11 | A name does not repeat its package's name: the module files, public classes and public functions of package `p` do not contain `p`, unless the name is exactly `p` (`cost.Cost`). | `scripts/code_organization_lint.py` |
+
+S8 and S9 recognize their subjects by configuration or by name, so a rename
+evades them.
+
+### 0.3 Structure rules
+
+| Rule | Statement | Checker |
+|---|---|---|
+| C1 | No import inside a function. A heavy third-party module is loaded lazily through `tilefoundry.utils.lazy`. | ruff `PLC0415` |
+| C2 | The package import graph is acyclic and obeys the layer table of [§0.5](#05-layers-and-cycles). The module import graph within one directory is acyclic. | import-linter: the `layers` contract and the whole-graph contract in `scripts/importlinter_acyclic.py` |
+| C3 | Exports and imports follow [§0.4](#04-exports-and-imports). | `scripts/code_organization_lint.py` |
+| C4 | No name starts with `_`: files, classes, functions, methods, attributes, variables, parameters and import aliases. Dunder names and a lone `_` are exempt. | `scripts/code_organization_lint.py` |
+| C5 | An attribute, or an element of an attribute, is written only through the `self` / `cls` of the method that writes it. No `setattr`, `delattr` or `object.__setattr__` is applied to another object. | `scripts/code_organization_lint.py` |
+| C6 | No `global`. A module-level container is immutable (`tuple`, `frozenset`, `MappingProxyType`); `__all__` is exempt. Mutable runtime state lives in a class instance and is written by that instance's own methods (C5). | `scripts/code_organization_lint.py` |
+| C7 | The composition root names, for every `Registry`, the keys that must have an entry (or `None`) and passes them to `check_registries`. A lookup that misses raises. A registration is written where its key's owner lives (table below). | `scripts/code_organization_lint.py`, and `check_registries` at import |
+| C8 | No comment is a tool directive (`noqa`, `type:`, `pragma:`, `ruff:`, `pylint:`, `pyright:`, `mypy:`, `fmt:`, `isort:`, `hygiene:`). | `scripts/comment_hygiene_lint.py` |
+| C9 | Every module and package has a docstring. | ruff `D100`, `D104` |
+
+C7 owners:
+
+| Key | The registration is written in |
+|---|---|
+| A concrete Op of `ir.hir`, `ir.tir` or a target package | The Op's own module |
+| A node defined in `ir.core` (the `Dim*` operations, `Tuple`, …) | The interface package that owns the registry |
+| A key naming a Target class (codegen, target-specific type inference) | The top-level package of that Target |
+| A function (a `services` key) | Any module; `check_registries` proves the entry exists |
+
+### 0.4 Exports and imports
+
+- Every module and every `__init__.py` has a literal `__all__`. It is the export list.
+- Within one directory: `from .module import Name`, with `Name` in `module.__all__`.
+- Across directories: `from tilefoundry.a.b import Name`, where `tilefoundry.a.b`
+  is a package and `Name` is in the `__all__` of its `__init__.py`. A module of
+  another directory is never imported directly.
+- A module never imports its own package or an ancestor package, including a
+  module placed directly in an ancestor package's directory.
+- An `__init__.py` holds only a docstring, `from .x import Name` lines whose `x`
+  is a module or subpackage of its own directory, and `__all__`.
+- Imports use `from ... import ...`; `import tilefoundry.x` is not used.
+- When the imported name is a subpackage (`from tilefoundry.interfaces import
+  typeinfer`), its members are reached as `typeinfer.register`, and each member
+  reached that way is in the subpackage's `__all__`.
+- Third-party imports are outside this section.
+
+| Visibility | Written as | Usable from |
+|---|---|---|
+| Module-private | Not in the module's `__all__` | The same file |
+| Package-internal | In the module's `__all__`, not in the package's `__all__` | The modules of the same directory |
+| Public | In the `__all__` of the package `__init__.py` | Modules of other directories, subject to C2 |
+
+Re-exporting through `__init__.py` is safe under C2 and this section together.
+Python runs every ancestor `__init__.py` before a submodule, so an ancestor is
+half initialized while its submodule loads and cannot be imported by it; a
+package's `__init__.py` loads only lower layers, which finish first.
+
+### 0.5 Layers and cycles
+
+A package imports only packages on lower rows; the packages of one row do not
+import each other. All rows live inside the distribution packages; a row is
+not a separate distribution.
+
+| Row | Packages (bottom to top) |
+|---|---|
+| 0 | `dispatch` (the generic `Registry`), `services`, `utils`, `dump` |
+| 1 | The IR foundation: `DType`, `StorageKind`, `Type`, `Expr`, `Op` and the `Dim*` operations |
+| 2 | `ir.types` |
+| 3 | `ir.core` (structure nodes and visitors), `ir.clause`, `ir.pattern`, `core`, `target` |
+| 4 | `interfaces` (`valuation`, `typeinfer`, `verify`, `cost`, `access`, `evaluator`, `schedule`) |
+| 5 | `ir.hir`, `ir.tir` |
+| 6 | `analysis`, `parser` |
+| 7 | `inspection`, `passes`, `codegen` |
+| 8 | `schedule`, `runtime` |
+| 9 | `dsl`, `cli`, and the modules of the root directory |
+| 10 | `tilefoundry`, the root package, imported only by users |
+| 11 | `tilefoundry_nvidia`, `tilefoundry_apple` |
+
+A cycle is broken according to its cause:
+
+| Cause | Fix |
+|---|---|
+| An import serves only a type annotation | Quote the annotation and drop the import |
+| A catch-all module joins several concepts and becomes a hub | Split it by concept |
+| A function of a lower-layer class uses a higher-layer concept | Move the function to the higher layer; the lower layer keeps the data |
+| A lower layer must call an implementation that lives higher | Call it through `services`: the service function is declared on row 0, the implementing package registers its implementation at import, and the composition root checks that it is present |
+| A package spans two rows | Split the package by row |
+
+### 0.6 Exceptions
+
+An exception to a rule is written only in `pyproject.toml`, in the section of
+the tool that checks the rule: `[tool.ruff.lint]` (`per-file-ignores`,
+`pep8-naming`), `[tool.code_organization]` (dynamic import points, value
+bases), `[tool.comment_hygiene]`, and `[tool.importlinter]` (`ignore_imports`,
+where an unmatched entry is an error). `.pre-commit-config.yaml` declares the
+hooks and carries no rule arguments.
 
 ## 1. Directory skeleton
 
@@ -208,10 +336,9 @@ carry boilerplate assembly only; emitters live in Python walkers.
 
 ### 2.1 Package export rule
 
-`tilefoundry.ir.types` re-exports type classes and `make_*` constructors. Other
-functions are imported from the module that owns them; for example,
-`make_mesh` is available at the package surface, while `separate` is imported
-from `tilefoundry.ir.types.mesh`.
+Every package re-exports its public names in its `__init__.py` and lists them
+in `__all__`. Other directories import only from the package
+([§0.4](#04-exports-and-imports)).
 
 ## 3. Multi-agent parallelism guarantee
 
