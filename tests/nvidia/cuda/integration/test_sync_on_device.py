@@ -1,4 +1,4 @@
-"""Programs whose shared memory accesses race without their sync steps, run on an sm_89 card.
+"""Programs whose shared memory accesses race without their sync steps or order, on an sm_89 card.
 
 Each finalizes through the default flow for the card and must match its reference
 exactly.
@@ -66,8 +66,10 @@ def _poisoned(param):
         ("analysis/sync_nested_subsets.py", _evaluated),
         ("passes/sync_row_windows.py", _identity),
         ("passes/sync_lane_rows.py", _identity),
+        ("passes/destination_order.py:Sibling", _evaluated),
+        ("passes/destination_order.py:KeptAcross", _evaluated),
     ],
-    ids=lambda value: Path(value).stem if isinstance(value, str) else None,
+    ids=lambda value: Path(value).name.replace(".py", "") if isinstance(value, str) else None,
 )
 def test_synchronised_program_matches_on_the_card(path, reference):
     module = replace(load_authored_ir(str(FIXTURES / path)), target=CudaTarget("nvidia.rtx_6000_ada"))

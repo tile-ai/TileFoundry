@@ -277,6 +277,12 @@ class ConvertHIRToTIR(ModulePass):
     and the Target. A target visitor overrides the visits it changes and
     implements the rest: loops, `InsertSlice`, `Zeros`, `FullLike` and
     instruction issue.
+  - Entering the function body, and in `on_region_start` any region's body,
+    the core visitor first lowers the children `LivenessMetadata.orders` lists
+    for it, in that order ([analysis §1.2.2](./analysis.md#122-memory)), so
+    statements follow the events the analysis planned with. A target visitor
+    that lowers loops enters each loop's body through `on_region_start` inside
+    the loop's builder region.
   - The pass lowers the device root: the callee of the `Launch` in `Module.entry`
     when that entry is a CPU host, otherwise `Module.entry` itself. It returns the
     Module unchanged under `CodegenOptions(emit="skeleton")` or when the Module

@@ -6,6 +6,8 @@ import isl
 
 from tilefoundry.ir.core import value_label
 from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.isl_interop import dim_range
+from tilefoundry.ir.types.dim import DimSub, simplify_dim
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry.access_relation import AccessRelation
 
@@ -15,6 +17,19 @@ from .errors import AnalysisError
 def induction_name(loop: LoopRegion) -> str:
     """Name a loop by the induction variable authored for it."""
     return getattr(loop.induction_var, "name", None) or "<unnamed>"
+
+
+def span_bounds(loop: LoopRegion) -> tuple[int, int] | None:
+    """Bounds on the least and greatest ``stop - start`` of *loop*; None without a stated range."""
+    span = simplify_dim(DimSub, (loop.extent, loop.start))
+    value = static_dim_value(span)
+    if value is not None:
+        return value, value
+    try:
+        bounds = dim_range(span)
+    except (ArithmeticError, TypeError, ValueError):
+        return None
+    return None if bounds is None else (bounds[0], bounds[1] - 1)
 
 
 def refuse_runtime_bound(loop: LoopRegion, which: str) -> None:
@@ -82,4 +97,10 @@ def loop_domain(loops, values, *, first=False):
     return result
 
 
-__all__ = ["induction_name", "iteration_domain", "loop_domain", "refuse_runtime_bound"]
+__all__ = [
+    "induction_name",
+    "iteration_domain",
+    "loop_domain",
+    "refuse_runtime_bound",
+    "span_bounds",
+]

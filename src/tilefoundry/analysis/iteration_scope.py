@@ -10,9 +10,7 @@ from tilefoundry.ir.core import Expr, Var, get_metadata
 from tilefoundry.ir.core.expr import SSAValue
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.isl_interop import dim_range
 from tilefoundry.ir.types import Mesh, Topology
-from tilefoundry.ir.types.dim import DimSub, simplify_dim
 from tilefoundry.ir.types.layout import ComposedLayout, get, size
 from tilefoundry.ir.types.utils import leaf_rank, leaf_span, static_dim_value
 from tilefoundry.ir.visitor import expr_children
@@ -36,7 +34,7 @@ from .access import (
     resolve_access,
 )
 from .errors import AnalysisError
-from .loop_domain import induction_name, iteration_domain, refuse_runtime_bound
+from .loop_domain import induction_name, iteration_domain, refuse_runtime_bound, span_bounds
 from .metadata import ExecutionMeshMetadata
 from .precision import AnalysisPrecision
 from .visitor import AnalyzeContext
@@ -578,27 +576,21 @@ class IterationScope:
         if isinstance(self.owner, MeshRegion) or self.parent is None:
             return 1, AnalysisPrecision.EXACT
         owner = self.owner
-        span = simplify_dim(DimSub, (owner.extent, owner.start))
         step = static_dim_value(owner.step)
         if step is None:
             raise AnalysisError(
                 f"loop {induction_name(owner)!r} steps by {owner.step!r}, which is not "
                 "a number; how often it runs is not stated"
             )
-        widest = static_dim_value(span)
-        precision = AnalysisPrecision.EXACT
-        if widest is None:
-            try:
-                bounds = dim_range(span)
-            except (ArithmeticError, TypeError, ValueError):
-                bounds = None
-            if bounds is None:
-                refuse_runtime_bound(
-                    owner, "extent" if static_dim_value(owner.extent) is None else "start"
-                )
-            widest = bounds[1] - 1
-            if bounds[1] - bounds[0] > 1:
-                precision = AnalysisPrecision.UPPER_BOUND
+        bounds = span_bounds(owner)
+        if bounds is None:
+            refuse_runtime_bound(
+                owner, "extent" if static_dim_value(owner.extent) is None else "start"
+            )
+        least, widest = bounds
+        precision = (
+            AnalysisPrecision.EXACT if widest <= least else AnalysisPrecision.UPPER_BOUND
+        )
         if step <= 0 or widest <= 0:
             return 1, precision
         return max(1, -(-widest // step)), precision

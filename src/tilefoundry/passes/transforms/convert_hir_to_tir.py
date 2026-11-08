@@ -19,6 +19,7 @@ import isl
 from tilefoundry.analysis import MemoryMetadata
 from tilefoundry.analysis.access import AliasKind, BufferAlias, buffer_alias, forwarded_leaves
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata, AllocationValue
+from tilefoundry.analysis.liveness import LivenessMetadata
 from tilefoundry.codegen.options import CodegenOptions
 from tilefoundry.ir.core import (
     BindingMetadata,
@@ -1333,6 +1334,17 @@ class Lowering(ValuationVisitor[Expr | View]):
             ctx.parameters[id(param)] = physical
             self._memo[id(param)] = (param, physical)
 
+    def visit_ordered(self, owner, ctx) -> None:
+        """Lower the children of *owner*'s body first in the order liveness gave them events."""
+        liveness = get_metadata(self.context.function, LivenessMetadata)
+        for expr in () if liveness is None else liveness.orders.get(id(owner), ()):
+            self.visit(expr, ctx)
+
+    def on_region_start(self, region, ctx):
+        inner = super().on_region_start(region, ctx)
+        self.visit_ordered(region, inner)
+        return inner
+
     def run(self) -> PrimFunction:
         ctx = self.context
         if ctx.function.body is None:
@@ -1354,6 +1366,7 @@ class Lowering(ValuationVisitor[Expr | View]):
             )
             output = Var(ctx.names.fresh("out"), type=output_type)
             ctx.outputs.append((path, output))
+        self.visit_ordered(ctx.function, ctx)
         self.visit(ctx.function.body, ctx=ctx)
         statements = ctx.builder.build(ctx.builder.blocks[0])
 

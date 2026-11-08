@@ -496,6 +496,54 @@ recorded without expanding the trip count; a carried parameter spans entry to
 exit, and a yielded value remains live through the backedge event. Positions
 are monotonic across the whole Function, including nested and sibling regions.
 
+Events follow a depth-first visit of the operands, except where a schedule
+overwrites data in place. The data a value may hold is found by following
+forwards and views that write nothing; a schedule's result is new data even
+though it aliases its destination. A retained call's result that shares an
+argument's provenance root ([§2.1](#21-shared-iterationscope-and-access)) also
+holds that argument's data. A loop's result holds new data and what its body
+yields; it may also hold its initial data where the body passes its parameter
+on, or where the loop may run no iterations because its step or its least
+extent past its start is not known to be positive. A loop without carries
+forwards its body. Read by the body, a carried parameter holds its initial data
+and what the body yields for it, which across the backedge may be another
+carry's data; as a schedule's operand it stands for its own data only.
+
+A schedule replaces the data its result operand holds in the storage it
+writes; data a loop's carry took out of that storage does not count. Writes
+whose result operands share a provenance root and whose elements meet keep
+their depth-first order, and the later one also replaces the earlier one's
+result. Each read that may touch the data a schedule replaces, other than the
+schedule's own reads and the operands its instruction only writes, must take an
+earlier event. Where the read reaches that data through a loop's carry, the
+loop takes the earlier event instead, or none when the schedule is in that
+loop's body: the schedule then uses that storage after the carry is defined,
+so allocation gives the carry storage of its own and copies the data into it
+([`AllocationValue`](#allocationvalue)). A read may touch the data when the
+elements its resolved device access reaches in the provenance root meet those
+the schedule's resolved device access writes; for a loop taking the data, the
+elements are those the carried value holds. Elements not resolved, which
+include a retained call's reads, or in another root, meet anything. In the innermost scope holding both, the child
+holding the earlier one precedes the child holding the schedule. Each such
+scope sorts its children by these constraints and their operands at once, ties
+in depth-first order, and events then follow that order.
+
+Liveness raises `AnalysisError` naming the constrained schedules of a scope
+whose constraints form a cycle. A loop's yield hands its data to the next round
+after every child of the body, and the function returns its result after every
+child. Liveness raises as well for a schedule in that body, or in the function,
+that replaces data the yield or the result hands on, where the elements it
+writes meet those the handed value holds in its provenance root; where a carry
+took that data first, that loop precedes the schedule instead. Where the order
+of a scope's calls and regions, other than call targets, differs from the
+depth-first one, `LivenessMetadata.orders` holds it under the scope's owner,
+and lowering emits them in that order
+([passes §7.1](./passes.md#71-converthirtotir)). This ordering does not cover a
+schedule in a loop that replaces data defined outside the loop and read again
+in a later round, a schedule in a retained callee that writes a formal, a tuple
+element taken by an index known only at run time, or the operands an
+instruction writes as scratch beside its result.
+
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | Report `binding` | Render `ValueLifetime.value` through the same printer used for the surrounding IR. Metadata retains the SSAValue identity, without storing a display name. | No |
