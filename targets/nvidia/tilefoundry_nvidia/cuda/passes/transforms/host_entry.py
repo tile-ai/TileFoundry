@@ -6,24 +6,17 @@ Launch geometry and the analyzed shared-memory peak are written into each
 
 from __future__ import annotations
 
-from tilefoundry.analysis.metadata import RegionMemoryMetadata
-from tilefoundry.ir.core import Var, get_metadata
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.tir.launch import launch_call
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import Sequential
-from tilefoundry.ir.types import StorageKind, TensorType, TupleType, UnitType
-from tilefoundry.ir.types.layout import Layout
-from tilefoundry.passes.transforms.host_entry import InsertHostEntryPass
-from tilefoundry.target import CpuTarget, bind
-from tilefoundry_nvidia.cuda import CudaTarget
-from tilefoundry_nvidia.cuda.analysis.sync import SyncPlanMetadata
-from tilefoundry_nvidia.cuda.ir.tir.sync.mbarrier import MBARRIER_BYTES
+from tilefoundry import analysis, target
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import core, expr, tir, types
+from tilefoundry.passes import transforms
+from tilefoundry.target import cpu
+from tilefoundry_nvidia.cuda import analysis as cuda_analysis
+from tilefoundry_nvidia.cuda import target as cuda_target
+from tilefoundry_nvidia.cuda.ir.tir import sync
 
 
-def _product(values: tuple[object, ...]) -> object:
+def product(values: tuple[object, ...]) -> object:
     result: object = 1
     for value in values:
         if value is None:
@@ -35,42 +28,42 @@ def _product(values: tuple[object, ...]) -> object:
     return result
 
 
-def insert_default_host_entry(module: Module) -> Module:
+def insert_default_host_entry(module: core.Module) -> core.Module:
     """Keep CPU entries or synthesize entries according to the module's IR kind."""
     entry = module.entry_function()
-    runs_on = entry.target if isinstance(entry, PrimFunction) else module.resolve_target()
-    if isinstance(runs_on, CpuTarget):
+    runs_on = entry.target if isinstance(entry, core.PrimFunction) else module.resolve_target()
+    if isinstance(runs_on, cpu.Target):
         return module
-    functions = tuple(frame.function for frame in list_call_paths(module).values())
-    if all(isinstance(fn, PrimFunction) for fn in functions):
+    functions = tuple(frame.function for frame in valuation.list_call_paths(module).values())
+    if all(isinstance(fn, core.PrimFunction) for fn in functions):
         return module
-    if all(isinstance(fn, Function) for fn in functions):
+    if all(isinstance(fn, core.Function) for fn in functions):
         return entries_for_hir_functions(module)
     raise TypeError("insert_default_host_entry: mixed HIR/TIR device functions are unsupported")
 
 
-def _smem_peak(fn: Function) -> int:
+def smem_peak(fn: core.Function) -> int:
     """The analyzed shared-memory high-water mark of *fn*, and 0 before analysis.
 
     It ends after the per-warp mbarrier words when the ``sync`` plan places them.
     """
-    region = get_metadata(fn, RegionMemoryMetadata)
+    region = expr.get_metadata(fn, analysis.RegionMemoryMetadata)
     peaks = () if region is None else region.peaks
     peak = next((peak.peak_bytes for peak in peaks if peak.memory_level == "smem"), 0)
-    plan = get_metadata(fn, SyncPlanMetadata)
+    plan = expr.get_metadata(fn, cuda_analysis.SyncPlanMetadata)
     if plan is None or plan.barriers is None:
         return peak
     offset, words = plan.barriers
-    return offset + MBARRIER_BYTES * words
+    return offset + sync.MBARRIER_BYTES * words
 
 
-def _launchable(ty) -> bool:
-    if isinstance(ty, TupleType):
-        return all(_launchable(field) for field in ty.fields)
-    return not isinstance(ty, TensorType) or ty.storage in (StorageKind.GMEM, StorageKind.UMAT)
+def launchable(ty) -> bool:
+    if isinstance(ty, types.TupleType):
+        return all(launchable(field) for field in ty.fields)
+    return not isinstance(ty, types.TensorType) or ty.storage in (expr.StorageKind.GMEM, expr.StorageKind.UMAT)
 
 
-def _fresh_name(stem: str, taken: set[str]) -> str:
+def fresh_name(stem: str, taken: set[str]) -> str:
     """Reserve *stem*, or its first free ``_1``, ``_2``, ... suffix, in *taken*."""
     candidate = stem
     index = 0
@@ -81,7 +74,7 @@ def _fresh_name(stem: str, taken: set[str]) -> str:
     return candidate
 
 
-def _entry_params(fn: Function) -> tuple[Var, ...]:
+def entry_params(fn: core.Function) -> tuple[expr.Var, ...]:
     """*fn*'s declared inputs, then one GMEM destination per tensor result leaf.
 
     An HIR result has a type and no name, so each destination is named ``out``
@@ -90,79 +83,77 @@ def _entry_params(fn: Function) -> tuple[Var, ...]:
     taken = {param.name for param in fn.params}
 
     def destinations(ty):
-        if isinstance(ty, TensorType):
-            yield Var(
-                _fresh_name("out", taken),
-                type=TensorType(
-                    tuple(ty.shape), ty.dtype, Layout(tuple(ty.shape)), StorageKind.GMEM
+        if isinstance(ty, types.TensorType):
+            yield expr.Var(
+                fresh_name("out", taken),
+                type=types.TensorType(
+                    tuple(ty.shape), ty.dtype, types.Layout(tuple(ty.shape)), expr.StorageKind.GMEM
                 ),
             )
-        elif isinstance(ty, TupleType):
+        elif isinstance(ty, types.TupleType):
             for field in ty.fields:
                 yield from destinations(field)
-        elif not isinstance(ty, UnitType):
+        elif not isinstance(ty, types.UnitType):
             raise TypeError(
                 f"insert_default_host_entry: unsupported result type {ty!r} in {fn.name!r}"
             )
 
-    inputs = tuple(Var(name=p.name, type=p.type, is_const=p.is_const) for p in fn.params)
+    inputs = tuple(expr.Var(name=p.name, type=p.type, is_const=p.is_const) for p in fn.params)
     return (*inputs, *destinations(fn.return_type))
 
 
-def host_entry_for(frame, selector: str, fn: Function, taken: set[str]) -> PrimFunction:
+def host_entry_for(frame, selector: str, fn: core.Function, taken: set[str]) -> core.PrimFunction:
     """Launch one Module entry with its declared inputs and flattened destinations."""
-    params = _entry_params(fn)
-    grid = (_product(tuple(t.size for t in frame.topologies if t.name == "cta")), 1, 1)
-    block = (_product(tuple(t.size for t in frame.topologies if t.name == "thread")), 1, 1)
-    launch = launch_call(
-        fn, params, grid, block, symbol=selector, dynamic_smem=_smem_peak(fn)
+    params = entry_params(fn)
+    grid = (product(tuple(t.size for t in frame.topologies if t.name == "cta")), 1, 1)
+    block = (product(tuple(t.size for t in frame.topologies if t.name == "thread")), 1, 1)
+    launch = tir.launch.launch_call(
+        fn, params, grid, block, symbol=selector, dynamic_smem=smem_peak(fn)
     )
-    return PrimFunction(
-        name=_fresh_name(f"{fn.name}_host", taken),
+    return core.PrimFunction(
+        name=fresh_name(f"{fn.name}_host", taken),
         params=params,
-        body=Sequential(body=(launch,)),
+        body=core.Sequential(body=(launch,)),
         output_count=len(params) - len(fn.params),
-        target=CpuTarget(),
+        target=cpu.Target(),
     )
 
 
-def entries_for_hir_functions(module: Module) -> Module:
+def entries_for_hir_functions(module: core.Module) -> core.Module:
     """Append host entries and select the root host as the Module entry.
 
     Python begins a kernel invocation only by entering a Module; any other
     function runs as a device call inside one, or is wrapped by Python itself.
     """
-    target = module.resolve_target()
-    if not isinstance(target, CudaTarget):
+    tgt = module.resolve_target()
+    if not isinstance(tgt, cuda_target.Target):
         raise ValueError(
-            f"insert_default_host_entry: HIR entries launch on a CUDA target, not {target!r}"
+            f"insert_default_host_entry: HIR entries launch on a CUDA target, not {tgt!r}"
         )
     taken = {fn.name for fn in module.functions}
     entries = []
     root = None
-    for call_path, frame in list_call_paths(module).items():
+    for call_path, frame in valuation.list_call_paths(module).items():
         fn = frame.function
         if (
-            isinstance(fn, Function)
+            isinstance(fn, core.Function)
             and frame.module.entry == fn.name
             and not any(part.isdecimal() for part in call_path.split(".")[:-1])
-            and _launchable(fn.return_type)
+            and launchable(fn.return_type)
         ):
             entry = host_entry_for(frame, call_path, fn, taken)
             entries.append(entry)
             if call_path == module.entry:
                 root = entry
-    module.functions = (*module.functions, *entries)
-    if root is not None:
-        module.entry = root.name
+    module.replace_functions((*module.functions, *entries), entry=None if root is None else root.name)
     return module
 
 
-@bind(CudaTarget, InsertHostEntryPass)
-class CudaInsertHostEntryPass(InsertHostEntryPass):
+@target.bind(cuda_target.Target, transforms.InsertHostEntryPass)
+class CudaInsertHostEntryPass(transforms.InsertHostEntryPass):
     """Give launchable HIR Module entries a host-callable entry before lowering."""
 
-    def run(self, module: Module) -> Module:
+    def run(self, module: core.Module) -> core.Module:
         return insert_default_host_entry(module)
 
 

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="ins", target=CpuTarget())
+@module(entry="ins", target=cpu.Target())
 class Ins:
     @func
     def ins(dst: Tensor[(2, 5, 3), "f32"], upd: Tensor[(2, 1, 3), "f32"]):

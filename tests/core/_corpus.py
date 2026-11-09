@@ -10,9 +10,8 @@ from tempfile import TemporaryDirectory
 from types import MappingProxyType
 from typing import TypeVar
 
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.dump import DumpFlags, dump
-from tilefoundry.ir.core.module import Module
+from tilefoundry import cli, dump
+from tilefoundry.ir import core
 
 C = TypeVar("C", bound="Case")
 
@@ -27,9 +26,9 @@ class Case:
         shown = f"{self.path.parent.name}/{self.path.stem}"
         return f"{shown}.{self.name}" if self.name else shown
 
-    def load(self) -> Module:
+    def load(self) -> core.Module:
         """Load a fresh program through the CLI; lowering mutates its module."""
-        return load_authored_ir(f"{self.path}:{self.name}" if self.name else str(self.path))
+        return cli.load_authored_ir(f"{self.path}:{self.name}" if self.name else str(self.path))
 
     def guard(self, state, problems: Problems) -> None:
         """A case's own checks; the base has none."""
@@ -54,12 +53,12 @@ def _owners(case_type: type[C]) -> tuple[type[C], ...]:
     return tuple(owners)
 
 
-def reload(printed: str, name: str) -> Module:
+def reload(printed: str, name: str) -> core.Module:
     """Reload runtime printer output for roundtrip checks only."""
     with TemporaryDirectory() as directory:
         path = Path(directory) / "roundtrip.py"
         path.write_text(printed)
-        return load_authored_ir(f"{path}:{name}")
+        return cli.load_authored_ir(f"{path}:{name}")
 
 
 class Problems:
@@ -88,12 +87,12 @@ class Problems:
         """Write every problem in the active dump scope and raise one summary."""
         if not self.problems:
             return
-        dump(
+        dump.dump(
             "problems.txt",
             lambda: "\n\n".join(
                 f"{name}: {message}\n{trace}" for name, message, trace in self.problems
             ),
-            DumpFlags.ALL,
+            dump.Flags.ALL,
         )
         summary = "\n".join(
             f"{name}: {message.splitlines()[0]}" for name, message, _trace in self.problems

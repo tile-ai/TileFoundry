@@ -2,55 +2,43 @@
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_schedule_eval
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Call, Op, OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.types import DType, Mesh, UnitType
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    matmul_relations,
-    register_access_relation,
-)
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, evaluator, typeinfer, verify
+from tilefoundry.ir import expr, types
 
 from .mma_atom import AtomPattern, FromAtom, MmaAtom
-from .sm80_mma import Mma as _Sm80Mma
-from .sm89_mma import Mma as _Sm89Mma
+from .sm80_mma import Mma
+from .sm89_mma import Mma as sm89_mma_Mma
 from .wgmma import Wgmma
 
-_FP_ACC_WIDEN = {
-    (DType.fp8e4m3, DType.f32),
-    (DType.f16, DType.f32),
-    (DType.bf16, DType.f32),
-    (DType.f16, DType.f16),
-    (DType.bf16, DType.bf16),
-    (DType.f32, DType.f32),
-}
+FP_ACC_WIDEN = frozenset({
+    (expr.DType.fp8e4m3, expr.DType.f32),
+    (expr.DType.f16, expr.DType.f32),
+    (expr.DType.bf16, expr.DType.f32),
+    (expr.DType.f16, expr.DType.f16),
+    (expr.DType.bf16, expr.DType.bf16),
+    (expr.DType.f32, expr.DType.f32),
+})
 
 
-@register_op(dialect="T", category="nn", name="tiled_mma")
-class TiledMma(Op):
+@expr.register_op(dialect="T", category="nn", name="tiled_mma")
+class TiledMma(expr.Op):
     """Execute one tiled MMA; the atom declares its operand contracts."""
 
     capability = (
-        OpCapability(
+        expr.OpCapability(
             Wgmma.capability,
             declaration=Wgmma,
             attribute="atom",
         ),
-        OpCapability(
-            _Sm80Mma.capability,
-            declaration=_Sm80Mma,
+        expr.OpCapability(
+            Mma.capability,
+            declaration=Mma,
             attribute="atom",
         ),
-        OpCapability(
-            _Sm89Mma.capability,
-            declaration=_Sm89Mma,
+        expr.OpCapability(
+            sm89_mma_Mma.capability,
+            declaration=sm89_mma_Mma,
             attribute="atom",
         ),
     )
@@ -59,21 +47,21 @@ class TiledMma(Op):
     def resource(self):
         return self.atom.resource
 
-    acc = ParamDef(
+    acc = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.READ | MemoryEffect.WRITE,
+        effect=expr.MemoryEffect.READ | expr.MemoryEffect.WRITE,
         pattern=FromAtom("C"),
     )
-    lhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=FromAtom("A"))
-    rhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=FromAtom("B"))
-    atom = ParamDef(
+    lhs = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=FromAtom("A"))
+    rhs = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=FromAtom("B"))
+    atom = expr.ParamDef(
         kind="attribute",
         annotation=MmaAtom,
-        pattern=AtomPattern(Wgmma, _Sm80Mma, _Sm89Mma),
+        pattern=AtomPattern(Wgmma, Mma, sm89_mma_Mma),
     )
-    execution_mesh = ParamDef(
+    execution_mesh = expr.ParamDef(
         kind="attribute",
-        annotation=Mesh,
+        annotation=types.Mesh,
         optional=True,
         default=None,
     )
@@ -83,31 +71,31 @@ class TiledMma(Op):
         return self.atom.execution_mesh_pattern(groups=True)
 
 
-@register_typeinfer(TiledMma)
-def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
-    return UnitType()
+@typeinfer.register(TiledMma)
+def _(call: "expr.Call", ctx: "typeinfer.TypeInferContext") -> types.UnitType:
+    return types.UnitType()
 
 
-@register_access_relation(TiledMma)
-def _tiled_mma_access_relation(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(TiledMma)
+def tiled_mma_access_relation(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     acc, lhs, rhs = (ctx.type_of(arg) for arg in call.args)
-    *operands, accumulated = matmul_relations(lhs.shape, rhs.shape, (-2, -1, -1, -2))
+    *operands, accumulated = access.matmul_relations(lhs.shape, rhs.shape, (-2, -1, -1, -2))
     return (accumulated, *operands, accumulated)
 
 
-@register_schedule_eval(TiledMma)
-def _eval_scheduled_mma(ctx):
+@evaluator.register(TiledMma)
+def eval_scheduled_mma(ctx):
     acc, lhs, rhs = (arg.data for arg in ctx.args)
-    return TensorValue(
-        ShardTensor(
+    return evaluator.TensorValue(
+        core.ShardTensor(
             ctx.result_type,
-            acc + torch.matmul(lhs.to(acc.dtype), rhs.to(acc.dtype)),
+            acc + utils.torch.matmul(lhs.to(acc.dtype), rhs.to(acc.dtype)),
         )
     )
 
 
-@register_verify_stmt(TiledMma)
-def verify_operand_shapes(call: "Call", ctx: "VerifyContext") -> None:
+@verify.register(TiledMma)
+def verify_operand_shapes(call: "expr.Call", ctx: "verify.Context") -> None:
     """Check A (M,K), B (K,N), and C (M,N) shapes and dtypes."""
     acc_ty, lhs_ty, rhs_ty = (ctx.type_of(arg) for arg in call.args[:3])
     if len(lhs_ty.shape) == 2 and len(rhs_ty.shape) == 2 and len(acc_ty.shape) == 2:
@@ -123,7 +111,7 @@ def verify_operand_shapes(call: "Call", ctx: "VerifyContext") -> None:
             )
     if lhs_ty.dtype != rhs_ty.dtype:
         ctx.error(call, f"Mma lhs/rhs dtype mismatch: {lhs_ty.dtype} vs {rhs_ty.dtype}")
-    if (lhs_ty.dtype, acc_ty.dtype) not in _FP_ACC_WIDEN:
+    if (lhs_ty.dtype, acc_ty.dtype) not in FP_ACC_WIDEN:
         ctx.error(
             call,
             f"Mma unsupported dtype combo: input {lhs_ty.dtype} acc {acc_ty.dtype}",

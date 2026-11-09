@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.ir.types.shard_layout import Broadcast
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.ir import types
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 _MESH_LAYOUT = Layout(shape=(4, 8), strides=(1, 4))
 
 
@@ -31,7 +31,7 @@ class MmaTile:
                 shape=(16, 16),
                 layout=ShardLayout(
                     layout=Layout(shape=(16, 16), strides=(16, 1)),
-                    attrs=(Broadcast(), Broadcast()),
+                    attrs=(types.Broadcast(), types.Broadcast()),
                     mesh=m,
                 ),
             )
@@ -40,7 +40,7 @@ class MmaTile:
                 shape=(16, 8),
                 layout=ShardLayout(
                     layout=Layout(shape=(16, 8), strides=(8, 1)),
-                    attrs=(Broadcast(), Broadcast()),
+                    attrs=(types.Broadcast(), types.Broadcast()),
                     mesh=m,
                 ),
             )
@@ -50,7 +50,7 @@ class MmaTile:
                     "bf16",
                     ShardLayout(
                         layout=Layout(shape=(16, 16), strides=(16, 1)),
-                        attrs=(Broadcast(), Broadcast()),
+                        attrs=(types.Broadcast(), types.Broadcast()),
                         mesh=m,
                     ),
                     "smem",
@@ -62,7 +62,7 @@ class MmaTile:
                     "bf16",
                     ShardLayout(
                         layout=Layout(shape=(16, 8), strides=(8, 1)),
-                        attrs=(Broadcast(), Broadcast()),
+                        attrs=(types.Broadcast(), types.Broadcast()),
                         mesh=m,
                     ),
                     "smem",
@@ -108,10 +108,10 @@ class MmaTile:
             )
             T.copy(acc, c_view)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def tile_host(
         a: Tensor[(256,), "bf16"],
         b: Tensor[(128,), "bf16"],
         c: Tensor[(128,), "f32"],
     ):
-        launch(tile_device, a, b, c, grid=(1, 1, 1), block=(32, 1, 1))  # noqa: F821
+        launch(tile_device, a, b, c, grid=(1, 1, 1), block=(32, 1, 1))

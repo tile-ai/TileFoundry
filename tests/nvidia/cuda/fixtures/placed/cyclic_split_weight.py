@@ -1,19 +1,19 @@
 """Weights whose local piece is not one block of the logical tensor."""
+from tilefoundry import runtime
 from tilefoundry.dsl import *
-from tilefoundry.runtime import runtime_func, runtime_module
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 def weight_module(size, layout, attrs, mesh):
-    @module(entry="read", target=CudaTarget("nvidia.h200_sxm"), topologies=(*mesh.topologies, Topology("cta", 1)))
+    @module(entry="read", target=cuda.Target("nvidia.h200_sxm"), topologies=(*mesh.topologies, Topology("cta", 1)))
     class Weight:
         @func
         def read(weight: ConstTensor[(size,), "f32", ShardLayout(layout, attrs, mesh)]):
             return tf.reshard(weight)
 
-    @runtime_module(Weight)
+    @runtime.module(Weight)
     class WeightTwin:
-        @runtime_func
+        @runtime.func
         def read(self, weight):
             return weight
 

@@ -43,7 +43,7 @@ def extr_alu(val, operand, outbits):
     return val
 
 
-def _extract(state, operand, vertical):
+def extract(state, operand, vertical):
     row = operand >> 20
     step, enable, stride = 64, U64, 0
     offset = operand
@@ -71,13 +71,9 @@ def _extract(state, operand, vertical):
         enable &= parse_writemask(operand >> 32, xybytes, 9)
     elif operand & (1 << 27):
         if vertical:
-            state.y[((operand >> 6) & 7) * 64 : (((operand >> 6) & 7) + 1) * 64] = state.x[
-                (row & 7) * 64 : ((row & 7) + 1) * 64
-            ]
+            state.copy_register("x", row & 7, "y", (operand >> 6) & 7)
         else:
-            state.x[((operand >> 16) & 7) * 64 : (((operand >> 16) & 7) + 1) * 64] = state.y[
-                (row & 7) * 64 : ((row & 7) + 1) * 64
-            ]
+            state.copy_register("y", row & 7, "x", (operand >> 16) & 7)
         return
     else:
         dst = state.y if vertical else state.x
@@ -108,9 +104,12 @@ def _extract(state, operand, vertical):
         offset += 64
 
 
-def emulate_AMX_EXTRX(state, operand):
-    _extract(state, operand, False)
+def emulate_amx_extrx(state, operand):
+    extract(state, operand, False)
 
 
-def emulate_AMX_EXTRY(state, operand):
-    _extract(state, operand, True)
+def emulate_amx_extry(state, operand):
+    extract(state, operand, True)
+
+
+__all__ = ["emulate_amx_extrx", "emulate_amx_extry", "load_xy_reg_indexed"]

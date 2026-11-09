@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__all__ = ["format_bytes"]
+
 
 def format_bytes(value: int) -> str:
     """Format a nonnegative byte count in its largest reached binary unit."""
@@ -19,6 +21,3 @@ def format_bytes(value: int) -> str:
         amount /= 1024
         unit = candidate
     return f"{value}B" if unit == "B" else f"{amount:.2f}{unit}"
-
-
-__all__ = ["format_bytes"]

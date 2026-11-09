@@ -10,17 +10,17 @@ from tests.nvidia.cuda.fixtures.logical.child_matmul_inherited_target import (
     K_LEN,
     ChildMatmul,
     ChildMatmulDirect,
-    ChildMatmulRoot,  # noqa: F401 -- the CUDA root that holds the same children
+    ChildMatmulRoot,
     ChildMatmulStaged,
     K,
     M,
     N,
 )
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="gemm", target=CpuTarget(), topologies=(Topology("cta", 1),))
+@module(entry="gemm", target=cpu.Target(), topologies=(Topology("cta", 1),))
 class ChildMatmulCpuRoot:
     child = ChildMatmul
     direct = ChildMatmulDirect
@@ -28,12 +28,12 @@ class ChildMatmulCpuRoot:
 
     @func
     def gemm(a: Tensor[(M, K), "bf16"], b: Tensor[(K, N), "bf16"]):
-        return child(a, b)  # noqa: F821 -- class-body binding
+        return child(a, b)
 
     @func
     def gemm_on_chip(a: Tensor[(M, K), "bf16"], b: Tensor[(K, N), "bf16"]):
-        return direct(a, b)  # noqa: F821 -- class-body binding
+        return direct(a, b)
 
     @func
     def gemm_staged(a: Tensor[(M, K_LEN), "bf16"], b: Tensor[(K_LEN, N), "bf16"]):
-        return staged(a, b)  # noqa: F821 -- class-body binding
+        return staged(a, b)

@@ -1,8 +1,8 @@
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="model", target=CudaTarget("vendor.v100_sxm2_32gb"), topologies=(Topology("cta", 1),))
+@module(entry="model", target=cuda.Target("vendor.v100_sxm2_32gb"), topologies=(Topology("cta", 1),))
 class Model:
     @func
     def model(source: Tensor[(8,), "f32"]):

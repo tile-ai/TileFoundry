@@ -26,12 +26,9 @@ flowchart TB
     Call -. target .-> Op
 ```
 
-`Module.functions` is `hir.Function | tir.PrimFunction`; the
-heterogeneous container is described in [§1](#1-module). HIR
-`Function` is an `Expr` subclass, TIR `PrimFunction` is a `Stmt`
-subclass — the diagram above intentionally does not draw an edge
-from `Module` to `Expr` to avoid implying that all functions are
-Exprs.
+`Module.functions` mixes HIR `Function` (an `Expr`) and TIR `PrimFunction`
+(a `Stmt`), so the diagram draws no edge from `Module` to `Expr`
+([§1](#1-module)).
 
 ## 1. `Module`
 
@@ -51,7 +48,7 @@ class Module:
     """
 
     name: str
-    functions: tuple[hir.Function | tir.PrimFunction, ...]
+    functions: tuple[core.Function | core.PrimFunction, ...]
     entry: str | None = None
     children: dict[str, "ModuleList"] = field(default_factory=dict)
     target: Target | None = None
@@ -59,6 +56,7 @@ class Module:
     metadata: dict[str, object] = field(default_factory=dict)
     methods: Mapping[str, object] = field(default_factory=dict)
 
+    @property
     def weights(self) -> Mapping[str, TensorType]: ...
     def resolve_target(self) -> Target: ...
     def effective_topologies(self) -> tuple[Topology, ...]: ...
@@ -71,19 +69,25 @@ class Module:
 ```
 
 - constraints:
-  - the top-level compilation unit (parser output; pass input/output);
-    constructing a `Module` seals its functions.
+  - the top-level compilation unit (parser output; pass input/output).
+    Constructing a `Module` **seals** its functions: each base function and
+    its specialization variants are finalized. Variants may be added to a base
+    only while authoring, before the base enters a `Module`; adding one after
+    sealing is an error ([hir §1.1](./hir.md#11-function)).
   - a `Module` is the execution domain of the functions it owns: it, not they,
-    declares the `Target` and the ordered `Topology` hierarchy.
+    declares the `Target` and the ordered `Topology` hierarchy. It is a static
+    definition, not an invocation: owning a `Function`, attaching a child, or
+    declaring a `Target` or hierarchy never begins or counts one (Python-to-HIR
+    entry and HIR-to-HIR device calls: [hir §1.1](./hir.md#11-function)).
   - `children` maps instance slot keys to `ModuleList` objects. Definitions and
     function bodies remain shared; placing a definition creates no copy and no
     parent backlink. A class-body `Module` becomes a single-element,
     non-indexed slot; a class-body `ModuleList` is held as authored.
   - a child MAY declare its own Target; holding it does not type its bodies
-    again. A call of a child function is typed
-    from the callee body under the callee's effective Target with the call's
-    own argument types ([hir §1.1](./hir.md#11-function)); that writes the
-    caller's `Call.type` and nothing in the child.
+    again. A call of a child function is typed from the callee body under the
+    callee's effective Target with the call's own argument types
+    ([hir §1.1](./hir.md#11-function)); that writes the caller's `Call.type`
+    and nothing in the child.
   - `owns(function)` MUST use identity and accept the Module's direct functions
     and their specialization variants. With `derived=True`, it MUST also follow
     a rebuilt function's recorded origin
@@ -91,16 +95,9 @@ class Module:
     only its first edge — a rebuild may itself be rebuilt; equal copies and
     same-name functions from another Module MUST remain unowned.
 
-A `Module` is a static definition and execution-context container, not a dynamic
-invocation. Owning a `Function`, attaching a child `Module`, or declaring a
-`Target` or `Topology` hierarchy never itself begins or counts an invocation;
-Python-to-HIR entry and HIR-to-HIR device calls are governed by
-[hir §1.1](./hir.md#11-function).
-
 - `parse_module` (see [parser §2](./parser.md#2-syntax-and-rules)) returns a `Module`.
-- A bare `@func` / `@prim_func` becomes an implicit single-function
-  `Module` whose `entry` is set to that function. A function that declares
-  execution context of its own is therefore already a `Module`.
+- A bare `@func` / `@prim_func` becomes an implicit single-function `Module`
+  whose `entry` names that function.
 - Same-module `@prim_func` calls resolve through the module's symbol
   table, not Python closures.
 - `topologies` is the execution domain's complete ordered hierarchy.
@@ -108,19 +105,19 @@ Python-to-HIR entry and HIR-to-HIR device calls are governed by
   effective levels and creates a lexical mesh binding.
 
 **Effective context.** `target` and `topologies` record what a Module
-*declares*, not what it resolves to; a visitor carries the effective declarations in its current `ValuationContext`,
-without copying them onto shared definitions or Functions.
+*declares*, not what it resolves to; a visitor carries the effective
+declarations in its current `valuation.Context`, without copying them onto
+shared definitions or Functions.
 
 - constraints:
-  - `topologies = None` declares nothing and inherits the nearest instance declaration;
-  `topologies = ()` declares an explicitly topology-free domain; an explicit
-  tuple replaces the inherited hierarchy whole rather than extending it. A
-  declared tuple MUST NOT repeat a level name.
+  - `topologies = None` declares nothing and inherits the nearest instance
+    declaration; `topologies = ()` declares an explicitly topology-free domain;
+    an explicit tuple replaces the inherited hierarchy whole rather than
+    extending it. A declared tuple MUST NOT repeat a level name.
   - `resolve_topology(name)` returns the single declared level with that exact
-  name and MUST fail, naming the levels that are available, when there is
-  none.
+    name and MUST fail, naming the available levels, when there is none.
   - `metadata` carries target / compiler-option configuration, never
-  semantic topology / mesh information.
+    semantic topology / mesh information.
   - A `children` key is the class-body attribute name. `Module.name` remains
     the definition name. Instance resource paths append that key, followed by
     the element index for an indexed slot, e.g. `layers.3.input_norm.w`.
@@ -131,23 +128,17 @@ without copying them onto shared definitions or Functions.
   - Lists and tuples of Modules in a class body MUST be refused with guidance
     to use `ModuleList(definition, N)`.
   - `methods` collects plain Python functions (orchestration methods, e.g.
-  `forward` / `init_caches`; full collection rule in
-  [parser §3](./parser.md#3-implementation-overview)). A function name,
-  a child module name, and a method name MUST be disjoint at one `Module`'s
-  own level — all three resolve through the same attribute surface ([§1.1](#11-function-access)
-  below), so a name used by more than one would be ambiguous.
+    `forward` / `init_caches`; collection rule in
+    [parser §3](./parser.md#3-implementation-overview)). Function, child and
+    method names MUST be disjoint at one Module's own level
+    ([§1.1](#11-function-access)).
   - `weights` is a derived property, not a stored field: each access unions
-  every function's `ConstTensor` params (`Var.is_const`), in (function
-  order, param order); the same name in two functions MUST carry an
-  identical `TensorType`, or the access raises. There is no `states` field
-  or persistent-state concept in the IR — a tensor that must survive across
-  steps (e.g. a KV cache) is an ordinary `Tensor` param the caller passes in
-  and receives back explicitly ([runtime §1.3](./runtime.md#13-runtimedecoratorpy)).
-  - Constructing a `Module` **seals** its functions: each base function and
-  its specialization variants are finalized. Variants may be added to a
-  base only during authoring, before the base enters a `Module`; once
-  sealed, adding a variant is an error
-  ([hir.md §1.1](./hir.md#11-function)).
+    every function's `ConstTensor` params (`Var.is_const`), in (function
+    order, param order); the same name in two functions MUST carry an
+    identical `TensorType`, or the access raises. The IR has no `states` field
+    or persistent-state concept — a tensor that must survive across steps
+    (e.g. a KV cache) is an ordinary `Tensor` param the caller passes in and
+    receives back ([runtime §1.3](./runtime.md#13-runtimedecoratorpy)).
 
 #### Target inheritance
 
@@ -155,20 +146,17 @@ A Module's target declaration belongs to its execution domain and is resolved
 by the visitor from the callee declaration or the inherited caller context.
 
 - constraints:
-  - `resolve_target()` MUST return this Module's declared target. Inherited
-    context belongs to the visitor's `ValuationContext`, not the shared Module.
+  - `resolve_target()` MUST return the exact instance this Module declared; it
+    MUST NOT reconstruct or replace an equal value, and inherited context
+    belongs to the visitor's `valuation.Context`, not the shared Module.
   - Callee context inheritance and call compatibility follow
     [hir §1.1](./hir.md#11-function).
-  - A root Module with no target declaration MUST be refused
-    when its target is resolved. Its root Module MUST declare one, for example
-    with `target=CpuTarget()`.
-  - A Target declaration MUST be a constructed Target instance.
-    A string MUST be refused rather than resolved or constructed.
-  - `resolve_target()` MUST return the exact instance this Module declared; it MUST
-    NOT reconstruct or replace an equal value.
-  - Declaring a Module MUST NOT require a target; a shared definition can
-    inherit execution context when a visitor enters it through a caller.
-
+  - `resolve_target()` on a Module with no declaration MUST be refused, so a
+    root Module MUST declare one, for example with `target=cpu.Target()`. Declaring
+    a Module does not require a target: a shared definition inherits context
+    when a visitor enters it through a caller.
+  - A Target declaration MUST be a constructed Target instance; a string MUST
+    be refused rather than resolved or constructed.
 
 #### Default step
 
@@ -186,8 +174,6 @@ step.
     Each function remains reachable by name. A Module that composes children in
     an orchestration method has no single step to nominate; that host Python
     method is invoked by name rather than selected as an evaluator target.
-  - A bare `@func` / `@prim_func` MUST become an implicit single-function
-    Module whose `entry` names that function.
 
 ### 1.1 Function access
 
@@ -195,13 +181,12 @@ A `Module` mirrors the model it describes: a caller reaches a kernel, a child
 component, or an orchestration step through the same attribute surface.
 
 Each `name` maps to at most one entry among `Module.functions`,
-`Module.children`, and `Module.methods`. Within `functions`,
+`Module.children`, and `Module.methods` (MUST be disjoint at one Module's own
+level; construction raises `ValueError` otherwise). Within `functions`,
 shape-specialization variants live inside that entry's `Function.variants`
 ([hir.md §1.1](./hir.md#11-function)), never as separate same-name entries.
 
 - constraints:
-  - A function name, child-module name, and method name MUST be mutually
-  disjoint at one Module's own level.
   - `mod.lookup(name)` returns the function named `name`; it raises unless
   exactly one function matches. This is the canonical name-resolution
   contract (e.g. for a `SymbolRef` callee), searches only this Module's own
@@ -213,7 +198,7 @@ shape-specialization variants live inside that entry's `Function.variants`
   when none match or when more than one same-kind entry shares the name. A
   **function** name resolves to the `Function` / `PrimFunction` node itself,
   like `lookup`; an HIR `Function` is callable as one
-  `evaluator.evaluate` step. A `Module` is likewise callable when it declares
+  `interfaces.evaluator.evaluate` step. A `Module` is likewise callable when it declares
   an `entry`, with one argument for every declared parameter. A **child module** name resolves to that child
   `Module` for a non-indexed slot or its `ModuleList` for an indexed slot.
   `ModuleList` supports Python iteration and indexing over its shared definitions.
@@ -225,9 +210,9 @@ shape-specialization variants live inside that entry's `Function.variants`
 
 ### 1.2 Definition call paths
 
-`tilefoundry.ir.module_utils.list_call_paths(root)` enumerates each declared
+`tilefoundry.interfaces.valuation.list_call_paths(root)` enumerates each declared
 function once by identity, in DFS first-instance order. It returns a
-`dict[call_path, ValuationContext]`, including HIR Functions and PrimFunctions. A
+`dict[call_path, valuation.Context]`, including HIR Functions and PrimFunctions. A
 call path is a dot-separated string. The frame records the current Module,
 function, effective target, and effective topologies; shared definitions use the first
 path for generated names, including indexed segments such as `layers.0.run`.
@@ -245,7 +230,7 @@ class ModuleList(Expr):
     """
 
     key: str | None
-    elements: tuple[Module | type[RuntimeModule], ...]
+    elements: tuple[Module | type[runtime.Module], ...]
     indexed: bool
 
     def __init__(self, definition, count=MISSING): ...
@@ -255,7 +240,7 @@ class ModuleList(Expr):
   - A `ModuleList` is an Expr leaf carrying `key`, `elements`, and `indexed`.
     Its key is assigned on attachment; its elements MUST be non-empty.
     Semantic Module slots MUST contain only Module definitions. Runtime twin
-    declarations use RuntimeModule subclasses through the same list surface
+    declarations use runtime.Module subclasses through the same list surface
     ([runtime §1.3](./runtime.md#13-runtimedecoratorpy)).
     A supplied count MUST be a positive integer, excluding bool.
     One Module without a count creates a non-indexed slot; a count or a tuple
@@ -316,13 +301,11 @@ class SourceSpanMetadata(IRMetadata):
 - constraints:
   - the immutable base of every typed annotation stored on an `Expr`: typed
     fields and an optional `resolve(ctx)` interpretation. The default returns
-    the same record. Analysis supplies its context; environment-dependent records
-    use that context's bound Scope. Core metadata does not define a capability
-    provider or declare requirements. Core MUST NOT
-    import analysis to interpret metadata. Text and JSON rendering belong to
-    inspection ([inspection §2.8](./inspection.md#28-record-comment-forms)); a
-    record MUST NOT carry a rendering, a key name, or a family name of its own.
-
+    the same record. Analysis supplies the context; environment-dependent
+    records use that context's bound Scope. Core MUST NOT import analysis to
+    interpret metadata. Text and JSON rendering belong to inspection
+    ([inspection §2.8](./inspection.md#28-record-comment-forms)); a record
+    MUST NOT carry a rendering, a key name, or a family name of its own.
   - `BindingMetadata` is the authored SSA label. The parser maps explicit DSL
     `loc=` syntax and inferred assignment names to this metadata; there is no
     parallel `Expr.loc` field.
@@ -330,6 +313,8 @@ class SourceSpanMetadata(IRMetadata):
     Its file, line, and start column identify the physical authored file position;
     the start column is one-based. `end_column`, when present, is the physical
     source-file offset using Python AST's exclusive-end convention.
+  - `RangeMetadata(lo, hi)` (in `ir/expr/metadata.py`) records conservative
+    half-open value bounds `[lo, hi)`; type inference attaches it.
 
 ```python
 class Expr:
@@ -358,13 +343,17 @@ class Expr:
 ```python
 def get_metadata(expr: "Expr", cls: type[T], *, ctx=None) -> T | None: ...
 def remove_metadata(expr: "Expr", cls: type[IRMetadata]) -> "Expr": ...
-def attach_metadata(expr: "Expr", value: IRMetadata) -> None: ...
-def detach_metadata(expr: "Expr", cls: type[IRMetadata]) -> None: ...
 def binding_name(expr: "Expr") -> str | None: ...
-def describe_expr(expr: "Expr") -> str: ...
+def describe_value(expr: "Expr") -> str: ...
 def diagnostic_location(expr: "Expr") -> str | None: ...
 def source_metadata(expr: "Expr") -> tuple[IRMetadata, ...]: ...
+
+class Annotated:
+    def attach_metadata(self, value: IRMetadata) -> None: ...
+    def detach_metadata(self, cls: type[IRMetadata]) -> None: ...
 ```
+
+`Expr` and `PrimFunction` inherit `Annotated`.
 
 - constraints:
   - `get_metadata` and `remove_metadata` match an exact concrete class, not
@@ -374,32 +363,28 @@ def source_metadata(expr: "Expr") -> tuple[IRMetadata, ...]: ...
     themselves. Resolving MUST NOT mutate the shared definition record.
   - `remove_metadata` returns a copy without the matching value; when the class
     is absent it returns the input expression unchanged.
-  - `attach_metadata` and `detach_metadata` perform those exact-class updates
+  - `Annotated.attach_metadata` and `Annotated.detach_metadata` perform those exact-class updates
     in place for passes that annotate the caller's IR. Attaching replaces any
     existing value and appends the new value after the retained metadata.
   - `binding_name` returns the authored SSA label. `diagnostic_location`
     prefers a source span and falls back to that label. `source_metadata`
     copies only binding/span metadata when a compiler pass synthesizes a
     replacement expression.
-  - `describe_expr` returns one diagnostic line with the source span when
+  - `describe_value` returns one diagnostic line with the source span when
     present, the binding name or `<unnamed>`, and the Call target or Expr class.
 
-`Expr` always carries a `type`. The runtime class of `Expr.type` is
-one of `TensorType` / `TupleType` / `UnitType`
+`Expr` always carries a `type`: `TensorType` / `TupleType` / `UnitType`
 ([types §2](./types.md#2-tensortype) / [types §4](./types.md#4-dim--symbolic-shape-dimensions)
-/ [types §6](./types.md#6-unittype)). Concrete `Expr` subclasses are
-not introduced per Op — value-producing Ops appear as `Call` nodes
-whose `target` carries the Op instance. Multi-output Ops produce a
-single `Call` whose `type` is `TupleType`; consumers project a single
-field through the `tuple_get_item` Op (a regular registered Op; no
-dedicated `Expr` subclass).
+/ [types §6](./types.md#6-unittype)). A multi-output Op produces a single
+`Call` whose `type` is `TupleType`; consumers project one field through the
+`tuple_get_item` Op (a regular registered Op, not an `Expr` subclass).
 
 Dialect-specific `Expr` subclasses are owned by their dialect specs, not
 here: HIR owns `Function`, `LoopRegion`, and `MeshRegion`
 ([hir §1](./hir.md#1-hir-expr-constructs)),
 and TIR owns `SymbolRef` and other TIR-specific `Expr` constructs
 ([tir](./tir.md)). The similarly-shaped TIR statement keeps the name
-`MeshScope` ([tir §1.2](./tir.md#12-structural-stmts-tirstmts)) on purpose,
+`MeshScope` ([tir §1.2](./tir.md#12-structural-stmts-ircore)) on purpose,
 not by oversight: it binds a `Var` over a `Sequential` body, whereas
 `MeshRegion` folds a region into one value.
 
@@ -414,7 +399,7 @@ class Call(Expr):
         args: attribute; Input expressions in parameter order.
     """
 
-    target: Op | hir.Function | ModuleList | Call
+    target: Op | core.Function | ModuleList | Call
     args: tuple[Expr, ...]
 ```
 
@@ -505,13 +490,14 @@ class ParameterInfo:
 class Op:
     """Describe an operation signature and its attribute values."""
 
-    def params(cls) -> list[ParameterInfo]: ...
     def __init__(self, **attrs): ...
+
+
+def parameters_of(cls: type) -> list[ParameterInfo]: ...
 ```
 
 - constraints:
-  - a value class describing an op's signature/attributes, not an `Expr` subclass;
-    a `Call` carries an `Op` instance in `target`; most Ops are pure.
+  - most Ops are pure.
   - resource-introducing Ops (e.g. `tir.memory.AllocTensor`) with
     positional-identity requirements MUST be anchored by a `LetStmt`
     (see [tir §2.3](./tir.md#23-tir-ops)).
@@ -577,7 +563,7 @@ def register_type(*, dialect: str, namespace: str) -> Callable[[type], type]:
     The schema MUST retain the namespace path; printers MUST emit the full
     dialect, namespace and name so the printed call resolves to that record.
   - `register_type` MUST place the class under its exact class name without
-    building an `OpSchema` or setting `_op_schema`.
+    building an `OpSchema`.
   - A duplicate key or a record/namespace collision MUST raise `ValueError`
     naming the existing owner. Each key MUST have exactly one record.
 
@@ -619,17 +605,16 @@ class Binary(Op):
     kind = ParamDef(kind="attribute", annotation=BinaryKind)
 ```
 
-The decorator parameters are `cls=None, *, dialect, category, namespace="",
-name=None, aliases=None`. Each alias inherits the canonical dialect, namespace
+Each alias inherits the canonical dialect, namespace
 and category, and fixes declared attribute values. Its signature reuses the
 canonical ParamDefs except for fixed attributes. The builder accepts remaining
 attributes only and MUST reject attempts to override fixed attributes.
 Alias schemas have `op_class=None`, `alias_of` equal to the canonical class and
-`fixed_attrs` recording the bindings. The class keeps its canonical `_op_schema`.
+`fixed_attrs` recording the bindings. The class keeps its canonical schema, which `schema_of` returns.
 Canonical and alias registration is atomic: any collision or invalid binding
 MUST leave the registry unchanged.
 
-`get_registered_name(value)` in `ir.core.register` is the sole
+`get_registered_name(value)` in `ir.expr.register` is the sole
 registered-name formatter for operations and exported declaration types. A registered
 class returns its canonical identity. An instance selects the first alias whose
 fixed attributes match its own parameters, in declaration order, and otherwise
@@ -641,7 +626,7 @@ Registered enum members print as their registered type name plus member name.
 
 The order of `kind="input"` ParamDefs determines `Call.args`
 position: `call.args[i]` corresponds to the `i`-th input ParamDef
-from `op.params()`.
+from `parameters_of(type(op))`.
 
 An Op is **value-form** when its `Call` produces an observable
 result the IR consumes — `Call.type` is then `TensorType` or
@@ -680,8 +665,10 @@ class Printable(ABC):
 
 ## 3. `Pattern`
 
-`Pattern` is the reusable predicate carrier shared by parser dispatch
-and specialization dispatch.
+`pattern.Pattern` is the reusable predicate carrier shared by parser dispatch
+and specialization dispatch. The package `tilefoundry.ir.pattern` is reached
+only as a namespace: `from tilefoundry.ir import pattern`, then
+`pattern.Range(...)`, `pattern.Wildcard("n")`, `pattern.Matcher()`.
 
 ```python
 class Pattern:
@@ -691,42 +678,44 @@ class Pattern:
 ```
 
 - constraints:
-  - shared by parser dispatch (`ParamDef.pattern`) and specialization dispatch
-    (`Function.specializations` / `PrimFunction.specializations`).
   - a successful match returns a truthy `Match` carrying named captures;
     failure is `None`.
 
 The implementation is split by responsibility under `ir/pattern/`:
 
-- `pattern.py` defines `Pattern` and the composable classes
-  `OrPattern`, `AndPattern`, `SequencePattern`,
-  `SwitchPattern`, `RangePattern`,
-  `LayoutPattern`, `SwizzlePattern`, `ComposedLayoutPattern`, `MeshPattern`,
-  `ShardLayoutPattern`, `TensorPattern`, `WildcardPattern`, and
-  `StarPattern`.
-- `predicates.py` defines the computed-condition base `Predicate`; integer
-  `Term` expressions and Boolean `Formula` predicates; and the named
-  arrangement predicates `Forward`, `Injective`, `WholeVectors`,
-  `PlainArrangement`, `BoxDims`, and `TensorMap`; and the tensor predicate
-  `Ranked`. It also owns the `is_ranked_tensor(**fields)` and
-  `is_scalar_tensor(**fields)` factories.
-- `match.py` owns the public `PatternMatcher` and structural `Refusal` evidence.
+- `pattern.py` defines the composable classes `pattern.Or`, `pattern.And`,
+  `pattern.Sequence`, `pattern.Switch`, `pattern.Range`, `pattern.Layout`,
+  `pattern.Swizzle`, `pattern.ComposedLayout`, `pattern.Mesh`,
+  `pattern.ShardLayout`, `pattern.Tensor`, `pattern.Wildcard` and
+  `pattern.Star`; the computed-condition base `pattern.Predicate`; and the
+  integer `pattern.Term` expressions and Boolean `pattern.Formula` predicates
+  written over named bindings.
+- `predicates.py` defines the named arrangement predicates `pattern.Forward`,
+  `pattern.Injective`, `pattern.WholeVectors`, `pattern.PlainArrangement`,
+  `pattern.BoxDims` and `pattern.TensorMap`, and the tensor predicate
+  `pattern.Ranked`. It also owns the `pattern.is_ranked_tensor(**fields)` and
+  `pattern.is_scalar_tensor(**fields)` factories.
+- `solve.py` evaluates and solves formulas against bindings, returning
+  `pattern.UNKNOWN` where the solver cannot decide.
+- `match.py` owns the `Pattern` base, the public `pattern.Matcher` and structural
+  `Refusal` evidence.
   An unstated (`None`) pattern field admits any value. Pattern nodes carry data
   only; declaration text and refusal text belong to inspection
   ([inspection §2.9](./inspection.md#29-pattern-declaration-reports)).
 - `constraint.py` owns cross-operand `Constraint`, `DistinctConstraint`,
   `SameConstraint`, and `SameModesConstraint` values.
-- `utils.py` owns specialization naming and dimension lookup.
+- `utils.py` owns specialization naming, dimension lookup, and the shared
+  execution-mesh and variant helpers.
 
 `Pattern.match(subject, captures=None)` is the public facade: it creates one
-`PatternMatcher`, which dispatches along the pattern class's MRO and owns the
+`pattern.Matcher`, which dispatches along the pattern class's MRO and owns the
 bindings, matched-node memo, deferred predicates, and branch rollback for that
 match. Nested patterns stay in that matcher instead of creating their own
 capture dictionaries. Effect-Op verification reuses one matcher across all
 operands of a call, so later operands see bindings established by earlier ones.
 
-An unnamed `WildcardPattern()` admits any value. A named
-`WildcardPattern(name)` also binds that value; every occurrence of the same
+An unnamed `pattern.Wildcard()` admits any value. A named
+`pattern.Wildcard(name)` also binds that value; every occurrence of the same
 name must match the same value. Named wildcards form integer `Term`
 expressions with `+`, `-`, `*`, `//`, and `%`; comparisons form a `Formula`,
 and `&`, `|`, and `~` combine formulas. `In`, `Table`, `Bits`, `ForAll`,
@@ -742,8 +731,8 @@ compiled into one OR-Tools CP-SAT model. An infeasible model is a mismatch,
 while an `UNKNOWN` solver result remains explicitly unknown rather than being
 reported as false. A refusal records the failed pattern, its subject,
 and a snapshot of the bindings; inspection decides how to render that
-evidence. `TensorPattern` matches fields in the order dtype, storage, shape,
-then layout. When an unbound `SwitchPattern` rejects every branch, the refusal
+evidence. `pattern.Tensor` matches fields in the order dtype, storage, shape,
+then layout. When an unbound `pattern.Switch` rejects every branch, the refusal
 records that switch itself rather than a failed pattern inside one branch.
 Structural refusals render the subject and pattern; predicate refusals render
 the predicate that actually failed, including the false conjunct of a formula.
@@ -752,41 +741,41 @@ The hand-written predicates in
 algebraic properties; `Formula` predicates instead read names bound by
 structural patterns.
 
-`LayoutPattern` optionally matches a bare `Layout`'s nested `shape` and
-`strides`, then applies its tuple of predicates. `ComposedLayoutPattern`,
-`ShardLayoutPattern`, and `TensorPattern` likewise apply their own predicate
+`pattern.Layout` optionally matches a bare `Layout`'s nested `shape` and
+`strides`, then applies its tuple of predicates. `pattern.ComposedLayout`,
+`pattern.ShardLayout`, and `pattern.Tensor` likewise apply their own predicate
 tuples after their structural fields match. Omitting both layout structural
 fields leaves the structure unconstrained and lets predicates read through
 supported composed or sharded forms. `Forward()` and `Injective()` express the
 corresponding computed properties; they are not implicit.
 When both structural fields are present, they are matched as paired CuTe modes
-while preserving their authored nesting. A `StarPattern(p)` in the same
+while preserving their authored nesting. A `pattern.Star(p)` in the same
 position of both fields consumes zero or more modes and applies `p` to every
 consumed mode; each tuple may contain at most one star. Bindings below a star
 are tuples, and a name may not occur both below and outside a star.
-`LayoutPattern.from_layout(layout, ...)` constructs the exact bare or composed
+`pattern.Layout.from_layout(layout, ...)` constructs the exact bare or composed
 pattern for an authored arrangement, preserving its nested structure and the
 explicitly supplied predicate table. `Forward(per_mode=True)` and
 `Injective(per_mode=True)` check each top-level mode independently.
-`ComposedLayout(None, 0, L)` and `L` are equivalent for both `LayoutPattern`
-and `ComposedLayoutPattern`: a bare layout supplies an identity inner and zero
-offset to a composed pattern. An omitted `ComposedLayoutPattern.inner` remains
+`ComposedLayout(None, 0, L)` and `L` are equivalent for both `pattern.Layout`
+and `pattern.ComposedLayout`: a bare layout supplies an identity inner and zero
+offset to a composed pattern. An omitted `pattern.ComposedLayout.inner` remains
 unconstrained and therefore admits any inner, including a swizzle. To require
-no swizzle, state `SwizzlePattern(0, 4, 3)`; its zero-bit variant also matches
+no swizzle, state `pattern.Swizzle(0, 4, 3)`; its zero-bit variant also matches
 an identity (`None`) inner. The three swizzle fields may themselves be
 patterns.
-`MeshPattern` rejects any supplied arrangement predicate that exposes
+`pattern.Mesh` rejects any supplied arrangement predicate that exposes
 `per_mode=False`, because each mesh level uses its own numbering space; an
 empty predicate table is allowed. It never changes the supplied pattern
-implicitly. Predicates on a surrounding `ComposedLayoutPattern` instead
+implicitly. Predicates on a surrounding `pattern.ComposedLayout` instead
 check the whole matched layout. Execution-mesh declarations may admit leading
-modes with `StarPattern`; operand mesh declarations keep their exact axis
+modes with `pattern.Star`; operand mesh declarations keep their exact axis
 structure because shard attrs refer to those axes.
-A wildcard in `MeshPattern.topologies` selects the innermost execution level
+A wildcard in `pattern.Mesh.topologies` selects the innermost execution level
 and binds its one-name tuple. Reusing that wildcard in an operand mesh requires
 the same level; valid topology names and extents come from the module's Target
 Facts, as specified in [target §11](./target.md#11-target-facts-projection).
-`ShardLayoutPattern` names the same `layout`, `attrs`, and `mesh` fields as
+`pattern.ShardLayout` names the same `layout`, `attrs`, and `mesh` fields as
 `ShardLayout`: `layout` and `mesh` are nested patterns, while `attrs` remains
 an exact structural value. Its mesh pattern may use the bare/composed identity
 equivalence above when stating sliced forms.
@@ -795,11 +784,11 @@ Two consumer surfaces:
 
 - **Parser dispatch** — `ParamDef.pattern` ([§2.3](#23-op)) is matched against an
   argument's `Expr.type` during parameter checking. Subclasses used:
-  `TensorPattern(shape?, dtype?, storage?, layout?)` (any rank), and
-  `AndPattern(parts)` (conjunction). Two factories construct
+  `pattern.Tensor(shape?, dtype?, storage?, layout?)` (any rank), and
+  `pattern.And(parts)` (conjunction). Two factories construct
   convenience patterns: `is_scalar_tensor(**fields)` returns
-  `TensorPattern(shape=(), **fields)` for rank-0 tensors;
-  `is_ranked_tensor(**fields)` returns a `TensorPattern` with a `Ranked`
+  `pattern.Tensor(shape=(), **fields)` for rank-0 tensors;
+  `is_ranked_tensor(**fields)` returns a `pattern.Tensor` with a `Ranked`
   predicate and MUST reject rank-0.
   A tensor rank is stated by giving `shape` that many positions; wildcard
   positions constrain only the sequence length. An omitted shape admits any
@@ -809,15 +798,15 @@ Two consumer surfaces:
   environment, so a later operand can require a value captured by an earlier
   operand.
 - **Specialization dispatch** — patterns appearing in
-  `hir.Function.specializations` ([hir.md §1.1](./hir.md#11-function))
-  and `tir.PrimFunction.specializations` describe which runtime
+  `core.Function.specializations` ([hir.md §1.1](./hir.md#11-function))
+  and `core.PrimFunction.specializations` describe which runtime
   shape range a variant covers. The HIR→TIR lowering inspects each
   pattern's fields directly; it does not call `match`.
 
-### 3.1 `RangePattern`
+### 3.1 `Range`
 
 ```python
-class RangePattern(Pattern):
+class Range(Pattern):
     """Match a closed integer range, optionally naming a dimension.
 
     Attributes:
@@ -834,8 +823,7 @@ class RangePattern(Pattern):
 - constraints:
   - At least one of `lo` and `hi` MUST be stated. Each stated bound MUST be a
     plain `int` (`bool` is rejected), and two stated bounds MUST satisfy
-    `lo <= hi`. `RangePattern(lo=k)` and `RangePattern(hi=k)` express the
-    one-sided relations formerly represented by separate pattern classes.
+    `lo <= hi`. `pattern.Range(lo=k)` and `pattern.Range(hi=k)` are one-sided.
   - A specialization states both bounds and a non-empty `dim_var`: the name
     of the `DimVar` the range applies to. The lowering resolves it to a runtime
     `ShapeOf(param, axis)` by walking the enclosing function signature.
@@ -845,10 +833,10 @@ class RangePattern(Pattern):
   - The pattern references a `DimVar` by name only. The envelope of
     the named dim lives on the `DimVar(name, lo, hi)` itself (see
     [types.md §4](./types.md#4-dim--symbolic-shape-dimensions)); the
-    `RangePattern` carries the per-variant sub-range. Envelope
+    `pattern.Range` carries the per-variant sub-range. Envelope
     containment (`pattern ⊆ DimVar envelope`) is checked in
     signature context — by the `@tilefoundry.func` validator and the
-    HIR→TIR lowering — not by `RangePattern.__post_init__`.
+    HIR→TIR lowering — not by `pattern.Range.__post_init__`.
 
 ## 4. Shared operation kinds
 
@@ -899,6 +887,7 @@ class ReduceKind(enum.Enum):
     SUM = "sum"
     ABS_MAX = "abs_max"
     MAX = "max"
+    MIN = "min"
 ```
 
 - constraints:

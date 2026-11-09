@@ -54,7 +54,7 @@ from pathlib import Path
 from transformers import AutoConfig
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _MAIN_ROPE: "tuple | None" = None
 
@@ -231,7 +231,7 @@ def _submodules(config: DSV4Config):
     C = DimVar("ctx_len", 0, config.window - 1)
 
 
-    @module(entry="mla_attend", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
+    @module(entry="mla_attend", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
     class DeepseekV4Attention:
         @func
         def mla_kv_update(
@@ -1298,7 +1298,7 @@ def _build_deepseek_v4_flash(config: DSV4Config, attention_module, moe_module):
     #: positions counting its own, so the context it is handed is one shorter.
     KEPT = config.window - 1
 
-    @module(entry="lm_head", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
+    @module(entry="lm_head", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
     class DeepseekV4Flash:
 
         @func

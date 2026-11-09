@@ -15,7 +15,12 @@ from .floating import (
 )
 
 
-def _alu(x, y, z, bits, mode, bf16=False):
+def bf16_order(v):
+    v = v - 65536 if v & 32768 else v
+    return v ^ ((v >> 15) & 0x7FFF)
+
+
+def lane_alu(x, y, z, bits, mode, bf16=False):
     if bf16:
         if mode == 0:
             return bf16_fma(x, y, z)
@@ -27,11 +32,7 @@ def _alu(x, y, z, bits, mode, bf16=False):
             if fp_isnan(x, "bf16") or fp_isnan(z, "bf16"):
                 return 0x7FC0
 
-            def order(v):
-                v = v - 65536 if v & 32768 else v
-                return v ^ ((v >> 15) & 0x7FFF)
-
-            return x if (order(x) > order(z) if mode == 7 else order(x) < order(z)) else z
+            return x if (bf16_order(x) > bf16_order(z) if mode == 7 else bf16_order(x) < bf16_order(z)) else z
         if mode == 10:
             return bf16_fma(x, y, 0x8000)
         if mode == 11:
@@ -57,7 +58,7 @@ def _alu(x, y, z, bits, mode, bf16=False):
     return z
 
 
-def _types(state, operand):
+def lane_types(state, operand):
     mode = (operand >> 42) & 15
     if mode in (0, 1):
         return 16, (32 if mode == 1 and state.version >= 2 else 16), state.version >= 2
@@ -70,7 +71,7 @@ def _types(state, operand):
     return 16, 16, False
 
 
-def _load(state, operand, xoff, yoff, xybits):
+def load_operands(state, operand, xoff, yoff, xybits):
     x = bytearray(load_xy_reg(state.x, xoff & 511))
     y = bytearray(load_xy_reg(state.y, yoff & 511))
     if operand & (1 << 53):
@@ -85,21 +86,21 @@ def _load(state, operand, xoff, yoff, xybits):
     return x, y
 
 
-def _value(buf, lane, xybits, zbits, bf16):
+def lane_value(buf, lane, xybits, zbits, bf16):
     v = read_uint(buf, lane * (xybits // 8), xybits // 8)
     if xybits != zbits:
         return bf16_to_f32(v) if bf16 else convert_bits(v, xybits, zbits)
     return v
 
 
-def emulate_AMX_VECFP(state, operand):
+def emulate_amx_vecfp(state, operand):
     if (operand >> 54) & 7:
         return
     operand &= ~(1 << 37)
     mode = 0 if operand & (1 << 53) else (operand >> 47) & 63
     if mode not in (0, 1, 4, 5, 7) and not (mode in (10, 11, 12) and state.version >= 2):
         return
-    xybits, zbits, bf16 = _types(state, operand)
+    xybits, zbits, bf16 = lane_types(state, operand)
     n = xybits // 8
     zr = operand >> 20
     zs = xs = ys = 64
@@ -146,7 +147,7 @@ def emulate_AMX_VECFP(state, operand):
         else:
             xs = xs * ibits // xybits
     for row in range(zr & (zs - 1), 64, zs):
-        x, y = _load(state, operand, xo, yo, xybits)
+        x, y = load_operands(state, operand, xo, yo, xybits)
         xo += xs
         yo += ys
         xe = parse_writemask(operand >> 32, n, 9)
@@ -169,28 +170,31 @@ def emulate_AMX_VECFP(state, operand):
             rr = bit_select(row, i, 1) if zbits == 32 and xybits == 16 else row
             ii = i >> 1 if zbits == 32 and xybits == 16 else i
             off = rr * 64 + ii * (zbits // 8)
-            xv = _value(x, i & ximask, xybits, zbits, bf16)
-            yv = _value(y, j, xybits, zbits, bf16)
+            xv = lane_value(x, i & ximask, xybits, zbits, bf16)
+            yv = lane_value(y, j, xybits, zbits, bf16)
             z = read_uint(state.z, off, zbits // 8)
             write_uint(
                 state.z,
                 off,
                 zbits // 8,
-                _alu(xv, yv, z, zbits, mode, bf16 and zbits == 16) if omask else 0,
+                lane_alu(xv, yv, z, zbits, mode, bf16 and zbits == 16) if omask else 0,
             )
 
 
 def vecfp_alu16(x, y, z, alumode):
-    return _alu(x, y, z, 16, alumode)
+    return lane_alu(x, y, z, 16, alumode)
 
 
 def vecfp_alu32(x, y, z, alumode):
-    return _alu(x, y, z, 32, alumode)
+    return lane_alu(x, y, z, 32, alumode)
 
 
 def vecfp_alu64(x, y, z, alumode):
-    return _alu(x, y, z, 64, alumode)
+    return lane_alu(x, y, z, 64, alumode)
 
 
 def vecfp_alu_bf16(x, y, z, alumode):
-    return _alu(x, y, z, 16, alumode, True)
+    return lane_alu(x, y, z, 16, alumode, True)
+
+
+__all__ = ["emulate_amx_vecfp", "lane_alu", "lane_types", "lane_value", "load_operands", "vecfp_alu16", "vecfp_alu32", "vecfp_alu64", "vecfp_alu_bf16"]

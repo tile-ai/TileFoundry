@@ -8,8 +8,8 @@ come from the entry it imported.
 from __future__ import annotations
 
 
-class AnalysisError(ValueError):
+class Error(ValueError):
     """An authored program the analysis rejects, or a measurement that failed."""
 
 
-__all__ = ["AnalysisError"]
+__all__ = ["Error"]

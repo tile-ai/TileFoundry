@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 participants = 2
-target = CudaTarget("nvidia.h200_sxm", device_count=participants)
+target = cuda.Target("nvidia.h200_sxm", device_count=participants)
 gpu = Topology("gpu", participants)
 mesh = Mesh((gpu,), Layout((participants,), (1,)), ("dp",))
-s8 = ShardLayout.default(
+s8 = ShardLayout.from_logical(
     (8, 8), mesh, (Split(0),), storage="gmem", owners=target.storage_owners
 )
-s4 = ShardLayout.default(
+s4 = ShardLayout.from_logical(
     (8, 4), mesh, (Split(0),), storage="gmem", owners=target.storage_owners
 )
 b8 = ShardLayout(Layout((8, 8)), (Broadcast(),), mesh)

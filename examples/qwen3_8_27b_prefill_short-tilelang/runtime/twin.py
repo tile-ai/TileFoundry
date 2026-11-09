@@ -1,4 +1,4 @@
-"""The tilelang runtime module: the twin of model.py's Modules, one runtime_func per
+"""The tilelang runtime module: the twin of model.py's Modules, one runtime.func per
 authored function, every one of them backed by tilelang kernels (runtime/kernels).
 
 `check runtime/twin.py:Qwen3_8_27BTwin` compares it against the evaluator running
@@ -20,7 +20,7 @@ import model  # noqa: E402
 from runtime import engine as eng  # noqa: E402
 from runtime.kernels import small  # noqa: E402
 from runtime.kernels.gemm import GemmConfig, gemm_kernel  # noqa: E402
-from tilefoundry.runtime import runtime_func, runtime_module  # noqa: E402
+from tilefoundry import runtime# noqa: E402
 
 _STORE = GemmConfig(BM=128, BN=128, BK=64, stages=4)
 _GDN48: dict[int, object] = {}
@@ -47,13 +47,13 @@ def _swiglu(x, w_gate, w_up, w_down):
     return out
 
 
-@runtime_module(model.Qwen3_8DeltaNetLayer)
+@runtime.module(model.Qwen3_8DeltaNetLayer)
 class DeltaNetLayerTwin:
-    @runtime_func
+    @runtime.func
     def swiglu(self, x, w_gate, w_up, w_down):
         return _swiglu(x, w_gate, w_up, w_down)
 
-    @runtime_func
+    @runtime.func
     def causal_conv(self, mixed, conv_w):
         T = _T(mixed)
         out = torch.empty_like(mixed)
@@ -61,7 +61,7 @@ class DeltaNetLayerTwin:
                                              out.view(T, eng.CONV))
         return out
 
-    @runtime_func
+    @runtime.func
     def l2_normalise(self, x):
         T = _T(x)
         out = torch.empty_like(x)
@@ -69,7 +69,7 @@ class DeltaNetLayerTwin:
                                                         out.view(T, x.shape[2], x.shape[3]))
         return out
 
-    @runtime_func
+    @runtime.func
     def delta_rule(self, q, k, v, g, beta):
         # A standalone call may hand 48 independent key heads; the fast path hands 16.
         from runtime.kernels.gdn import GdnKernels
@@ -84,7 +84,7 @@ class DeltaNetLayerTwin:
                        read.view(T, eng.HV * eng.DV), state.view(eng.HV, eng.DK, eng.DV))
         return read, state
 
-    @runtime_func
+    @runtime.func
     def gated_delta_net(self, x, w_qkv, w_z, w_b, w_a, conv_w, a_log, dt_bias, gamma_gdn, w_out):
         T = _T(x)
         e = _engine(T, x)
@@ -102,7 +102,7 @@ class DeltaNetLayerTwin:
         gemm_kernel(T, eng.H, eng.HV * eng.DV, _STORE, "store")(e.y, w_out, out.view(T, eng.H))
         return out, window, state
 
-    @runtime_func
+    @runtime.func
     def layer(self, hidden, gamma_in, w_qkv, w_z, w_b, w_a, conv_w, a_log, dt_bias, gamma_gdn, w_out,
               gamma_post, w_gate, w_up, w_down):
         T = _T(hidden)
@@ -112,27 +112,27 @@ class DeltaNetLayerTwin:
         return h.view(1, T, eng.H), window.unsqueeze(0), state.unsqueeze(0)
 
 
-@runtime_module(model.Qwen3_8AttentionLayer)
+@runtime.module(model.Qwen3_8AttentionLayer)
 class AttentionLayerTwin:
-    @runtime_func
+    @runtime.func
     def swiglu(self, x, w_gate, w_up, w_down):
         return _swiglu(x, w_gate, w_up, w_down)
 
-    @runtime_func
+    @runtime.func
     def partial_rope(self, x, cos, sin):
         T = _T(x)
         out = torch.empty_like(x)
         small.rope_kernel(T, x.shape[2], x.shape[3])(x[0], cos, sin, out[0])
         return out
 
-    @runtime_func
+    @runtime.func
     def partial_rope_kv(self, x, cos, sin):
         T = _T(x)
         out = torch.empty_like(x)
         small.rope_kernel(T, x.shape[2], x.shape[3])(x[0], cos, sin, out[0])
         return out
 
-    @runtime_func
+    @runtime.func
     def attend(self, q, k, v):
         # The core kernel multiplies by bf16(sigmoid(gate)); a gate of 1e4 makes that
         # factor exactly 1.0, so the product is the attention output unchanged.
@@ -143,7 +143,7 @@ class AttentionLayerTwin:
         e.att.core(q[0], k[0], v[0], gate, y)
         return y.view(1, T, eng.HQ, eng.D)
 
-    @runtime_func
+    @runtime.func
     def gated_attention(self, x, cos, sin, w_q, w_k, w_v, gamma_q, gamma_k, w_o):
         T = _T(x)
         e = _engine(T, x)
@@ -157,7 +157,7 @@ class AttentionLayerTwin:
         gemm_kernel(T, eng.H, eng.HQ * eng.D, _STORE, "store")(e.y, w_o, out.view(T, eng.H))
         return out, kr, vv
 
-    @runtime_func
+    @runtime.func
     def layer(self, hidden, cos, sin, gamma_in, w_q, w_k, w_v, gamma_q, gamma_k, w_o,
               gamma_post, w_gate, w_up, w_down):
         T = _T(hidden)
@@ -215,16 +215,16 @@ def _prefill(self, token_ids, cos, sin, table, gamma_final, w_head):
 
 def _make_root():
     ns = {
-        "embed": runtime_func(_embed),
-        "final_norm": runtime_func(_final_norm),
-        "lm_head": runtime_func(_lm_head),
-        "prefill": runtime_func(_prefill),
+        "embed": runtime.func(_embed),
+        "final_norm": runtime.func(_final_norm),
+        "lm_head": runtime.func(_lm_head),
+        "prefill": runtime.func(_prefill),
         "__doc__": "Twin of model.Qwen3_8_27B.",
         "__module__": __name__,
     }
     for i, kind in enumerate(eng.KINDS):
         ns[f"layer{i}"] = DeltaNetLayerTwin if kind == "linear_attention" else AttentionLayerTwin
-    return runtime_module(model.Qwen3_8_27B)(type("Qwen3_8_27BTwin", (), ns))
+    return runtime.module(model.Qwen3_8_27B)(type("Qwen3_8_27BTwin", (), ns))
 
 
 Qwen3_8_27BTwin = _make_root()

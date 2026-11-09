@@ -2,10 +2,9 @@
 
 from pathlib import Path
 
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.codegen.link_module import link_program
-from tilefoundry.codegen.options import CodegenOptions
-from tilefoundry.compile import default_pipeline
+from tilefoundry import codegen, passes
+
+from .source import load_authored_ir
 
 
 def run_scaffold(source: str, out_dir: str) -> int:
@@ -14,8 +13,12 @@ def run_scaffold(source: str, out_dir: str) -> int:
     if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
         raise ValueError(f"scaffold: output directory {destination} must be empty")
     module = load_authored_ir(source)
-    options = CodegenOptions(emit="skeleton")
-    link_program(
-        default_pipeline(module, options).run(module), workdir=destination, options=options
+    codegen.link_program(
+        passes.default_pipeline(module, passes.Options(lower=False)).run(module),
+        workdir=destination,
+        options=codegen.Options(emit="skeleton"),
     )
     return 0
+
+
+__all__ = ["run_scaffold"]

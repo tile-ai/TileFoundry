@@ -1,7 +1,7 @@
 """Issue n16 atoms within each warpgroup share of a split N axis."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 Q_SMEM = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((8, 8), (3, 4, 16)), ((512, 64), (4096, 16, 1))))
 K_SMEM = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((12, 8), (3, 4, 16)), ((512, 64), (6144, 16, 1))))
@@ -13,7 +13,7 @@ def _wg(n):
                              a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.K)
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 384)))
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 384)))
 class N16:
     @func
     def gemm(q: Tensor[(64, 192), "bf16"], k: Tensor[(96, 192), "bf16"]) -> Tensor[(64, 96), "f32"]:

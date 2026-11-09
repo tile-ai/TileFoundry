@@ -12,14 +12,14 @@ import torch
 
 from tilefoundry.analysis.check import check_program
 from tilefoundry.core import ShardTensor, local_type
-from tilefoundry.ir.core import Call, Constant, Tuple, Var
-from tilefoundry.ir.core.metadata import binding_name
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.expr import Call, Constant, Tuple, Var
+from tilefoundry.ir.expr import binding_name
+from tilefoundry.ir.core.function import Function
+from tilefoundry.ir.core.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import Placement, TensorType
-from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten
-from tilefoundry.ir.types.shard_layout import (
+from tilefoundry.ir.types import ComposedLayout, Layout, flatten
+from tilefoundry.ir.types import (
     Partial,
     Split,
     local_layout_and_offset,
@@ -27,7 +27,7 @@ from tilefoundry.ir.types.shard_layout import (
     shard_layout_of,
     split_target_axes,
 )
-from tilefoundry.ir.types.utils import leaf_span, leaves_of
+from tilefoundry.ir.utils import leaf_span, leaves_of
 
 from .model import PARAMETER_NAMES, SUPPORTED_MESHES, T, training_program
 from .ownership_svg import render_svg
@@ -60,7 +60,7 @@ def describe_tensor(held):
     local_shape = tuple(local_type(held).shape)
     address = shard.layout.outer if isinstance(shard.layout, ComposedLayout) else shard.layout
     host = replace(shard, layout=Layout(address.shape))
-    for placement in Placement.each(shard.mesh):
+    for placement in Placement.from_mesh(shard.mesh):
         coordinate = mesh_coords(shard.mesh, placement.program_ids(shard.mesh.topologies))
         logical, logical_offset = local_layout_and_offset(host, shape, coordinate)
         selected = tags.as_strided(logical.shape, logical.strides, logical_offset)

@@ -10,23 +10,23 @@ storage). ``typeinfer`` returns it verbatim.
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.types import TensorType
-from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.interfaces import typeinfer
+from tilefoundry.ir import expr, types
 
 
-@register_op(name="alloc_tensor", dialect='T', category='memory')
-class AllocTensor(Op):
+@expr.register_op(name="alloc_tensor", dialect='T', category='memory')
+class AllocTensor(expr.Op):
     """Allocate a tensor; the result type is carried on ``tensor_type``.
 
     Value form — the result ``Var`` MUST be anchored by ``LetStmt.value``.
     """
 
-    tensor_type = ParamDef(kind="attribute", annotation=TensorType)
+    tensor_type = expr.ParamDef(kind="attribute", annotation=types.TensorType)
 
 
-@register_typeinfer(AllocTensor)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(AllocTensor)
+def _(call: "Call", ctx: "TypeInferContext") -> types.TensorType:
     return call.target.tensor_type
+
+
+__all__ = ["AllocTensor"]

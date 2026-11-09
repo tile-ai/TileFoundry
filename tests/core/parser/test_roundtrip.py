@@ -6,11 +6,10 @@ from pathlib import Path
 import pytest
 
 from tests.core._corpus import Case, case, check_case, special
-from tilefoundry.inspection import as_script
-from tilefoundry.ir.core import Call, Constant
-from tilefoundry.ir.core.kinds import UnaryKind
-from tilefoundry.ir.hir.math.unary import Unary
-from tilefoundry.ir.hir.specialize import InstantiateDimensionCloner
+from tilefoundry import inspection
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import expr
+from tilefoundry.ir.hir import math
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 GQA_DECODE = FIXTURES / "placed" / "gqa_decode.py"
@@ -27,8 +26,8 @@ class GqaCorrectionReadsOldCarryAndUniqueYield(RoundtripCase):
 
     def guard(self, state, problems):
         entry = state.entry_function()
-        function = InstantiateDimensionCloner({"ctx_len": 8}).function(entry)
-        printed = as_script(function)
+        function = valuation.InstantiateDimensionCloner({"ctx_len": 8}).function(entry)
+        printed = inspection.as_script(function)
 
         assert printed.count("        m_new = tf.max(m, score)") == 1
         assert " = tf.sub(m, m_new)" in printed
@@ -62,7 +61,7 @@ class SignedLiteral(RoundtripCase):
 
     def guard(self, state, problems):
         result = state.entry_function().body
-        assert isinstance(result, Constant)
+        assert isinstance(result, expr.Constant)
         assert type(result.value) is type(self.expected)
         assert result.value == self.expected
 
@@ -98,9 +97,9 @@ class NegatedValue(RoundtripCase):
     def guard(self, state, problems):
         function = state.entry_function()
         result = function.body
-        assert isinstance(result, Call)
-        assert isinstance(result.target, Unary)
-        assert result.target.kind is UnaryKind.NEG
+        assert isinstance(result, expr.Call)
+        assert isinstance(result.target, math.Unary)
+        assert result.target.kind is expr.UnaryKind.NEG
         assert result.args[0] is function.params[0]
 
 

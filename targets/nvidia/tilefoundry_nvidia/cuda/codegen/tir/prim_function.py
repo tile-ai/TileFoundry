@@ -9,19 +9,15 @@ kernel in a translation unit runs at the geometry that unit states once.
 
 from __future__ import annotations
 
-from tilefoundry.codegen.emitter import CppEmitter
-from tilefoundry.codegen.signature import TensorSignature, tensor_signature_of
-from tilefoundry.ir.pattern import RangePattern
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.types.shard_layout import ShardLayout
-from tilefoundry.ir.types.utils import shape_numel_upper_bound
-from tilefoundry.visitor_registry.registries import Role, register_codegen
-from tilefoundry_nvidia.cuda import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
-from tilefoundry_nvidia.cuda.codegen.tir.memory.tensor_view import render_shard_layout_value
+from tilefoundry import codegen
+from tilefoundry.ir import core, pattern, types, utils
+from tilefoundry_nvidia.cuda import target
+from tilefoundry_nvidia.cuda.codegen import context
+
+from .memory import render_shard_layout_value
 
 
-def wrap_buffer(signature: TensorSignature, ctx: CudaCodegenContext) -> None:
+def wrap_buffer(signature: codegen.TensorSignature, ctx: context.Context) -> None:
     """Wrap one parameter's pointer in the tensor the body indexes it through.
 
     The layout is the envelope the whole dispatch range fits in, so one kernel
@@ -29,11 +25,11 @@ def wrap_buffer(signature: TensorSignature, ctx: CudaCodegenContext) -> None:
     of that envelope this instance holds.
     """
     name = signature.name
-    total = shape_numel_upper_bound(signature.type.shape)
+    total = utils.shape_numel_upper_bound(signature.type.shape)
     layout = f"cute::make_layout(cute::Shape<cute::Int<{total}>>{{}})"
     pointer = f"cute::make_tensor(cute::make_gmem_ptr({name}), {layout})"
     shard = signature.type.layout
-    if not isinstance(shard, ShardLayout):
+    if not isinstance(shard, types.ShardLayout):
         ctx.emit(f"auto {name}_tensor = {pointer};")
         return
     preamble, value = render_shard_layout_value(
@@ -44,7 +40,7 @@ def wrap_buffer(signature: TensorSignature, ctx: CudaCodegenContext) -> None:
     ctx.emit(f"auto {name}_tensor = tilefoundry::make_shard_tensor({pointer}, {layout}, {value});")
 
 
-def _dispatch(fn: PrimFunction, ctx: CudaCodegenContext) -> None:
+def dispatch(fn: core.PrimFunction, ctx: context.Context) -> None:
     """Write the variants of *fn* as branches on the extent they range over.
 
     The extent is already a parameter of this kernel, so the choice costs one
@@ -52,17 +48,17 @@ def _dispatch(fn: PrimFunction, ctx: CudaCodegenContext) -> None:
     before it -- and the host has nothing to gain by making it, since all the
     variants run at one geometry anyway.
     """
-    ctx.bind_extents(tensor_signature_of(param) for param in fn.params)
+    ctx.bind_extents(codegen.tensor_signature_of(param) for param in fn.params)
     emit_range_dispatch(fn, ctx, ctx.emit_node)
 
 
-def emit_range_dispatch(fn, ctx: CudaCodegenContext, emit_branch) -> None:
+def emit_range_dispatch(fn, ctx: context.Context, emit_branch) -> None:
     """Emit the common range selection, delegating each selected variant body."""
     for index, variant in enumerate(fn.variants):
-        pattern = _range_over_one_dimension(fn, variant)
-        subject = _subject(fn, pattern, ctx)
+        declared = range_over_one_dimension(fn, variant)
+        subject = dispatch_subject(fn, declared, ctx)
         opening = "if" if index == 0 else "} else if"
-        ctx.emit(f"{opening} (({pattern.lo} <= {subject}) && ({subject} <= {pattern.hi})) {{")
+        ctx.emit(f"{opening} (({declared.lo} <= {subject}) && ({subject} <= {declared.hi})) {{")
         ctx.indent()
         emit_branch(variant)
         ctx.dedent()
@@ -73,35 +69,35 @@ def emit_range_dispatch(fn, ctx: CudaCodegenContext, emit_branch) -> None:
     ctx.emit("}")
 
 
-def _range_over_one_dimension(fn: PrimFunction, variant: PrimFunction) -> RangePattern:
+def range_over_one_dimension(fn: core.PrimFunction, variant: core.PrimFunction) -> pattern.Range:
     """The pattern selecting *variant*, which a branch can only be a range."""
-    pattern = variant.specializations[0]
-    if not isinstance(pattern, RangePattern):
+    declared = variant.specializations[0]
+    if not isinstance(declared, pattern.Range):
         raise NotImplementedError(
             f"CUDA dispatch: {fn.name!r} selects {variant.name!r} by "
-            f"{type(pattern).__name__}; only a range over one dimension is written"
+            f"{type(declared).__name__}; only a range over one dimension is written"
         )
-    return pattern
+    return declared
 
 
-def _subject(fn: PrimFunction, pattern: RangePattern, ctx: CudaCodegenContext) -> str:
+def dispatch_subject(fn: core.PrimFunction, declared: pattern.Range, ctx: context.Context) -> str:
     """Where this kernel reads the dimension *pattern* ranges over."""
-    subject = ctx.dynamic_extents.get(pattern.dim_var)
+    subject = ctx.dynamic_extents.get(declared.dim_var)
     if subject is None:
         raise ValueError(
-            f"CUDA dispatch: {fn.name!r} selects on {pattern.dim_var!r}, which "
+            f"CUDA dispatch: {fn.name!r} selects on {declared.dim_var!r}, which "
             f"no parameter's type leaves open, so the kernel is never told it"
         )
     return subject
 
 
-@register_codegen(CudaTarget, Role.EMIT, PrimFunction)
-def _emit(fn: PrimFunction, ctx: CudaCodegenContext) -> None:
+@codegen.register(target.Target, codegen.Role.EMIT, core.PrimFunction)
+def emit(fn: core.PrimFunction, ctx: context.Context) -> None:
     """Write what runs inside one ``__global__``: its buffers, then its statements."""
     if fn.variants:
-        _dispatch(fn, ctx)
+        dispatch(fn, ctx)
         return
-    params = tuple(tensor_signature_of(param) for param in fn.params)
+    params = tuple(codegen.tensor_signature_of(param) for param in fn.params)
     for param in fn.params:
         ctx.register_kernel_param(param)
     ctx.bind_extents(params)
@@ -112,4 +108,10 @@ def _emit(fn: PrimFunction, ctx: CudaCodegenContext) -> None:
     if ctx.codegen_context.options.emit == "skeleton":
         ctx.emit(f"// TODO: {fn.name}")
     else:
-        CppEmitter(context=ctx).visit(fn.body)
+        codegen.CppEmitter(context=ctx).visit(fn.body)
+
+
+__all__ = [
+    "emit_range_dispatch",
+    "wrap_buffer",
+]

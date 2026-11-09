@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.ir.core.kinds import ReduceKind
-from tilefoundry.ir.types.shard_layout import Broadcast
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.ir import expr, types
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 @module(topologies=(Topology("cta", 4), Topology("thread", 128)))
@@ -30,14 +29,14 @@ class _TwoLevel:
             two_src = T.tensor_view(
                 T.ptr_of(a_two[ml.c * 2 : ml.c * 2 + 2, 0:4, 0:128, 0:4]),
                 layout=ShardLayout(
-                    Layout((2, 4, 128, 4), (2048, 512, 4, 1)), (Broadcast(), Split(2)), ml
+                    Layout((2, 4, 128, 4), (2048, 512, 4, 1)), (types.Broadcast(), Split(2)), ml
                 ),
                 shape=(2, 4, 128, 4),
             )
             two_dst = T.tensor_view(
                 T.ptr_of(out_two[ml.c * 2 : ml.c * 2 + 2, 0:4, 0:1, 0:1]),
                 layout=ShardLayout(
-                    Layout((2, 4, 1, 1), (4, 1, 1, 1)), (Broadcast(), Broadcast()), ml
+                    Layout((2, 4, 1, 1), (4, 1, 1, 1)), (types.Broadcast(), types.Broadcast()), ml
                 ),
                 shape=(2, 4, 1, 1),
             )
@@ -48,7 +47,7 @@ class _TwoLevel:
                 two_ws,
                 axes=(2, 3),
                 keepdim=True,
-                kind=ReduceKind.MEAN,
+                kind=expr.ReduceKind.MEAN,
             )
 
 
@@ -58,7 +57,7 @@ class TwoLevelReduce:
 
     two_level = _TwoLevel
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def two_level_host(
         a_two: Tensor[(8, 4, 128, 4), "f32"], out_two: Tensor[(8, 4, 1, 1), "f32"]
     ):

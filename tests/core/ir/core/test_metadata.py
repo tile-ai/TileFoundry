@@ -12,43 +12,34 @@ from dataclasses import dataclass
 
 import pytest
 
-from tilefoundry.ir.core import (
-    BindingMetadata,
-    IRMetadata,
-    Op,
-    SourceSpanMetadata,
-    Var,
-    VerifyError,
-    get_metadata,
-)
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir import expr, types
 
 
 @dataclass(frozen=True)
-class _Label(IRMetadata):
+class _Label(expr.IRMetadata):
     value: str
 
 
-def _type() -> TensorType:
-    return TensorType.scalar(DType.f32)
+def _type() -> types.TensorType:
+    return types.TensorType.from_scalar(expr.DType.f32)
 
 
 def test_source_labels_do_not_change_expr_identity() -> None:
-    plain = Var(type=_type(), name="x")
-    located = Var(
+    plain = expr.Var(type=_type(), name="x")
+    located = expr.Var(
         type=_type(),
         name="x",
         metadata=(
-            BindingMetadata("x"),
-            SourceSpanMetadata("model.py", 7, 3, 7, 9),
+            expr.BindingMetadata("x"),
+            expr.SourceSpanMetadata("model.py", 7, 3, 7, 9),
         ),
     )
 
     assert located == plain
     assert hash(located) == hash(plain)
-    assert get_metadata(located, BindingMetadata) == BindingMetadata("x")
+    assert expr.get_metadata(located, expr.BindingMetadata) == expr.BindingMetadata("x")
 
-    assert get_metadata(located, IRMetadata) is None
+    assert expr.get_metadata(located, expr.IRMetadata) is None
 
 
 def test_expr_rejects_malformed_metadata() -> None:
@@ -58,26 +49,26 @@ def test_expr_rejects_malformed_metadata() -> None:
     and a non-``IRMetadata`` entry has no class to look up by. Both are
     construction-time errors, and the first reports the span it was given.
     """
-    with pytest.raises(VerifyError, match=r"duplicate _Label metadata") as exc_info:
-        Var(
+    with pytest.raises(expr.VerifyError, match=r"duplicate _Label metadata") as exc_info:
+        expr.Var(
             type=_type(),
             name="x",
             metadata=(
-                SourceSpanMetadata("model.py", 7, 3),
+                expr.SourceSpanMetadata("model.py", 7, 3),
                 _Label("first"),
                 _Label("second"),
             ),
         )
     assert "at model.py:7:3" in str(exc_info.value)
 
-    with pytest.raises(VerifyError, match="must be IRMetadata, got object"):
-        Var(type=_type(), name="x", metadata=(object(),))  # type: ignore[arg-type]
+    with pytest.raises(expr.VerifyError, match="must be IRMetadata, got object"):
+        expr.Var(type=_type(), name="x", metadata=(object(),))
 
 
 def test_op_attribute_singleton_cache() -> None:
     """No-attribute Ops are cached — ``Foo() is Foo()`` (spec 001)."""
 
-    class _OpB(Op):
+    class _OpB(expr.Op):
         pass
 
     assert _OpB() is _OpB()

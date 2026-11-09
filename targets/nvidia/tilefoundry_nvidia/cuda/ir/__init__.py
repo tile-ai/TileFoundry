@@ -1,7 +1,3 @@
-"""Load CUDA HIR and TIR registrations."""
+"""CUDA HIR and TIR Ops; importing the package registers each of them."""
 
-import importlib
-import pkgutil
-
-for _, module_name, _ in pkgutil.walk_packages(__path__, __name__ + "."):
-    importlib.import_module(module_name)
+from . import hir, tir

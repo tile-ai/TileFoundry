@@ -9,38 +9,37 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.types import DType, Topology
-from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.target import TopologyFacts, TopologyLevelFacts, UnsupportedCapabilityError
-from tilefoundry_apple import AmxTarget
+from tilefoundry import target
+from tilefoundry.ir import expr, types
+from tilefoundry_apple import amx
 
 
 def test_amx_target_reports_and_validates_its_own_topology_levels():
     """Twelve CPU execution positions share AMX capability, not twelve AMX engines."""
-    target = AmxTarget()
-    levels = target.get_facts(TopologyFacts).topologies
+    tgt = amx.Target()
+    levels = tgt.get_facts(target.TopologyFacts).topologies
     assert tuple(level.name for level in levels) == ("thread",)
     assert not any(level.from_target for level in levels)
-    assert target.get_facts(TopologyLevelFacts, "thread") == TopologyLevelFacts("thread", 12, 12)
-    assert AmxTarget().get_facts(TopologyFacts) == target.get_facts(TopologyFacts)
-    assert AmxTarget("apple.m2_pro") == target
-    assert target.to_python().text == 'AmxTarget("apple.m2_pro")'
+    assert tgt.get_facts(target.TopologyLevelFacts, "thread") == target.TopologyLevelFacts("thread", 12, 12)
+    assert amx.Target().get_facts(target.TopologyFacts) == tgt.get_facts(target.TopologyFacts)
+    assert amx.Target("apple.m2_pro") == tgt
+    assert tgt.to_python().text == 'amx.Target("apple.m2_pro")'
 
     with pytest.raises(ValueError) as topology_error:
-        target.validate_program_topology(Topology("cta", 4))
+        tgt.validate_program_topology(types.Topology("cta", 4))
     assert "unsupported topology level 'cta'" in str(topology_error.value)
     assert "('thread',)" in str(topology_error.value)
-    with pytest.raises(UnsupportedCapabilityError, match="no Facts projection"):
-        target.get_facts(TopologyLevelFacts, "cta")
+    with pytest.raises(target.UnsupportedCapabilityError, match="no Facts projection"):
+        tgt.get_facts(target.TopologyLevelFacts, "cta")
 
     with pytest.raises(ValueError, match="unsupported topology level 'amx'"):
-        target.validate_program_topology(Topology("amx", 1))
-    target.validate_program_topology(Topology("thread", 12))
+        tgt.validate_program_topology(types.Topology("amx", 1))
+    tgt.validate_program_topology(types.Topology("thread", 12))
     with pytest.raises(ValueError, match="must satisfy 1 <= extent <= 12"):
-        target.validate_program_topology(Topology("thread", 13))
+        tgt.validate_program_topology(types.Topology("thread", 13))
     with pytest.raises(ValueError, match="must be positive"):
-        target.validate_program_topology(Topology("thread", 0))
-    target.validate_program_topology(Topology("thread", DimVar("workers", 1, 12)))
+        tgt.validate_program_topology(types.Topology("thread", 0))
+    tgt.validate_program_topology(types.Topology("thread", expr.DimVar("workers", 1, 12)))
 
 
 def test_amx_values_stand_on_the_installed_documents_and_say_how_they_were_got():
@@ -50,10 +49,10 @@ def test_amx_values_stand_on_the_installed_documents_and_say_how_they_were_got()
     records provenance and conditions. Vendor bandwidth and a unit count inferred
     from scaling cannot claim measurement, and an absent peak remains absent.
     """
-    target = AmxTarget()
-    architecture, device = target.architecture, target.device
+    tgt = amx.Target()
+    architecture, device = tgt.architecture, tgt.device
 
-    assert (target.architecture_id, target.device_id) == ("apple.amx", "apple.m2_pro")
+    assert (tgt.architecture_id, tgt.device_id) == ("apple.amx", "apple.m2_pro")
 
     assert architecture.staging_bytes == 512
     assert architecture.accumulator_bytes == 4096
@@ -68,8 +67,8 @@ def test_amx_values_stand_on_the_installed_documents_and_say_how_they_were_got()
     assert device.performance_core_count == 8
     assert device.sm_count == 2
 
-    architecture_document = AmxTarget.hardware.documents()["apple.amx"]
-    device_document = AmxTarget.hardware.documents()["apple.m2_pro"]
+    architecture_document = amx.Target.hardware.documents()["apple.amx"]
+    device_document = amx.Target.hardware.documents()["apple.m2_pro"]
     assert device_document.fact("memory.unified.bandwidth").origin == "vendor"
     assert device_document.fact("compute.amx_unit_count").origin == "estimated"
     assert device_document.fact("throughput.amx.f32").origin == "measured"
@@ -89,11 +88,11 @@ def test_unmeasured_units_and_dtypes_have_no_throughput_entry():
     either unit, so asking for one raises instead of returning a guess -- as does
     naming a unit that has no recorded rate at all.
     """
-    target = AmxTarget()
-    assert target.architecture.supports_compute_dtype(DType.f16)
-    assert target.device.throughput_for("amx", DType.f32) == 504_900_000_000
-    assert target.device.throughput_for("neon", DType.f32) == 107_700_000_000
+    tgt = amx.Target()
+    assert tgt.architecture.supports_compute_dtype(expr.DType.f16)
+    assert tgt.device.throughput_for("amx", expr.DType.f32) == 504_900_000_000
+    assert tgt.device.throughput_for("neon", expr.DType.f32) == 107_700_000_000
     with pytest.raises(ValueError, match="no measured compute-throughput"):
-        target.device.throughput_for("amx", DType.f16)
+        tgt.device.throughput_for("amx", expr.DType.f16)
     with pytest.raises(ValueError, match="no measured compute-throughput"):
-        target.device.throughput_for("sme", DType.f32)
+        tgt.device.throughput_for("sme", expr.DType.f32)

@@ -1,7 +1,7 @@
 from dataclasses import replace
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 from tilefoundry_nvidia.cuda.models.qwen3_5_35b_a3b.model import (
     _DT,
     _H,
@@ -13,7 +13,7 @@ from tilefoundry_nvidia.cuda.models.qwen3_5_35b_a3b.model import (
 
 @module(
     entry="routing",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 132), Topology("thread", 512)),
 )
 class Wrapper:

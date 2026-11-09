@@ -17,19 +17,13 @@ from pathlib import Path
 import pytest
 
 from tests.core._corpus import Case, case, check_case, reload, special
-from tilefoundry.cli.source import load_authored_ir, load_namespace
+from tilefoundry import cli, inspection
 from tilefoundry.dsl import *
-from tilefoundry.inspection import as_script
-from tilefoundry.ir.core import Call
-from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.nn.matmul import MatMul
-from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import core, expr
+from tilefoundry.ir.hir import nn
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
 DSL = Path(__file__).parents[1] / "fixtures" / "dsl"
 
@@ -44,34 +38,34 @@ def test_held_child_takes_owner_target():
     Target and the call's storage, and a call the Target refuses fails where the
     root makes it, leaving the child's types as they were.
     """
-    namespace = load_namespace(str(DSL / "child_matmul_cpu_root.py"))[0]
+    namespace = cli.load_namespace(str(DSL / "child_matmul_cpu_root.py"))[0]
     K, M, N = (namespace[name] for name in ("K", "M", "N"))
 
     def storages(owner):
         found = []
         for function in owner.functions:
             for body in (variant.body for variant in (function, *function.variants)):
-                for expr in () if body is None else collect_exprs(body):
-                    if isinstance(expr, Call) and isinstance(expr.target, MatMul):
-                        found.append(expr.type.storage)
-                    if isinstance(expr, LoopRegion):
-                        found.extend(p.type.storage for p in expr.params if p.name == "acc")
+                for node in () if body is None else core.collect_exprs(body):
+                    if isinstance(node, expr.Call) and isinstance(node.target, nn.MatMul):
+                        found.append(node.type.storage)
+                    if isinstance(node, core.LoopRegion):
+                        found.extend(p.type.storage for p in node.params if p.name == "acc")
         return found
 
     def stored_types(owner):
         exprs = [
-            expr
+            node
             for function in owner.functions
             for variant in (function, *function.variants)
-            for expr in collect_exprs(variant.body)
+            for node in core.collect_exprs(variant.body)
         ]
         params = [
             param
-            for expr in exprs
-            if isinstance(expr, (LoopRegion, MeshRegion))
-            for param in expr.params
+            for node in exprs
+            if isinstance(node, (core.LoopRegion, core.MeshRegion))
+            for param in node.params
         ]
-        return [(expr, expr.type) for expr in (*exprs, *params)]
+        return [(node, node.type) for node in (*exprs, *params)]
 
     def call_storage(owner, name):
         (function,) = (function for function in owner.functions if function.name == name)
@@ -82,7 +76,7 @@ def test_held_child_takes_owner_target():
     for child in held:
         assert child.target is None
         assert storages(child) == [StorageKind.UMAT] * 3
-    assert list_call_paths(cuda_root)["direct.direct"].target is cuda_root.target
+    assert valuation.list_call_paths(cuda_root)["direct.direct"].target is cuda_root.target
     assert call_storage(cuda_root, "gemm_on_chip") is StorageKind.RMEM
     before = [stored_types(child) for child in held]
 
@@ -91,33 +85,33 @@ def test_held_child_takes_owner_target():
     for child, original, types in zip(children, held, before, strict=True):
         assert child is original and child.target is None
         assert storages(child) == [StorageKind.UMAT] * 3
-        assert all(expr.type is stored for expr, stored in types)
+        assert all(node.type is stored for node, stored in types)
     assert call_storage(_CpuRoot, "gemm_on_chip") is StorageKind.SMEM
     assert call_storage(cuda_root, "gemm_on_chip") is StorageKind.RMEM
     callees = [
-        expr.target
+        node.target
         for function in _CpuRoot.functions
-        for expr in collect_exprs(function.body)
-        if isinstance(expr, Call)
+        for node in core.collect_exprs(function.body)
+        if isinstance(node, expr.Call)
     ]
     assert all(any(target is slot for target in callees) for slot in _CpuRoot.children.values())
 
-    imported = reload(as_script(cuda_root), "ChildMatmulRoot")
+    imported = reload(inspection.as_script(cuda_root), "ChildMatmulRoot")
     for slot in imported.children.values():
         child = slot.elements[0]
         assert child.target is None
         assert storages(child) == [StorageKind.UMAT] * 3
-    assert list_call_paths(imported)["direct.direct"].target == cuda_root.target
+    assert valuation.list_call_paths(imported)["direct.direct"].target == cuda_root.target
     assert call_storage(imported, "gemm_on_chip") is StorageKind.RMEM
 
-    _Refused = load_authored_ir(str(DSL / "refused_child_matmul.py"))
+    _Refused = cli.load_authored_ir(str(DSL / "refused_child_matmul.py"))
     parsed = stored_types(_Refused)
     refused = _Refused
-    with pytest.raises(VerifyError, match="no nvidia.h200_sxm MMA reads lhs f32 smem"):
+    with pytest.raises(expr.VerifyError, match="no nvidia.h200_sxm MMA reads lhs f32 smem"):
 
         @module(
             entry="call",
-            target=CudaTarget("nvidia.h200_sxm"),
+            target=cuda.Target("nvidia.h200_sxm"),
             topologies=(Topology("cta", 1),),
         )
         class _RefusingRoot:
@@ -125,10 +119,10 @@ def test_held_child_takes_owner_target():
 
             @func
             def call(a: Tensor[(M, K), "f32"], b: Tensor[(K, N), "f32"]):
-                return child(a, b)  # noqa: F821 -- class-body binding
+                return child(a, b)
 
     assert storages(_Refused) == [StorageKind.UMAT] * 3
-    assert all(expr.type is stored for expr, stored in parsed)
+    assert all(node.type is stored for node, stored in parsed)
 
 
 class ModuleDecoratorCase(Case):
@@ -147,10 +141,10 @@ class PrimFuncSiblingLaunch(ModuleDecoratorCase):
     path: Path = DSL / "prim_func_sibling_launch.py"
 
     def guard(self, state, problems):
-        assert isinstance(state, Module)
+        assert isinstance(state, core.Module)
         assert [fn.name for fn in state.functions] == ["dev", "host"]
         assert state.entry == "host"
-        assert state.lookup("host").target == CpuTarget()
+        assert state.lookup("host").target == cpu.Target()
 
 
 @pytest.mark.parametrize(
@@ -178,15 +172,15 @@ class PrimFuncSiblingLaunch(ModuleDecoratorCase):
 )
 def test_module_rejects_invalid_instances(fixture, refused):
     source = Path(__file__).parents[1] / f"fixtures/diagnostics/parser_module_instance_{fixture}.py"
-    with pytest.raises((TypeError, ValueError, VerifyError), match=refused):
-        load_authored_ir(str(source))
+    with pytest.raises((TypeError, ValueError, expr.VerifyError), match=refused):
+        cli.load_authored_ir(str(source))
 
 
 def test_entryless_module_occupies_slot():
     scaled_modules = Path(__file__).parents[1] / "fixtures/shapes/scaled_modules.py"
-    ScaledChild = load_authored_ir(f"{scaled_modules}:ScaledChild")
+    ScaledChild = cli.load_authored_ir(f"{scaled_modules}:ScaledChild")
     slot = ModuleList(dataclasses.replace(ScaledChild, entry=None))
-    root = Module("Container", (), None, children={"unused": slot})
+    root = core.Module("Container", (), None, children={"unused": slot})
     assert dataclasses.replace(root).children["unused"] is slot
     assert slot.elements[0].entry is None
 

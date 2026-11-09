@@ -5,10 +5,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def reduce_ba(
     p: Tensor[(8, 256, 96), "f32"], scratch: Tensor[(96,), "bf16"], out: Tensor[(256, 96), "bf16"]
 ):

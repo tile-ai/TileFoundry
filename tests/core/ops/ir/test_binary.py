@@ -17,47 +17,36 @@ from tests.core.ops.ir.op_case import (
     infer_call,
     op_case_test,
 )
-from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.types import (
-    DType,
-    Layout,
-    Mesh,
-    Topology,
-    make_shard_tensor_type,
-    make_tensor_type,
-)
-from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split
-from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.visitor_registry.contexts import TrafficBytes
+from tilefoundry.interfaces import cost
+from tilefoundry.ir import expr, types, utils
+from tilefoundry.ir.hir import math
 
-_ADD = Binary(kind=BinaryKind.ADD)
-_MUL = Binary(kind=BinaryKind.MUL)
-_SUB = Binary(kind=BinaryKind.SUB)
-_F = DType.f32
-_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
-_MAB = Mesh((Topology("gpu", 8),), Layout((2, 4), (4, 1)), ("a", "b"))
-_PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
-_PMAX = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("max"),))
-_BCAST = make_tensor_type((16, 8), _F)
-_PSUM_AXIS0 = make_shard_tensor_type((16, 8), mesh=_MAB, attrs=(Partial("sum"), Broadcast()))
-_PSUM_AXIS1 = make_shard_tensor_type((16, 8), mesh=_MAB, attrs=(Broadcast(), Partial("sum")))
+_ADD = math.Binary(kind=expr.BinaryKind.ADD)
+_MUL = math.Binary(kind=expr.BinaryKind.MUL)
+_SUB = math.Binary(kind=expr.BinaryKind.SUB)
+_F = expr.DType.f32
+_M = types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",))
+_MAB = types.Mesh((types.Topology("gpu", 8),), types.Layout((2, 4), (4, 1)), ("a", "b"))
+_PSUM = utils.make_shard_tensor_type((16, 8), mesh=_M, attrs=(types.Partial("sum"),))
+_PMAX = utils.make_shard_tensor_type((16, 8), mesh=_M, attrs=(types.Partial("max"),))
+_BCAST = types.TensorType.from_shape((16, 8), _F)
+_PSUM_AXIS0 = utils.make_shard_tensor_type((16, 8), mesh=_MAB, attrs=(types.Partial("sum"), types.Broadcast()))
+_PSUM_AXIS1 = utils.make_shard_tensor_type((16, 8), mesh=_MAB, attrs=(types.Broadcast(), types.Partial("sum")))
 
 
 def test_broadcast_fallback_keeps_shard_mismatch():
     narrow = (1, 1, 16, 1, 128)
     wide = (1, 1, 16, 4, 128)
-    lhs = make_tensor_type(narrow, _F, layout=Layout(narrow))
-    rhs = make_tensor_type(wide, _F, layout=Layout(wide))
-    assert infer_call(_MUL, lhs, rhs).layout == Layout(wide)
-    assert infer_call(_MUL, lhs, make_tensor_type(wide, _F)).layout == Layout(wide)
-    replicated = make_shard_tensor_type(narrow, mesh=_M, attrs=(Broadcast(),))
+    lhs = types.TensorType.from_shape(narrow, _F, layout=types.Layout(narrow))
+    rhs = types.TensorType.from_shape(wide, _F, layout=types.Layout(wide))
+    assert infer_call(_MUL, lhs, rhs).layout == types.Layout(wide)
+    assert infer_call(_MUL, lhs, types.TensorType.from_shape(wide, _F)).layout == types.Layout(wide)
+    replicated = utils.make_shard_tensor_type(narrow, mesh=_M, attrs=(types.Broadcast(),))
     replicated_out = infer_call(_MUL, replicated, rhs)
     assert replicated_out.layout.layout.shape == wide
-    split_0 = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),))
-    split_1 = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(1),))
-    with pytest.raises(VerifyError, match="incompatible"):
+    split_0 = utils.make_shard_tensor_type((16, 8), mesh=_M, attrs=(types.Split(0),))
+    split_1 = utils.make_shard_tensor_type((16, 8), mesh=_M, attrs=(types.Split(1),))
+    with pytest.raises(expr.VerifyError, match="incompatible"):
         infer_call(_ADD, split_0, split_1)
 
 
@@ -69,34 +58,34 @@ def test_lower_rank_split_right_aligns():
     Split on that output axis, not as the internal layout position count a valid
     derivation happens to produce.
     """
-    split_1d = make_shard_tensor_type((8,), mesh=_M, attrs=(Split(0),))
-    plain_2d = make_tensor_type((4, 8), _F)
+    split_1d = utils.make_shard_tensor_type((8,), mesh=_M, attrs=(types.Split(0),))
+    plain_2d = types.TensorType.from_shape((4, 8), _F)
     for lhs, rhs in ((plain_2d, split_1d), (split_1d, plain_2d)):
         out = infer_call(_ADD, lhs, rhs)
         assert out.shape == (4, 8)
-        assert out.layout.attrs == (Split(1),)
+        assert out.layout.attrs == (types.Split(1),)
 
 
 _COMPARISONS = (
-    BinaryKind.EQ,
-    BinaryKind.NE,
-    BinaryKind.LT,
-    BinaryKind.LE,
-    BinaryKind.GT,
-    BinaryKind.GE,
+    expr.BinaryKind.EQ,
+    expr.BinaryKind.NE,
+    expr.BinaryKind.LT,
+    expr.BinaryKind.LE,
+    expr.BinaryKind.GT,
+    expr.BinaryKind.GE,
 )
-_TRUTH = (BinaryKind.AND, BinaryKind.OR)
-_REAL = make_tensor_type((8,), DType.f32)
-_WHOLE = make_tensor_type((8,), DType.i32)
-_TRUTHY = make_tensor_type((8,), DType.bool)
+_TRUTH = (expr.BinaryKind.AND, expr.BinaryKind.OR)
+_REAL = types.TensorType.from_shape((8,), expr.DType.f32)
+_WHOLE = types.TensorType.from_shape((8,), expr.DType.i32)
+_TRUTHY = types.TensorType.from_shape((8,), expr.DType.bool)
 COST_CASES = [
     OpCase(
         "lt_over_reals_is_a_predicate",
-        Binary(kind=BinaryKind.LT),
+        math.Binary(kind=expr.BinaryKind.LT),
         (_REAL, _REAL),
         cost=Cost(
             ops={"predicate": 8},
-            traffic=(TrafficBytes(read=32), TrafficBytes(read=32), TrafficBytes(write=1)),
+            traffic=(cost.TrafficBytes(read=32), cost.TrafficBytes(read=32), cost.TrafficBytes(write=1)),
         ),
     ),
     OpCase(
@@ -104,8 +93,8 @@ COST_CASES = [
         _ADD,
         (_REAL, _REAL),
         cost=Cost(
-            flops={DType.f32: 8},
-            traffic=(TrafficBytes(read=32), TrafficBytes(read=32), TrafficBytes(write=32)),
+            flops={expr.DType.f32: 8},
+            traffic=(cost.TrafficBytes(read=32), cost.TrafficBytes(read=32), cost.TrafficBytes(write=32)),
         ),
     ),
 ]
@@ -121,28 +110,28 @@ def test_binary_charges_by_work_kind(case):
     target publishes, so `performance` refused the program instead of timing it.
     """
     check_op_case(case)
-    assert DType.bool not in case.cost.flops
+    assert expr.DType.bool not in case.cost.flops
 
 
 CASES = (
     OpCase(
         "different_rank_broadcast",
         _ADD,
-        (make_tensor_type((4, 8), _F), make_tensor_type((8,), _F)),
-        type=make_tensor_type((4, 8), _F),
+        (types.TensorType.from_shape((4, 8), _F), types.TensorType.from_shape((8,), _F)),
+        type=types.TensorType.from_shape((4, 8), _F),
     ),
     OpCase(
         "empty_axis",
         _ADD,
-        (make_tensor_type((1, 0, 8), _F), make_tensor_type((8,), _F)),
-        type=make_tensor_type((1, 0, 8), _F),
+        (types.TensorType.from_shape((1, 0, 8), _F), types.TensorType.from_shape((8,), _F)),
+        type=types.TensorType.from_shape((1, 0, 8), _F),
     ),
     OpCase(
         "conflicting_concrete_storage",
         _ADD,
         (
-            make_tensor_type((4, 8), _F, storage="gmem"),
-            make_tensor_type((4, 8), _F, storage="rmem"),
+            types.TensorType.from_shape((4, 8), _F, storage="gmem"),
+            types.TensorType.from_shape((4, 8), _F, storage="rmem"),
         ),
         error=ExpectedError(match="conflicting storage"),
     ),
@@ -150,10 +139,10 @@ CASES = (
         "unmaterialized_abstains_from_storage",
         _ADD,
         (
-            make_tensor_type((4, 8), _F, storage=StorageKind.UMAT),
-            make_tensor_type((4, 8), _F, storage="rmem"),
+            types.TensorType.from_shape((4, 8), _F, storage=expr.StorageKind.UMAT),
+            types.TensorType.from_shape((4, 8), _F, storage="rmem"),
         ),
-        type=make_tensor_type((4, 8), _F, layout=Layout((4, 8), (8, 1)), storage="rmem"),
+        type=types.TensorType.from_shape((4, 8), _F, layout=types.Layout((4, 8), (8, 1)), storage="rmem"),
     ),
     OpCase("add_partial_sum_partial_sum_passes", _ADD, (_PSUM, _PSUM), type=_PSUM),
     OpCase(

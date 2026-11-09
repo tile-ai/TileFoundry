@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from tilefoundry.ir.core.metadata import IRMetadata
+from tilefoundry.ir import expr
 
 
 @dataclass(frozen=True)
@@ -24,51 +24,45 @@ class SourceLocation:
         return f"{self.filename}:{self.line}:{self.column}"
 
 
-class ClauseProvenance(Enum):
+class Provenance(Enum):
     """Source category for a where clause."""
 
     AUTHOR = "author"
 
 
 @dataclass(frozen=True)
-class WhereClause:
+class Where:
     """Base value for one stage-neutral hard constraint."""
 
     source_loc: SourceLocation = field(default_factory=SourceLocation)
-    provenance: ClauseProvenance = ClauseProvenance.AUTHOR
+    provenance: Provenance = Provenance.AUTHOR
 
 
 @dataclass(frozen=True)
-class WhereClauseMetadata(IRMetadata):
+class WhereMetadata(expr.IRMetadata):
     """Aggregate hard constraints attached to one concrete tensor Expr."""
 
-    constraints: tuple[WhereClause, ...] = ()
+    constraints: tuple[Where, ...] = ()
     source_loc: SourceLocation = field(default_factory=SourceLocation)
 
     def __post_init__(self) -> None:
         constraints = tuple(self.constraints)
         if not constraints:
             raise ValueError(f"where clauses at {self.source_loc.describe()} cannot be empty")
-        if any(not isinstance(item, WhereClause) for item in constraints):
-            bad = next(item for item in constraints if not isinstance(item, WhereClause))
+        if any(not isinstance(item, Where) for item in constraints):
+            bad = next(item for item in constraints if not isinstance(item, Where))
             raise TypeError(
-                f"where-clause metadata expects WhereClause values, got {type(bad).__name__}"
+                f"where-clause metadata expects Where values, got {type(bad).__name__}"
             )
         object.__setattr__(self, "constraints", constraints)
 
 
-def clause_metadata(expr: Any) -> WhereClauseMetadata | None:
+def metadata(node: Any) -> WhereMetadata | None:
     """Return schedule metadata attached to ``expr``, if present."""
-    for item in getattr(expr, "metadata", ()):
-        if type(item) is WhereClauseMetadata:
+    for item in getattr(node, "metadata", ()):
+        if type(item) is WhereMetadata:
             return item
     return None
 
 
-__all__ = [
-    "ClauseProvenance",
-    "WhereClause",
-    "WhereClauseMetadata",
-    "SourceLocation",
-    "clause_metadata",
-]
+__all__ = ["Provenance", "SourceLocation", "Where", "WhereMetadata", "metadata"]

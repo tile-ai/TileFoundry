@@ -3,60 +3,50 @@ from dataclasses import dataclass
 import pytest
 
 from tests.core.fixtures.meshes import CT, CTA
-from tilefoundry.ir.pattern import (
-    ComposedLayoutPattern,
-    LayoutPattern,
-    MeshPattern,
-    Predicate,
-    WildcardPattern,
-)
-from tilefoundry.ir.pattern import (
-    predicates as P,
-)
-from tilefoundry.ir.types import ComposedLayout, DType, Layout
+from tilefoundry.ir import expr, pattern, types
 
 
 @dataclass(frozen=True)
-class _BareLayout(Predicate):
+class _BareLayout(pattern.Predicate):
     def holds(self, subject, bindings):
-        return isinstance(subject, Layout)
+        return isinstance(subject, types.Layout)
 
 
 def test_mesh_pattern_matches_the_levels_it_names():
     with pytest.raises(ValueError, match="per-mode predicates"):
-        MeshPattern(
+        pattern.Mesh(
             ("thread",),
-            ComposedLayoutPattern(
-                outer=LayoutPattern(
+            pattern.ComposedLayout(
+                outer=pattern.Layout(
                     ((128,),),
                     ((1,),),
-                    predicates=(P.Forward(),),
+                    predicates=(pattern.Forward(),),
                 )
             ),
         )
 
-    warpgroup = MeshPattern(
+    warpgroup = pattern.Mesh(
         ("thread",),
-        ComposedLayoutPattern(
-            offset=WildcardPattern("p0"),
-            outer=LayoutPattern(
+        pattern.ComposedLayout(
+            offset=pattern.Wildcard("p0"),
+            outer=pattern.Layout(
                 ((128,),),
                 ((1,),),
-                predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
+                predicates=(pattern.Forward(per_mode=True), pattern.Injective(per_mode=True)),
             ),
-            predicates=(WildcardPattern("p0") % 128 == 0,),
+            predicates=(pattern.Wildcard("p0") % 128 == 0,),
         ),
     )
     assert warpgroup.match(CT[1:3, 128:256]).captures["p0"] == 128
     assert warpgroup.match(CT[1:3, 64:192]) is None
-    both = MeshPattern(
+    both = pattern.Mesh(
         ("cta", "thread"),
-        ComposedLayoutPattern(
-            offset=WildcardPattern(),
-            outer=LayoutPattern(
+        pattern.ComposedLayout(
+            offset=pattern.Wildcard(),
+            outer=pattern.Layout(
                 ((2,), (128,)),
                 ((1,), (1,)),
-                predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
+                predicates=(pattern.Forward(per_mode=True), pattern.Injective(per_mode=True)),
             ),
         ),
     )
@@ -66,28 +56,28 @@ def test_mesh_pattern_matches_the_levels_it_names():
 
 
 def test_layout_predicates_read_through_composition():
-    pattern = LayoutPattern(
+    declared = pattern.Layout(
         predicates=(
-            P.WholeVectors(
-                WildcardPattern("width"),
+            pattern.WholeVectors(
+                pattern.Wildcard("width"),
                 "dtype0",
                 (4, 8, 16),
             ),
         )
     )
-    subject = ComposedLayout(None, 0, Layout(((128, 4),), ((4, 1),)))
+    subject = types.ComposedLayout(None, 0, types.Layout(((128, 4),), ((4, 1),)))
 
-    assert pattern.match(subject, {"dtype0": DType.f32}).captures["width"] == 16
+    assert declared.match(subject, {"dtype0": expr.DType.f32}).captures["width"] == 16
 
 
 def test_composed_layout_predicates_read_the_received_subject():
-    pattern = ComposedLayoutPattern(
+    declared = pattern.ComposedLayout(
         inner=None,
         offset=0,
-        outer=LayoutPattern(),
+        outer=pattern.Layout(),
         predicates=(_BareLayout(),),
     )
-    bare = Layout((4,), (1,))
+    bare = types.Layout((4,), (1,))
 
-    assert pattern.match(bare) is not None
-    assert pattern.match(ComposedLayout(None, 0, bare)) is None
+    assert declared.match(bare) is not None
+    assert declared.match(types.ComposedLayout(None, 0, bare)) is None

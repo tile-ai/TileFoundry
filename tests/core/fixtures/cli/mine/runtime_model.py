@@ -2,11 +2,11 @@
 
 from model import Mine
 
-from tilefoundry.runtime import runtime_func, runtime_module
+from tilefoundry import runtime
 
 
-@runtime_module(Mine)
+@runtime.module(Mine)
 class MineTwin:
-    @runtime_func
+    @runtime.func
     def main(self, x):
         return x * x

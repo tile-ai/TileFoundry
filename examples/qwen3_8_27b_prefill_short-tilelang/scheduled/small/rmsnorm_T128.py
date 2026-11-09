@@ -9,7 +9,7 @@ to torch's (per-lane accumulators per chunk position, ((a0+a1)+a2)+a3, shfl_down
 the reduce without an order.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 128
 H = 5120
@@ -18,7 +18,7 @@ NCH = H // 128
 EPS = 1e-6
 
 
-@module(entry="rmsnorm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", M // ROWS), Topology("thread", 32 * ROWS)))
+@module(entry="rmsnorm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", M // ROWS), Topology("thread", 32 * ROWS)))
 class SCHED_RMSNORM_T128:
     @func
     def rmsnorm(x: Tensor[(M, H), "bf16"], gamma: Tensor[(H,), "bf16"]) -> Tensor[(M, H), "bf16"]:

@@ -1,6 +1,6 @@
 """Define test causal lm e2e behavior.
 
-End-to-end test of the ``Module`` / ``RuntimeModule`` twin model on a real
+End-to-end test of the ``Module`` / ``runtime.Module`` twin model on a real
 DeepSeek-V4-Flash subtree: prepare a fabricated checkpoint, load both sides,
 check parity.
 """
@@ -17,8 +17,9 @@ from safetensors.torch import save_file
 from tests.nvidia.cuda.models.deepseek_v4_flash.hf_alias import hf_alias
 from tests.nvidia.cuda.models.deepseek_v4_flash.reference import small
 from tests.nvidia.cuda.models.deepseek_v4_flash.runtime import build_runtime_causal_lm
-from tilefoundry.evaluator.value import to_torch_dtype
-from tilefoundry.ir.core.module import Module
+from tilefoundry import runtime
+from tilefoundry.interfaces.evaluator import to_torch_dtype
+from tilefoundry.ir.core import Module
 from tilefoundry.orchestrator.causal_lm import generation
 from tilefoundry.runtime import (
     Absolute,
@@ -26,8 +27,6 @@ from tilefoundry.runtime import (
     RelL2,
     SafetensorsResource,
     check,
-    runtime_func,
-    runtime_module,
 )
 from tilefoundry_nvidia.cuda.models.deepseek_v4_flash.model import build_deepseek_v4_flash
 
@@ -186,11 +185,11 @@ def prepared(tmp_path_factory, config, semantic, raw_tensors):
 
 @pytest.fixture(scope="module")
 def twins(config, semantic, prepared):
-    runtime = build_runtime_causal_lm(config, ir=semantic)
+    twin = build_runtime_causal_lm(config, ir=semantic)
 
     loaded = semantic.load(SafetensorsResource(str(prepared), device="cuda"))
-    runtime.load(SafetensorsResource(str(prepared), device="cuda"))
-    return loaded, runtime
+    twin.load(SafetensorsResource(str(prepared), device="cuda"))
+    return loaded, twin
 
 
 def _node_inputs(semantic, config):
@@ -215,13 +214,13 @@ def test_prepared_checkpoint_matches_evaluator(config, raw_tensors, prepared, tw
     the prepared store loads on its own, and the twin agrees with the evaluator node
     by node.
     """
-    semantic, runtime = twins
+    semantic, twin = twins
     store = SafetensorsResource(str(prepared), device="cuda")
 
-    assert set(store._index()) == EXPECTED_PREPARED_KEYS
+    assert set(store.index()) == EXPECTED_PREPARED_KEYS
     debris = [
         k
-        for k in store._index()
+        for k in store.index()
         if any(
             tag in (k.split(".", 2)[2] if k.startswith("layers.") else k)
             for tag in ("layers.", "attn.", "ffn", "experts.", "wkv", "wq_", "wo_", "raw")
@@ -302,11 +301,11 @@ def test_prepared_checkpoint_matches_evaluator(config, raw_tensors, prepared, tw
     inputs = _node_inputs(semantic, config)
     step_and_latent = {"output[0]": _AGREES, "output[1]": _AGREES}
     nodes = {
-        "attention": (runtime.layers[0].attention, semantic.children["layers"][0].children["attention"], step_and_latent),
-        "moe": (runtime.layers[0].moe, semantic.children["layers"][0].children["moe"], {"output": _AGREES}),
-        "layer0": (runtime.layers[0], semantic.children["layers"][0], step_and_latent),
+        "attention": (twin.layers[0].attention, semantic.children["layers"][0].children["attention"], step_and_latent),
+        "moe": (twin.layers[0].moe, semantic.children["layers"][0].children["moe"], {"output": _AGREES}),
+        "layer0": (twin.layers[0], semantic.children["layers"][0], step_and_latent),
         "root": (
-            runtime,
+            twin,
             semantic,
             {
                 "output[0]": _AGREES,
@@ -330,7 +329,7 @@ def test_decode_loop_threads_twin_state(config, twins):
     the second step read the first one's output. The authored orchestration
     methods bind on both sides, so this is one driver rather than twin loops.
     """
-    semantic, runtime = twins
+    semantic, twin = twins
     steps = config.window + 2
     ids = torch.arange(steps, dtype=torch.int64, device="cuda") % config.vocab
     semantic_view = semantic
@@ -338,7 +337,7 @@ def test_decode_loop_threads_twin_state(config, twins):
     tokenizer = _Tokeniser(ids.cpu().tolist())
 
     reference = generation.decode(semantic, tokenizer, "", max_new=TWINNED_STEPS, device="cuda")
-    candidate = generation.decode(runtime, tokenizer, "", max_new=TWINNED_STEPS, device="cuda")
+    candidate = generation.decode(twin, tokenizer, "", max_new=TWINNED_STEPS, device="cuda")
 
     assert reference.tokens == TWINNED_STEPS
     assert candidate.tokens == TWINNED_STEPS
@@ -349,7 +348,7 @@ def test_decode_loop_threads_twin_state(config, twins):
     runs = {}
     for name, model, count in (
         ("reference", semantic, steps),
-        ("candidate", runtime, TWINNED_STEPS),
+        ("candidate", twin, TWINNED_STEPS),
     ):
         view = semantic_view if model is semantic else model
         caches = view.init_caches(device="cuda")
@@ -434,12 +433,12 @@ def test_decode_times_sampled_steps(monkeypatch):
 
 
 def test_runtime_module_rejects_mismatch(config, twins):
-    """``@runtime_module`` rejects a missing, extra, or mismatched kernel/child at decoration time.
+    """``@runtime.module`` rejects a missing, extra, or mismatched kernel/child at decoration time.
 
-    ``@runtime_module`` rejects a missing, extra, or mismatched kernel/child
+    ``@runtime.module`` rejects a missing, extra, or mismatched kernel/child
     at decoration time.
     """
-    semantic, runtime = twins
+    semantic, twin = twins
 
     layer0 = semantic.children["layers"][0]
     attention = layer0.children["attention"].module
@@ -447,68 +446,68 @@ def test_runtime_module_rejects_mismatch(config, twins):
 
     with pytest.raises(TypeError, match=r"missing \['mla_kv_update'\]"):
 
-        @runtime_module(attention)
+        @runtime.module(attention)
         class MissingKernel:
-            @runtime_func
+            @runtime.func
             def mla_attend(self, *args):
                 raise AssertionError("never called")
 
     with pytest.raises(TypeError, match=r"extra \['mla_attend_extra'\]"):
 
-        @runtime_module(attention)
+        @runtime.module(attention)
         class ExtraKernel:
-            @runtime_func
+            @runtime.func
             def mla_kv_update(self, *args):
                 raise AssertionError("never called")
 
-            @runtime_func
+            @runtime.func
             def mla_attend(self, *args):
                 raise AssertionError("never called")
 
-            @runtime_func
+            @runtime.func
             def mla_attend_extra(self, *args):
                 raise AssertionError("never called")
 
     with pytest.raises(TypeError, match="a runtime twin reserves"):
 
-        @runtime_module(replace(attention, methods={**attention.methods, "module": None}))
+        @runtime.module(replace(attention, methods={**attention.methods, "module": None}))
         class ReservedInTheModule:
-            @runtime_func
+            @runtime.func
             def mla_kv_update(self, *args):
                 raise AssertionError("never called")
 
-            @runtime_func
+            @runtime.func
             def mla_attend(self, *args):
                 raise AssertionError("never called")
 
     with pytest.raises(TypeError, match="a runtime twin reserves"):
 
-        @runtime_module(attention)
+        @runtime.module(attention)
         class ReservedInTheTwin:
             module = "not a Module"
 
-            @runtime_func
+            @runtime.func
             def mla_kv_update(self, *args):
                 raise AssertionError("never called")
 
-            @runtime_func
+            @runtime.func
             def mla_attend(self, *args):
                 raise AssertionError("never called")
 
     with pytest.raises(TypeError, match=r"child module names.*missing \['moe'\]"):
 
-        @runtime_module(layer)
+        @runtime.module(layer)
         class MissingChild:
-            attention = type(runtime.layers[0].attention)
+            attention = type(twin.layers[0].attention)
 
-            @runtime_func
+            @runtime.func
             def pre_attn_rms_norm(self, *args):
                 raise AssertionError("never called")
 
-            @runtime_func
+            @runtime.func
             def pre_moe_rms_norm(self, *args):
                 raise AssertionError("never called")
 
-            @runtime_func
+            @runtime.func
             def residual_add(self, *args):
                 raise AssertionError("never called")

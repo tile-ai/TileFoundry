@@ -5,12 +5,12 @@ crosses threads, so it needs the wait and the barrier the sync plan adds.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.rtx_6000_ada"),
+    target=cuda.Target("nvidia.rtx_6000_ada"),
     topologies=(Topology("cta", 1), Topology("thread", 8)),
 )
 class RowWindows:

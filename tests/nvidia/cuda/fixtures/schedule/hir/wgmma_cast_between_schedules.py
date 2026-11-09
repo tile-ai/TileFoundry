@@ -9,7 +9,7 @@ an explicit reduction, producing an ``(M, 1)`` result.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 64
 N = 32
@@ -20,7 +20,7 @@ STAGES = 2
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 256)),
 )
 class WGMMA_CAST_BETWEEN_SCHEDULES:

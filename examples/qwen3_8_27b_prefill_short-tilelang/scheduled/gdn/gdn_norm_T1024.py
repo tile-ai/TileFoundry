@@ -34,7 +34,7 @@ Differences to the kernel:
 - Result: the bf16 y (T, 48, 128) itself (one tensor result, no packing).
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 T_ = 1024
 HV = 48
@@ -46,7 +46,7 @@ INV_D = 0.0078125
 EPS = 1e-6
 
 
-@module(entry="gdn_norm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", T_ * 6), Topology("thread", 128)))
+@module(entry="gdn_norm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", T_ * 6), Topology("thread", 128)))
 class SCHED_GDN_NORM_T1024:
     @func
     def gdn_norm(o: Tensor[(T_, HV, D), "bf16"], proj: Tensor[(T_, PROJ), "bf16"],

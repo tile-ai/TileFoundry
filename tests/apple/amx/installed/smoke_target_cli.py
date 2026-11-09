@@ -9,10 +9,10 @@ def test_target_list_prints_reconstructing_values(tf) -> None:
     check_target_list(
         tf,
         (
-            ('AmxTarget("apple.m2_pro")', "apple.m2_pro"),
-            ("CpuTarget()", "cpu"),
+            ('amx.Target("apple.m2_pro")', "apple.m2_pro"),
+            ("cpu.Target()", "cpu"),
         ),
-        ("from tilefoundry.target import CpuTarget", "from tilefoundry_apple import AmxTarget"),
+        ("from tilefoundry.target import cpu", "from tilefoundry_apple import amx"),
     )
 
 

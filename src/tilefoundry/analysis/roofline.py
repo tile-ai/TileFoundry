@@ -8,15 +8,12 @@ different count of the same flops.
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Call, Expr, describe_expr, get_metadata
-from tilefoundry.ir.core import attach_metadata as attach
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types import DType
-from tilefoundry.visitor_registry.valuation import ValuationVisitor
+from tilefoundry import target
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import core, expr
 
 from .compute_cost import inflight_bytes
-from .errors import AnalysisError
-from .facts import ThroughputFacts
+from .errors import Error
 from .metadata import (
     ComputeCostMetadata,
     MemoryMetadata,
@@ -28,15 +25,15 @@ from .visitor import AnalyzeContext
 SELECTOR = "roofline"
 
 
-_NO_BOUND = 0
+NO_BOUND = 0
 
 
-def _totals(held) -> tuple[tuple[str, int], ...]:
+def totals_of(held) -> tuple[tuple[str, int], ...]:
     """One typed work category's whole-program counts."""
     return tuple((name, spread.total) for name, spread in held.kinds)
 
 
-def _compute_ns(flops: tuple[tuple[str, int], ...], facts: ThroughputFacts) -> int:
+def compute_time_ns(flops: tuple[tuple[str, int], ...], facts: target.ThroughputFacts) -> int:
     """Time the flops need, summed over the dtypes that have a rate.
 
     A dtype the target publishes no rate for contributes nothing. That
@@ -47,9 +44,9 @@ def _compute_ns(flops: tuple[tuple[str, int], ...], facts: ThroughputFacts) -> i
     for name, value in flops:
         if not value:
             continue
-        dtype = getattr(DType, name, None)
+        dtype = getattr(expr.DType, name, None)
         if dtype is None:
-            raise AnalysisError(f"roofline: unknown compute dtype {name!r}")
+            raise Error(f"roofline: unknown compute dtype {name!r}")
         rate = facts.peak_for(dtype)
         if rate is None:
             continue
@@ -57,14 +54,14 @@ def _compute_ns(flops: tuple[tuple[str, int], ...], facts: ThroughputFacts) -> i
     return total
 
 
-def _memory_ns(crossed: int, facts: ThroughputFacts) -> int:
+def memory_time_ns(crossed: int, facts: target.ThroughputFacts) -> int:
     """Time the bytes at the target's bandwidth level need."""
     if facts.memory_bandwidth_bytes_per_second is None or not crossed:
-        return _NO_BOUND
+        return NO_BOUND
     return -(-(crossed * 1_000_000_000) // facts.memory_bandwidth_bytes_per_second)
 
 
-def _bound(compute_ns: int, memory_ns: int, *, has_work: bool) -> RooflineMetadata:
+def bound_of(compute_ns: int, memory_ns: int, *, has_work: bool) -> RooflineMetadata:
     """Combine the two sides into one bound and name the one that set it.
 
     A nanosecond is owed by what this could have priced: work of a rated kind
@@ -93,10 +90,10 @@ def _bound(compute_ns: int, memory_ns: int, *, has_work: bool) -> RooflineMetada
     )
 
 
-def _cost_bound(
+def cost_bound(
     cost: ComputeCostMetadata,
     moved: MemoryMetadata | RegionMemoryMetadata,
-    facts: ThroughputFacts,
+    facts: target.ThroughputFacts,
 ) -> RooflineMetadata:
     """Bound one occurrence from the work it does and the bytes it moves.
 
@@ -112,14 +109,14 @@ def _cost_bound(
     crossed = 0 if reached is None else reached.total.total_bytes
     unique = None if moved.footprint is None else moved.footprint.bytes_at(facts.bandwidth_level)
     crossed = crossed if unique is None else unique[1]
-    return _bound(
-        _compute_ns(_totals(cost.flops), facts),
-        _memory_ns(crossed, facts),
-        has_work=bool(any(value for _name, value in _totals(cost.flops)) or crossed),
+    return bound_of(
+        compute_time_ns(totals_of(cost.flops), facts),
+        memory_time_ns(crossed, facts),
+        has_work=bool(any(value for _, value in totals_of(cost.flops)) or crossed),
     )
 
 
-class RooflineVisitor(ValuationVisitor[None]):
+class RooflineVisitor(valuation.Visitor[None]):
     """Attach one bound per Call in expression order.
 
     Each Call is priced for the bytes it keeps in flight; the Function, for the
@@ -131,55 +128,55 @@ class RooflineVisitor(ValuationVisitor[None]):
         super().__init__()
         self.query, self.inflight = query, 0
 
-    def facts(self, ctx: AnalyzeContext, inflight: int | None) -> ThroughputFacts:
+    def facts(self, ctx: AnalyzeContext, inflight: int | None) -> target.ThroughputFacts:
         query = None if self.query is None else (*self.query, inflight)
-        return ctx.target.get_facts(ThroughputFacts, query)
+        return ctx.target.get_facts(target.ThroughputFacts, query)
 
     def default_visit_leaf(
-        self, expr: Expr, _operands: tuple[None, ...], ctx: AnalyzeContext
+        self, node: expr.Expr, operands: tuple[None, ...], ctx: AnalyzeContext
     ) -> None:
-        if not isinstance(expr, Call):
+        if not isinstance(node, expr.Call):
             return
-        cost = get_metadata(expr, ComputeCostMetadata)
+        cost = expr.get_metadata(node, ComputeCostMetadata)
         if cost is None:
-            raise AnalysisError(
-                f"{describe_expr(expr)}: roofline needs the compute-cost record "
+            raise Error(
+                f"{expr.describe_value(node)}: roofline needs the compute-cost record "
                 "this call was never given"
             )
-        moved = get_metadata(expr, MemoryMetadata)
+        moved = expr.get_metadata(node, MemoryMetadata)
         if moved is None:
-            raise AnalysisError(
-                f"{describe_expr(expr)}: roofline needs the traffic record the "
+            raise Error(
+                f"{expr.describe_value(node)}: roofline needs the traffic record the "
                 "memory family states for every call it measures"
             )
-        level = ctx.target.get_facts(ThroughputFacts).bandwidth_level
-        callee = ctx._callee_context(expr) is not None
-        inflight = None if callee else inflight_bytes(expr, ctx.scope, ctx.target, level)
+        level = ctx.target.get_facts(target.ThroughputFacts).bandwidth_level
+        callee = ctx.callee_context(node) is not None
+        inflight = None if callee else inflight_bytes(node, ctx.scope, ctx.target, level)
         self.inflight = max(self.inflight, inflight or 0)
-        attach(expr, _cost_bound(cost, moved, self.facts(ctx, inflight)))
+        node.attach_metadata(cost_bound(cost, moved, self.facts(ctx, inflight)))
 
 
 def analyze_roofline(
-    function: Function,
+    function: core.Function,
     context: AnalyzeContext,
 ) -> None:
     """Attach a bound to every Call and the normalized Function."""
     unit = context.topology_level
     visitor = RooflineVisitor(None if unit is None else (unit, context.scope.active_positions(unit)))
     visitor.visit(function.body, context)
-    total = get_metadata(function, ComputeCostMetadata)
+    total = expr.get_metadata(function, ComputeCostMetadata)
     if total is None:
-        raise AnalysisError(
+        raise Error(
             f"function {function.name!r}: roofline needs the compute-cost root "
             "record this function was never given"
         )
-    moved = get_metadata(function, RegionMemoryMetadata)
+    moved = expr.get_metadata(function, RegionMemoryMetadata)
     if moved is None:
-        raise AnalysisError(
+        raise Error(
             f"function {function.name!r}: roofline needs the traffic root record "
             "the memory family states for every function it measures"
         )
-    attach(function, _cost_bound(total, moved, visitor.facts(context, visitor.inflight)))
+    function.attach_metadata(cost_bound(total, moved, visitor.facts(context, visitor.inflight)))
 
 
 __all__ = ["SELECTOR", "analyze_roofline"]

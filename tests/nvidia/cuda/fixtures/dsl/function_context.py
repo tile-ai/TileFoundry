@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from tests.nvidia.cuda.fixtures.logical.module_context import CONTEXT_CTA
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(CONTEXT_CTA,))
+@func(target=cuda.Target("nvidia.h200_sxm"), topologies=(CONTEXT_CTA,))
 def standalone(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
     return tf.relu(x)
 

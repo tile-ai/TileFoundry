@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 @module(entry="over_asking_host", target=_CUDA, topologies=(Topology("thread", 128),))
@@ -26,6 +26,6 @@ class OverAskingLaunch:
             T.copy(view, reg)
             T.copy(reg, view)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def over_asking_host(a: Tensor[(4, 32), "f32"]):
         launch(over_asking_device, a, grid=(1, 1, 1), block=(128, 1, 1), dynamic_smem=1048576)

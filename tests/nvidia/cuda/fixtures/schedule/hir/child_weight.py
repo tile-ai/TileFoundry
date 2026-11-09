@@ -3,7 +3,7 @@
 Only the parent is a file-level Module; it retains the child in its slot.
 """
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 @module(entry="run")
@@ -17,7 +17,7 @@ class Child:
             return tf.schedule((held, wr, result), op=T.binary(kind=BinaryKind.MUL))
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1), Topology("thread", 32)))
 class ChildWeight:
     scaled = Child
@@ -26,7 +26,7 @@ class ChildWeight:
     def gemm(x: Tensor[(32,), "f32"]) -> Tensor[(32,), "f32", "rmem"]:
         with Mesh(("cta",), layout=(1,), names=("b",)) as _a:
             with Mesh(("thread",), layout=(32,), names=("l",)) as _t:
-                return scaled(x)  # noqa: F821
+                return scaled(x)
 
 
 del Child

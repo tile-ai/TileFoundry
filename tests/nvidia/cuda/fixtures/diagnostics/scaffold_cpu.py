@@ -1,7 +1,7 @@
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
-TARGET = CpuTarget()
+TARGET = cpu.Target()
 
 
 @module(entry="run", target=TARGET)

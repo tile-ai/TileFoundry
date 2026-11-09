@@ -12,12 +12,12 @@ block drops what it does not use, so no function in that program declares it.
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 BT = DimVar("BT", 0, 1 << 10)
 
 
-@module(entry="main", target=CpuTarget())
+@module(entry="main", target=cpu.Target())
 class Staged:
     """One root calling a helper that alone declares the chunk length."""
 
@@ -29,10 +29,10 @@ class Staged:
 
     @func
     def main(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return stage(x)  # noqa: F821
+        return stage(x)
 
 
-@module(entry="stage", target=CpuTarget())
+@module(entry="stage", target=cpu.Target())
 class Helper:
     """The same helper standing alone, so a root can attach it."""
 
@@ -43,7 +43,7 @@ class Helper:
         return x + s
 
 
-@module(entry="main", target=CpuTarget())
+@module(entry="main", target=cpu.Target())
 class Rooted:
     """One root reaching the helper as an attached child."""
 
@@ -51,10 +51,10 @@ class Rooted:
 
     @func
     def main(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return child(x)  # noqa: F821
+        return child(x)
 
 
-@module(entry="main", target=CpuTarget())
+@module(entry="main", target=cpu.Target())
 class DeadScratch:
     """A chunk length named only by a binding the block never uses."""
 

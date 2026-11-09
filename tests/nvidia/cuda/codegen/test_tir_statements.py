@@ -2,73 +2,67 @@
 
 import pytest
 
-import tilefoundry_nvidia.cuda.codegen  # noqa: F401
-from tilefoundry.inspection import as_script
-from tilefoundry.ir.core import Call, Constant, Tuple, Var
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.tir.memory.alloc_tensor import AllocTensor
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import For, LetStmt, MeshScope, Sequential
-from tilefoundry.ir.types import DType, Layout, Mesh, StorageKind, TensorType, Topology, TupleType
-from tilefoundry.visitor_registry.verify import verify_module
-from tilefoundry_nvidia import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
+from tilefoundry import inspection, verifier
+from tilefoundry.ir import core, expr, types
+from tilefoundry.ir.hir import tensor
+from tilefoundry.ir.tir import memory
+from tilefoundry_nvidia import cuda
+from tilefoundry_nvidia.cuda import codegen
 
 
 def test_loop_bounds_emit_variables() -> None:
-    scalar = TensorType.scalar(DType.i64)
-    variable = Var(type=scalar, name="n")
-    loop = For(
-        induction_var=Var(type=scalar, name="i"),
-        start=Constant(type=scalar, value=0),
+    scalar = types.TensorType.from_scalar(expr.DType.i64)
+    variable = expr.Var(type=scalar, name="n")
+    loop = core.For(
+        induction_var=expr.Var(type=scalar, name="i"),
+        start=expr.Constant(type=scalar, value=0),
         stop=variable,
-        step=Constant(type=scalar, value=1),
-        body=Sequential(()),
+        step=expr.Constant(type=scalar, value=1),
+        body=core.Sequential(()),
     )
-    context = CudaCodegenContext()
+    context = codegen.Context()
     context.emit_node(loop)
     assert "i_1 < n_2" in context.source()
 
 
 def test_long_sequence_emits_statements() -> None:
-    type_ = TensorType.scalar(DType.f32, storage=StorageKind.RMEM)
+    type_ = types.TensorType.from_scalar(expr.DType.f32, storage=expr.StorageKind.RMEM)
     statements = tuple(
-        LetStmt(
-            Var(name=f"value_{i}", type=type_), Call(AllocTensor(tensor_type=type_), (), type=type_)
+        core.LetStmt(
+            expr.Var(name=f"value_{i}", type=type_), expr.Call(memory.AllocTensor(tensor_type=type_), (), type=type_)
         )
         for i in range(1000)
     )
-    mesh = Mesh((Topology("thread", 32),), layout=Layout((32,), (1,)))
-    binding = Var(name="thread", type=TensorType.scalar(DType.i64, storage=StorageKind.RMEM))
-    function = PrimFunction(
+    mesh = types.Mesh((types.Topology("thread", 32),), layout=types.Layout((32,), (1,)))
+    binding = expr.Var(name="thread", type=types.TensorType.from_scalar(expr.DType.i64, storage=expr.StorageKind.RMEM))
+    function = core.PrimFunction(
         name="sequence",
         params=(),
-        body=Sequential((MeshScope(mesh, binding, Sequential(statements)),)),
-        target=CudaTarget("nvidia.h200_sxm"),
+        body=core.Sequential((core.MeshScope(mesh, binding, core.Sequential(statements)),)),
+        target=cuda.Target("nvidia.h200_sxm"),
         output_count=0,
     )
-    module = Module(name="LongSequence", functions=(function,))
-    printed = as_script(module)
+    module = core.Module(name="LongSequence", functions=(function,))
+    printed = inspection.as_script(module)
     assert printed.count("T.alloc_tensor(") == 1000
-    verify_module(module)
-    context = CudaCodegenContext(target=module.functions[0].target)
+    verifier.verify_module(module)
+    context = codegen.Context(target=module.functions[0].target)
     context.emit_node(module.functions[0].body)
     assert context.source()
 
 
 @pytest.mark.parametrize("homogeneous,dynamic", [(True, False), (True, True), (False, False)])
 def test_tuple_binding_emits_one_variable(homogeneous, dynamic):
-    first = Constant(1, type=TensorType.scalar(DType.i64))
-    second = Constant(2 if homogeneous else 2.5, type=TensorType.scalar(DType.i64 if homogeneous else DType.f32))
-    values = Tuple((first, second), type=TupleType((first.type, second.type)))
-    held = Var("choices", type=values.type)
-    index = Var("index", type=first.type) if dynamic else Constant(0, type=first.type)
-    selected = Var("selected", type=first.type)
-    context = CudaCodegenContext(target=CudaTarget("nvidia.h200_sxm"))
-    context.emit_node(Sequential((
-        LetStmt(held, values),
-        LetStmt(selected, Call(TupleGetItem(), (held, index), type=selected.type)),
+    first = expr.Constant(1, type=types.TensorType.from_scalar(expr.DType.i64))
+    second = expr.Constant(2 if homogeneous else 2.5, type=types.TensorType.from_scalar(expr.DType.i64 if homogeneous else expr.DType.f32))
+    values = expr.Tuple((first, second), type=types.TupleType((first.type, second.type)))
+    held = expr.Var("choices", type=values.type)
+    index = expr.Var("index", type=first.type) if dynamic else expr.Constant(0, type=first.type)
+    selected = expr.Var("selected", type=first.type)
+    context = codegen.Context(target=cuda.Target("nvidia.h200_sxm"))
+    context.emit_node(core.Sequential((
+        core.LetStmt(held, values),
+        core.LetStmt(selected, expr.Call(tensor.TupleGetItem(), (held, index), type=selected.type)),
     )))
     declaration, selection = context.source().strip().splitlines()
     name = context.name_for(held)

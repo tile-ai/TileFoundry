@@ -8,7 +8,7 @@ instruction that performs it is an offer --- `T.copy_async`, `T.tma` or a plain
 decision of its own, and ReLU stays the first matmul's tile-level epilogue.
 """
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 1024
 N = 2048
@@ -18,7 +18,7 @@ BN = 16
 BK = 32
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1), Topology("thread", 512)))
 class GEMM_RELU_GEMM_SMEM_STAGED:
     @func

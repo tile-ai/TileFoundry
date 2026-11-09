@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Finalize policy-generated regions in an authored plan.
 
-Input is ``docs/plans/<name>.md``. hygiene: required CLI path template.
+Input is an authored plan file under the plans directory.
 Related Files select milestone acceptance criteria and final-tree gates.
 Handwritten content is preserved; a plan that breaks the template's structure
 fails validation instead of being rewritten.
@@ -26,7 +26,7 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from get_policy import filter_policies, load_policies  # noqa: E402
+from get_policy import filter_policies, load_policies
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = REPO_ROOT / "docs" / "policies" / "project-policy.json"

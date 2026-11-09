@@ -8,10 +8,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def pack(
     w_qkv: ConstTensor[(10240, 5120), "bf16"], w_z: ConstTensor[(6144, 5120), "bf16"], w_b: ConstTensor[(48, 5120), "bf16"], w_a: ConstTensor[(48, 5120), "bf16"], out: Tensor[(16640, 5120), "bf16"]
 ):

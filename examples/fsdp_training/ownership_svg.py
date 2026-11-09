@@ -6,7 +6,7 @@ from math import prod
 from textwrap import wrap
 from xml.etree.ElementTree import Element, SubElement, indent, tostring
 
-from tilefoundry.ir.types.stride import crd2idx
+from tilefoundry.ir.types import crd2idx
 
 COLORS = ("#4c92cf", "#e4ad50", "#62ad86", "#ae88cb")
 

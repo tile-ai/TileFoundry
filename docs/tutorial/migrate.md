@@ -87,7 +87,7 @@ casts first and scales second. The version below scales first.
 """One published step, authored as HIR: RMS norm, then blockwise FP8 quantization."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 ROWS = 2
 H = 7168  # this example's row width, not a field of the model above
@@ -99,7 +99,7 @@ EPS = 1e-6  # config.json: rms_norm_eps
 
 @module(
     entry="rms_norm_quant",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1),),
 )
 class RmsNormQuant:
@@ -169,7 +169,7 @@ failed.
 """One published step, authored as HIR: RMS norm, then blockwise FP8 quantization."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 ROWS = 2
 H = 7168  # this example's row width, not a field of the model above
@@ -181,7 +181,7 @@ EPS = 1e-6  # config.json: rms_norm_eps
 
 @module(
     entry="rms_norm_quant",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1),),
 )
 class RmsNormQuant:

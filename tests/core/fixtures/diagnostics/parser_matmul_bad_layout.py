@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="invalid_layout", target=CpuTarget())
+@module(entry="invalid_layout", target=cpu.Target())
 class MatmulBadLayout:
     @func
     def invalid_layout(

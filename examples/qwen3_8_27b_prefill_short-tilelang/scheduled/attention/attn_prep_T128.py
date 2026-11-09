@@ -20,7 +20,7 @@ Result: scheduled lowering accepts one tensor result, so q, k and v are stated a
 kernel's warp-slot order; the kernel writes the same rows into three buffers.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 T_ = 128
 D = 256
@@ -30,7 +30,7 @@ EPS = 1e-6
 QW = 24 * 512
 
 
-@module(entry="attn_prep", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", T_), Topology("thread", 1024)))
+@module(entry="attn_prep", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", T_), Topology("thread", 1024)))
 class SCHED_ATTN_PREP_T128:
     @func
     def attn_prep(qkv: Tensor[(T_, 14336), "bf16"], gamma_q: Tensor[(D,), "bf16"], gamma_k: Tensor[(D,), "bf16"],

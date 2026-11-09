@@ -42,7 +42,7 @@ pair and each row of the pair to one group of 128 threads.
 """The step from the migrate page, placed two ways: with a boundary, and without."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 PAIR = 2  # rows one CTA normalizes
 CTAS = 132  # one CTA per SM of the H200, so the grid is one wave
@@ -53,7 +53,7 @@ BLOCKS = H // BLOCK
 FP8_MAX = 448.0  # the largest finite fp8e4m3, because fmt says e4m3
 EPS = 1e-6  # config.json: rms_norm_eps
 
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 _CTA = Topology("cta", CTAS)
 _THREAD = Topology("thread", PAIR * 4 * 32)
 
@@ -179,7 +179,7 @@ import triton
 import triton.language as tl
 from rms_norm_quant import BLOCK, BLOCKS, EPS, FP8_MAX, H, ROWS, Fused
 
-from tilefoundry.runtime import runtime_func, runtime_module
+from tilefoundry import runtime
 
 _TILE = triton.next_power_of_2(BLOCKS)
 
@@ -208,9 +208,9 @@ def _rms_norm_quant(
     tl.store(s_ptr + row * BLOCKS + blocks, scale, mask=live)
 
 
-@runtime_module(Fused)
+@runtime.module(Fused)
 class Fast:
-    @runtime_func
+    @runtime.func
     def rms_norm_quant(self, a, gamma):
         quant = torch.empty((ROWS, H), dtype=torch.float8_e4m3fn, device=a.device)
         scale = torch.empty((ROWS, BLOCKS), dtype=torch.float32, device=a.device)

@@ -1,14 +1,14 @@
 from dataclasses import dataclass
 
-from tilefoundry.target import Target, register_target
+from tilefoundry import target
 
 
 @dataclass(frozen=True)
-class _VendorBase(Target):
+class _VendorBase(target.Target):
     topology_levels = ('core',)
 
 
-@register_target
+@target.register
 @dataclass(frozen=True)
 class VendorOne(_VendorBase):
     name = 'tests.cli.vendor_one'

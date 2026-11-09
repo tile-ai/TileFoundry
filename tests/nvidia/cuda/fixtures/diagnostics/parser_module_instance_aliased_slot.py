@@ -1,9 +1,9 @@
 from tests.nvidia.cuda.fixtures.shapes.scaled_modules import ScaledChild
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="main", target=cuda.Target("nvidia.h200_sxm"))
 class Invalid:
     layers = ModuleList(ScaledChild, 3)
     other = layers

@@ -10,10 +10,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def gdn_scan(
     q: Tensor[(256, 16, 128), "bf16"], k: Tensor[(256, 16, 128), "bf16"], ut: Tensor[(48, 4, 128, 64), "f32"], wb: Tensor[(48, 4, 2, 64, 128), "bf16"], pb: Tensor[(48, 4, 64, 64), "bf16"], fc: Tensor[(48, 4, 3, 64), "f32"], scratch: Tensor[(4096,), "f32"], scratch_1: Tensor[(8192,), "f32"], out: Tensor[(384, 48, 128), "f32"]
 ):

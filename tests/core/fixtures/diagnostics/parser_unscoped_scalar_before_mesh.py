@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="scalar_before_mesh", target=CpuTarget(), topologies=(Topology("cta", 1),))
+@module(entry="scalar_before_mesh", target=cpu.Target(), topologies=(Topology("cta", 1),))
 class ScalarBeforeMesh:
     @func
     def scalar_before_mesh(x: Tensor[(4, 4), "f32"]):

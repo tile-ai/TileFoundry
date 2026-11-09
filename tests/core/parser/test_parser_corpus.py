@@ -9,9 +9,8 @@ import torch
 
 from tests.core._corpus import case, cases
 from tests.core.parser._parser_case import ParserCase, check_parser_case, unique_parser_cases
-from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.core import Constant
-from tilefoundry.ir.types import DType
+from tilefoundry.interfaces import evaluator
+from tilefoundry.ir import expr
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 TILE_WINDOWS = FIXTURES / "shapes/tile_window_syntax.py"
@@ -42,7 +41,7 @@ class Lp(ParserCase):
 
     def guard(self, state, problems):
         ir, rebuilt = state.ir, state.rebuilt
-        expected = [DType.fp8e4m3, DType.f8e8m0, DType.f4e2m1]
+        expected = [expr.DType.fp8e4m3, expr.DType.f8e8m0, expr.DType.f4e2m1]
         assert [p.type.dtype for p in ir.entry_function().params] == expected
         assert [p.type.dtype for p in rebuilt.entry_function().params] == expected
 
@@ -73,7 +72,7 @@ class NanValueTuple(ParserCase):
 
     def guard(self, state, problems):
         body = state.rebuilt.entry_function().body
-        assert isinstance(body.elements[1], Constant)
+        assert isinstance(body.elements[1], expr.Constant)
         assert math.isnan(body.elements[1].value)
 
 
@@ -109,7 +108,7 @@ class SequentialScanCopy(ParserCase):
 
     def guard(self, state, problems):
         x = torch.arange(16, dtype=torch.float32).reshape(4, 4)
-        torch.testing.assert_close(evaluate(state.rebuilt.entry_function(), x), (x + 1) * 2)
+        torch.testing.assert_close(evaluator.evaluate(state.rebuilt.entry_function(), x), (x + 1) * 2)
 
 
 EXPECTED = {

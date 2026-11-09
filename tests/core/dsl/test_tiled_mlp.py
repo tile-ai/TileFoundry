@@ -11,9 +11,8 @@ from pathlib import Path
 import torch
 
 from tests.core.models.decode_oracle import agrees_to_one_rounding
-from tilefoundry.cli.source import load_namespace
-from tilefoundry.evaluator import evaluate
-from tilefoundry.runtime.resource import DictResource
+from tilefoundry import cli, runtime
+from tilefoundry.interfaces import evaluator
 
 TILED_MLP = Path(__file__).parents[1] / "fixtures" / "dsl" / "tiled_mlp.py"
 _TORCH_DT = torch.bfloat16
@@ -22,7 +21,7 @@ _TORCH_DT = torch.bfloat16
 def _drawn(device="cpu", seed=0):
     """One input and one set of weights, shared by both spellings."""
     torch.manual_seed(seed)
-    program = load_namespace(str(TILED_MLP))[0]
+    program = cli.load_namespace(str(TILED_MLP))[0]
     S, HIDDEN, INTERMEDIATE = program["S"], program["HIDDEN"], program["INTERMEDIATE"]
 
     def draw(*shape):
@@ -30,7 +29,7 @@ def _drawn(device="cpu", seed=0):
 
     x = draw(1, S, HIDDEN)
     loaded = program["TiledMLP"].load(
-        DictResource(
+        runtime.DictResource(
             {
                 "w_gate": draw(1, HIDDEN, INTERMEDIATE),
                 "w_up": draw(1, HIDDEN, INTERMEDIATE),
@@ -46,6 +45,6 @@ def test_tiled_mlp_matches_naive() -> None:
     loaded, x = _drawn()
 
     agrees_to_one_rounding(
-        evaluate(loaded.tiled_mlp, x),
-        evaluate(loaded.naive_mlp, x),
+        evaluator.evaluate(loaded.tiled_mlp, x),
+        evaluator.evaluate(loaded.naive_mlp, x),
     )

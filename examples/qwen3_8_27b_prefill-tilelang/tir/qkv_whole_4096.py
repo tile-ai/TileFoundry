@@ -12,10 +12,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def whole(
     x: Tensor[(1, 4096, 5120), "bf16"], w: Tensor[(14336, 5120), "bf16"], gamma_q: Tensor[(256,), "bf16"], gamma_k: Tensor[(256,), "bf16"], cos: Tensor[(4096, 64), "bf16"], sin: Tensor[(4096, 64), "bf16"], out: Tensor[(4096, 14336), "bf16"]
 ):

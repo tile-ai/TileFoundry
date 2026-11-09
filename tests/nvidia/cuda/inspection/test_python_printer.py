@@ -12,25 +12,21 @@ from pathlib import Path
 import pytest
 
 from tests.core._corpus import Case, case, check_case, reload, special
-from tilefoundry.cli.source import load_authored_ir
+from tilefoundry import cli, inspection, target, utils
 from tilefoundry.dsl import *
-from tilefoundry.inspection import PythonPrintOptions, as_script
-from tilefoundry.ir.core.module import Module
-from tilefoundry.target import Target, register_target
-from tilefoundry.utils.python_source import PythonExpr
-from tilefoundry_nvidia.cuda.target import CudaArchitecture
-from tilefoundry_nvidia.cuda.target import CudaTarget as BuiltinCudaTarget
+from tilefoundry.ir import core
+from tilefoundry_nvidia.cuda import target as cuda_target
 
 PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
 RMSNORM = f"{PLACED / 'rmsnorm.py'}:RmsnormModule"
 
 
-class CudaTarget(BuiltinCudaTarget):
+class ProviderTarget(cuda_target.Target):
     name = "tests.printer.cuda"
 
 
 @dataclass(frozen=True)
-class ExtendedCudaArchitecture(CudaArchitecture):
+class ExtendedCudaArchitecture(cuda_target.Architecture):
     thirteenth_field: int
 
 
@@ -44,8 +40,8 @@ class TypesAreOptInComments(PythonPrinterCase):
 
     def guard(self, state, problems):
         fn = state.entry_function()
-        canonical = as_script(fn)
-        annotated = as_script(fn, options=PythonPrintOptions(show_types=True))
+        canonical = inspection.as_script(fn)
+        annotated = inspection.as_script(fn, options=inspection.PythonPrintOptions(show_types=True))
 
         assert canonical != annotated
         assert "# Tensor[" in annotated
@@ -65,26 +61,26 @@ def test_python_printer_case(case: PythonPrinterCase) -> None:
     check_case(case)
 
 
-def _rebuild(rendered: PythonExpr):
+def _rebuild(rendered: utils.PythonExpr):
     source = "\n".join([*rendered.imports, f"result = {rendered.text}"])
     namespace: dict = {}
-    exec(compile(source, "<emitted>", "exec"), namespace)  # noqa: S102
+    exec(compile(source, "<emitted>", "exec"), namespace)
     return namespace["result"]
 
 
 def test_installed_target_prints_constructor():
-    installed = BuiltinCudaTarget("nvidia.h200_sxm")
+    installed = cuda_target.Target("nvidia.h200_sxm")
     rendered = installed.to_python()
 
-    assert rendered == PythonExpr(
-        imports=("from tilefoundry_nvidia import CudaTarget",),
-        text='CudaTarget("nvidia.h200_sxm")',
+    assert rendered == utils.PythonExpr(
+        imports=("from tilefoundry_nvidia import cuda",),
+        text='cuda.Target("nvidia.h200_sxm")',
     )
     assert _rebuild(rendered) == installed
 
 
 def test_hardware_values_keep_added_fields():
-    installed = BuiltinCudaTarget("nvidia.h200_sxm")
+    installed = cuda_target.Target("nvidia.h200_sxm")
     architecture = ExtendedCudaArchitecture(
         **{
             field.name: getattr(installed.architecture, field.name)
@@ -92,47 +88,47 @@ def test_hardware_values_keep_added_fields():
         },
         thirteenth_field=13,
     )
-    target = BuiltinCudaTarget(
+    tgt = cuda_target.Target(
         architecture=architecture,
         device=replace(installed.device, name="h200_custom", sm_count=64),
     )
-    rendered = target.to_python()
+    rendered = tgt.to_python()
 
     assert "thirteenth_field=13" in rendered.text
     assert rendered.imports == (
         "from tests.nvidia.cuda.inspection.test_python_printer import ExtendedCudaArchitecture",
-        "from tilefoundry.ir.types import DType",
-        "from tilefoundry_nvidia import CudaDevice, CudaTarget",
+        "from tilefoundry.ir.expr import DType",
+        "from tilefoundry_nvidia.cuda import Device, Target",
     )
     rebuilt = _rebuild(rendered)
-    assert rebuilt == target
+    assert rebuilt == tgt
     assert rebuilt.architecture.thirteenth_field == 13
 
 
 def test_external_cuda_target_keeps_provider():
-    function = load_authored_ir(RMSNORM).entry_function()
-    register_target(CudaTarget)
-    target = CudaTarget("nvidia.h200_sxm")
-    module = Module("external", (function,), function.name, target=target)
-    canonical = as_script(module)
+    function = cli.load_authored_ir(RMSNORM).entry_function()
+    target.register(ProviderTarget)
+    tgt = ProviderTarget("nvidia.h200_sxm")
+    module = core.Module("external", (function,), function.name, target=tgt)
+    canonical = inspection.as_script(module)
 
-    assert "from tests.nvidia.cuda.inspection.test_python_printer import CudaTarget" in canonical
-    assert "from tilefoundry_nvidia.cuda.target import CudaTarget" not in canonical
+    assert "from tests.nvidia.cuda.inspection.test_python_printer import ProviderTarget" in canonical
+    assert "from tilefoundry_nvidia.cuda.target import Target" not in canonical
     rebuilt = reload(canonical, "external")
-    assert type(rebuilt.target) is CudaTarget
-    assert rebuilt.target == target
+    assert type(rebuilt.target) is ProviderTarget
+    assert rebuilt.target == tgt
 
 
 def test_printer_emits_provider_expression():
-    class UninterpretableTarget(Target):
+    class UninterpretableTarget(target.Target):
         name = "tests.printer.uninterpretable"
 
-        def to_python(self) -> PythonExpr:
-            return PythonExpr(("from nobody import unknown",), "unknown !!!")
+        def to_python(self) -> utils.PythonExpr:
+            return utils.PythonExpr(("from nobody import unknown",), "unknown !!!")
 
-    function = load_authored_ir(RMSNORM).entry_function()
-    canonical = as_script(
-        Module(
+    function = cli.load_authored_ir(RMSNORM).entry_function()
+    canonical = inspection.as_script(
+        core.Module(
             "uninterpretable",
             (function,),
             function.name,

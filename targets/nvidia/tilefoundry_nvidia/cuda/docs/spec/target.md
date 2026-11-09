@@ -1,14 +1,15 @@
 # TileFoundry CUDA Spec — Target
 
-## 4. `CudaTarget`
+## 4. `cuda.Target`
 
 ```python
-class CudaTarget(Target):
+class Target(target.Target):
     """CUDA target composed from one architecture and one device."""
 
     name: ClassVar[str] = "cuda"
     architecture: Architecture
     device: Device
+    device_count: int | None
     architecture_id: str | None
     device_id: str | None
     architecture_digest: str | None
@@ -21,8 +22,13 @@ class CudaTarget(Target):
         architecture: Architecture | str | Path | None = None,
         *,
         arch: str | None = None,
+        device_count: int | None = None,
     ) -> None: ...
 
+    @classmethod
+    def from_installed(cls) -> tuple[Target, ...]: ...
+    @property
+    def identity(self) -> str: ...
     def validate_program_topology(self, topology: Topology) -> None: ...
     def topology_limit(self, name: str) -> int: ...
     def get_analyzer(self, selector: str) -> Analyzer: ...
@@ -50,19 +56,22 @@ class CudaTarget(Target):
     supplied directly carries no document, so it has no ID or digest and is
     exempt from that check: it is a distinct hardware value rather than a
     revision of an installed one.
-  - `CudaTarget` MUST compose any installed architecture and device pair that
+  - `cuda.Target` MUST compose any installed architecture and device pair that
     declares compatibility. A further CUDA product is its two documents
     ([target §10.2](../../../../../../docs/spec/target.md#102-registry-and-resolution)) and nothing else: no Target subclass,
     and no architecture or device type of its own. The services and Facts are
     selected by the value already, and the numbers are in the documents, so
     either addition would carry nothing.
-  - `CudaTarget.available()` MUST contain one value per device document whose
+  - `cuda.Target.from_installed()` MUST contain one value per device document whose
     sole compatible architecture document is available. Its `identity` MUST be
     that device document's ID.
   - CUDA MUST select its standard Analyzer and Facts through the corresponding
     getters. These selections MUST NOT use
     `Target.name`, an exact-concrete-type table, or a second extension
     registration.
+  - `device_count`, when given, MUST be a positive `int`; `None` admits any
+    extent at the `gpu` level. `topology_limit("gpu")` is `device_count`, or 1
+    when it is `None`.
   - `get_analyzer("sync")` returns the `sync` family
     ([analysis §1](./analysis.md#1-sync)), which requires `memory`; every other
     selector is the base Target's.
@@ -157,10 +166,10 @@ single source of any resource mapping it states. A resource declaration does
 not imply a throughput fact, and MUST NOT be priced as a service unless a
 consumer defines a quantity with matching units.
 
-### 4.1 `CudaArchitecture`
+### 4.1 `cuda.Architecture`
 
 ```python
-class CudaArchitecture(Architecture):
+class Architecture(target.Architecture):
     """What one CUDA architecture states about itself."""
 
     name: str
@@ -278,10 +287,10 @@ The installed `nvidia.sm89` architecture document.
   - It MUST record no tensor-memory capacity: `mma.sync` accumulates in the
     register file, so there is no separate store to size.
 
-### 4.2 `CudaDevice`
+### 4.2 `cuda.Device`
 
 ```python
-class CudaDevice(Device):
+class Device(target.Device):
     """One CUDA device: how many SMs, and the memory and compute rates."""
 
     name: str
@@ -291,9 +300,12 @@ class CudaDevice(Device):
     gmem_owner: str
     hbm_bandwidth_bytes_per_second: int
     l2_capacity_bytes: int | None
-    _dense_flops: tuple[tuple[DType, int], ...]
-    _service_ops: tuple[tuple[str, int], ...]
+    dense_flops: tuple[tuple[DType, int], ...]
+    service_ops: tuple[tuple[str, int], ...]
     gmem_latency_ns: int | None = None
+
+    @property
+    def dense_flops_per_second(self) -> dict[DType, int]: ...
 
     def peak_for(self, dtype: DType) -> int: ...
 
@@ -326,11 +338,12 @@ class CudaDevice(Device):
     error for any other DType. A product with no such mode records that leaf
     unavailable, so asking for its rate fails instead of reading as a rate
     nobody published.
-  - `_dense_flops` MUST hold a dense integer FLOP/s entry per DType. A published
+  - `dense_flops` MUST hold a dense integer FLOP/s entry per DType;
+    `dense_flops_per_second` returns it as a dict. A published
     sparse peak MUST be halved and the division stated as the document's
     evidence, so no plan is priced against a rate structured sparsity is
     required to reach.
-  - `_service_ops` MUST hold one integer results/s entry per service kind the
+  - `service_ops` MUST hold one integer results/s entry per service kind the
     installed document records, stated per CTA rather than per device. A kind
     the document does not record MUST be absent rather than zero, so a consumer
     that needs it refuses instead of pricing the work at nothing.

@@ -32,7 +32,7 @@ LIBCLANG = ("/usr/lib/x86_64-linux-gnu/libclang-18.so.1", "/usr/lib/llvm-18/lib/
 """Where a system install puts it; the ``libclang`` wheel is asked first."""
 
 REGIONS: dict[str, str] = {
-    "py-module-RuntimeModule": "runtime/module.py::RuntimeModule",
+    "py-module-Module": "runtime/module.py::Module",
     "py-module-CompiledModule": "runtime/module.py::CompiledModule",
     "py-function": "runtime/function.py",
     "py-decorator": "runtime/decorator.py",
@@ -40,7 +40,8 @@ REGIONS: dict[str, str] = {
     "py-resource": "runtime/resource.py",
     "py-measure": "runtime/measure.py",
     "py-tensor": "core/tensor.py",
-    "py-compile": "compile.py",
+    "py-compile": "compiler/compilation.py",
+    "py-compile-options": "compiler/options.py",
     "cpu-runtime": "cpu/runtime.h",
     "cuda-runtime": "cuda/runtime.cuh",
     "layout-cute-ext": "cuda/layout/cute_ext.cuh",

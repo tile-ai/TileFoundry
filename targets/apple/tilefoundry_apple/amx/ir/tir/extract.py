@@ -1,19 +1,8 @@
-from tilefoundry.ir.core import OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.hir.tensor.cast import Cast
-from tilefoundry.ir.pattern import (
-    LayoutPattern,
-    OrPattern,
-    RangePattern,
-    SwitchPattern,
-    TensorPattern,
-    WildcardPattern,
-)
-from tilefoundry.ir.pattern import predicates as P
-from tilefoundry.ir.pattern.predicates import Bits, In, Table, variable
-from tilefoundry.ir.types import DType, StorageKind
-from tilefoundry.visitor_registry.candidates import HirMatch
+"""AMX EXTRX and EXTRY Ops."""
+
+from tilefoundry.interfaces import schedule
+from tilefoundry.ir import expr, pattern
+from tilefoundry.ir.hir import sharding, tensor
 
 from .common import (
     I8,
@@ -24,69 +13,69 @@ from .common import (
     Bank,
     ExtractMode,
     Repeat,
-    bind,
     instruction_versions,
 )
+from .semantics import register_semantics
 
-R = MemoryEffect.READ
-W = MemoryEffect.WRITE
+R = expr.MemoryEffect.READ
+W = expr.MemoryEffect.WRITE
 
 
-_EXTRACT_SRC_DTYPE = WildcardPattern(
+EXTRACT_SRC_DTYPE = pattern.Wildcard(
     "src_dtype",
     predicates=(
-        SwitchPattern(
+        pattern.Switch(
             "mode",
             {
-                ExtractMode.COPY: OrPattern(*TYPES),
-                ExtractMode.LEGACY: OrPattern(
-                    DType.i16, DType.u16, DType.f16, DType.i32, DType.u32, DType.f32, DType.f64
+                ExtractMode.COPY: pattern.Or(*TYPES),
+                ExtractMode.LEGACY: pattern.Or(
+                    expr.DType.i16, expr.DType.u16, expr.DType.f16, expr.DType.i32, expr.DType.u32, expr.DType.f32, expr.DType.f64
                 ),
-                ExtractMode.INTEGER: OrPattern(*I8, *I16, *I32),
-                ExtractMode.FLOAT: OrPattern(DType.f16, DType.f32, DType.f64),
+                ExtractMode.INTEGER: pattern.Or(*I8, *I16, *I32),
+                ExtractMode.FLOAT: pattern.Or(expr.DType.f16, expr.DType.f32, expr.DType.f64),
             },
         ),
     ),
 )
 
-_EXTRACT_DST_DTYPE = WildcardPattern(
+EXTRACT_DST_DTYPE = pattern.Wildcard(
     "dst_dtype",
     predicates=(
-        SwitchPattern(
+        pattern.Switch(
             "mode",
             {
-                ExtractMode.COPY: WildcardPattern("src_dtype"),
-                ExtractMode.LEGACY: WildcardPattern("src_dtype"),
-                ExtractMode.INTEGER: WildcardPattern(
+                ExtractMode.COPY: pattern.Wildcard("src_dtype"),
+                ExtractMode.LEGACY: pattern.Wildcard("src_dtype"),
+                ExtractMode.INTEGER: pattern.Wildcard(
                     predicates=(
-                        In(variable("dst_dtype"), (*I8, *I16, *I32)),
-                        Bits("dst_dtype") <= Bits("src_dtype"),
+                        pattern.In(pattern.variable("dst_dtype"), (*I8, *I16, *I32)),
+                        pattern.Bits("dst_dtype") <= pattern.Bits("src_dtype"),
                     )
                 ),
-                ExtractMode.FLOAT: SwitchPattern(
+                ExtractMode.FLOAT: pattern.Switch(
                     "src_dtype",
                     {
-                        DType.f16: DType.f16,
-                        DType.f32: OrPattern(DType.f32, DType.f16, DType.bf16),
-                        DType.f64: DType.f64,
+                        expr.DType.f16: expr.DType.f16,
+                        expr.DType.f32: pattern.Or(expr.DType.f32, expr.DType.f16, expr.DType.bf16),
+                        expr.DType.f64: expr.DType.f64,
                     },
                 ),
             },
         ),
-        (variable("mode") != ExtractMode.FLOAT)
-        | (variable("amx_generation") >= 2)
-        | (variable("dst_dtype") == variable("src_dtype")),
+        (pattern.variable("mode") != ExtractMode.FLOAT)
+        | (pattern.variable("amx_generation") >= 2)
+        | (pattern.variable("dst_dtype") == pattern.variable("src_dtype")),
     ),
 )
 
 
 class Extrx(AmxOp):
     hir_matches = (
-        HirMatch(
-            Reshard, attributes={"mode": ExtractMode.COPY}, operands={"src": "x", "dst": "result"}
+        schedule.HirMatch(
+            sharding.Reshard, attributes={"mode": ExtractMode.COPY}, operands={"src": "x", "dst": "result"}
         ),
-        HirMatch(
-            Cast,
+        schedule.HirMatch(
+            tensor.Cast,
             attributes={
                 "mode": ExtractMode.INTEGER,
                 "shift": 0,
@@ -95,192 +84,192 @@ class Extrx(AmxOp):
             },
             operands={"src": "x", "dst": "result"},
         ),
-        HirMatch(
-            Cast, attributes={"mode": ExtractMode.FLOAT}, operands={"src": "x", "dst": "result"}
+        schedule.HirMatch(
+            tensor.Cast, attributes={"mode": ExtractMode.FLOAT}, operands={"src": "x", "dst": "result"}
         ),
     )
     mnemonic = "EXTRX"
-    capability = OpCapability("amx_extrx")
+    capability = expr.OpCapability("amx_extrx")
     resource = "amx_engine"
     roles = ("src", "dst")
     writes = ("dst",)
     register_roles = {"src": "extract_source", "dst": "destination"}
-    mode = ParamDef(
+    mode = expr.ParamDef(
         kind="attribute",
         annotation=ExtractMode,
-        pattern=WildcardPattern("mode"),
+        pattern=pattern.Wildcard("mode"),
         default=ExtractMode.LEGACY,
     )
-    src_dtype = ParamDef(
-        kind="attribute", annotation=DType, pattern=_EXTRACT_SRC_DTYPE, default=DType.f32
+    src_dtype = expr.ParamDef(
+        kind="attribute", annotation=expr.DType, pattern=EXTRACT_SRC_DTYPE, default=expr.DType.f32
     )
-    dst_dtype = ParamDef(
-        kind="attribute", annotation=DType, pattern=_EXTRACT_DST_DTYPE, default=DType.f32
+    dst_dtype = expr.ParamDef(
+        kind="attribute", annotation=expr.DType, pattern=EXTRACT_DST_DTYPE, default=expr.DType.f32
     )
-    destination = ParamDef(
+    destination = expr.ParamDef(
         kind="attribute",
         annotation=Bank,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "destination",
             predicates=(
-                OrPattern(Bank.X, Bank.Y),
-                In(variable("mode"), (ExtractMode.INTEGER, ExtractMode.FLOAT))
-                | (variable("destination") == Bank.X),
+                pattern.Or(Bank.X, Bank.Y),
+                pattern.In(pattern.variable("mode"), (ExtractMode.INTEGER, ExtractMode.FLOAT))
+                | (pattern.variable("destination") == Bank.X),
             ),
         ),
         default=Bank.X,
     )
-    z_selector = ParamDef(
+    z_selector = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "z_selector",
             predicates=(
-                RangePattern(lo=0, hi=63),
-                (variable("mode") != ExtractMode.COPY) | (variable("z_selector") <= 7),
+                pattern.Range(lo=0, hi=63),
+                (pattern.variable("mode") != ExtractMode.COPY) | (pattern.variable("z_selector") <= 7),
             ),
         ),
         default=0,
     )
-    destination_register = ParamDef(
+    destination_register = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "destination_register",
             predicates=(
-                RangePattern(lo=0, hi=7),
-                (variable("mode") == ExtractMode.COPY) | (variable("destination_register") == 0),
+                pattern.Range(lo=0, hi=7),
+                (pattern.variable("mode") == ExtractMode.COPY) | (pattern.variable("destination_register") == 0),
             ),
         ),
         default=0,
     )
-    destination_offset = ParamDef(
+    destination_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "destination_offset",
             predicates=(
-                RangePattern(lo=0, hi=511),
-                (variable("mode") != ExtractMode.COPY) | (variable("destination_offset") == 0),
+                pattern.Range(lo=0, hi=511),
+                (pattern.variable("mode") != ExtractMode.COPY) | (pattern.variable("destination_offset") == 0),
             ),
         ),
         default=0,
     )
-    repeat = ParamDef(
+    repeat = expr.ParamDef(
         kind="attribute",
         annotation=Repeat,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "repeat",
             predicates=(
-                (variable("repeat") == Repeat.ONE)
+                (pattern.variable("repeat") == Repeat.ONE)
                 | (
-                    (variable("amx_generation") >= 2)
-                    & In(variable("mode"), (ExtractMode.INTEGER, ExtractMode.FLOAT))
+                    (pattern.variable("amx_generation") >= 2)
+                    & pattern.In(pattern.variable("mode"), (ExtractMode.INTEGER, ExtractMode.FLOAT))
                 ),
             ),
         ),
         default=Repeat.ONE,
     )
-    alternating = ParamDef(
+    alternating = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "alternating",
             predicates=(
-                (P.In(variable("alternating"), (False,)))
+                (pattern.In(pattern.variable("alternating"), (False,)))
                 | (
-                    In(variable("mode"), (ExtractMode.INTEGER, ExtractMode.FLOAT))
-                    & (Bits("src_dtype") == 32)
+                    pattern.In(pattern.variable("mode"), (ExtractMode.INTEGER, ExtractMode.FLOAT))
+                    & (pattern.Bits("src_dtype") == 32)
                 ),
             ),
         ),
         default=False,
     )
-    low_byte_only = ParamDef(
+    low_byte_only = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "low_byte_only",
             predicates=(
-                (P.In(variable("low_byte_only"), (False,)))
-                | ((variable("mode") == ExtractMode.LEGACY) & (Bits("src_dtype") == 16)),
+                (pattern.In(pattern.variable("low_byte_only"), (False,)))
+                | ((pattern.variable("mode") == ExtractMode.LEGACY) & (pattern.Bits("src_dtype") == 16)),
             ),
         ),
         default=False,
     )
-    shift = ParamDef(
+    shift = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "shift",
             predicates=(
-                RangePattern(lo=0, hi=31),
-                (variable("mode") == ExtractMode.INTEGER) | (variable("shift") == 0),
+                pattern.Range(lo=0, hi=31),
+                (pattern.variable("mode") == ExtractMode.INTEGER) | (pattern.variable("shift") == 0),
             ),
         ),
         default=0,
     )
-    rounding = ParamDef(
+    rounding = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "rounding",
             predicates=(
-                (P.In(variable("rounding"), (False,))) | (variable("mode") == ExtractMode.INTEGER),
+                (pattern.In(pattern.variable("rounding"), (False,))) | (pattern.variable("mode") == ExtractMode.INTEGER),
             ),
         ),
         default=False,
     )
-    saturate = ParamDef(
+    saturate = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "saturate",
             predicates=(
-                (P.In(variable("saturate"), (False,))) | (variable("mode") == ExtractMode.INTEGER),
+                (pattern.In(pattern.variable("saturate"), (False,))) | (pattern.variable("mode") == ExtractMode.INTEGER),
             ),
         ),
         default=False,
     )
-    mask = ParamDef(
+    mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "mask",
             predicates=(
-                SwitchPattern(
+                pattern.Switch(
                     "mode",
                     {
                         ExtractMode.COPY: 0,
-                        ExtractMode.LEGACY: RangePattern(lo=0, hi=127),
-                        ExtractMode.INTEGER: RangePattern(lo=0, hi=511),
-                        ExtractMode.FLOAT: RangePattern(lo=0, hi=511),
+                        ExtractMode.LEGACY: pattern.Range(lo=0, hi=127),
+                        ExtractMode.INTEGER: pattern.Range(lo=0, hi=511),
+                        ExtractMode.FLOAT: pattern.Range(lo=0, hi=511),
                     },
                 ),
-                variable("src_lanes") == 64 // (Bits("src_dtype") // 8),
-                variable("dst_lanes") == 64 // (Bits("dst_dtype") // 8),
-                variable("rows") == Table((0, 1, 2, 0, 4))[variable("repeat")],
-                variable("extract_ratio") == Bits("src_dtype") // Bits("dst_dtype"),
-                variable("extract_inner") == 512 // Bits("src_dtype"),
-                variable("source_row")
-                == (64 // Table((0, 1, 2, 0, 4))[variable("repeat")])
+                pattern.variable("src_lanes") == 64 // (pattern.Bits("src_dtype") // 8),
+                pattern.variable("dst_lanes") == 64 // (pattern.Bits("dst_dtype") // 8),
+                pattern.variable("rows") == pattern.Table((0, 1, 2, 0, 4))[pattern.variable("repeat")],
+                pattern.variable("extract_ratio") == pattern.Bits("src_dtype") // pattern.Bits("dst_dtype"),
+                pattern.variable("extract_inner") == 512 // pattern.Bits("src_dtype"),
+                pattern.variable("source_row")
+                == (64 // pattern.Table((0, 1, 2, 0, 4))[pattern.variable("repeat")])
                 * 64
-                // (Bits("src_dtype") // 8),
-                SwitchPattern(
+                // (pattern.Bits("src_dtype") // 8),
+                pattern.Switch(
                     "alternating",
                     {
-                        False: WildcardPattern(
-                            predicates=(variable("extract_step") == 64 // (Bits("src_dtype") // 8),)
+                        False: pattern.Wildcard(
+                            predicates=(pattern.variable("extract_step") == 64 // (pattern.Bits("src_dtype") // 8),)
                         ),
-                        True: SwitchPattern(
+                        True: pattern.Switch(
                             "dst_dtype",
                             {
-                                d: WildcardPattern(
+                                d: pattern.Wildcard(
                                     predicates=(
-                                        variable("extract_step")
+                                        pattern.variable("extract_step")
                                         == (2 if d.bit_width == 16 else 1)
                                         * 64
-                                        // (Bits("src_dtype") // 8),
+                                        // (pattern.Bits("src_dtype") // 8),
                                     )
                                 )
                                 for d in TYPES
@@ -292,51 +281,51 @@ class Extrx(AmxOp):
         ),
         default=0,
     )
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=SwitchPattern(
+        pattern=pattern.Switch(
             "mode",
             {
-                ExtractMode.COPY: TensorPattern(
-                    shape=(1, WildcardPattern("src_lanes")),
-                    dtype=WildcardPattern("src_dtype"),
-                    storage=StorageKind.RMEM,
-                    layout=LayoutPattern((1, WildcardPattern("src_lanes")), (0, 1)),
+                ExtractMode.COPY: pattern.Tensor(
+                    shape=(1, pattern.Wildcard("src_lanes")),
+                    dtype=pattern.Wildcard("src_dtype"),
+                    storage=expr.StorageKind.RMEM,
+                    layout=pattern.Layout((1, pattern.Wildcard("src_lanes")), (0, 1)),
                 ),
-                ExtractMode.LEGACY: TensorPattern(
-                    shape=(1, 1, WildcardPattern("src_lanes")),
-                    dtype=WildcardPattern("src_dtype"),
-                    storage=StorageKind.RMEM,
-                    layout=LayoutPattern(
-                        (1, 1, WildcardPattern("src_lanes")),
-                        (WildcardPattern("source_row"), WildcardPattern("src_lanes"), 1),
+                ExtractMode.LEGACY: pattern.Tensor(
+                    shape=(1, 1, pattern.Wildcard("src_lanes")),
+                    dtype=pattern.Wildcard("src_dtype"),
+                    storage=expr.StorageKind.RMEM,
+                    layout=pattern.Layout(
+                        (1, 1, pattern.Wildcard("src_lanes")),
+                        (pattern.Wildcard("source_row"), pattern.Wildcard("src_lanes"), 1),
                     ),
                 ),
                 **{
-                    m: TensorPattern(
-                        shape=(WildcardPattern("rows"), WildcardPattern("dst_lanes")),
-                        dtype=WildcardPattern("src_dtype"),
-                        storage=StorageKind.RMEM,
-                        layout=SwitchPattern(
+                    m: pattern.Tensor(
+                        shape=(pattern.Wildcard("rows"), pattern.Wildcard("dst_lanes")),
+                        dtype=pattern.Wildcard("src_dtype"),
+                        storage=expr.StorageKind.RMEM,
+                        layout=pattern.Switch(
                             "extract_ratio",
                             {
-                                1: LayoutPattern(
-                                    (WildcardPattern("rows"), WildcardPattern("dst_lanes")),
-                                    (WildcardPattern("source_row"), 1),
+                                1: pattern.Layout(
+                                    (pattern.Wildcard("rows"), pattern.Wildcard("dst_lanes")),
+                                    (pattern.Wildcard("source_row"), 1),
                                 ),
                                 **{
-                                    ratio: LayoutPattern(
+                                    ratio: pattern.Layout(
                                         (
-                                            WildcardPattern("rows"),
+                                            pattern.Wildcard("rows"),
                                             (
-                                                WildcardPattern("extract_inner"),
-                                                WildcardPattern("extract_ratio"),
+                                                pattern.Wildcard("extract_inner"),
+                                                pattern.Wildcard("extract_ratio"),
                                             ),
                                         ),
                                         (
-                                            WildcardPattern("source_row"),
-                                            (1, WildcardPattern("extract_step")),
+                                            pattern.Wildcard("source_row"),
+                                            (1, pattern.Wildcard("extract_step")),
                                         ),
                                     )
                                     for ratio in (2, 4)
@@ -349,31 +338,28 @@ class Extrx(AmxOp):
             },
         ),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
         effect=R | W,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("rows"), WildcardPattern("dst_lanes")),
-            dtype=WildcardPattern("dst_dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("rows"), WildcardPattern("dst_lanes")),
-                (WildcardPattern("dst_lanes"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("rows"), pattern.Wildcard("dst_lanes")),
+            dtype=pattern.Wildcard("dst_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("rows"), pattern.Wildcard("dst_lanes")),
+                (pattern.Wildcard("dst_lanes"), 1),
             ),
         ),
     )
 
-    def __init__(self, **attrs):
-        bind(self, attrs)
-
 
 class Extry(AmxOp):
     hir_matches = (
-        HirMatch(
-            Reshard, attributes={"mode": ExtractMode.COPY}, operands={"src": "x", "dst": "result"}
+        schedule.HirMatch(
+            sharding.Reshard, attributes={"mode": ExtractMode.COPY}, operands={"src": "x", "dst": "result"}
         ),
-        HirMatch(
-            Cast,
+        schedule.HirMatch(
+            tensor.Cast,
             attributes={
                 "mode": ExtractMode.INTEGER,
                 "shift": 0,
@@ -382,190 +368,190 @@ class Extry(AmxOp):
             },
             operands={"src": "x", "dst": "result"},
         ),
-        HirMatch(
-            Cast, attributes={"mode": ExtractMode.FLOAT}, operands={"src": "x", "dst": "result"}
+        schedule.HirMatch(
+            tensor.Cast, attributes={"mode": ExtractMode.FLOAT}, operands={"src": "x", "dst": "result"}
         ),
     )
     mnemonic = "EXTRY"
-    capability = OpCapability("amx_extry")
+    capability = expr.OpCapability("amx_extry")
     resource = "amx_engine"
     roles = ("src", "dst")
     writes = ("dst",)
     register_roles = {"src": "extract_source", "dst": "destination"}
-    mode = ParamDef(
+    mode = expr.ParamDef(
         kind="attribute",
         annotation=ExtractMode,
-        pattern=WildcardPattern("mode"),
+        pattern=pattern.Wildcard("mode"),
         default=ExtractMode.LEGACY,
     )
-    src_dtype = ParamDef(
-        kind="attribute", annotation=DType, pattern=_EXTRACT_SRC_DTYPE, default=DType.f32
+    src_dtype = expr.ParamDef(
+        kind="attribute", annotation=expr.DType, pattern=EXTRACT_SRC_DTYPE, default=expr.DType.f32
     )
-    dst_dtype = ParamDef(
-        kind="attribute", annotation=DType, pattern=_EXTRACT_DST_DTYPE, default=DType.f32
+    dst_dtype = expr.ParamDef(
+        kind="attribute", annotation=expr.DType, pattern=EXTRACT_DST_DTYPE, default=expr.DType.f32
     )
-    destination = ParamDef(
+    destination = expr.ParamDef(
         kind="attribute",
         annotation=Bank,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "destination",
             predicates=(
-                OrPattern(Bank.X, Bank.Y),
-                In(variable("mode"), (ExtractMode.INTEGER, ExtractMode.FLOAT))
-                | (variable("destination") == Bank.Y),
+                pattern.Or(Bank.X, Bank.Y),
+                pattern.In(pattern.variable("mode"), (ExtractMode.INTEGER, ExtractMode.FLOAT))
+                | (pattern.variable("destination") == Bank.Y),
             ),
         ),
         default=Bank.Y,
     )
-    z_selector = ParamDef(
+    z_selector = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "z_selector",
             predicates=(
-                RangePattern(lo=0, hi=63),
-                (variable("mode") != ExtractMode.COPY) | (variable("z_selector") <= 7),
+                pattern.Range(lo=0, hi=63),
+                (pattern.variable("mode") != ExtractMode.COPY) | (pattern.variable("z_selector") <= 7),
             ),
         ),
         default=0,
     )
-    destination_register = ParamDef(
+    destination_register = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "destination_register",
             predicates=(
-                RangePattern(lo=0, hi=7),
-                (variable("mode") == ExtractMode.COPY) | (variable("destination_register") == 0),
+                pattern.Range(lo=0, hi=7),
+                (pattern.variable("mode") == ExtractMode.COPY) | (pattern.variable("destination_register") == 0),
             ),
         ),
         default=0,
     )
-    destination_offset = ParamDef(
+    destination_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "destination_offset",
             predicates=(
-                RangePattern(lo=0, hi=511),
-                (variable("mode") != ExtractMode.COPY) | (variable("destination_offset") == 0),
+                pattern.Range(lo=0, hi=511),
+                (pattern.variable("mode") != ExtractMode.COPY) | (pattern.variable("destination_offset") == 0),
             ),
         ),
         default=0,
     )
-    repeat = ParamDef(
+    repeat = expr.ParamDef(
         kind="attribute",
         annotation=Repeat,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "repeat",
             predicates=(
-                (variable("repeat") == Repeat.ONE)
+                (pattern.variable("repeat") == Repeat.ONE)
                 | (
-                    (variable("amx_generation") >= 2)
-                    & In(variable("mode"), (ExtractMode.INTEGER, ExtractMode.FLOAT))
+                    (pattern.variable("amx_generation") >= 2)
+                    & pattern.In(pattern.variable("mode"), (ExtractMode.INTEGER, ExtractMode.FLOAT))
                 ),
             ),
         ),
         default=Repeat.ONE,
     )
-    alternating = ParamDef(
+    alternating = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "alternating",
             predicates=(
-                (P.In(variable("alternating"), (False,)))
+                (pattern.In(pattern.variable("alternating"), (False,)))
                 | (
-                    In(variable("mode"), (ExtractMode.INTEGER, ExtractMode.FLOAT))
-                    & (Bits("src_dtype") == 32)
+                    pattern.In(pattern.variable("mode"), (ExtractMode.INTEGER, ExtractMode.FLOAT))
+                    & (pattern.Bits("src_dtype") == 32)
                 ),
             ),
         ),
         default=False,
     )
-    low_byte_only = ParamDef(
+    low_byte_only = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "low_byte_only",
             predicates=(
-                (P.In(variable("low_byte_only"), (False,)))
-                | ((variable("mode") == ExtractMode.LEGACY) & (Bits("src_dtype") == 16)),
+                (pattern.In(pattern.variable("low_byte_only"), (False,)))
+                | ((pattern.variable("mode") == ExtractMode.LEGACY) & (pattern.Bits("src_dtype") == 16)),
             ),
         ),
         default=False,
     )
-    shift = ParamDef(
+    shift = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "shift",
             predicates=(
-                RangePattern(lo=0, hi=31),
-                (variable("mode") == ExtractMode.INTEGER) | (variable("shift") == 0),
+                pattern.Range(lo=0, hi=31),
+                (pattern.variable("mode") == ExtractMode.INTEGER) | (pattern.variable("shift") == 0),
             ),
         ),
         default=0,
     )
-    rounding = ParamDef(
+    rounding = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "rounding",
             predicates=(
-                (P.In(variable("rounding"), (False,))) | (variable("mode") == ExtractMode.INTEGER),
+                (pattern.In(pattern.variable("rounding"), (False,))) | (pattern.variable("mode") == ExtractMode.INTEGER),
             ),
         ),
         default=False,
     )
-    saturate = ParamDef(
+    saturate = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "saturate",
             predicates=(
-                (P.In(variable("saturate"), (False,))) | (variable("mode") == ExtractMode.INTEGER),
+                (pattern.In(pattern.variable("saturate"), (False,))) | (pattern.variable("mode") == ExtractMode.INTEGER),
             ),
         ),
         default=False,
     )
-    mask = ParamDef(
+    mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "mask",
             predicates=(
-                SwitchPattern(
+                pattern.Switch(
                     "mode",
                     {
                         ExtractMode.COPY: 0,
-                        ExtractMode.LEGACY: RangePattern(lo=0, hi=127),
-                        ExtractMode.INTEGER: RangePattern(lo=0, hi=511),
-                        ExtractMode.FLOAT: RangePattern(lo=0, hi=511),
+                        ExtractMode.LEGACY: pattern.Range(lo=0, hi=127),
+                        ExtractMode.INTEGER: pattern.Range(lo=0, hi=511),
+                        ExtractMode.FLOAT: pattern.Range(lo=0, hi=511),
                     },
                 ),
-                variable("src_lanes") == 64 // (Bits("src_dtype") // 8),
-                variable("dst_lanes") == 64 // (Bits("dst_dtype") // 8),
-                variable("rows") == Table((0, 1, 2, 0, 4))[variable("repeat")],
-                variable("extract_ratio") == Bits("src_dtype") // Bits("dst_dtype"),
-                variable("extract_inner") == 512 // Bits("src_dtype"),
-                variable("source_row")
-                == 64 // Table((0, 1, 2, 0, 4))[variable("repeat")] // (Bits("src_dtype") // 8),
-                SwitchPattern(
+                pattern.variable("src_lanes") == 64 // (pattern.Bits("src_dtype") // 8),
+                pattern.variable("dst_lanes") == 64 // (pattern.Bits("dst_dtype") // 8),
+                pattern.variable("rows") == pattern.Table((0, 1, 2, 0, 4))[pattern.variable("repeat")],
+                pattern.variable("extract_ratio") == pattern.Bits("src_dtype") // pattern.Bits("dst_dtype"),
+                pattern.variable("extract_inner") == 512 // pattern.Bits("src_dtype"),
+                pattern.variable("source_row")
+                == 64 // pattern.Table((0, 1, 2, 0, 4))[pattern.variable("repeat")] // (pattern.Bits("src_dtype") // 8),
+                pattern.Switch(
                     "alternating",
                     {
-                        False: WildcardPattern(
-                            predicates=(variable("extract_step") == 64 // (Bits("src_dtype") // 8),)
+                        False: pattern.Wildcard(
+                            predicates=(pattern.variable("extract_step") == 64 // (pattern.Bits("src_dtype") // 8),)
                         ),
-                        True: SwitchPattern(
+                        True: pattern.Switch(
                             "dst_dtype",
                             {
-                                d: WildcardPattern(
+                                d: pattern.Wildcard(
                                     predicates=(
-                                        variable("extract_step")
+                                        pattern.variable("extract_step")
                                         == (2 if d.bit_width == 16 else 1)
                                         * 64
-                                        // (Bits("src_dtype") // 8),
+                                        // (pattern.Bits("src_dtype") // 8),
                                     )
                                 )
                                 for d in TYPES
@@ -577,51 +563,51 @@ class Extry(AmxOp):
         ),
         default=0,
     )
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=SwitchPattern(
+        pattern=pattern.Switch(
             "mode",
             {
-                ExtractMode.COPY: TensorPattern(
-                    shape=(1, WildcardPattern("src_lanes")),
-                    dtype=WildcardPattern("src_dtype"),
-                    storage=StorageKind.RMEM,
-                    layout=LayoutPattern((1, WildcardPattern("src_lanes")), (0, 1)),
+                ExtractMode.COPY: pattern.Tensor(
+                    shape=(1, pattern.Wildcard("src_lanes")),
+                    dtype=pattern.Wildcard("src_dtype"),
+                    storage=expr.StorageKind.RMEM,
+                    layout=pattern.Layout((1, pattern.Wildcard("src_lanes")), (0, 1)),
                 ),
-                ExtractMode.LEGACY: TensorPattern(
-                    shape=(WildcardPattern("rows"), 64),
-                    dtype=WildcardPattern("src_dtype"),
-                    storage=StorageKind.RMEM,
-                    layout=LayoutPattern(
-                        (WildcardPattern("rows"), 64),
-                        (WildcardPattern("source_row"), WildcardPattern("src_lanes")),
+                ExtractMode.LEGACY: pattern.Tensor(
+                    shape=(pattern.Wildcard("rows"), 64),
+                    dtype=pattern.Wildcard("src_dtype"),
+                    storage=expr.StorageKind.RMEM,
+                    layout=pattern.Layout(
+                        (pattern.Wildcard("rows"), 64),
+                        (pattern.Wildcard("source_row"), pattern.Wildcard("src_lanes")),
                     ),
                 ),
                 **{
-                    m: TensorPattern(
-                        shape=(WildcardPattern("rows"), WildcardPattern("dst_lanes")),
-                        dtype=WildcardPattern("src_dtype"),
-                        storage=StorageKind.RMEM,
-                        layout=SwitchPattern(
+                    m: pattern.Tensor(
+                        shape=(pattern.Wildcard("rows"), pattern.Wildcard("dst_lanes")),
+                        dtype=pattern.Wildcard("src_dtype"),
+                        storage=expr.StorageKind.RMEM,
+                        layout=pattern.Switch(
                             "extract_ratio",
                             {
-                                1: LayoutPattern(
-                                    (WildcardPattern("rows"), WildcardPattern("dst_lanes")),
-                                    (WildcardPattern("source_row"), 64),
+                                1: pattern.Layout(
+                                    (pattern.Wildcard("rows"), pattern.Wildcard("dst_lanes")),
+                                    (pattern.Wildcard("source_row"), 64),
                                 ),
                                 **{
-                                    ratio: LayoutPattern(
+                                    ratio: pattern.Layout(
                                         (
-                                            WildcardPattern("rows"),
+                                            pattern.Wildcard("rows"),
                                             (
-                                                WildcardPattern("extract_inner"),
-                                                WildcardPattern("extract_ratio"),
+                                                pattern.Wildcard("extract_inner"),
+                                                pattern.Wildcard("extract_ratio"),
                                             ),
                                         ),
                                         (
-                                            WildcardPattern("source_row"),
-                                            (64, WildcardPattern("extract_step")),
+                                            pattern.Wildcard("source_row"),
+                                            (64, pattern.Wildcard("extract_step")),
                                         ),
                                     )
                                     for ratio in (2, 4)
@@ -634,24 +620,26 @@ class Extry(AmxOp):
             },
         ),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
         effect=R | W,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("rows"), WildcardPattern("dst_lanes")),
-            dtype=WildcardPattern("dst_dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("rows"), WildcardPattern("dst_lanes")),
-                (WildcardPattern("dst_lanes"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("rows"), pattern.Wildcard("dst_lanes")),
+            dtype=pattern.Wildcard("dst_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("rows"), pattern.Wildcard("dst_lanes")),
+                (pattern.Wildcard("dst_lanes"), 1),
             ),
         ),
     )
-
-    def __init__(self, **attrs):
-        bind(self, attrs)
 
 
 ExtrxV1, ExtrxV2, ExtrxV3 = instruction_versions(Extrx, (1, 2, 4), name="extrx", category="memory")
 
 ExtryV1, ExtryV2, ExtryV3 = instruction_versions(Extry, (1, 2, 4), name="extry", category="memory")
+
+register_semantics((ExtrxV1, ExtrxV2, ExtrxV3, ExtryV1, ExtryV2, ExtryV3,))
+
+
+__all__ = ["ExtrxV1", "ExtrxV2", "ExtrxV3", "ExtryV1", "ExtryV2", "ExtryV3"]

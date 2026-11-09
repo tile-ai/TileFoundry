@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
-def _html_escape(text: str) -> str:
+def html_escape(text: str) -> str:
     return (
         text.replace("&", "&amp;")
         .replace("<", "&lt;")
@@ -37,7 +37,7 @@ class Span:
     bold: bool = False
 
     def to_html(self) -> str:
-        body = _html_escape(self.text)
+        body = html_escape(self.text)
         if self.bold:
             body = f"<B>{body}</B>"
         if self.color or self.face or self.size is not None:
@@ -85,7 +85,7 @@ class Cell:
         if self.href is not None:
             attrs.append(f'HREF="{self.href}"')
         if self.title is not None:
-            attrs.append(f'TITLE="{_html_escape(self.title)}"')
+            attrs.append(f'TITLE="{html_escape(self.title)}"')
         if self.colspan is not None:
             attrs.append(f'COLSPAN="{self.colspan}"')
         if self.rowspan is not None:

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.core.module import Module
-from tilefoundry.passes.pass_base import ModulePass
+from tilefoundry.ir import core
+from tilefoundry.passes import pass_base
 
 
-class InsertHostEntryPass(ModulePass):
+class InsertHostEntryPass(pass_base.ModulePass):
     """Give a Module its Target's host entries; the default has none to add."""
 
     name = "insert-host-entry"
@@ -17,5 +17,8 @@ class InsertHostEntryPass(ModulePass):
         """Create the host entry pass selected by the Target."""
         return cls()
 
-    def run(self, module: Module) -> Module:
+    def run(self, module: core.Module) -> core.Module:
         return module
+
+
+__all__ = ["InsertHostEntryPass"]

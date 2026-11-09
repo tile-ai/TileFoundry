@@ -1,6 +1,6 @@
-"""``RuntimeResource`` — checkpoint access surface.
+"""``Resource`` — checkpoint access surface.
 
-``RuntimeResource`` — checkpoint access surface: load a tensor (or group)
+``Resource`` — checkpoint access surface: load a tensor (or group)
 by name, scope to a child namespace. ``DictResource`` is an in-memory/test
 double; ``SafetensorsResource`` reads a safetensors checkpoint
 directory. See [runtime §1.8](docs/spec/runtime.md#18-runtimeresourcepy).
@@ -8,13 +8,16 @@ directory. See [runtime §1.8](docs/spec/runtime.md#18-runtimeresourcepy).
 from __future__ import annotations
 
 import dataclasses
+import json
 import weakref
+from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Union
 
-from tilefoundry.evaluator.value import to_torch_dtype
-from tilefoundry.ir.core.module import Module, ModuleList
-from tilefoundry.ir.types.tensor_type import TensorType
-from tilefoundry.utils.lazy import torch
+from tilefoundry import utils
+from tilefoundry.interfaces import evaluator
+from tilefoundry.ir import core, types
+
+safetensors = utils.LazyModule("safetensors")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -24,7 +27,7 @@ class Absolute:
     name: str
 
 
-Convert = Callable[["torch.Tensor"], "torch.Tensor"]
+Convert = Callable[["utils.torch.Tensor"], "utils.torch.Tensor"]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -48,7 +51,7 @@ AliasValue = Union[str, "tuple[str, ...]", Absolute, Preprocessed]
 AliasMap = Mapping[str, AliasValue]
 
 
-def _resolved_device(device: str) -> str:
+def resolved_device(device: str) -> str:
     """Pin a bare accelerator name to the current device before opening a shard.
 
     Safetensors reads a bare device name as index 0, while torch uses the device
@@ -58,13 +61,13 @@ def _resolved_device(device: str) -> str:
     """
     if device == "cpu" or ":" in device:
         return device
-    module = torch.get_device_module(device)
+    module = utils.torch.get_device_module(device)
     if not module.is_available():
         return device
     return f"{device}:{module.current_device()}"
 
 
-def _alias_lookup(alias: AliasMap, prefix: str, name: str) -> "AliasValue | None":
+def alias_lookup(alias: AliasMap, prefix: str, name: str) -> "AliasValue | None":
     qualified = f"{prefix}{name}"
     if qualified in alias:
         return alias[qualified]
@@ -73,10 +76,10 @@ def _alias_lookup(alias: AliasMap, prefix: str, name: str) -> "AliasValue | None
     return None
 
 
-def _resolve_key(
+def resolve_key(
     alias: AliasMap, prefix: str, name: str,
 ) -> "tuple[str | tuple[str, ...], Convert | None]":
-    hit = _alias_lookup(alias, prefix, name)
+    hit = alias_lookup(alias, prefix, name)
     read = None
     if isinstance(hit, Preprocessed):
         hit, read = hit.name, hit.read
@@ -89,31 +92,31 @@ def _resolve_key(
     return f"{prefix}{hit}", read
 
 
-def _resolve_segment(alias: AliasMap, prefix: str, seg: str) -> str:
-    hit = _alias_lookup(alias, prefix, seg)
+def resolve_segment(alias: AliasMap, prefix: str, seg: str) -> str:
+    hit = alias_lookup(alias, prefix, seg)
     if hit is None:
         return seg
     if isinstance(hit, Preprocessed):
         raise TypeError(
-            f"RuntimeResource.subtree: segment {seg!r} resolves to {hit!r}; a subtree "
+            f"Resource.subtree: segment {seg!r} resolves to {hit!r}; a subtree "
             "segment is a path, not a tensor"
         )
     if isinstance(hit, tuple):
         raise TypeError(
-            f"RuntimeResource.subtree: segment {seg!r} resolves to a "
+            f"Resource.subtree: segment {seg!r} resolves to a "
             f"tuple-valued alias {hit!r}; a subtree segment must resolve to "
             f"one name"
         )
     if isinstance(hit, Absolute):
         raise TypeError(
-            f"RuntimeResource.subtree: segment {seg!r} resolves to an absolute "
+            f"Resource.subtree: segment {seg!r} resolves to an absolute "
             f"alias {hit!r}; a subtree segment must resolve to one relative "
             f"name"
         )
     return hit
 
 
-def _reject_group(where: str, name: str, resolved: "str | tuple[str, ...]") -> str:
+def reject_group(where: str, name: str, resolved: "str | tuple[str, ...]") -> str:
     if isinstance(resolved, tuple):
         raise TypeError(
             f"{where}: {name!r} resolves to a tuple-valued alias "
@@ -123,56 +126,56 @@ def _reject_group(where: str, name: str, resolved: "str | tuple[str, ...]") -> s
     return resolved
 
 
-class RuntimeResource(Protocol):
+class Resource(Protocol):
     """Checkpoint access surface: load one tensor (or group) by name, scope to a subtree.
 
     Checkpoint access surface: load one tensor (or group) by name, scope
     to a subtree.
     """
 
-    def load(self, name: str) -> torch.Tensor: ...
+    def load(self, name: str) -> utils.torch.Tensor: ...
 
-    def load_group(self, name: str) -> "tuple[torch.Tensor, ...] | None": ...
+    def load_group(self, name: str) -> "tuple[utils.torch.Tensor, ...] | None": ...
 
-    def subtree(self, seg: str) -> "RuntimeResource": ...
+    def subtree(self, seg: str) -> "Resource": ...
 
 
 class DictResource:
-    """dict-backed ``RuntimeResource`` — in-memory / test double.
+    """dict-backed ``Resource`` — in-memory / test double.
 
     *data* is a flat, dot-prefixed dict (``{"layer0.attention.w": tensor}``)
     shared by every scoped view; ``subtree`` only extends the prefix.
     """
 
     def __init__(
-        self, data: Mapping[str, torch.Tensor], prefix: str = "",
+        self, data: Mapping[str, utils.torch.Tensor], prefix: str = "",
         alias: AliasMap | None = None,
     ) -> None:
-        self._data = data
-        self._prefix = prefix
-        self._alias = alias or {}
+        self.data = data
+        self.prefix = prefix
+        self.alias = alias or {}
 
-    def load(self, name: str) -> torch.Tensor:
-        resolved, read = _resolve_key(self._alias, self._prefix, name)
-        raw_key = _reject_group(
+    def load(self, name: str) -> utils.torch.Tensor:
+        resolved, read = resolve_key(self.alias, self.prefix, name)
+        raw_key = reject_group(
             "DictResource.load", name, resolved
         )
         try:
-            value = self._data[raw_key]
+            value = self.data[raw_key]
         except KeyError:
             raise KeyError(
                 f"DictResource: no tensor named {name!r} (raw key {raw_key!r})"
             ) from None
         return value if read is None else read(value)
 
-    def load_group(self, name: str) -> "tuple[torch.Tensor, ...] | None":
-        resolved, _ = _resolve_key(self._alias, self._prefix, name)
+    def load_group(self, name: str) -> "tuple[utils.torch.Tensor, ...] | None":
+        resolved, _ = resolve_key(self.alias, self.prefix, name)
         if not isinstance(resolved, tuple):
             return None
         out = []
         for raw in resolved:
             try:
-                out.append(self._data[raw])
+                out.append(self.data[raw])
             except KeyError:
                 raise KeyError(
                     f"DictResource: no tensor named {name!r} (raw key {raw!r})"
@@ -180,12 +183,25 @@ class DictResource:
         return tuple(out)
 
     def subtree(self, seg: str) -> "DictResource":
-        resolved = _resolve_segment(self._alias, self._prefix, seg)
-        return DictResource(self._data, f"{self._prefix}{resolved}.", alias=self._alias)
+        resolved = resolve_segment(self.alias, self.prefix, seg)
+        return DictResource(self.data, f"{self.prefix}{resolved}.", alias=self.alias)
+
+
+def unsharded_map(directory: Path) -> dict[str, str]:
+    """The one shard's own key list, for a directory that ships no index."""
+    shard = "model.safetensors"
+    path = directory / shard
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"SafetensorsResource: {directory} holds neither "
+            f"model.safetensors.index.json nor {shard}"
+        )
+    with safetensors.safe_open(str(path), framework="pt", device="cpu") as handle:
+        return dict.fromkeys(handle.keys(), shard)
 
 
 class SafetensorsResource:
-    """safetensors-directory-backed ``RuntimeResource``.
+    """safetensors-directory-backed ``Resource``.
 
     Reads a safetensors checkpoint directory via mmap'd ``safe_open``: either
     N shards plus ``model.safetensors.index.json``, or a single unsharded
@@ -199,46 +215,34 @@ class SafetensorsResource:
         self, ckpt_dir: str, prefix: str = "", *, device: str,
         alias: AliasMap | None = None,
     ) -> None:
-        self._ckpt_dir = ckpt_dir
-        self._prefix = prefix
-        self._device = device
-        self._alias = alias or {}
-        self._open_shards: dict[tuple[str, str], Any] = {}
-        self._shard_of_key: dict[str, str] | None = None
-        self._read_tensors: weakref.WeakValueDictionary[
-            tuple[str, str], torch.Tensor
+        self.ckpt_dir = ckpt_dir
+        self.prefix = prefix
+        self.device = device
+        self.alias = alias or {}
+        self.open_shards: dict[tuple[str, str], Any] = {}
+        self.shard_of_key: dict[str, str] | None = None
+        self.read_tensors: weakref.WeakValueDictionary[
+            tuple[str, str], utils.torch.Tensor
         ] = weakref.WeakValueDictionary()
 
-    def _index(self) -> dict[str, str]:
-        if self._shard_of_key is None:
-            import json  # noqa: PLC0415
-            from pathlib import Path  # noqa: PLC0415
+    def share_cache_of(self, parent: "SafetensorsResource") -> None:
+        """Use *parent*'s index, shard handles and tensor cache."""
+        self.shard_of_key = parent.shard_of_key
+        self.open_shards = parent.open_shards
+        self.read_tensors = parent.read_tensors
 
-            directory = Path(self._ckpt_dir)
+    def index(self) -> dict[str, str]:
+        if self.shard_of_key is None:
+            directory = Path(self.ckpt_dir)
             index_path = directory / "model.safetensors.index.json"
             if index_path.is_file():
                 with open(index_path, encoding="utf-8") as fh:
-                    self._shard_of_key = dict(json.load(fh)["weight_map"])
+                    self.shard_of_key = dict(json.load(fh)["weight_map"])
             else:
-                self._shard_of_key = self._unsharded_map(directory)
-        return self._shard_of_key
+                self.shard_of_key = unsharded_map(directory)
+        return self.shard_of_key
 
-    @staticmethod
-    def _unsharded_map(directory: "Path") -> dict[str, str]:
-        """The one shard's own key list, for a directory that ships no index."""
-        from safetensors import safe_open  # noqa: PLC0415
-
-        shard = "model.safetensors"
-        path = directory / shard
-        if not path.is_file():
-            raise FileNotFoundError(
-                f"SafetensorsResource: {directory} holds neither "
-                f"model.safetensors.index.json nor {shard}"
-            )
-        with safe_open(str(path), framework="pt", device="cpu") as handle:
-            return dict.fromkeys(handle.keys(), shard)
-
-    def _read_one(self, raw_key: str) -> torch.Tensor:
+    def read_one(self, raw_key: str) -> utils.torch.Tensor:
         """One tensor, read onto the device this process has selected right now.
 
         A handle carries the device it was opened with, and the same key read
@@ -246,46 +250,42 @@ class SafetensorsResource:
         remembered under the resolved device beside the name. Keying either by
         name alone would hand a reader on one card what another card holds.
         """
-        from pathlib import Path  # noqa: PLC0415
-
-        from safetensors import safe_open  # noqa: PLC0415
-
-        device = _resolved_device(self._device)
-        hit = self._read_tensors.get((raw_key, device))
+        device = resolved_device(self.device)
+        hit = self.read_tensors.get((raw_key, device))
         if hit is not None:
             return hit
-        shard = self._index()[raw_key]
-        handle = self._open_shards.get((shard, device))
+        shard = self.index()[raw_key]
+        handle = self.open_shards.get((shard, device))
         if handle is None:
-            handle = safe_open(
-                str(Path(self._ckpt_dir) / shard), framework="pt", device=device,
+            handle = safetensors.safe_open(
+                str(Path(self.ckpt_dir) / shard), framework="pt", device=device,
             )
-            self._open_shards[(shard, device)] = handle
+            self.open_shards[(shard, device)] = handle
         value = handle.get_tensor(raw_key)
-        self._read_tensors[(raw_key, device)] = value
+        self.read_tensors[(raw_key, device)] = value
         return value
 
-    def load(self, name: str) -> torch.Tensor:
-        resolved, read = _resolve_key(self._alias, self._prefix, name)
-        raw_key = _reject_group(
+    def load(self, name: str) -> utils.torch.Tensor:
+        resolved, read = resolve_key(self.alias, self.prefix, name)
+        raw_key = reject_group(
             "SafetensorsResource.load", name, resolved
         )
         try:
-            value = self._read_one(raw_key)
+            value = self.read_one(raw_key)
         except KeyError:
             raise KeyError(
                 f"SafetensorsResource: no tensor named {name!r} (raw key {raw_key!r})"
             ) from None
         return value if read is None else read(value)
 
-    def load_group(self, name: str) -> "tuple[torch.Tensor, ...] | None":
-        resolved, _ = _resolve_key(self._alias, self._prefix, name)
+    def load_group(self, name: str) -> "tuple[utils.torch.Tensor, ...] | None":
+        resolved, _ = resolve_key(self.alias, self.prefix, name)
         if not isinstance(resolved, tuple):
             return None
         out = []
         for raw in resolved:
             try:
-                out.append(self._read_one(raw))
+                out.append(self.read_one(raw))
             except KeyError:
                 raise KeyError(
                     f"SafetensorsResource: no tensor named {name!r} (raw key {raw!r})"
@@ -293,14 +293,12 @@ class SafetensorsResource:
         return tuple(out)
 
     def subtree(self, seg: str) -> "SafetensorsResource":
-        resolved = _resolve_segment(self._alias, self._prefix, seg)
+        resolved = resolve_segment(self.alias, self.prefix, seg)
         child = SafetensorsResource(
-            self._ckpt_dir, f"{self._prefix}{resolved}.", device=self._device,
-            alias=self._alias,
+            self.ckpt_dir, f"{self.prefix}{resolved}.", device=self.device,
+            alias=self.alias,
         )
-        child._shard_of_key = self._shard_of_key
-        child._open_shards = self._open_shards
-        child._read_tensors = self._read_tensors
+        child.share_cache_of(self)
         return child
 
 
@@ -314,45 +312,45 @@ class DrawnResource:
 
     def __init__(
         self,
-        module: Module | ModuleList,
-        generator: torch.Generator,
+        module: core.Module | core.ModuleList,
+        generator: utils.torch.Generator,
         device: str,
-        drawn: dict[str, torch.Tensor] | None = None,
+        drawn: dict[str, utils.torch.Tensor] | None = None,
         prefix: str = "",
     ) -> None:
-        self._module, self._generator = module, generator
-        self._device, self._prefix = device, prefix
-        self._drawn = {} if drawn is None else drawn
+        self.module, self.generator = module, generator
+        self.device, self.prefix = device, prefix
+        self.drawn = {} if drawn is None else drawn
 
-    def load(self, name: str) -> torch.Tensor:
+    def load(self, name: str) -> utils.torch.Tensor:
         """Draw a declared weight on first use and retain it strongly."""
-        key = f"{self._prefix}{name}"
-        if key not in self._drawn:
-            declared: TensorType = self._module.weights[name]
-            self._drawn[key] = draw_tensor(declared, self._generator, self._device)
-        return self._drawn[key]
+        key = f"{self.prefix}{name}"
+        if key not in self.drawn:
+            declared: types.TensorType = self.module.weights[name]
+            self.drawn[key] = draw_tensor(declared, self.generator, self.device)
+        return self.drawn[key]
 
     def load_group(self, name: str) -> None:
         """Drawn tensors have no one-to-many alias map."""
         return None
 
     def subtree(self, seg: str) -> "DrawnResource":
-        if isinstance(self._module, ModuleList):
+        if isinstance(self.module, core.ModuleList):
             try:
                 index = int(seg)
             except ValueError:
                 raise KeyError(seg) from None
-            child = self._module.elements[index]
+            child = self.module.elements[index]
         else:
-            slot = self._module.children[seg]
+            slot = self.module.children[seg]
             child = slot if slot.indexed else slot.elements[0]
         return DrawnResource(
-            child, self._generator, self._device, drawn=self._drawn,
-            prefix=f"{self._prefix}{seg}.",
+            child, self.generator, self.device, drawn=self.drawn,
+            prefix=f"{self.prefix}{seg}.",
         )
 
 
-def _extents(type_) -> tuple[int, ...]:
+def extents(type_) -> tuple[int, ...]:
     """Return concrete extents, refusing a shape that still contains a range."""
     shape = []
     for extent in type_.shape:
@@ -364,16 +362,16 @@ def _extents(type_) -> tuple[int, ...]:
     return tuple(shape)
 
 
-def draw_tensor(declared: TensorType, generator: torch.Generator, device: str) -> torch.Tensor:
+def draw_tensor(declared: types.TensorType, generator: utils.torch.Generator, device: str) -> utils.torch.Tensor:
     """Draw one tensor of *dtype* from *generator*."""
-    shape = _extents(declared)
+    shape = extents(declared)
     dtype = declared.dtype
-    torch_dtype = to_torch_dtype(dtype)
+    torch_dtype = evaluator.to_torch_dtype(dtype)
     if torch_dtype.is_floating_point:
-        return torch.randn(shape, generator=generator, device=device).to(torch_dtype)
-    if torch_dtype == torch.bool:
-        return torch.randint(0, 2, shape, generator=generator, device=device).to(torch_dtype)
-    return torch.randint(0, 8, shape, generator=generator, device=device).to(torch_dtype)
+        return utils.torch.randn(shape, generator=generator, device=device).to(torch_dtype)
+    if torch_dtype == utils.torch.bool:
+        return utils.torch.randint(0, 2, shape, generator=generator, device=device).to(torch_dtype)
+    return utils.torch.randint(0, 8, shape, generator=generator, device=device).to(torch_dtype)
 
 
 __all__ = [
@@ -381,7 +379,8 @@ __all__ = [
     "DictResource",
     "DrawnResource",
     "Preprocessed",
-    "RuntimeResource",
+    "Resource",
     "SafetensorsResource",
     "draw_tensor",
+    "resolved_device",
 ]

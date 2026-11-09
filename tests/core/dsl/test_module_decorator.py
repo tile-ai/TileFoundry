@@ -9,13 +9,9 @@ from pathlib import Path
 import pytest
 import torch
 
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.evaluator import evaluate
-from tilefoundry.evaluator.value import EvalError
-from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.core.module import Module
-from tilefoundry.runtime.resource import DictResource
-from tilefoundry.utils.spec_ref import spec_ref_render
+from tilefoundry import cli, runtime, utils
+from tilefoundry.interfaces import evaluator
+from tilefoundry.ir import core, expr
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 CLASS_BODIES = FIXTURES / "dsl" / "class_body_modules.py"
@@ -31,7 +27,7 @@ def test_module_collects_functions_in_order():
     instead returns a runnable callable, see ``ir.core.module.Module``); a name
     the class never declared raises ``AttributeError``.
     """
-    _Demo = load_authored_ir(f"{CLASS_BODIES}:_Demo")
+    _Demo = cli.load_authored_ir(f"{CLASS_BODIES}:_Demo")
     assert _Demo.name == "_Demo"
     assert [fn.name for fn in _Demo.functions] == ["leaf", "composed"]
     assert _Demo.lookup("leaf").name == "leaf"
@@ -47,10 +43,10 @@ def test_module_refuses_ambiguous_attribute():
     real Module fields are never intercepted, and ``lookup`` refuses ambiguous
     matches — the core-ir [parser §2](docs/spec/parser.md#2-syntax-and-rules) ambiguity rule.
     """
-    base = load_authored_ir(f"{CLASS_BODIES}:_Demo").lookup("leaf")
+    base = cli.load_authored_ir(f"{CLASS_BODIES}:_Demo").lookup("leaf")
     dup_a = dataclasses.replace(base, name="dup")
     dup_b = dataclasses.replace(base, name="dup")
-    mod = Module(name="Dup", functions=(dup_a, dup_b), entry="dup")
+    mod = core.Module(name="Dup", functions=(dup_a, dup_b), entry="dup")
     assert mod.name == "Dup"
     assert len(mod.functions) == 2
     with pytest.raises(AttributeError):
@@ -66,12 +62,12 @@ def test_module_accepts_three_member_kinds():
     bound on the resulting Module. A member that is none of the three kinds
     (DSL function / child Module / plain function) is still rejected.
     """
-    _WithMethod = load_authored_ir(f"{CLASS_BODIES}:_WithMethod")
+    _WithMethod = cli.load_authored_ir(f"{CLASS_BODIES}:_WithMethod")
 
     assert _WithMethod.describe() == "_WithMethod/only"
 
     with pytest.raises(TypeError, match="only these three member kinds"):
-        load_authored_ir(str(DIAGNOSTICS / "dsl_module_constant_member.py"))
+        cli.load_authored_ir(str(DIAGNOSTICS / "dsl_module_constant_member.py"))
 
 
 def test_module_refuses_empty_body():
@@ -83,18 +79,18 @@ def test_module_refuses_empty_body():
     is refused rather than dropped.
     """
     with pytest.raises(TypeError, match="empty class body"):
-        load_authored_ir(str(DIAGNOSTICS / "dsl_module_empty_body.py"))
+        cli.load_authored_ir(str(DIAGNOSTICS / "dsl_module_empty_body.py"))
 
-    _MethodsOnly = load_authored_ir(f"{CLASS_BODIES}:_MethodsOnly")
+    _MethodsOnly = cli.load_authored_ir(f"{CLASS_BODIES}:_MethodsOnly")
 
     assert _MethodsOnly.entry is None
     assert _MethodsOnly.walk(3) == 3
 
     with pytest.raises(ValueError, match=r"entry 'absent' names no collected function"):
-        load_authored_ir(str(DIAGNOSTICS / "dsl_module_absent_entry.py"))
+        cli.load_authored_ir(str(DIAGNOSTICS / "dsl_module_absent_entry.py"))
 
     with pytest.raises(TypeError, match=r"__call__ has no effect"):
-        load_authored_ir(str(DIAGNOSTICS / "dsl_module_class_call.py"))
+        cli.load_authored_ir(str(DIAGNOSTICS / "dsl_module_class_call.py"))
 
 
 def test_stepless_module_reports_no_entry():
@@ -104,7 +100,7 @@ def test_stepless_module_reports_no_entry():
     answered by saying there is no default step. Neither may read as ``entry``
     being wrong, which is what ``None`` reaching the entry lookup produces.
     """
-    _NoStep = load_authored_ir(f"{CLASS_BODIES}:_NoStep")
+    _NoStep = cli.load_authored_ir(f"{CLASS_BODIES}:_NoStep")
 
     with pytest.raises(ValueError, match=r"declares no entry"):
         _NoStep()
@@ -123,28 +119,28 @@ def test_module_runner_takes_weights():
     list is refused naming the runner it wanted, and neither is sent to the
     other's.
     """
-    _Weighted = load_authored_ir(f"{WEIGHTED}:_Weighted")
+    _Weighted = cli.load_authored_ir(f"{WEIGHTED}:_Weighted")
 
     ones = torch.ones(2, dtype=torch.float32)
     weight = torch.full((2,), 3.0)
 
-    assert evaluate(_Weighted.scale, ones, weight).float().cpu().tolist() == [3.0, 3.0]
+    assert evaluator.evaluate(_Weighted.scale, ones, weight).float().cpu().tolist() == [3.0, 3.0]
 
-    with pytest.raises(EvalError, match=r"expects 2 inputs, got 1"):
-        evaluate(_Weighted.scale, ones)
+    with pytest.raises(evaluator.EvalError, match=r"expects 2 inputs, got 1"):
+        evaluator.evaluate(_Weighted.scale, ones)
 
-    loaded = _Weighted.load(DictResource({"w": weight}))
-    with pytest.raises(EvalError, match=r"expects 1 activation") as excinfo:
-        evaluate(loaded.scale, ones, weight)
+    loaded = _Weighted.load(runtime.DictResource({"w": weight}))
+    with pytest.raises(evaluator.EvalError, match=r"expects 1 activation") as excinfo:
+        evaluator.evaluate(loaded.scale, ones, weight)
     assert "load(resource)" not in str(excinfo.value)
 
     with pytest.raises(KeyError) as excinfo:
-        evaluate(_Weighted.load(DictResource({})).scale, ones)
+        evaluator.evaluate(_Weighted.load(runtime.DictResource({})).scale, ones)
     refused = str(excinfo.value)
     assert "missing declared weight 'w'" in refused
     assert "prepare produces it" in refused
     assert (
-        spec_ref_render(
+        utils.spec_ref_render(
             "[runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)"
         )
         in refused
@@ -157,7 +153,7 @@ def test_shared_child_binds_per_owner():
     Two owners over one child IR read their own subtrees rather than the last
     one loaded winning.
     """
-    _Owner = load_authored_ir(f"{WEIGHTED}:_Owner")
+    _Owner = cli.load_authored_ir(f"{WEIGHTED}:_Owner")
 
     def aliasing(name):
 
@@ -169,12 +165,12 @@ def test_shared_child_binds_per_owner():
     assert left.children["leaf"].elements[0] is right.children["leaf"].elements[0]
 
     ones = torch.ones(2, dtype=torch.float32)
-    loaded_left = left.load(DictResource({"leaf.w": torch.full((2,), 3.0)}))
-    loaded_right = right.load(DictResource({"leaf.w": torch.full((2,), 10.0)}))
+    loaded_left = left.load(runtime.DictResource({"leaf.w": torch.full((2,), 3.0)}))
+    loaded_right = right.load(runtime.DictResource({"leaf.w": torch.full((2,), 10.0)}))
 
     assert loaded_left.children["leaf"].module is loaded_right.children["leaf"].module
-    assert evaluate(loaded_left.leaf, ones).float().cpu().tolist() == [3.0, 3.0]
-    assert evaluate(loaded_right.leaf, ones).float().cpu().tolist() == [10.0, 10.0]
+    assert evaluator.evaluate(loaded_left.leaf, ones).float().cpu().tolist() == [3.0, 3.0]
+    assert evaluator.evaluate(loaded_right.leaf, ones).float().cpu().tolist() == [10.0, 10.0]
 
 
 def test_forward_reference_sibling_fails_loudly():
@@ -184,5 +180,5 @@ def test_forward_reference_sibling_fails_loudly():
     sibling (only callee-before-caller is supported) and raises rather than
     silently mis-parsing the call.
     """
-    with pytest.raises(VerifyError):
-        load_authored_ir(str(DIAGNOSTICS / "dsl_module_forward_sibling.py"))
+    with pytest.raises(expr.VerifyError):
+        cli.load_authored_ir(str(DIAGNOSTICS / "dsl_module_forward_sibling.py"))

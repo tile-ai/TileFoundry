@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.ir import expr
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 _ROWS, _COLS = 128, 4
 _SWIZZLE = Swizzle(2, 2, 2)
 
@@ -48,16 +48,16 @@ class SwizzledSquare:
             T.copy(src_view, tile)
             T.sync(threads)
             T.copy(tile, fragment)
-            T.binary(fragment, fragment, fragment, kind=BinaryKind.MUL)
+            T.binary(fragment, fragment, fragment, kind=expr.BinaryKind.MUL)
             T.copy(fragment, dst_view)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def swizzled_square_host(
         src: Tensor[(_ROWS, _COLS), "f32"],
         dst: Tensor[(_ROWS, _COLS), "f32"],
     ):
-        launch(  # noqa: F821
-            swizzled_square_device,  # noqa: F821
+        launch(
+            swizzled_square_device,
             src,
             dst,
             grid=(1, 1, 1),

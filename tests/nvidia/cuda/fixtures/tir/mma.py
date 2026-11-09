@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="mm_host", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="mm_host", target=cuda.Target("nvidia.h200_sxm"))
 class MmHandwritten:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def mm_device(
         a: Tensor[(16, 16), "bf16"], b: Tensor[(16, 8), "bf16"], c: Tensor[(16, 8), "f32"]
     ):
@@ -44,7 +44,7 @@ class MmHandwritten:
             c_view = T.tensor_view(T.ptr_of(c), layout=(2, 8 @ _warp.lane, 4 @ _warp.warp, 2))
             T.copy(acc, c_view)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def mm_host(a: Tensor[(16, 16), "bf16"], b: Tensor[(16, 8), "bf16"], c: Tensor[(16, 8), "f32"]):
         launch(mm_device, a, b, c, grid=(
         1,

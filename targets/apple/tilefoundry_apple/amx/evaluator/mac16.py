@@ -21,7 +21,7 @@ def mac32_alu(x, y, z, operand):
     return val if operand & (1 << 27) else val + z
 
 
-def emulate_AMX_MAC16(state, operand):
+def emulate_amx_mac16(state, operand):
     x, y = load_xy_reg(state.x, (operand >> 10) & 511), load_xy_reg(state.y, operand & 511)
     zr = (operand >> 20) & 63
     xe, ye = parse_writemask(operand >> 41, 2, 7), parse_writemask(operand >> 32, 2, 7)
@@ -60,3 +60,6 @@ def emulate_AMX_MAC16(state, operand):
                         operand,
                     ),
                 )
+
+
+__all__ = ["emulate_amx_mac16"]

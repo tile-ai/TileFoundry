@@ -9,11 +9,8 @@ from pathlib import Path
 
 import pytest
 
-import tilefoundry.cli.analyze as analyze_cli
-import tilefoundry.cli.target as target_cli
 from tests.core.cli._targets import listed_identities
-from tilefoundry import cli
-from tilefoundry.utils.units import format_bytes
+from tilefoundry import cli, utils
 
 _SMOKE_TARGET = Path(__file__).parents[1] / "installed" / "smoke_target"
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -55,8 +52,8 @@ def test_analyze_disarms_watchdog(
 ) -> None:
     """Neither successful returns nor raised errors leave a timer armed in the caller."""
     source = FIXTURES / "cli/neighbours.py"
-    disarmed = analyze_cli._watch(analyze_cli._ANALYSIS_TIMEOUT_SECONDS)
-    monkeypatch.setattr(analyze_cli, "_watch", lambda limit: disarmed)
+    disarmed = cli.analyze.watch(cli.analyze.ANALYSIS_TIMEOUT_SECONDS)
+    monkeypatch.setattr(cli.analyze, "watch", lambda limit: disarmed)
     assert not disarmed.is_set()
 
     assert (
@@ -143,7 +140,7 @@ def test_persisted_targets_drive_commands(
     tmp_path,
 ) -> None:
     registry = tmp_path / "registry.toml"
-    default = target_cli.registry_path()
+    default = cli.target.registry_path()
     default_before = default.read_bytes() if default.exists() else None
     architecture = _copy(
         _SMOKE_TARGET / "hw" / "vendor_sm70.toml",
@@ -170,7 +167,7 @@ def test_persisted_targets_drive_commands(
     assert "vendor.sm70" in added_architecture.stdout
     added_device = _run_cli(registry, tmp_path, "target", "add", "--document", str(device))
     assert added_device.returncode == 0, added_device.stderr
-    assert 'CudaTarget("vendor.v100_sxm2_32gb")' in added_device.stdout
+    assert 'cuda.Target("vendor.v100_sxm2_32gb")' in added_device.stdout
     added_provider = _run_cli(registry, tmp_path, "target", "add", str(provider))
     assert added_provider.returncode == 0, added_provider.stderr
     assert "VendorNpuTarget()" in added_provider.stdout
@@ -186,7 +183,7 @@ def test_persisted_targets_drive_commands(
 
     listed = _run_cli(registry, tmp_path, "target", "list")
     assert listed.returncode == 0, listed.stderr
-    assert 'CudaTarget("vendor.v100_sxm2_32gb")' in listed.stdout
+    assert 'cuda.Target("vendor.v100_sxm2_32gb")' in listed.stdout
     assert "VendorNpuTarget()" in listed.stdout
     assert "identity: vendor.v100_sxm2_32gb   added" in listed.stdout
     assert "identity: vendor.npu   added" in listed.stdout
@@ -262,7 +259,7 @@ def test_persisted_targets_drive_commands(
     after = _run_cli(registry, tmp_path, "target", "list")
     assert after.returncode == 0, after.stderr
     assert "VendorNpuTarget()" not in after.stdout
-    assert 'CudaTarget("vendor.v100_sxm2_32gb")' not in after.stdout
+    assert 'cuda.Target("vendor.v100_sxm2_32gb")' not in after.stdout
 
     if default_before is None:
         assert not default.exists()
@@ -324,7 +321,7 @@ def test_registration_isolates_bad_entries(
     collision = _run_cli(registry, tmp_path, "target", "add", str(collision_provider))
     assert collision.returncode == 1
     assert "target identity 'nvidia.h200_sxm' is already occupied by" in collision.stderr
-    assert 'CudaTarget("nvidia.h200_sxm")' in collision.stderr
+    assert 'cuda.Target("nvidia.h200_sxm")' in collision.stderr
     stored = tomllib.loads(registry.read_text(encoding="utf-8"))
     assert "module" not in stored
 
@@ -363,7 +360,7 @@ def test_registration_isolates_bad_entries(
     listed = _run_cli(registry, tmp_path, "target", "list")
     assert listed.returncode == 0
     assert "document 'vendor.bad_sm70' content changed" in listed.stderr
-    assert 'CudaTarget("vendor.v100_sxm2_32gb")' in listed.stdout
+    assert 'cuda.Target("vendor.v100_sxm2_32gb")' in listed.stdout
     analyzed = _run_cli(
         registry,
         tmp_path,
@@ -607,7 +604,7 @@ def test_memory_lines_match_json_totals(tmp_path) -> None:
             for segment in traffic.split(";")
         }
         for level, moved in row["totals"]["traffic"].items():
-            total = f"r{format_bytes(moved['read'])}/w{format_bytes(moved['write'])}@total"
+            total = f"r{utils.format_bytes(moved['read'])}/w{utils.format_bytes(moved['write'])}@total"
             assert total in segments[level].split(",")
     entry = functions[0]
     for row in functions[1:]:

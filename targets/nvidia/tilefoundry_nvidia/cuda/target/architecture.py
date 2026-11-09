@@ -10,12 +10,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.types import DType
-from tilefoundry.target.base import Architecture
+from tilefoundry import target
+from tilefoundry.ir import expr
 
 
 @dataclass(frozen=True)
-class CudaArchitecture(Architecture):
+class Architecture(target.Architecture):
     """What one CUDA architecture states about itself.
 
     The per-SM limits live here rather than on a device: they are properties of
@@ -25,7 +25,7 @@ class CudaArchitecture(Architecture):
     name: str
     gpu_architecture: str
     gpu_code: tuple[str, ...]
-    supported_compute_dtypes: tuple[DType, ...]
+    supported_compute_dtypes: tuple[expr.DType, ...]
     capabilities: tuple[str, ...]
     max_threads_per_cta: int
     max_threads_per_warp: int
@@ -43,7 +43,7 @@ class CudaArchitecture(Architecture):
     tensor_memory_per_cta_bytes: int | None
     tmem_owner: str
 
-    def supports_compute_dtype(self, dtype: DType) -> bool:
+    def supports_compute_dtype(self, dtype: expr.DType) -> bool:
         """Return whether this architecture has a compute instruction for ``dtype``."""
         return dtype in self.supported_compute_dtypes
 
@@ -54,4 +54,4 @@ class CudaArchitecture(Architecture):
         raise ValueError(f"{self.name}: no architecture limit for topology level {name!r}")
 
 
-__all__ = ["CudaArchitecture"]
+__all__ = ["Architecture"]

@@ -1,8 +1,8 @@
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="accumulate", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 2),))
+@module(entry="accumulate", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 2),))
 class UnitAxesCarry:
     @func
     def accumulate(x: Tensor[(1, 1, 64), "f32"]):

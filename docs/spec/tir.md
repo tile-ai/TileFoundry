@@ -4,15 +4,14 @@ TIR is the imperative target IR. A `@tilefoundry.prim_func` body parses
 into TIR. TIR has no value return; effect-form Ops carry
 the work, structural Stmts carry control flow.
 
-- **Container**: `tir.PrimFunction(name, params, body, output_count, target)`.
+- **Container**: `core.PrimFunction(name, params, body, output_count, target)`.
   `body` is a `Sequential`; the function returns no value.
 - **Stmt tree**: function bodies are nested Stmts only. Exprs appear
   inside Stmt fields (e.g. `LetStmt.value`, `For.start`).
-- **Effect Ops** (`Copy`, `Fill`, `Cast`, `ReLU`, `Reduce`)
-  are value-class Ops registered with `@register_op`; in Stmt
-  position they are invoked as `Evaluate(op, args)`
-  ([§1.4](#14-evaluate)).
-- **Value Ops** (`AllocTensor`, `MemorySpan`, `PtrOf`, `TensorView`)
+- **Effect Ops** (`Copy`, `Fill`, `Cast`, `ReLU`, `Reduce`, ...)
+  are Ops registered with `@register_op`; in Stmt position they are invoked as
+  `Evaluate(op, args)` ([§1.4](#14-evaluate)).
+- **Value Ops** (`AllocTensor`, `Span`, `PtrOf`, `TensorView`)
   are anchored by `LetStmt` so their result `Var` has stable
   identity.
 - **No HIR Ops** reach TIR. A program is TIR before the pass pipeline
@@ -50,7 +49,7 @@ flowchart TB
     Stmt --> EvaluateStmt
 ```
 
-### 1.2 Structural Stmts (`tir.stmts`)
+### 1.2 Structural Stmts (`ir.core`)
 
 ```python
 class Sequential(Stmt):
@@ -133,9 +132,8 @@ class Return(Stmt):
 
 - constraints:
   - the structural (control-flow / binding) Stmt family; bodies are `Sequential`.
-
-- `MeshScope.mesh` carries the `Mesh` object; the `binding` `Var`
-  scopes the mesh inside `body`.
+  - `MeshScope.mesh` carries the `Mesh` object; the `binding` `Var` scopes it
+    inside `body`.
 
 ### 1.3 `PrimFunction`
 
@@ -149,14 +147,23 @@ class PrimFunction(Stmt):
         body: attribute; Function body.
         output_count: attribute; Number of trailing output parameters.
         target: attribute; Compilation target for this function.
+        specializations: attribute; Shape patterns a variant is specialized for.
+        variants: attribute; Specialization variants of this base function.
         metadata: attribute; Non-semantic function-level analysis records.
+        sealed: attribute; Whether `add_variant` is closed; excluded from equality.
+        display_name: attribute; Optional display label; excluded from equality.
     """
 
     name: str
     params: tuple[Var, ...]
     body: Sequential
     output_count: int = 1
-    target: Target = field(default_factory=default_target)
+    target: Target = field(default_factory=cpu.Target)
+    specializations: tuple[pattern.Pattern, ...] = ()
+    variants: tuple[PrimFunction, ...] = ()
+    metadata: tuple[IRMetadata, ...] = ()
+    sealed: bool = False
+    display_name: str | None = None
 ```
 
 The DSL spelling `prim_func(output_count=N)` records the trailing output
@@ -164,9 +171,13 @@ parameters; omitting it means one output.
 
 - constraints:
   - itself a `Stmt`, not a separate top-level node; returns no value.
-    `verify_prim_function` enforces the rules below.
+  - `add_variant` MUST raise `RuntimeError` once `sealed`. Each variant carries
+    exactly one `pattern.Range` in `specializations`, whose dimension variable
+    MUST be derivable from the base parameters; `verify_prim_function` checks
+    each variant with the rules below.
 
-`visitor_registry.verify.verify_prim_function(fn, *, module_fns=())` enforces:
+`verifier.verify_prim_function(fn, *, module_fns=())` enforces (`module_fns` is
+the sibling `PrimFunction`s, or the enclosing `core.Module`):
 
 - **Param homogeneity**. All parameters' layouts MUST be uniformly
   `ShardLayout` or uniformly non-`ShardLayout`; mixing is rejected.
@@ -205,7 +216,7 @@ parameters; omitting it means one output.
   For atom calls, operand patterns apply to the shared projected issue tiles.
   Every input operand MUST match its `ParamDef.pattern` and every
   declared `between` relation MUST hold. A per-Op verifier registered via
-  `@register_verify_stmt(Op)` MAY impose additional rules that the declaration
+  `verify.register(Op)` MAY impose additional rules that the declaration
   does not express. An effect Op with neither an input pattern nor a `between`
   relation MUST register such a verifier; an Op stating no contract is rejected.
 
@@ -224,7 +235,7 @@ class Evaluate(Stmt):
 The `callable` is one of:
 
 - an effect-form `Op` (e.g. `tir.memory.Copy`,
-  `tir.tensor.Reduce`, `tir.Launch` [§2.3](#23-tir-ops)). `args` are
+  `tir.reduce.Reduce`, `tir.launch.Launch` [§2.3](#23-tir-ops)). `args` are
   the Op's operands in `ParamDef` order. Device-instruction verification uses the shared
   `check_call`: match the execution mesh, project instruction tiles, check
   operand patterns and declared `between` relations, then invoke the optional
@@ -245,20 +256,15 @@ The `callable` is one of:
 
 Scheduled lowering follows [passes §7.1](./passes.md#71-converthirtotir).
 
-Per-Op verify and codegen handlers, when present, are keyed by `Op` type and
-receive the Op together with `args`; an `Op` callable carries no result, so its
-`Call` form is unit-typed.
+Per-Op verify and codegen handlers, when present, are keyed by `Op` type. The
+value-producing counterpart is the `Call(Op, args)` Expr
+([core-ir.md §2.1](./core-ir.md#21-call)), which has a non-`Unit` result type
+and is anchored by `LetStmt`; `Evaluate` is the unit-typed Stmt-position form
+and the only Stmt-position invocation wrapper.
 
-The value-producing counterpart is the `Call(Op, args)` Expr
-([core-ir.md §2.1](./core-ir.md#21-call)): it has a non-`Unit` result
-type and is anchored by `LetStmt`. `Evaluate` is the unit-typed,
-Stmt-position form and the only Stmt-position invocation wrapper.
-
-**Effect Op vs. control Stmt.** A callable that is a single
-unconditional invocation — an effect `Op` or a function `SymbolRef` —
-is expressed as `Evaluate(callable, args)`. A construct that carries
-its own control flow stays a first-class `Stmt`, not an `Evaluate`
-callable. `Abort` ([§1.7](#17-abort)) is a terminator.
+**Effect Op vs. control Stmt.** A single unconditional invocation — an effect
+`Op` or a function `SymbolRef` — is `Evaluate(callable, args)`. A construct that
+carries its own control flow stays a first-class `Stmt`.
 
 ### 1.5 `Sync`
 
@@ -317,10 +323,9 @@ target implementation.
 
 #### Design rationale
 
-A barrier's scope is a compile-time constant — *which* threads take part — so
-the mesh, and any slice of it, is a compile-time descriptor rather than an SSA
-value, and the barrier kind is derived from that set by one shared routine so
-verify and codegen cannot disagree.
+The participating threads are a compile-time constant, so the mesh and any
+slice of it is a descriptor, not an SSA value. One shared routine derives the
+barrier kind from that set, so verify and codegen cannot disagree.
 
 ### 1.7 `Abort`
 
@@ -481,9 +486,9 @@ class AllocTensor(Op):
 - constraints:
   - allocate a tensor; a value Op anchored by `LetStmt.value`.
 
-##### MemorySpan
+##### Span
 ```python
-class MemorySpan(Op):
+class Span(Op):
     """Value form; re-interpret a memory region as a typed tensor.
 
     Attributes:
@@ -559,7 +564,7 @@ class Copy(Op):
 
     src: Tensor
     dst: Tensor
-    execution_mesh: MeshPattern
+    execution_mesh: pattern.Mesh
 ```
 - constraints:
   - `src` declares `READ`; `dst` declares `WRITE`.
@@ -570,7 +575,7 @@ class Copy(Op):
     A caller changing shape MUST state that shape in its source or destination
     view; Copy does not infer a reshape from the runtime's enumeration order.
   - `execution_mesh` is the mesh declaration shared by every rmem operand's
-    `ShardLayoutPattern.mesh`.
+    `pattern.ShardLayout.mesh`.
 
 ##### Fill
 ```python
@@ -584,7 +589,7 @@ class Fill(Op):
 
     tensor: Tensor
     value: Tensor
-    execution_mesh: MeshPattern
+    execution_mesh: pattern.Mesh
 ```
 - constraints:
   - `tensor` declares `WRITE`; `value` declares `READ` and MUST be scalar.
@@ -594,6 +599,9 @@ class Fill(Op):
     the scalar carries no shard mesh.
 
 ##### Cast
+
+`Cast` lives in `tir.cast`; it is listed here beside the memory Ops.
+
 ```python
 class Cast(Op):
     """Effect form; convert a register tile to ``dtype``."""
@@ -601,7 +609,7 @@ class Cast(Op):
     src: Tensor
     dst: Tensor
     dtype: DType
-    execution_mesh: MeshPattern
+    execution_mesh: pattern.Mesh
 ```
 - constraints:
   - `src` declares `READ`; `dst` declares `WRITE`; both are rmem tensors.
@@ -628,7 +636,7 @@ class ReLU(Op):
   - `src` declares `READ`; `dst` declares `WRITE`; both are rmem tensors. A tile held elsewhere
     is moved in and out by `Copy`, which schedule inserts from this declaration.
 
-#### Tensor Ops (`tir.tensor.*`)
+#### Tensor Ops (`tir.reduce`, `tir.dot`)
 
 ##### Reduce
 
@@ -711,6 +719,9 @@ per-op classes; they appear as `Evaluate(op, args)`. `BinaryKind` /
 `UnaryKind` / `ReduceKind` are compiler-wide tag enums shared across HIR and
 TIR; lowering preserves the kind value without re-mapping. Their owning
 definitions are [core-ir §4](./core-ir.md#4-shared-operation-kinds).
+
+`Binary` and `Unary` live in `tir.arith`; `Where`, `Clamp`, `Arange` and `Cast` in
+`tir.where`, `tir.clamp`, `tir.arange` and `tir.cast`.
 
 `Binary`, `Unary`, `Where`, `Clamp`, `Cast`, `ReLU`, and `Reduce` are target-neutral
 instruction declarations (`OpCapability(None)`) with registered access
@@ -864,7 +875,7 @@ block_y, block_z, *forwarded_args)`:
   root-relative selector ([core-ir §1](./core-ir.md#1-module)).
   The host-entry pass writes and checks a HIR callee's forwarded args
   ([passes §7.3](./passes.md#73-inserthostentrypass)); verification
-  resolves the selector and does not check them again.
+  resolves the selector and checks only that each forwarded arg is a tensor.
 - **grid / block**: `args[1:7]` are the grid then block extents in the fixed
   order `grid_x, grid_y, grid_z, block_x, block_y, block_z`. Each is an `Expr`
   — a `Constant` for a static extent, a `ShapeOf` ([§2.2](#22-shapeof)) for a
@@ -873,7 +884,9 @@ block_y, block_z, *forwarded_args)`:
   through the codegen `program_dim` / `program_shape` accessors, never as
   arguments.
 - **forwarded args**: the remaining `args` bind the callee's parameters, one
-  each, in declaration order. An extent the callee's types leave open is not
+  each, in declaration order. Each MUST be a tensor; for a `PrimFunction`
+  callee, the count MUST equal the parameter count and each type MUST equal its
+  parameter's type. An extent the callee's types leave open is not
   among them: it travels with the pointer the convention expands that
   parameter into ([codegen §4.4](./codegen.md#44-signatures)), read off the
   tensor the host holds.
@@ -892,21 +905,21 @@ schema's `category` and sort by its `name` within each category.
 An instruction Op reserves the class-body name `execution_mesh` for the mesh
 that executes one issue. A fixed instruction declaration MAY state a concrete
 `Mesh`; an Op with a caller-selectable frame MAY state a `ParamDef` whose
-pattern is a `MeshPattern`; and an element-wise Op MAY point directly at the
-same `MeshPattern` used by its operand shard declarations. A declaration
-MAY use an `OrPattern` of mesh patterns when it supports distinct execution
+pattern is a `pattern.Mesh`; and an element-wise Op MAY point directly at the
+same `pattern.Mesh` used by its operand shard declarations. A declaration
+MAY use an `pattern.Or` of mesh patterns when it supports distinct execution
 topologies. The target's verifier enforces any topology-specific restrictions.
 These are the supported forms. An instruction whose `execution_mesh` has another form MUST be
 rejected by name rather than treated as running on arbitrary threads.
 
 An operand that carries a `ShardLayout` and executes element-wise MUST use that
-same execution-mesh pattern in `ShardLayoutPattern.mesh`. Unsharded gmem and
+same execution-mesh pattern in `pattern.ShardLayout.mesh`. Unsharded gmem and
 smem operands carry no holder mesh; the execution declaration does not invent
 one for them. Plain operands read their state through
 [shard §6.1](./shard.md#61-placement-semantics) and match Broadcast only on
 axes that do not separate storage copies.
 
-#### Async copy Ops (`tir.async.*`)
+#### Async copy Ops (`tir.async_copy.*`)
 
 Non-blocking gmem→smem staging: a producer issues copies and commits groups;
 a consumer waits on the group queue.
@@ -931,7 +944,7 @@ class CopyAsync(Op):
     dst: Tensor
     index: Tensor | None = None
     fill: float | None = None
-    execution_mesh: MeshPattern
+    execution_mesh: pattern.Mesh
 ```
 - constraints:
   - `src` is gmem and `dst` is smem, with the same dtype. Each layout MUST

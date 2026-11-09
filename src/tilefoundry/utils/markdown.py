@@ -10,34 +10,27 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-_HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
+__all__ = ["Heading", "anchor", "headings"]
 
+HEADING_LINE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 
-_FENCE = re.compile(r"^\s*(```|~~~)")
+FENCE_LINE = re.compile(r"^\s*(```|~~~)")
 
+NUMBERED_TITLE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(.*)$")
 
-_NUMBER = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(.*)$")
+INLINE_HTML = re.compile(r"<[^>]*>")
 
-
-_INLINE_HTML = re.compile(r"<[^>]*>")
-
-
-_NOT_IN_ANCHOR = re.compile(r"[^\w\- ]")
+NON_ANCHOR_CHARS = re.compile(r"[^\w\- ]")
 
 
 @dataclass(frozen=True)
 class Heading:
     """One heading line, and the three things a reader asks of it."""
 
-
     level: int
-
     title: str
-
     number: str | None
-
     anchor: str
-
     line: int
 
 
@@ -48,8 +41,8 @@ def anchor(text: str) -> str:
     run of punctuation away rather than to a separator, so `Instance 2 - verify`
     becomes `instance-2---verify` and `register_alias` keeps its underscore.
     """
-    stripped = _INLINE_HTML.sub("", text).lower()
-    return _NOT_IN_ANCHOR.sub("", stripped).replace(" ", "-")
+    stripped = INLINE_HTML.sub("", text).lower()
+    return NON_ANCHOR_CHARS.sub("", stripped).replace(" ", "-")
 
 
 def headings(text: str) -> tuple[Heading, ...]:
@@ -64,16 +57,16 @@ def headings(text: str) -> tuple[Heading, ...]:
     seen: dict[str, int] = {}
     fenced = False
     for line, raw in enumerate(text.splitlines()):
-        if _FENCE.match(raw):
+        if FENCE_LINE.match(raw):
             fenced = not fenced
             continue
         if fenced:
             continue
-        matched = _HEADING.match(raw)
+        matched = HEADING_LINE.match(raw)
         if matched is None:
             continue
         body = matched.group(2)
-        numbered = _NUMBER.match(body)
+        numbered = NUMBERED_TITLE.match(body)
         base = anchor(body)
         repeat = seen.get(base, 0)
         seen[base] = repeat + 1
@@ -87,6 +80,3 @@ def headings(text: str) -> tuple[Heading, ...]:
             )
         )
     return tuple(found)
-
-
-__all__ = ["Heading", "anchor", "headings"]

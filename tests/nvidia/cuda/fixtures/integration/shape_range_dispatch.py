@@ -3,21 +3,21 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _S = DimVar("S", 1, 7)
 
 
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="main", target=cuda.Target("nvidia.h200_sxm"))
 class Dispatch:
     @func
     def main(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
         pass
 
-    @main.specialize(RangePattern("S", 1, 3))
+    @main.specialize(pattern.Range("S", 1, 3))
     def small_shape(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
         return tf.mul(x, x)
 
-    @main.specialize(RangePattern("S", 4, 7))
+    @main.specialize(pattern.Range("S", 4, 7))
     def large_shape(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
-        return tf.add(x, x)  # noqa: F821
+        return tf.add(x, x)

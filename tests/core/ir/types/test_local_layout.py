@@ -15,53 +15,41 @@ from itertools import product
 
 import pytest
 
-from tilefoundry.ir.types import DType, Layout, Mesh, Topology, make_shard_tensor_type
-from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.shard_layout import (
-    Broadcast,
-    Split,
-    _local_readback,
-    local_layout,
-    local_layout_and_offset,
-    mesh_coords,
-    shard_layout_of,
-)
-from tilefoundry.ir.types.stride import try_compact_major
-from tilefoundry.ir.types.utils import local_type_of
+from tilefoundry.ir import expr, types, utils
 
-_GPU, _THREAD = Topology("gpu", 2), Topology("thread", 32)
+_GPU, _THREAD = types.Topology("gpu", 2), types.Topology("thread", 32)
 
 
-def _mesh(topology: Topology, extents: tuple[int, ...], names: tuple[str, ...]) -> Mesh:
-    return Mesh((topology,), Layout(extents, try_compact_major(extents)), names)
+def _mesh(topology: types.Topology, extents: tuple[int, ...], names: tuple[str, ...]) -> types.Mesh:
+    return types.Mesh((topology,), types.Layout(extents, types.try_compact_major(extents)), names)
 
 
 _CASES = {
-    "one axis one level": ((8, 4), _mesh(_GPU, (2,), ("g",)), (Split(0),)),
-    "the other axis": ((8, 4), _mesh(_GPU, (2,), ("g",)), (Split(1),)),
-    "broadcast keeps it whole": ((8, 4), _mesh(_GPU, (2,), ("g",)), (Broadcast(),)),
+    "one axis one level": ((8, 4), _mesh(_GPU, (2,), ("g",)), (types.Split(0),)),
+    "the other axis": ((8, 4), _mesh(_GPU, (2,), ("g",)), (types.Split(1),)),
+    "broadcast keeps it whole": ((8, 4), _mesh(_GPU, (2,), ("g",)), (types.Broadcast(),)),
     "two axes of one level over one tensor axis": (
         (32,),
         _mesh(_THREAD, (4, 8), ("w", "t")),
-        (Split(0), Split(0)),
+        (types.Split(0), types.Split(0)),
     ),
     "two axes of one level over two tensor axes": (
         (8, 16),
         _mesh(_THREAD, (4, 8), ("w", "t")),
-        (Split(0), Split(1)),
+        (types.Split(0), types.Split(1)),
     ),
     "one axis split, one broadcast": (
         (8, 16),
         _mesh(_THREAD, (4, 8), ("w", "t")),
-        (Split(1), Broadcast()),
+        (types.Split(1), types.Broadcast()),
     ),
 }
 
 
-def _instances(mesh: Mesh) -> int:
+def _instances(mesh: types.Mesh) -> int:
     """How many programs the mesh spreads a tensor over."""
     count = 1
-    for extent in flatten(mesh.layout).shape:
+    for extent in types.flatten(mesh.layout).shape:
         count *= extent
     return count
 
@@ -79,13 +67,13 @@ def _elements(layout, offset: int) -> list[int]:
 def test_the_layout_and_the_type_narrow_the_same_way(case: str) -> None:
     """Every instance's layout holds the extent the Type says one shard is."""
     shape, mesh, attrs = _CASES[case]
-    held = make_shard_tensor_type(shape, mesh=mesh, attrs=attrs, dtype=DType.f32)
-    shard = shard_layout_of(held.layout)
-    want = tuple(local_type_of(held).shape)
+    held = utils.make_shard_tensor_type(shape, mesh=mesh, attrs=attrs, dtype=expr.DType.f32)
+    shard = types.shard_layout_of(held.layout)
+    want = tuple(utils.local_type_of(held).shape)
 
     for program_id in range(_instances(mesh)):
-        layout, _offset = local_layout(shard, shape, mesh_coords(mesh, (program_id,)))
-        layout = _local_readback(layout)
+        layout, _offset = types.local_layout(shard, shape, types.mesh_coords(mesh, (program_id,)))
+        layout = types.local_readback(layout)
         assert tuple(layout.shape) == want, (
             f"{case}: instance {program_id} holds {tuple(layout.shape)}, "
             f"while one shard of {shape} is {want}"
@@ -103,12 +91,12 @@ def test_every_instance_together_tile_the_tensor(case: str) -> None:
     elements it lands on are named.
     """
     shape, mesh, attrs = _CASES[case]
-    held = make_shard_tensor_type(shape, mesh=mesh, attrs=attrs, dtype=DType.f32)
-    shard = shard_layout_of(held.layout)
+    held = utils.make_shard_tensor_type(shape, mesh=mesh, attrs=attrs, dtype=expr.DType.f32)
+    shard = types.shard_layout_of(held.layout)
 
     covered: Counter[int] = Counter()
     for program_id in range(_instances(mesh)):
-        layout, offset = local_layout_and_offset(shard, shape, mesh_coords(mesh, (program_id,)))
+        layout, offset = types.local_layout_and_offset(shard, shape, types.mesh_coords(mesh, (program_id,)))
         covered.update(_elements(layout, offset))
 
     whole = 1
@@ -124,12 +112,12 @@ def test_every_instance_together_tile_the_tensor(case: str) -> None:
 
 def test_the_layout_keeps_the_whole_tensors_strides() -> None:
     """A slice is the same rows the same distance apart, begun further in."""
-    mesh = Mesh((_GPU,), Layout((2,), (1,)), ("g",))
-    held = make_shard_tensor_type((4, 4), mesh=mesh, attrs=(Split(1),), dtype=DType.f32)
-    shard = shard_layout_of(held.layout)
+    mesh = types.Mesh((_GPU,), types.Layout((2,), (1,)), ("g",))
+    held = utils.make_shard_tensor_type((4, 4), mesh=mesh, attrs=(types.Split(1),), dtype=expr.DType.f32)
+    shard = types.shard_layout_of(held.layout)
 
-    assert local_layout_and_offset(shard, (4, 4), (0,))[0].strides == (4, 1)
-    assert [local_layout_and_offset(shard, (4, 4), (gpu,))[1] for gpu in (0, 1)] == [0, 2]
+    assert types.local_layout_and_offset(shard, (4, 4), (0,))[0].strides == (4, 1)
+    assert [types.local_layout_and_offset(shard, (4, 4), (gpu,))[1] for gpu in (0, 1)] == [0, 2]
 
 
 def test_the_outer_axis_steps_over_what_the_inner_one_holds() -> None:
@@ -138,23 +126,23 @@ def test_the_outer_axis_steps_over_what_the_inner_one_holds() -> None:
     One step of the outer axis clears the eight the inner one holds, rather
     than the whole the outer axis was already narrowed out of.
     """
-    mesh = Mesh((_THREAD,), Layout((4, 8), (8, 1)), ("w", "t"))
-    held = make_shard_tensor_type((32,), mesh=mesh, attrs=(Split(0), Split(0)), dtype=DType.f32)
-    shard = shard_layout_of(held.layout)
+    mesh = types.Mesh((_THREAD,), types.Layout((4, 8), (8, 1)), ("w", "t"))
+    held = utils.make_shard_tensor_type((32,), mesh=mesh, attrs=(types.Split(0), types.Split(0)), dtype=expr.DType.f32)
+    shard = types.shard_layout_of(held.layout)
 
     offsets = [
-        local_layout_and_offset(shard, (32,), mesh_coords(mesh, (pid,)))[1] for pid in range(32)
+        types.local_layout_and_offset(shard, (32,), types.mesh_coords(mesh, (pid,)))[1] for pid in range(32)
     ]
     assert offsets == list(range(32))
 
 
 def test_a_level_with_no_id_is_left_whole() -> None:
     """A level the host did not place divides nothing; the device does that."""
-    mesh = Mesh((_GPU,), Layout((2, 4), (4, 1)), ("g", "c"))
-    held = make_shard_tensor_type((8, 4), mesh=mesh, attrs=(Split(0), Split(1)), dtype=DType.f32)
-    shard = shard_layout_of(held.layout)
+    mesh = types.Mesh((_GPU,), types.Layout((2, 4), (4, 1)), ("g", "c"))
+    held = utils.make_shard_tensor_type((8, 4), mesh=mesh, attrs=(types.Split(0), types.Split(1)), dtype=expr.DType.f32)
+    shard = types.shard_layout_of(held.layout)
 
-    layout, offset = local_layout_and_offset(shard, (8, 4), mesh_coords(mesh, (None,)))
+    layout, offset = types.local_layout_and_offset(shard, (8, 4), types.mesh_coords(mesh, (None,)))
     assert (tuple(layout.shape), offset) == ((8, 4), 0)
 
 
@@ -165,9 +153,9 @@ def test_an_extent_its_mesh_axis_does_not_divide_is_refused() -> None:
     shape asked about here is one the layout was not built for -- which is the
     only way the two can disagree, and worth naming rather than slicing.
     """
-    mesh = Mesh((_GPU,), Layout((4,), (1,)), ("g",))
-    held = make_shard_tensor_type((8,), mesh=mesh, attrs=(Split(0),), dtype=DType.f32)
-    shard = shard_layout_of(held.layout)
+    mesh = types.Mesh((_GPU,), types.Layout((4,), (1,)), ("g",))
+    held = utils.make_shard_tensor_type((8,), mesh=mesh, attrs=(types.Split(0),), dtype=expr.DType.f32)
+    shard = types.shard_layout_of(held.layout)
 
     with pytest.raises(ValueError, match=r"layout positions .* cross logical axes of \(6,\)"):
-        local_layout_and_offset(shard, (6,), (0,))
+        types.local_layout_and_offset(shard, (6,), (0,))

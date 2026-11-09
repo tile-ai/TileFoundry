@@ -4,59 +4,48 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from tilefoundry.ir.core import Op, OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import SameConstraint, utils
-from tilefoundry.ir.types import DType, StorageKind, UnitType
-from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
-from tilefoundry.visitor_registry.access_relation import (
-    broadcast_access,
-    broadcast_all,
-    identity_access,
-    iterating,
-    register_access_relation,
-)
+from tilefoundry.interfaces import access, typeinfer, verify
+from tilefoundry.ir import expr, pattern, types
 
-_IN_RMEM = utils.tensor_in(StorageKind.RMEM)
+IN_RMEM = pattern.tensor_in(expr.StorageKind.RMEM)
 
 
-@register_op(dialect="T", category="arith", name="where")
-class Where(Op):
+@expr.register_op(dialect="T", category="arith", name="where")
+class Where(expr.Op):
     """Write lhs where cond is true, otherwise rhs, into dst."""
 
-    capability = OpCapability(None)
-    execution_mesh = utils.thread_execution_mesh()
+    capability = expr.OpCapability(None)
+    execution_mesh = pattern.thread_execution_mesh()
 
-    cond = ParamDef(
-        kind="input", effect=MemoryEffect.READ, pattern=replace(_IN_RMEM, dtype=DType.bool)
+    cond = expr.ParamDef(
+        kind="input", effect=expr.MemoryEffect.READ, pattern=replace(IN_RMEM, dtype=expr.DType.bool)
     )
-    lhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_IN_RMEM)
-    rhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_IN_RMEM)
-    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=_IN_RMEM)
+    lhs = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=IN_RMEM)
+    rhs = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=IN_RMEM)
+    dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=IN_RMEM)
 
-    between = (SameConstraint("dtype", "lhs", "rhs"), SameConstraint("dtype", "lhs", "dst"))
-
-
-@register_typeinfer(Where)
-def _(call, ctx) -> UnitType:
-    return UnitType()
+    between = (pattern.SameConstraint("dtype", "lhs", "rhs"), pattern.SameConstraint("dtype", "lhs", "dst"))
 
 
-@register_access_relation(Where)
+@typeinfer.register(Where)
+def _(call, ctx) -> types.UnitType:
+    return types.UnitType()
+
+
+@access.register_relation(Where)
 def _(call, ctx):
     shapes = tuple(ctx.type_of(arg).shape for arg in call.args[:3])
-    out_shape = broadcast_all(shapes)
-    output = identity_access(len(out_shape))
-    return iterating(out_shape, (
-        *(broadcast_access(out_shape, shape) for shape in shapes), output, output,
+    out_shape = access.broadcast_all(shapes)
+    output = access.identity(len(out_shape))
+    return access.iterating(out_shape, (
+        *(access.broadcast(out_shape, shape) for shape in shapes), output, output,
     ))
 
 
-@register_verify_stmt(Where)
+@verify.register(Where)
 def _(call, ctx) -> None:
     cond, lhs, rhs, dst = (ctx.type_of(arg) for arg in call.args)
-    if broadcast_all((cond.shape, lhs.shape, rhs.shape)) != tuple(dst.shape):
+    if access.broadcast_all((cond.shape, lhs.shape, rhs.shape)) != tuple(dst.shape):
         ctx.error(call, "Where destination must have the broadcast shape of its inputs")
 
 

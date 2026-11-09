@@ -3,83 +3,79 @@
 import pytest
 
 from tests.core._corpus import reload
+from tilefoundry import inspection
 from tilefoundry.dsl import *
-from tilefoundry.inspection import as_script
-from tilefoundry.inspection.analysis_report import _type_text
-from tilefoundry.ir.core import BindingMetadata, Call, Var
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.target import CpuTarget
+from tilefoundry.ir import core, expr
+from tilefoundry.ir.hir import math
+from tilefoundry.target import cpu
 
 
 def test_binding_metadata_names_binding():
-    tensor_type = TensorType.scalar(DType.f32)
-    source = Var(name="source", type=tensor_type)
-    result = Call(
-        target=Binary(kind=BinaryKind.ADD),
+    tensor_type = TensorType.from_scalar(DType.f32)
+    source = expr.Var(name="source", type=tensor_type)
+    result = expr.Call(
+        target=math.Binary(kind=expr.BinaryKind.ADD),
         args=(source, source),
         type=tensor_type,
-        metadata=(BindingMetadata("result"),),
+        metadata=(expr.BindingMetadata("result"),),
     )
-    function = Function.build(
+    function = core.Function.from_parts(
         name="binding_name",
         params=(source,),
         body=result,
         return_type=tensor_type,
     )
 
-    canonical = as_script(function)
+    canonical = inspection.as_script(function)
 
     assert "result = tf.add(source, source)" in canonical
 
-    unbound = Call(
-        target=Binary(kind=BinaryKind.ADD),
+    unbound = expr.Call(
+        target=math.Binary(kind=expr.BinaryKind.ADD),
         args=(source, source),
         type=tensor_type,
     )
-    unbound_function = Function.build(
+    unbound_function = core.Function.from_parts(
         name="generated_name",
         params=(source,),
         body=unbound,
         return_type=tensor_type,
     )
 
-    assert "v0 = tf.add(source, source)" in as_script(unbound_function)
+    assert "v0 = tf.add(source, source)" in inspection.as_script(unbound_function)
 
-    named_later = Call(
-        target=Binary(kind=BinaryKind.ADD), args=(unbound, source), type=tensor_type,
-        metadata=(BindingMetadata("v0"),),
+    named_later = expr.Call(
+        target=math.Binary(kind=expr.BinaryKind.ADD), args=(unbound, source), type=tensor_type,
+        metadata=(expr.BindingMetadata("v0"),),
     )
-    reserved_function = Function.build(
+    reserved_function = core.Function.from_parts(
         name="reserved_name", params=(source,), body=named_later, return_type=tensor_type,
     )
-    reserved = as_script(
-        Module(
+    reserved = inspection.as_script(
+        core.Module(
             name="Reserved",
             functions=(reserved_function,),
             entry="reserved_name",
-            target=CpuTarget(),
+            target=cpu.Target(),
         )
     )
     assert "v0_2 = tf.add(source, source)" in reserved
     assert "v0 = tf.add(v0_2, source)" in reserved
-    assert as_script(reload(reserved, "Reserved")) == reserved
+    assert inspection.as_script(reload(reserved, "Reserved")) == reserved
 
 
 def test_umat_type_round_trips() -> None:
-    tensor_type = TensorType.scalar(DType.i64, storage=StorageKind.UMAT)
-    source = Var(name="source", type=tensor_type)
-    function = Function.build(
+    tensor_type = TensorType.from_scalar(DType.i64, storage=StorageKind.UMAT)
+    source = expr.Var(name="source", type=tensor_type)
+    function = core.Function.from_parts(
         name="umat_annotation",
         params=(source,),
         body=source,
         return_type=tensor_type,
     )
 
-    rendered = as_script(
-        Module(name="Umat", functions=(function,), entry="umat_annotation", target=CpuTarget())
+    rendered = inspection.as_script(
+        core.Module(name="Umat", functions=(function,), entry="umat_annotation", target=cpu.Target())
     )
 
     assert 'Tensor[(), "i64", "umat"]' in rendered
@@ -89,23 +85,23 @@ def test_umat_type_round_trips() -> None:
 
 
 def test_analysis_report_names_umat_storage() -> None:
-    assert _type_text(TensorType.umat_scalar()) == "i64[] umat"
+    assert inspection.type_text(TensorType.from_umat_scalar()) == "i64[] umat"
 
 
-@pytest.mark.parametrize("kind, alias", [(BinaryKind.MUL, "mul"), (BinaryKind.MIN, "min")])
+@pytest.mark.parametrize("kind, alias", [(expr.BinaryKind.MUL, "mul"), (expr.BinaryKind.MIN, "min")])
 def test_kinded_alias_round_trips(kind, alias):
-    tensor_type = TensorType.scalar(DType.f32)
-    source = Var(name="source", type=tensor_type)
-    function = Function.build(
+    tensor_type = TensorType.from_scalar(DType.f32)
+    source = expr.Var(name="source", type=tensor_type)
+    function = core.Function.from_parts(
         name="alias_round_trip", params=(source,),
-        body=Call(target=Binary(kind=kind), args=(source, source), type=tensor_type),
+        body=expr.Call(target=math.Binary(kind=kind), args=(source, source), type=tensor_type),
         return_type=tensor_type,
     )
-    rendered = as_script(Module(
-        name="Aliases", functions=(function,), entry=function.name, target=CpuTarget(),
+    rendered = inspection.as_script(core.Module(
+        name="Aliases", functions=(function,), entry=function.name, target=cpu.Target(),
     ))
     assert f"tf.{alias}(source, source)" in rendered
     rebuilt = reload(rendered, "Aliases").entry_function()
-    assert isinstance(rebuilt.body.target, Binary)
+    assert isinstance(rebuilt.body.target, math.Binary)
     assert rebuilt.body.target.kind is kind
-    assert as_script(reload(rendered, "Aliases")) == rendered
+    assert inspection.as_script(reload(rendered, "Aliases")) == rendered

@@ -13,14 +13,10 @@ import pytest
 import torch
 
 import tilefoundry
-from tilefoundry.analysis.api import analyze
-from tilefoundry.analysis.check import check_program
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.evaluator import evaluate
-from tilefoundry.evaluator.value import to_torch_dtype
-from tilefoundry.runtime.measure import flatten_outputs
+from tilefoundry import analysis, cli, runtime
+from tilefoundry.interfaces import evaluator
 from tilefoundry.schedule import finalize
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 
@@ -36,7 +32,7 @@ def _gemm(function):
 def _identity(function):
     (param,) = function.params
     generator = torch.Generator().manual_seed(0)
-    x = torch.randn(tuple(param.type.shape), generator=generator).to(to_torch_dtype(param.type.dtype))
+    x = torch.randn(tuple(param.type.shape), generator=generator).to(evaluator.to_torch_dtype(param.type.dtype))
     return (x,), x
 
 
@@ -44,15 +40,15 @@ def _evaluated(function):
     generator = torch.Generator().manual_seed(0)
     inputs = tuple(
         torch.randn(tuple(param.type.shape), generator=generator).to(
-            to_torch_dtype(param.type.dtype)
+            evaluator.to_torch_dtype(param.type.dtype)
         )
         for param in function.params
     )
-    return inputs, evaluate(function, *inputs)
+    return inputs, evaluator.evaluate(function, *inputs)
 
 
 def _poisoned(param):
-    dtype = to_torch_dtype(param.type.dtype)
+    dtype = evaluator.to_torch_dtype(param.type.dtype)
     fill = float("nan") if dtype.is_floating_point else -1
     return torch.full(tuple(param.type.shape), fill, dtype=dtype, device="cuda")
 
@@ -72,10 +68,10 @@ def _poisoned(param):
     ids=lambda value: Path(value).name.replace(".py", "") if isinstance(value, str) else None,
 )
 def test_synchronised_program_matches_on_the_card(path, reference):
-    module = replace(load_authored_ir(str(FIXTURES / path)), target=CudaTarget("nvidia.rtx_6000_ada"))
+    module = replace(cli.load_authored_ir(str(FIXTURES / path)), target=cuda.Target("nvidia.rtx_6000_ada"))
     inputs, expected = reference(module.entry_function())
     lowered = finalize(
-        analyze(*check_program(module, module.entry_function()), analysis=("memory", "sync"))
+        analysis.analyze(*analysis.check_program(module, module.entry_function()), analysis=("memory", "sync"))
     )
     compiled = tilefoundry.build(lowered)
     scratch = tuple(_poisoned(param) for param in compiled.type.input_params[len(inputs) :])
@@ -83,5 +79,5 @@ def test_synchronised_program_matches_on_the_card(path, reference):
     compiled(*(value.cuda() for value in inputs), *scratch, *outputs)
     torch.cuda.synchronize()
     actual = outputs[0] if len(outputs) == 1 else outputs
-    for (_, got), (_, want) in zip(flatten_outputs(actual), flatten_outputs(expected), strict=True):
+    for (_, got), (_, want) in zip(runtime.flatten_outputs(actual), runtime.flatten_outputs(expected), strict=True):
         assert torch.equal(got.cpu(), want.cpu())

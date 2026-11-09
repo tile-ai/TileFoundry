@@ -1,4 +1,4 @@
-"""``tilefoundry.ir.visitor`` — Expr / Stmt visitor + mutator contract.
+"""``tilefoundry.ir.core.visitor`` — Expr / Stmt visitor + mutator contract.
 
 Every pass is written against these six guarantees, and a break in any of them
 shows up in a pass's output rather than at its cause: class-name dispatch, an
@@ -15,63 +15,40 @@ import gc
 
 import pytest
 
-from tilefoundry.ir.core import Call, Constant, Expr, Op, Var
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.tir.memory import Copy, Fill
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.shape import ShapeOf
-from tilefoundry.ir.tir.stmts import (
-    Evaluate,
-    For,
-    Sequential,
-)
-from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.ir.types import CallableType, DType, TensorType, UnitType
-from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.visitor import (
-    ExprCloner,
-    ExprFunctor,
-    ExprVisitor,
-    StmtExprMutator,
-    StmtMutator,
-    StmtVisitor,
-    collect_exprs,
-    rewrite_prim_function,
-    walk_prim_function,
-)
+from tilefoundry.ir import core, expr, types
+from tilefoundry.ir.tir import memory
 
 
-def _t() -> TensorType:
-    return TensorType.scalar(DType.f32, storage=StorageKind.RMEM)
+def _t() -> types.TensorType:
+    return types.TensorType.from_scalar(expr.DType.f32, storage=expr.StorageKind.RMEM)
 
 
-def _i32() -> TensorType:
-    return TensorType.scalar(DType.i32, storage=StorageKind.RMEM)
+def _i32() -> types.TensorType:
+    return types.TensorType.from_scalar(expr.DType.i32, storage=expr.StorageKind.RMEM)
 
 
-class _OpA(Op):
+class _OpA(expr.Op):
     pass
 
 
-class _OpB(Op):
+class _OpB(expr.Op):
     pass
 
 
-def _var(name: str, t: TensorType | None = None) -> Var:
-    return Var(type=t or _t(), name=name)
+def _var(name: str, t: types.TensorType | None = None) -> expr.Var:
+    return expr.Var(type=t or _t(), name=name)
 
 
-def _const(v: object, t: TensorType | None = None) -> Constant:
-    return Constant(type=t or _t(), value=v)
+def _const(v: object, t: types.TensorType | None = None) -> expr.Constant:
+    return expr.Constant(type=t or _t(), value=v)
 
 
-def _call(op: Op, *args: Expr) -> Call:
-    return Call(type=_t(), target=op, args=args)
+def _call(op: expr.Op, *args: expr.Expr) -> expr.Call:
+    return expr.Call(type=_t(), target=op, args=args)
 
 
-def _eval_call(op: Op, *args: Expr) -> Evaluate:
-    return Evaluate(callable=op, args=args)
+def _eval_call(op: expr.Op, *args: expr.Expr) -> core.Evaluate:
+    return core.Evaluate(callable=op, args=args)
 
 
 def test_expr_visitor_dispatches_by_class_name_and_shares_unchanged_branches() -> None:
@@ -83,7 +60,7 @@ def test_expr_visitor_dispatches_by_class_name_and_shares_unchanged_branches() -
     """
     visits = []
 
-    class V(ExprVisitor[None]):
+    class V(core.ExprVisitor[None]):
         def visit_Var(self, var, ctx):
             visits.append(("Var", var.name))
 
@@ -97,15 +74,15 @@ def test_expr_visitor_dispatches_by_class_name_and_shares_unchanged_branches() -
     tree = _call(_OpA(), _var("x"), _const(1.0))
     V().visit(tree)
     assert visits == [("Call", "_OpA"), ("Var", "x"), ("Constant", 1.0)]
-    assert ExprCloner().visit(tree) is tree
+    assert core.ExprCloner().visit(tree) is tree
 
 
 def test_expr_cloner_shares_rewrite_results_for_shared_inputs() -> None:
     shared = _var("shared")
     tree = _call(_OpA(), shared, shared)
 
-    class FreshVars(ExprCloner):
-        def visit_Var(self, var: Var, ctx) -> Var:
+    class FreshVars(core.ExprCloner):
+        def visit_Var(self, var: expr.Var, ctx) -> expr.Var:
             return _var(var.name)
 
     rewritten = FreshVars().visit(tree)
@@ -118,40 +95,40 @@ def test_expr_visitor_memo_visits_shared_dag_once_and_returns_same_result() -> N
     shared = _call(_OpA(), _var("shared"))
     tree = _call(_OpB(), shared, shared)
 
-    class CountingVisitor(ExprVisitor[object]):
+    class CountingVisitor(core.ExprVisitor[object]):
         def __init__(self) -> None:
             super().__init__()
             self.counts: dict[str, int] = {}
 
-        def _count(self, expr: Expr) -> None:
-            name = type(expr).__name__
+        def _count(self, node: expr.Expr) -> None:
+            name = type(node).__name__
             self.counts[name] = self.counts.get(name, 0) + 1
 
-        def visit_Var(self, var: Var, ctx) -> str:
+        def visit_Var(self, var: expr.Var, ctx) -> str:
             self._count(var)
             return var.name
 
-        def visit_Call(self, call: Call, ctx) -> tuple[str, tuple[object, ...]]:
+        def visit_Call(self, call: expr.Call, ctx) -> tuple[str, tuple[object, ...]]:
             self._count(call)
             return (
                 type(call.target).__name__,
                 tuple(self.visit(arg, ctx) for arg in call.args),
             )
 
-    class CountingFunctor(ExprFunctor[object]):
+    class CountingFunctor(expr.Functor[object]):
         def __init__(self) -> None:
             super().__init__()
             self.counts: dict[str, int] = {}
 
-        def _count(self, expr: Expr) -> None:
-            name = type(expr).__name__
+        def _count(self, node: expr.Expr) -> None:
+            name = type(node).__name__
             self.counts[name] = self.counts.get(name, 0) + 1
 
-        def visit_Var(self, var: Var, ctx) -> str:
+        def visit_Var(self, var: expr.Var, ctx) -> str:
             self._count(var)
             return var.name
 
-        def visit_Call(self, call: Call, ctx) -> tuple[str, tuple[object, ...]]:
+        def visit_Call(self, call: expr.Call, ctx) -> tuple[str, tuple[object, ...]]:
             self._count(call)
             return (
                 type(call.target).__name__,
@@ -172,37 +149,37 @@ def test_collected_postorder_visits_each_shared_expression_once() -> None:
     shared = _call(_OpA(), _var("shared"))
     root = _call(_OpB(), shared, shared)
 
-    ordered = collect_exprs(root)
+    ordered = core.collect_exprs(root)
 
-    assert [type(expr).__name__ for expr in ordered] == ["Var", "Call", "Call"]
+    assert [type(node).__name__ for node in ordered] == ["Var", "Call", "Call"]
     assert ordered[1] is shared
     assert ordered[2] is root
 
 
 def test_expr_visitor_pins_memo_expr_and_uses_explicit_function_root() -> None:
-    expr = _var("pinned")
-    key = id(expr)
+    node = _var("pinned")
+    key = id(node)
     marker = object()
 
-    class V(ExprVisitor[object]):
-        def visit_Var(self, var: Var, ctx) -> object:
+    class V(core.ExprVisitor[object]):
+        def visit_Var(self, var: expr.Var, ctx) -> object:
             return marker
 
     visitor = V()
-    assert visitor.visit(expr) is marker
-    del expr
+    assert visitor.visit(node) is marker
+    del node
     gc.collect()
     for i in range(64):
         _var(f"replacement_{i}")
 
-    pinned, result = visitor._memo[key]
+    pinned, result = visitor.memo[key]
     assert id(pinned) == key
     assert visitor.visit(pinned) is result is marker
 
     body = _var("body")
-    root = Function.build(name="root", params=(), body=body, return_type=body.type)
+    root = core.Function.from_parts(name="root", params=(), body=body, return_type=body.type)
     other_body = _var("other_body")
-    other = Function.build(name="other", params=(), body=other_body, return_type=other_body.type)
+    other = core.Function.from_parts(name="other", params=(), body=other_body, return_type=other_body.type)
     rooted = V(root_function=root)
     assert rooted.can_visit_function_body(root)
     assert not rooted.can_visit_function_body(other)
@@ -214,16 +191,16 @@ def test_expr_visitor_pins_memo_expr_and_uses_explicit_function_root() -> None:
 
 
 def test_expr_functor_requires_explicit_handler_for_unknown_expr() -> None:
-    shape = ShapeOf(type=_i32(), param=_var("x"), axis=0)
+    shape = core.ShapeOf(type=_i32(), param=_var("x"), axis=0)
     with pytest.raises(NotImplementedError, match="ShapeOf"):
-        ExprVisitor().visit(shape)
+        core.ExprVisitor().visit(shape)
 
     x = _var("x")
     y = _var("y")
     sub = _call(_OpA(), x, y)
     top = _call(_OpB(), sub, _const(2.0))
 
-    class OnlyReplaceY(ExprCloner):
+    class OnlyReplaceY(core.ExprCloner):
         def visit_Var(self, var, ctx):
             return _var("y2") if var.name == "y" else var
 
@@ -243,7 +220,7 @@ def test_expr_cloner_skips_loop_region_binding_vars() -> None:
     ind = _var("i", _i32())
     carried = (_var("a"), _var("b"))
     init = (_var("a0"), _var("b0"))
-    region = LoopRegion(
+    region = core.LoopRegion(
         type=_t(),
         induction_var=ind,
         params=carried,
@@ -256,29 +233,29 @@ def test_expr_cloner_skips_loop_region_binding_vars() -> None:
 
     replaced: list[str] = []
 
-    class ToConst(ExprCloner):
+    class ToConst(core.ExprCloner):
         def visit_Var(self, var, ctx):
             replaced.append(var.name)
             return _const(0.0)
 
     out = ToConst().visit(region)
     assert out.induction_var is ind and out.params is carried
-    assert isinstance(out.body, Constant)
+    assert isinstance(out.body, expr.Constant)
 
     assert "i" not in replaced and "a" not in replaced and "b" not in replaced
     assert "a0" in replaced and "b0" in replaced
-    assert all(isinstance(e, Constant) for e in out.args)
+    assert all(isinstance(e, expr.Constant) for e in out.args)
 
 
-def _simple_for_body() -> For:
+def _simple_for_body() -> core.For:
     i = _var("i", _i32())
-    body = Sequential(
+    body = core.Sequential(
         body=(
-            _eval_call(Copy(), _var("src"), _var("dst")),
-            _eval_call(Fill(), _var("t"), _const(0.0)),
+            _eval_call(memory.Copy(), _var("src"), _var("dst")),
+            _eval_call(memory.Fill(), _var("t"), _const(0.0)),
         )
     )
-    return For(
+    return core.For(
         induction_var=i,
         start=_const(0, _i32()),
         stop=_const(16, _i32()),
@@ -298,7 +275,7 @@ def test_stmt_walk_stays_in_the_stmt_tree_and_shares_unchanged_siblings() -> Non
     seen: list[str] = []
     visited_vars: list[str] = []
 
-    class V(StmtVisitor[None]):
+    class V(core.StmtVisitor[None]):
         def visit_Evaluate(self, stmt):
             seen.append(type(stmt.callable).__name__)
 
@@ -315,10 +292,10 @@ def test_stmt_walk_stays_in_the_stmt_tree_and_shares_unchanged_siblings() -> Non
 
     s = _simple_for_body()
 
-    class ReplaceCopy(StmtMutator):
+    class ReplaceCopy(core.StmtMutator):
         def visit_Evaluate(self, stmt):
-            if isinstance(stmt.callable, Copy):
-                return _eval_call(Copy(), _var("new_src"), stmt.args[1])
+            if isinstance(stmt.callable, memory.Copy):
+                return _eval_call(memory.Copy(), _var("new_src"), stmt.args[1])
             return stmt
 
     out = ReplaceCopy().visit(s)
@@ -337,22 +314,22 @@ def test_stmt_expr_mutator_rewrites_expr_fields_tuples_and_symbolref_leaf() -> N
     """
     s = _simple_for_body()
 
-    class RewriteConst(StmtExprMutator):
+    class RewriteConst(core.StmtExprMutator):
         def visit_Constant(self, c, ctx):
-            return Constant(type=c.type, value=32) if c.value == 16 else c
+            return expr.Constant(type=c.type, value=32) if c.value == 16 else c
 
     out = RewriteConst().visit_stmt(s)
     assert out.stop.value == 32
     assert out.start is s.start and out.step is s.step
 
     a, b, c = _var("a"), _var("b"), _var("c")
-    ct = CallableType(return_type=UnitType(), parameters=(a.type, b.type, c.type))
-    ref = SymbolRef(name="callee", type=ct)
-    call_stmt = Evaluate(callable=ref, args=(a, b, c))
+    ct = types.CallableType(return_type=types.UnitType(), parameters=(a.type, b.type, c.type))
+    ref = core.SymbolRef(name="callee", type=ct)
+    call_stmt = core.Evaluate(callable=ref, args=(a, b, c))
 
-    assert StmtExprMutator().visit_stmt(call_stmt) is call_stmt
+    assert core.StmtExprMutator().visit_stmt(call_stmt) is call_stmt
 
-    class ReplaceB(StmtExprMutator):
+    class ReplaceB(core.StmtExprMutator):
         def visit_Var(self, var, ctx):
             return _var("b2") if var.name == "b" else var
 
@@ -370,12 +347,12 @@ def test_prim_function_walk_and_identity_preserving_rewrite() -> None:
     """
     seen: list[str] = []
     s = _simple_for_body()
-    pf = PrimFunction(name="foo", params=(), body=Sequential(body=(s,)))
+    pf = core.PrimFunction(name="foo", params=(), body=core.Sequential(body=(s,)))
 
-    class V(StmtVisitor[None]):
+    class V(core.StmtVisitor[None]):
         def visit_For(self, stmt):
             seen.append("For")
 
-    walk_prim_function(V(), pf)
+    core.walk_prim_function(V(), pf)
     assert seen == ["For"]
-    assert rewrite_prim_function(StmtMutator(), pf) is pf
+    assert core.rewrite_prim_function(core.StmtMutator(), pf) is pf

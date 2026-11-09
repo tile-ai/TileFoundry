@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from tests.core._corpus import Case, case, check_case, special
-from tilefoundry.inspection.viewer.builder import ViewerBuilder
+from tilefoundry.inspection import viewer
 
 PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
 
@@ -16,7 +16,7 @@ class ViewerCase(Case):
     """A program whose entry function the viewer draws."""
 
     def guard(self, state, problems):
-        graph = ViewerBuilder(state.entry_function(), collapsed=set()).build()
+        graph = viewer.Builder(state.entry_function(), collapsed=set()).build()
 
         assert graph.source.strip()
 

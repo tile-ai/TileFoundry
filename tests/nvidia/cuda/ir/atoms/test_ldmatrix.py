@@ -1,6 +1,6 @@
 """Warp matrix copy patterns compared with compiled CuTe."""
 
-from tilefoundry_nvidia.cuda.ir.tir.memory.ldmatrix import LdMatrix
+from tilefoundry_nvidia.cuda.ir.tir import memory
 
 from ._cute_reference import (
     cute_reference,
@@ -12,7 +12,7 @@ from ._cute_reference import (
 
 
 def test_ldmatrix_atom():
-    op = LdMatrix()
+    op = memory.LdMatrix()
     reference = cute_reference()["ldmatrix"]
     for role in op.roles:
         assert to_tv_layout(op, role) == reference_tv(reference[role])

@@ -1,12 +1,12 @@
 """A CTA-scoped two-row RMS norm followed by blockwise FP8 quantization."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="rmsnorm_quant_seq_2",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 2 * 4 * 32)),
 )
 class RmsnormQuantSeq2Module:

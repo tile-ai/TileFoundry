@@ -19,44 +19,40 @@ DOCUMENT_KINDS = ("architecture", "device")
 FACT_EVIDENCE_KEYS = ("unit", "origin", "source", "conditions")
 
 
-
-
-
-
 FACT_ORIGINS = ("vendor", "measured", "reference", "derived", "estimated")
 
-_ENVELOPE_KEYS = ("schema", "kind", "id")
+ENVELOPE_KEYS = ("schema", "kind", "id")
 
 
-class HardwareSpecError(Exception):
+class SpecError(Exception):
     """Base for every hardware-document diagnostic."""
 
 
-class DocumentFormatError(HardwareSpecError):
+class DocumentFormatError(SpecError):
     """The document is not readable TOML or its envelope is malformed."""
 
 
-class EvidenceFormatError(HardwareSpecError):
+class EvidenceFormatError(SpecError):
     """A leaf under ``facts`` is not a well-formed evidence record."""
 
 
-class SchemaValidationError(HardwareSpecError):
+class SchemaValidationError(SpecError):
     """A document's fact tree does not satisfy its target-owned schema."""
 
 
-class UnknownDocumentError(HardwareSpecError):
+class UnknownDocumentError(SpecError):
     """No document is installed under the requested ID."""
 
 
-class UnknownSchemaError(HardwareSpecError):
+class UnknownSchemaError(SpecError):
     """No typed schema is registered under the name a document claims."""
 
 
-class DuplicateRegistrationError(HardwareSpecError):
+class DuplicateRegistrationError(SpecError):
     """A document ID or schema name was registered twice."""
 
 
-class IncompatiblePairError(HardwareSpecError):
+class IncompatiblePairError(SpecError):
     """An architecture and a device do not declare each other compatible."""
 
 
@@ -84,7 +80,7 @@ class Fact:
 
 
 @dataclass(frozen=True)
-class HardwareDocument:
+class Document:
     """One parsed architecture or device document.
 
     ``facts`` is keyed by dotted leaf path (``memory.hbm.bandwidth``), which is
@@ -117,10 +113,10 @@ class ResolvedResource:
     value: Any
     id: str | None = None
     digest: str | None = None
-    document: HardwareDocument | None = None
+    document: Document | None = None
 
 
-def _leaf_from(path: str, table: dict[str, Any]) -> Fact:
+def leaf_from(path: str, table: dict[str, Any]) -> Fact:
     """One evidence leaf, validated against the generic leaf format."""
     has_value = "value" in table
     status = table.get("status")
@@ -163,12 +159,12 @@ def _leaf_from(path: str, table: dict[str, Any]) -> Fact:
     )
 
 
-def _is_leaf(table: dict[str, Any]) -> bool:
+def is_leaf(table: dict[str, Any]) -> bool:
     """Whether a table under ``facts`` terminates a path rather than nesting."""
     return "value" in table or "status" in table
 
 
-def _walk_facts(tree: dict[str, Any], prefix: str = "") -> dict[str, Fact]:
+def walk_facts(tree: dict[str, Any], prefix: str = "") -> dict[str, Fact]:
     """Every evidence leaf under a freely nested ``facts`` namespace."""
     leaves: dict[str, Fact] = {}
     for key, node in tree.items():
@@ -177,7 +173,7 @@ def _walk_facts(tree: dict[str, Any], prefix: str = "") -> dict[str, Fact]:
             raise EvidenceFormatError(
                 f"fact {path!r}: expected a table, got {type(node).__name__}"
             )
-        if _is_leaf(node):
+        if is_leaf(node):
             nested = sorted(
                 key for key, value in node.items() if isinstance(value, dict)
             )
@@ -186,13 +182,13 @@ def _walk_facts(tree: dict[str, Any], prefix: str = "") -> dict[str, Fact]:
                     f"fact {path!r}: a leaf cannot also be a namespace; it records "
                     f"a value but nests {nested}"
                 )
-            leaves[path] = _leaf_from(path, node)
+            leaves[path] = leaf_from(path, node)
         else:
-            leaves.update(_walk_facts(node, path))
+            leaves.update(walk_facts(node, path))
     return leaves
 
 
-def parse_document(text: str, *, origin_label: str) -> HardwareDocument:
+def parse_document(text: str, *, origin_label: str) -> Document:
     """Parse one hardware document from TOML *text*.
 
     *origin_label* names the document in diagnostics: an installed ID for a
@@ -208,12 +204,12 @@ def parse_document(text: str, *, origin_label: str) -> HardwareDocument:
         raise DocumentFormatError(
             f"{origin_label}: missing the [spec] envelope table"
         )
-    missing = [key for key in _ENVELOPE_KEYS if not envelope.get(key)]
+    missing = [key for key in ENVELOPE_KEYS if not envelope.get(key)]
     if missing:
         raise DocumentFormatError(
             f"{origin_label}: [spec] is missing {missing}"
         )
-    unknown_envelope = set(envelope) - set(_ENVELOPE_KEYS)
+    unknown_envelope = set(envelope) - set(ENVELOPE_KEYS)
     if unknown_envelope:
         raise DocumentFormatError(
             f"{origin_label}: unknown [spec] keys {sorted(unknown_envelope)}"
@@ -239,7 +235,6 @@ def parse_document(text: str, *, origin_label: str) -> HardwareDocument:
         )
     declared_peers = compatibility_table.get(peer_key, [])
 
-
     if not isinstance(declared_peers, list) or not all(
         isinstance(peer, str) and peer for peer in declared_peers
     ):
@@ -258,12 +253,12 @@ def parse_document(text: str, *, origin_label: str) -> HardwareDocument:
             f"{origin_label}: unknown top-level tables {sorted(unknown_top)}"
         )
 
-    return HardwareDocument(
+    return Document(
         id=envelope["id"],
         kind=kind,
         schema=envelope["schema"],
         compatibility=compatibility,
-        facts=_walk_facts(facts_tree),
+        facts=walk_facts(facts_tree),
         digest=hashlib.sha256(text.encode("utf-8")).hexdigest(),
     )
 
@@ -275,8 +270,8 @@ __all__ = [
     "DuplicateRegistrationError",
     "EvidenceFormatError",
     "Fact",
-    "HardwareDocument",
-    "HardwareSpecError",
+    "Document",
+    "SpecError",
     "IncompatiblePairError",
     "ResolvedResource",
     "SchemaValidationError",

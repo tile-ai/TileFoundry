@@ -6,13 +6,13 @@ uses that decision at the producer, before entering the capturing scope.
 
 from tilefoundry import func, module
 from tilefoundry.dsl import Mesh, T, Tensor, Topology, tf
-from tilefoundry.ir.types import Layout
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.ir import types
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 32)),
 )
 class CapturedInsertUpdate:
@@ -22,7 +22,7 @@ class CapturedInsertUpdate:
     ) -> Tensor[(2, 4), "bf16", "smem"]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(32,), names=("lane",)) as threads:
-                tile = tf.zeros(Tensor[(2, 4), "bf16", Layout((2, 4), (4, 1)), "smem"])
+                tile = tf.zeros(Tensor[(2, 4), "bf16", types.Layout((2, 4), (4, 1)), "smem"])
                 for r in range(2):
                     row_dst = tf.empty(
                         Tensor[

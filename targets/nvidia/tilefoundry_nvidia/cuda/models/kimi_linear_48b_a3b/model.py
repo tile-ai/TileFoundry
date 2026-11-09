@@ -58,7 +58,7 @@ from typing import Optional
 from transformers.configuration_utils import PretrainedConfig
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 # ── the checkpoint's own configuration class ─────────────────────────────────
 #
@@ -275,7 +275,7 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
 
     @module(
         entry="mla_attention",
-        target=CudaTarget("nvidia.h200_sxm"),
+        target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", 132), Topology("thread", 512)),
     )
     class KimiMla:
@@ -379,7 +379,7 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
 
     @module(
         entry="kda_attention",
-        target=CudaTarget("nvidia.h200_sxm"),
+        target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", 132), Topology("thread", 512)),
     )
     class KimiKda:
@@ -535,7 +535,7 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
 
     @module(
         entry="moe",
-        target=CudaTarget("nvidia.h200_sxm"),
+        target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", 132), Topology("thread", 512)),
     )
     class KimiMoe:
@@ -651,7 +651,7 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             shared = shared_expert(tokens, sh_gate, sh_up, sh_down)
             return tf.reshape(routed + shared, new_shape=(1, _S, config.hidden_size))
 
-    @module(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
+    @module(target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
     class KimiLinear48BA3B:
         """The three kernels this model is, as one tree.
 

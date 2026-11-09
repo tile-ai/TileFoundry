@@ -15,11 +15,10 @@ from .layout import (
     Swizzle,
     flat_shape,
     flat_stride,
-    make_swizzle,
 )
 
 
-def _crd2idx_unbounded(layout: Layout, coord: int) -> int:
+def crd2idx_unbounded(layout: Layout, coord: int) -> int:
     """Apply CuTe ``crd2idx`` while leaving the final mode unwrapped."""
     shape = flat_shape(layout)
     stride = flat_stride(layout)
@@ -65,9 +64,9 @@ def composition(left, right, offset: int = 0):
                 f"composition: a non-zero offset ({offset}) between a Layout and a "
                 f"Swizzle has no canonical ComposedLayout form"
             )
-        active_y = _crd2idx_unbounded(left, right.yyy_mask)
-        active_z = _crd2idx_unbounded(left, right.zzz_mask)
-        return composition(make_swizzle(active_y, active_z), left)
+        active_y = crd2idx_unbounded(left, right.yyy_mask)
+        active_z = crd2idx_unbounded(left, right.zzz_mask)
+        return composition(Swizzle.from_active(active_y, active_z), left)
     raise NotImplementedError(
         f"composition: no swizzle rule for {type(left).__name__} ∘ {type(right).__name__}"
     )

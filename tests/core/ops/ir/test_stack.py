@@ -14,69 +14,59 @@ from tests.core.ops.ir.op_case import (
     infer_call,
     op_case_test,
 )
-from tilefoundry.ir.hir.tensor.stack import Stack
-from tilefoundry.ir.types import (
-    DType,
-    Layout,
-    Mesh,
-    Partial,
-    ShardLayout,
-    Topology,
-    make_shard_tensor_type,
-    make_tensor_type,
-)
-from tilefoundry.ir.types.shard_layout import Split, split_target_axes
-from tilefoundry.visitor_registry.contexts import TrafficBytes
+from tilefoundry.interfaces import cost
+from tilefoundry.ir import expr, types, utils
+from tilefoundry.ir.hir import tensor
 
 
 def test_stack_result_has_fresh_layout() -> None:
-    source_type = make_tensor_type((2, 3), layout=Layout(shape=(2, 3), strides=(3, 1)))
-    result = infer_call(Stack(axis=1), source_type, source_type)
+    source_type = types.TensorType.from_shape((2, 3), layout=types.Layout(shape=(2, 3), strides=(3, 1)))
+    result = infer_call(tensor.Stack(axis=1), source_type, source_type)
     assert result.shape == (2, 2, 3)
-    assert result.layout == Layout(shape=(2, 2, 3), strides=(6, 3, 1))
+    assert result.layout == types.Layout(shape=(2, 2, 3), strides=(6, 3, 1))
     left = torch.arange(6, dtype=torch.float32).reshape(2, 3)
     right = left + 10
     check_op_case(
         OpCase(
-            "negative_axis", Stack(axis=-1), (left, right), value=torch.stack((left, right), dim=-1)
+            "negative_axis", tensor.Stack(axis=-1), (left, right), value=torch.stack((left, right), dim=-1)
         )
     )
 
 
 def test_stack_shifts_split_past_axis() -> None:
-    mesh = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
-    plain = make_tensor_type((2, 8))
-    sharded = make_shard_tensor_type((2, 8), mesh=mesh, attrs=(Split(1),))
-    result = infer_call(Stack(axis=0), plain, sharded)
-    assert isinstance(result.layout, ShardLayout)
+    mesh = types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",))
+    plain = types.TensorType.from_shape((2, 8))
+    sharded = utils.make_shard_tensor_type((2, 8), mesh=mesh, attrs=(types.Split(1),))
+    result = infer_call(tensor.Stack(axis=0), plain, sharded)
+    assert isinstance(result.layout, types.ShardLayout)
     assert result.layout != sharded.layout
     assert math.prod(result.layout.layout.shape) == math.prod(result.shape)
-    assert split_target_axes(result.layout, result.shape) == (2,)
+    assert types.split_target_axes(result.layout, result.shape) == (2,)
 
 
 def test_stack_carries_uniform_partial() -> None:
-    partial = make_shard_tensor_type(
+    partial = utils.make_shard_tensor_type(
         (2, 8),
-        mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
-        attrs=(Partial("sum"),),
+        mesh=types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",)),
+        attrs=(types.Partial("sum"),),
     )
-    result = infer_call(Stack(axis=1), partial, partial)
-    assert isinstance(result.layout, ShardLayout)
+    result = infer_call(tensor.Stack(axis=1), partial, partial)
+    assert isinstance(result.layout, types.ShardLayout)
     assert result.layout.layout.shape == result.shape
-    assert result.layout.attrs == (Partial("sum"),)
+    assert result.layout.attrs == (types.Partial("sum"),)
 
 
 def _make_stack_costs_each_input_read_and_the_result_write() -> OpCase:
     input_bytes = 2 * 3 * 4
     return OpCase(
         "stack",
-        Stack(axis=0),
-        (make_tensor_type((2, 3), DType.f32),) * 2,
+        tensor.Stack(axis=0),
+        (types.TensorType.from_shape((2, 3), expr.DType.f32),) * 2,
         cost=Cost(
             traffic=(
-                TrafficBytes(read=input_bytes),
-                TrafficBytes(read=input_bytes),
-                TrafficBytes(write=2 * input_bytes),
+                cost.TrafficBytes(read=input_bytes),
+                cost.TrafficBytes(read=input_bytes),
+                cost.TrafficBytes(write=2 * input_bytes),
             )
         ),
     )
@@ -86,38 +76,38 @@ CASES = (
     _make_stack_costs_each_input_read_and_the_result_write(),
     OpCase(
         "incompatible_split_axes",
-        Stack(axis=0),
+        tensor.Stack(axis=0),
         (
-            make_shard_tensor_type(
+            utils.make_shard_tensor_type(
                 (8, 8),
-                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
-                attrs=(Split(0),),
+                mesh=types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",)),
+                attrs=(types.Split(0),),
             ),
-            make_shard_tensor_type(
+            utils.make_shard_tensor_type(
                 (8, 8),
-                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
-                attrs=(Split(1),),
+                mesh=types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",)),
+                attrs=(types.Split(1),),
             ),
         ),
         error=ExpectedError(match="input 1 .*incompatible.*Reshard"),
     ),
     OpCase(
         "partial_and_plain_slices",
-        Stack(axis=0),
+        tensor.Stack(axis=0),
         (
-            make_shard_tensor_type(
+            utils.make_shard_tensor_type(
                 (8, 8),
-                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
-                attrs=(Partial("sum"),),
+                mesh=types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",)),
+                attrs=(types.Partial("sum"),),
             ),
-            make_tensor_type((8, 8)),
+            types.TensorType.from_shape((8, 8)),
         ),
         error=ExpectedError(match="input 1 does not carry Partial.*reshard"),
     ),
     OpCase(
         "axis_out_of_range",
-        Stack(axis=-3),
-        (make_tensor_type((8,)), make_tensor_type((8,))),
+        tensor.Stack(axis=-3),
+        (types.TensorType.from_shape((8,)), types.TensorType.from_shape((8,))),
         error=ExpectedError(match="axis -3 out of range"),
     ),
 )

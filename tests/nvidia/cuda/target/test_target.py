@@ -16,61 +16,46 @@ from pathlib import Path
 import pytest
 
 from tests.core.target.test_target import _provider_target
-from tilefoundry import CompilerOptions, build, jit
-from tilefoundry.analysis import AnalysisError, analyze
-from tilefoundry.analysis.check import check_program
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.codegen.linkable_module import LinkableModule
+from tilefoundry import CompilerOptions, analysis, build, cli, codegen, jit, target
 from tilefoundry.dsl import *
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import Sequential
-from tilefoundry.target import (
-    CpuTarget,
-    PerformanceServiceFacts,
-    ThroughputFacts,
-    TopologyFacts,
-    TopologyLevelFacts,
-    register_target,
-    registered_targets,
-)
-from tilefoundry.target.base import bind
-from tilefoundry_nvidia import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.tir.stmts.mesh_scope import validate_cuda_topology_levels
-from tilefoundry_nvidia.cuda.target.spec import SM90_ID
+from tilefoundry.ir import core
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
+from tilefoundry_nvidia.cuda import target as cuda_target
+from tilefoundry_nvidia.cuda.codegen.tir import stmts
 
 PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
 
 
-class ExternalCudaTarget(CudaTarget):
+class ExternalCudaTarget(cuda.Target):
     name = "tests.core.target.external_cuda"
 
 
-class _NoComputeUnitRateCudaTarget(CudaTarget):
+class _NoComputeUnitRateCudaTarget(cuda.Target):
     name = "tests.core.target.no_compute_unit_rate_cuda"
 
     def get_facts(self, facts_type: type, query: object | None = None):
         facts = super().get_facts(facts_type, query)
-        if facts_type is PerformanceServiceFacts:
+        if facts_type is target.PerformanceServiceFacts:
             return replace(facts, unit_flops=())
         return facts
 
 
-class ExtraTopologyCudaTarget(CudaTarget):
+class ExtraTopologyCudaTarget(cuda.Target):
     name = "tests.core.target.extra_topology_cuda"
     extra_levels = (
-        TopologyLevelFacts("custom", 1, None),
-        TopologyLevelFacts("unknown", 1, None),
+        target.TopologyLevelFacts("custom", 1, None),
+        target.TopologyLevelFacts("unknown", 1, None),
     )
 
     def get_facts(self, facts_type: type, query: object | None = None):
-        if facts_type is TopologyFacts and query is None:
+        if facts_type is target.TopologyFacts and query is None:
             inherited = super().get_facts(facts_type, query)
-            return TopologyFacts(
+            return target.TopologyFacts(
                 (*inherited.topologies, *self.extra_levels),
                 parallel_level=inherited.parallel_level,
             )
-        if facts_type is TopologyLevelFacts:
+        if facts_type is target.TopologyLevelFacts:
             for level in self.extra_levels:
                 if level.name == query:
                     return level
@@ -85,81 +70,81 @@ def test_cuda_projects_cta_rates() -> None:
     predicate peak is published, so each is stated per CTA in the hardware table
     and arrives unchanged.
     """
-    target = CudaTarget("nvidia.h200_sxm")
-    device = target.get_facts(ThroughputFacts)
-    services = target.get_facts(PerformanceServiceFacts)
+    tgt = cuda.Target("nvidia.h200_sxm")
+    device = tgt.get_facts(target.ThroughputFacts)
+    services = tgt.get_facts(target.PerformanceServiceFacts)
 
     assert services.unit == "cta"
     assert dict(services.unit_flops) == {
-        dtype: rate // target.device.sm_count for dtype, rate in device.peak_flops_per_second
+        dtype: rate // tgt.device.sm_count for dtype, rate in device.peak_flops_per_second
     }
     assert dict(services.unit_bandwidth) == {
         device.bandwidth_level: (
-            target.device.hbm_bandwidth_bytes_per_second // target.device.sm_count
+            tgt.device.hbm_bandwidth_bytes_per_second // tgt.device.sm_count
         ),
         "smem": (
-            target.architecture.shared_memory_bandwidth_bytes_per_clock_per_sm
-            * target.device.sm_clock_hz
+            tgt.architecture.shared_memory_bandwidth_bytes_per_clock_per_sm
+            * tgt.device.sm_clock_hz
         ),
     }
-    assert dict(services.unit_ops) == dict(target.device.service_ops_per_second)
+    assert dict(services.unit_ops) == dict(tgt.device.service_ops_per_second)
     assert all(rate > 0 for _kind, rate in services.unit_ops)
 
 
 def test_performance_refuses_missing_compute_rate() -> None:
-    target = _NoComputeUnitRateCudaTarget("nvidia.h200_sxm")
-    MoEMegaKernel = load_authored_ir(f"{PLACED / 'moe_mega_kernel.py'}:MoEMegaKernel")
-    subject = replace(MoEMegaKernel, target=target)
+    tgt = _NoComputeUnitRateCudaTarget("nvidia.h200_sxm")
+    MoEMegaKernel = cli.load_authored_ir(f"{PLACED / 'moe_mega_kernel.py'}:MoEMegaKernel")
+    subject = replace(MoEMegaKernel, target=tgt)
     function = subject.entry_function()
 
-    with pytest.raises(AnalysisError, match=r"dtype 'f32'.*'cta'"):
-        analyze(*check_program(subject, function), analysis="performance")
+    with pytest.raises(analysis.Error, match=r"dtype 'f32'.*'cta'"):
+        analysis.analyze(*analysis.check_program(subject, function), analysis="performance")
 
 
 def test_topology_validation_uses_emission_target() -> None:
     custom = ExtraTopologyCudaTarget("nvidia.h200_sxm")
 
-    validate_cuda_topology_levels(custom, ("custom",))
+    stmts.validate_cuda_topology_levels(custom, ("custom",))
     with pytest.raises(ValueError, match=r"supports \{gpu, cta, thread, custom, unknown\}"):
-        validate_cuda_topology_levels(custom, ("warp",))
+        stmts.validate_cuda_topology_levels(custom, ("warp",))
 
 
 def test_registration_rejects_invalid_providers() -> None:
     inherited = type(
         "InheritedTarget",
-        (CudaTarget,),
+        (cuda.Target,),
         {"__module__": "tests.providers.inherited"},
     )
     empty = _provider_target("tests.providers.empty", "EmptyTarget", "")
 
     with pytest.raises(ValueError, match="declare a class-level"):
-        register_target(inherited)
+        target.register(inherited)
     with pytest.raises(ValueError, match="non-empty"):
-        register_target(empty)
+        target.register(empty)
     with pytest.raises(TypeError, match="Target subclass"):
-        register_target(object)
+        target.register(object)
     with pytest.raises(TypeError, match="Target subclass"):
-        register_target("tests.core.target.argument")
+        target.register("tests.core.target.argument")
 
     owner = _provider_target("tests.providers.owner", "OwnedTarget", "tests.core.target.conflict")
     claimant = _provider_target(
         "tests.providers.claimant", "ClaimantTarget", "tests.core.target.conflict"
     )
-    register_target(owner)
+    target.register(owner)
     with pytest.raises(ValueError, match="already owned.*cannot register"):
-        register_target(claimant)
+        target.register(claimant)
 
 
 def test_target_rejects_strings_keeps_instances() -> None:
-    target = CudaTarget("nvidia.h200_sxm")
-    module = Module("exact", (), target=target)
+    tgt = cuda.Target("nvidia.h200_sxm")
+    module = core.Module("exact", (), target=tgt)
 
-    assert module.target is target
-    assert module.resolve_target() is target
+    assert module.target is tgt
+    assert module.resolve_target() is tgt
     with pytest.raises(TypeError, match="Target instance, not a string"):
-        Module("invalid", (), target="cuda")
+        core.Module("invalid", (), target="cuda")
     with pytest.raises(TypeError, match="Target instance, not a string"):
-        PrimFunction("invalid", (), Sequential(()), target="cuda")
+        core.PrimFunction("invalid", (), core.Sequential(()), target="cuda")
 
 
 def test_topology_extent_checks_resource_facts() -> None:
@@ -170,18 +155,18 @@ def test_topology_extent_checks_resource_facts() -> None:
     threads one supports. A symbolic extent is explicit but deferred until the
     program's dimensions are resolved.
     """
-    target = CudaTarget("nvidia.h200_sxm")
-    target.validate_program_topology(Topology("cta", 132))
-    target.validate_program_topology(Topology("cta", 310_000))
-    target.validate_program_topology(Topology("thread", 1024))
-    target.validate_program_topology(Topology("cta", DimVar("ctas", 1, 310_000)))
+    tgt = cuda.Target("nvidia.h200_sxm")
+    tgt.validate_program_topology(Topology("cta", 132))
+    tgt.validate_program_topology(Topology("cta", 310_000))
+    tgt.validate_program_topology(Topology("thread", 1024))
+    tgt.validate_program_topology(Topology("cta", DimVar("ctas", 1, 310_000)))
     ExternalCudaTarget("nvidia.h200_sxm").validate_program_topology(Topology("thread", 1024))
     with pytest.raises(ValueError, match="must be positive"):
-        target.validate_program_topology(Topology("cta", 0))
+        tgt.validate_program_topology(Topology("cta", 0))
     with pytest.raises(ValueError, match="1 <= extent <= 1024") as error:
-        target.validate_program_topology(Topology("thread", 1025))
+        tgt.validate_program_topology(Topology("thread", 1025))
     assert str(error.value) == (
-        "CudaTarget (cuda): topology 'thread' extent 1025 must satisfy 1 <= extent <= 1024"
+        "cuda.Target: topology 'thread' extent 1025 must satisfy 1 <= extent <= 1024"
     )
     assert len(str(error.value)) < 120
 
@@ -193,26 +178,26 @@ def test_build_rejects_mixed_device_targets() -> None:
         emitted.append(args)
         raise AssertionError("unequal device targets reached code generation")
 
-    class FirstDeviceTarget(CudaTarget):
+    class FirstDeviceTarget(cuda.Target):
         name = "tests.core.target.first_device"
 
-    class SecondDeviceTarget(CudaTarget):
+    class SecondDeviceTarget(cuda.Target):
         name = "tests.core.target.second_device"
 
-    @bind(FirstDeviceTarget, LinkableModule)
-    @bind(SecondDeviceTarget, LinkableModule)
-    class UnexpectedModule(LinkableModule):
+    @target.bind(FirstDeviceTarget, codegen.LinkableModule)
+    @target.bind(SecondDeviceTarget, codegen.LinkableModule)
+    class UnexpectedModule(codegen.LinkableModule):
         @classmethod
         def create(cls, *args):
             return unexpected_emit(*args)
 
     first_target = FirstDeviceTarget("nvidia.h200_sxm")
     second_target = SecondDeviceTarget("nvidia.h200_sxm")
-    body = Sequential(body=())
-    first = PrimFunction("first", (), body, target=first_target)
-    second = PrimFunction("second", (), body, target=second_target)
-    host = PrimFunction("host", (), body, target=CpuTarget())
-    mixed = Module("mixed", (first, second, host), "host", target=first_target)
+    body = core.Sequential(body=())
+    first = core.PrimFunction("first", (), body, target=first_target)
+    second = core.PrimFunction("second", (), body, target=second_target)
+    host = core.PrimFunction("host", (), body, target=cpu.Target())
+    mixed = core.Module("mixed", (first, second, host), "host", target=first_target)
 
     with pytest.raises(ValueError) as error:
         build(mixed)
@@ -222,13 +207,13 @@ def test_build_rejects_mixed_device_targets() -> None:
 
 
 def test_target_conflict_summaries_stable() -> None:
-    function = load_authored_ir(f"{PLACED / 'rmsnorm.py'}:RmsnormModule").entry_function()
-    declared_target = CudaTarget("nvidia.h200_sxm")
-    explicit_target = CudaTarget(
+    function = cli.load_authored_ir(f"{PLACED / 'rmsnorm.py'}:RmsnormModule").entry_function()
+    declared_target = cuda.Target("nvidia.h200_sxm")
+    explicit_target = cuda.Target(
         "nvidia.h200_sxm",
-        architecture=replace(CudaTarget.hardware.resolve(SM90_ID).value, name="sm_90_alt"),
+        architecture=replace(cuda.Target.hardware.resolve(cuda_target.SM90_ID).value, name="sm_90_alt"),
     )
-    module_value = Module(
+    module_value = core.Module(
         name="conflicting_targets",
         functions=(function,),
         entry=function.name,
@@ -248,11 +233,11 @@ def test_target_conflict_summaries_stable() -> None:
     ):
         with pytest.raises(ValueError, match=f"tilefoundry.{operation}") as error:
             invoke()
-        assert "CudaTarget (cuda)" in str(error.value)
+        assert "cuda.Target" in str(error.value)
         assert "architecture=" not in str(error.value)
         assert "device=" not in str(error.value)
         assert len(str(error.value)) < 220
 
 
 def test_cuda_target_registered() -> None:
-    assert {"cuda"} <= registered_targets().keys()
+    assert {"cuda"} <= target.registered().keys()

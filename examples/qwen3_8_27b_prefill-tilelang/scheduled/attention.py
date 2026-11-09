@@ -25,9 +25,9 @@ tir/attention_{n}.py, implemented by kernels/attention.py `attention_tir_kernel`
             i32 offsets come from register tensors (tf.zeros(..., "rmem")).
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 HQ, HKV, D = 24, 4, 256
 GQA = HQ // HKV
 QKVW = HQ * 2 * D + 2 * HKV * D

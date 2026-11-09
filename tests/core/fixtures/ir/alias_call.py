@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.dsl.tf import add as _tf_add  # noqa: F401  -- closure capture
-from tilefoundry.target import CpuTarget
+from tilefoundry.dsl import tf
+from tilefoundry.target import cpu
 
 
-@module(entry="_alias_call", target=CpuTarget())
+@module(entry="_alias_call", target=cpu.Target())
 class AliasCall:
     @func
     def _alias_call(
@@ -15,4 +15,4 @@ class AliasCall:
         b: Tensor[(8,), DType.f32],
     ) -> Tensor[(8,), DType.f32]:
 
-        return _tf_add(a, b)
+        return tf.add(a, b)

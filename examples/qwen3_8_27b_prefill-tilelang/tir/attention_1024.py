@@ -8,10 +8,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def attention(
     qkv: Tensor[(1024, 14336), "bf16"], iota: Tensor[(128,), "i32"], scratch: Tensor[(32768,), "bf16"], out: Tensor[(1024, 6144), "bf16"]
 ):

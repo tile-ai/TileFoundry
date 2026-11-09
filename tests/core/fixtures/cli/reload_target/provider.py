@@ -1,6 +1,7 @@
-from tilefoundry.target import CpuTarget, register_target
+from tilefoundry import target
+from tilefoundry.target import cpu
 
 
-@register_target
-class ReloadTarget(CpuTarget):
+@target.register
+class ReloadTarget(cpu.Target):
     name = 'tests.cli.reload_target'

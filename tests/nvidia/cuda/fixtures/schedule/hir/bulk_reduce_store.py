@@ -1,10 +1,10 @@
 """Reduce two CTA partial sums from shared memory into an explicit global destination."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 2), Topology("thread", 32)))
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 2), Topology("thread", 32)))
 class BulkReduceStore:
     @func
     def gemm():

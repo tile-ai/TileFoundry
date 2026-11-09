@@ -58,7 +58,7 @@ def test_spec_rejects_a_section_that_does_not_exist(tf) -> None:
 @pytest.mark.parametrize(
     ("topic", "section", "expected"),
     (
-        ("core-ir", "target-inheritance", "with `target=CpuTarget()`"),
+        ("core-ir", "target-inheritance", "with `target=cpu.Target()`"),
         ("core-ir", "default-step", "MUST have no default step"),
         ("cli", "check", "A FAIL with `--inputs random`"),
     ),

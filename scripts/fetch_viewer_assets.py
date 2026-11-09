@@ -17,14 +17,14 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from tilefoundry.inspection.viewer.assets import ensure_assets
+from tilefoundry.inspection import viewer
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Download + verify viewer JS assets.")
     ap.add_argument("--cache-dir", type=Path, default=None, help="target cache directory")
     args = ap.parse_args()
-    paths = ensure_assets(cache_root=args.cache_dir)
+    paths = viewer.assets.ensure_assets(cache_root=args.cache_dir)
     for name, path in paths.items():
         print(f"{name}: {path}")
 

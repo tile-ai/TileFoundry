@@ -7,16 +7,16 @@ from pathlib import Path
 import pytest
 import torch
 
-from tilefoundry.cli.source import load_authored_ir, load_namespace
-from tilefoundry.evaluator import evaluate
+from tilefoundry import cli
+from tilefoundry.interfaces import evaluator
 
 PREFILL_DECODE = Path(__file__).parents[2] / "fixtures" / "placed" / "prefill_decode_attention.py"
 
 
 def _attention():
     """The fixture's head count, head width, and authored entry."""
-    constants = load_namespace(str(PREFILL_DECODE))[0]
-    entry = load_authored_ir(f"{PREFILL_DECODE}:PrefillDecodeAttention").entry_function()
+    constants = cli.load_namespace(str(PREFILL_DECODE))[0]
+    entry = cli.load_authored_ir(f"{PREFILL_DECODE}:PrefillDecodeAttention").entry_function()
     return constants["HEADS"], constants["HEAD_DIM"], entry
 
 
@@ -27,7 +27,7 @@ def test_prefill_matches_causal_attention(sequence):
     query = torch.randn((1, sequence, HEADS, HEAD_DIM), dtype=torch.bfloat16)
     empty_cache = torch.zeros((1, 1, HEADS, HEAD_DIM), dtype=torch.bfloat16)
 
-    actual = evaluate(
+    actual = evaluator.evaluate(
         attend,
         query,
         empty_cache,
@@ -51,7 +51,7 @@ def test_decode_matches_cache_attention(context):
     key = torch.randn((1, context, HEADS, HEAD_DIM), dtype=torch.bfloat16)
     value = torch.randn((1, context, HEADS, HEAD_DIM), dtype=torch.bfloat16)
 
-    actual = evaluate(
+    actual = evaluator.evaluate(
         attend,
         query,
         key,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 CTAS = 132
 N = CTAS * 128
@@ -11,7 +11,7 @@ N = CTAS * 128
 
 @module(
     entry="kernel",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", CTAS),),
 )
 class DynamicTripCount:

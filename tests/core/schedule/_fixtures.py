@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tests.core._corpus import Case, Problems
-from tilefoundry.cli import main as cli_main
+from tilefoundry import cli
 
 
 @dataclass(frozen=True)
@@ -22,7 +22,7 @@ class FactsCase(Case):
 def check_facts_case(case: FactsCase, tmp_path: Path, capsys) -> None:
     problems = Problems(case)
     out = tmp_path / "facts.txt"
-    code = problems.run("facts", cli_main, [
+    code = problems.run("facts", cli.main, [
         "schedule", "facts", "--target", case.target, str(out),
     ])
     captured = capsys.readouterr()

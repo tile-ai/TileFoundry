@@ -616,7 +616,7 @@ reaching none MUST be refused explicitly rather than approximated.
 - constraints:
   - Derive the tier from topology scope, layout size and slice offset
     ([§2.3.2](#232-layoutmeshcuh)), never from a call-site template argument.
-    Classification MUST agree with `ir/tir/sync.py`'s `classify`: unsliced
+    Classification MUST agree with `tilefoundry.ir.tir.sync.classify`: unsliced
     `cta` meshes use grid barriers; whole blocks use block barriers (warp
     convergence for one-warp blocks); subsets inside one warp use convergence;
     aligned cross-warp subsets use named barriers.

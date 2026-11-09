@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.ir.types.shard_layout import Split
+from tilefoundry import cli
+from tilefoundry.ir import types
 
 
 def test_unit_splits_survive_loop_carry() -> None:
-    module = load_authored_ir(
+    module = cli.load_authored_ir(
         str(Path(__file__).parents[1] / "fixtures/logical/unit_axes_carry.py")
     )
-    assert module.entry_function().return_type.layout.attrs == (Split(0), Split(1), Split(2))
+    assert module.entry_function().return_type.layout.attrs == (types.Split(0), types.Split(1), types.Split(2))

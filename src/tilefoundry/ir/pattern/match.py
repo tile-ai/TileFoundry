@@ -1,35 +1,20 @@
-"""Shared matching helpers for IR patterns."""
+"""The ``Pattern`` base and the matcher that reads it, with the shared matching helpers."""
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
+from typing import ClassVar
 
-from tilefoundry.ir.types import (
-    ComposedLayout,
-    Layout,
-    Mesh,
-    ShardLayout,
-    StorageKind,
-    Swizzle,
-    TensorType,
-    make_mesh,
-)
-from tilefoundry.ir.types.dim import DimVar, is_dim_op_call
-from tilefoundry.ir.types.int_tuple import congruent
-from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.mesh import separate
-from tilefoundry.ir.types.storage import StorageOwners
-from tilefoundry.ir.types.substitute import DimSubstitutionError, substitute_shape_dim
-from tilefoundry.ir.types.utils import attrs_by_axis, participant_layout
+from tilefoundry.ir import dim, expr, types
+from tilefoundry.ir.types import int_tuple
+
+from .solve import UNKNOWN, Unknown, failing, solve
+
+UNREADABLE = object()
+"""What a pattern's ``tensor_layout`` returns when it cannot read a tensor's layout."""
 
 OPAQUE = object()
-
-
-class Unknown:
-    """A truthy result when the solver cannot prove success or failure."""
-
-    def __bool__(self) -> bool:
-        return True
 
 
 @dataclass(frozen=True)
@@ -48,24 +33,72 @@ class Refusal:
     bindings: dict
 
 
-class _Bindings(dict):
+@dataclass(frozen=True)
+class Pattern:
+    """Base class for a predicate that returns bindings or ``None``."""
+
+    predicates: tuple["Predicate", ...] = field(default_factory=tuple, kw_only=True)
+    repeats: ClassVar[bool] = False
+
+    def replace(self, **changes):
+        """A copy of this value with *changes* applied to its fields.
+
+        ``dataclasses.replace`` cannot rebuild a value with ``init=False`` fields or with
+        its own ``__init__``.
+        """
+        result = copy.copy(self)
+        vars(result).update(changes)
+        return result
+
+    def match(self, subject, captures=None) -> Match | None:
+        held = Matcher(dict(captures or {}))
+        return Match(dict(held.bindings)) if held.match(self, subject) and held.solve() is True else None
+
+    def captured(self) -> tuple[str, ...]:
+        """The names this pattern binds, in field order."""
+        return tuple(name for field in vars(self).values() for name in captured_names(field))
+
+    def project(self, subject, bindings: dict):
+        """The subject as this pattern reads it; a pattern that reads it whole returns it."""
+        return subject
+
+    def tensor_layout(self, subject: types.TensorType, matcher):
+        """The layout of a tensor as this pattern reads it, or ``UNREADABLE``."""
+        return subject.layout
+
+
+def captured_names(value) -> tuple[str, ...]:
+    """The names bound by *value*: a pattern, or the patterns in a tuple."""
+    if isinstance(value, Pattern):
+        return value.captured()
+    if isinstance(value, tuple):
+        return tuple(name for item in value for name in captured_names(item))
+    return ()
+
+
+class Bindings(dict):
     """A binding dict that keeps nested ``matched`` calls on its owner."""
 
-    matcher: PatternMatcher
+    def __init__(self, matcher: Matcher, initial: dict) -> None:
+        super().__init__(initial)
+        self.matcher = matcher
 
 
-class PatternMatcher:
+class Matcher:
     """Match one pattern tree while retaining bindings and match evidence."""
 
-    def __init__(self, bindings=None, *, owners=StorageOwners((), {}), mesh=None):
-        self.owners = owners
+    def __init__(self, bindings=None, *, owners=None, mesh=None):
+        self.owners = owners if owners is not None else expr.StorageOwners((), {})
         self.mesh = mesh
-        self.bindings: _Bindings = _Bindings(bindings or {})
-        self.bindings.matcher = self
+        self.bindings: Bindings = Bindings(self, bindings or {})
         self.memo: dict[int, object] = {}
         self.pending: list[object] = []
         self.refusal: Refusal | None = None
-        self._depth = 0
+        self.depth = 0
+
+    def use_mesh(self, mesh) -> None:
+        """Read tensors that carry no shard layout over *mesh*."""
+        self.mesh = mesh
 
     def snapshot(self):
         """Save all transactional matcher state."""
@@ -88,37 +121,26 @@ class PatternMatcher:
 
     def match(self, pattern, subject) -> bool:
         """Match *pattern* against *subject* transactionally."""
-        root = self._depth == 0
+        root = self.depth == 0
         if root:
             self.refusal = None
         saved = self.snapshot()
-        self._depth += 1
+        self.depth += 1
         try:
             try:
-                if isinstance(subject, ShardLayout) and isinstance(
-                    pattern, _shard_layout_pattern_type()
-                ):
-                    topologies = pattern.mesh.topologies
-                    if not isinstance(topologies, tuple):
-                        topologies = self.bindings.get(
-                            topologies.name,
-                            tuple(
-                                getattr(level, "name", level)
-                                for level in subject.mesh.topologies[-1:]
-                            ),
-                        )
-                    subject = participant_layout(subject, topologies)
+                if isinstance(pattern, Pattern):
+                    subject = pattern.project(subject, self.bindings)
             except ValueError:
-                found = self._fail(pattern, subject)
+                found = self.fail(pattern, subject)
             else:
-                found = self._match(pattern, subject)
+                found = self.match_one(pattern, subject)
         except Exception:
             self.restore(saved)
             raise
         finally:
-            self._depth -= 1
+            self.depth -= 1
         if found:
-            if isinstance(pattern, _pattern_type()):
+            if isinstance(pattern, Pattern):
                 self.memo.setdefault(id(pattern), subject)
             return True
         refusal = self.refusal or Refusal(pattern, subject, dict(self.bindings))
@@ -130,8 +152,6 @@ class PatternMatcher:
         """Finish formulas that still had unbound names during structural matching."""
         if not self.pending:
             return True
-        from .predicates import UNKNOWN, failing, solve  # noqa: PLC0415 - protocol cycle
-
         formulas = tuple(self.pending)
         solved = solve(formulas, self.bindings)
         predicate = failing(formulas, self.bindings)
@@ -148,60 +168,47 @@ class PatternMatcher:
         self.refusal = Refusal(predicate, subject, dict(self.bindings))
         return False
 
-    def _fail(self, pattern, subject) -> bool:
+    def fail(self, pattern, subject) -> bool:
         if self.refusal is None:
             self.refusal = Refusal(pattern, subject, dict(self.bindings))
         return False
 
-    def _match(self, pattern, subject) -> bool:
+    def match_one(self, pattern, subject) -> bool:
+        """Match one node without a transaction."""
         if pattern is None:
             return True
-        if isinstance(pattern, DimVar):
+        if isinstance(pattern, expr.DimVar):
             if pattern.name in self.bindings:
-                return self.bindings[pattern.name] == subject or self._fail(pattern, subject)
+                return self.bindings[pattern.name] == subject or self.fail(pattern, subject)
             if type(subject) is not int or not pattern.lo <= subject <= pattern.hi:
-                return self._fail(pattern, subject)
+                return self.fail(pattern, subject)
             self.bindings[pattern.name] = subject
             return True
-        if is_dim_op_call(pattern):
+        if expr.is_dim_op_call(pattern):
             found = evaluated(pattern, self.bindings)
-            return (found is not None and found == subject) or self._fail(pattern, subject)
-        if not isinstance(pattern, _pattern_type()):
-            return pattern == subject or self._fail(pattern, subject)
+            return (found is not None and found == subject) or self.fail(pattern, subject)
+        if not isinstance(pattern, Pattern):
+            return pattern == subject or self.fail(pattern, subject)
         for cls in type(pattern).__mro__:
             visitor = getattr(self, f"visit_{cls.__name__}", None)
             if visitor is not None:
                 return visitor(pattern, subject) and all(
                     self.match(predicate, subject) for predicate in pattern.predicates
                 )
-        return self._fail(pattern, subject)
+        return self.fail(pattern, subject)
 
     def visit_Pattern(self, pattern, subject) -> bool:
         raise NotImplementedError(f"{type(pattern).__name__} has no visitor")
 
-    def visit_WildcardPattern(self, pattern, subject) -> bool:
+    def visit_Wildcard(self, pattern, subject) -> bool:
         if pattern.name:
             if pattern.name in self.bindings:
-                return self.bindings[pattern.name] == subject or self._fail(pattern, subject)
+                return self.bindings[pattern.name] == subject or self.fail(pattern, subject)
             self.bindings[pattern.name] = subject
         return True
 
-    def _captured_names(self, value) -> tuple[str, ...]:
-        from .pattern import Pattern, WildcardPattern  # noqa: PLC0415 - pattern protocol cycle
-
-        if isinstance(value, WildcardPattern):
-            name = getattr(value, "name", None)
-            return () if not name else (name,)
-        if isinstance(value, Pattern):
-            return tuple(
-                name for field in vars(value).values() for name in self._captured_names(field)
-            )
-        if isinstance(value, tuple):
-            return tuple(name for item in value for name in self._captured_names(item))
-        return ()
-
-    def _match_repeated(self, owner, patterns, subjects) -> bool:
-        names = tuple(dict.fromkeys(self._captured_names(patterns)))
+    def match_repeated(self, owner, patterns, subjects) -> bool:
+        names = tuple(dict.fromkeys(captured_names(patterns)))
         prior = {name: self.bindings.pop(name) for name in names if name in self.bindings}
         captured = {name: [] for name in names}
         for values in subjects:
@@ -209,25 +216,25 @@ class PatternMatcher:
                 return False
             for name in names:
                 if name not in self.bindings:
-                    return self._fail(owner, subjects)
+                    return self.fail(owner, subjects)
                 captured[name].append(self.bindings.pop(name))
         for name, values in captured.items():
             held = tuple(values)
             if name in prior and prior[name] != held:
-                return self._fail(owner, subjects)
+                return self.fail(owner, subjects)
             self.bindings[name] = prior.get(name, held)
         return True
 
-    def visit_StarPattern(self, pattern, subject) -> bool:
+    def visit_Star(self, pattern, subject) -> bool:
         if not isinstance(subject, (tuple, list)):
-            return self._fail(pattern, subject)
-        return self._match_repeated(
+            return self.fail(pattern, subject)
+        return self.match_repeated(
             pattern,
             (pattern.pattern,),
             tuple((value,) for value in subject),
         )
 
-    def visit_OrPattern(self, pattern, subject) -> bool:
+    def visit_Or(self, pattern, subject) -> bool:
         saved = self.snapshot()
         first_refusal = None
         for alternative in pattern.patterns:
@@ -238,27 +245,27 @@ class PatternMatcher:
             first_refusal = first_refusal or self.refusal
         self.restore(saved)
         self.refusal = first_refusal
-        return self._fail(pattern, subject)
+        return self.fail(pattern, subject)
 
-    def visit_AndPattern(self, pattern, subject) -> bool:
+    def visit_And(self, pattern, subject) -> bool:
         return all(self.match(part, subject) for part in pattern.parts)
 
-    def visit_SequencePattern(self, pattern, subject) -> bool:
+    def visit_Sequence(self, pattern, subject) -> bool:
         if not isinstance(subject, (tuple, list)) or len(subject) != len(pattern.patterns):
-            return self._fail(pattern, subject)
+            return self.fail(pattern, subject)
         return all(self.match(place, value) for place, value in zip(pattern.patterns, subject))
 
-    def visit_RangePattern(self, pattern, subject) -> bool:
+    def visit_Range(self, pattern, subject) -> bool:
         found = not isinstance(subject, bool) and isinstance(subject, int)
         found = found and (pattern.lo is None or subject >= pattern.lo)
         found = found and (pattern.hi is None or subject <= pattern.hi)
-        return found or self._fail(pattern, subject)
+        return found or self.fail(pattern, subject)
 
-    def visit_SwitchPattern(self, pattern, subject) -> bool:
+    def visit_Switch(self, pattern, subject) -> bool:
         if pattern.param in self.bindings:
             wanted = self.bindings[pattern.param]
             branch = next((item for value, item in pattern.branches if value == wanted), None)
-            return self._fail(pattern, subject) if branch is None else self.match(branch, subject)
+            return self.fail(pattern, subject) if branch is None else self.match(branch, subject)
         saved = self.snapshot()
         for value, branch in pattern.branches:
             self.restore(saved)
@@ -266,9 +273,9 @@ class PatternMatcher:
             if self.match(branch, subject):
                 return True
         self.restore(saved)
-        return self._fail(pattern, subject)
+        return self.fail(pattern, subject)
 
-    def _match_mode_trees(
+    def match_mode_trees(
         self,
         owner,
         pattern_shape,
@@ -276,16 +283,14 @@ class PatternMatcher:
         subject_shape,
         subject_strides,
     ) -> bool:
-        from .pattern import StarPattern  # noqa: PLC0415 - pattern protocol cycle
-
         if isinstance(pattern_shape, tuple):
             if not isinstance(subject_shape, tuple) or not isinstance(subject_strides, tuple):
-                return self._fail(owner, (subject_shape, subject_strides))
+                return self.fail(owner, (subject_shape, subject_strides))
             star = next(
                 (
                     index
                     for index, item in enumerate(pattern_shape)
-                    if isinstance(item, StarPattern)
+                    if isinstance(item, Pattern) and item.repeats
                 ),
                 None,
             )
@@ -293,13 +298,13 @@ class PatternMatcher:
             if len(subject_shape) != len(subject_strides) or (
                 star is None and len(subject_shape) != minimum
             ):
-                return self._fail(owner, (subject_shape, subject_strides))
+                return self.fail(owner, (subject_shape, subject_strides))
             if star is not None and len(subject_shape) < minimum:
-                return self._fail(owner, (subject_shape, subject_strides))
+                return self.fail(owner, (subject_shape, subject_strides))
 
             before = len(pattern_shape) if star is None else star
             for index in range(before):
-                if not self._match_mode_trees(
+                if not self.match_mode_trees(
                     owner,
                     pattern_shape[index],
                     pattern_strides[index],
@@ -320,7 +325,7 @@ class PatternMatcher:
                     subject_strides[star:repeated_end],
                 )
             )
-            if not self._match_repeated(
+            if not self.match_repeated(
                 shape_star,
                 (shape_star.pattern, stride_star.pattern),
                 repeated,
@@ -331,7 +336,7 @@ class PatternMatcher:
             for offset in range(after):
                 pattern_index = star + 1 + offset
                 subject_index = repeated_end + offset
-                if not self._match_mode_trees(
+                if not self.match_mode_trees(
                     owner,
                     pattern_shape[pattern_index],
                     pattern_strides[pattern_index],
@@ -342,30 +347,30 @@ class PatternMatcher:
             return True
 
         if isinstance(subject_shape, tuple) or isinstance(subject_strides, tuple):
-            return self._fail(owner, (subject_shape, subject_strides))
+            return self.fail(owner, (subject_shape, subject_strides))
         if not self.match(pattern_shape, subject_shape):
             return False
         return subject_shape == 1 or self.match(pattern_strides, subject_strides)
 
-    def visit_LayoutPattern(self, pattern, subject) -> bool:
+    def visit_Layout(self, pattern, subject) -> bool:
         structural = subject
         if (
-            isinstance(structural, ComposedLayout)
+            isinstance(structural, types.ComposedLayout)
             and structural.inner is None
             and structural.offset == 0
         ):
             structural = structural.outer
         if pattern.shape is not None or pattern.strides is not None:
-            if not isinstance(structural, Layout):
-                return self._fail(pattern, subject)
-            extents = tuple(flatten(structural.shape))
-            strides = tuple(flatten(structural.strides))
+            if not isinstance(structural, types.Layout):
+                return self.fail(pattern, subject)
+            extents = tuple(types.flatten(structural.shape))
+            strides = tuple(types.flatten(structural.strides))
             if any(type(number) is not int for number in (*extents, *strides)):
-                return self._fail(pattern, subject)
+                return self.fail(pattern, subject)
             if any(number <= 0 for number in extents):
-                return self._fail(pattern, subject)
+                return self.fail(pattern, subject)
             if pattern.shape is not None and pattern.strides is not None:
-                if not self._match_mode_trees(
+                if not self.match_mode_trees(
                     pattern,
                     pattern.shape,
                     pattern.strides,
@@ -380,17 +385,17 @@ class PatternMatcher:
                     if pattern.shape is not None
                     else (pattern.strides, structural.strides, strides)
                 )
-                if not congruent(profile, actual) or not all(
+                if not int_tuple.congruent(profile, actual) or not all(
                     self.match(place, value) for place, value in zip(places, values)
                 ):
                     return False
         return True
 
-    def visit_SwizzlePattern(self, pattern, subject) -> bool:
+    def visit_Swizzle(self, pattern, subject) -> bool:
         if subject is None:
             return self.match(pattern.bits, 0)
-        if not isinstance(subject, Swizzle):
-            return self._fail(pattern, subject)
+        if not isinstance(subject, types.Swizzle):
+            return self.fail(pattern, subject)
         return all(
             self.match(place, value)
             for place, value in (
@@ -400,11 +405,11 @@ class PatternMatcher:
             )
         )
 
-    def visit_ComposedLayoutPattern(self, pattern, subject) -> bool:
-        if isinstance(subject, Layout):
-            subject = ComposedLayout(None, 0, subject)
-        if not isinstance(subject, ComposedLayout):
-            return self._fail(pattern, subject)
+    def visit_ComposedLayout(self, pattern, subject) -> bool:
+        if isinstance(subject, types.Layout):
+            subject = types.ComposedLayout(None, 0, subject)
+        if not isinstance(subject, types.ComposedLayout):
+            return self.fail(pattern, subject)
         return all(
             self.match(place, value)
             for place, value in (
@@ -414,13 +419,13 @@ class PatternMatcher:
             )
         )
 
-    def visit_MeshPattern(self, pattern, subject) -> bool:
-        if not isinstance(subject, Mesh):
-            return self._fail(pattern, subject)
-        levels = separate(subject)
+    def visit_Mesh(self, pattern, subject) -> bool:
+        if not isinstance(subject, types.Mesh):
+            return self.fail(pattern, subject)
+        levels = types.separate(subject)
         if not isinstance(pattern.topologies, tuple):
             if not levels:
-                return self._fail(pattern, subject)
+                return self.fail(pattern, subject)
             selected = levels[-1]
             names = tuple(getattr(level, "name", level) for level in selected.topologies)
             return self.match(pattern.topologies, names) and self.match(
@@ -433,16 +438,16 @@ class PatternMatcher:
         )
         found = tuple(getattr(level.topologies[0], "name", level.topologies[0]) for level in picked)
         if len(picked) != len(pattern.topologies) or set(found) != set(pattern.topologies):
-            return self._fail(pattern, subject)
-        return self.match(pattern.layout, make_mesh(*picked).layout)
+            return self.fail(pattern, subject)
+        return self.match(pattern.layout, types.Mesh.from_meshes(*picked).layout)
 
-    def visit_TensorPattern(self, pattern, subject) -> bool:
-        if not isinstance(subject, TensorType):
-            return self._fail(pattern, subject)
+    def visit_Tensor(self, pattern, subject) -> bool:
+        if not isinstance(subject, types.TensorType):
+            return self.fail(pattern, subject)
         if not self.match(pattern.dtype, subject.dtype):
             return False
         if not (
-            subject.storage is StorageKind.UMAT and isinstance(pattern.storage, StorageKind)
+            subject.storage is expr.StorageKind.UMAT and isinstance(pattern.storage, expr.StorageKind)
         ) and not self.match(pattern.storage, subject.storage):
             return False
         if pattern.shape is not None and (
@@ -454,28 +459,20 @@ class PatternMatcher:
             return False
 
         layout = subject.layout
-        if isinstance(pattern.layout, _shard_layout_pattern_type()):
-            shard = layout if isinstance(layout, ShardLayout) else None
-            mesh = shard.mesh if shard is not None else self.mesh
-            if mesh is None or layout is None:
-                return self._fail(pattern.layout, layout)
-            if shard is None and isinstance(pattern.layout.mesh.topologies, tuple):
-                mesh = participant_layout(
-                    ShardLayout(layout, tuple(attrs_by_axis(subject, mesh).values()), mesh),
-                    pattern.layout.mesh.topologies,
-                ).mesh
-            attrs = tuple(attrs_by_axis(subject, mesh, self.owners).values())
-            layout = ShardLayout(shard.layout if shard else layout, attrs, mesh)
+        if isinstance(pattern.layout, Pattern):
+            layout = pattern.layout.tensor_layout(subject, self)
+            if layout is UNREADABLE:
+                return self.fail(pattern.layout, subject.layout)
         return pattern.layout is None or self.match(pattern.layout, layout)
 
-    def visit_ShardLayoutPattern(self, pattern, subject) -> bool:
-        if not isinstance(subject, ShardLayout):
-            return self._fail(pattern, subject)
+    def visit_ShardLayout(self, pattern, subject) -> bool:
+        if not isinstance(subject, types.ShardLayout):
+            return self.fail(pattern, subject)
         subject_names = tuple(
             getattr(topology, "name", topology) for topology in subject.mesh.topologies
         )
         if not self.match(pattern.mesh.topologies, subject_names):
-            return self._fail(pattern, subject)
+            return self.fail(pattern, subject)
         return all(
             self.match(place, value)
             for place, value in (
@@ -490,14 +487,14 @@ class PatternMatcher:
         if held is None:
             self.pending.append(pattern)
             return True
-        return held or self._fail(pattern, subject)
+        return held or self.fail(pattern, subject)
 
     def visit_AtomPattern(self, pattern, subject) -> bool:
         if not isinstance(subject, pattern.declarations):
-            return self._fail(pattern, subject)
+            return self.fail(pattern, subject)
         for name, value in subject.bindings.items():
             if name in self.bindings and self.bindings[name] != value:
-                return self._fail(pattern, subject)
+                return self.fail(pattern, subject)
             self.bindings[name] = value
         return True
 
@@ -507,58 +504,46 @@ class PatternMatcher:
         )
 
 
-def _pattern_type():
-    from .pattern import Pattern  # noqa: PLC0415 - pattern protocol cycle
-
-    return Pattern
-
-
-def _shard_layout_pattern_type():
-    from .pattern import ShardLayoutPattern  # noqa: PLC0415 - pattern protocol cycle
-
-    return ShardLayoutPattern
-
-
-def _named(value):
+def named(value):
     """One enumerated field as an author writes it, or None when unstated."""
     return None if value is None else getattr(value, "name", str(value)).lower()
 
 
-def _extents(bindings) -> dict:
+def extents(bindings) -> dict:
     return {name: value for name, value in dict(bindings or {}).items() if type(value) is int}
 
 
 def evaluated(value, captures):
     """Evaluate one symbolic dimension, or return None while it is unresolved."""
     try:
-        held = substitute_shape_dim(value, _extents(captures))
-    except DimSubstitutionError:
+        held = dim.substitute_shape_entry(value, extents(captures))
+    except dim.SubstitutionError:
         return None
     return held if type(held) is int else None
 
 
 def is_symbolic(value) -> bool:
-    return isinstance(value, DimVar) or is_dim_op_call(value)
+    return isinstance(value, expr.DimVar) or expr.is_dim_op_call(value)
 
 
 def matched(pattern, subject, captures=None) -> Match | None:
     """Match a nested pattern, symbolic dimension, wildcard, or fixed value."""
     owner = getattr(captures, "matcher", None)
-    if isinstance(owner, PatternMatcher):
+    if isinstance(owner, Matcher):
         return Match(dict(owner.bindings)) if owner.match(pattern, subject) else None
     if pattern is None:
         return Match(dict(captures or {}))
     held = Match(dict(captures or {}))
-    if isinstance(pattern, DimVar):
+    if isinstance(pattern, expr.DimVar):
         if pattern.name in held.captures:
             return held if held.captures[pattern.name] == subject else None
         if type(subject) is not int or not pattern.lo <= subject <= pattern.hi:
             return None
         return Match({**held.captures, pattern.name: subject})
-    if is_dim_op_call(pattern):
+    if expr.is_dim_op_call(pattern):
         found = evaluated(pattern, held.captures)
         return held if found is not None and found == subject else None
-    if isinstance(pattern, _pattern_type()):
+    if isinstance(pattern, Pattern):
         return pattern.match(subject, held.captures)
     return held if pattern == subject else None
 
@@ -574,13 +559,17 @@ def refusals_between(op_type, operands: dict) -> tuple[str, ...]:
 
 
 __all__ = [
-    "Match",
-    "PatternMatcher",
-    "Refusal",
+    "UNREADABLE",
     "OPAQUE",
+    "Match",
+    "Matcher",
+    "Pattern",
+    "Refusal",
     "between_rules",
+    "captured_names",
     "evaluated",
     "is_symbolic",
     "matched",
+    "named",
     "refusals_between",
 ]

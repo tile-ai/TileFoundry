@@ -72,7 +72,7 @@ def check_training(function, *, steps=2, seed=183):
     Require every reference parameter gradient to be nonzero on each update.
     Random nonzero projections expose each backward path from the first step.
     """
-    from tilefoundry.evaluator import evaluate
+    from tilefoundry.interfaces.evaluator import evaluate
 
     token_count = int(function.params[0].type.shape[0])
     batch = token_count // T

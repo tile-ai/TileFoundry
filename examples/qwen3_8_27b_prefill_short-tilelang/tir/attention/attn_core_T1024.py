@@ -8,10 +8,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def attn_core(
     q: Tensor[(1024, 24, 256), "bf16"], k: Tensor[(1024, 4, 256), "bf16"], v: Tensor[(1024, 4, 256), "bf16"], qkv: Tensor[(1024, 14336), "bf16"], diag: Tensor[(64, 64), "f32"], scratch: Tensor[(16384,), "bf16"], scratch_1: Tensor[(16384,), "bf16"], out: Tensor[(1024, 6144), "bf16"]
 ):

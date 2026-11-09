@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
-from tilefoundry.cli import data
-from tilefoundry.cli.models import render_source_directory, source_summary
+from . import data
+from .models import render_source_directory, source_summary
 
 PAGES: tuple[str, ...] = ("index", "migrate", "optimize", "schedule", "showcase")
 
@@ -43,14 +44,14 @@ def page_lines() -> list[str]:
     return lines
 
 
-def _orchestrator_families() -> tuple[Path, ...]:
+def orchestrator_families() -> tuple[Path, ...]:
     """The family directories that the active source lookup ships."""
     return data.directories("orchestrator")
 
 
-def _orchestrator_family(name: str) -> Path:
+def orchestrator_family(name: str) -> Path:
     """Find one shipped orchestrator family by name."""
-    families = _orchestrator_families()
+    families = orchestrator_families()
     for family in families:
         if family.name == name:
             return family
@@ -60,7 +61,7 @@ def _orchestrator_family(name: str) -> Path:
 
 def render_orchestrators() -> str:
     """The shipped orchestrator families and their leading descriptions."""
-    families = _orchestrator_families()
+    families = orchestrator_families()
     width = max(len(family.name) for family in families)
     lines = [f"Orchestrators in {data.directory('orchestrator')}:"]
     for family in families:
@@ -72,15 +73,13 @@ def render_orchestrators() -> str:
 
 def render_orchestrator(name: str) -> str:
     """One shipped orchestrator family directory and its source summaries."""
-    family = _orchestrator_family(name)
+    family = orchestrator_family(name)
     sources = data.files("orchestrator", family.name)
     return render_source_directory(family, sources)
 
 
 def run_tutorial(page: str | None, family: str | None = None) -> int:
     """Print the overview, a workflow page, or an orchestrator family."""
-    import sys  # noqa: PLC0415
-
     if page is None:
         rendered = render_page(PAGES[0])
     elif page == "orchestrator":

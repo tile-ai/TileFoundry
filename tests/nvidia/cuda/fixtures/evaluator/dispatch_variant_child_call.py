@@ -5,10 +5,10 @@ from __future__ import annotations
 from tests.nvidia.cuda.fixtures.shapes.scaled_modules import EVALUATOR_N as _N_EVAL
 from tests.nvidia.cuda.fixtures.shapes.scaled_modules import DynamicScaledChild
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="dispatch", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="dispatch", target=cuda.Target("nvidia.h200_sxm"))
 class _Dispatch:
     scaled = DynamicScaledChild
 
@@ -16,6 +16,6 @@ class _Dispatch:
     def dispatch(x: Tensor[(_N_EVAL,), "f32"]) -> Tensor[(_N_EVAL,), "f32"]:
         pass
 
-    @dispatch.specialize(RangePattern("N_eval", 1, 7))
+    @dispatch.specialize(pattern.Range("N_eval", 1, 7))
     def dynamic_variant(x: Tensor[(_N_EVAL,), "f32"]) -> Tensor[(_N_EVAL,), "f32"]:
-        return scaled(x)  # noqa: F821
+        return scaled(x)

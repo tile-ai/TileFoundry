@@ -1,11 +1,11 @@
 """`model.py`'s high-performance implementation: tilelang kernels behind
-`@runtime_module` twins, plus the driver that turns one step into many.
+`@runtime.module` twins, plus the driver that turns one step into many.
 
 Two layers, and they answer different questions.
 
 **The twins** (`Qwen3_5LinearAttention` ... `Qwen3_5Decoder`) are runtime
-counterparts of `model.py`'s Modules, one `@runtime_func` per authored `@func`,
-same names, same order, same shapes. `@runtime_module` validates that
+counterparts of `model.py`'s Modules, one `@runtime.func` per authored `@func`,
+same names, same order, same shapes. `@runtime.module` validates that
 correspondence at decoration time and `tilefoundry check` measures it, so these
 are the thing that is *judged*. They keep the authored contract exactly: state
 arrives as a parameter and leaves as a result, nothing is mutated in place, and
@@ -40,7 +40,7 @@ import model as sem  # noqa: E402
 import weights as wt  # noqa: E402
 from config import CKPT, REAL  # noqa: E402
 from tilefoundry.dsl import ModuleList  # noqa: E402
-from tilefoundry.runtime import runtime_func, runtime_module  # noqa: E402
+from tilefoundry import runtime# noqa: E402
 
 # ---------------------------------------------------------------------------
 # Which implementation each function uses.
@@ -113,25 +113,25 @@ _CFG = REAL
 # ---------------------------------------------------------------------------
 
 
-@runtime_module(sem.Qwen3_5LinearAttention)
+@runtime.module(sem.Qwen3_5LinearAttention)
 class Qwen3_5LinearAttention:
-    @runtime_func
+    @runtime.func
     def conv_step(self, conv_state, entry, conv_w):
         return _impl("conv_step", _gdn.conv_step, _tr.conv_step)(
             conv_state, entry, conv_w
         )
 
-    @runtime_func
+    @runtime.func
     def l2_normalise(self, x):
         return _impl("l2_normalise", _gdn.l2_normalise, _tr.l2_normalise)(x)
 
-    @runtime_func
+    @runtime.func
     def delta_step(self, recurrent_state, q, k, v, g, beta):
         return _impl("delta_step", _gdn.delta_step, _tr.delta_step)(
             recurrent_state, q, k, v, g, beta
         )
 
-    @runtime_func
+    @runtime.func
     def linear_attention(
         self, hidden, gamma_in, w_in_qkv, w_in_z, w_in_b, w_in_a, conv_w, a_log,
         dt_bias, conv_state, recurrent_state, gamma_gdn, w_out,
@@ -144,21 +144,21 @@ class Qwen3_5LinearAttention:
         )
 
 
-@runtime_module(sem.Qwen3_5FullAttention)
+@runtime.module(sem.Qwen3_5FullAttention)
 class Qwen3_5FullAttention:
-    @runtime_func
+    @runtime.func
     def partial_rope(self, x, cos_cache, sin_cache, pos_ids):
         return _impl("partial_rope", _attn.partial_rope, _tr.partial_rope)(
             x, cos_cache, sin_cache, pos_ids
         )
 
-    @runtime_func
+    @runtime.func
     def partial_rope_kv(self, x, cos_cache, sin_cache, pos_ids):
         return _impl(
             "partial_rope_kv", _attn.partial_rope_kv, _tr.partial_rope_kv
         )(x, cos_cache, sin_cache, pos_ids)
 
-    @runtime_func
+    @runtime.func
     def full_attention(
         self, hidden, gamma_in, w_qg, w_k, w_v, gamma_q, gamma_k, cos_cache,
         sin_cache, pos_ids, k_cache, v_cache, scale, w_o,
@@ -171,30 +171,30 @@ class Qwen3_5FullAttention:
         )
 
 
-@runtime_module(sem.Qwen3_5Router)
+@runtime.module(sem.Qwen3_5Router)
 class Qwen3_5Router:
-    @runtime_func
+    @runtime.func
     def routing(self, tokens, w_router):
         return _impl("routing", _moe.routing, _tr.routing)(tokens, w_router)
 
 
-@runtime_module(sem.Qwen3_5MoE)
+@runtime.module(sem.Qwen3_5MoE)
 class Qwen3_5MoE:
     router = Qwen3_5Router
 
-    @runtime_func
+    @runtime.func
     def post_norm(self, hidden, gamma_post):
         return _impl("post_norm", _moe.post_norm, _tr.post_norm)(
             hidden, gamma_post
         )
 
-    @runtime_func
+    @runtime.func
     def routed_experts(self, tokens, weights, indices, w_gate, w_up, w_down):
         return _impl(
             "routed_experts", _moe.routed_experts, _tr.routed_experts
         )(tokens, weights, indices, w_gate, w_up, w_down)
 
-    @runtime_func
+    @runtime.func
     def shared_expert(
         self, tokens, w_shared_gate, w_shared_up, w_shared_down, w_shared_scale
     ):
@@ -202,7 +202,7 @@ class Qwen3_5MoE:
             tokens, w_shared_gate, w_shared_up, w_shared_down, w_shared_scale
         )
 
-    @runtime_func
+    @runtime.func
     def experts(
         self, tokens, weights, indices, w_gate, w_up, w_down, w_shared_gate,
         w_shared_up, w_shared_down, w_shared_scale,
@@ -224,21 +224,21 @@ def _tl_add(a, b):
     return out
 
 
-Qwen3_5FullAttnLayer = runtime_module(sem.Qwen3_5FullAttnLayer)(
+Qwen3_5FullAttnLayer = runtime.module(sem.Qwen3_5FullAttnLayer)(
     type(
         "Qwen3_5FullAttnLayer",
         (),
         {"mixer": Qwen3_5FullAttention, "moe": Qwen3_5MoE,
-         "residual_add": runtime_func(_residual_add)},
+         "residual_add": runtime.func(_residual_add)},
     )
 )
 
-Qwen3_5LinearAttnLayer = runtime_module(sem.Qwen3_5LinearAttnLayer)(
+Qwen3_5LinearAttnLayer = runtime.module(sem.Qwen3_5LinearAttnLayer)(
     type(
         "Qwen3_5LinearAttnLayer",
         (),
         {"mixer": Qwen3_5LinearAttention, "moe": Qwen3_5MoE,
-         "residual_add": runtime_func(_residual_add)},
+         "residual_add": runtime.func(_residual_add)},
     )
 )
 
@@ -298,11 +298,11 @@ def _decoder_twin(cfg=REAL, sem_decoder=None):
     sem_decoder = sem.Qwen3_5Decoder if sem_decoder is None else sem_decoder
     namespace = {"layers": ModuleList(tuple(_LAYER_TWIN[kind] for kind in cfg.layer_types))}
     namespace.update(
-        embed=runtime_func(_embed),
-        final_rms_norm=runtime_func(_final_rms_norm),
-        lm_head=runtime_func(_lm_head),
+        embed=runtime.func(_embed),
+        final_rms_norm=runtime.func(_final_rms_norm),
+        lm_head=runtime.func(_lm_head),
     )
-    return runtime_module(sem_decoder)(type("Qwen3_5Decoder", (), namespace))
+    return runtime.module(sem_decoder)(type("Qwen3_5Decoder", (), namespace))
 
 
 Qwen3_5Decoder = _decoder_twin(REAL)
@@ -336,7 +336,7 @@ class Session:
         self.cfg = cfg
         self.device = device
         self.capacity = min(capacity, cfg.max_ctx)
-        # The semantic tree and the twin must be the same shape: `@runtime_module`
+        # The semantic tree and the twin must be the same shape: `@runtime.module`
         # requires the child-name sets to be *equal*, so a truncated run needs its
         # own authored tree rather than the published one with layers ignored.
         self.sem = sem.Qwen3_5Decoder if cfg is REAL else sem.build(cfg)["Qwen3_5Decoder"]

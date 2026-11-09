@@ -1,14 +1,14 @@
-"""``RuntimeFunction`` — the implementation base class for a node's body.
+"""``Function`` — the implementation base class for a node's body.
 
 Its ``type`` is the signature codegen produced for that function. See
 [runtime §1.2](docs/spec/runtime.md#12-runtimefunctionpy).
 """
 from __future__ import annotations
 
-from tilefoundry.codegen.signature import CallableSignature
+from tilefoundry import codegen
 
 
-class RuntimeFunction:
+class Function:
     """Implementation base class.
 
     Implementation base class: a ``CallableSignature`` ``type`` plus a
@@ -16,13 +16,13 @@ class RuntimeFunction:
     caches) at construction and returns its value(s) directly.
     """
 
-    def __init__(self, type: CallableSignature) -> None:
+    def __init__(self, type: codegen.CallableSignature) -> None:
         self.type = type
 
     def __call__(self, *args):
         raise NotImplementedError(
-            f"RuntimeFunction {self.type.name!r}: subclass must implement __call__()"
+            f"runtime.Function {self.type.name!r}: subclass must implement __call__()"
         )
 
 
-__all__ = ["RuntimeFunction"]
+__all__ = ["Function"]

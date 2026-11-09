@@ -22,3 +22,6 @@ class Stmt:
     """
 
     loc: str | None = field(default=None, kw_only=True)
+
+
+__all__ = ["Stmt"]

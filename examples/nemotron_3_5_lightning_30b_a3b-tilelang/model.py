@@ -44,8 +44,8 @@ from tilefoundry import func, module
 from tilefoundry.dsl import (  # noqa: F401
     ConstTensor, DimVar, DimVarRangePat, Mesh, Tensor, tf,
 )
-from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target import CudaTarget
+from tilefoundry.ir.types import Topology
+from tilefoundry_nvidia import cuda
 
 
 def published(path: Path | None = None) -> dict:
@@ -128,7 +128,7 @@ CROSSOVER = 2048
 CF = DimVar("ctx_full", 0, CAP + 1)
 CT = DimVar("ctx_tail", 1, ABLK + 1)
 
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 
 
 @module(entry="decode_step", target=_H200,

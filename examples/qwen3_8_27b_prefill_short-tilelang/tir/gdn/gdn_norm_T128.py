@@ -6,10 +6,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def gdn_norm(
     o: Tensor[(128, 48, 128), "bf16"], proj: Tensor[(128, 16640), "bf16"], gamma: Tensor[(128,), "bf16"], scratch: Tensor[(1024,), "bf16"], out: Tensor[(128, 48, 128), "bf16"]
 ):

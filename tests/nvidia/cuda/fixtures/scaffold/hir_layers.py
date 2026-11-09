@@ -3,9 +3,9 @@
 import torch
 import tvm_ffi
 
+from tilefoundry import runtime
 from tilefoundry.dsl import *
-from tilefoundry.runtime.module import RuntimeModule
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 S = DimVar("S", 1, 16)
 HIERARCHY = (Topology("thread", 32),)
@@ -23,7 +23,7 @@ class Layers:
     leaf = Leaf
 
 
-@module(entry="model", target=CudaTarget("nvidia.h200_sxm"), topologies=HIERARCHY)
+@module(entry="model", target=cuda.Target("nvidia.h200_sxm"), topologies=HIERARCHY)
 class Root:
     layers = Layers
 
@@ -35,19 +35,19 @@ class Root:
     def model(out: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]) -> Tensor[(S, 8), "f32"]:
         pass
 
-    @model.specialize(RangePattern("S", 1, 8))
+    @model.specialize(pattern.Range("S", 1, 8))
     def small(out: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]) -> Tensor[(S, 8), "f32"]:
-        return run(out, w)  # noqa: F821
+        return run(out, w)
 
-    @model.specialize(RangePattern("S", 9, 16))
+    @model.specialize(pattern.Range("S", 9, 16))
     def large(out: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]) -> Tensor[(S, 8), "f32"]:
-        return run(out, w)  # noqa: F821
+        return run(out, w)
 
     def forward(self, x):
         return self.layers.leaf.run(x)
 
 
-class Runtime(RuntimeModule):
+class Runtime(runtime.Module):
     def __init__(self, library_path):
         super().__init__("Root", entry="forward")
         self.library = tvm_ffi.load_module(str(library_path))

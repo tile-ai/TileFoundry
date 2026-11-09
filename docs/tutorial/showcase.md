@@ -86,7 +86,7 @@ from tilefoundry.analysis import analyze as run_analysis
 
 from tilefoundry.inspection.analysis_report import render_analysis, render_text
 
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 HIDDEN = 256
 QUERY_HEADS = 8
@@ -100,7 +100,7 @@ SCALE = 1.0 / math.sqrt(HEAD_DIM)
 WORKERS = 4
 BLOCK = 128
 
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 _CTA = Topology("cta", 132)
 ```
 
@@ -288,7 +288,7 @@ T = floor(232448 B / 128 B)
   = 1816
 ```
 
-This is not the complete placement peak: other simultaneously resident values also occupy smem. `Stage1_Specialized` still uses the estimate to express two closed `RangePattern` variants, `[1, 1816]` and `[1817, 8192]`; the CP placement report below decides whether either variant actually fits. The Stage1 body is deliberately the unsplit baseline, so the dispatch contract can be read independently from the later implementations.
+This is not the complete placement peak: other simultaneously resident values also occupy smem. `Stage1_Specialized` still uses the estimate to express two closed `pattern.Range` variants, `[1, 1816]` and `[1817, 8192]`; the CP placement report below decides whether either variant actually fits. The Stage1 body is deliberately the unsplit baseline, so the dispatch contract can be read independently from the later implementations.
 
 <!-- tilefoundry-source: attn_layer.py -->
 
@@ -361,7 +361,7 @@ class Stage1_Specialized:
     ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
         pass
 
-    @gqa_decode.specialize(RangePattern("ctx_len", 1, SPECIALIZE_T))
+    @gqa_decode.specialize(pattern.Range("ctx_len", 1, SPECIALIZE_T))
     def short_context(
         hidden: Tensor[(1, 1, HIDDEN), "bf16"],
         w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
@@ -381,7 +381,7 @@ class Stage1_Specialized:
             cur_pos, write_len, pos_ids, cos_cache, sin_cache,
         )
 
-    @gqa_decode.specialize(RangePattern("ctx_len", SPECIALIZE_T + 1, ROPE_CONTEXT))
+    @gqa_decode.specialize(pattern.Range("ctx_len", SPECIALIZE_T + 1, ROPE_CONTEXT))
     def long_context(
         hidden: Tensor[(1, 1, HIDDEN), "bf16"],
         w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
@@ -1097,7 +1097,7 @@ The page uses this embedded ladder for features orthogonal to GQA:
 |---|---|
 | `@module(entry/target/topologies)` | `Stage0_Naive` |
 | `@func`, `Tensor`, `ConstTensor`, `DimVar` | `Stage0_Naive` |
-| `pass` prototype and `@f.specialize(RangePattern)` | `Stage1_Specialized` |
+| `pass` prototype and `@f.specialize(pattern.Range)` | `Stage1_Specialized` |
 | single `Mesh`, shard sugar `X @ m.axis`, `reshard` to smem/gmem | `Stage2_Sharded` |
 | split-K worker mesh and online softmax state | `Stage3_Fused` |
 | weight staging and output gather | `Stage4_WeightPrepared` |

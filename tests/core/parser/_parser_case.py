@@ -6,14 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tests.core._corpus import Case, Problems, reload
-from tilefoundry.inspection import as_script
-from tilefoundry.ir.core import Call, SourceSpanMetadata, get_metadata
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.visitor_registry.verify import verify_module
+from tilefoundry import inspection, verifier
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import core, expr
 
 
 @dataclass(frozen=True)
@@ -26,21 +21,21 @@ class ParserCase(Case):
 
 @dataclass(frozen=True)
 class Parsed:
-    ir: Module | None
+    ir: core.Module | None
     printed: str | None
-    rebuilt: Module | None
+    rebuilt: core.Module | None
 
 
 def _functions(ir):
-    return tuple(frame.function for frame in list_call_paths(ir).values())
+    return tuple(frame.function for frame in valuation.list_call_paths(ir).values())
 
 
 def require_call_spans(ir) -> None:
     for function in _functions(ir):
-        if isinstance(function, Function):
-            for expr in collect_exprs(function.body):
-                if isinstance(expr, Call):
-                    assert get_metadata(expr, SourceSpanMetadata) is not None
+        if isinstance(function, core.Function):
+            for node in core.collect_exprs(function.body):
+                if isinstance(node, expr.Call):
+                    assert expr.get_metadata(node, expr.SourceSpanMetadata) is not None
 
 
 def _reparse(ir, printed):
@@ -57,26 +52,26 @@ def _const_parameters(ir, printed, rebuilt):
 
 
 def _verify_tir(ir):
-    if any(isinstance(fn, PrimFunction) for fn in _functions(ir)):
-        verify_module(ir)
+    if any(isinstance(fn, core.PrimFunction) for fn in _functions(ir)):
+        verifier.verify_module(ir)
 
 
 def _same_print(printed, path):
     other = Case(path=path).load()
-    assert as_script(other) == printed
+    assert inspection.as_script(other) == printed
 
 
 def check_parser_case(case: ParserCase) -> None:
     problems = Problems(case)
     ir = problems.run("parse", case.load)
     problems.run("source spans", require_call_spans, ir)
-    printed = problems.run("print", as_script, ir)
+    printed = problems.run("print", inspection.as_script, ir)
     if case.canonical:
         problems.expect("canonical text", lambda text: text == case.path.read_text(), printed)
         rebuilt = ir
     else:
         rebuilt = problems.run("reparse", _reparse, ir, printed)
-        reprinted = problems.run("reprint", as_script, rebuilt)
+        reprinted = problems.run("reprint", inspection.as_script, rebuilt)
         problems.expect("fixed point", lambda before, after: before == after, printed, reprinted)
     problems.run("constant parameters", _const_parameters, ir, printed, rebuilt)
     problems.run("verify TIR", _verify_tir, rebuilt)

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 _MESH_LAYOUT = Layout(shape=(4, 8), strides=(1, 4))
 
 
@@ -57,7 +57,7 @@ class Fp8MmaTile:
             )
             T.copy(acc, c_view)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def fp8_host(
         a: Tensor[(16, 32), "fp8e4m3"],
         b: Tensor[(32, 8), "fp8e4m3"],

@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import replace
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 S, K, N = 8, 4, 6
 BM, BK, BN = 4, 2, 2
 
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 _ONE_MIB = 1024 * 1024
 
 
@@ -32,9 +32,9 @@ class InvariantReuse:
     ):
         with Mesh(("cta",), layout=(4,), names=("cta",)) as _cta:
             result = tf.zeros(Tensor[(BM, BK), "bf16", (BM, BK), "smem"])
-            for m in tf.tile(S, BM):  # noqa: F405
-                for n in tf.tile(N, BN):  # noqa: F405
-                    for k in tf.tile(K, BK):  # noqa: F405
+            for m in tf.tile(S, BM):
+                for n in tf.tile(N, BN):
+                    for k in tf.tile(K, BK):
                         loaded = tf.reshard(x[m, k], (BM, BK), "smem")
                         result = loaded + loaded
             return result
@@ -113,7 +113,7 @@ class WaveTruncation:
     def read(x: Tensor[(1024,), "bf16"]):
         with Mesh(("cta",), layout=(256,), names=("i",)) as cta:
             result = tf.zeros(Tensor[(4,), "bf16", (4,), "rmem"])
-            for i in tf.tile(  # noqa: F405
+            for i in tf.tile(
                 cta.i * (1024 // 256),
                 (cta.i + 1) * (1024 // 256),
                 4,
@@ -150,7 +150,7 @@ class TruncatedWaveReuse:
         with Mesh(("cta",), layout=(256,), names=("i",)) as cta:
             result = tf.zeros(Tensor[(16,), "bf16", (16,), "rmem"])
             for _i in range(cta.i, cta.i + 1):
-                result = tf.reshard(view(x), (16,), "rmem")  # noqa: F821
+                result = tf.reshard(view(x), (16,), "rmem")
             return result
 
 
@@ -168,15 +168,15 @@ class SiblingLoopReuse:
     def read(x: Tensor[(8,), "bf16"], y: Tensor[(8,), "bf16"]):
         with Mesh(("cta",), layout=(1,), names=("cta",)) as _cta:
             x_local = tf.zeros(Tensor[(8,), "bf16", (8,), "rmem"])
-            for n in tf.tile(6, 2):  # noqa: F405
+            for n in tf.tile(6, 2):
                 x_local = tf.reshard(x, (8,), "rmem")
             y_local = tf.zeros(Tensor[(8,), "bf16", (8,), "rmem"])
-            for m in tf.tile(1, 1):  # noqa: F405
+            for m in tf.tile(1, 1):
                 y_local = tf.reshard(y, (8,), "rmem")
             return x_local + y_local
 
 
-_TIGHT_L2 = CudaTarget(
+_TIGHT_L2 = cuda.Target(
     replace(_H200.device, l2_capacity_bytes=_ONE_MIB),
     architecture=_H200.architecture,
 )

@@ -13,8 +13,8 @@ import torch
 
 from tests.core._corpus import Case, Problems, case, reload
 from tests.nvidia.cuda.schedule._plain import SiteCounts, check_plain_report
-from tilefoundry.cli import main as cli_main
-from tilefoundry.ir.tir import PrimFunction
+from tilefoundry import cli
+from tilefoundry.ir import core
 
 
 @dataclass(frozen=True)
@@ -194,7 +194,7 @@ class FinalizedRows(ScheduleCliCase):
         out, captured = state
         assert captured == ("", "")
         lowered = reload(out.read_text(), "RowCopy").entry_function()
-        assert isinstance(lowered, PrimFunction)
+        assert isinstance(lowered, core.PrimFunction)
         assert lowered.params[-1].type.shape == (128,)
 
 
@@ -551,7 +551,7 @@ FIXTURES = (
 def test_candidates_nk_layout(tmp_path, capsys):
     variant = Path(__file__).parents[1] / "fixtures/schedule/variants/gemm_relu_gemm_untiled_nk.py"
     out = tmp_path / "gemm_relu_gemm_untiled.json"
-    assert cli_main(["schedule", "candidates", str(variant), str(out), "--json"]) == 0
+    assert cli.main(["schedule", "candidates", str(variant), str(out), "--json"]) == 0
     case = PlainCandidates(source=str(variant), sites=SiteCounts(2, 0, detailed=True))
     problems = Problems(case)
     problems.run("guard", case.guard, (out, capsys.readouterr()), problems)
@@ -568,7 +568,7 @@ def test_cli_case(case: ScheduleCliCase, tmp_path, capsys):
         out = tmp_path / "out"
         argv = [arg.format(out=out, tmp=tmp_path) for arg in case.argv]
         try:
-            code = cli_main(argv)
+            code = cli.main(argv)
         except SystemExit as error:
             code = error.code
         captured = capsys.readouterr()

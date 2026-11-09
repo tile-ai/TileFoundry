@@ -40,9 +40,9 @@ gated_norm  rows are (token, value head), 128 values each.
             times silu(f32 z) = z / (1 + exp(-z)) in f32; one landing.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 HV, DV, VAL, EPS = 48, 128, 6144, 1e-6
 P_W, Z0 = 16640, 10240        # in_proj's packed output: row stride, z's first column
 RB, LN, VEC = 16, 16, 8       # rows per CTA, lanes per row, values per lane

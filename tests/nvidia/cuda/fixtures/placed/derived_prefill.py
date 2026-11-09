@@ -1,7 +1,7 @@
 """A placed prefill whose execution geometry derives from authored dimensions."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 PREFILL_N = DimVar("prefill_n", 1, 64)
 TOPOLOGY_ONLY = DimVar("topology_only", 1, 1024)
@@ -10,7 +10,7 @@ PREFILL_TILES = ceildiv(PREFILL_N, 8)
 
 @module(
     entry="prefill",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", PREFILL_TILES), Topology("thread", TOPOLOGY_ONLY)),
 )
 class DerivedPrefill:

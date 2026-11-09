@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.core.module import Module
-from tilefoundry.passes import ModulePass, PassManager
+from tilefoundry import passes
+from tilefoundry.ir import core
 
 
 def test_pass_manager_runs_in_registered_order_and_enforces_requires():
@@ -26,31 +26,31 @@ def test_pass_manager_runs_in_registered_order_and_enforces_requires():
     """
     trace: list[str] = []
 
-    class _Traced(ModulePass):
+    class _Traced(passes.ModulePass):
         def __init__(self, tag):
             self.tag = tag
             self.name = tag
 
-        def run(self, module: Module) -> Module:
+        def run(self, module: core.Module) -> core.Module:
             trace.append(self.tag)
             return module
 
-    pm = PassManager()
+    pm = passes.PassManager()
     pm.add(_Traced("a")).add(_Traced("b")).add(_Traced("c"))
 
-    pm.run(Module(name="m", functions=(), entry="x"))
+    pm.run(core.Module(name="m", functions=(), entry="x"))
     assert trace == ["a", "b", "c"]
 
     ran: list[str] = []
 
-    class _A(ModulePass):
+    class _A(passes.ModulePass):
         name = "a"
 
         def run(self, module):
             ran.append("a")
             return module
 
-    class _B(ModulePass):
+    class _B(passes.ModulePass):
         name = "b"
         requires = ("a",)
 
@@ -58,10 +58,10 @@ def test_pass_manager_runs_in_registered_order_and_enforces_requires():
             ran.append("b")
             return module
 
-    empty = Module(name="m", functions=(), entry="x")
-    assert PassManager(passes=[_A(), _B()]).run(empty) is empty
+    empty = core.Module(name="m", functions=(), entry="x")
+    assert passes.PassManager(passes=[_A(), _B()]).run(empty) is empty
     assert ran == ["a", "b"]
 
     with pytest.raises(ValueError, match="requires 'a' not registered before it"):
-        PassManager(passes=[_B(), _A()]).run(empty)
+        passes.PassManager(passes=[_B(), _A()]).run(empty)
     assert ran == ["a", "b"]

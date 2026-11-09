@@ -12,112 +12,100 @@ from __future__ import annotations
 import pytest
 
 from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
-from tilefoundry.dsl.storage import gmem, rmem
-from tilefoundry.ir.core import Call, Var
-from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.types import (
-    Broadcast,
-    ComposedLayout,
-    Layout,
-    Mesh,
-    ShardLayout,
-    Topology,
-    make_tensor_type,
-)
-from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard_layout import Split
-from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.visitor_registry.buffer_alias import aliased_operand
+from tilefoundry.dsl import storage as dsl_storage
+from tilefoundry.interfaces import access
+from tilefoundry.ir import expr, types
+from tilefoundry.ir.hir import sharding
 
 
-@pytest.mark.parametrize("storage", [StorageKind.GMEM, StorageKind.SMEM, StorageKind.RMEM])
+@pytest.mark.parametrize("storage", [expr.StorageKind.GMEM, expr.StorageKind.SMEM, expr.StorageKind.RMEM])
 def test_compact_factored_layouts_alias(storage):
-    compact = make_tensor_type((64,), layout=Layout((64,), (1,)), storage=storage)
-    factored = make_tensor_type((64,), layout=Layout(((8, 8),), ((8, 1),)), storage=storage)
+    compact = types.TensorType.from_shape((64,), layout=types.Layout((64,), (1,)), storage=storage)
+    factored = types.TensorType.from_shape((64,), layout=types.Layout(((8, 8),), ((8, 1),)), storage=storage)
     assert aliases(compact, factored) == 0
     assert aliases(factored, compact) == 0
 
 
 def test_large_gmem_factorization_aliases_source():
-    compact = make_tensor_type(
+    compact = types.TensorType.from_shape(
         (1, 2048, 8192),
-        layout=Layout((1, 2048, 8192), (16777216, 8192, 1)),
-        storage=StorageKind.GMEM,
+        layout=types.Layout((1, 2048, 8192), (16777216, 8192, 1)),
+        storage=expr.StorageKind.GMEM,
     )
-    mesh = Mesh((Topology("cta", 128),), Layout((128,), (1,)), ("tile",))
-    sharded = make_tensor_type(
+    mesh = types.Mesh((types.Topology("cta", 128),), types.Layout((128,), (1,)), ("tile",))
+    sharded = types.TensorType.from_shape(
         compact.shape,
-        storage=StorageKind.GMEM,
-        layout=ShardLayout(Layout((1, 2048, 128, 64), (16777216, 8192, 64, 1)), (Split(2),), mesh),
+        storage=expr.StorageKind.GMEM,
+        layout=types.ShardLayout(types.Layout((1, 2048, 128, 64), (16777216, 8192, 64, 1)), (types.Split(2),), mesh),
     )
     assert aliases(compact, sharded) == 0
     assert aliases(sharded, compact) == 0
 
 
 def aliases(source, result):
-    value = Var("source", type=source)
-    call = Call(Reshard(layout=result.layout, storage=result.storage), (value,), type=result)
-    return aliased_operand(call)
+    value = expr.Var("source", type=source)
+    call = expr.Call(sharding.Reshard(layout=result.layout, storage=result.storage), (value,), type=result)
+    return access.aliased_operand(call)
 
 
-@pytest.mark.parametrize("storage", (StorageKind.GMEM, StorageKind.RMEM))
+@pytest.mark.parametrize("storage", (expr.StorageKind.GMEM, expr.StorageKind.RMEM))
 def test_broadcast_split_alias_follows_storage(storage):
-    mesh = Mesh((Topology("thread", 4),), Layout((4,), (1,)), ("unit",))
-    broadcast = make_tensor_type(
-        (64,), layout=ShardLayout(Layout((4, 16), (16, 1)), (Broadcast(),), mesh), storage=storage
+    mesh = types.Mesh((types.Topology("thread", 4),), types.Layout((4,), (1,)), ("unit",))
+    broadcast = types.TensorType.from_shape(
+        (64,), layout=types.ShardLayout(types.Layout((4, 16), (16, 1)), (types.Broadcast(),), mesh), storage=storage
     )
-    split = make_tensor_type(
+    split = types.TensorType.from_shape(
         (64,),
-        layout=ShardLayout(
-            Layout((4, 16), (0 if storage is StorageKind.RMEM else 16, 1)), (Split(0),), mesh
+        layout=types.ShardLayout(
+            types.Layout((4, 16), (0 if storage is expr.StorageKind.RMEM else 16, 1)), (types.Split(0),), mesh
         ),
         storage=storage,
     )
-    expected = None if storage is StorageKind.RMEM else 0
+    expected = None if storage is expr.StorageKind.RMEM else 0
     assert aliases(broadcast, split) == expected
     assert aliases(split, broadcast) == expected
 
 
-@pytest.mark.parametrize("storage", (StorageKind.GMEM, StorageKind.RMEM))
+@pytest.mark.parametrize("storage", (expr.StorageKind.GMEM, expr.StorageKind.RMEM))
 def test_repartition_follows_independent_split_coordinates(storage):
-    mesh = Mesh((Topology("cta", 4),), Layout((4,), (1,)), ("tile",))
-    other = Mesh((Topology("cta", 8),), Layout((8,), (1,)), ("tile",))
-    zero = storage is StorageKind.RMEM
-    source = make_tensor_type(
+    mesh = types.Mesh((types.Topology("cta", 4),), types.Layout((4,), (1,)), ("tile",))
+    other = types.Mesh((types.Topology("cta", 8),), types.Layout((8,), (1,)), ("tile",))
+    zero = storage is expr.StorageKind.RMEM
+    source = types.TensorType.from_shape(
         (64,),
-        layout=ShardLayout(Layout((4, 16), (0 if zero else 16, 1)), (Split(0),), mesh),
+        layout=types.ShardLayout(types.Layout((4, 16), (0 if zero else 16, 1)), (types.Split(0),), mesh),
         storage=storage,
     )
-    result = make_tensor_type(
+    result = types.TensorType.from_shape(
         (64,),
-        layout=ShardLayout(Layout((8, 8), (0 if zero else 8, 1)), (Split(0),), other),
+        layout=types.ShardLayout(types.Layout((8, 8), (0 if zero else 8, 1)), (types.Split(0),), other),
         storage=storage,
     )
     assert aliases(source, result) == (None if zero else 0)
 
 
-@pytest.mark.parametrize("storage", (StorageKind.GMEM, StorageKind.SMEM, StorageKind.RMEM))
+@pytest.mark.parametrize("storage", (expr.StorageKind.GMEM, expr.StorageKind.SMEM, expr.StorageKind.RMEM))
 def test_reshard_transpose_requires_data_movement(storage):
-    source = make_tensor_type((4, 4), layout=Layout((4, 4), (4, 1)), storage=storage)
-    result = make_tensor_type((4, 4), layout=Layout((4, 4), (1, 4)), storage=storage)
+    source = types.TensorType.from_shape((4, 4), layout=types.Layout((4, 4), (4, 1)), storage=storage)
+    result = types.TensorType.from_shape((4, 4), layout=types.Layout((4, 4), (1, 4)), storage=storage)
     assert aliases(source, result) is None
 
 
-def _lanes(layout) -> Mesh:
-    return Mesh((Topology("thread", 64),), layout, ("a", "b"))
+def _lanes(layout) -> types.Mesh:
+    return types.Mesh((types.Topology("thread", 64),), layout, ("a", "b"))
 
 
-_LANES = _lanes(Layout((4, 8), (8, 1)))
+_LANES = _lanes(types.Layout((4, 8), (8, 1)))
 
 
-@pytest.mark.parametrize("storage", (StorageKind.GMEM, StorageKind.SMEM, StorageKind.RMEM))
+@pytest.mark.parametrize("storage", (expr.StorageKind.GMEM, expr.StorageKind.SMEM, expr.StorageKind.RMEM))
 @pytest.mark.parametrize(
     ("held_by", "moves"),
     (
-        (_lanes(ComposedLayout(None, 0, Layout((4, 8), (8, 1)))), False),
-        (_lanes(ComposedLayout(None, 32, Layout((4, 8), (8, 1)))), True),
-        (_lanes(Layout((4, 8), (1, 4))), True),
-        (Mesh((Topology("cta", 64),), Layout((4, 8), (8, 1)), ("a", "b")), True),
+        (_lanes(types.ComposedLayout(None, 0, types.Layout((4, 8), (8, 1)))), False),
+        (_lanes(types.ComposedLayout(None, 32, types.Layout((4, 8), (8, 1)))), True),
+        (_lanes(types.Layout((4, 8), (1, 4))), True),
+        (types.Mesh((types.Topology("cta", 64),), types.Layout((4, 8), (8, 1)), ("a", "b")), True),
     ),
     ids=(
         "the same threads with a zero offset",
@@ -128,156 +116,156 @@ _LANES = _lanes(Layout((4, 8), (8, 1)))
 )
 def test_registers_alias_only_where_each_element_keeps_its_thread(storage, held_by, moves):
     """Register storage aliases only when every element stays with its thread; shared may move."""
-    private = storage is StorageKind.RMEM
-    layout = Layout((4, 8), (0, 0) if private else (8, 1))
-    source = make_tensor_type(
-        (32,), layout=ShardLayout(layout, (Split(0), Split(1)), _LANES), storage=storage
+    private = storage is expr.StorageKind.RMEM
+    layout = types.Layout((4, 8), (0, 0) if private else (8, 1))
+    source = types.TensorType.from_shape(
+        (32,), layout=types.ShardLayout(layout, (types.Split(0), types.Split(1)), _LANES), storage=storage
     )
-    result = make_tensor_type(
-        (32,), layout=ShardLayout(layout, (Split(0), Split(1)), held_by), storage=storage
+    result = types.TensorType.from_shape(
+        (32,), layout=types.ShardLayout(layout, (types.Split(0), types.Split(1)), held_by), storage=storage
     )
     assert aliases(source, result) == (None if private and moves else 0)
 
 
 def test_registers_move_when_the_mesh_axes_trade_modes():
     """The same mesh and strides; each mesh axis now holds the mode the other one held."""
-    mesh = Mesh((Topology("thread", 16),), Layout((4, 4), (4, 1)), ("a", "b"))
-    layout = Layout((4, 4, 2), (8, 2, 1))
-    source = make_tensor_type(
-        (32,), layout=ShardLayout(layout, (Split(0), Split(1)), mesh), storage=StorageKind.RMEM
+    mesh = types.Mesh((types.Topology("thread", 16),), types.Layout((4, 4), (4, 1)), ("a", "b"))
+    layout = types.Layout((4, 4, 2), (8, 2, 1))
+    source = types.TensorType.from_shape(
+        (32,), layout=types.ShardLayout(layout, (types.Split(0), types.Split(1)), mesh), storage=expr.StorageKind.RMEM
     )
-    result = make_tensor_type(
-        (32,), layout=ShardLayout(layout, (Split(1), Split(0)), mesh), storage=StorageKind.RMEM
+    result = types.TensorType.from_shape(
+        (32,), layout=types.ShardLayout(layout, (types.Split(1), types.Split(0)), mesh), storage=expr.StorageKind.RMEM
     )
     assert aliases(source, result) is None
 
 
 def test_registers_move_within_a_thread():
     """Each element stays on its thread but changes register."""
-    mesh = Mesh((Topology("thread", 4),), Layout((4,), (1,)), ("unit",))
-    source = make_tensor_type(
+    mesh = types.Mesh((types.Topology("thread", 4),), types.Layout((4,), (1,)), ("unit",))
+    source = types.TensorType.from_shape(
         (16,),
-        layout=ShardLayout(Layout((4, 2, 2), (4, 2, 1)), (Split(0),), mesh),
-        storage=StorageKind.RMEM,
+        layout=types.ShardLayout(types.Layout((4, 2, 2), (4, 2, 1)), (types.Split(0),), mesh),
+        storage=expr.StorageKind.RMEM,
     )
-    result = make_tensor_type(
+    result = types.TensorType.from_shape(
         (16,),
-        layout=ShardLayout(Layout((4, 2, 2), (4, 1, 2)), (Split(0),), mesh),
-        storage=StorageKind.RMEM,
+        layout=types.ShardLayout(types.Layout((4, 2, 2), (4, 1, 2)), (types.Split(0),), mesh),
+        storage=expr.StorageKind.RMEM,
     )
     assert aliases(source, result) is None
 
 
 def test_broadcast_registers_alias_in_another_notation():
     """Every thread of the broadcast axis holds a copy; factoring the local mode keeps them."""
-    source = make_tensor_type(
+    source = types.TensorType.from_shape(
         (32,),
-        layout=ShardLayout(Layout((8, 4), (4, 1)), (Broadcast(), Split(0)), _LANES),
-        storage=StorageKind.RMEM,
+        layout=types.ShardLayout(types.Layout((8, 4), (4, 1)), (types.Broadcast(), types.Split(0)), _LANES),
+        storage=expr.StorageKind.RMEM,
     )
-    result = make_tensor_type(
+    result = types.TensorType.from_shape(
         (32,),
-        layout=ShardLayout(Layout((8, 2, 2), (4, 2, 1)), (Broadcast(), Split(0)), _LANES),
-        storage=StorageKind.RMEM,
+        layout=types.ShardLayout(types.Layout((8, 2, 2), (4, 2, 1)), (types.Broadcast(), types.Split(0)), _LANES),
+        storage=expr.StorageKind.RMEM,
     )
     assert aliases(source, result) == 0
-    one = Mesh(
-        (Topology("thread", 64),), ComposedLayout(None, 0, Layout((1, 8), (8, 1))), ("a", "b")
+    one = types.Mesh(
+        (types.Topology("thread", 64),), types.ComposedLayout(None, 0, types.Layout((1, 8), (8, 1))), ("a", "b")
     )
-    first = make_tensor_type(
+    first = types.TensorType.from_shape(
         (32,),
-        layout=ShardLayout(Layout((8, 4), (4, 1)), (Broadcast(), Split(0)), one),
-        storage=StorageKind.RMEM,
+        layout=types.ShardLayout(types.Layout((8, 4), (4, 1)), (types.Broadcast(), types.Split(0)), one),
+        storage=expr.StorageKind.RMEM,
     )
     assert aliases(source, first) is None, "copies on four threads are not copies on one"
 
 
 def test_private_split_factorizations_alias():
-    mesh = Mesh((Topology("thread", 4),), Layout((4,), (1,)), ("unit",))
-    source = make_tensor_type(
+    mesh = types.Mesh((types.Topology("thread", 4),), types.Layout((4,), (1,)), ("unit",))
+    source = types.TensorType.from_shape(
         (64,),
-        layout=ShardLayout(Layout((4, 16), (0, 1)), (Split(0),), mesh),
-        storage=StorageKind.RMEM,
+        layout=types.ShardLayout(types.Layout((4, 16), (0, 1)), (types.Split(0),), mesh),
+        storage=expr.StorageKind.RMEM,
     )
-    result = make_tensor_type(
+    result = types.TensorType.from_shape(
         (64,),
-        layout=ShardLayout(Layout((1, 4, 8, 2), (0, 0, 2, 1)), (Split(1),), mesh),
-        storage=StorageKind.RMEM,
+        layout=types.ShardLayout(types.Layout((1, 4, 8, 2), (0, 0, 2, 1)), (types.Split(1),), mesh),
+        storage=expr.StorageKind.RMEM,
     )
     assert aliases(source, result) == 0
 
 
-def _shard_layout(shape) -> ShardLayout:
-    return ShardLayout(
-        layout=Layout(shape=shape, strides=tuple([1] * len(shape))),
+def _shard_layout(shape) -> types.ShardLayout:
+    return types.ShardLayout(
+        layout=types.Layout(shape=shape, strides=tuple([1] * len(shape))),
         attrs=(),
-        mesh=Mesh((Topology("cta", 128),), Layout((128,), (1,)), ("g",)),
+        mesh=types.Mesh((types.Topology("cta", 128),), types.Layout((128,), (1,)), ("g",)),
     )
 
 
 _SL_PRESERVES_SHAPE = _shard_layout((1, 8, 192))
-_MESH_H2L = Mesh(
-    topologies=(Topology("thread", 4),), layout=Layout(shape=(4,), strides=(1,)), names=("t",)
+_MESH_H2L = types.Mesh(
+    topologies=(types.Topology("thread", 4),), layout=types.Layout(shape=(4,), strides=(1,)), names=("t",)
 )
-_SL_H2L = ShardLayout(
-    layout=Layout(shape=(2, 4, 128), strides=None), attrs=(Split(1),), mesh=_MESH_H2L
+_SL_H2L = types.ShardLayout(
+    layout=types.Layout(shape=(2, 4, 128), strides=None), attrs=(types.Split(1),), mesh=_MESH_H2L
 )
-_MESH_L2H = Mesh(
-    topologies=(Topology("thread", 4),), layout=Layout(shape=(4,), strides=(1,)), names=("w",)
+_MESH_L2H = types.Mesh(
+    topologies=(types.Topology("thread", 4),), layout=types.Layout(shape=(4,), strides=(1,)), names=("w",)
 )
-_REG_L2H_LAYOUT = ShardLayout(
-    layout=Layout(shape=(4, 64), strides=(0, 1)), attrs=(Split(0),), mesh=_MESH_L2H
+_REG_L2H_LAYOUT = types.ShardLayout(
+    layout=types.Layout(shape=(4, 64), strides=(0, 1)), attrs=(types.Split(0),), mesh=_MESH_L2H
 )
-_SL_L2H = ShardLayout(layout=Layout(shape=(4, 64), strides=None), attrs=(Split(0),), mesh=_MESH_L2H)
+_SL_L2H = types.ShardLayout(layout=types.Layout(shape=(4, 64), strides=None), attrs=(types.Split(0),), mesh=_MESH_L2H)
 
 
 def _materialized(shape, strides, attrs, mesh):
-    return ShardLayout(layout=Layout(shape=shape, strides=strides), attrs=attrs, mesh=mesh)
+    return types.ShardLayout(layout=types.Layout(shape=shape, strides=strides), attrs=attrs, mesh=mesh)
 
 
-_S_DYN = DimVar("seq_len", 1, 3)
-_MESH_DYN = Mesh(topologies=(Topology("cta", 8),), layout=Layout(shape=(8,), strides=(1,)))
-_SL_DYN_BARE = ShardLayout(
-    layout=Layout(shape=(1, _S_DYN, 32, 128), strides=None), attrs=(Split(axis=2),), mesh=_MESH_DYN
+_S_DYN = expr.DimVar("seq_len", 1, 3)
+_MESH_DYN = types.Mesh(topologies=(types.Topology("cta", 8),), layout=types.Layout(shape=(8,), strides=(1,)))
+_SL_DYN_BARE = types.ShardLayout(
+    layout=types.Layout(shape=(1, _S_DYN, 32, 128), strides=None), attrs=(types.Split(axis=2),), mesh=_MESH_DYN
 )
 CASES = (
     OpCase(
         "destination_umat_rejected",
-        Reshard(layout=_SL_PRESERVES_SHAPE, storage=StorageKind.UMAT),
-        (make_tensor_type((1, 1536)),),
+        sharding.Reshard(layout=_SL_PRESERVES_SHAPE, storage=expr.StorageKind.UMAT),
+        (types.TensorType.from_shape((1, 1536)),),
         error=ExpectedError(match="unmaterialized"),
     ),
     OpCase(
         "storage_change_without_layout_errors",
-        Reshard(storage=rmem),
-        (make_tensor_type((1, 1536)),),
+        sharding.Reshard(storage=dsl_storage.rmem),
+        (types.TensorType.from_shape((1, 1536)),),
         error=ExpectedError(match="storage change requires"),
     ),
     OpCase(
         "low_to_high_sugar_materializes_shared",
-        Reshard(layout=_SL_L2H, storage=gmem),
-        (make_tensor_type((4, 64), storage=rmem, layout=_REG_L2H_LAYOUT),),
-        type=make_tensor_type(
-            (4, 64), storage=gmem, layout=_materialized((4, 64), (64, 1), (Split(0),), _MESH_L2H)
+        sharding.Reshard(layout=_SL_L2H, storage=dsl_storage.gmem),
+        (types.TensorType.from_shape((4, 64), storage=dsl_storage.rmem, layout=_REG_L2H_LAYOUT),),
+        type=types.TensorType.from_shape(
+            (4, 64), storage=dsl_storage.gmem, layout=_materialized((4, 64), (64, 1), (types.Split(0),), _MESH_L2H)
         ),
     ),
     OpCase(
         "unmaterialized_to_high_sugar_materializes_shared",
-        Reshard(layout=_SL_L2H, storage=gmem),
-        (make_tensor_type((4, 64), storage=StorageKind.UMAT),),
-        type=make_tensor_type(
-            (4, 64), storage=gmem, layout=_materialized((4, 64), (64, 1), (Split(0),), _MESH_L2H)
+        sharding.Reshard(layout=_SL_L2H, storage=dsl_storage.gmem),
+        (types.TensorType.from_shape((4, 64), storage=expr.StorageKind.UMAT),),
+        type=types.TensorType.from_shape(
+            (4, 64), storage=dsl_storage.gmem, layout=_materialized((4, 64), (64, 1), (types.Split(0),), _MESH_L2H)
         ),
     ),
     OpCase(
         "same_storage_dynamic_bare_axis_shared_engine",
-        Reshard(layout=_SL_DYN_BARE, storage=None),
-        (make_tensor_type((1, _S_DYN, 32, 128)),),
-        type=make_tensor_type(
+        sharding.Reshard(layout=_SL_DYN_BARE, storage=None),
+        (types.TensorType.from_shape((1, _S_DYN, 32, 128)),),
+        type=types.TensorType.from_shape(
             (1, _S_DYN, 32, 128),
-            storage=gmem,
+            storage=dsl_storage.gmem,
             layout=_materialized(
-                (1, _S_DYN, 32, 128), (0, 32 * 128, 128, 1), (Split(2),), _MESH_DYN
+                (1, _S_DYN, 32, 128), (0, 32 * 128, 128, 1), (types.Split(2),), _MESH_DYN
             ),
         ),
     ),

@@ -10,9 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from tilefoundry import jit
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry import cli, jit
+from tilefoundry_nvidia import cuda
 
 
 def test_jit_rejects_bad_arguments() -> None:
@@ -22,11 +21,11 @@ def test_jit_rejects_bad_arguments() -> None:
         return a
 
     with pytest.raises(TypeError, match="expected Function or Module"):
-        jit(raw_fn, target=CudaTarget("nvidia.h200_sxm"))
+        jit(raw_fn, target=cuda.Target("nvidia.h200_sxm"))
 
     rmsnorm = Path(__file__).parents[1] / "fixtures/placed/rmsnorm.py"
-    fn = load_authored_ir(f"{rmsnorm}:RmsnormModule").entry_function()
+    fn = cli.load_authored_ir(f"{rmsnorm}:RmsnormModule").entry_function()
     with pytest.raises(TypeError, match="Target instance, not a string"):
         jit(fn, target="vulkan")
     with pytest.raises(TypeError, match="unexpected keyword argument"):
-        jit(fn, target=CudaTarget("nvidia.h200_sxm"), foo=1)
+        jit(fn, target=cuda.Target("nvidia.h200_sxm"), foo=1)

@@ -4,62 +4,39 @@ from __future__ import annotations
 
 import isl
 
-from tilefoundry.ir.core import Op, OpCapability
-from tilefoundry.ir.core.kinds import ReduceKind
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import (
-    ComposedLayoutPattern,
-    LayoutPattern,
-    MeshPattern,
-    ShardLayoutPattern,
-    StarPattern,
-    TensorPattern,
-    WildcardPattern,
-    utils,
-)
-from tilefoundry.ir.pattern import predicates as P
-from tilefoundry.ir.tir.sync import WARP_SIZE
-from tilefoundry.ir.types import DType, ShardLayout, StorageKind, TensorType, UnitType
-from tilefoundry.ir.types.layout import ComposedLayout, flatten
-from tilefoundry.ir.types.mesh import _named, levels
-from tilefoundry.ir.types.utils import static_dim_value
-from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    identity_access,
-    iterating,
-    register_access_relation,
-)
+from tilefoundry.interfaces import access, typeinfer, verify
+from tilefoundry.ir import expr, pattern, types
 
-__all__ = ["ReduceKind", "Reduce"]
+from .sync import WARP_SIZE
 
-_ = WildcardPattern()
-_FOLDS_IN_FLOAT = (DType.f32, DType.f16, DType.bf16)
-_PLAIN = LayoutPattern((StarPattern(_),), (StarPattern(_),))
-_ONE_MESH = MeshPattern(
+__all__ = ["Reduce", "workspace_slots"]
+
+_ = pattern.Wildcard()
+FOLDS_IN_FLOAT = (expr.DType.f32, expr.DType.f16, expr.DType.bf16)
+PLAIN = pattern.Layout((pattern.Star(_),), (pattern.Star(_),))
+ONE_MESH = pattern.Mesh(
     ("thread",),
-    ComposedLayoutPattern(
+    pattern.ComposedLayout(
         inner=None,
-        offset=WildcardPattern("mesh_offset"),
-        outer=LayoutPattern(
-            (StarPattern(WildcardPattern("mesh_shape")),),
-            (StarPattern(WildcardPattern("mesh_stride")),),
+        offset=pattern.Wildcard("mesh_offset"),
+        outer=pattern.Layout(
+            (pattern.Star(pattern.Wildcard("mesh_shape")),),
+            (pattern.Star(pattern.Wildcard("mesh_stride")),),
         ),
     ),
 )
 
 
-def _folding(dtype: str, layout) -> TensorPattern:
+def folding(dtype: str, layout) -> pattern.Tensor:
     """A float-foldable tensor sharded over the one mesh both operands name."""
-    return TensorPattern(
-        dtype=WildcardPattern(dtype),
-        layout=ShardLayoutPattern(layout, _, _ONE_MESH),
-        predicates=(P.In(WildcardPattern(dtype), _FOLDS_IN_FLOAT),),
+    return pattern.Tensor(
+        dtype=pattern.Wildcard(dtype),
+        layout=pattern.ShardLayout(layout, _, ONE_MESH),
+        predicates=(pattern.In(pattern.Wildcard(dtype), FOLDS_IN_FLOAT),),
     )
 
 
-def _reduced_axes(op, rank: int) -> tuple[int, ...]:
+def reduced_axes(op, rank: int) -> tuple[int, ...]:
     """Normalize this instruction's axes against one source rank."""
     axes = tuple(axis + rank if axis < 0 else axis for axis in op.axes)
     if any(axis < 0 or axis >= rank for axis in axes):
@@ -67,9 +44,9 @@ def _reduced_axes(op, rank: int) -> tuple[int, ...]:
     return axes
 
 
-def _result_shape(op, source) -> tuple:
+def result_shape(op, source) -> tuple:
     """Apply the instruction's declared keepdim policy to the source shape."""
-    axes = _reduced_axes(op, len(source.shape))
+    axes = reduced_axes(op, len(source.shape))
     return tuple(
         1 if axis in axes else extent
         for axis, extent in enumerate(source.shape)
@@ -77,33 +54,33 @@ def _result_shape(op, source) -> tuple:
     )
 
 
-@register_op(dialect="T", category="tensor")
-class Reduce(Op):
+@expr.register_op(dialect="T", category="tensor")
+class Reduce(expr.Op):
     """Generic axis reduction; dispatched by the ``kind`` tag."""
 
-    capability = OpCapability(None)
-    execution_mesh = utils.thread_execution_mesh()
+    capability = expr.OpCapability(None)
+    execution_mesh = pattern.thread_execution_mesh()
 
-    src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_folding("src_dtype", _PLAIN))
-    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=_folding("dst_dtype", None))
-    workspace = ParamDef(
+    src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=folding("src_dtype", PLAIN))
+    dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=folding("dst_dtype", None))
+    workspace = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.READ | MemoryEffect.WRITE,
-        pattern=utils.tensor_in(StorageKind.SMEM),
+        effect=expr.MemoryEffect.READ | expr.MemoryEffect.WRITE,
+        pattern=pattern.tensor_in(expr.StorageKind.SMEM),
         optional=True,
         default=None,
     )
-    axes = ParamDef(kind="attribute", annotation=tuple)
-    keepdim = ParamDef(kind="attribute", annotation=bool)
-    kind = ParamDef(kind="attribute", annotation=ReduceKind)
+    axes = expr.ParamDef(kind="attribute", annotation=tuple)
+    keepdim = expr.ParamDef(kind="attribute", annotation=bool)
+    kind = expr.ParamDef(kind="attribute", annotation=expr.ReduceKind)
 
 
-@register_typeinfer(Reduce)
-def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
-    return UnitType()
+@typeinfer.register(Reduce)
+def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
+    return types.UnitType()
 
 
-def _workspace_slots(source) -> int:
+def workspace_slots(source) -> int:
     """One slot per warp of the thread level ``source`` is sharded over.
 
     The runtime posts each warp's partial at its warp index and reads its group
@@ -112,15 +89,15 @@ def _workspace_slots(source) -> int:
     CTA combines its own partials in its own shared memory.
     """
     mesh = source.layout.mesh
-    names = _named(mesh)
+    names = types.topology_names(mesh)
     if "thread" in names:
-        level = levels(mesh)[names.index("thread")]
+        level = types.levels(mesh)[names.index("thread")]
     else:
-        stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
+        stated = mesh.layout.outer if isinstance(mesh.layout, types.ComposedLayout) else mesh.layout
         level = stated
     threads = 1
-    for extent in flatten(level).shape:
-        value = static_dim_value(extent)
+    for extent in types.flatten(level).shape:
+        value = expr.static_dim_value(extent)
         if value is None or value <= 0:
             raise ValueError(
                 f"Reduce workspace needs a static positive thread mesh, got extent {extent!r}"
@@ -129,8 +106,8 @@ def _workspace_slots(source) -> int:
     return -(-threads // WARP_SIZE)
 
 
-@register_access_relation(Reduce)
-def _reduce_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(Reduce)
+def reduce_access(call: "Call", ctx) -> tuple[access.Relation, ...]:
     """Walk the source coordinates and collapse reduced axes into ``dst``.
 
     The workspace is reached at every warp slot from every source coordinate:
@@ -139,8 +116,8 @@ def _reduce_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     op = call.target
     source = ctx.type_of(call.args[0])
     rank = len(source.shape)
-    axes = _reduced_axes(op, rank)
-    out_shape = _result_shape(op, source)
+    axes = reduced_axes(op, rank)
+    out_shape = result_shape(op, source)
     surviving = [axis for axis in range(rank) if axis not in axes]
     came_from = {axis: axis for axis in range(rank)} if op.keepdim else dict(enumerate(surviving))
     writes_at = [
@@ -148,30 +125,30 @@ def _reduce_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
         for axis in range(len(out_shape))
     ]
     domain = ", ".join(f"d{axis}" for axis in range(rank))
-    destination_access = AccessRelation(isl.map(f"{{ [{domain}] -> [{', '.join(writes_at)}] }}"))
-    inputs = [identity_access(rank), destination_access]
+    destination_access = access.Relation(isl.map(f"{{ [{domain}] -> [{', '.join(writes_at)}] }}"))
+    inputs = [access.identity(rank), destination_access]
     if len(call.args) > 2:
-        slots = _workspace_slots(source)
-        inputs.append(AccessRelation(isl.map(f"{{ [{domain}] -> [s] : 0 <= s < {slots} }}")))
-    return iterating(source.shape, (*inputs, destination_access))
+        slots = workspace_slots(source)
+        inputs.append(access.Relation(isl.map(f"{{ [{domain}] -> [s] : 0 <= s < {slots} }}")))
+    return access.iterating(source.shape, (*inputs, destination_access))
 
 
-@register_verify_stmt(Reduce)
-def _(call: "Call", ctx: "VerifyContext") -> None:
+@verify.register(Reduce)
+def _(call: "Call", ctx: "verify.Context") -> None:
     if len(call.args) <= 2:
         return
     source, workspace = ctx.type_of(call.args[0]), ctx.type_of(call.args[2])
     if not (
-        isinstance(source, TensorType)
-        and isinstance(source.layout, ShardLayout)
-        and isinstance(workspace, TensorType)
+        isinstance(source, types.TensorType)
+        and isinstance(source.layout, types.ShardLayout)
+        and isinstance(workspace, types.TensorType)
     ):
         return
     try:
-        slots = _workspace_slots(source)
+        slots = workspace_slots(source)
     except ValueError as error:
         ctx.error(call, str(error))
-    held = static_dim_value(workspace.shape[0]) if len(workspace.shape) == 1 else None
+    held = expr.static_dim_value(workspace.shape[0]) if len(workspace.shape) == 1 else None
     if held is None or held < slots:
         ctx.error(
             call,

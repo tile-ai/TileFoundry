@@ -2,38 +2,35 @@
 
 from dataclasses import replace
 
-from tilefoundry.ir.core.param_def import collect_param_defs
-from tilefoundry.ir.hir.tensor.cast import Cast
-from tilefoundry.ir.pattern import PatternMatcher
-from tilefoundry.ir.pattern.utils import selected_pattern
-from tilefoundry.ir.types import Layout, StorageKind
-from tilefoundry.ir.types.shard_layout import ShardLayout
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.candidates import candidate_ops
-from tilefoundry.visitor_registry.registries import typeinfer_registry
-from tilefoundry_apple.amx.target import AmxTarget
+from tilefoundry.interfaces import schedule, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir.hir import tensor
+from tilefoundry_apple.amx import target
 
 
-@register_typeinfer(Cast, target=AmxTarget)
-def _cast(call, ctx):
-    result = typeinfer_registry.lookup(Cast)(call, ctx).type
+@typeinfer.register(tensor.Cast, target=target.Target)
+def infer_cast(call, ctx):
+    result = typeinfer.registry.require(tensor.Cast)(call, ctx).type
     source = ctx.type_of(call.args[0])
-    if source.storage is not StorageKind.RMEM:
+    if source.storage is not expr.StorageKind.RMEM:
         return result
-    plain = replace(source, layout=source.layout.layout) if isinstance(source.layout, ShardLayout) else source
-    for instruction in candidate_ops(Cast, target=ctx.target):
+    plain = replace(source, layout=source.layout.layout) if isinstance(source.layout, types.ShardLayout) else source
+    for instruction in schedule.candidate_ops(tensor.Cast, target=ctx.target):
         for declaration in getattr(instruction, "hir_matches", ()):
-            if declaration.op is not Cast:
+            if declaration.op is not tensor.Cast:
                 continue
             try:
                 op = instruction(**declaration.attributes, src_dtype=source.dtype, dst_dtype=result.dtype)
             except (ValueError, TypeError):
                 continue
-            param = next(p for p in collect_param_defs(instruction) if p.name == 'src')
-            matcher = PatternMatcher(op.bindings)
-            if matcher.match(selected_pattern(param.pattern, op.bindings), plain) and matcher.solve() is True:
-                layout = Layout(source.shape)
-                if isinstance(source.layout, ShardLayout):
+            param = next(p for p in expr.collect_param_defs(instruction) if p.name == 'src')
+            matcher = pattern.Matcher(op.bindings)
+            if matcher.match(pattern.selected(param.pattern, op.bindings), plain) and matcher.solve() is True:
+                layout = types.Layout(source.shape)
+                if isinstance(source.layout, types.ShardLayout):
                     layout = replace(source.layout, layout=layout)
                 return replace(result, layout=layout)
     return result
+
+
+__all__ = ["infer_cast"]

@@ -1,13 +1,26 @@
-"""Target-owned Facts shared across consumer families and their validation."""
+"""The Facts aggregates a Target projects, and the validation of what it returns.
+
+Each aggregate is the narrow hardware record one consumer asks for, and none
+names a backend: the topology limits and the memory-execution levels that
+several consumers share, the memory hierarchy graph, and the throughput rates
+and parallel capacity the analysis families divide work by. What a consumer
+cannot see it cannot depend on, so these types are the record of how much
+hardware each measurement rests on. ``facts_result`` checks the shape of one
+value a Target returns from ``get_facts``.
+"""
 
 from __future__ import annotations
 
 import dataclasses
+from enum import Enum
 from typing import TypeVar
 
-from tilefoundry.ir.types.storage import TARGET_MEMORY_OWNER
+from tilefoundry import dispatch
+from tilefoundry.ir import expr
 
 FactsT = TypeVar("FactsT")
+
+
 
 
 @dataclasses.dataclass(frozen=True)
@@ -63,7 +76,7 @@ class MemoryExecutionFacts:
     topologies: tuple[str, ...]
 
 
-class TargetFactsError(Exception):
+class FactsError(Exception):
     """A Target failed to provide the requested immutable Facts aggregate."""
 
 
@@ -72,29 +85,208 @@ def facts_result(
 ) -> FactsT:
     """Validate and return one Facts value provided by *target*."""
     if not isinstance(facts_type, type):
-        raise TargetFactsError(
-            f"{type(target).__name__}: Facts type must be a class, got "
+        raise FactsError(
+            f"{dispatch.spelled(type(target))}: Facts type must be a class, got "
             f"{type(facts_type).__name__}"
         )
     if not dataclasses.is_dataclass(facts_type) or not facts_type.__dataclass_params__.frozen:
-        raise TargetFactsError(
-            f"{type(target).__name__}: {facts_type.__name__} must be a frozen "
+        raise FactsError(
+            f"{dispatch.spelled(type(target))}: {facts_type.__name__} must be a frozen "
             "dataclass Facts aggregate"
         )
     if not isinstance(value, facts_type):
-        raise TargetFactsError(
-            f"{type(target).__name__}: Facts projection for {facts_type.__name__} "
+        raise FactsError(
+            f"{dispatch.spelled(type(target))}: Facts projection for {facts_type.__name__} "
             f"returned {type(value).__name__}"
         )
     return value
 
 
+class MemoryRelationKind(Enum):
+    """How two memory levels are related.
+
+    The vocabulary is deliberately small and non-hierarchical. A hierarchy that
+    is only ever a tree cannot say that a cache and an addressable level divide
+    one physical block, which is exactly the relationship that decides how much
+    of that block either one gets.
+    """
+
+    CACHES = "caches"
+    SHARES_CAPACITY_WITH = "shares_capacity_with"
+
+
+@dataclasses.dataclass(frozen=True)
+class ExplicitMemoryLevelFacts:
+    """A level a program places values in by name.
+
+    ``scope`` is the topology level ``capacity_bytes`` is stated per, so a
+    per-CTA and a per-device capacity are not accidentally compared. ``owner``
+    is the topology level whose units own separate values, or ``"target"`` when
+    every unit shares the target-wide allocation.
+    """
+
+    name: str
+    capacity_bytes: int | None
+    scope: str
+    owner: str
+
+
+@dataclasses.dataclass(frozen=True)
+class ImplicitMemoryLevelFacts:
+    """A level traffic passes through without being placed there.
+
+    A program never allocates in a cache, so this level has no footprint of its
+    own. Its capacity is still worth knowing: it decides whether the working set
+    of the level it caches will stay resident.
+    """
+
+    name: str
+    capacity_bytes: int | None
+    scope: str
+
+
+@dataclasses.dataclass(frozen=True)
+class MemoryLevelRelation:
+    """One edge between two memory levels.
+
+    ``shared_capacity_bytes`` is set only on a capacity-sharing edge, where it
+    is the size of the block both levels are taken from.
+    """
+
+    kind: MemoryRelationKind
+    near: str
+    far: str
+    shared_capacity_bytes: int | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class MemoryHierarchyFacts:
+    """Every memory level of one target, as a flat graph.
+
+    The levels are two flat tuples and the structure is a separate edge list,
+    rather than a nesting. A target whose cache is shared with an addressable
+    level, or whose two caches have no containment relationship at all, is then
+    describable without picking a parent for anything.
+    """
+
+    explicit_levels: tuple[ExplicitMemoryLevelFacts, ...]
+    implicit_levels: tuple[ImplicitMemoryLevelFacts, ...]
+    relations: tuple[MemoryLevelRelation, ...]
+
+    def explicit(self, name: str) -> ExplicitMemoryLevelFacts | None:
+        """The explicit level called *name*, if the target has one."""
+        return next((level for level in self.explicit_levels if level.name == name), None)
+
+    def implicit(self, name: str) -> ImplicitMemoryLevelFacts | None:
+        """The implicit level called *name*, if the target has one."""
+        return next((level for level in self.implicit_levels if level.name == name), None)
+
+    def cached_level(self, name: str) -> str | None:
+        """The level *name* caches, if it caches one."""
+        return next(
+            (
+                relation.far
+                for relation in self.relations
+                if relation.kind is MemoryRelationKind.CACHES and relation.near == name
+            ),
+            None,
+        )
+
+    def backing_level(self, name: str) -> str:
+        """The addressable level *name* ultimately caches.
+
+        A cache in front of a cache is followed to the end of the chain, because
+        the working set that decides whether it holds is the one the program
+        actually placed somewhere.
+        """
+        seen = {name}
+        current = name
+        while (nearer := self.cached_level(current)) is not None:
+            if nearer in seen:
+                raise ValueError(f"memory hierarchy: caching cycle through {current!r}")
+            seen.add(nearer)
+            current = nearer
+        return current
+
+    def capacity_sharers(self, name: str) -> tuple[tuple[str, int | None], ...]:
+        """Every level *name* divides a physical block with, and that block's size."""
+        return tuple(
+            (
+                relation.far if relation.near == name else relation.near,
+                relation.shared_capacity_bytes,
+            )
+            for relation in self.relations
+            if relation.kind is MemoryRelationKind.SHARES_CAPACITY_WITH
+            and name in (relation.near, relation.far)
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class PerformanceServiceFacts:
+    """Everything one unit gets through, by the kind of work it is asked for.
+
+    Floating-point work by dtype, movement by the level it crosses, and the work
+    that is not floating point at all by the service it asks for. A comparison,
+    a select, an integer add and a local move all take a machine time, and none
+    of them is a FLOP; a dtype is not a kind of work.
+    """
+
+    unit_flops: tuple[tuple[expr.DType, int], ...]
+    unit_ops: tuple[tuple[str, int], ...]
+    unit_bandwidth: tuple[tuple[str, int], ...]
+    unit: str
+
+    def flops(self, dtype: expr.DType) -> int | None:
+        """What one unit gets through of *dtype*, or ``None`` when unstated."""
+        return next((stated for named, stated in self.unit_flops if named == dtype), None)
+
+    def ops(self, kind: str) -> int | None:
+        """What one unit gets through of *kind*, or ``None`` when unstated."""
+        return next((stated for named, stated in self.unit_ops if named == kind), None)
+
+    def bandwidth(self, memory_level: str) -> int | None:
+        """What one unit moves at *memory_level*, or ``None`` when unstated."""
+        return next(
+            (stated for named, stated in self.unit_bandwidth if named == memory_level),
+            None,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class ThroughputFacts:
+    """The whole-device rates a bound divides the whole program's work by.
+
+    ``bandwidth_level`` names the memory level ``memory_bandwidth`` describes,
+    so the bound is computed from the traffic at that level rather than from
+    every level summed together. What one unit gets through is a different
+    question, asked of `PerformanceServiceFacts`: a bound over the whole device
+    and the time one CTA takes are not the same number divided.
+    """
+
+    peak_flops_per_second: tuple[tuple[expr.DType, int], ...]
+    memory_bandwidth_bytes_per_second: int | None
+    bandwidth_level: str
+
+    def peak_for(self, dtype: expr.DType) -> int | None:
+        """The published rate for *dtype*, or ``None`` when there is none."""
+        return next(
+            (rate for entry, rate in self.peak_flops_per_second if entry == dtype),
+            None,
+        )
+
+
 __all__ = [
+    "ExplicitMemoryLevelFacts",
+    "FactsError",
     "FactsT",
-    "TARGET_MEMORY_OWNER",
-    "TargetFactsError",
+    "ImplicitMemoryLevelFacts",
+    "MemoryExecutionFacts",
+    "MemoryHierarchyFacts",
+    "MemoryLevelRelation",
+    "MemoryRelationKind",
+    "PerformanceServiceFacts",
+    "ThroughputFacts",
     "TopologyFacts",
     "TopologyLevelFacts",
-    "MemoryExecutionFacts",
     "facts_result",
 ]

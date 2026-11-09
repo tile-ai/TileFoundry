@@ -4,32 +4,20 @@ from dataclasses import replace
 
 import pytest
 
-from tilefoundry.ir.core import Call, Var
-from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.types import (
-    Broadcast,
-    DType,
-    Layout,
-    Mesh,
-    Partial,
-    ShardLayout,
-    StorageKind,
-    TensorType,
-    Topology,
-    Varying,
-)
-from tilefoundry.visitor_registry.buffer_alias import aliased_operand
+from tilefoundry.interfaces import access
+from tilefoundry.ir import expr, types
+from tilefoundry.ir.hir import sharding
 
 
 def _types():
-    cta = Mesh((Topology("cta", 2),), Layout((2,), (1,)))
-    src = TensorType(
+    cta = types.Mesh((types.Topology("cta", 2),), types.Layout((2,), (1,)))
+    src = types.TensorType(
         (64, 64),
-        DType.f32,
-        ShardLayout(Layout((64, 64), (64, 1)), (Partial("sum"),), cta),
-        StorageKind.SMEM,
+        expr.DType.f32,
+        types.ShardLayout(types.Layout((64, 64), (64, 1)), (types.Partial("sum"),), cta),
+        expr.StorageKind.SMEM,
     )
-    dst = TensorType((64, 64), DType.f32, Layout((64, 64), (64, 1)), StorageKind.GMEM)
+    dst = types.TensorType((64, 64), expr.DType.f32, types.Layout((64, 64), (64, 1)), expr.StorageKind.GMEM)
     return src, dst
 
 
@@ -37,34 +25,36 @@ def _types():
 def test_partial_to_broadcast_not_aliased(move_axis):
     src, _ = _types()
     if move_axis:
-        mesh = Mesh((Topology("cta", 4),), Layout((2, 2), (2, 1)))
+        mesh = types.Mesh((types.Topology("cta", 4),), types.Layout((2, 2), (2, 1)))
         src = replace(
-            src, layout=replace(src.layout, attrs=(Partial("sum"), Broadcast()), mesh=mesh)
+            src, layout=replace(src.layout, attrs=(types.Partial("sum"), types.Broadcast()), mesh=mesh)
         )
-        attrs = (Broadcast(), Partial("sum"))
+        attrs = (types.Broadcast(), types.Partial("sum"))
     else:
-        attrs = (Broadcast(),)
+        attrs = (types.Broadcast(),)
     dst = replace(src, layout=replace(src.layout, attrs=attrs))
-    call = Call(Reshard(layout=dst.layout, storage=dst.storage), (Var("src", type=src),), type=dst)
-    assert aliased_operand(call) is None
+    call = expr.Call(sharding.Reshard(layout=dst.layout, storage=dst.storage), (expr.Var("src", type=src),), type=dst)
+    assert access.aliased_operand(call) is None
 
 
 def test_broadcast_to_plain_aliases():
     src, _ = _types()
-    src = replace(src, layout=replace(src.layout, attrs=(Broadcast(),)))
+    src = replace(src, layout=replace(src.layout, attrs=(types.Broadcast(),)))
     dst = replace(src, layout=src.layout.layout)
-    call = Call(Reshard(layout=dst.layout, storage=dst.storage), (Var("src", type=src),), type=dst)
-    assert aliased_operand(call) == 0
+    call = expr.Call(
+        sharding.Reshard(layout=dst.layout, storage=dst.storage), (expr.Var("src", type=src),), type=dst
+    )
+    assert access.aliased_operand(call) == 0
 
 
 @pytest.mark.parametrize(
     "before,after,expected",
     (
-        (Partial("sum"), Partial("sum"), 0),
-        (Varying(), Partial("sum"), 0),
-        (None, Partial("sum"), 0),
-        (Partial("sum"), Partial("max"), None),
-        (Broadcast(), Partial("sum"), None),
+        (types.Partial("sum"), types.Partial("sum"), 0),
+        (types.Varying(), types.Partial("sum"), 0),
+        (None, types.Partial("sum"), 0),
+        (types.Partial("sum"), types.Partial("max"), None),
+        (types.Broadcast(), types.Partial("sum"), None),
     ),
 )
 def test_partial_alias_states(before, after, expected):
@@ -72,5 +62,7 @@ def test_partial_alias_states(before, after, expected):
     layout = src.layout
     src = replace(src, layout=layout.layout if before is None else replace(layout, attrs=(before,)))
     dst = replace(src, layout=replace(layout, attrs=(after,)))
-    call = Call(Reshard(layout=dst.layout, storage=dst.storage), (Var("src", type=src),), type=dst)
-    assert aliased_operand(call) == expected
+    call = expr.Call(
+        sharding.Reshard(layout=dst.layout, storage=dst.storage), (expr.Var("src", type=src),), type=dst
+    )
+    assert access.aliased_operand(call) == expected

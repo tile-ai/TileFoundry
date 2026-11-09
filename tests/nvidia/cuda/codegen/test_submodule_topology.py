@@ -8,11 +8,11 @@ import pytest
 import torch
 
 import tilefoundry
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry import cli
+from tilefoundry_nvidia import cuda
 
 CODEGEN = Path(__file__).parents[1] / "fixtures" / "codegen"
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
@@ -22,7 +22,7 @@ def test_parent_links_two_topology_domains() -> None:
     x1 = torch.randn(128, device="cuda")
     o0 = torch.empty_like(x0)
     o1 = torch.empty_like(x1)
-    _Parent = load_authored_ir(f"{CODEGEN / 'two_topology_domains.py'}:_Parent")
+    _Parent = cli.load_authored_ir(f"{CODEGEN / 'two_topology_domains.py'}:_Parent")
     runtime = tilefoundry.compile(_Parent, target=_CUDA)
     runtime(x0, o0, x1, o1)
     torch.cuda.synchronize()

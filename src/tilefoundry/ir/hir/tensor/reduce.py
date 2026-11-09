@@ -3,72 +3,55 @@
 from __future__ import annotations
 
 from math import prod
+from types import MappingProxyType
 
 import isl
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.dim import resolve_dim
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.kinds import ReduceKind
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.layout import Layout
-from tilefoundry.ir.types.shard_layout import ShardLayout, shard_layout_of
-from tilefoundry.ir.types.storage import StorageOwners
-from tilefoundry.ir.types.utils import reject_partials
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    identity_access,
-    iterating,
-    register_access_relation,
-    relations_of,
-)
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
-__all__ = ["ReduceKind", "Reduce"]
+__all__ = ["Reduce"]
 
 
-@register_op(dialect='tf', category='tensor')
-class Reduce(Op):
+@expr.register_op(dialect='tf', category='tensor')
+class Reduce(expr.Op):
     """Axis reduction over ``x``, one ``ReduceKind`` per runtime reduce tag."""
 
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
-    axes = ParamDef(kind="attribute", annotation=tuple)
-    keepdim = ParamDef(kind="attribute", annotation=bool, default=True)
-    kind = ParamDef(kind="attribute", annotation=ReduceKind, default=ReduceKind.MEAN)
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    axes = expr.ParamDef(kind="attribute", annotation=tuple)
+    keepdim = expr.ParamDef(kind="attribute", annotation=bool, default=True)
+    kind = expr.ParamDef(kind="attribute", annotation=expr.ReduceKind, default=expr.ReduceKind.MEAN)
 
 
-def _reduced_axes(call: "Call", rank: int) -> tuple:
+def reduced_axes(call: "expr.Call", rank: int) -> tuple:
     return tuple(a % rank if a < 0 else a for a in call.target.axes)
 
 
-_PARTIAL = {
-    ReduceKind.SUM: "sum",
-    ReduceKind.MEAN: "sum",
-    ReduceKind.MAX: "max",
-    ReduceKind.ABS_MAX: "max",
-    ReduceKind.MIN: "min",
-}
+PARTIAL = MappingProxyType(
+    {
+        expr.ReduceKind.SUM: "sum",
+        expr.ReduceKind.MEAN: "sum",
+        expr.ReduceKind.MAX: "max",
+        expr.ReduceKind.ABS_MAX: "max",
+        expr.ReduceKind.MIN: "min",
+    }
+)
 """What a reduction over a split axis leaves on that mesh axis: each unit's part,
 combined by this reduction. A mean's parts are its sums over the whole count."""
 
 
-@register_typeinfer(Reduce)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(Reduce)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     x_ty = ctx.type_of(call.args[0])
     kind = call.target.kind
 
-    commutes_with = frozenset() if kind is ReduceKind.ABS_MAX else frozenset({_PARTIAL[kind]})
-    reject_partials("x", x_ty.layout, commutes_with=commutes_with)
+    commutes_with = frozenset() if kind is expr.ReduceKind.ABS_MAX else frozenset({PARTIAL[kind]})
+    ir_utils.reject_partials("x", x_ty.layout, commutes_with=commutes_with)
     keepdim = call.target.keepdim
     rank = len(x_ty.shape)
-    reduced = _reduced_axes(call, rank)
+    reduced = reduced_axes(call, rank)
 
     new_shape = list(x_ty.shape)
     for a in sorted(reduced, reverse=True):
@@ -78,16 +61,16 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             new_shape.pop(a)
     out_shape = tuple(new_shape)
 
-    new_layout = Layout(out_shape)
-    source_shard = shard_layout_of(x_ty.layout)
+    new_layout = types.Layout(out_shape)
+    source_shard = types.shard_layout_of(x_ty.layout)
     if source_shard is not None:
-        relation = relations_of(call, ctx)
-        derived = derive_output_shard_layout(
+        relation = access.relations_of(call, ctx)
+        derived = typeinfer.derive_output_shard_layout(
             (x_ty,),
             relation,
             out_shape,
             complete_reduction_dims=frozenset(reduced),
-            reduction=_PARTIAL[kind],
+            reduction=PARTIAL[kind],
             fresh_strides=True,
             ctx=ctx,
             storage=x_ty.storage,
@@ -95,18 +78,18 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         new_layout = (
             derived
             if derived is not None
-            else ShardLayout.default(
+            else types.ShardLayout.from_logical(
                 out_shape,
                 source_shard.mesh,
                 source_shard.attrs,
                 storage=x_ty.storage,
                 owners=ctx.target.storage_owners
                 if ctx is not None and ctx.target is not None
-                else StorageOwners((), {}),
+                else expr.StorageOwners((), {}),
             )
         )
 
-    return TensorType(
+    return types.TensorType(
         shape=out_shape,
         dtype=x_ty.dtype,
         layout=new_layout,
@@ -114,85 +97,85 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     )
 
 
-_EMPTY_IDENTITY = (ReduceKind.MAX, ReduceKind.MIN, ReduceKind.ABS_MAX)
+EMPTY_IDENTITY = (expr.ReduceKind.MAX, expr.ReduceKind.MIN, expr.ReduceKind.ABS_MAX)
 
 
-def _least_representable(dtype: "torch.dtype"):
+def least_representable(dtype: "utils.torch.dtype"):
     """The smallest value *dtype* can hold.
 
     The smallest value *dtype* can hold: ``False``, ``iinfo.min``, or ``-inf``
     where the dtype round-trips it and ``finfo.min`` where it does not.
     """
-    if dtype is torch.bool:
+    if dtype is utils.torch.bool:
         return False
     if not dtype.is_floating_point:
-        return torch.iinfo(dtype).min
+        return utils.torch.iinfo(dtype).min
     negative_infinity = float("-inf")
-    held = torch.tensor(negative_infinity, dtype=torch.float32).to(dtype).to(torch.float32)
-    return negative_infinity if held.item() == negative_infinity else torch.finfo(dtype).min
+    held = utils.torch.tensor(negative_infinity, dtype=utils.torch.float32).to(dtype).to(utils.torch.float32)
+    return negative_infinity if held.item() == negative_infinity else utils.torch.finfo(dtype).min
 
 
-def _greatest_representable(dtype: "torch.dtype"):
+def greatest_representable(dtype: "utils.torch.dtype"):
     """The largest value *dtype* can hold."""
-    if dtype is torch.bool:
+    if dtype is utils.torch.bool:
         return True
     if not dtype.is_floating_point:
-        return torch.iinfo(dtype).max
+        return utils.torch.iinfo(dtype).max
     infinity = float("inf")
-    held = torch.tensor(infinity, dtype=torch.float32).to(dtype).to(torch.float32)
-    return infinity if held.item() == infinity else torch.finfo(dtype).max
+    held = utils.torch.tensor(infinity, dtype=utils.torch.float32).to(dtype).to(utils.torch.float32)
+    return infinity if held.item() == infinity else utils.torch.finfo(dtype).max
 
 
-def _reduced_count(ctx, axes) -> int:
+def reduced_count(ctx, axes) -> int:
     """How many elements the reduction covers in the whole input, not in one unit's part.
 
     A mean over a split axis is Partial sum, so each unit holds its sum over the
     whole count rather than its own mean.
     """
     shape = ctx.args[0].type.shape
-    return prod(resolve_dim(shape[axis], ctx.dim_bindings) for axis in axes)
+    return prod(evaluator.resolve_dim(shape[axis], ctx.dim_bindings) for axis in axes)
 
 
-@register_eval(Reduce)
-def _eval_reduce(ctx):
+@evaluator.register(Reduce)
+def eval_reduce(ctx):
     axes = tuple(ctx.op.axes)
     keepdim = ctx.op.keepdim
     kind = ctx.op.kind
-    whole = _reduced_count(ctx, axes)
+    whole = reduced_count(ctx, axes)
 
     def reduce(x):
-        if kind in _EMPTY_IDENTITY and any(x.shape[axis] == 0 for axis in axes):
-            if kind is ReduceKind.ABS_MAX:
+        if kind in EMPTY_IDENTITY and any(x.shape[axis] == 0 for axis in axes):
+            if kind is expr.ReduceKind.ABS_MAX:
                 identity = 0
-            elif kind is ReduceKind.MIN:
-                identity = _greatest_representable(x.dtype)
+            elif kind is expr.ReduceKind.MIN:
+                identity = greatest_representable(x.dtype)
             else:
-                identity = _least_representable(x.dtype)
+                identity = least_representable(x.dtype)
             reduced = list(x.shape)
             for axis in axes:
                 reduced[axis] = 1
-            out = torch.full(reduced, identity, dtype=x.dtype, device=x.device)
+            out = utils.torch.full(reduced, identity, dtype=x.dtype, device=x.device)
             return out if keepdim else out.squeeze(dim=axes)
-        if kind is ReduceKind.MEAN:
+        if kind is expr.ReduceKind.MEAN:
             out = x.mean(dim=axes, keepdim=keepdim)
             part = prod(x.shape[axis] for axis in axes)
             return out if part == whole else out * (part / whole)
-        if kind is ReduceKind.SUM:
+        if kind is expr.ReduceKind.SUM:
             return x.sum(dim=axes, keepdim=keepdim)
-        if kind is ReduceKind.ABS_MAX:
+        if kind is expr.ReduceKind.ABS_MAX:
             return x.abs().amax(dim=axes, keepdim=keepdim)
-        if kind is ReduceKind.MAX:
+        if kind is expr.ReduceKind.MAX:
             return x.amax(dim=axes, keepdim=keepdim)
-        if kind is ReduceKind.MIN:
+        if kind is expr.ReduceKind.MIN:
             return x.amin(dim=axes, keepdim=keepdim)
         raise ValueError(f"evaluator: unsupported ReduceKind {kind}")
 
     x = ctx.args[0].tensor
     held = reduce(x.tensor) if x.is_global else tuple((p, reduce(t)) for p, t in x.tensor)
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
-def _kept(shape: tuple) -> int:
+def kept(shape: tuple) -> int:
     """How many elements a shape of numbers holds."""
     counted = 1
     for extent in shape:
@@ -200,8 +183,8 @@ def _kept(shape: tuple) -> int:
     return counted
 
 
-@register_access_relation(Reduce)
-def _reduce_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(Reduce)
+def reduce_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """Every source coordinate feeding a result coordinate, read once.
 
     A reduction walks what it reads, so the source's own positions are the
@@ -230,7 +213,16 @@ def _reduce_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     ]
     collapses = ", ".join(writes_at)
     domain = ", ".join(f"d{index}" for index in range(rank))
-    return iterating(
+    return access.iterating(
         source.shape,
-        (identity_access(rank), AccessRelation(isl.map(f"{{ [{domain}] -> [{collapses}] }}"))),
+        (access.identity(rank), access.Relation(isl.map(f"{{ [{domain}] -> [{collapses}] }}"))),
     )
+
+
+@cost.register(Reduce)
+def reduce_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    (source,) = cost.input_types(call, ctx)
+    output = cost.output_type(call, ctx)
+    if not isinstance(source, types.TensorType):
+        raise ValueError("Reduce cost requires a tensor input")
+    return cost.operation(source.dtype, ir_utils.numel(source), cost.traffic((source,), output))

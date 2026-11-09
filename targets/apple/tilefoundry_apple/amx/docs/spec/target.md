@@ -1,9 +1,9 @@
 # TileFoundry AMX Spec — Target
 
-## 7. `AppleAmx`
+## 7. `amx.Architecture`
 
 ```python
-class AppleAmx:
+class Architecture(target.Architecture):
     """Describe AMX compilation identity and structural capabilities."""
 
     name: str
@@ -14,31 +14,29 @@ class AppleAmx:
     rmem_owner: str
 
     def supports_compute_dtype(self, dtype: DType) -> bool: ...
-
-    def topology_limit(self, name: str) -> int: ...
 ```
 
 - constraints:
   - `name` MUST be the architecture identity used by AMX compilation.
-  - AppleAmx MUST own the supported compute DTypes and instruction capabilities.
+  - amx.Architecture MUST own the supported compute DTypes and instruction capabilities.
     AMX capabilities MUST NOT introduce a separate program topology level.
     The modelled atom catalogue MAY be narrower than the supported compute DTypes.
-  - AppleAmx MUST own the X/Y staging and Z accumulator register files. They are
+  - amx.Architecture MUST own the X/Y staging and Z accumulator register files. They are
     ISA geometry, so every part carrying this coprocessor shares them and a
     device MUST NOT restate them. `staging_bytes` MUST be the size of one
     staging file, the X and Y files being equal.
   - `rmem_owner` MUST be `thread`: logical register state belongs to the issuing
     CPU thread. This does not imply one physical AMX engine per thread.
   - Product- and frequency-dependent throughput values MUST NOT be stored on
-    AppleAmx.
-  - AMX has no CTA thread level, so AppleAmx MUST carry no CTA thread limit.
+    amx.Architecture.
+  - AMX has no CTA thread level, so amx.Architecture MUST carry no CTA thread limit.
   - No field MAY carry a default: every value comes from the installed
-    document ([target §1](../../../../../../docs/spec/target.md#1-target)0).
+    document ([target §10](../../../../../../docs/spec/target.md#10-installed-hardware-resources)).
 
 ## 8. `AppleM2Pro`
 
 ```python
-class AppleM2Pro:
+class AppleM2Pro(target.Device):
     """Describe the apple_m2_pro package's fixed hard resource limits."""
 
     name: str
@@ -53,7 +51,7 @@ class AppleM2Pro:
     unified_memory_capacity_bytes: int
     unified_memory_owner: str
     unified_memory_bandwidth_bytes_per_second: int
-    _unit_flops: tuple[tuple[str, tuple[tuple[DType, int], ...]], ...]
+    unit_flops: tuple[tuple[str, tuple[tuple[DType, int], ...]], ...]
 
     performance_amx_f16: int | None
     performance_host_lane_events: int | None
@@ -69,7 +67,7 @@ class AppleM2Pro:
     MUST NOT exceed `performance_core_count`.
   - Cache and core facts MUST distinguish the performance core from the
     efficiency core, and every value MUST come from the installed document
-    ([target §1](../../../../../../docs/spec/target.md#1-target)0). No field MAY carry a default.
+    ([target §10](../../../../../../docs/spec/target.md#10-installed-hardware-resources)). No field MAY carry a default.
   - A core-level tile's resident footprint MUST be bounded by
     `l1d_bytes_per_performance_core`. The AMX register files bound one atom
     instance instead, which the storage filter enforces rather than a per-tile
@@ -94,10 +92,10 @@ class AppleM2Pro:
     multiplied by the CPU thread count.
 
 
-## 9. `AmxTarget`
+## 9. `amx.Target`
 
 ```python
-class AmxTarget(Target):
+class Target(target.Target):
     """Compose one AMX target from one architecture and one device."""
 
     name: ClassVar[str] = "amx"
@@ -125,10 +123,10 @@ class AmxTarget(Target):
     document path, or a concrete value, on the same terms as
     [target §4](../../../../../nvidia/tilefoundry_nvidia/cuda/docs/spec/target.md#4-cudatarget). An omitted architecture MUST be read from the device
     document's sole compatibility declaration.
-  - `AmxTarget()` MUST select the installed `apple.amx` and `apple.m2_pro`
+  - `amx.Target()` MUST select the installed `apple.amx` and `apple.m2_pro`
     documents, and `arch` MUST equal
     `architecture.name`.
-  - `AmxTarget.available()` MUST contain one value per device document whose
+  - `amx.Target.from_installed()` MUST contain one value per device document whose
     sole compatible architecture document is available. Its `identity` MUST be
     that device document's ID.
   - `get_facts(TopologyFacts).topologies` MUST contain only `thread`, with logical
@@ -140,14 +138,14 @@ class AmxTarget(Target):
     complete admitted range of a symbolic extent. `amx` MUST be rejected as a
     topology name. Memory execution MUST use the same `thread` vocabulary.
   - Unsupported topology levels MUST raise an actionable error naming the
-    supported levels, from both the limit lookup and topology validation.
+    supported levels. `validate_program_topology` is the core Target's, which reads these Facts.
 
 
 ## Full instruction catalogue
 
 The installed architecture document admits each declared instruction capability
 as `amx_<mnemonic>`. Per-instruction Patterns check legal dtype/mode combinations;
-full catalogue support includes F16/BF16/F32/F64 and signed/unsigned8/16/32-bit
+full catalogue support includes F16/BF16/F32/F64 and signed/unsigned 8/16/32-bit
 views where the particular instruction defines them. A dtype listed by the
 architecture does not make every instruction accept it.
 
@@ -172,8 +170,8 @@ Target generation Facts bridge participates in selection.
 The unchanged capabilities are SET, CLR, LDZ, LDZI, STX, STY, STZ, STZI,
 FMA16/32/64, FMS16/32/64, and MAC16, retaining names such as `amx_fma32`.
 The installed `apple.amx` ID remains the AppleM2 capability catalogue, preserving the
-existing `apple.m2_pro` compatibility reference and default `AmxTarget()`.
-The additional architecture documents reuse the same schema and `AppleAmx`
+existing `apple.m2_pro` compatibility reference and default `amx.Target()`.
+The additional architecture documents reuse the same schema and `amx.Architecture`
 structure; they do not add AppleM1/AppleM3/AppleM4 device specifications or measured rates.
 
 These capability partitions come from the original C emulator and its

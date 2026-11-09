@@ -10,10 +10,6 @@ from unittest.mock import patch
 import isl
 import pytest
 
-import tilefoundry.cli.schedule as schedule_cli
-import tilefoundry.ir.hir.schedule as schedules
-import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
-import tilefoundry.visitor_registry.instruction as instructions
 from tests.core._corpus import Case, case, check_case, reload, special
 from tests.nvidia.cuda.schedule._support import (
     _finalized,
@@ -21,56 +17,16 @@ from tests.nvidia.cuda.schedule._support import (
     _UnstatedInstruction,
     entry_function,
 )
-from tilefoundry.analysis.access import AliasKind
-from tilefoundry.analysis.allocation import AllocationSummaryMetadata
-from tilefoundry.analysis.api import analyze
-from tilefoundry.analysis.check import check_program
-from tilefoundry.analysis.metadata import (
-    MemoryMetadata,
-    RegionMemoryMetadata,
-)
-from tilefoundry.cli import main as cli_main
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.inspection import as_script
-from tilefoundry.ir.core import (
-    Call,
-    Var,
-    detach_metadata,
-    get_metadata,
-)
-from tilefoundry.ir.core.expr import SSAValue
-from tilefoundry.ir.core.module import Module, ModuleList
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.schedule import ScheduleOp
-from tilefoundry.ir.hir.tensor.cast import Cast as HirCast
-from tilefoundry.ir.hir.tensor.empty import Empty
-from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
-from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.tir.memory import Copy, TensorView
-from tilefoundry.ir.types import (
-    ComposedLayout,
-    DType,
-    Layout,
-    ShardLayout,
-    StorageKind,
-    Swizzle,
-    TensorType,
-    Topology,
-)
-from tilefoundry.ir.types.utils import static_dim_value
-from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.passes.transforms.convert_hir_to_tir import LoweringError, TirBuilder
+from tilefoundry import analysis, cli, inspection, verifier
+from tilefoundry.interfaces import access, schedule, typeinfer
+from tilefoundry.ir import core, expr, hir, types
+from tilefoundry.ir.hir import tensor
+from tilefoundry.ir.tir import memory
+from tilefoundry.passes import transforms
 from tilefoundry.schedule import finalize
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    access_relation_registry,
-)
-from tilefoundry.visitor_registry.contexts import TypeInferContext
-from tilefoundry.visitor_registry.instruction import ScheduleRefusal, project
-from tilefoundry.visitor_registry.verify import verify_module, verify_prim_function
-from tilefoundry_nvidia import CudaTarget
-from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
-from tilefoundry_nvidia.cuda.passes.transforms.lowering import CudaLowering
+from tilefoundry_nvidia import cuda
+from tilefoundry_nvidia.cuda.ir.tir import nn
+from tilefoundry_nvidia.cuda.passes import transforms as passes_transforms
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 VARIANTS = FIXTURES / "schedule" / "variants"
@@ -78,12 +34,12 @@ INPLACE = FIXTURES / "schedule" / "hir" / "inplace_output_update.py"
 
 def _m1_analysis():
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_a_k_major.py"
-    module = load_authored_ir(str(source))
+    module = cli.load_authored_ir(str(source))
     return (
         source,
         module,
-        analyze(
-            *check_program(module, module.entry_function()),
+        analysis.analyze(
+            *analysis.check_program(module, module.entry_function()),
             analysis=("memory", "sync"),
         ),
     )
@@ -96,7 +52,7 @@ def _assert_cli_lowering_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     out = tmp_path / "failed.py"
-    assert cli_main(["schedule", "finalize", str(source), str(out)]) == 1
+    assert cli.main(["schedule", "finalize", str(source), str(out)]) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
     assert message in captured.err
@@ -104,23 +60,23 @@ def _assert_cli_lowering_error(
 
 
 def _returned_view(storage, chain=False):
-    type_ = TensorType((32,), DType.f32, Layout((32,), (1,)), storage)
-    param = Var("x", type=type_)
-    function = Function.build(name="run", params=(param,), body=param, return_type=type_)
-    leaf = Module("View", (function,), "run")
-    slot = ModuleList(leaf)
+    type_ = types.TensorType((32,), expr.DType.f32, types.Layout((32,), (1,)), storage)
+    param = expr.Var("x", type=type_)
+    function = core.Function.from_parts(name="run", params=(param,), body=param, return_type=type_)
+    leaf = core.Module("View", (function,), "run")
+    slot = core.ModuleList(leaf)
     activation = replace(param)
-    call = Call(slot, (activation,), type=type_)
+    call = expr.Call(slot, (activation,), type=type_)
     if chain:
-        call = Call(slot, (call,), type=type_)
-    root = Function.build(name="root", params=(activation,), body=call, return_type=type_)
-    return Module(
+        call = expr.Call(slot, (call,), type=type_)
+    root = core.Function.from_parts(name="root", params=(activation,), body=call, return_type=type_)
+    return core.Module(
         "ViewCaller",
         (root,),
         "root",
         children={"child": slot},
-        target=CudaTarget("nvidia.h200_sxm"),
-        topologies=(Topology("cta", 1), Topology("thread", 32)),
+        target=cuda.Target("nvidia.h200_sxm"),
+        topologies=(types.Topology("cta", 1), types.Topology("thread", 32)),
     )
 
 
@@ -130,11 +86,11 @@ def test_finalize_json_carries_source(
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_a_k_major.py"
     out = tmp_path / "finalized.json"
 
-    assert cli_main(["schedule", "finalize", str(source), str(out), "--json"]) == 0
+    assert cli.main(["schedule", "finalize", str(source), str(out), "--json"]) == 0
     assert capsys.readouterr() == ("", "")
     payload = json.loads(out.read_text())
     assert set(payload) == {"source"}
-    verify_prim_function(entry_function(reload(payload["source"], "WGMMA_A_K_MAJOR")))
+    verifier.verify_prim_function(entry_function(reload(payload["source"], "WGMMA_A_K_MAJOR")))
 
 
 def test_lowering_reports_smem_overflow(
@@ -143,13 +99,13 @@ def test_lowering_reports_smem_overflow(
     four_stage = VARIANTS / "four_stage_gemm.py"
 
     out = tmp_path / "finalized.py"
-    assert cli_main(["schedule", "finalize", str(four_stage), str(out)]) == 0
+    assert cli.main(["schedule", "finalize", str(four_stage), str(out)]) == 0
     assert capsys.readouterr() == ("", "")
-    module = load_authored_ir(str(four_stage))
-    result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
-    memory = get_metadata(result.function, RegionMemoryMetadata)
-    assert "smem placement peak 256.00KiB exceeds capacity 227.00KiB" in memory.errors
-    verify_prim_function(entry_function(load_authored_ir(str(out))))
+    module = cli.load_authored_ir(str(four_stage))
+    result = analysis.analyze(*analysis.check_program(module, module.entry_function()), analysis=("memory",))
+    mem = expr.get_metadata(result.function, analysis.RegionMemoryMetadata)
+    assert "smem placement peak 256.00KiB exceeds capacity 227.00KiB" in mem.errors
+    verifier.verify_prim_function(entry_function(cli.load_authored_ir(str(out))))
 
 
 def test_lowering_rejects_missing_access_relation(
@@ -157,31 +113,31 @@ def test_lowering_rejects_missing_access_relation(
 ) -> None:
     source, _module, result = _m1_analysis()
     transfer = next(
-        expr
-        for expr in collect_exprs(result.function.body)
-        if isinstance(expr, Call)
-        and isinstance(expr.target, ScheduleOp)
-        and not isinstance(expr.target.op, TiledMma)
+        node
+        for node in core.collect_exprs(result.function.body)
+        if isinstance(node, expr.Call)
+        and isinstance(node.target, hir.schedule.ScheduleOp)
+        and not isinstance(node.target.op, nn.TiledMma)
     )
-    monkeypatch.delitem(access_relation_registry._map, type(transfer.target.op))
-    monkeypatch.setattr(schedule_cli, "analyze", lambda *_args, **_kwargs: result)
+    monkeypatch.delitem(access.relation_registry.entries, type(transfer.target.op))
+    monkeypatch.setattr(analysis, "analyze", lambda *_args, **_kwargs: result)
 
     _assert_cli_lowering_error(source, "states no access relations", tmp_path, capsys)
 
 
 def test_finalize_rejects_missing_memory_analysis():
-    module = load_authored_ir(str(FIXTURES / "schedule" / "hir" / "smem_padded_stages.py"))
-    result = analyze(
-        *check_program(module, module.entry_function()), analysis=("compute-cost",)
+    module = cli.load_authored_ir(str(FIXTURES / "schedule" / "hir" / "smem_padded_stages.py"))
+    result = analysis.analyze(
+        *analysis.check_program(module, module.entry_function()), analysis=("compute-cost",)
     )
-    with pytest.raises(LoweringError, match="finalize needs the result of analyze"):
+    with pytest.raises(transforms.LoweringError, match="finalize needs the result of analyze"):
         finalize(result)
 
 
 def test_lowering_rejects_written_return_window():
-    module = load_authored_ir(str(FIXTURES / "diagnostics" / "lowering_written_return_window.py"))
+    module = cli.load_authored_ir(str(FIXTURES / "diagnostics" / "lowering_written_return_window.py"))
     with pytest.raises(
-        lowering_module.LoweringError, match="requires a non-identity inverse relation"
+        transforms.LoweringError, match="requires a non-identity inverse relation"
     ):
         _finalized(module)
 
@@ -195,31 +151,31 @@ class ZeroTripCarry(LoweringCase):
     path: Path = VARIANTS / "zero_trip_carry.py"
 
     def guard(self, state, problems):
-        result = analyze(*check_program(state, state.entry_function()), analysis=("memory",))
-        summary = get_metadata(result.function, AllocationSummaryMetadata)
+        result = analysis.analyze(*analysis.check_program(state, state.entry_function()), analysis=("memory",))
+        summary = expr.get_metadata(result.function, analysis.AllocationSummaryMetadata)
         carry = [
             proof
             for value in summary.values
             for proof in value.aliases
-            if proof.kind in (AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD)
+            if proof.kind in (analysis.AliasKind.CARRY_INIT, analysis.AliasKind.CARRY_YIELD)
         ]
-        assert {proof.kind for proof in carry} == {AliasKind.CARRY_INIT, AliasKind.CARRY_YIELD}
+        assert {proof.kind for proof in carry} == {analysis.AliasKind.CARRY_INIT, analysis.AliasKind.CARRY_YIELD}
         assert all(proof.relation.relation.is_identity() for proof in carry)
         lowered = _finalized(state)
-        verify_module(lowered)
-        verify_module(reload(as_script(lowered), lowered.name))
+        verifier.verify_module(lowered)
+        verifier.verify_module(reload(inspection.as_script(lowered), lowered.name))
         visitor = _RetainedStatements()
         visitor.visit(lowered.lookup("gemm").body)
         assert len(visitor.loops) == 1
         loop = visitor.loops[0]
-        assert tuple(static_dim_value(value) for value in (loop.start, loop.stop, loop.step)) == (
+        assert tuple(expr.static_dim_value(value) for value in (loop.start, loop.stop, loop.step)) == (
             0,
             0,
             1,
         )
         body = _RetainedStatements()
         body.visit(loop.body)
-        assert sum(isinstance(op, Copy) for op in body.operations) == 1
+        assert sum(isinstance(op, memory.Copy) for op in body.operations) == 1
 
 
 @case
@@ -228,27 +184,27 @@ class DynamicWindow(LoweringCase):
 
     def guard(self, state, problems):
         lowered = _finalized(state)
-        verify_module(lowered)
-        printed = as_script(lowered)
-        verify_module(reload(printed, lowered.name))
+        verifier.verify_module(lowered)
+        printed = inspection.as_script(lowered)
+        verifier.verify_module(reload(printed, lowered.name))
         visitor = _RetainedStatements()
         visitor.visit(lowered.lookup("gemm").body)
         views = [
             value
             for value in visitor.bindings.values()
-            if isinstance(value, Call)
-            and isinstance(value.target, TensorView)
+            if isinstance(value, expr.Call)
+            and isinstance(value.target, memory.TensorView)
             and value.type.shape == (8, 8)
         ]
         assert any(
             view.type.layout.strides == (8, 1)
             and any(
-                isinstance(expr, Call)
-                and isinstance(expr.target, Slice)
-                and expr.target.sizes == (1, 1)
-                and isinstance(expr.args[1].elements[0], Call)
-                and expr.args[1].elements[1].value == 0
-                for expr in collect_exprs(view)
+                isinstance(node, expr.Call)
+                and isinstance(node.target, tensor.Slice)
+                and node.target.sizes == (1, 1)
+                and isinstance(node.args[1].elements[0], expr.Call)
+                and node.args[1].elements[1].value == 0
+                for node in core.collect_exprs(view)
             )
             for view in views
         )
@@ -260,19 +216,19 @@ class RegisterRows(LoweringCase):
 
     def guard(self, state, problems):
         lowered = _finalized(state)
-        verify_module(lowered)
-        verify_module(reload(as_script(lowered), lowered.name))
+        verifier.verify_module(lowered)
+        verifier.verify_module(reload(inspection.as_script(lowered), lowered.name))
         visitor = _RetainedStatements()
         visitor.visit(lowered.lookup("gemm").body)
         slices = [
-            expr
+            node
             for value in visitor.bindings.values()
-            for expr in collect_exprs(value)
-            if isinstance(expr, Call)
-            and isinstance(expr.target, Slice)
-            and isinstance(expr.args[0].type.layout, ShardLayout)
+            for node in core.collect_exprs(value)
+            if isinstance(node, expr.Call)
+            and isinstance(node.target, tensor.Slice)
+            and isinstance(node.args[0].type.layout, types.ShardLayout)
         ]
-        assert slices and all(expr.target.sizes[1] == 16 for expr in slices)
+        assert slices and all(node.target.sizes[1] == 16 for node in slices)
 
 
 @dataclass(frozen=True)
@@ -281,20 +237,20 @@ class ComposedRankView(LoweringCase):
 
     def guard(self, state, problems):
         lowered = _finalized(state)
-        verify_module(lowered)
-        verify_module(reload(as_script(lowered), lowered.name))
+        verifier.verify_module(lowered)
+        verifier.verify_module(reload(inspection.as_script(lowered), lowered.name))
         visitor = _RetainedStatements()
         visitor.visit(lowered.lookup("gemm").body)
         views = [
             value
             for value in visitor.bindings.values()
-            if isinstance(value, Call)
-            and isinstance(value.target, TensorView)
+            if isinstance(value, expr.Call)
+            and isinstance(value.target, memory.TensorView)
             and value.type.shape == (8, 8, 16, 4)
         ]
         assert any(
             value.type.layout
-            == ComposedLayout(Swizzle(3, 4, 3), self.offset, Layout((8, 8, 16, 4), (512, 64, 4, 1)))
+            == types.ComposedLayout(types.Swizzle(3, 4, 3), self.offset, types.Layout((8, 8, 16, 4), (512, 64, 4, 1)))
             for value in views
         )
 
@@ -318,13 +274,13 @@ class ComposedOuterReshape(LoweringCase):
 
     def guard(self, state, problems):
         lowered = _finalized(state)
-        verify_module(reload(as_script(lowered), lowered.name))
+        verifier.verify_module(reload(inspection.as_script(lowered), lowered.name))
         visitor = _RetainedStatements()
         visitor.visit(lowered.lookup("gemm").body)
-        expected = ComposedLayout(Swizzle(3, 4, 3), self.offset, Layout(self.modes, self.strides))
+        expected = types.ComposedLayout(types.Swizzle(3, 4, 3), self.offset, types.Layout(self.modes, self.strides))
         assert any(
-            isinstance(value, Call)
-            and isinstance(value.target, TensorView)
+            isinstance(value, expr.Call)
+            and isinstance(value.target, memory.TensorView)
             and value.type.layout == expected
             for value in visitor.bindings.values()
         )
@@ -358,28 +314,28 @@ class ModularWindow(LoweringCase):
 
     def guard(self, state, problems):
         lowered = _finalized(state)
-        verify_module(reload(as_script(lowered), lowered.name))
+        verifier.verify_module(reload(inspection.as_script(lowered), lowered.name))
 
 
 @pytest.mark.parametrize("coordinate_division", [False, True])
 def test_view_strides_distinguish_divisions(coordinate_division):
-    source = Var("x", type=TensorType((64,), DType.f32, Layout((64,), (1,)), StorageKind.GMEM))
-    desired = replace(source.type, shape=(8,), layout=Layout((8,), (1,)))
-    relation = AccessRelation(isl.map("{ [i] -> [floor(i/2)] : 0 <= i < 8 }"))
+    source = expr.Var("x", type=types.TensorType((64,), expr.DType.f32, types.Layout((64,), (1,)), expr.StorageKind.GMEM))
+    desired = replace(source.type, shape=(8,), layout=types.Layout((8,), (1,)))
+    relation = access.Relation(isl.map("{ [i] -> [floor(i/2)] : 0 <= i < 8 }"))
     if not coordinate_division:
-        tile = Var("tile", type=TensorType.umat_scalar(DType.i64))
-        relation = AccessRelation(
+        tile = expr.Var("tile", type=types.TensorType.from_umat_scalar(expr.DType.i64))
+        relation = access.Relation(
             isl.map("[tile] -> { [i] -> [i + floor(tile/4)] : 0 <= i < 8 }"), {"tile": tile}
         )
-    function = Function.build(name="view", params=(source,), body=source, return_type=source.type)
-    storage = lowering_module.StoragePlan(function)
+    function = core.Function.from_parts(name="view", params=(source,), body=source, return_type=source.type)
+    storage = transforms.StoragePlan(function)
     values = {} if coordinate_division else {id(tile): tile}
     if coordinate_division:
-        with pytest.raises(lowering_module.LoweringError, match="non-affine address"):
+        with pytest.raises(transforms.LoweringError, match="non-affine address"):
             storage.view(source, relation, desired, values=values)
     else:
         view = storage.view(source, relation, desired, values=values)
-        assert view.type.layout == Layout((8,), (1,))
+        assert view.type.layout == types.Layout((8,), (1,))
 
 
 def test_lowering_rejects_offsetless_result(
@@ -387,14 +343,14 @@ def test_lowering_rejects_offsetless_result(
 ) -> None:
     source, _module, result = _m1_analysis()
     addressable = next(
-        expr
-        for expr in collect_exprs(result.function.body)
-        if isinstance(expr, Call)
-        and isinstance(expr.target, Empty)
-        and expr.type.storage is StorageKind.SMEM
+        node
+        for node in core.collect_exprs(result.function.body)
+        if isinstance(node, expr.Call)
+        and isinstance(node.target, tensor.Empty)
+        and node.type.storage is expr.StorageKind.SMEM
     )
-    detach_metadata(addressable, MemoryMetadata)
-    monkeypatch.setattr(schedule_cli, "analyze", lambda *_args, **_kwargs: result)
+    addressable.detach_metadata(analysis.MemoryMetadata)
+    monkeypatch.setattr(analysis, "analyze", lambda *_args, **_kwargs: result)
 
     _assert_cli_lowering_error(source, "addressable smem result but no offsets", tmp_path, capsys)
 
@@ -404,12 +360,12 @@ def test_lowering_rejects_unknown_hir_call(
 ) -> None:
     source, _module, result = _m1_analysis()
     view = next(
-        expr
-        for expr in collect_exprs(result.function.body)
-        if isinstance(expr, Call) and type(expr.target).__name__ == "Slice"
+        node
+        for node in core.collect_exprs(result.function.body)
+        if isinstance(node, expr.Call) and type(node.target).__name__ == "Slice"
     )
     view.target = _UnstatedInstruction()
-    monkeypatch.setattr(schedule_cli, "analyze", lambda *_args, **_kwargs: result)
+    monkeypatch.setattr(analysis, "analyze", lambda *_args, **_kwargs: result)
 
     _assert_cli_lowering_error(
         source, "_UnstatedInstruction states no access relations", tmp_path, capsys
@@ -421,12 +377,12 @@ def test_lowering_rejects_unscheduled_gmem_cast(
 ) -> None:
     source, _module, result = _m1_analysis()
     cast = next(
-        expr
-        for expr in collect_exprs(result.function.body)
-        if isinstance(expr, Call) and isinstance(expr.target, HirCast)
+        node
+        for node in core.collect_exprs(result.function.body)
+        if isinstance(node, expr.Call) and isinstance(node.target, tensor.Cast)
     )
-    cast.type = replace(cast.type, storage=StorageKind.GMEM)
-    monkeypatch.setattr(schedule_cli, "analyze", lambda *_args, **_kwargs: result)
+    cast.type = replace(cast.type, storage=expr.StorageKind.GMEM)
+    monkeypatch.setattr(analysis, "analyze", lambda *_args, **_kwargs: result)
 
     _assert_cli_lowering_error(
         source,
@@ -438,21 +394,21 @@ def test_lowering_rejects_unscheduled_gmem_cast(
 
 def test_projection_rejects_partial_atom_tiles() -> None:
     source = Path(__file__).parents[1] / "fixtures/schedule/hir/wgmma_repeat_along_k.py"
-    module = load_authored_ir(str(source))
-    result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
-    schedule = next(
-        expr
-        for expr in collect_exprs(result.function.body)
-        if isinstance(expr, Call)
-        and isinstance(expr.target, ScheduleOp)
-        and isinstance(expr.target.op, TiledMma)
+    module = cli.load_authored_ir(str(source))
+    result = analysis.analyze(*analysis.check_program(module, module.entry_function()), analysis=("memory",))
+    sched = next(
+        node
+        for node in core.collect_exprs(result.function.body)
+        if isinstance(node, expr.Call)
+        and isinstance(node.target, hir.schedule.ScheduleOp)
+        and isinstance(node.target.op, nn.TiledMma)
     )
-    acc, lhs, rhs = (arg.type for arg in schedule.args)
+    acc, lhs, rhs = (arg.type for arg in sched.args)
     with pytest.raises(
-        ScheduleRefusal, match="iteration extent 17 is not divisible by single-issue extent 16"
+        schedule.RefusalError, match="iteration extent 17 is not divisible by single-issue extent 16"
     ):
-        project(
-            schedule.target.op,
+        schedule.project(
+            sched.target.op,
             (replace(acc, shape=(acc.shape[0], 17)), lhs, replace(rhs, shape=(rhs.shape[0], 17))),
             None,
         )
@@ -461,31 +417,31 @@ def test_projection_rejects_partial_atom_tiles() -> None:
 @pytest.mark.parametrize("failure", ("leftmost", "factor"))
 def test_projection_names_bad_repeat_mode(failure):
     source = Path(__file__).parents[1] / "fixtures/schedule/hir/wgmma_n16_within_warpgroup_share.py"
-    module = load_authored_ir(str(source))
-    result = analyze(*check_program(module, module.entry_function()), analysis=("memory",))
-    schedule = next(
+    module = cli.load_authored_ir(str(source))
+    result = analysis.analyze(*analysis.check_program(module, module.entry_function()), analysis=("memory",))
+    sched = next(
         value
-        for value in collect_exprs(result.function.body)
-        if isinstance(value, Call)
-        and isinstance(value.target, ScheduleOp)
-        and isinstance(value.target.op, TiledMma)
+        for value in core.collect_exprs(result.function.body)
+        if isinstance(value, expr.Call)
+        and isinstance(value.target, hir.schedule.ScheduleOp)
+        and isinstance(value.target.op, nn.TiledMma)
     )
-    acc, lhs, rhs = (arg.type for arg in schedule.args)
+    acc, lhs, rhs = (arg.type for arg in sched.args)
     if failure == "leftmost":
         layout = replace(
-            acc.layout, layout=Layout((4, 2, 8, 2, 2, 4, 6), (16, 8, 1, 3072, 1024, 128, 64))
+            acc.layout, layout=types.Layout((4, 2, 8, 2, 2, 4, 6), (16, 8, 1, 3072, 1024, 128, 64))
         )
         operands = (replace(acc, layout=layout), lhs, rhs)
         reason = "acc axis 1: repeat is not leftmost at mode 4"
     else:
         layout = replace(
             rhs.layout,
-            outer=Layout(((3, 4, 16), (3, 2, 2, 8)), ((6144, 16, 1), (8192, 1024, 512, 64))),
+            outer=types.Layout(((3, 4, 16), (3, 2, 2, 8)), ((6144, 16, 1), (8192, 1024, 512, 64))),
         )
         operands = (acc, lhs, replace(rhs, layout=layout))
         reason = "rhs iteration axis 1: repeat mode .* cannot factor as"
-    with pytest.raises(ScheduleRefusal, match=reason):
-        project(schedule.target.op, operands, None)
+    with pytest.raises(schedule.RefusalError, match=reason):
+        schedule.project(sched.target.op, operands, None)
 
 
 @pytest.mark.parametrize(
@@ -493,38 +449,38 @@ def test_projection_names_bad_repeat_mode(failure):
 )
 def test_lowering_issues_statically_without_readmission(name, issues, monkeypatch):
     source = Path(__file__).parents[1] / f"fixtures/schedule/hir/{name}.py"
-    module = load_authored_ir(str(source))
-    result = analyze(
-        *check_program(module, module.entry_function()), analysis=("memory", "sync")
+    module = cli.load_authored_ir(str(source))
+    result = analysis.analyze(
+        *analysis.check_program(module, module.entry_function()), analysis=("memory", "sync")
     )
 
     def reject(*args, **kwargs):
         raise AssertionError("lowering repeated instruction admission")
 
-    monkeypatch.setattr(schedules, "check_call", reject)
-    monkeypatch.setattr(instructions, "check_call", reject)
-    lowered = CudaLowering(
-        TypeInferContext(module=result.module, function=result.function, owner=result.function),
+    monkeypatch.setattr(schedule, "check_call", reject)
+    monkeypatch.setattr(schedule.instruction, "check_call", reject)
+    lowered = passes_transforms.CudaLowering(
+        typeinfer.TypeInferContext(module=result.module, function=result.function, owner=result.function),
     ).run()
     statements = _RetainedStatements()
     statements.visit(lowered.body)
     assert not any(loop.induction_var.name.startswith("o_") for loop in statements.loops)
-    issued = [stmt for stmt in statements.statements if isinstance(stmt.callable, TiledMma)]
+    issued = [stmt for stmt in statements.statements if isinstance(stmt.callable, nn.TiledMma)]
     assert len(issued) == issues
     for stmt in issued:
         for arg in stmt.args:
-            for expr in collect_exprs(statements.bindings.get(id(arg), arg)):
-                if isinstance(expr, Call) and isinstance(expr.target, Slice):
+            for node in core.collect_exprs(statements.bindings.get(id(arg), arg)):
+                if isinstance(node, expr.Call) and isinstance(node.target, tensor.Slice):
                     assert all(
-                        static_dim_value(start) is not None for start in expr.args[1].elements
+                        expr.static_dim_value(start) is not None for start in node.args[1].elements
                     )
 
 
-@pytest.mark.parametrize("storage", [StorageKind.GMEM, StorageKind.SMEM])
+@pytest.mark.parametrize("storage", [expr.StorageKind.GMEM, expr.StorageKind.SMEM])
 @pytest.mark.parametrize("chain", [False, True])
 def test_returned_view_passes_storage(storage, chain):
     lowered = _finalized(_returned_view(storage, chain))
-    verify_module(lowered)
+    verifier.verify_module(lowered)
     function = lowered.lookup("root")
     visitor = _RetainedStatements()
     visitor.visit(function.body)
@@ -536,7 +492,7 @@ def test_returned_view_passes_storage(storage, chain):
     assert call.args[0] is not call.args[-1]
     assert visitor.storage(call.args[0]) is function.params[0]
     assert visitor.storage(call.args[-1]) is function.params[-1]
-    assert not any(isinstance(op, Copy) for op in visitor.operations)
+    assert not any(isinstance(op, memory.Copy) for op in visitor.operations)
     callee = _RetainedStatements()
     callee.visit(lowered.children[call.callable.key].elements[0].entry_function().body)
     assert not callee.operations
@@ -553,12 +509,12 @@ def test_inplace_output_reuses_or_refuses(read_old, reshape):
     }[read_old, reshape]
     if reshape:
         with pytest.raises(
-            lowering_module.LoweringError, match="requires a non-identity inverse relation"
+            transforms.LoweringError, match="requires a non-identity inverse relation"
         ):
-            _finalized(load_authored_ir(str(source)))
+            _finalized(cli.load_authored_ir(str(source)))
         return
-    lowered = _finalized(load_authored_ir(str(source)))
-    verify_module(lowered)
+    lowered = _finalized(cli.load_authored_ir(str(source)))
+    verifier.verify_module(lowered)
     function = lowered.lookup("gemm")
     visitor = _RetainedStatements()
     visitor.visit(function.body)
@@ -569,7 +525,7 @@ def test_inplace_output_reuses_or_refuses(read_old, reshape):
     assert visitor.storage(call.args[-1]) is function.params[-1]
     callee = _RetainedStatements()
     callee.visit(call.callable.body)
-    copies = [stmt for stmt in callee.statements if isinstance(stmt.callable, Copy)]
+    copies = [stmt for stmt in callee.statements if isinstance(stmt.callable, memory.Copy)]
     assert len(copies) == 2
     assert callee.storage(copies[0].args[0]) is call.callable.params[0 if read_old else 1]
     assert callee.storage(copies[-1].args[-1]) is call.callable.params[-1]
@@ -582,7 +538,7 @@ class ReadBeforeUpdate(LoweringCase):
 
     def guard(self, state, problems):
         lowered = _finalized(state)
-        verify_module(lowered)
+        verifier.verify_module(lowered)
         visitor = _RetainedStatements()
         visitor.visit(lowered.lookup("gemm").body)
         update = visitor.calls[0].callable
@@ -592,7 +548,7 @@ class ReadBeforeUpdate(LoweringCase):
         identity = body.calls[0]
         assert body.storage(identity.args[0]) is update.params[0]
         assert body.storage(identity.args[-1]) is update.params[0]
-        copies = [stmt for stmt in body.statements if isinstance(stmt.callable, Copy)]
+        copies = [stmt for stmt in body.statements if isinstance(stmt.callable, memory.Copy)]
         assert body.storage(copies[0].args[0]) is update.params[0]
         assert body.storage(copies[-1].args[-1]) is update.params[-1]
 
@@ -602,16 +558,16 @@ class BroadcastStages(LoweringCase):
     path: Path = VARIANTS / "broadcast_stages.py"
 
     def guard(self, state, problems):
-        result = analyze(*check_program(state, state.entry_function()), analysis="memory")
+        result = analysis.analyze(*analysis.check_program(state, state.entry_function()), analysis="memory")
         staged = next(
-            expr
-            for expr in collect_exprs(result.function.body)
-            if isinstance(expr, Call) and getattr(expr.target, "buffers", 1) == 2
+            node
+            for node in core.collect_exprs(result.function.body)
+            if isinstance(node, expr.Call) and getattr(node.target, "buffers", 1) == 2
         )
-        memory = get_metadata(staged, MemoryMetadata)
-        assert len(memory.offsets) == 2
-        assert all(offset % 16 == 0 for offset in memory.offsets)
-        assert memory.buffer_bytes >= 2 * 3 * DType.f32.bit_width // 8
+        mem = expr.get_metadata(staged, analysis.MemoryMetadata)
+        assert len(mem.offsets) == 2
+        assert all(offset % 16 == 0 for offset in mem.offsets)
+        assert mem.buffer_bytes >= 2 * 3 * expr.DType.f32.bit_width // 8
 
 
 @pytest.mark.parametrize("later_use", [None, "callee", "caller"])
@@ -625,65 +581,65 @@ def test_retained_insert_keeps_parameter_storage(later_use, nested):
         ("caller", False): VARIANTS / "retained_caller_returns_output.py",
         ("caller", True): VARIANTS / "retained_caller_returns_output_via_relay.py",
     }[later_use, nested]
-    module = load_authored_ir(str(path))
-    result = analyze(*check_program(module, module.entry_function()), analysis=("memory", "sync"))
+    module = cli.load_authored_ir(str(path))
+    result = analysis.analyze(*analysis.check_program(module, module.entry_function()), analysis=("memory", "sync"))
     call = next(
         value
-        for value in collect_exprs(result.function.body)
-        if isinstance(value, Call) and isinstance(value.target, Function)
+        for value in core.collect_exprs(result.function.body)
+        if isinstance(value, expr.Call) and isinstance(value.target, core.Function)
     )
     callee = call.target
     if nested:
         callee = next(
             value.target
-            for value in collect_exprs(callee.body)
-            if isinstance(value, Call) and isinstance(value.target, Function)
+            for value in core.collect_exprs(callee.body)
+            if isinstance(value, expr.Call) and isinstance(value.target, core.Function)
         )
     insert = next(
         value
-        for value in collect_exprs(callee.body)
-        if isinstance(value, Call) and isinstance(value.target, InsertSlice)
+        for value in core.collect_exprs(callee.body)
+        if isinstance(value, expr.Call) and isinstance(value.target, tensor.InsertSlice)
     )
-    inserted = get_metadata(insert, MemoryMetadata)
-    called = get_metadata(call, MemoryMetadata)
+    inserted = expr.get_metadata(insert, analysis.MemoryMetadata)
+    called = expr.get_metadata(call, analysis.MemoryMetadata)
     proofs = {
-        value.value: value for value in get_metadata(callee, AllocationSummaryMetadata).values
+        value.value: value for value in expr.get_metadata(callee, analysis.AllocationSummaryMetadata).values
     }
     callers = {
         value.value: value
-        for value in get_metadata(result.function, AllocationSummaryMetadata).values
+        for value in expr.get_metadata(result.function, analysis.AllocationSummaryMetadata).values
     }
     if later_use == "callee":
-        assert not proofs[SSAValue(insert)].aliases
+        assert not proofs[core.SSAValue(insert)].aliases
     else:
         link = next(
             alias
-            for alias in proofs[SSAValue(insert)].aliases
-            if alias.kind is AliasKind.INSERT_SLICE
+            for alias in proofs[core.SSAValue(insert)].aliases
+            if alias.kind is analysis.AliasKind.INSERT_SLICE
         )
         assert link.target.expr is insert.args[0]
         assert link.relation.relation.is_identity()
-        composed = AllocationSummaryMetadata(tuple(proofs.values())).address_alias(
-            proofs[SSAValue(insert)]
+        composed = analysis.AllocationSummaryMetadata(tuple(proofs.values())).address_alias(
+            proofs[core.SSAValue(insert)]
         )
         assert composed.target.expr is callee.params[0]
         assert composed.relation.relation.is_identity()
         assert inserted.buffer_bytes is None and inserted.offsets == ()
     if later_use is not None:
-        assert not callers[SSAValue(call)].aliases
+        assert not callers[core.SSAValue(call)].aliases
         assert called.offsets
     else:
-        composed = AllocationSummaryMetadata(tuple(callers.values())).address_alias(
-            callers[SSAValue(call)]
+        composed = analysis.AllocationSummaryMetadata(tuple(callers.values())).address_alias(
+            callers[core.SSAValue(call)]
         )
         assert composed.target.expr is result.function.params[0]
         assert composed.relation.relation.is_identity()
         assert called.buffer_bytes is None and called.offsets == ()
     if later_use == "caller":
         with patch.object(
-            TirBuilder, "transfer", autospec=True, side_effect=TirBuilder.transfer
+            transforms.TirBuilder, "transfer", autospec=True, side_effect=transforms.TirBuilder.transfer
         ) as copy:
-            with pytest.raises(LoweringError, match="cannot be placed"):
+            with pytest.raises(transforms.LoweringError, match="cannot be placed"):
                 finalize(result)
         copy.assert_not_called()
 
@@ -693,24 +649,24 @@ class RetainedWindow(LoweringCase):
     path: Path = VARIANTS / "retained_window.py"
 
     def guard(self, state, problems):
-        result = analyze(*check_program(state, state.entry_function()), analysis="memory")
+        result = analysis.analyze(*analysis.check_program(state, state.entry_function()), analysis="memory")
         call = next(
             value
-            for value in collect_exprs(result.function.body)
-            if isinstance(value, Call) and isinstance(value.target, Function)
+            for value in core.collect_exprs(result.function.body)
+            if isinstance(value, expr.Call) and isinstance(value.target, core.Function)
         )
-        memory = get_metadata(call, MemoryMetadata)
+        mem = expr.get_metadata(call, analysis.MemoryMetadata)
         values = {
             value.value: value
-            for value in get_metadata(result.function, AllocationSummaryMetadata).values
+            for value in expr.get_metadata(result.function, analysis.AllocationSummaryMetadata).values
         }
-        composed = AllocationSummaryMetadata(tuple(values.values())).address_alias(
-            values[SSAValue(call)]
+        composed = analysis.AllocationSummaryMetadata(tuple(values.values())).address_alias(
+            values[core.SSAValue(call)]
         )
         assert composed.target.expr is result.function.params[0]
         expected = isl.map("{ [i, j] -> [i + 1, j] : 0 <= i < 2 and 0 <= j < 4 }")
         assert composed.relation.relation.is_equal(expected)
-        assert memory.buffer_bytes is None and memory.offsets == ()
+        assert mem.buffer_bytes is None and mem.offsets == ()
 
 
 @dataclass(frozen=True)
@@ -718,23 +674,23 @@ class ReadOnlyReturn(LoweringCase):
     relation: str = ""
 
     def guard(self, state, problems):
-        result = analyze(*check_program(state, state.entry_function()), analysis="memory")
+        result = analysis.analyze(*analysis.check_program(state, state.entry_function()), analysis="memory")
         call = next(
             value
-            for value in collect_exprs(result.function.body)
-            if isinstance(value, Call) and isinstance(value.target, Function)
+            for value in core.collect_exprs(result.function.body)
+            if isinstance(value, expr.Call) and isinstance(value.target, core.Function)
         )
-        memory = get_metadata(call, MemoryMetadata)
+        mem = expr.get_metadata(call, analysis.MemoryMetadata)
         values = {
             value.value: value
-            for value in get_metadata(result.function, AllocationSummaryMetadata).values
+            for value in expr.get_metadata(result.function, analysis.AllocationSummaryMetadata).values
         }
-        composed = AllocationSummaryMetadata(tuple(values.values())).address_alias(
-            values[SSAValue(call)]
+        composed = analysis.AllocationSummaryMetadata(tuple(values.values())).address_alias(
+            values[core.SSAValue(call)]
         )
         assert composed.target.expr is result.function.params[0]
         assert composed.relation.relation.is_equal(isl.map(self.relation))
-        assert memory.buffer_bytes is None and memory.offsets == ()
+        assert mem.buffer_bytes is None and mem.offsets == ()
 
 
 @case

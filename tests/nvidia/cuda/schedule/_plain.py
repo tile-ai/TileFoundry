@@ -2,9 +2,8 @@
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.core import get_registered_name
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir import expr
+from tilefoundry.ir.hir import math
 
 
 @dataclass(frozen=True)
@@ -39,7 +38,7 @@ def check_plain_report(report, source, sites):
             }
             assert all(item["reason"] for item in row["refused"])
     if sites.binaries is not None:
-        binary_names = {get_registered_name(Binary(kind=kind)) for kind in BinaryKind}
+        binary_names = {expr.get_registered_name(math.Binary(kind=kind)) for kind in expr.BinaryKind}
         binaries = [row for row in report["lines"] if row["op"] in binary_names]
         assert len(binaries) == sites.binaries
         assert all(any(c["id"] == "T.binary" for c in row["candidates"]) for row in binaries)

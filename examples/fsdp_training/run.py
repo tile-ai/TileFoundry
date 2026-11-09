@@ -10,16 +10,16 @@ from tilefoundry.analysis import RegionMemoryMetadata, analyze
 from tilefoundry.core import local_type
 from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.analysis.check import check_program
-from tilefoundry.ir.core import Call, Tuple, Var, get_metadata
-from tilefoundry.ir.core.expr import SSAValue
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.expr import Call, Tuple, Var, get_metadata
+from tilefoundry.ir.core.ssa_value import SSAValue
+from tilefoundry.ir.core.function import Function
+from tilefoundry.ir.core.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split, shard_layout_of
-from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.utils import leaf_span, leaves_of
-from tilefoundry.ir.visitor import collect_exprs
+from tilefoundry.ir.types import Broadcast, Partial, Split, shard_layout_of
+from tilefoundry.ir.types import flatten
+from tilefoundry.ir.utils import leaf_span, leaves_of
+from tilefoundry.ir.core.visitor import collect_exprs
 
 from .model import SUPPORTED_MESHES, training_program
 from .reference import check_training

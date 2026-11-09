@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="run",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 32),),
 )
 class ScheduledScale:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def run(x: Tensor[(32,), "f32"], w: ConstTensor[(32,), "f32"], out: Tensor[(32,), "f32"]):
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
@@ -32,14 +32,14 @@ class ScheduledScale:
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 32),),
 )
 class ModuleInstances:
     layers = ModuleList(ScheduledScale, 3)
     mm = ScheduledScale
 
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def helper(x: Tensor[(32,), "f32"], w: ConstTensor[(32,), "f32"], out: Tensor[(32,), "f32"]):
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
@@ -52,7 +52,7 @@ class ModuleInstances:
                 window = T.tensor_view(T.ptr_of(value_2[0:0 + 32]), layout=(32,), shape=(32,))
                 T.copy(value_1, window)
 
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def gemm(
         x: Tensor[(32,), "f32"], w: ConstTensor[(32,), "f32"], scratch: Tensor[(32,), "f32"], scratch_1: Tensor[(32,), "f32"], scratch_2: Tensor[(32,), "f32"], scratch_3: Tensor[(32,), "f32"], scratch_4: Tensor[(32,), "f32"], out: Tensor[(32,), "f32"]
     ):

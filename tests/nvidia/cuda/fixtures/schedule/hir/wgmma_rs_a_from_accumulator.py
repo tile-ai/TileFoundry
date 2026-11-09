@@ -7,7 +7,7 @@ leaving the issuing warpgroup's registers.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 64
 K = 32
@@ -22,7 +22,7 @@ _HELD = (Split(2), Split(0), Split(4))
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 256)),
 )
 class WGMMA_RS_A_FROM_ACCUMULATOR:

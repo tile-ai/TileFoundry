@@ -5,7 +5,7 @@ from .extract import load_xy_reg_indexed
 from .vecint import vecint_alu, vecint_alu_mode4
 
 
-def emulate_AMX_MATINT(state, operand):
+def emulate_amx_matint(state, operand):
     if (operand >> 55) & 3:
         return
     indexed = bool(operand & (1 << 53))
@@ -78,3 +78,6 @@ def emulate_AMX_MATINT(state, operand):
             off = bit_select(bit_select(j, zr, xn - 1), i // xn, zm) * 64 + (i & -zn)
             zv = load_int(state.z, off, zn, 64 - zb)
             write_uint(state.z, off, zn, vecint_alu(xv, yv, zv, mode, shift) & omask)
+
+
+__all__ = ["emulate_amx_matint"]

@@ -1,12 +1,12 @@
 """Preserve MN-major B unit modes when two groups issue n64 WGMMA tiles."""
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 A = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((8, 8), 16), ((512, 64), 1)))
 B = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((2, 8), (2, 1, 64)), ((512, 64), (4096, 1024, 1))))
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1), Topology("thread", 256)))
 class GroupedMnMajorB:
     @func

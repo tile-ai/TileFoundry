@@ -12,39 +12,25 @@ from tests.core.ops.ir.op_case import (
     infer_call,
     op_case_test,
 )
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.context import EvaluateContext
-from tilefoundry.evaluator.registry import eval_registry
-from tilefoundry.evaluator.value import TensorValue, TupleValue
-from tilefoundry.ir.hir.tensor.split import Split
-from tilefoundry.ir.types import (
-    DType,
-    Layout,
-    Mesh,
-    ShardLayout,
-    Topology,
-    TupleType,
-    make_shard_tensor_type,
-    make_tensor_type,
-)
-from tilefoundry.ir.types.shard_layout import Split as SplitAttr
-from tilefoundry.ir.types.shard_layout import shard_layout_local_shape
-from tilefoundry.visitor_registry.contexts import TrafficBytes
+from tilefoundry import core
+from tilefoundry.interfaces import cost, evaluator
+from tilefoundry.ir import expr, types, utils
+from tilefoundry.ir.hir import tensor
 
 
 def test_split_rebuilds_result_layouts():
-    plain = make_tensor_type((16, 8), layout=Layout(shape=(16, 8), strides=(8, 1)))
-    plain_parts = infer_call(Split(axis=0, num_splits=4), plain).fields
-    assert all((part.layout == Layout(shape=(4, 8), strides=(8, 1)) for part in plain_parts))
-    sharded = make_shard_tensor_type(
-        (16, 8), mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)), attrs=(SplitAttr(0),)
+    plain = types.TensorType.from_shape((16, 8), layout=types.Layout(shape=(16, 8), strides=(8, 1)))
+    plain_parts = infer_call(tensor.Split(axis=0, num_splits=4), plain).fields
+    assert all((part.layout == types.Layout(shape=(4, 8), strides=(8, 1)) for part in plain_parts))
+    sharded = utils.make_shard_tensor_type(
+        (16, 8), mesh=types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",)), attrs=(types.Split(0),)
     )
-    sharded_parts = infer_call(Split(axis=1, num_splits=2), sharded).fields
-    assert all((isinstance(part.layout, ShardLayout) for part in sharded_parts))
-    assert all((part.layout.attrs == (SplitAttr(0),) for part in sharded_parts))
+    sharded_parts = infer_call(tensor.Split(axis=1, num_splits=2), sharded).fields
+    assert all((isinstance(part.layout, types.ShardLayout) for part in sharded_parts))
+    assert all((part.layout.attrs == (types.Split(0),) for part in sharded_parts))
     assert all(
         (
-            math.prod(shard_layout_local_shape(part.layout)) == math.prod(part.shape) // 4
+            math.prod(types.shard_layout_local_shape(part.layout)) == math.prod(part.shape) // 4
             for part in sharded_parts
         )
     )
@@ -53,30 +39,30 @@ def test_split_rebuilds_result_layouts():
 def test_split_evaluates_equal_fields() -> None:
     source = torch.arange(24, dtype=torch.float32).reshape(4, 6)
     expected = tuple(torch.chunk(source, 3, dim=1))
-    check_op_case(OpCase("three_columns", Split(axis=1, num_splits=3), (source,), value=expected))
+    check_op_case(OpCase("three_columns", tensor.Split(axis=1, num_splits=3), (source,), value=expected))
     assert torch.equal(torch.cat(expected, dim=1), source)
 
 
 def test_split_values_carry_field_types() -> None:
-    source_type = make_shard_tensor_type(
+    source_type = utils.make_shard_tensor_type(
         (8, 4),
-        dtype=DType.f32,
+        dtype=expr.DType.f32,
         storage="rmem",
-        mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
-        attrs=(SplitAttr(0),),
+        mesh=types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",)),
+        attrs=(types.Split(0),),
     )
-    op = Split(axis=1, num_splits=2)
+    op = tensor.Split(axis=1, num_splits=2)
     result_type = infer_call(op, source_type)
-    handler = eval_registry.lookup(Split)
+    handler = evaluator.registry.get(tensor.Split, None)
     assert handler is not None
     result = handler(
-        EvaluateContext(
+        evaluator.EvaluateContext(
             op=op,
-            args=(TensorValue(ShardTensor(source_type, torch.arange(32).reshape(8, 4).float())),),
+            args=(evaluator.TensorValue(core.ShardTensor(source_type, torch.arange(32).reshape(8, 4).float())),),
             result_type=result_type,
         )
     )
-    assert isinstance(result, TupleValue)
+    assert isinstance(result, evaluator.TupleValue)
     assert tuple((element.type for element in result.elements)) == result_type.fields
     assert result.type == result_type
 
@@ -85,9 +71,9 @@ def _make_split_costs_one_full_read_and_write() -> OpCase:
     moved = 4 * 6 * 4
     return OpCase(
         "split",
-        Split(axis=1, num_splits=3),
-        (make_tensor_type((4, 6)),),
-        cost=Cost(traffic=(TrafficBytes(read=moved), TrafficBytes(write=moved))),
+        tensor.Split(axis=1, num_splits=3),
+        (types.TensorType.from_shape((4, 6)),),
+        cost=Cost(traffic=(cost.TrafficBytes(read=moved), cost.TrafficBytes(write=moved))),
     )
 
 
@@ -95,26 +81,26 @@ CASES = (
     _make_split_costs_one_full_read_and_write(),
     OpCase(
         "negative_axis",
-        Split(axis=-1, num_splits=2),
-        (make_tensor_type((4, 8)),),
-        type=TupleType(fields=(make_tensor_type((4, 4)),) * 2),
+        tensor.Split(axis=-1, num_splits=2),
+        (types.TensorType.from_shape((4, 8)),),
+        type=types.TupleType(fields=(types.TensorType.from_shape((4, 4)),) * 2),
     ),
     OpCase(
         "axis_out_of_range",
-        Split(axis=2, num_splits=2),
-        (make_tensor_type((4, 8)),),
+        tensor.Split(axis=2, num_splits=2),
+        (types.TensorType.from_shape((4, 8)),),
         error=ExpectedError(match="axis 2 out of range"),
     ),
     OpCase(
         "zero_splits",
-        Split(axis=0, num_splits=0),
-        (make_tensor_type((4, 8)),),
+        tensor.Split(axis=0, num_splits=0),
+        (types.TensorType.from_shape((4, 8)),),
         error=ExpectedError(match="num_splits must be positive, got 0"),
     ),
     OpCase(
         "negative_splits",
-        Split(axis=0, num_splits=-2),
-        (make_tensor_type((4, 8)),),
+        tensor.Split(axis=0, num_splits=-2),
+        (types.TensorType.from_shape((4, 8)),),
         error=ExpectedError(match="num_splits must be positive, got -2"),
     ),
 )

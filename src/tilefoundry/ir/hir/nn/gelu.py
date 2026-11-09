@@ -1,51 +1,50 @@
+"""HIR pointwise ``Gelu`` Op."""
+
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.utils import reject_partials
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    identity_relations,
-    register_access_relation,
-)
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
-_COMMUTES_WITH = frozenset()
+COMMUTES_WITH = frozenset()
 
 
-@register_op(dialect='tf', category='nn')
-class Gelu(Op):
+@expr.register_op(dialect='tf', category='nn')
+class Gelu(expr.Op):
     """Gaussian Error Linear Unit.
 
     Gaussian Error Linear Unit. ``approximate="tanh"`` is the tanh-based
     approximation (HF ``gelu_pytorch_tanh`` / Gemma-2 MLP activation).
     """
 
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
-    approximate = ParamDef(kind="attribute", annotation=str, default="tanh")
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    approximate = expr.ParamDef(kind="attribute", annotation=str, default="tanh")
 
 
-@register_typeinfer(Gelu)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(Gelu)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     x_ty = ctx.type_of(call.args[0])
-    reject_partials("x", x_ty.layout, commutes_with=_COMMUTES_WITH)
+    ir_utils.reject_partials("x", x_ty.layout, commutes_with=COMMUTES_WITH)
     return x_ty
 
 
-@register_eval(Gelu)
-def _eval_gelu(ctx):
+@evaluator.register(Gelu)
+def eval_gelu(ctx):
     def gelu(x):
-        return torch.nn.functional.gelu(x, approximate=ctx.op.approximate)
+        return utils.torch.nn.functional.gelu(x, approximate=ctx.op.approximate)
 
     x = ctx.args[0].tensor
     held = gelu(x.tensor) if x.is_global else tuple((p, gelu(t)) for p, t in x.tensor)
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
-register_access_relation(Gelu)(identity_relations)
+access.register_relation(Gelu)(access.identity_relations)
+
+
+@cost.register(Gelu)
+def gelu_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    return cost.elementwise(call, ctx)
+
+
+__all__ = ["Gelu"]

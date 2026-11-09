@@ -1,7 +1,7 @@
 """Scheduled HIR: split-K finish of o_proj/down at M = 128, 2 slices: C = bf16(R + bf16(sum_s P[s])).
 Runtime kernel: runtime/kernels/gemm.py splitk_reduce_kernel(M=128, N=5120, S=2, residual=True): 1024 threads x 8 elements per CTA."""
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 128
 N = 5120
@@ -12,7 +12,7 @@ SPAN = BLOCK * PER
 TILES = M * N // SPAN
 
 
-@module(entry="reduce_sk", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", TILES), Topology("thread", BLOCK)))
+@module(entry="reduce_sk", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", TILES), Topology("thread", BLOCK)))
 class SCHED_REDUCE_SK_T128:
     @func
     def reduce_sk(p: Tensor[(S, M * N), "f32"], r: Tensor[(M * N,), "bf16"]) -> Tensor[(M * N,), "bf16"]:

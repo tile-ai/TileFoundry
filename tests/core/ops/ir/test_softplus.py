@@ -10,19 +10,18 @@ from __future__ import annotations
 import torch
 
 from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
-from tilefoundry.ir.hir.math.softplus import Softplus
-from tilefoundry.ir.types import Layout, Mesh, Topology, make_shard_tensor_type
-from tilefoundry.ir.types.shard_layout import Partial
+from tilefoundry.ir import types, utils
+from tilefoundry.ir.hir import math
 
-_OP = Softplus()
-_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
-_PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
+_OP = math.Softplus()
+_M = types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",))
+_PSUM = utils.make_shard_tensor_type((16, 8), mesh=_M, attrs=(types.Partial("sum"),))
 
 
 def _make_softplus_evaluate():
     torch.manual_seed(0)
     x = torch.rand(4) + 0.5
-    return OpCase("softplus", Softplus(), (x,), value=torch.nn.functional.softplus(x), atol=1e-06)
+    return OpCase("softplus", math.Softplus(), (x,), value=torch.nn.functional.softplus(x), atol=1e-06)
 
 
 CASES = (

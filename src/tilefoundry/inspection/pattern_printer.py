@@ -4,19 +4,16 @@ from __future__ import annotations
 
 from dataclasses import replace
 from enum import Enum
+from types import MappingProxyType
 
-from tilefoundry.ir.clause.layout import is_layout_wildcard
-from tilefoundry.ir.core.param_def import collect_param_defs
-from tilefoundry.ir.core.register import get_registered_name
-from tilefoundry.ir.pattern.pattern import Pattern, WildcardPattern
-from tilefoundry.ir.pattern.predicates import Formula, failing
-from tilefoundry.ir.pattern.utils import declared_execution_mesh
-from tilefoundry.ir.types import Broadcast, DType, Split, StorageKind
-from tilefoundry.ir.types.dim import DimFloorDiv, DimMul, DimVar, is_dim_op_call
+from tilefoundry import services
+from tilefoundry.ir import clause, expr, pattern, types
 
-_UNNAMED = "_"
-_ARRANGEMENT = "every arrangement"
-_BINARY_OPERATORS = {
+from .printer_base import PythonPrinter
+
+UNNAMED = "_"
+ARRANGEMENT = "every arrangement"
+BINARY_OPERATORS = MappingProxyType({
     **{op: (symbol, 1) for op, symbol in (
         ("eq", "=="), ("ne", "!="), ("lt", "<"), ("le", "<="), ("gt", ">"), ("ge", ">="),
     )},
@@ -27,66 +24,73 @@ _BINARY_OPERATORS = {
     "mul": ("*", 5),
     "floordiv": ("//", 5),
     "mod": ("%", 5),
-}
+})
+
+
+def with_predicates(written: str, rules: tuple[str, ...]) -> str:
+    if not rules:
+        return written
+    return "\n".join((written, "  predicates:", *(
+        f"    {line}" for rule in rules for line in rule.splitlines()
+    )))
+
+
+def written_tuple(items: tuple[str, ...]) -> str:
+    written = ", ".join(items)
+    return f"({written},)" if len(items) == 1 else f"({written})"
+
 
 class PatternPrinter:
     """Render pattern trees without a Python print context."""
 
-    def written(self, pattern, name: str = _UNNAMED) -> str:
+    def written(self, node, name: str = UNNAMED) -> str:
         """Write the value shape admitted by *pattern*."""
-        if not isinstance(pattern, Pattern):
-            return self._written_value(pattern)
-        return self._dispatch("visit", pattern, name)
+        if not isinstance(node, pattern.Pattern):
+            return self.written_value(node)
+        return self.dispatch("visit", node, name)
 
-    def rules(self, pattern, name: str = _UNNAMED) -> tuple[str, ...]:
+    def rules(self, node, name: str = UNNAMED) -> tuple[str, ...]:
         """Write the ordered, de-duplicated conditions imposed by *pattern*."""
-        if not isinstance(pattern, Pattern):
+        if not isinstance(node, pattern.Pattern):
             return ()
         lines = tuple(
             dict.fromkeys(
                 (
-                    *self._dispatch("rules", pattern, name),
-                    *self._rules_of(pattern.predicates, name, predicates=True),
+                    *self.dispatch("rules", node, name),
+                    *self.rules_of(node.predicates, name, predicates=True),
                 )
             )
         )
         return lines
 
-    def described(self, pattern, name: str = _UNNAMED) -> str:
+    def described(self, node, name: str = UNNAMED) -> str:
         """Write a value shape followed by its predicate lines, when present."""
-        written, rules = self.written(pattern, name), self.rules(pattern, name)
+        written, rules = self.written(node, name), self.rules(node, name)
         if rules and all("\n" not in line for line in (written, *rules)):
             return written + " where " + "; ".join(rules)
-        return self._described(written, rules)
+        return with_predicates(written, rules)
 
-    @staticmethod
-    def _described(written: str, rules: tuple[str, ...]) -> str:
-        if not rules:
-            return written
-        return "\n".join((written, "  predicates:", *(
-            f"    {line}" for rule in rules for line in rule.splitlines()
-        )))
 
-    def alternatives(self, pattern, bindings=()) -> tuple:
+    def alternatives(self, node, bindings=()) -> tuple:
         """Flatten declaration branches into ``(bindings, leaf)`` pairs."""
-        if not isinstance(pattern, Pattern):
-            return ((tuple(bindings), pattern),)
-        return self._dispatch("alternatives", pattern, tuple(bindings))
+        if not isinstance(node, pattern.Pattern):
+            return ((tuple(bindings), node),)
+        return self.dispatch("alternatives", node, tuple(bindings))
 
     def refusal_reason(self, refusal, parameter=None) -> str:
         """The failed node's reason, optionally named by its instruction operand."""
         if refusal is None:
             reason = "the pattern did not match"
         else:
-            pattern = refusal.pattern
-            if isinstance(pattern, Formula):
-                failed = failing((pattern,), refusal.bindings)
+            node = refusal.pattern
+            if isinstance(node, pattern.Formula):
+                failed = pattern.failing((node,), refusal.bindings)
                 if failed is not None:
-                    pattern = failed
+                    node = failed
             reason = (
-                self._dispatch("refused", pattern, refusal.subject)
-                if isinstance(pattern, Pattern)
-                else self.refused_Pattern(pattern, refusal.subject)
+                self.dispatch("refused", node, refusal.subject)
+                if isinstance(node, pattern.Pattern)
+                else self.refused_Pattern(node, refusal.subject)
             )
         return reason if parameter is None else f"{parameter}: {reason}"
 
@@ -96,7 +100,7 @@ class PatternPrinter:
         for path in paths:
             for name, value in path:
                 written = (
-                    self._subject_value(value)
+                    self.subject_value(value)
                     if isinstance(value, float) else getattr(value, "name", str(value))
                 )
                 values = merged.setdefault(name, [])
@@ -120,44 +124,42 @@ class PatternPrinter:
         data = self.match_data((path,), self.refusal_reason(refusal))
         return self.match_text("", data).lstrip()
 
-    def _subject_value(self, value) -> str:
-        from .printer_base import PythonPrinter  # noqa: PLC0415
-
-        if isinstance(value, (DType, StorageKind)):
-            return self._written_value(value)
+    def subject_value(self, value) -> str:
+        if isinstance(value, (expr.DType, expr.StorageKind)):
+            return self.written_value(value)
         return PythonPrinter().print(value)
 
-    def refused_Pattern(self, pattern, subject) -> str:
-        return f"{self._subject_value(subject)} does not match {self.written(pattern)}"
+    def refused_Pattern(self, node, subject) -> str:
+        return f"{self.subject_value(subject)} does not match {self.written(node)}"
 
-    def refused_Predicate(self, pattern, subject) -> str:
-        return "could not satisfy " + "; ".join(self.rules(pattern))
+    def refused_Predicate(self, node, subject) -> str:
+        return "could not satisfy " + "; ".join(self.rules(node))
 
-    def refused_SwitchPattern(self, pattern, subject) -> str:
-        options = ", ".join(self._written_value(value) for value, _ in pattern.branches)
+    def refused_Switch(self, node, subject) -> str:
+        options = ", ".join(self.written_value(value) for value, _ in node.branches)
         return (
-            f"{pattern.param} has no matching branch for "
-            f"{self._subject_value(subject)}; branches: {options}"
+            f"{node.param} has no matching branch for "
+            f"{self.subject_value(subject)}; branches: {options}"
         )
 
     def declaration(self, op_type) -> dict[str, tuple[str, ...]]:
         """Render the declaration directly, retaining symbolic conditions."""
         sections = []
-        parameters = tuple(getattr(op_type, "parameters", ())) or collect_param_defs(op_type)
+        parameters = tuple(getattr(op_type, "parameters", ())) or expr.collect_param_defs(op_type)
         parameters_by_name = {param.name: param for param in parameters}
         if parameters:
             sections.append(("parameters", tuple((param.name, param.pattern) for param in parameters)))
         roles = tuple(
             (name, getattr(op_type, name))
             for name in ("C", "A", "B")
-            if isinstance(getattr(op_type, name, None), Pattern)
+            if isinstance(getattr(op_type, name, None), pattern.Pattern)
         )
         if roles:
             sections.append(("operands", roles))
             sections.append(
                 (
                     "attributes",
-                    (("execution mesh", declared_execution_mesh(op_type)),),
+                    (("execution mesh", pattern.declared_execution_mesh(op_type)),),
                 )
             )
         if not roles and parameters:
@@ -181,16 +183,16 @@ class PatternPrinter:
         for heading, items in sections:
             lines = []
             width = max((len(name) for name, _ in items), default=0)
-            for name, pattern in items:
+            for name, node in items:
                 parameter = parameters_by_name.get(name)
-                description = "any value" if pattern is None else self.described(pattern, name)
+                description = "any value" if node is None else self.described(node, name)
                 qualifier = ""
                 if parameter is not None:
                     annotation = parameter.annotation
                     if isinstance(annotation, type) and issubclass(annotation, Enum):
-                        if pattern is None or isinstance(pattern, WildcardPattern):
+                        if node is None or isinstance(node, pattern.Wildcard):
                             qualifier += " in {" + ", ".join(
-                                self._written_value(value) for value in annotation
+                                self.written_value(value) for value in annotation
                             ) + "}"
                     elif annotation is not object:
                         qualifier += f" (type {getattr(annotation, '__name__', annotation)})"
@@ -200,7 +202,7 @@ class PatternPrinter:
                 described[0] += qualifier
                 default = ""
                 if parameter is not None and parameter.has_default:
-                    default = f" (default {self._written_value(parameter.default)})"
+                    default = f" (default {self.written_value(parameter.default)})"
                 prefix = f"    {name.ljust(width)}  "
                 lines.append(prefix + described[0] + default)
                 continuation = " " * len(prefix)
@@ -208,193 +210,189 @@ class PatternPrinter:
             rendered[heading] = tuple(lines)
         return rendered
 
-    def _dispatch(self, operation: str, pattern: Pattern, argument):
-        for cls in type(pattern).__mro__:
+    def dispatch(self, operation: str, node: pattern.Pattern, argument):
+        for cls in type(node).__mro__:
             visitor = getattr(self, f"{operation}_{cls.__name__}", None)
             if visitor is not None:
-                return visitor(pattern, argument)
+                return visitor(node, argument)
         raise NotImplementedError(
-            f"{type(pattern).__name__} has no PatternPrinter {operation} visitor"
+            f"{type(node).__name__} has no PatternPrinter {operation} visitor"
         )
 
-    def _written_dim(self, value) -> str:
-        if isinstance(value, DimVar):
+    def written_dim(self, value) -> str:
+        if isinstance(value, expr.DimVar):
             return value.name
-        if is_dim_op_call(value):
-            left, right = (self._written_dim(arg) for arg in value.args)
-            if isinstance(value.target, DimFloorDiv):
+        if expr.is_dim_op_call(value):
+            left, right = (self.written_dim(arg) for arg in value.args)
+            if isinstance(value.target, expr.DimFloorDiv):
                 return f"{left}/{right}"
-            if isinstance(value.target, DimMul):
+            if isinstance(value.target, expr.DimMul):
                 return f"{left}*{right}"
             return f"({left} {type(value.target).__name__} {right})"
         return str(getattr(value, "value", value))
 
-    def _written_value(self, value) -> str:
+    def written_value(self, value) -> str:
         if isinstance(value, float):
-            return self._subject_value(value)
-        if isinstance(value, Broadcast):
+            return self.subject_value(value)
+        if isinstance(value, types.Broadcast):
             return "B()"
-        if isinstance(value, DType):
+        if isinstance(value, expr.DType):
             return value.name
-        if isinstance(value, Split):
+        if isinstance(value, types.Split):
             return f"S({value.axis})"
-        if isinstance(value, StorageKind):
+        if isinstance(value, expr.StorageKind):
             return value.name.lower()
         if isinstance(value, Enum):
             try:
-                return f"{get_registered_name(value)}.{value.name}"
+                return f"{expr.get_registered_name(value)}.{value.name}"
             except ValueError:
                 return f"{type(value).__name__}.{value.name}"
         if isinstance(value, tuple):
-            return self._written_tuple(tuple(self._written_value(item) for item in value))
+            return written_tuple(tuple(self.written_value(item) for item in value))
         if isinstance(value, list):
-            return self._written_tuple(tuple(self._written_value(item) for item in value))
-        if isinstance(value, DimVar) or is_dim_op_call(value):
-            return self._written_dim(value)
-        return _UNNAMED if is_layout_wildcard(value) else str(value)
+            return written_tuple(tuple(self.written_value(item) for item in value))
+        if isinstance(value, expr.DimVar) or expr.is_dim_op_call(value):
+            return self.written_dim(value)
+        return UNNAMED if clause.is_layout_wildcard(value) else str(value)
 
-    @staticmethod
-    def _written_tuple(items: tuple[str, ...]) -> str:
-        written = ", ".join(items)
-        return f"({written},)" if len(items) == 1 else f"({written})"
 
-    def _written_grouped(self, modes) -> str:
+    def written_grouped(self, modes) -> str:
         if isinstance(modes, tuple):
-            return self._written_tuple(tuple(self._written_grouped(mode) for mode in modes))
+            return written_tuple(tuple(self.written_grouped(mode) for mode in modes))
         return self.written(modes)
 
-    def _rules_of(self, values, name: str = _UNNAMED, *, predicates=False) -> tuple[str, ...]:
+    def rules_of(self, values, name: str = UNNAMED, *, predicates=False) -> tuple[str, ...]:
         lines = []
         for value in values:
             if not predicates:
                 lines.extend(self.rules(value, name))
-            elif isinstance(value, Pattern):
-                lines.extend(self._dispatch("predicate", value, name))
+            elif isinstance(value, pattern.Pattern):
+                lines.extend(self.dispatch("predicate", value, name))
             else:
-                lines.append(f"{name} == {self._written_value(value)}")
+                lines.append(f"{name} == {self.written_value(value)}")
         return tuple(lines)
 
-    def predicate_Pattern(self, pattern, name) -> tuple[str, ...]:
-        return self.rules(pattern, name)
+    def predicate_Pattern(self, node, name) -> tuple[str, ...]:
+        return self.rules(node, name)
 
-    def predicate_WildcardPattern(self, pattern, name) -> tuple[str, ...]:
-        binding = (f"{name} matches {pattern.name or 'any value'}",) if pattern.name != name else ()
-        return (*binding, *self.rules(pattern, name))
+    def predicate_Wildcard(self, node, name) -> tuple[str, ...]:
+        binding = (f"{name} matches {node.name or 'any value'}",) if node.name != name else ()
+        return (*binding, *self.rules(node, name))
 
-    def visit_WildcardPattern(self, pattern, name) -> str:
-        return "any value" if pattern.name == name else pattern.name or name
+    def visit_Wildcard(self, node, name) -> str:
+        return "any value" if node.name == name else node.name or name
 
-    def rules_WildcardPattern(self, pattern, name) -> tuple[str, ...]:
+    def rules_Wildcard(self, node, name) -> tuple[str, ...]:
         return ()
 
-    def visit_StarPattern(self, pattern, name) -> str:
-        return f"*{self.written(pattern.pattern, name)}"
+    def visit_Star(self, node, name) -> str:
+        return f"*{self.written(node.pattern, name)}"
 
-    def rules_StarPattern(self, pattern, name) -> tuple[str, ...]:
-        return self.rules(pattern.pattern, name)
+    def rules_Star(self, node, name) -> tuple[str, ...]:
+        return self.rules(node.pattern, name)
 
-    def visit_OrPattern(self, pattern, name) -> str:
+    def visit_Or(self, node, name) -> str:
         return "one of {" + "; ".join(
-            self.described(item, name) for item in pattern.patterns
+            self.described(item, name) for item in node.patterns
         ) + "}"
 
-    def rules_OrPattern(self, pattern, name) -> tuple[str, ...]:
+    def rules_Or(self, node, name) -> tuple[str, ...]:
         return ()
 
-    def predicate_OrPattern(self, pattern, name) -> tuple[str, ...]:
-        return (self.described(pattern, name),)
+    def predicate_Or(self, node, name) -> tuple[str, ...]:
+        return (self.described(node, name),)
 
-    def visit_AndPattern(self, pattern, name) -> str:
-        return " and ".join(self.described(part, name) for part in pattern.parts)
+    def visit_And(self, node, name) -> str:
+        return " and ".join(self.described(part, name) for part in node.parts)
 
-    def rules_AndPattern(self, pattern, name) -> tuple[str, ...]:
+    def rules_And(self, node, name) -> tuple[str, ...]:
         return ()
 
-    def visit_SequencePattern(self, pattern, name) -> str:
-        return self._written_tuple(tuple(self.written(item, name) for item in pattern.patterns))
+    def visit_Sequence(self, node, name) -> str:
+        return written_tuple(tuple(self.written(item, name) for item in node.patterns))
 
-    def rules_SequencePattern(self, pattern, name) -> tuple[str, ...]:
-        return self._rules_of(pattern.patterns, name)
+    def rules_Sequence(self, node, name) -> tuple[str, ...]:
+        return self.rules_of(node.patterns, name)
 
-    def visit_RangePattern(self, pattern, name) -> str:
+    def visit_Range(self, node, name) -> str:
         return name
 
-    def rules_RangePattern(self, pattern, name) -> tuple[str, ...]:
-        if pattern.lo is None:
-            return (f"{name} <= {pattern.hi}",)
-        if pattern.hi is None:
-            return (f"{pattern.lo} <= {name}",)
-        return (f"{pattern.lo} <= {name} <= {pattern.hi}",)
+    def rules_Range(self, node, name) -> tuple[str, ...]:
+        if node.lo is None:
+            return (f"{name} <= {node.hi}",)
+        if node.hi is None:
+            return (f"{node.lo} <= {name}",)
+        return (f"{node.lo} <= {name} <= {node.hi}",)
 
-    def visit_SwitchPattern(self, pattern, name) -> str:
+    def visit_Switch(self, node, name) -> str:
         branches = []
-        for value, branch in pattern.branches:
+        for value, branch in node.branches:
             lines = self.described(branch, name).splitlines()
-            branches.append(f"  {pattern.param}={self._written_value(value)}: {lines[0]}")
+            branches.append(f"  {node.param}={self.written_value(value)}: {lines[0]}")
             branches.extend(f"    {line}" for line in lines[1:])
-        return "\n".join((f"switch {pattern.param}:", *branches))
+        return "\n".join((f"switch {node.param}:", *branches))
 
-    def rules_SwitchPattern(self, pattern, name) -> tuple[str, ...]:
+    def rules_Switch(self, node, name) -> tuple[str, ...]:
         return ()
 
-    def predicate_SwitchPattern(self, pattern, name) -> tuple[str, ...]:
-        return (self.described(pattern, name),)
+    def predicate_Switch(self, node, name) -> tuple[str, ...]:
+        return (self.described(node, name),)
 
-    def visit_LayoutPattern(self, pattern, name) -> str:
-        if pattern.shape is None and pattern.strides is None:
+    def visit_Layout(self, node, name) -> str:
+        if node.shape is None and node.strides is None:
             return "layout"
-        shape = name if pattern.shape is None else self._written_grouped(tuple(pattern.shape))
+        shape = name if node.shape is None else self.written_grouped(tuple(node.shape))
         strides = (
-            name if pattern.strides is None else self._written_grouped(tuple(pattern.strides))
+            name if node.strides is None else self.written_grouped(tuple(node.strides))
         )
         return f"Layout({shape}, {strides})"
 
-    def rules_LayoutPattern(self, pattern, name) -> tuple[str, ...]:
-        return self._rules_of(pattern.positions())
+    def rules_Layout(self, node, name) -> tuple[str, ...]:
+        return self.rules_of(node.positions())
 
-    def visit_SwizzlePattern(self, pattern, name) -> str:
+    def visit_Swizzle(self, node, name) -> str:
         return (
-            f"Swizzle({self.written(pattern.bits)}, {self.written(pattern.base)}, "
-            f"{self.written(pattern.shift)})"
+            f"Swizzle({self.written(node.bits)}, {self.written(node.base)}, "
+            f"{self.written(node.shift)})"
         )
 
-    def rules_SwizzlePattern(self, pattern, name) -> tuple[str, ...]:
-        return self._rules_of((pattern.bits, pattern.base, pattern.shift))
+    def rules_Swizzle(self, node, name) -> tuple[str, ...]:
+        return self.rules_of((node.bits, node.base, node.shift))
 
-    def visit_ComposedLayoutPattern(self, pattern, name) -> str:
+    def visit_ComposedLayout(self, node, name) -> str:
         return (
-            f"ComposedLayout({self.written(pattern.inner)}, "
-            f"{self.written(pattern.offset)}, {self.written(pattern.outer)})"
+            f"ComposedLayout({self.written(node.inner)}, "
+            f"{self.written(node.offset)}, {self.written(node.outer)})"
         )
 
-    def rules_ComposedLayoutPattern(self, pattern, name) -> tuple[str, ...]:
-        return self._rules_of((pattern.inner, pattern.offset, pattern.outer))
+    def rules_ComposedLayout(self, node, name) -> tuple[str, ...]:
+        return self.rules_of((node.inner, node.offset, node.outer))
 
-    def visit_MeshPattern(self, pattern, name) -> str:
+    def visit_Mesh(self, node, name) -> str:
         topologies = (
-            repr(pattern.topologies)
-            if isinstance(pattern.topologies, tuple)
-            else self.written(pattern.topologies)
+            repr(node.topologies)
+            if isinstance(node.topologies, tuple)
+            else self.written(node.topologies)
         )
-        return f"Mesh({topologies}, {self.written(pattern.layout)})"
+        return f"Mesh({topologies}, {self.written(node.layout)})"
 
-    def rules_MeshPattern(self, pattern, name) -> tuple[str, ...]:
-        return self.rules(pattern.layout)
+    def rules_Mesh(self, node, name) -> tuple[str, ...]:
+        return self.rules(node.layout)
 
-    def visit_Ranked(self, pattern, name) -> str:
+    def visit_Ranked(self, node, name) -> str:
         return name
 
-    def rules_Ranked(self, pattern, name) -> tuple[str, ...]:
+    def rules_Ranked(self, node, name) -> tuple[str, ...]:
         return (f"{name} has rank > 0",)
 
-    def visit_TensorPattern(self, pattern, name) -> str:
+    def visit_Tensor(self, node, name) -> str:
         fields = []
         for field in ("shape", "dtype", "storage", "layout"):
-            value = getattr(pattern, field)
+            value = getattr(node, field)
             if value is None:
                 continue
             written = (
-                self._written_tuple(tuple(
+                written_tuple(tuple(
                     self.described(item, f"{name}.shape[{index}]")
                     for index, item in enumerate(value)
                 ))
@@ -403,125 +401,125 @@ class PatternPrinter:
             lines = written.splitlines()
             fields.append(f"  {field}={lines[0]}")
             fields.extend(f"    {line}" for line in lines[1:])
-        if pattern.layout is None:
+        if node.layout is None:
             fields.append("  layout=any arrangement")
         if all("\n" not in line for line in fields) and all(not line.startswith("    ") for line in fields):
             return "Tensor(" + ", ".join(line.strip() for line in fields) + ")"
         return "\n".join(("Tensor:", *fields))
 
-    def rules_TensorPattern(self, pattern, name) -> tuple[str, ...]:
+    def rules_Tensor(self, node, name) -> tuple[str, ...]:
         return ()
 
-    def visit_ShardLayoutPattern(self, pattern, name) -> str:
+    def visit_ShardLayout(self, node, name) -> str:
         attrs = (
-            self._written_tuple(tuple(self._written_value(attr) for attr in pattern.attrs))
-            if isinstance(pattern.attrs, tuple)
-            else self.written(pattern.attrs)
+            written_tuple(tuple(self.written_value(attr) for attr in node.attrs))
+            if isinstance(node.attrs, tuple)
+            else self.written(node.attrs)
         )
         return (
-            f"ShardLayout({self.written(pattern.layout)}, {attrs}, "
-            f"{self.written(pattern.mesh)})"
+            f"ShardLayout({self.written(node.layout)}, {attrs}, "
+            f"{self.written(node.mesh)})"
         )
 
-    def rules_ShardLayoutPattern(self, pattern, name) -> tuple[str, ...]:
-        return self._rules_of((pattern.layout, pattern.attrs, pattern.mesh))
+    def rules_ShardLayout(self, node, name) -> tuple[str, ...]:
+        return self.rules_of((node.layout, node.attrs, node.mesh))
 
-    def visit_AtomPattern(self, pattern, name) -> str:
-        return "one of " + ", ".join(get_registered_name(item) for item in pattern.declarations)
+    def visit_AtomPattern(self, node, name) -> str:
+        return "one of " + ", ".join(expr.get_registered_name(item) for item in node.declarations)
 
-    def rules_AtomPattern(self, pattern, name) -> tuple[str, ...]:
+    def rules_AtomPattern(self, node, name) -> tuple[str, ...]:
         return ()
 
-    def visit_FromAtom(self, pattern, name) -> str:
-        return f"the {pattern.role} operand of its atom"
+    def visit_FromAtom(self, node, name) -> str:
+        return f"the {node.role} operand of its atom"
 
-    def rules_FromAtom(self, pattern, name) -> tuple[str, ...]:
+    def rules_FromAtom(self, node, name) -> tuple[str, ...]:
         return ()
 
-    def visit_Predicate(self, pattern, name) -> str:
+    def visit_Predicate(self, node, name) -> str:
         return name
 
-    def rules_Predicate(self, pattern, name) -> tuple[str, ...]:
-        raise NotImplementedError(f"{type(pattern).__name__} has no PatternPrinter rules visitor")
+    def rules_Predicate(self, node, name) -> tuple[str, ...]:
+        raise NotImplementedError(f"{type(node).__name__} has no PatternPrinter rules visitor")
 
-    def visit_Formula(self, pattern, name) -> str:
+    def visit_Formula(self, node, name) -> str:
         return name
 
-    def rules_Formula(self, pattern, name) -> tuple[str, ...]:
-        return (self._written_expression(pattern),)
+    def rules_Formula(self, node, name) -> tuple[str, ...]:
+        return (self.written_expression(node),)
 
-    def visit_Forward(self, pattern, name) -> str:
+    def visit_Forward(self, node, name) -> str:
         return name
 
-    def rules_Forward(self, pattern, name) -> tuple[str, ...]:
-        subject = "each top-level mode" if pattern.per_mode else _ARRANGEMENT
+    def rules_Forward(self, node, name) -> tuple[str, ...]:
+        subject = "each top-level mode" if node.per_mode else ARRANGEMENT
         return (f"{subject} has no backward step",)
 
-    def visit_Injective(self, pattern, name) -> str:
+    def visit_Injective(self, node, name) -> str:
         return name
 
-    def rules_Injective(self, pattern, name) -> tuple[str, ...]:
-        subject = "each top-level mode" if pattern.per_mode else _ARRANGEMENT
+    def rules_Injective(self, node, name) -> tuple[str, ...]:
+        subject = "each top-level mode" if node.per_mode else ARRANGEMENT
         return (f"{subject} reaches each of its own slots exactly once",)
 
-    def visit_WholeVectors(self, pattern, name) -> str:
+    def visit_WholeVectors(self, node, name) -> str:
         return name
 
-    def rules_WholeVectors(self, pattern, name) -> tuple[str, ...]:
+    def rules_WholeVectors(self, node, name) -> tuple[str, ...]:
         return (
             "every run: each tile axis's modes walked fastest first, contiguous ones "
             "joined; the run at step 1 and every other step a whole number of vectors",
-            *self.rules(pattern.width),
+            *self.rules(node.width),
         )
 
-    def visit_PlainArrangement(self, pattern, name) -> str:
+    def visit_PlainArrangement(self, node, name) -> str:
         return name
 
-    def rules_PlainArrangement(self, pattern, name) -> tuple[str, ...]:
+    def rules_PlainArrangement(self, node, name) -> tuple[str, ...]:
         return (
             "every plain arrangement is a static strided layout with no swizzle and zero "
             "offset, and, where it is sharded, one every participant holds whole",
         )
 
-    def visit_BoxDims(self, pattern, name) -> str:
+    def visit_BoxDims(self, node, name) -> str:
         return name
 
-    def rules_BoxDims(self, pattern, name) -> tuple[str, ...]:
+    def rules_BoxDims(self, node, name) -> tuple[str, ...]:
         reading = (
             "every box: each tile axis's modes, contiguous ones joined up to "
-            f"{pattern.limit} elements, one dim each, in increasing step"
+            f"{node.limit} elements, one dim each, in increasing step"
         )
-        return (reading, *self._rules_of(pattern.dims))
+        return (reading, *self.rules_of(node.dims))
 
-    def visit_TensorMap(self, pattern, name) -> str:
+    def visit_TensorMap(self, node, name) -> str:
         return name
 
-    def rules_TensorMap(self, pattern, name) -> tuple[str, ...]:
+    def rules_TensorMap(self, node, name) -> tuple[str, ...]:
         return (
             "every tensormap: one dim per mode of the tile, the mode at step 1 first",
-            *self._rules_of(pattern.steps),
+            *self.rules_of(node.steps),
         )
 
-    def _written_expression(self, value, parent=0) -> str:
+    def written_expression(self, value, parent=0) -> str:
         if isinstance(value, float):
-            return self._subject_value(value)
+            return self.subject_value(value)
         name = type(value).__name__
         if name == "Formula":
             if value.op == "not":
-                return f"~({self._written_expression(value.args[0])})"
+                return f"~({self.written_expression(value.args[0])})"
             if value.op == "forall":
                 term, token, body = value.args
                 return (
-                    f"all({self._written_expression(body)} for x{token} "
-                    f"in {self._written_expression(term)})"
+                    f"all({self.written_expression(body)} for x{token} "
+                    f"in {self.written_expression(term)})"
                 )
             if value.op == "in":
-                values = ", ".join(self._written_value(item) for item in value.args[1])
-                return f"{self._written_expression(value.args[0])} in {{{values}}}"
-            return self._written_binary(value, parent)
+                values = ", ".join(self.written_value(item) for item in value.args[1])
+                return f"{self.written_expression(value.args[0])} in {{{values}}}"
+            return self.written_binary(value, parent)
         if name == "Term":
             if value.op == "constant":
-                return self._written_expression(value.args[0])
+                return self.written_expression(value.args[0])
             if value.op in {"variable", "bits"}:
                 return (
                     value.args[0]
@@ -531,57 +529,56 @@ class PatternPrinter:
             if value.op == "bound":
                 return f"x{value.args[0]}"
             if value.op == "element":
-                return f"{self._written_value(value.args[0])}[{self._written_expression(value.args[1])}]"
+                return f"{self.written_value(value.args[0])}[{self.written_expression(value.args[1])}]"
             if value.op in {"sum", "count"}:
-                return f"{value.op.title()}({self._written_expression(value.args[0])})"
-            return self._written_binary(value, parent)
-        return self._written_value(value) if isinstance(value, (DType, StorageKind, Enum, tuple)) else repr(value)
+                return f"{value.op.title()}({self.written_expression(value.args[0])})"
+            return self.written_binary(value, parent)
+        return self.written_value(value) if isinstance(value, (expr.DType, expr.StorageKind, Enum, tuple)) else repr(value)
 
-    def _written_binary(self, value, parent):
-        symbol, precedence = _BINARY_OPERATORS[value.op]
+    def written_binary(self, value, parent):
+        symbol, precedence = BINARY_OPERATORS[value.op]
         text = (
-            f"{self._written_expression(value.args[0], precedence + (precedence == 1))} {symbol} "
-            f"{self._written_expression(value.args[1], precedence + 1)}"
+            f"{self.written_expression(value.args[0], precedence + (precedence == 1))} {symbol} "
+            f"{self.written_expression(value.args[1], precedence + 1)}"
         )
         return f"({text})" if precedence < parent else text
 
-    def alternatives_Pattern(self, pattern, bindings) -> tuple:
-        return ((bindings, pattern),)
+    def alternatives_Pattern(self, node, bindings) -> tuple:
+        return ((bindings, node),)
 
-    def alternatives_OrPattern(self, pattern, bindings) -> tuple:
-        if not any(isinstance(item, Pattern) for item in pattern.patterns):
-            return ((bindings, pattern),)
+    def alternatives_OrPattern(self, node, bindings) -> tuple:
+        if not any(isinstance(item, pattern.Pattern) for item in node.patterns):
+            return ((bindings, node),)
         return tuple(
             held
-            for alternative in pattern.patterns
+            for alternative in node.patterns
             for held in self.alternatives(alternative, bindings)
         )
 
-    def alternatives_SwitchPattern(self, pattern, bindings) -> tuple:
+    def alternatives_SwitchPattern(self, node, bindings) -> tuple:
         known = dict(bindings)
-        if pattern.param in known:
+        if node.param in known:
             branch = next(
-                (branch for value, branch in pattern.branches if value == known[pattern.param]), None
+                (branch for value, branch in node.branches if value == known[node.param]), None
             )
             return () if branch is None else self.alternatives(branch, bindings)
         return tuple(
             held
-            for value, branch in pattern.branches
-            for held in self.alternatives(branch, (*bindings, (pattern.param, value)))
+            for value, branch in node.branches
+            for held in self.alternatives(branch, (*bindings, (node.param, value)))
         )
 
-    def alternatives_TensorPattern(self, pattern, bindings) -> tuple:
-        from tilefoundry.ir.pattern.utils import selected_pattern  # noqa: PLC0415
+    def alternatives_TensorPattern(self, node, bindings) -> tuple:
 
-        states = ((bindings, pattern),)
+        states = ((bindings, node),)
         for field in ("dtype", "storage"):
             states = tuple(
                 (held, replace(tensor, **{field: alternative}))
                 for bound, tensor in states
                 for held, alternative in self.alternatives(getattr(tensor, field), bound)
             )
-        if pattern.shape is not None:
-            for index in range(len(pattern.shape)):
+        if node.shape is not None:
+            for index in range(len(node.shape)):
                 states = tuple(
                     (
                         held,
@@ -593,12 +590,28 @@ class PatternPrinter:
                     for bound, tensor in states
                     for held, alternative in self.alternatives(tensor.shape[index], bound)
                 )
-        return tuple((bound, selected_pattern(tensor, dict(bound))) for bound, tensor in states)
+        return tuple((bound, pattern.selected(tensor, dict(bound))) for bound, tensor in states)
 
-    def alternatives_ShardLayoutPattern(self, pattern, bindings) -> tuple:
+    def alternatives_ShardLayoutPattern(self, node, bindings) -> tuple:
         return tuple(
-            (held, replace(pattern, layout=alternative))
-            for held, alternative in self.alternatives(pattern.layout, bindings)
+            (held, replace(node, layout=alternative))
+            for held, alternative in self.alternatives(node.layout, bindings)
         )
 
-__all__ = ["PatternPrinter"]
+__all__ = ["PatternPrinter", "describe_refusal", "refusal_reason"]
+
+
+def describe_refusal(instruction: str, path: tuple, reason: object) -> str:
+    """Text of a schedule refusal of *instruction* at the binding *path*."""
+    printer = PatternPrinter()
+    return printer.match_text(instruction, printer.match_data((path,), reason)).lstrip()
+
+
+def refusal_reason(refusal: object, parameter: str | None) -> str:
+    """The reason a failed pattern match gives for *parameter*."""
+    return PatternPrinter().refusal_reason(refusal, parameter)
+
+
+services.registry.register(services.describe_refusal, describe_refusal)
+services.registry.register(services.refusal_reason, refusal_reason)
+

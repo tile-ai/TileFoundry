@@ -1,8 +1,8 @@
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="main", target=cuda.Target("nvidia.h200_sxm"))
 class Bad:
     @func
     def main(x: Tensor[(8,), "f32"]):

@@ -1,7 +1,5 @@
 """Render the executable Pattern graph as deterministic surface EBNF."""
 
-# ruff: noqa: PLC0415
-
 from __future__ import annotations
 
 import ast
@@ -27,14 +25,15 @@ from .ast_pattern import (
     RepeatPattern,
     SequencePattern,
 )
+from .pattern_nodes import FunctionPattern
 
 
-def _grammar_name(value: str) -> str:
+def to_grammar_name(value: str) -> str:
     return value.replace("_", "-").replace(" ", "-").lower()
 
 
 @dataclasses.dataclass(frozen=True)
-class _Expr:
+class Fragment:
     text: str
     alternatives: tuple[str, ...] = ()
 
@@ -44,15 +43,15 @@ class _Expr:
         return self.text
 
 
-def _text(value: str) -> _Expr:
-    return _Expr(value)
+def plain(value: str) -> Fragment:
+    return Fragment(value)
 
 
-def _concat(*parts: _Expr | None) -> _Expr:
-    return _text(" ".join(part.flat() for part in parts if part and part.flat()))
+def concat(*parts: Fragment | None) -> Fragment:
+    return plain(" ".join(part.flat() for part in parts if part and part.flat()))
 
 
-def _choice(*parts: _Expr) -> _Expr:
+def choice(*parts: Fragment) -> Fragment:
     alternatives: list[str] = []
     for part in parts:
         values = part.alternatives or (part.text,)
@@ -60,34 +59,38 @@ def _choice(*parts: _Expr) -> _Expr:
             if value and value not in alternatives:
                 alternatives.append(value)
     if len(alternatives) == 1:
-        return _text(alternatives[0])
-    return _Expr("", tuple(alternatives))
+        return plain(alternatives[0])
+    return Fragment("", tuple(alternatives))
 
 
-def _terminal(value: str) -> _Expr:
-    return _text(repr(value))
+def terminal(value: str) -> Fragment:
+    return plain(repr(value))
 
 
-def _optional(value: _Expr) -> _Expr:
-    return _text(f"({value.flat()})?")
+def optional(value: Fragment) -> Fragment:
+    return plain(f"({value.flat()})?")
 
 
-def _delimited(left: str, value: _Expr, right: str) -> _Expr:
-    return _concat(_terminal(left), value, _terminal(right))
+def delimited(left: str, value: Fragment, right: str) -> Fragment:
+    return concat(terminal(left), value, terminal(right))
 
 
-def _separated(items: tuple[_Expr, ...], separator: _Expr) -> _Expr:
+def separated(items: tuple[Fragment, ...], separator: Fragment) -> Fragment:
     if not items:
-        return _text("")
+        return plain("")
     output = items[0]
     for item in items[1:]:
-        output = _concat(output, separator, item)
+        output = concat(output, separator, item)
     return output
 
 
-def _repeated(item: _Expr, minimum: int, separator: _Expr) -> _Expr:
-    required = _concat(item, _text(f"({separator.flat()} {item.flat()})*"))
-    return required if minimum else _optional(required)
+def repeated(item: Fragment, minimum: int, separator: Fragment) -> Fragment:
+    required = concat(item, plain(f"({separator.flat()} {item.flat()})*"))
+    return required if minimum else optional(required)
+
+
+def field_patterns(pattern: AstNodePattern) -> dict[str, object]:
+    return {part.name: part.pattern for part in pattern.parts if isinstance(part, FieldPattern)}
 
 
 class RenderVisitor:
@@ -95,69 +98,65 @@ class RenderVisitor:
 
     def __init__(self, *, line_width: int = 100):
         self.line_width = line_width
-        self._seen: set[str] = set()
-        self._seen_named: set[str] = set()
-        self._productions: list[tuple[str, _Expr]] = []
+        self.seen: set[str] = set()
+        self.seen_named: set[str] = set()
+        self.productions: list[tuple[str, Fragment]] = []
 
-    def _named_pattern(self, pattern: Any) -> _Expr | None:
-        name = getattr(pattern, "grammar_name", None)
+    def named_pattern(self, pattern: Any) -> Fragment | None:
+        name = pattern.grammar_name
         if not isinstance(name, str):
             return None
-        grammar_name = _grammar_name(name)
-        if grammar_name not in self._seen_named:
-            self._seen_named.add(grammar_name)
-            self._productions.append((grammar_name, self._ast_node(pattern, allow_named=False)))
-        return _text(grammar_name)
+        grammar_name = to_grammar_name(name)
+        if grammar_name not in self.seen_named:
+            self.seen_named.add(grammar_name)
+            self.productions.append((grammar_name, self.ast_node(pattern, allow_named=False)))
+        return plain(grammar_name)
 
-    def _element(self, pattern: ElementPattern[Any]) -> _Expr:
+    def element(self, pattern: ElementPattern[Any]) -> Fragment:
         name = pattern.element_name
         if not name:
             raise TypeError(f"{type(pattern).__name__} has no explicit element_name")
-        grammar_name = _grammar_name(name)
-        if name in self._seen:
-            return _text(grammar_name)
-        self._seen.add(name)
+        grammar_name = to_grammar_name(name)
+        if name in self.seen:
+            return plain(grammar_name)
+        self.seen.add(name)
         if pattern.syntax is None:
             raise TypeError(f"{type(pattern).__name__} has no executable syntax")
         rhs = self.visit(pattern.syntax)
         for pattern_class in getattr(pattern, "ATTRIBUTE_PATTERNS", ()):
             self.visit(pattern_class())
-        self._productions.append((grammar_name, rhs))
-        return _text(grammar_name)
+        self.productions.append((grammar_name, rhs))
+        return plain(grammar_name)
 
-    def _list_pattern(self, pattern: object) -> _Expr:
-        comma = _terminal(",")
+    def list_pattern(self, pattern: object) -> Fragment:
+        comma = terminal(",")
         if isinstance(pattern, RepeatPattern):
-            return _repeated(self.visit(pattern.pattern), pattern.minimum, comma)
+            return repeated(self.visit(pattern.pattern), pattern.minimum, comma)
         if isinstance(pattern, SequencePattern):
-            return _separated(tuple(self.visit(item) for item in pattern.patterns), comma)
+            return separated(tuple(self.visit(item) for item in pattern.patterns), comma)
         if isinstance(pattern, ChoicePattern):
-            return _choice(*(self._list_pattern(item) for item in pattern.patterns))
+            return choice(*(self.list_pattern(item) for item in pattern.patterns))
         return self.visit(pattern)
 
-    @staticmethod
-    def _fields(pattern: AstNodePattern) -> dict[str, object]:
-        return {part.name: part.pattern for part in pattern.parts if isinstance(part, FieldPattern)}
-
-    def _field(self, fields: dict[str, object], name: str, fallback: str) -> _Expr:
+    def field(self, fields: dict[str, object], name: str, fallback: str) -> Fragment:
         pattern = fields.get(name)
-        return _text(fallback) if pattern is None else self.visit(pattern)
+        return plain(fallback) if pattern is None else self.visit(pattern)
 
-    def _optional_field(self, fields: dict[str, object], name: str, fallback: str) -> _Expr:
+    def optional_field(self, fields: dict[str, object], name: str, fallback: str) -> Fragment:
         pattern = fields.get(name)
         if isinstance(pattern, OptionalPattern):
             pattern = pattern.pattern
-        return _text(fallback) if pattern is None else self.visit(pattern)
+        return plain(fallback) if pattern is None else self.visit(pattern)
 
-    def _ast_node(self, pattern: AstNodePattern, *, allow_named: bool = True) -> _Expr:
+    def ast_node(self, pattern: AstNodePattern, *, allow_named: bool = True) -> Fragment:
         if allow_named:
-            named = self._named_pattern(pattern)
+            named = self.named_pattern(pattern)
             if named is not None:
                 return named
         node_type = pattern.node_type
         for part in pattern.parts:
             self.visit(part)
-        fields = self._fields(pattern)
+        fields = field_patterns(pattern)
 
         if node_type is ast.Constant:
             predicates = [part for part in pattern.parts if isinstance(part, PredicatePattern)]
@@ -165,30 +164,32 @@ class RenderVisitor:
                 return self.visit(predicates[-1])
             value = fields.get("value")
             if isinstance(value, CapturePattern) or value is None:
-                return _choice(
-                    _text("None"),
-                    _text("Ellipsis"),
-                    _text("boolean-literal"),
-                    _text("integer-literal"),
-                    _text("float-literal"),
-                    _text("complex-literal"),
-                    _text("string-literal"),
-                    _text("bytes-literal"),
+                return choice(
+                    plain("None"),
+                    plain("Ellipsis"),
+                    plain("boolean-literal"),
+                    plain("integer-literal"),
+                    plain("float-literal"),
+                    plain("complex-literal"),
+                    plain("string-literal"),
+                    plain("bytes-literal"),
                 )
             return self.visit(value)
         if node_type is ast.Name:
             identifier = fields.get("id")
             if isinstance(identifier, (LiteralPattern, ChoicePattern)):
                 return self.visit(identifier)
-            return _text("identifier")
+            return plain("identifier")
         if node_type is ast.Attribute:
             value = fields.get("value")
             fallback = "identifier" if isinstance(value, AstNodePattern) and value.node_type is ast.Name else "primary"
             attr = fields.get("attr")
-            return _concat(
-                self.visit(value) if value is not None else _text(fallback),
-                _terminal("."),
-                self.visit(attr) if isinstance(attr, (LiteralPattern, ChoicePattern)) else _text("identifier"),
+            return concat(
+                self.visit(value) if value is not None else plain(fallback),
+                terminal("."),
+                self.visit(attr)
+                if isinstance(attr, (LiteralPattern, ChoicePattern))
+                else plain("identifier"),
             )
         if node_type in {ast.Tuple, ast.List, ast.Set}:
             delimiters = {
@@ -206,10 +207,10 @@ class RenderVisitor:
                 ]
                 if structural:
                     return self.visit(structural[-1])
-                values = _text("")
+                values = plain("")
             else:
-                values = self._list_pattern(values_pattern)
-            return _delimited(left, values, right)
+                values = self.list_pattern(values_pattern)
+            return delimited(left, values, right)
         if node_type is ast.Dict:
             key_pattern = fields.get("keys", LiteralPattern())
             value_pattern = fields.get("values", LiteralPattern())
@@ -223,47 +224,47 @@ class RenderVisitor:
                 if isinstance(value_pattern, RepeatPattern)
                 else self.visit(value_pattern)
             )
-            entry = _concat(key, _terminal(":"), value)
-            return _delimited("{", _repeated(entry, 0, _terminal(",")), "}")
+            entry = concat(key, terminal(":"), value)
+            return delimited("{", repeated(entry, 0, terminal(",")), "}")
         if node_type is ast.BinOp:
-            return _concat(
-                self._field(fields, "left", "expression"),
-                self._field(fields, "op", "binary-op"),
-                self._field(fields, "right", "expression"),
+            return concat(
+                self.field(fields, "left", "expression"),
+                self.field(fields, "op", "binary-op"),
+                self.field(fields, "right", "expression"),
             )
         if node_type is ast.UnaryOp:
-            return _concat(
-                self._field(fields, "op", "unary-op"),
-                self._field(fields, "operand", "expression"),
+            return concat(
+                self.field(fields, "op", "unary-op"),
+                self.field(fields, "operand", "expression"),
             )
         if node_type is ast.Compare:
-            return _concat(
-                self._field(fields, "left", "expression"),
-                self._list_pattern(fields.get("ops", SequencePattern())),
-                self._list_pattern(fields.get("comparators", SequencePattern())),
+            return concat(
+                self.field(fields, "left", "expression"),
+                self.list_pattern(fields.get("ops", SequencePattern())),
+                self.list_pattern(fields.get("comparators", SequencePattern())),
             )
         if node_type is ast.BoolOp:
             values = fields.get("values", SequencePattern())
             if isinstance(values, SequencePattern) and len(values.patterns) == 2:
-                return _concat(
+                return concat(
                     self.visit(values.patterns[0]),
-                    self._field(fields, "op", "boolean-op"),
+                    self.field(fields, "op", "boolean-op"),
                     self.visit(values.patterns[1]),
                 )
-            return self._list_pattern(values)
+            return self.list_pattern(values)
         if node_type is ast.Call:
             args = fields.get("args")
             keywords = fields.get("keywords")
             if not isinstance(args, RepeatPattern) or not isinstance(keywords, RepeatPattern):
-                arguments = _concat(
-                    self._list_pattern(args) if args is not None else None,
-                    self._list_pattern(keywords) if keywords is not None else None,
+                arguments = concat(
+                    self.list_pattern(args) if args is not None else None,
+                    self.list_pattern(keywords) if keywords is not None else None,
                 )
-                return _concat(
-                    self._field(fields, "func", "callee"),
-                    _delimited("(", arguments, ")"),
+                return concat(
+                    self.field(fields, "func", "callee"),
+                    delimited("(", arguments, ")"),
                 )
-            argument_patterns: list[_Expr] = []
+            argument_patterns: list[Fragment] = []
             minimum = 0
             for name in ("args", "keywords"):
                 values = fields.get(name)
@@ -271,105 +272,105 @@ class RenderVisitor:
                     argument_patterns.append(self.visit(values.pattern))
                     minimum = max(minimum, values.minimum)
             arguments = (
-                _repeated(_choice(*argument_patterns), minimum, _terminal(","))
+                repeated(choice(*argument_patterns), minimum, terminal(","))
                 if argument_patterns
-                else _text("")
+                else plain("")
             )
-            return _concat(
-                self._field(fields, "func", "callee"),
-                _delimited("(", arguments, ")"),
+            return concat(
+                self.field(fields, "func", "callee"),
+                delimited("(", arguments, ")"),
             )
         if node_type is ast.keyword:
-            return _concat(
-                self._field(fields, "arg", "name"),
-                _terminal("="),
-                self._field(fields, "value", "expression"),
+            return concat(
+                self.field(fields, "arg", "name"),
+                terminal("="),
+                self.field(fields, "value", "expression"),
             )
         if node_type is ast.Slice:
-            lower = self._field(fields, "lower", "")
-            upper = self._field(fields, "upper", "")
-            step = self._optional_field(fields, "step", "")
-            return _concat(
+            lower = self.field(fields, "lower", "")
+            upper = self.field(fields, "upper", "")
+            step = self.optional_field(fields, "step", "")
+            return concat(
                 lower,
-                _terminal(":"),
+                terminal(":"),
                 upper,
-                _optional(_concat(_terminal(":"), step)),
+                optional(concat(terminal(":"), step)),
             )
         if node_type is ast.Subscript:
-            return _concat(
-                self._field(fields, "value", "expression"),
-                _delimited("[", self._field(fields, "slice", "expression"), "]"),
+            return concat(
+                self.field(fields, "value", "expression"),
+                delimited("[", self.field(fields, "slice", "expression"), "]"),
             )
         if node_type is ast.arguments:
-            return self._list_pattern(fields.get("args", SequencePattern()))
+            return self.list_pattern(fields.get("args", SequencePattern()))
         if node_type is ast.arg:
-            return _concat(
-                _text("name"),
-                _terminal(":"),
-                self._field(fields, "annotation", "type-annotation"),
+            return concat(
+                plain("name"),
+                terminal(":"),
+                self.field(fields, "annotation", "type-annotation"),
             )
         if node_type is ast.Assign:
-            return _concat(
-                self._list_pattern(fields.get("targets", SequencePattern())),
-                _terminal("="),
-                self._field(fields, "value", "expression"),
+            return concat(
+                self.list_pattern(fields.get("targets", SequencePattern())),
+                terminal("="),
+                self.field(fields, "value", "expression"),
             )
         if node_type is ast.AnnAssign:
-            value = self._optional_field(fields, "value", "expression")
-            return _concat(
-                self._field(fields, "target", "name"),
-                _terminal(":"),
-                self._field(fields, "annotation", "type-annotation"),
-                _optional(_concat(_terminal("="), value)),
+            value = self.optional_field(fields, "value", "expression")
+            return concat(
+                self.field(fields, "target", "name"),
+                terminal(":"),
+                self.field(fields, "annotation", "type-annotation"),
+                optional(concat(terminal("="), value)),
             )
         if node_type is ast.Return:
-            return _concat(_terminal("return"), self._field(fields, "value", ""))
+            return concat(terminal("return"), self.field(fields, "value", ""))
         if node_type is ast.Expr:
-            return self._field(fields, "value", "expression")
+            return self.field(fields, "value", "expression")
         if node_type is ast.Pass:
-            return _terminal("pass")
+            return terminal("pass")
         if node_type is ast.For:
-            return _concat(
-                _terminal("for"),
-                self._field(fields, "target", "name"),
-                _terminal("in"),
-                self._field(fields, "iter", "expression"),
-                _terminal(":"),
-                self._field(fields, "body", "block"),
+            return concat(
+                terminal("for"),
+                self.field(fields, "target", "name"),
+                terminal("in"),
+                self.field(fields, "iter", "expression"),
+                terminal(":"),
+                self.field(fields, "body", "block"),
             )
         if node_type is ast.withitem:
-            alias = _concat(
-                _terminal("as"),
-                self._field(fields, "optional_vars", "name"),
+            alias = concat(
+                terminal("as"),
+                self.field(fields, "optional_vars", "name"),
             )
-            return _concat(
-                self._field(fields, "context_expr", "expression"),
-                _optional(alias),
+            return concat(
+                self.field(fields, "context_expr", "expression"),
+                optional(alias),
             )
         if node_type is ast.With:
-            return _concat(
-                _terminal("with"),
-                self._list_pattern(fields.get("items", SequencePattern())),
-                _terminal(":"),
-                self._field(fields, "body", "block"),
+            return concat(
+                terminal("with"),
+                self.list_pattern(fields.get("items", SequencePattern())),
+                terminal(":"),
+                self.field(fields, "body", "block"),
             )
         if node_type is ast.Module:
             body = fields.get("body", SequencePattern())
             if isinstance(body, RepeatPattern):
-                return _repeated(self.visit(body.pattern), body.minimum, _text("newline"))
-            return self._list_pattern(body)
+                return repeated(self.visit(body.pattern), body.minimum, plain("newline"))
+            return self.list_pattern(body)
         if node_type is ast.FunctionDef:
-            returns = self._optional_field(fields, "returns", "return-type")
-            return _concat(
-                _terminal("def"),
-                _text("name"),
-                _delimited("(", self._field(fields, "args", "signature"), ")"),
-                _optional(_concat(_terminal("->"), returns)),
-                _terminal(":"),
-                self._field(fields, "body", "block"),
+            returns = self.optional_field(fields, "returns", "return-type")
+            return concat(
+                terminal("def"),
+                plain("name"),
+                delimited("(", self.field(fields, "args", "signature"), ")"),
+                optional(concat(terminal("->"), returns)),
+                terminal(":"),
+                self.field(fields, "body", "block"),
             )
         if node_type is ast.MatMult:
-            return _terminal("@")
+            return terminal("@")
         operator = {
             ast.Add: "+",
             ast.BitOr: "|",
@@ -392,9 +393,9 @@ class RenderVisitor:
             ast.Not: "not",
         }.get(node_type)
         if operator is not None:
-            return _terminal(operator)
+            return terminal(operator)
         if node_type is ast.Load:
-            return _text("")
+            return plain("")
         if node_type in {ast.expr, ast.stmt}:
             structural = [
                 part
@@ -406,16 +407,16 @@ class RenderVisitor:
             predicates = [part for part in pattern.parts if isinstance(part, PredicatePattern)]
             if predicates:
                 return self.visit(predicates[-1])
-            return _text("expression" if node_type is ast.expr else "statement")
+            return plain("expression" if node_type is ast.expr else "statement")
 
         parts = tuple(self.visit(part) for part in pattern.parts)
-        return _concat(_text(_grammar_name(node_type.__name__)), *parts)
+        return concat(plain(to_grammar_name(node_type.__name__)), *parts)
 
-    def visit(self, pattern: Any) -> _Expr:
+    def visit(self, pattern: Any) -> Fragment:
         if isinstance(pattern, ElementPattern):
-            return self._element(pattern)
+            return self.element(pattern)
         if isinstance(pattern, AstNodePattern):
-            return self._ast_node(pattern)
+            return self.ast_node(pattern)
         if isinstance(pattern, FieldPattern):
             return self.visit(pattern.pattern)
         if isinstance(pattern, LiteralPattern):
@@ -431,33 +432,33 @@ class RenderVisitor:
                     float: "float-literal",
                     str: "string-literal",
                 }
-                return _choice(
-                    *(_text(names.get(item, f"{item.__name__}-literal")) for item in types)
+                return choice(
+                    *(plain(names.get(item, f"{item.__name__}-literal")) for item in types)
                 )
             if pattern.value is dataclasses.MISSING:
-                return _text("literal")
-            return _text(repr(pattern.value))
+                return plain("literal")
+            return plain(repr(pattern.value))
         if isinstance(pattern, ReferencePattern):
-            return _text("primary")
+            return plain("primary")
         if isinstance(pattern, SequencePattern):
-            return _separated(tuple(self.visit(item) for item in pattern.patterns), _terminal(","))
+            return separated(tuple(self.visit(item) for item in pattern.patterns), terminal(","))
         if isinstance(pattern, ChoicePattern):
-            return _choice(*(self.visit(item) for item in pattern.patterns))
+            return choice(*(self.visit(item) for item in pattern.patterns))
         if isinstance(pattern, ConditionPattern):
             return self.visit(pattern.pattern)
         if isinstance(pattern, OptionalPattern):
-            return _optional(self.visit(pattern.pattern))
+            return optional(self.visit(pattern.pattern))
         if isinstance(pattern, RepeatPattern):
-            return _repeated(self.visit(pattern.pattern), pattern.minimum, _terminal(","))
+            return repeated(self.visit(pattern.pattern), pattern.minimum, terminal(","))
         if isinstance(pattern, (ChildPattern, BranchPattern, BindPattern, LazyPattern)):
             return self.visit(pattern.pattern)
         if isinstance(pattern, PredicatePattern):
-            return _text(_grammar_name(pattern.label))
+            return plain(to_grammar_name(pattern.label))
         if isinstance(pattern, CapturePattern):
-            return _text(_grammar_name(pattern.name))
+            return plain(to_grammar_name(pattern.name))
         raise TypeError(f"unsupported executable pattern {type(pattern).__name__}")
 
-    def _format_production(self, name: str, rhs: _Expr, width: int) -> list[str]:
+    def format_production(self, name: str, rhs: Fragment, width: int) -> list[str]:
         prefix = f"{name:<{width}} ::= "
         continuation = " " * (width + 5)
         if rhs.alternatives:
@@ -488,24 +489,22 @@ class RenderVisitor:
         root_name = root.element_name
         if not root_name:
             raise TypeError(f"{type(root).__name__} has no explicit element_name")
-        self._element(root)
-        width = max(len(name) for name, _ in self._productions)
+        self.element(root)
+        width = max(len(name) for name, _ in self.productions)
         lines = [
-            f"; root: {_grammar_name(root_name)}",
+            f"; root: {to_grammar_name(root_name)}",
             '; literal: Python ast.Constant syntax, e.g. 1, "bf16", or None',
             "; name: Python variable name; primary: name/attribute base for calls and subscripts",
             "; expression: Python syntax composed from literals, names, primaries, and operators",
             "; runtime-expression: expression lowered to a TileFoundry IR Expr",
         ]
-        for name, rhs in self._productions:
-            lines.extend(self._format_production(name, rhs, width))
+        for name, rhs in self.productions:
+            lines.extend(self.format_production(name, rhs, width))
         return "\n".join(lines)
 
 
 def render_grammar(root: ElementPattern[Any] | None = None) -> str:
     if root is None:
-        from .pattern_nodes import FunctionPattern
-
         root = FunctionPattern()
     return RenderVisitor().render(root)
 

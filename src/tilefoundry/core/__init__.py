@@ -1,5 +1,5 @@
 """Values shared by the evaluator and the runtime."""
 
-from tilefoundry.core.tensor import ShardTensor, local_type
+from __future__ import annotations
 
-__all__ = ["ShardTensor", "local_type"]
+from .tensor import ShardTensor, local_type

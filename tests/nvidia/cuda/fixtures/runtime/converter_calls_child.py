@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from tests.nvidia.cuda.fixtures.shapes.scaled_modules import ScaledChild
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="run", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="run", target=cuda.Target("nvidia.h200_sxm"))
 class _Converted:
     scaled = ScaledChild
 
@@ -17,4 +17,4 @@ class _Converted:
 
     @run.converter("w")
     def _convert_w(w: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return scaled(w)  # noqa: F821
+        return scaled(w)

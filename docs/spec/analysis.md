@@ -10,7 +10,7 @@ This spec owns TileFoundry's fact layer: everything a later stage decides
 
 The caller binds dimensions through `check_program`, then passes both returned
 objects to `analyze`. Local definition trees remain internal to analysis.
-`AnalysisResult.module` and `AnalysisResult.function` identify the supplied program and root.
+`analysis.Result.module` and `analysis.Result.function` identify the supplied program and root.
 
 Per-Op semantic derivation — typeinfer, the forward access relation, shard
 propagation — is owned by [semantic-analysis](./semantic-analysis.md), and the
@@ -50,7 +50,7 @@ its dependencies and output additions.
 | `compute-cost` | - | `ComputeCostMetadata` | every measured Call and the Function | the authored program | `compute-cost` | every measured Call |
 | `memory` | - | `MemoryMetadata`, `RegionMemoryMetadata` | `MemoryMetadata` on every measured Call; `RegionMemoryMetadata` on the Function and each occupied `MeshRegion` | the authored program, `MemoryHierarchyFacts`, `TopologyFacts` | `memory`, `advisory` | every measured Call |
 | `roofline` | `compute-cost`, `memory` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | `roofline` | every measured Call |
-| `performance` | `compute-cost`, `memory` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `TopologyFacts`, `MemoryHierarchyFacts` | `performance` | every Call with a modeled duration |
+| `performance` | `compute-cost`, `memory`, `roofline` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `TopologyFacts`, `MemoryHierarchyFacts` | `performance` | every Call with a modeled duration |
 
 Every compact text summary begins with these two lines:
 
@@ -78,16 +78,16 @@ record for a conclusion it has not computed.
 One result is rendered once, and every surface reads that rendering:
 
 ```python
-def report(result: AnalysisResult) -> dict[str, object]:
+def report(result: analysis.Result) -> dict[str, object]:
     """Project one composed Analyze result into a shared rendering structure."""
     ...
 
-def render_analysis(result: AnalysisResult) -> AnalysisRendering:
+def render_analysis(result: analysis.Result) -> AnalysisRendering:
     """Render one annotated program and its report data in a single pass."""
     ...
 ```
 
-- `report` MUST accept one `AnalysisResult` and read every requested family's
+- `report` MUST accept one `analysis.Result` and read every requested family's
   records from that result's record-bearing Function. It MUST NOT merge
   independently rebuilt Functions by identity, origin, dimensions, or walk
   position.
@@ -128,12 +128,12 @@ layer settles is which type a field holds and what its keys name:
     establish every requested root's family-specific readiness. Each family
     states its own through the checker its descriptor carries, and one
     metadata-free traversal of the derived program answers all of them.
-    Performance readiness requires positive `TopologyLevelFacts.max_physical_units` for
-    the selected topology, rates stated for that same level, and one valid
-    execution placement for every occurrence that will take time. Where the
-    buffers go is not a readiness question: nothing here decides it.
-    Failing performance readiness MUST NOT make the same unplaced program invalid
-    for `compute-cost`, `memory`, or `roofline`.
+    Performance readiness requires a selected topology level whose
+    `TopologyLevelFacts.max_physical_units` is a positive integer and one-unit
+    `PerformanceServiceFacts` stated for that same level. Where an occurrence
+    runs is stated by the program, so that checker visits no occurrence; where
+    the buffers go is not a readiness question. Failing performance readiness
+    MUST NOT make the program invalid for `compute-cost`, `memory`, or `roofline`.
   - Global logical work, per-unit work, and lifetime order MUST remain
     target-independent. Physical capacity, hierarchy relationships, and
     throughput comparisons are target-aware.
@@ -143,13 +143,11 @@ layer settles is which type a field holds and what its keys name:
     requested MUST stay on the IR and MUST NOT be reported except for roofline's
     bounded evidence defined below. Record ownership MUST come from the
     Target-selected descriptor ([§2.2](#22-target-selected-analyzers)).
-  - Every rendering of one run MUST select records through one shared decision
-    and MUST show only records actually written.
+  - Every rendering of one run MUST select records through one shared decision,
+    MUST show only records actually written, and MUST carry the same conclusions.
   - Every reported quantity MUST come from a record, except a total that is the
     exact sum of records that state it. A quantity not derivable that way MUST be
     recorded by the analysis that computed it.
-  - Text and JSON MUST be built from one intermediate report and MUST carry the
-    same conclusions.
   - A family's JSON projection MUST be its record's fields under their own names,
     with nothing left out: a default, a `null`, and an empty mapping are each a
     fact a program branches on, and a key spelled by hand is a key that can drift
@@ -165,7 +163,7 @@ layer settles is which type a field holds and what its keys name:
 
 #### 1.2.1 `compute-cost`
 
-Analysis quantities share `AnalysisPrecision`: `EXACT`, `UPPER_BOUND`,
+Analysis quantities share `analysis.Precision`: `EXACT`, `UPPER_BOUND`,
 `LOWER_BOUND`, and `UNKNOWN`. Their JSON spellings are `exact`, `upper_bound`,
 `lower_bound`, and `unknown`. Exact evidence is the identity when evidence is
 combined; equal directions retain their direction, opposing directions become
@@ -182,7 +180,7 @@ class ComputeCostMetadata(IRMetadata):
     topologies: tuple[str, ...] = ()
     flops: Breakdown[int] = Breakdown()
     other_ops: Breakdown[int] = Breakdown()
-    precision: AnalysisPrecision = AnalysisPrecision.EXACT
+    precision: Precision = Precision.EXACT
 ```
 
 
@@ -219,7 +217,7 @@ Each reported Call's JSON projection is under its `compute-cost` key:
   - A record MUST be attached to every reached `Call` and Function.
     The Function record MUST include authored-loop repetition and therefore is
     not the direct sum of the one-occurrence Call records.
-  - An op with no registered cost evaluator MUST raise `AnalysisError`.
+  - An op with no registered cost evaluator MUST raise `analysis.Error`.
   - Dim arithmetic (`DimAdd`, `DimSub`, `DimMul`, `DimFloorDiv`, `DimMod`,
     `DimMin`, `DimMax`) is scalar address work, not tensor work: its evaluator
     MUST state no flops, no service, and zero traffic in every operand slot.
@@ -255,7 +253,6 @@ class MemoryMetadata(IRMetadata):
     footprint: Footprint | None = None
     buffer_bytes: int | None = None
     offsets: tuple[int, ...] = ()
-    alias: BufferAlias | None = None
 
 
 class ReuseWindow:
@@ -268,7 +265,7 @@ class ReuseWindow:
     holds_bytes: int = 0
     reuse_bytes: int = 0
     fits: bool = True
-    precision: AnalysisPrecision = AnalysisPrecision.EXACT
+    precision: Precision = Precision.EXACT
 
 
 class RegionMemoryMetadata(IRMetadata):
@@ -292,14 +289,16 @@ class Spread[V]:
     """One quantity, whole and as one unit of each topology level holds it.
 
     Attributes:
-        logical: attribute; What the authored operation asks before replication.
+        logical: property; What the authored operation asks before replication.
         total: attribute; What the whole execution asks.
         per_unit: attribute; What one unit of each level holds, in topology order.
+        logical_groups: attribute; Local logical values grouped by the induction
+            variables and formals they depend on.
     """
 
-    logical: V
     total: V
     per_unit: tuple[V, ...] = ()
+    logical_groups: tuple[tuple[tuple[Var, ...], V], ...] = ()
 
 
 class Breakdown[V]:
@@ -330,7 +329,7 @@ counts one slice per index as an upper bound.
 | `MemoryMetadata.traffic` | One occurrence's per-boundary movement, grouped by storage and communication boundary. | No; projection reads resolved Mesh and topology extents. |
 | `MemoryMetadata.operands` | One occurrence's movement in order `(*call.args, call)`. | No |
 | `MemoryMetadata.buffer_bytes` | The bytes in one physical copy of an address-placed `gmem` or `smem` tensor result, including a carried phi and all contributions on Partial axes finer than its storage owner. `None` for tuple results or results that are not address-placed. | No |
-| `MemoryMetadata.offsets` | The byte offset of each physical result slot: each copy of a staged tensor in copy order, or each tuple `AllocationValue` in flattened result-index order. An `rmem` result has no reported offsets. Staged tuple results MUST raise `AnalysisError`. | No |
+| `MemoryMetadata.offsets` | The byte offset of each physical result slot: each copy of a staged tensor in copy order, or each tuple `AllocationValue` in flattened result-index order. An `rmem` result has no reported offsets. Staged tuple results MUST raise `analysis.Error`. | No |
 | `RegionMemoryMetadata.topologies` | The same effective Module topology levels. | No |
 | `RegionMemoryMetadata.traffic` | Every reachable occurrence. `logical` multiplies only loops the value varies in; `total` and `per_unit` multiply every enclosing loop. | No |
 
@@ -339,7 +338,7 @@ counts one slice per index as an upper bound.
     the number of positions executing its mesh scope, as for `compute-cost`.
     Storage MUST count the selected topology unit; communication MUST count
     the topology unit named by its boundary. An undeclared communication
-    boundary MUST raise `AnalysisError`, rather than use whole movement.
+    boundary MUST raise `analysis.Error`, rather than use whole movement.
   - One relation MUST answer for the whole program and for one unit, from one
     registration; every boundary MUST be held to the iterations its participant
     performs. Projecting an operand's Type is not enough, because a value nobody
@@ -435,18 +434,11 @@ class Footprint:
   - A program declaring more units than the target holds MUST NOT have them all
     counted as concurrent. The wave is the first `wave_units` positions in the
     mesh's own linear order, taken through `Mesh.layout`'s strides.
-  - `logical` MUST retain the single-window union. `total` MUST count that
-    union once per executed window, with no `per_unit` entries. The wave count
-    MUST be `ceil(mesh_positions(topology_level) / wave_units)`; a partial last
-    wave MUST count as a full wave. Function accumulation MUST union Calls
-    sharing an enclosing loop/mesh chain before multiplying by that group's
-    waves and every enclosing loop's trips, then sum the groups.
-  - Reuse, cache capacity checks, and the printed `footprint` field MUST use
-    the single-window `logical` bytes.
+  - The wave count MUST be `ceil(mesh_positions(topology_level) / wave_units)`; a
+    partial last wave MUST count as a full wave. Reuse, cache capacity checks,
+    and the printed `footprint` field MUST use the single-window `logical` bytes.
   - `Footprint.precision` MUST preserve direction throughout address merging
-    and counting. A missing boundary MUST contribute `LOWER_BOUND`; a counted
-    widened relation MUST contribute `UPPER_BOUND`; a refused boundary MUST
-    contribute `UNKNOWN`. No intermediate Boolean may discard this direction.
+    and counting; no intermediate Boolean may discard it.
   - A footprint MUST be absent, not empty, when analysis cannot state the wave
     it is taken over.
 
@@ -528,7 +520,7 @@ holding the earlier one precedes the child holding the schedule. Each such
 scope sorts its children by these constraints and their operands at once, ties
 in depth-first order, and events then follow that order.
 
-Liveness raises `AnalysisError` naming the constrained schedules of a scope
+Liveness raises `analysis.Error` naming the constrained schedules of a scope
 whose constraints form a cycle. A loop's yield hands its data to the next round
 after every child of the body, and the function returns its result after every
 child. Liveness raises as well for a schedule in that body, or in the function,
@@ -552,23 +544,23 @@ instruction writes as scratch beside its result.
 | `ValueLifetime.defined_at` | Definition event on the Function-wide structured SSA timeline. A staged (`buffers > 1`) result starts at the outermost enclosing loop's phi event rather than its own definition event. | No |
 | `ValueLifetime.last_used_at` | Greatest ordinary-consumer, region-entry, loop-backedge, or region-exit use event belonging to this result index. Static tuple projections use only the selected result; other tuple uses use every result. | No |
 | `ValueLifetime.persistent` | True for parameters and false for body allocations. | No |
-| `RegionMemoryMetadata.lifetimes` | Every value residency except a non-material view. | As above |
+| `RegionMemoryMetadata.lifetimes` | Every value residency except a non-material view; present on the entry Function only. | As above |
 
 - constraints:
   - Optional reuse MUST NOT place an ordinary result in a caller-owned
     parameter buffer. Donation is a contract with the caller, not a conclusion
     this family may draw. Semantic same-address relations, including registered
     views, InsertSlice destinations, and retained-call formal-to-actual bindings,
-    are address constraints rather than optional donation. Each SSA value remains
-    a distinct value with its own interval, even when addresses are equal.
+    are address constraints rather than optional donation.
 
 ##### `BufferAlias`
 
 ```python
 class BufferAlias:
     target: SSAValue              # the result whose bytes hold this value
-    relation: AccessRelation      # result coordinates -> target coordinates
+    relation: access.Relation      # result coordinates -> target coordinates
     kind: AliasKind
+    writes: bool = False          # a mutation in the composed callee chain
 ```
 
 | Field | How it is computed | Reads the target |
@@ -576,9 +568,10 @@ class BufferAlias:
 | `BufferAlias.target` | A registered view: the operand `aliased_operand` names. An adopted InsertSlice update window: the destination resolved through region captures. A carried-phi tie: the initial or phi value; an accepted InsertSlice result tie: its destination. | No |
 | `BufferAlias.relation` | A registered view: `renaming_relation`. An update window: the proven operand-to-result relation with parameters resolved to values visible at the producer. A tie: identity. | No |
 | `BufferAlias.kind` | One `AliasKind` member for each structural link or accepted tie. | No |
+| `BufferAlias.writes` | `True` when the composed callee chain mutates the target; otherwise `False`. | No |
 
 - constraints:
-  - An op registered with `@register_buffer_alias(Op)` returns the viewed
+  - An op registered with `access.register_alias(Op)` returns the viewed
     input's position or `None` for each Call. `buffer_alias()` returns
     `BufferAlias(SSAValue(buffer), relation, AliasKind.VIEW)`, describing that input's bytes and the
     result-to-input coordinates, and proves the declaration on every call.
@@ -607,7 +600,7 @@ class BufferAlias:
     address and recording zero traffic.
   - `buffer_bytes` of a value with a Partial axis finer than its storage owner
     MUST count one copy per unit of that axis. Multiple such axes multiply
-    their copy counts; an unresolved extent MUST raise `AnalysisError`.
+    their copy counts; an unresolved extent MUST raise `analysis.Error`.
   - Fresh smem allocations MUST reserve a byte span covering the physical
     layout's addresses within the selected topology unit, including stride holes
     and composition offsets. Splits at coarser levels restrict the local domain;
@@ -618,14 +611,13 @@ class BufferAlias:
     Invalid negative or unresolved physical address ranges MUST be refused.
   - Registered buffer aliases MUST create an `AllocationValue(lifetime, aliases)`
     with its own SSA interval and the operand's byte span, requiring the same
-    address. A persistent operand MUST pin its alias at the same
-    address. Aliases MUST NOT receive independent `buffer_bytes` or
-    `offsets`. Analysis MUST resolve structural tuple projections to their
+    address; a persistent operand MUST pin its alias there. Aliases MUST NOT
+    receive independent `buffer_bytes` or `offsets`. Analysis MUST resolve structural tuple projections to their
     selected element without a coordinate-renaming proof. For other aliases,
     `buffer_alias()` MUST prove that the result-to-operand map is single-valued, injective, and
     contained in the operand's index box, using the call's own unmodified
     declared access relation via `renaming_relation`, not its folded accesses.
-    Failure to prove that declaration MUST raise `AnalysisError`. `Transpose`
+    Failure to prove that declaration MUST raise `analysis.Error`. `Transpose`
     is not registered: it writes a new value, retains its access permutation,
     and receives its own allocation under the ordinary conflict rules.
   - Retained calls MUST translate every callee value in a formal parameter's
@@ -634,9 +626,8 @@ class BufferAlias:
     unless the composed callee chain writes into the formal (directly through
     InsertSlice or through a retained call) and the old actual has a later ordinary
     use. Read-only parameter and view returns MUST alias despite later reads of
-    the actual. This is independent of optional reuse of fresh results. InsertSlice
-    and call-result aliases MUST remain accepted links in the allocation summary
-    without independent bytes or offsets.
+    the actual, independently of optional reuse of fresh results. InsertSlice
+    and call-result aliases remain accepted links in the allocation summary.
   - Allocation MUST return storage for each SSA value and record adopted
     InsertSlice update windows and carried-phi ties in `AllocationValue.aliases`.
     An update window MUST be adopted only together with the InsertSlice's
@@ -695,12 +686,11 @@ class BufferAlias:
     space and using the input's type for widening. Source relations retain their
     defining loop prefix, aligned to the access's enclosing loops; loops internal
     to an escaping region MUST be projected out.
-  - LivenessMetadata MUST record each SSA value's own interval. Except for dynamic
-    projections and their forwards described below, every tensor SSA value,
-    including views, region parameters and results, and static tuple projections,
-    MUST have its own `AllocationValue`; intervals MUST NOT be merged or extended
-    to include aliases. Every tuple value MUST have one `AllocationValue` identified by `lifetime.value`
-    per flattened tensor result. Its interval runs from the tuple's definition to
+  - Except for dynamic projections and their forwards described below, every
+    tensor SSA value, including views, region parameters and results, and static
+    tuple projections, MUST have its own `AllocationValue`; intervals MUST NOT be
+    merged or extended to include aliases. Every tuple value MUST have one
+    `AllocationValue` identified by `lifetime.value` per flattened tensor result. Its interval runs from the tuple's definition to
     the last use belonging to that result: a static tuple projection uses only
     the selected result, while whole-tuple operations, region captures, synthetic
     loop uses, and returns use every result. A dynamic tuple projection MUST
@@ -837,7 +827,7 @@ windows rooted at a return MUST name the Call result leaf. Internal SSA values
 retain their identities and share one address across all translated windows.
 The caller MUST NOT mutate AllocationValue aliases in a callee summary. Own
 windows MUST reference the AllocationValue's lifetime object rather than copy it.
-Implicit weights MUST use the union of instance indices. Only the entry solves
+Only the entry solves
 placement, once, after collecting its Call leaves; non-boundary callee offsets
 MUST be published from that solution. Repeated region windows contribute their
 maximum occupancy without traversing the callee body again.
@@ -882,27 +872,22 @@ class MemoryLevelPeak:
 | `MemoryLevelPeak.peak_bytes` | On a Function, the address high-water mark of the first feasible global `gmem` or `smem` placement; its `rmem` peak is the maximum of every `MeshRegion` stage peak and the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest root occupancy in its inclusive entry-to-exit event window. Unsplit tensor values defined in its body or child regions contribute while their lifetimes intersect the window, without region-versus-owner filtering. Split values retain owner eligibility and holder-mesh selection. Target-owned storage (`gmem`) never contributes to a region. | `MemoryHierarchyFacts.explicit_levels[].owner` for a `MeshRegion`; otherwise no. |
 | `MemoryLevelPeak.persistent_bytes` | Union of persistent address intervals at `gmem`/`smem`; greatest persistent member span per root at other levels. | No |
 | `MemoryLevelPeak.capacity_bytes` | Capacity of the matching explicit level, or `None` when unknown. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
-| `RegionMemoryMetadata.peaks` | One peak per occupied or moved storage level. | As above |
-| `RegionMemoryMetadata.solver_status` | `"feasible"` after the whole-Function placement settles, including when there is no addressable value. | No |
+| `RegionMemoryMetadata.peaks` | One peak per occupied or moved storage level; present on the entry Function only, and a callee Function states none. | As above |
+| `RegionMemoryMetadata.solver_status` | `"feasible"` after the entry's whole-Function placement settles, including when there is no addressable value; `"not_run"` on a callee Function, which does not place. | No |
 | `RegionMemoryMetadata.errors` | Non-fatal placement-capacity failures and cache-capacity failures proved by exact or lower-bound counts. | `MemoryHierarchyFacts` |
 | `RegionMemoryMetadata.advisories` | Cache-capacity findings whose upper-bound or unknown counts do not prove excess. | `MemoryHierarchyFacts` |
 
 - constraints:
   - `RegionMemoryMetadata` MUST be attached per reachable `Function` and per
-    `MeshRegion` with an eligible live value. Unsplit tensor values defined in
-    the region body or child regions contribute over intersecting lifetimes,
-    independently of the region's depth relative to the storage owner. Split
-    values retain owner eligibility and declared-holder selection. Each root
-    counts once; target-owned storage (`gmem`) is excluded. A mesh-region
-    record carries only its topology names and per-level peaks; whole-Function
-    traffic, footprints, reuse windows, lifetimes, errors, and advisories stay
-    on the Function.
+    `MeshRegion` with an eligible live value, with the contributions stated for
+    `MemoryLevelPeak.peak_bytes`. A mesh-region record carries only its topology
+    names and per-level peaks; whole-Function traffic, footprints, reuse windows,
+    lifetimes, errors, and advisories stay on the Function.
   - Every explicit level considered for a mesh-region peak MUST state an owner
     in `MemoryHierarchyFacts`. A missing owner is an error, not a reason to
     treat the level as shared by every region.
   - A split value MUST declare its holder mesh to belong to an eligible
-    `MeshRegion`. No holder declaration MUST be inferred for a split value;
-    unsplit tensor values use the definition and lifetime rule above.
+    `MeshRegion`; no holder MUST be inferred for it.
   - An access relation that keeps a parameter with a stated finite range is
     exact and MAY prove overlap. A widened relation, and one with an unbounded
     parameter, MUST NOT.
@@ -916,16 +901,16 @@ class MemoryLevelPeak:
   - Carry, InsertSlice, window and in-place sharing MUST follow
     the pre-solve value links and acceptance conditions above. Simultaneously
     live values in overlapping address intervals MUST belong to the same root;
-    otherwise analysis MUST raise `AnalysisError` identifying both bindings,
+    otherwise analysis MUST raise `analysis.Error` identifying both bindings,
     intervals, offsets, and level.
   - Every placed offset MUST be aligned to the greater of 16 bytes and the
     result element width. A staged result's copies MUST be contiguous: copy
     `k` starts at the solved block offset plus `k * buffer_bytes`.
   - Mandatory aliases, alignment, and lifetime interference that have no
-    feasible joint placement MUST raise `AnalysisError`; analysis MUST NOT
+    feasible joint placement MUST raise `analysis.Error`; analysis MUST NOT
     silently discard a required alias.
   - A domain that cannot be expressed or does not settle in time MUST raise
-    `AnalysisError` and leave no record. The solver MUST stop at its first
+    `analysis.Error` and leave no record. The solver MUST stop at its first
     feasible assignment rather than prove a minimum. Capacity MUST NOT restrict
     the address space.
   - A seed is a complete candidate placement that analysis builds for itself
@@ -1005,11 +990,10 @@ of these reuse relations states no row.
   - Rows MUST NOT be summed. One row's window lies inside another's whenever
     its axis is nested inside, so a row that fits implies those nested in it
     fit.
-  - Rows MUST be ordered by `reuse_bytes`, largest first. Equal reuse amounts retain
-    their derivation order.
+  - Rows MUST be ordered by `reuse_bytes`, largest first; equal amounts keep
+    derivation order.
   - Data read once states no row; its bytes still enter every row whose window
     contains it.
-  - A row whose computed reuse is zero states no row.
   - A window at or above capacity MUST add one non-fatal diagnosis, regardless
     of how many buffer rows share it, and MUST NOT fail the call. `EXACT` and
     `LOWER_BOUND` conclusions belong to `errors`: their true holds are at least
@@ -1272,10 +1256,6 @@ Requesting roofline adds this verdict and the two quantities the bound divides
 its dependencies wrote is promoted; asking for `memory` is what states those
 ([§1.2.2](#122-memory)).
 
-```text
-roofline ideal-ns=<int> bound-by=<resource>
-```
-
 Every measured Call receives this annotation. `compute_ns` and `memory_ns` are
 the two numbers the verdict was read off, so they are in JSON rather than on the
 line:
@@ -1357,15 +1337,13 @@ its full form as defined in that family's section.
   - Rate-to-duration divisions MUST use exact integer ceiling division. They
     MUST NOT pass through floating-point arithmetic.
   - Roofline records MUST be attached to reached `Call`s and Functions.
-  - Roofline MUST read `ComputeCostMetadata` rather than evaluate the program a
+  - Roofline MUST read the recorded work rather than evaluate the program a
     second time.
   - A recorded compute dtype that is not a `DType` name MUST raise
-    `AnalysisError`.
-  - `ThroughputFacts.peak_for` MUST return `None` for an unpublished dtype rate,
-    and analysis MUST NOT substitute an assumed rate.
-  - Roofline reads only `ComputeCostMetadata`, so a roofline-only rendering
-    reports only what roofline and that dependency wrote. No other family's
-    conclusion is promoted into it.
+    `analysis.Error`.
+  - Roofline reads only the `compute-cost` and `memory` records, and a
+    roofline-only rendering reports only what roofline and those dependencies
+    wrote under the bounded `totals` rule above.
 
 #### 1.2.4 `performance`
 
@@ -1421,7 +1399,7 @@ Occurrence fields are:
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `start_ns` | Start of one occurrence on the authored-order local timeline, after its producers end and after the last occurrence sharing any of its participants. | No |
+| `start_ns` | Start of one occurrence on the authored-order local timeline: the end of the preceding timed occurrence in authored order. | No |
 | `end_ns` | End of that occurrence's first execution. | No |
 | `trips` | One outside a loop; within a loop, the enclosing loop trip count represented by the interval. | No |
 | `stride_ns` | Zero outside a loop; within a loop, the makespan of one body execution. | No |
@@ -1430,14 +1408,13 @@ Function summary fields are:
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `timeline` | `[0, local makespan * waves)`, where the local makespan is the end of the CTA-local timeline, or zero with no work, and `waves` is `ceil(N / P)`: `N` is the most positions the Function's meshes run at the level selected by `TopologyFacts.parallel_level` and `P` is that level's `max_physical_units`. Its duration is the prediction; `waves` is not a field. | `TopologyFacts` |
+| `timeline` | `[0, local makespan * waves)`, where the local makespan is the end of the CTA-local timeline, or zero with no work (on the entry Function, raised to the roofline `ideal_ns` when roofline ran), and `waves` is `ceil(N / P)`: `N` is the most positions the Function's meshes run at the level selected by `TopologyFacts.parallel_level` and `P` is that level's `max_physical_units`. Its duration is the prediction; `waves` is not a field. | `TopologyFacts` |
 
-Occurrence intervals remain CTA-local. They are not copied once per wave, and
-neither the executing positions nor `max_physical_units` changes them. The capacity
-`P` is the machine-side position count; the mapping of one CTA to one SM is
-compiler policy. The
-aggregate itself is stated once in [target §11](./target.md#11-target-facts-projection),
-because `memory` reads it too.
+Occurrence intervals remain CTA-local and are not copied once per wave. The
+capacity `P` is the machine-side position count; the mapping of one CTA to one
+SM is compiler policy. The aggregate itself is stated once in
+[target §11](./target.md#11-target-facts-projection), because `memory` reads it
+too.
 
 Requesting performance adds this Function verdict to the summary:
 
@@ -1478,26 +1455,19 @@ Function: {"timeline": {"start_ns": 0, "end_ns": <int>, "trips": 1,
 ```
 
 The summary envelope's duration is a deterministic comparison estimate, not a
-runtime prediction. It deliberately excludes launch overhead, occupancy,
-utilization, traffic volume, and other execution effects that this family does not
+runtime prediction or a guarantee about lowering. It excludes launch overhead,
+occupancy, utilization, traffic volume, and other effects this family does not
 model.
 
 - constraints:
-  - A primitive Call is eligible for performance when it is reachable in the
-    authored HIR. Its execution region is represented structurally by
-    `MeshRegion`; the result layout remains an independent property. A result
-    carrying no `ShardLayout` MUST NOT unplace the occurrence that produced it.
-    An occurrence
-    with no nonzero share of
-    `flops`, none of `service` and no nonzero
-    `MemoryMetadata.traffic.storage` at `bandwidth_level` is structural to this
-    model: it needs no execution placement and MUST receive no record, because
-    an empty
-    interval reads as a measurement rather than as the absence of one. Movement
-    at another level does not change that and MUST NOT be dropped from
-    `MemoryMetadata` because of it -- structural here means nothing to time,
-    not nothing done. It still carries its producers' precedence to its
-    consumers. Inputs MUST NOT supply placement for an unplaced occurrence.
+  - A primitive Call reachable in the authored HIR is eligible; its execution
+    region is the enclosing `MeshRegion`, independent of the result layout. An
+    occurrence with no nonzero share of `flops`, none of `service` and no
+    nonzero `MemoryMetadata.traffic.storage` at `bandwidth_level` is structural
+    to this model and MUST receive no record, because an empty interval reads as
+    a measurement rather than as the absence of one. Movement at another level
+    MUST NOT be dropped from `MemoryMetadata` because of it: structural means
+    nothing to time, not nothing done.
   - The global total for an occurrence is its per-unit quantity multiplied by
     the number of positions in the enclosing execution scope. This multiplier
     counts copied or replicated work: an unsharded operation inside a scope is
@@ -1507,15 +1477,14 @@ model.
   - A `MeshRegion` evaluates its boundary arguments outside the region and
     executes its body once per enclosing position. Argument work is charged at
     its defining site; body work is charged per enclosing position.
-  - The participant set MUST be the exact image of that Mesh's layout under
-    [shard §5](./shard.md#5-mesh), not an extent inferred from a topology or an
-    operand. A `Broadcast` shard attribute still names placement: attributes
-    describe distribution while the Mesh describes which positions participate.
-  - Every primitive occurrence has one fixed duration and occupies its exact
-    participant set. An SSA consumer MUST start no earlier than its producers
-    end. Two positive-duration occurrences whose participant sets intersect
-    MUST NOT overlap; disjoint sets MAY overlap, while a partial intersection
-    serializes each whole occurrence rather than splitting it by participant.
+  - The positions an occurrence runs on come from its Mesh layout
+    ([shard §5](./shard.md#5-mesh)), counted at the selected level and capped at
+    `active` for the per-unit share. A `Broadcast` shard attribute does not
+    change them: attributes describe distribution, the Mesh describes which
+    positions participate.
+  - Every primitive occurrence has one fixed duration. Occurrences are laid end
+    to end in authored order on one local timeline, so an SSA consumer starts no
+    earlier than its producers end and no two occurrences overlap.
   - A Call's scheduled duration MUST multiply every enclosing authored loop's
     trip count, including loops in which the Call is invariant. Work explicitly
     defined outside a loop MUST keep its defining scope's repetition count.
@@ -1529,14 +1498,10 @@ model.
     `[start_ns + t*stride_ns, end_ns + t*stride_ns)`, for `0 <= t < trips`.
     The loop spans `trips * stride_ns`; a consumer of its yield MUST wait for
     that full span. Loop-invariant values remain single occurrences outside it.
-  - What an occurrence waits for MUST be read off the program's own structure:
-    the values it names, the loop it sits in, and the participants it runs on.
-    An ordering MUST NOT be inferred from an allocation -- which values share
-    bytes is a plan's decision and no plan has been made -- and no occurrence is
-    held back for a write nobody proved happens in place.
+  - An ordering MUST NOT be inferred from an allocation: which values share
+    bytes is a plan's decision and no plan has been made.
   - Occurrences MUST be laid out in definition-relative order. Reordering
-    independent work is a later decision, not an analysis's: what overlaps
-    is what the program's own placement made independent, and the reported time
+    independent work is a later decision, not an analysis's: the reported time
     is the time of the program as written. On a `Function`, the summary's
     `timeline` MUST start at zero and span the whole local plan, scaled by
     `waves`; there MUST be no second field restating the local makespan or the
@@ -1550,8 +1515,6 @@ model.
     never reaches performance because `memory` refuses it.
     Capacity therefore changes whether there is an answer, never which answer:
     two capacities that both admit a placement MUST produce the same intervals.
-  - Performance is a modeled plan and MUST NOT be read as a guarantee about
-    lowering, physical occupancy, or runtime performance.
 
 ## 2. Composed analysis
 
@@ -1560,26 +1523,26 @@ analysis runs.
 
 ```python
 def check_program(
-    module: "Module",
-    function: "Function",
+    module: "core.Module",
+    function: "core.Function",
     *,
-    dims: "Mapping[str, int] | None" = None,
     topology_level: str | None = None,
-    budget: int = _NODE_BUDGET,
-    analyzers: tuple["Analyzer", ...] = (),
-) -> tuple["Module", "Function"]: ...
+    budget: int = NODE_BUDGET,
+    analyzers: tuple["target.Analyzer", ...] = (),
+    dims: "Mapping[str, int] | None" = None,
+) -> tuple["core.Module", "core.Function"]: ...
 
 
-class AnalysisCheckContext(ValuationContext):
+class CheckContext(valuation.Context):
     """What every input check reads: the program, the machine, and the topology level.
 
-    Costing here is a question, not a record: nothing a context computes is
-    attached.
+    The context is bound to the derived Function the analyses will read.
+    Nothing a check reads is a derived analysis record.
     """
 
-    module: "Module"
-    function: "Function"
-    target: "Target"
+    module: "core.Module"
+    function: "core.Function"
+    target: "target.Target"
     topology_level: str | None
 
 ```
@@ -1596,15 +1559,13 @@ class AnalysisCheckContext(ValuationContext):
     before ordinary type inference with ranges. Remaining symbolic dimensions
     MUST be named before any consuming algorithm runs.
   - Every effective Module topology MUST name a level the resolved Target
-    supports. A resolved static extent MUST be positive and within that level's
-    finite hardware limit. A rejection MUST name the level, its extent, and the
-    reason.
+    supports, with a positive static extent within that level's finite hardware
+    limit; a rejection names the level, its extent, and the reason.
   - A non-`None` `topology_level` MUST name exactly one effective Module topology.
-  - Callers MUST build the program before invoking Analyze. Analyze MUST run
-    the requested closure's checkers on that same program before any metadata
-    writes. `check_program(analyzers=...)` and Analyze use the same checker gate:
-    each checker's `check_target_facts`, followed by `visit` on each reached
-    definition. The first refusal MUST stop the gate before any family writes.
+  - `check_program(analyzers=...)` and Analyze use the same checker gate: each
+    checker's `check_target_facts`, followed by `visit` on each reached
+    definition. Analyze MUST run the requested closure's checkers on the checked
+    program before any metadata writes, and the first refusal MUST stop the gate.
   - The returned Module MUST contain one typed derived function per reached
     definition, retaining calls and LoopRegions. Entry parameters and implicit
     child weights retain their names and roles; weights MUST NOT become root
@@ -1621,10 +1582,10 @@ class AnalysisCheckContext(ValuationContext):
     without a body MUST raise `VerifyError` naming the function and call path.
   - One definition MUST receive one argument-type signature and one current
     mesh. Different shape, dtype, layout, storage, or mesh MUST raise
-    `AnalysisError` naming the callee, both call paths, and both signatures.
+    `analysis.Error` naming the callee, both call paths, and both signatures.
   - Check MUST attach internal `ExecutionMeshMetadata` to every derived
     Function, recording its unique enclosing mesh; root records `None`. This
-    record is not exported by `tilefoundry.analysis` and does not opt into printing.
+    record is exported as `analysis.ExecutionMeshMetadata` but does not opt into printing.
   - Records MUST live on IR once per definition, in local coordinates. The
     definition's scope tree MUST stop at its own root, whose parent is `None`.
     Source entries MUST stop at formals; formals' variance dependencies MUST
@@ -1641,16 +1602,20 @@ class AnalysisCheckContext(ValuationContext):
     A separately materialized callee result of matching memory level and byte
     size MUST share the caller destination. A return without an independent
     material buffer requires a caller destination, which MAY increase peak memory.
-  - Implicit weights MUST be persistent. Their instance index tuples are the
-    union of reached index images clipped to slot bounds; their cardinality
-    scales weight bytes. Unknown indices reach the whole slot. Traffic uses
-    loop trips without this multiplier.
+  - Implicit weights MUST be persistent and are counted by `(slot key chain,
+    weight)` and the union of reached instance-index tuples, clipped to slot
+    bounds; their cardinality scales weight bytes. Unknown indices reach the
+    whole slot, and traffic uses loop trips without this multiplier. Caller
+    induction variables map from the loop domain to those tuples; textual
+    instance labels MUST NOT determine counts. Footprint coordinates prefix
+    instance indices before unioning element addresses, and persistent bytes
+    count each reached instance once.
   - Each internal SSA leaf MUST share one address across its occurrence windows.
     Callee parameters and results tied to caller destinations use caller pointers
     and carry no offsets. Internal values MUST NOT reuse parameter storage;
     a return group's proven reuse of a parameter is applied only at the call,
     subject to the caller's persistent and last-use checks. Different alias
-    relationships MUST raise `AnalysisError` naming the callee, binding,
+    relationships MUST raise `analysis.Error` naming the callee, binding,
     both binding paths, and relationships.
   - Authored-analysis readiness is not a program-level rejection. Analyze MUST
     NOT reject an authored `where(...)` constraint: it is an input to a later
@@ -1670,14 +1635,14 @@ launches because of Module ownership; the invocation rule is owned by
 dummy-run a plain Python orchestration method.
 
 - constraints:
-  - Analyze MUST validate every caller/callee edge the selected query reaches
-    against the one-execution-context requirement
+  - `check_program` MUST validate every caller/callee edge the selected query
+    reaches against the one-execution-context requirement
     ([hir §1.1](./hir.md#11-function)). Reaching is what is validated, so an
     attached child no call reaches has no edge here. Both effective targets
     and complete topology hierarchies MUST match.
 
 ```python
-class AnalysisResult:
+class Result:
     """Record what one composed Analyze call computed.
 
     Attributes:
@@ -1690,29 +1655,29 @@ class AnalysisResult:
         functions: attribute; Reached derived functions in root-first DFS order.
     """
 
-    module: "Module"
-    function: "Function"
+    module: "core.Module"
+    function: "core.Function"
     analyses: tuple[str, ...]
     topology_level: str | None
     executed: tuple[str, ...]
-    metadata_types: tuple[type[IRMetadata], ...]
-    functions: tuple["Function", ...]
+    metadata_types: tuple[type[expr.IRMetadata], ...]
+    functions: tuple["core.Function", ...]
 
 
 def analyze(
-    module: "Module",
-    function: "Function",
+    module: "core.Module",
+    function: "core.Function",
     *,
-    analysis: str | Iterable[str],
+    analysis: str | Sequence[str],
     topology_level: str | None = None,
+    level: str | None = None,
     options: object | None = None,
-) -> AnalysisResult: ...
+) -> Result: ...
 ```
 
 - constraints:
-  - One call MUST select one or more root analyses. It MUST preserve their
-    first-occurrence order, resolve their union dependency closure, and execute
-    every member once.
+  - `level` is an alias of `topology_level`; naming both with different values
+    MUST raise `ValueError`.
   - `topology_level` MUST name one effective Module topology. When omitted, it
     MUST default to the coarsest effective topology whose `TopologyLevelFacts`
     states `max_physical_units`. A program may name a level the host places
@@ -1722,7 +1687,7 @@ def analyze(
     declared levels the coarsest MUST be left selected, so the refusal names
     the level rather than the absence of one; when the Module declares none,
     `topology_level` MUST remain `None` and no per-unit projection divides.
-    `AnalysisResult.topology_level` MUST record the resolved answer.
+    `analysis.Result.topology_level` MUST record the resolved answer.
   - A target MUST answer `PerformanceServiceFacts` and state
     `TopologyLevelFacts.max_physical_units` for the level it is asked about,
     and MUST refuse a level it publishes no rate for rather than answering for a different one. The query is
@@ -1734,7 +1699,7 @@ def analyze(
   - The Function MUST belong to the checked Module, including its derived
     definitions. Analyze MUST write metadata in place without cloning or
     re-running type inference. A root without `ExecutionMeshMetadata` MUST be
-    rejected with `AnalysisError("analyze needs the program returned by check_program")`.
+    rejected with `analysis.Error("analyze needs the program returned by check_program")`.
     Dimension binding belongs to `check_program`.
   - Within `check_program`, stated `dims` MUST be a non-empty mapping whose
     keys name reached dimensions and whose integer extents satisfy their bounds.
@@ -1742,7 +1707,7 @@ def analyze(
     it, and no dimension MAY remain symbolic after substitution in types, Meshes,
     loop bounds, attributes, or effective topologies. Invalid bindings and missing
     bodies MUST fail with their names before any consuming algorithm runs.
-  - `AnalysisResult.function` and `AnalysisResult.module` MUST be the exact
+  - `analysis.Result.function` and `analysis.Result.module` MUST be the exact
     objects supplied by the caller. The checked Function retains its origin and
     bound extents; analysis does not return the symbolic authored input.
   - The recorded extents MUST be what identifies which size a derived Function is
@@ -1750,10 +1715,10 @@ def analyze(
     in a loop bound, a body operation's attribute, or a nested callee leaves the
     signature identical at every extent, so two sizes would be indistinguishable
     to anything comparing signatures.
-  - The operation MUST resolve the root's full transitive dependency closure,
-    order it so every dependency precedes its dependants, and execute each
-    member exactly once per call. `executed` MUST report that order, so a shared
-    dependency appears once.
+  - One call MUST select one or more root analyses, preserve their
+    first-occurrence order, resolve their union dependency closure, order it so
+    every dependency precedes its dependants, and execute each member exactly
+    once. `executed` MUST report that order, so a shared dependency appears once.
   - Dependencies MUST be resolved under the same exact concrete Target as the
     root, obtained from `Module.resolve_target()`.
   - A dependency cycle MUST fail and MUST name the path that closes it. A
@@ -1762,10 +1727,9 @@ def analyze(
   - Type inference and structural validation belong to `check_program` and
     MUST complete before Analyze receives the program. Analysis reads those
     inferred types and assumes a verified function.
-  - Family-specific readiness MUST be checked on that inferred derived program and
-    MUST complete before the first analysis in the dependency closure runs. In
-    particular, a performance request that lacks an execution placement MUST
-    fail before dependency Metadata is written.
+  - Family-specific readiness MUST be checked on that derived program before the
+    first analysis in the dependency closure runs. In particular, a performance request for a level whose physical units the
+    target does not state MUST fail before dependency Metadata is written.
   - Re-running MUST recompute the closure and refresh the Metadata that closure
     owns. There MUST be no cross-call cache. Metadata owned by nothing in the
     closure MUST be left untouched.
@@ -1773,7 +1737,7 @@ def analyze(
     the IR, in execution order and without repeats. An analysis that declares a
     type but writes no record for this function MUST NOT contribute it, so a
     renderer is never sent after records that are not there.
-  - `AnalysisResult` MUST be semantic. Human text, JSON, and annotated HIR are
+  - `analysis.Result` MUST be semantic. Human text, JSON, and annotated HIR are
     renderings of it and of the Metadata on the IR, and MUST NOT be fields of
     it.
 
@@ -1782,7 +1746,7 @@ def analyze(
 `get_metadata(expr, kind, ctx=ctx)` delegates to `IRMetadata.resolve(ctx)`
 and the already-bound Scope; its default
 returns the record unchanged. Metadata does not declare capability requirements.
-Analysis contexts extend `TypeInferContext`, not `CostContext`. The context
+Analysis contexts extend `TypeInferContext`, not `cost.Context`. The context
 prepares the callee and argument bindings. The context's `enter_call` calls the caller scope's `attach` operation and
 records the call edge. Reading `callee_scope` follows that existing edge;
 it does not recursively bind a definition tree. Consumers query `ctx.scope`,
@@ -1805,16 +1769,16 @@ lexical scopes or trigger a second analysis of their callee body.
 | AllocationSummaryMetadata | Values, in-place capabilities and unchanged raw address decisions. Bound occupancy is interpreted through the attached Scope and cached in its snapshot; consumers do not recursively expand calls. |
 | PerformanceMetadata / PerformanceSummaryMetadata | Local intervals; the performance family handles their origin, not Scope. |
 
-`Spread.logical_groups` is
-`tuple[tuple[tuple[Var, ...], V], ...] = ()`. `logical` is derived by summing
-its groups, or the typed zero for empty groups. Call groups name local induction
-variables and formals; Function accumulation consumes local induction variables
-and retains only the formals on which the count depends. Caller Function
-accumulation multiplies it by `scope.dependency_trips` for that set, preserving the joined precision. Call resolution MUST NOT apply caller
-loop multiplicities to either work or traffic. Renderers MUST show only `logical`,
-`total`, and `per_unit`, and MUST NOT render the groups.
+`Spread.logical` is the sum of `logical_groups`, or the typed zero for empty
+groups. Call groups name local induction variables and formals; Function
+accumulation consumes local induction variables and retains only the formals on
+which the count depends. Caller Function accumulation multiplies it by
+`scope.dependency_trips` for that set, preserving the joined precision. Call
+resolution MUST NOT apply caller loop multiplicities to either work or traffic.
+Renderers MUST show only `logical`, `total`, and `per_unit`, and MUST NOT render
+the groups.
 
-Footprint evidence retains local reached sets, their `AccessRelation.values`
+Footprint evidence retains local reached sets, their `access.Relation.values`
 expressions, and groups of reached sets with local window multiplicities.
 Display names belong to the expression printer. Metadata references retain
 SSAValue identities and reuse the same printer bindings as the surrounding IR;
@@ -1840,8 +1804,7 @@ Reuse windows MUST be computed once per definition. Callee internal loops are
 candidates only on that callee's Function record; caller records use only the
 caller's own loops and mesh axes. Their window footprint includes resolved
 callee reached sets. A callee's unresolved formal coordinates use their widest
-legal bound and state `UPPER_BOUND`. ReuseWindow retains its seven numeric and
-label fields and is not resolved through calls. Local source values use local
+legal bound and state `UPPER_BOUND`. ReuseWindow is not resolved through calls. Local source values use local
 variance. A callee-internal source absent from that table conservatively follows
 the current Call's variance; implicit const weights remain invariant, and
 instance-index dependence is tested through the reached image. This may omit
@@ -1854,12 +1817,6 @@ template; it stores neither child templates nor a second timeline origin.
 Allocation may resolve the callee template at a Call to obtain internal windows.
 Standalone liveness for a function without Calls MUST work without a scope
 tree. It MUST NOT use an attached LivenessMetadata record as an implicit result cache.
-
-Implicit weights MUST be counted by `(slot key chain, weight)` and the union of
-reached instance-index tuples. Caller induction variables map from the loop
-domain to those tuples; textual instance labels MUST NOT determine counts.
-Footprint coordinates prefix instance indices before unioning element addresses,
-and persistent bytes count each reached instance once.
 
 Callee call durations MUST use the resolved callee summary's duration divided
 by its waves. Non-entry summaries use the local schedule without a roofline
@@ -1875,7 +1832,7 @@ trees or resolving them again.
 ### 2.1 Shared IterationScope and Access
 
 Each reached definition is visited once to build its IterationScope tree.
-`ValueProvenance` and `AccessAnalysis` are defined beside IterationScope in
+`ValueProvenance` and `ScopeAccess` are defined beside IterationScope in
 `analysis/iteration_scope.py` and composed as `scope.provenance` and `scope.access`.
 The first implements source/dependency queries; the second implements access
 and projection queries. Both operate on the scope's single `snapshot`:
@@ -1898,11 +1855,11 @@ Scope itself owns lexical structure, the iteration domain, and multiplicities.
 `unit`, `varies`, and optional `forward`. `forward` is a direct structural operand,
 not the data-identity root. Three views remain supported; a missing unit view is
 unknown. Types and display names are not duplicated in snapshots.
-`domain` is an AccessRelation of zero-dimensional tuples with constraints on
+`domain` is an access.Relation of zero-dimensional tuples with constraints on
 identity-named loop parameters. `first()` constrains each coordinate to its
 loop's start. `compose`, `constrain`, and `project` maintain parameter mappings
-in AccessRelation; consumers do not maintain parallel parameter-name tables.
-`SSAValue` is defined in ir/core/expr.py, and exposes `leaves` and `leaf`.
+in access.Relation; consumers do not maintain parallel parameter-name tables.
+`SSAValue` is defined in `ir/core/ssa_value.py`; `ssa_leaves(expr)` lists the values of an expression and `SSAValue.leaf` reads one value's type.
 
 An input `Access` stores its original Call boundary index as well as its relation
 and allocation expression; an output stores `input_index=None` and its own output
@@ -1920,9 +1877,11 @@ the widest legal access approximation.
 Normalization shares one derived body and its records per reached definition
 ([§2](#2-composed-analysis)).
 
-`analysis.loop_terms` resolves HIR values to `LoopTerm` without depending on
-isl. `analysis.access` turns those terms into isl constraints and owns access
-widening; the two modules do not define a second affine graph representation.
+`access.affine_of` (`interfaces/access`, see
+[visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation))
+turns HIR values into isl affine forms. `analysis/loop_domain.py` builds the
+iteration domain from them and `analysis/access.py` owns access widening; the two
+modules do not define a second affine graph representation.
 
 - constraints:
   - A loop `start` or `extent` MAY be unit-dependent. Every runtime leaf in one
@@ -1950,18 +1909,19 @@ widening; the two modules do not define a second affine graph representation.
   - `IterationScope.trips()` MUST count a loop off its bounds, not its domain:
     `max(1, ceil(max(stop - start) / step))`, refusing an unbounded span.
     `trips_precision` is `EXACT` where that span reaches one value and
-    `WIDENED` where it reaches several, the count then being an upper bound.
+    `UPPER_BOUND` where it reaches several, the count then being an upper bound.
 
 ### 2.2 Target-selected Analyzers
 
 ```python
-class AnalyzeContext:
-    module: Module
-    target: Target
+class AnalyzeContext(typeinfer.TypeInferContext):
+    module: core.Module
+    function: core.Function
+    target: target.Target
     topology_level: str | None
     options: object | None
     scope: IterationScope | None = None
-    current_mesh: Mesh | None = None
+    current_mesh: types.Mesh | None = None
 
     @property
     def topologies(self) -> tuple[Topology, ...]: ...
@@ -1970,37 +1930,38 @@ class AnalyzeContext:
 
 
 AnalysisCallable = Callable[
-    [Function, AnalyzeContext], None
+    [core.Function, AnalyzeContext], None
 ]
 
+# tilefoundry.target.Analyzer
 class Analyzer:
-    """Describe one Target-selected analysis.
+    """Describe one Target-selected analysis; a frozen dataclass.
 
     Attributes:
         selector: attribute; Public analysis selector.
         run: attribute; Analysis implementation.
         requires: attribute; Dependency selectors.
         produces: attribute; Owned metadata classes.
-        input_checker: attribute; What this analysis needs of a program.
     """
 
     selector: str
     run: AnalysisCallable
     requires: tuple[str, ...] = ()
-    produces: tuple[type[IRMetadata], ...] = ()
-    input_checker: AnalysisInputChecker = NO_INPUT_CHECK
+    produces: tuple[type[expr.IRMetadata], ...] = ()
+
+    def get_checker(self) -> "target.AnalysisChecker | None": ...
 
 
-class AnalysisInputChecker(Protocol):
+# tilefoundry.target.AnalysisChecker
+class AnalysisChecker(Protocol):
     """What one analysis requires before any analysis writes.
 
-    Three questions answerable without reading a record: what the target must
-    state, what each call must carry, and what the function must hold.
+    A checker states requirements and never attaches Metadata. It asks
+    target-wide questions once, then visits each reached definition.
     """
 
-    def check_target(self, ctx: AnalysisCheckContext) -> None: ...
-    def check_call(self, call: Call, ctx: AnalysisCheckContext) -> None: ...
-    def finish(self, function: Function, ctx: AnalysisCheckContext) -> None: ...
+    def check_target_facts(self, ctx: CheckContext) -> None: ...
+    def visit(self, node: expr.Expr, ctx: CheckContext) -> None: ...
 
 
 class Target:
@@ -2015,8 +1976,8 @@ class Target:
     options MAY be `None`.
   - The same `AnalyzeContext` is what analysis reads types and access relations
     through. It is created before the scope tree, which reads relations through
-    it with no topology level, and its `root`/`current` are bound to that tree
-    before any analysis runs. `type_of` returns the `Expr.type` that
+    it with no topology level, and its `scope` is bound to that tree
+    (`bind_scope`) before any analysis runs. `type_of` returns the `Expr.type` that
     `check_program` stored on the analyzed copy; `local_type_of` projects it to
     `topology_level` over the Module's topologies, or returns it whole without
     one. `current_mesh` is `None`: relations are asked outside any execution
@@ -2031,9 +1992,10 @@ class Target:
   - A declaration MUST be rejected when it requires itself, repeats a
     dependency, produces the same Metadata type twice, or names a `produces`
     entry that is not an `IRMetadata` subclass.
-  - `input_checker` MUST default to one that requires nothing, so an analysis
-    with no input contract is declared by leaving the field out and keeps
-    working unchanged. A checker MUST NOT attach Metadata: it states what a
+  - `get_checker()` MUST default to `None`, so an analysis with no input
+    contract needs no override and keeps working unchanged. An Analyzer with an
+    input contract is a subclass that overrides `get_checker` to return a fresh
+    checker. A checker MUST NOT attach Metadata: it states what a
     program must already be, and every checker in a closure MUST have answered
     before any analysis in it writes.
   - An analysis MAY change only the Metadata types its Analyzer declares.

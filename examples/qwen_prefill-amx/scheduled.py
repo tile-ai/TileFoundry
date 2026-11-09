@@ -3,13 +3,14 @@
 from dataclasses import replace
 from tilefoundry import module, func
 from tilefoundry.dsl import Tensor, ConstTensor, Mesh, T, Topology, tf
-from tilefoundry.ir.types import Layout, DType
+from tilefoundry.ir.types import Layout
+from tilefoundry.ir.expr import DType
 from tilefoundry.ir.tir.amx.instructions import Z_LAYOUT
 from model import build
-from tilefoundry.ir.core import Call, Var
-from tilefoundry.ir.visitor import collect_exprs, ExprCloner, BindingSubstitutionCloner
+from tilefoundry.ir.expr import Call, Var
+from tilefoundry.ir.core.visitor import collect_exprs, ExprCloner, BindingSubstitutionCloner
 from tilefoundry.ir.hir.schedule import ScheduleOp
-from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.core.mesh_region import MeshRegion
 from tilefoundry.ir.types import Mesh as MeshValue
 from tilefoundry.ir.tir.cpu.tensor import instruction_for, INSTRUCTIONS
 
@@ -144,8 +145,8 @@ class CPUChoices(ExprCloner):
         ):
             op = instruction_for(call.target, len(args), call.type.dtype)
             from tilefoundry.ir.hir.tensor.empty import Empty
-            from tilefoundry.ir.types import StorageKind
-            from tilefoundry.ir.types.stride import compact_row_major
+            from tilefoundry.ir.expr import StorageKind
+            from tilefoundry.ir.types import compact_row_major
 
             ty = replace(
                 call.type,
@@ -161,7 +162,7 @@ class CPUChoices(ExprCloner):
 
 def cpu_schedule(module, memo=None):
     from tilefoundry.dsl import ModuleList
-    from tilefoundry.ir.core import Op
+    from tilefoundry.ir.expr import Op
 
     memo = {} if memo is None else memo
     if id(module) in memo:

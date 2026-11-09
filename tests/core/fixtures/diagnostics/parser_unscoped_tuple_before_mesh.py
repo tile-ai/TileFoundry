@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="tuple_before_mesh", target=CpuTarget(), topologies=(Topology("cta", 1),))
+@module(entry="tuple_before_mesh", target=cpu.Target(), topologies=(Topology("cta", 1),))
 class TupleBeforeMesh:
     @func
     def tuple_before_mesh(

@@ -1,10 +1,10 @@
 """A WGMMA unit followed by an ordinary unit in the same CUDA project."""
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 @module(topologies=(Topology("thread", 128),))
@@ -39,7 +39,7 @@ class MixedUnits:
     group = _Group
     plain = _Plain
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def host(
         x0: Tensor[(128,), "f32"],
         o0: Tensor[(128,), "f32"],

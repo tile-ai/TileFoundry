@@ -1,0 +1,35 @@
+"""The ``MeshRegion`` expression: the participants a region of work runs on."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from tilefoundry.ir import expr, types
+
+
+@dataclass(unsafe_hash=True)
+class MeshRegion(expr.Expr):
+    """The participants a region of work runs on, as a node rather than a stack.
+
+    Which participants run a region is a fact about the program's structure, so
+    it is a region -- not a snapshot copied onto every expression inside, and not
+    something read back off the layout a result happens to carry. The node states
+    the participants and nothing else: what each unit sees of an operand is read
+    off that operand's own ``ShardLayout``, the way ``Local`` already reads it, so
+    there is no second copy of that to drift.
+    """
+
+    mesh: types.Mesh
+    body: expr.Expr
+    params: tuple[expr.Var, ...] = ()
+    args: tuple[expr.Expr, ...] = ()
+
+    def carries(self):
+        return ()
+
+    def captures(self) -> tuple[tuple[expr.Var, expr.Expr], ...]:
+        """Pair every region parameter with its argument."""
+        return tuple(zip(self.params, self.args, strict=True))
+
+
+__all__ = ["MeshRegion"]

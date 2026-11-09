@@ -1,6 +1,6 @@
-from tilefoundry.target import Target, register_target
+from tilefoundry import target
 
 
-@register_target
-class CollisionTarget(Target):
+@target.register
+class CollisionTarget(target.Target):
     name = 'nvidia.h200_sxm'

@@ -9,48 +9,38 @@ dtypes and the operand storages names the result storage by its C.
 
 from __future__ import annotations
 
-from tilefoundry.ir.core.op import supported_op_capabilities
-from tilefoundry.ir.hir._helpers import resolve_anchor_storage
-from tilefoundry.ir.hir.nn.matmul import (
-    MatMul,
-    matmul_result_dtype,
-    matmul_result_shape_and_layout,
-)
-from tilefoundry.ir.pattern import PatternMatcher
-from tilefoundry.ir.pattern.utils import selected_pattern, variants
-from tilefoundry.ir.types import DType, StorageKind, TensorType
-from tilefoundry.target import Target
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry_nvidia.cuda import CudaTarget
+from tilefoundry import target
+from tilefoundry.interfaces import schedule, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir.hir import nn
+from tilefoundry_nvidia.cuda import target as cuda_target
 
-_ON_CHIP = (StorageKind.SMEM, StorageKind.RMEM)
+ON_CHIP = (expr.StorageKind.SMEM, expr.StorageKind.RMEM)
 
 
-def _mma_declarations(target: Target) -> tuple[type, ...]:
+def mma_declarations(tgt: target.Target) -> tuple[type, ...]:
     """The atom declarations of the target's supported MatMul carriers."""
-    from tilefoundry.visitor_registry.candidates import candidate_ops  # noqa: PLC0415
-
-    carriers = candidate_ops(MatMul)
+    carriers = schedule.candidate_ops(nn.MatMul)
     return tuple(
         capability.declaration
-        for op_type, capability in supported_op_capabilities(target)
+        for op_type, capability in expr.supported_op_capabilities(tgt)
         if op_type in carriers and capability.declaration is not None
     )
 
 
-def _matches(pattern, value, configuration: dict) -> bool:
-    matcher = PatternMatcher(configuration)
-    return bool(matcher.match(pattern, value) and matcher.solve())
+def matches(declared, value, configuration: dict) -> bool:
+    matcher = pattern.Matcher(configuration)
+    return bool(matcher.match(declared, value) and matcher.solve())
 
 
-def _result_storages(
-    target: Target, lhs: TensorType, rhs: TensorType, dtype: DType
-) -> set[StorageKind]:
+def result_storages(
+    tgt: target.Target, lhs: types.TensorType, rhs: types.TensorType, dtype: expr.DType
+) -> set[expr.StorageKind]:
     storages = set()
-    for declaration in _mma_declarations(target):
-        for configuration in variants(declaration.parameters, vary_defaulted=True):
+    for declaration in mma_declarations(tgt):
+        for configuration in pattern.variants(declaration.parameters, vary_defaulted=True):
             a, b, c = (
-                selected_pattern(getattr(declaration, role), configuration)
+                pattern.selected(getattr(declaration, role), configuration)
                 for role in ("A", "B", "C")
             )
             fields = (
@@ -60,28 +50,31 @@ def _result_storages(
                 (b.storage, rhs.storage),
                 (c.dtype, dtype),
             )
-            if all(_matches(pattern, value, configuration) for pattern, value in fields):
+            if all(matches(declared, value, configuration) for declared, value in fields):
                 storages.add(c.storage)
     return storages
 
 
-@register_typeinfer(MatMul, target=CudaTarget)
-def _cuda_matmul(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(nn.MatMul, target=cuda_target.Target)
+def cuda_matmul(call: "Call", ctx: "TypeInferContext") -> types.TensorType:
     lhs = ctx.type_of(call.args[0])
     rhs = ctx.type_of(call.args[1])
-    shape, layout = matmul_result_shape_and_layout(call, ctx)
-    dtype = matmul_result_dtype(call.target, lhs)
-    if lhs.storage not in _ON_CHIP and rhs.storage not in _ON_CHIP:
-        storage = resolve_anchor_storage(ctx, call, lhs.storage, rhs.storage)
-        return TensorType(shape=shape, dtype=dtype, layout=layout, storage=storage)
-    target = ctx.resolve_target()
-    storages = _result_storages(target, lhs, rhs, dtype)
+    shape, layout = nn.matmul_result_shape_and_layout(call, ctx)
+    dtype = nn.matmul_result_dtype(call.target, lhs)
+    if lhs.storage not in ON_CHIP and rhs.storage not in ON_CHIP:
+        storage = typeinfer.resolve_anchor_storage(ctx, call, lhs.storage, rhs.storage)
+        return types.TensorType(shape=shape, dtype=dtype, layout=layout, storage=storage)
+    tgt = ctx.resolve_target()
+    storages = result_storages(tgt, lhs, rhs, dtype)
     if not storages:
         ctx.error(
             call,
-            f"no {target.identity} MMA reads lhs {lhs.dtype.name} {lhs.storage.name.lower()} "
+            f"no {tgt.identity} MMA reads lhs {lhs.dtype.name} {lhs.storage.name.lower()} "
             f"and rhs {rhs.dtype.name} {rhs.storage.name.lower()} into {dtype.name}; "
             "see `tilefoundry schedule facts`",
         )
-    storage = storages.pop() if len(storages) == 1 else StorageKind.UMAT
-    return TensorType(shape=shape, dtype=dtype, layout=layout, storage=storage)
+    storage = storages.pop() if len(storages) == 1 else expr.StorageKind.UMAT
+    return types.TensorType(shape=shape, dtype=dtype, layout=layout, storage=storage)
+
+
+__all__: list[str] = []

@@ -4,7 +4,7 @@ from .common import load_xy_reg, parse_writemask, read_uint, write_uint
 from .floating import convert_bits, fp_add, fp_fma, fp_isnan, fp_mul
 
 
-def _alu(x, y, z, bits, operand, subtract=False):
+def fma_alu(x, y, z, bits, operand, subtract=False):
     mode = (operand >> 27) & 7
     sign = 1 << (bits - 1)
     if subtract:
@@ -40,7 +40,7 @@ def _alu(x, y, z, bits, operand, subtract=False):
     return fp_fma(x, y, z, bits)
 
 
-def _emulate(state, operand, bits, subtract=False):
+def emulate_fma(state, operand, bits, subtract=False):
     n = bits // 8
     lanes = 64 // n
     zr = (operand >> 20) & 63
@@ -86,16 +86,19 @@ def _emulate(state, operand, bits, subtract=False):
             size = outbits // 8
             off = row * 64 + index * size
             z = read_uint(state.z, off, size)
-            write_uint(state.z, off, size, _alu(xv, yv, z, outbits, operand, subtract))
+            write_uint(state.z, off, size, fma_alu(xv, yv, z, outbits, operand, subtract))
 
 
-def emulate_AMX_FMA16(state, operand):
-    _emulate(state, operand, 16)
+def emulate_amx_fma16(state, operand):
+    emulate_fma(state, operand, 16)
 
 
-def emulate_AMX_FMA32(state, operand):
-    _emulate(state, operand, 32)
+def emulate_amx_fma32(state, operand):
+    emulate_fma(state, operand, 32)
 
 
-def emulate_AMX_FMA64(state, operand):
-    _emulate(state, operand, 64)
+def emulate_amx_fma64(state, operand):
+    emulate_fma(state, operand, 64)
+
+
+__all__ = ["emulate_amx_fma16", "emulate_amx_fma32", "emulate_amx_fma64", "emulate_fma"]

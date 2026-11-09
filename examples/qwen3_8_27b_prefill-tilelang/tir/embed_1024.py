@@ -7,10 +7,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def embed(
     table: ConstTensor[(248320, 5120), "bf16"], token_ids: Tensor[(1024,), "i64"], out: Tensor[(1024, 5, 256, 4), "bf16"]
 ):

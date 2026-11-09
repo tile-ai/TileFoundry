@@ -2,40 +2,43 @@
 
 from __future__ import annotations
 
-from tilefoundry.target.services import AnalysisCallable, AnalysisChecker, Analyzer
+from tilefoundry import services, target
+
+from .allocation import AllocationSummaryMetadata
+from .check import PerformanceChecker
+from .compute_cost import analyze_compute_cost
+from .liveness import LivenessMetadata
+from .memory import analyze_memory
+from .metadata import (
+    ComputeCostMetadata,
+    MemoryMetadata,
+    PerformanceMetadata,
+    PerformanceSummaryMetadata,
+    RegionMemoryMetadata,
+    RooflineMetadata,
+)
+from .performance import analyze_performance
+from .roofline import analyze_roofline
 
 
-class _PerformanceAnalyzer(Analyzer):
+class PerformanceAnalyzer(target.Analyzer):
     """The performance service and the program requirements it owns."""
 
-    def get_checker(self) -> AnalysisChecker:
+    def get_checker(self) -> target.AnalysisChecker:
         """Return a fresh visitor so one checked program cannot memoize another."""
-        from tilefoundry.analysis.check import PerformanceChecker  # noqa: PLC0415
-
         return PerformanceChecker()
 
 
-def builtin_analyzer(selector: str) -> Analyzer | None:
+def builtin_analyzer(selector: str) -> target.Analyzer | None:
     """Construct the one standard analysis service named by *selector*."""
     if selector == "compute-cost":
-        from tilefoundry.analysis.compute_cost import analyze_compute_cost  # noqa: PLC0415
-        from tilefoundry.analysis.metadata import ComputeCostMetadata  # noqa: PLC0415
-
-        return Analyzer(
+        return target.Analyzer(
             "compute-cost",
             analyze_compute_cost,
             produces=(ComputeCostMetadata,),
         )
     if selector == "memory":
-        from tilefoundry.analysis.allocation import AllocationSummaryMetadata  # noqa: PLC0415
-        from tilefoundry.analysis.liveness import LivenessMetadata  # noqa: PLC0415
-        from tilefoundry.analysis.memory import analyze_memory  # noqa: PLC0415
-        from tilefoundry.analysis.metadata import (  # noqa: PLC0415
-            MemoryMetadata,
-            RegionMemoryMetadata,
-        )
-
-        return Analyzer(
+        return target.Analyzer(
             "memory",
             analyze_memory,
             produces=(
@@ -46,23 +49,14 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
             ),
         )
     if selector == "roofline":
-        from tilefoundry.analysis.metadata import RooflineMetadata  # noqa: PLC0415
-        from tilefoundry.analysis.roofline import analyze_roofline  # noqa: PLC0415
-
-        return Analyzer(
+        return target.Analyzer(
             "roofline",
             analyze_roofline,
             requires=("compute-cost", "memory"),
             produces=(RooflineMetadata,),
         )
     if selector == "performance":
-        from tilefoundry.analysis.metadata import (  # noqa: PLC0415
-            PerformanceMetadata,
-            PerformanceSummaryMetadata,
-        )
-        from tilefoundry.analysis.performance import analyze_performance  # noqa: PLC0415
-
-        return _PerformanceAnalyzer(
+        return PerformanceAnalyzer(
             "performance",
             analyze_performance,
             requires=("compute-cost", "memory", "roofline"),
@@ -71,8 +65,6 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
     return None
 
 
-__all__ = [
-    "AnalysisCallable",
-    "Analyzer",
-    "builtin_analyzer",
-]
+services.registry.register(services.builtin_analyzer, builtin_analyzer)
+
+__all__ = ["builtin_analyzer"]

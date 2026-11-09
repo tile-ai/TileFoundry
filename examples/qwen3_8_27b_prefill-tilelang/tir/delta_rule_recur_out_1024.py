@@ -9,10 +9,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def recur_out(
     q: Tensor[(1024, 16, 128), "bf16"], k: Tensor[(1024, 16, 128), "bf16"], wup: Tensor[(1024, 48, 320), "bf16"], gc: Tensor[(48, 1024), "f32"], scratch: Tensor[(4096,), "bf16"], out: Tensor[(1024, 48, 128), "bf16"]
 ):

@@ -2,37 +2,31 @@
 
 from __future__ import annotations
 
-from tilefoundry.codegen.scalar_expr import render_scalar_expr
-from tilefoundry.ir.types.shard_layout import ShardLayout
-from tilefoundry.visitor_registry.registries import Role, register_codegen
-from tilefoundry_nvidia.cuda import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
-from tilefoundry_nvidia.cuda.ir.tir.sync.mbarrier import (
-    MBarrierArriveExpectTx,
-    MBarrierInit,
-    MBarrierInvalidate,
-    MBarrierWaitParity,
-)
+from tilefoundry import codegen
+from tilefoundry.ir import types
+from tilefoundry_nvidia.cuda import target
+from tilefoundry_nvidia.cuda.codegen import context
+from tilefoundry_nvidia.cuda.ir.tir import sync
 
 
-def barrier_word(var, ctx: CudaCodegenContext) -> str:
+def barrier_word(var, ctx: context.Context) -> str:
     """The address of the barrier word itself, as a generic pointer."""
     base = ctx.name_for(var)
     if ctx.is_kernel_param(var):
         base = f"{base}_tensor"
-    if isinstance(getattr(getattr(var, "type", None), "layout", None), ShardLayout):
+    if isinstance(getattr(getattr(var, "type", None), "layout", None), types.ShardLayout):
         base = f"tilefoundry::local({base})"
     return f"&{base}(0)"
 
 
-def _smem_addr(var, ctx: CudaCodegenContext) -> str:
+def smem_addr(var, ctx: context.Context) -> str:
     """The barrier's shared-window address, which every ``mbarrier.*`` takes."""
     return f"static_cast<unsigned>(__cvta_generic_to_shared({barrier_word(var, ctx)}))"
 
 
-@register_codegen(CudaTarget, Role.EMIT, MBarrierInit)
-def _emit_init(call, ctx: CudaCodegenContext) -> None:
-    addr = _smem_addr(call.args[0], ctx)
+@codegen.register(target.Target, codegen.Role.EMIT, sync.MBarrierInit)
+def emit_init(call, ctx: context.Context) -> None:
+    addr = smem_addr(call.args[0], ctx)
     count = int(call.target.arrive_count)
     ctx.emit(
         f'asm volatile("mbarrier.init.shared::cta.b64 [%0], %1;\\n" '
@@ -40,9 +34,9 @@ def _emit_init(call, ctx: CudaCodegenContext) -> None:
     )
 
 
-@register_codegen(CudaTarget, Role.EMIT, MBarrierArriveExpectTx)
-def _emit_arrive_expect_tx(call, ctx: CudaCodegenContext) -> None:
-    addr = _smem_addr(call.args[0], ctx)
+@codegen.register(target.Target, codegen.Role.EMIT, sync.MBarrierArriveExpectTx)
+def emit_arrive_expect_tx(call, ctx: context.Context) -> None:
+    addr = smem_addr(call.args[0], ctx)
     tx = int(call.target.tx_bytes)
     body = (
         "{\\n  .reg .b64 state;\\n"
@@ -51,10 +45,10 @@ def _emit_arrive_expect_tx(call, ctx: CudaCodegenContext) -> None:
     ctx.emit(f'asm volatile("{body}" :: "r"({addr}), "r"({tx}u));')
 
 
-@register_codegen(CudaTarget, Role.EMIT, MBarrierWaitParity)
-def _emit_wait_parity(call, ctx: CudaCodegenContext) -> None:
-    addr = _smem_addr(call.args[0], ctx)
-    phase = render_scalar_expr(call.args[1], ctx)
+@codegen.register(target.Target, codegen.Role.EMIT, sync.MBarrierWaitParity)
+def emit_wait_parity(call, ctx: context.Context) -> None:
+    addr = smem_addr(call.args[0], ctx)
+    phase = codegen.render_scalar_expr(call.args[1], ctx)
     ctx.emit("{")
     ctx.indent()
     ctx.emit("unsigned tilefoundry_mbarrier_ready = 0u;")
@@ -75,9 +69,9 @@ def _emit_wait_parity(call, ctx: CudaCodegenContext) -> None:
     ctx.emit("}")
 
 
-@register_codegen(CudaTarget, Role.EMIT, MBarrierInvalidate)
-def _emit_invalidate(call, ctx: CudaCodegenContext) -> None:
-    addr = _smem_addr(call.args[0], ctx)
+@codegen.register(target.Target, codegen.Role.EMIT, sync.MBarrierInvalidate)
+def emit_invalidate(call, ctx: context.Context) -> None:
+    addr = smem_addr(call.args[0], ctx)
     ctx.emit(f'asm volatile("mbarrier.inval.shared::cta.b64 [%0];\\n" :: "r"({addr}));')
 
 

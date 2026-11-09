@@ -41,7 +41,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from tilefoundry.dsl import ModuleList  # noqa: E402
-from tilefoundry.runtime.decorator import runtime_func, runtime_module  # noqa: E402
+from tilefoundry import runtime# noqa: E402
 
 import kernels as K  # noqa: E402
 from engine import _load_module  # noqa: E402
@@ -110,15 +110,15 @@ def _rms_norm(x, gamma):
     return out.reshape(1, 1, H)
 
 
-@runtime_module(ref.Qwen3_1_7B_DecoderLayer)
+@runtime.module(ref.Qwen3_1_7B_DecoderLayer)
 class LayerTwin:
     """One decoder layer, in the reference's signatures, on TileLang kernels."""
 
-    @runtime_func
+    @runtime.func
     def input_rms_norm(self, hidden, gamma_in):
         return _rms_norm(hidden, gamma_in)
 
-    @runtime_func
+    @runtime.func
     def self_attention(self, hidden, gamma_in, w_q, w_k, w_v, gamma_q, gamma_k,
                        cos_cache, sin_cache, pos_ids, k_cache, v_cache, scale, w_o):
         """Fused norm + QKV + q/k norm + rope + GQA attention + o_proj.
@@ -168,7 +168,7 @@ class LayerTwin:
         v_new = vc[ctx].reshape(1, 1, HKV, D).clone()
         return out, k_new, v_new
 
-    @runtime_func
+    @runtime.func
     def mlp(self, hidden, gamma_post, w_gate, w_up, w_down):
         """Fused post-attention norm + dense SwiGLU."""
         dev = hidden.device
@@ -181,7 +181,7 @@ class LayerTwin:
         )
         return dpart.sum(0).to(hidden.dtype).reshape(1, 1, H)
 
-    @runtime_func
+    @runtime.func
     def decoder_layer(self, hidden, gamma_in, w_q, w_k, w_v, gamma_q, gamma_k,
                       cos_cache, sin_cache, pos_ids, k_cache, v_cache, scale, w_o,
                       gamma_post, w_gate, w_up, w_down):
@@ -203,19 +203,19 @@ class LayerTwin:
 _ROOT_FUNCS = {}
 
 
-@runtime_func
+@runtime.func
 def embed(self, w_embed, token_ids):
     out = torch.empty(H, device=w_embed.device, dtype=w_embed.dtype)
     K.embed(V, H)(w_embed, token_ids.reshape(1).to(torch.int64), out)
     return out.reshape(1, 1, H)
 
 
-@runtime_func
+@runtime.func
 def final_rms_norm(self, hidden, gamma_final):
     return _rms_norm(hidden, gamma_final)
 
 
-@runtime_func
+@runtime.func
 def lm_head(self, hidden, w_head):
     dev = hidden.device
     kern, nb = K.lm_head(H, V, *T_HEAD)
@@ -227,7 +227,7 @@ def lm_head(self, hidden, w_head):
 
 
 #: The layers slot mirrors the authored ModuleList, one twin per instance.
-RootTwin = runtime_module(ref.Qwen3_1_7B)(type("RootTwin", (), {
+RootTwin = runtime.module(ref.Qwen3_1_7B)(type("RootTwin", (), {
     "__doc__": "The layer stack and the step around it, as a runtime twin.",
     "embed": embed,
     "final_rms_norm": final_rms_norm,

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
 @module(
     entry="run",
-    target=CpuTarget(),
+    target=cpu.Target(),
     topologies=(Topology("cta", 2), Topology("thread", 4)),
 )
 class ReshardEscape:

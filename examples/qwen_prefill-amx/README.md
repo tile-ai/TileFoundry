@@ -98,7 +98,7 @@ with no decode loop, MTP or vision path.
 ```text
 model.py                 the whole-model HIR and checkpoint weight converters
 scheduled.py             the same model with explicit AMX projection schedules
-runtime_model.py         RuntimeModule adapter for the original native model driver
+runtime_model.py         runtime.Module adapter for the original native model driver
 kernels/prefill.cpp       the original TVM FFI model and projection entries
 kernels/__init__.py       first-use native build and load
 weights.py               GGUF reading and checkpoint-to-module weight aliases

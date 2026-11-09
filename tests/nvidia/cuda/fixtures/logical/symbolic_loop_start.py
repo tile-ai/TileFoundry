@@ -1,10 +1,10 @@
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 NC = DimVar("chunks", 1, 32)
 
 
-@module(entry="read", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4),))
+@module(entry="read", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 4),))
 class SymbolicStart:
     @func
     def read(x: Tensor[(16,), "f32"]):

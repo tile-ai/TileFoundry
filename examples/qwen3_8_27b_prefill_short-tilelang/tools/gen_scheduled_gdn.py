@@ -36,7 +36,7 @@ C = 64
 PROJ_PAD = 16640      # row stride of the engine's in-projection buffer (engine.GDN_IN_PAD)
 
 PRE = '''from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 '''
 
@@ -122,7 +122,7 @@ PACK = CONV + 96
 EPS_L2 = {EPS}
 
 
-@module(entry="gdn_prep", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", NB * 80), Topology("thread", W * 32)))
+@module(entry="gdn_prep", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", NB * 80), Topology("thread", W * 32)))
 class SCHED_GDN_PREP_T{T}:
     @func
     def gdn_prep(proj: Tensor[(T_, PROJ), "bf16"], conv_w: Tensor[(CONV, 4), "bf16", Layout((CONV, 4), (4, 1))],
@@ -335,7 +335,7 @@ F_OFF = 28672
 PACK = {PACK}
 
 
-@module(entry="gdn_chunk", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", HV * NC), Topology("thread", 256)))
+@module(entry="gdn_chunk", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", HV * NC), Topology("thread", 256)))
 class SCHED_GDN_CHUNK_T{T}:
     @func
     def gdn_chunk(q: Tensor[(T_, 16, D), "bf16"], k: Tensor[(T_, 16, D), "bf16"], v: Tensor[(T_, HV, D), "bf16"],
@@ -540,7 +540,7 @@ C = 64
 S_ROW = T_
 
 
-@module(entry="gdn_scan", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", HV * 2), Topology("thread", 384)))
+@module(entry="gdn_scan", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", HV * 2), Topology("thread", 384)))
 class SCHED_GDN_SCAN_T{T}:
     @func
     def gdn_scan(q: Tensor[(T_, 16, D), "bf16"], k: Tensor[(T_, 16, D), "bf16"], ut: Tensor[(HV, NC, D, C), "f32"],
@@ -688,7 +688,7 @@ INV_D = 0.0078125
 EPS = 1e-6
 
 
-@module(entry="gdn_norm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", T_ * 6), Topology("thread", 128)))
+@module(entry="gdn_norm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", T_ * 6), Topology("thread", 128)))
 class SCHED_GDN_NORM_T{T}:
     @func
     def gdn_norm(o: Tensor[(T_, HV, D), "bf16"], proj: Tensor[(T_, PROJ), "bf16"],

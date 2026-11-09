@@ -11,7 +11,7 @@ Structure: one CTA per (128 x 160) output tile, tiles launched M-fastest;
 the checkpoint's (out, in) weight, read K-major (b_major=K) through a bitcast view.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 512
 N = 5120
@@ -24,7 +24,7 @@ GM = M // BM
 GN = N // BN
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", GM * GN), Topology("thread", 384)))
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", GM * GN), Topology("thread", 384)))
 class SCHED_DOWN_T512:
     @func
     def gemm(a: Tensor[(M, K), "bf16"], w: Tensor[(N, K), "bf16"], residual: Tensor[(M, N), "bf16"]) -> Tensor[(M, N), "bf16"]:

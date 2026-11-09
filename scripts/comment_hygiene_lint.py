@@ -16,44 +16,28 @@ import io
 import re
 import sys
 import tokenize
+import tomllib
 from pathlib import Path
 
-MAX_PROSE_LINES = 8
-MAX_COLUMNS = 100
-MAX_ASSERT_MESSAGE = 100
-EXEMPT_PREFIXES = (
-    "tests/nvidia/cuda/models/",
-    "tests/core/models/decode_oracle.py",
-    "tests/core/models/dense_decode.py",
-    "targets/nvidia/tilefoundry_nvidia/cuda/models/",
-    "examples/",
-)
-DIRECTIVE_PREFIXES = ("ruff:", "noqa", "type:", "pragma:", "mypy:", "fmt:", "isort:")
 PYTHON_SUFFIXES = frozenset({".py"})
 C_SUFFIXES = frozenset({".h", ".hpp", ".cuh", ".cu", ".cpp", ".cc"})
 GOOGLE_SECTION = re.compile(
     r"^\s*(?:Args|Arguments|Attributes|Example|Examples|Note|Notes|Parameters"
     r"|Raises|References|Returns|See Also|Todo|Warns|Warnings|Yields)\s*:\s*$"
 )
-ALLOW = re.compile(r"\bhygiene:")
-NARRATION: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"\bAC-\d+-\d+\b"), "an acceptance-criterion id"),
-    (re.compile(r"\bmilestones?\s+M\d+\b", re.IGNORECASE), "a milestone reference"),
-    (re.compile(r"\bplans?\s+`?\d+`?\b", re.IGNORECASE), "a plan reference"),
-    (re.compile(r"docs/plans/"), "a plan path"),
-    (re.compile(r"\b(?:PR|pull request|issue)\s*#?\d+\b", re.IGNORECASE), "a PR/issue reference"),
-    (re.compile(r"\bcommit\s+[0-9a-f]{7,40}\b", re.IGNORECASE), "a commit hash"),
-    (
-        re.compile(
-            r"\b(?:as discussed|per review|review(?:er)? (?:said|asked|wants|requested)"
-            r"|address(?:ed|ing) (?:the )?(?:review|feedback)|as agreed)\b",
-            re.IGNORECASE,
-        ),
-        "review narration",
-    ),
-)
 SELF = Path(__file__).resolve()
 ROOT = SELF.parent.parent
+_RULES = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"][
+    "comment_hygiene"
+]
+MAX_PROSE_LINES = _RULES["max_prose_lines"]
+MAX_COLUMNS = _RULES["max_columns"]
+MAX_ASSERT_MESSAGE = _RULES["max_assert_message"]
+EXEMPT_PREFIXES = tuple(_RULES["exempt"])
+DIRECTIVE_PREFIXES = tuple(_RULES["directive_prefixes"])
+NARRATION: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(pattern), what) for pattern, what in _RULES["narration"]
+)
 
 
 def is_exempt(path: Path) -> bool:
@@ -77,12 +61,14 @@ def comment_tokens(text: str) -> list[tokenize.TokenInfo]:
         return []
 
 
+def is_shebang(token: tokenize.TokenInfo) -> bool:
+    """Whether a hash token is the interpreter line at the top of the file."""
+    return token.start == (1, 0) and token.string.startswith("#!")
+
+
 def is_directive(token: tokenize.TokenInfo) -> bool:
     """Whether a hash token addresses a tool rather than a reader."""
-    body = token.string.lstrip("#").strip()
-    return body.startswith(DIRECTIVE_PREFIXES) or (
-        token.start[0] == 1 and token.start[1] == 0 and token.string.startswith("#!")
-    )
+    return token.string.lstrip("#").strip().startswith(DIRECTIVE_PREFIXES)
 
 
 def prose_lines(text: str) -> int:
@@ -120,8 +106,6 @@ def _narration(lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
     """Transient process references in numbered prose lines."""
     found = []
     for number, line in lines:
-        if ALLOW.search(line):
-            continue
         for pattern, what in NARRATION:
             if pattern.search(line):
                 found.append((number, f"documentation carries {what}"))
@@ -144,7 +128,16 @@ def placement_findings(text: str) -> list[tuple[int, str]]:
     return [
         (token.start[0], "explanation outside a docstring")
         for token in comment_tokens(text)
-        if not is_directive(token)
+        if not is_shebang(token) and not is_directive(token)
+    ]
+
+
+def directive_findings(text: str) -> list[tuple[int, str]]:
+    """Python comments that address a tool; the shebang is the only exception."""
+    return [
+        (token.start[0], "tool directive; exceptions live in pyproject.toml")
+        for token in comment_tokens(text)
+        if not is_shebang(token) and is_directive(token)
     ]
 
 
@@ -164,23 +157,6 @@ def docstring_findings(text: str) -> list[tuple[int, str]]:
             if width > MAX_COLUMNS:
                 found.append(
                     (number, f"documentation line is {width} columns; limit is {MAX_COLUMNS}")
-                )
-    return found
-
-
-def width_findings(text: str) -> list[tuple[int, str]]:
-    """Overwide Python tool directives and shebangs."""
-    found = []
-    lines = text.splitlines()
-    for token in comment_tokens(text):
-        if is_directive(token):
-            width = len(lines[token.start[0] - 1].rstrip())
-            if width > MAX_COLUMNS:
-                found.append(
-                    (
-                        token.start[0],
-                        f"documentation line is {width} columns; limit is {MAX_COLUMNS}",
-                    )
                 )
     return found
 
@@ -388,7 +364,7 @@ def findings(path: Path) -> list[tuple[int, str]]:
     if not is_exempt(path) or path.resolve() == SELF:
         found.extend(placement_findings(text))
         found.extend(docstring_findings(text))
-        found.extend(width_findings(text))
+        found.extend(directive_findings(text))
     return sorted(found)
 
 

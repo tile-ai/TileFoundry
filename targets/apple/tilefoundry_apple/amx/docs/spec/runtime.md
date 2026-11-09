@@ -4,13 +4,13 @@
 instruction macros from Peter Cawley's `corsix/amx` reference. The adjacent
 `LICENSE` retains the MIT copyright and permission notice.
 
-The catalogue contains24 named entries over opcodes0..22, with SET and CLR
-sharing opcode17: LDX/LDY/LDZ/LDZI, STX/STY/STZ/STZI, EXTRX/EXTRY,
+The catalogue contains 24 named entries over opcodes 0..22, with SET and CLR
+sharing opcode 17: LDX/LDY/LDZ/LDZI, STX/STY/STZ/STZI, EXTRX/EXTRY,
 FMA16/32/64, FMS16/32/64, MAC16, VECFP/VECINT, MATFP/MATINT, GENLUT,
 and SET/CLR. EXTRH/EXTRV are modes of the extraction opcodes.
 
 The header is a reference for agents authoring native implementations. Arguments
-are the original encoded64-bit instruction operands; SET/CLR take no GPR operand.
+are the original encoded 64-bit instruction operands; SET/CLR take no GPR operand.
 Callers construct the instruction's documented fields and own register state,
 thread lifetime and memory. Calling a macro issues a real AMX instruction.
 

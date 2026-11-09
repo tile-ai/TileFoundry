@@ -23,10 +23,10 @@ import json
 from pathlib import Path
 
 from tilefoundry import func, module
-from tilefoundry.runtime import runtime_func, runtime_module
+from tilefoundry import runtime
 from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Mesh, Tensor, tf
-from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target import CudaTarget
+from tilefoundry.ir.types import Topology
+from tilefoundry_nvidia import cuda
 
 H, HQ, HKV, DH = 2688, 32, 2, 128
 GQA = HQ // HKV
@@ -46,7 +46,7 @@ CT = DimVar("ctx_tail", 1, ABLK + 1)
 WRK = 32
 WRK_BOTH = 4
 
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 _CTA = Topology("cta", 132)
 
 #: The ladder compares one decision, so the projections are not in it: they are
@@ -401,7 +401,7 @@ class AttnDispatch:
         return by_context(qg, k_cache, v_cache, k_tail, v_tail)
 
 
-@runtime_module(AttnDispatch)
+@runtime.module(AttnDispatch)
 class AttnRuntime:
     """The kernel's two attention bodies, against the ladder that states them.
 
@@ -414,19 +414,19 @@ class AttnRuntime:
     139 GB (see ISSUES.md).
     """
 
-    @runtime_func
+    @runtime.func
     def by_head_worker(self, qg, k_cache, v_cache, k_tail, v_tail):
         import mega_kernel  # noqa: PLC0415 -- compiled on first use
 
         return mega_kernel.run_attn("head", qg, k_cache, v_cache, k_tail, v_tail)
 
-    @runtime_func
+    @runtime.func
     def by_context(self, qg, k_cache, v_cache, k_tail, v_tail):
         import mega_kernel  # noqa: PLC0415
 
         return mega_kernel.run_attn("context", qg, k_cache, v_cache, k_tail, v_tail)
 
-    @runtime_func
+    @runtime.func
     def attend(self, qg, k_cache, v_cache, k_tail, v_tail):
         import mega_kernel  # noqa: PLC0415
 

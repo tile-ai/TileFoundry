@@ -5,7 +5,7 @@ products, signatures and linking. This spec owns the CUDA implementations.
 
 ## 1. Emission and launch boundary
 
-`CudaTarget` binds `EmitContext` to `CudaCodegenContext` and `LinkableModule`
+`cuda.Target` binds `EmitContext` to `codegen.Context` and `LinkableModule`
 to `CudaLinkableModule`. Both full and skeleton emission are supported;
 skeleton emission rejects targets with `device_count`, because its editable
 body does not implement multi-device execution. Skeletons retain signatures,
@@ -22,14 +22,15 @@ kernel ran. A host unit MUST NOT reference CUDA or CuTe
 types.
 
 CUDA registers the host writer for shared `Launch` at
-`(CpuTarget, Role.EMIT, Launch)`. It selects CUDA's CALLEE and CALLER writers
+`(cuda.Target, Role.LAUNCH, Launch)`; the CPU host entry reaches it through
+the callee's Target. It selects CUDA's CALLEE and CALLER writers
 through the registry using the host's local names. `MeshScope` statement
 emission and `MeshCoord` scalar emission use the same per-target registry.
 
 ## 2. Context and value emission
 
 ```python
-class CudaCodegenContext(EmitContext):
+class Context(EmitContext):
     """A compile writing CUDA: the shared context plus what only CUDA states."""
 
     launches: Mapping[int, Geometry]
@@ -38,7 +39,7 @@ class CudaCodegenContext(EmitContext):
     def bind_extents(self, params) -> None: ...
     def reset_barrier_ids(self) -> None: ...
     def alloc_barrier_id(self) -> int: ...
-    def declare_smem_base(self, write: Callable[[CudaCodegenContext], None]) -> None: ...
+    def declare_smem_base(self, write: Callable[[Context], None]) -> None: ...
     def smem_base(self) -> str: ...
     def dtype_to_cpp(self, dtype_name: str) -> str: ...
 ```
@@ -63,12 +64,11 @@ while owning register tensors are copied.
 
 CUDA emits `CopyAsyncBulk` and `LdMatrix` as the uniform runtime calls
 `tilefoundry::ops::copy_async_bulk(...)` and
-`tilefoundry::ops::ldmatrix(...)`. `CopyAsyncTensor` is nevertheless a public
-TIR declaration, but CUDA emission MUST fail explicitly until the host can
+`tilefoundry::ops::ldmatrix(...)`. `CopyAsyncTensor` is a public TIR declaration, but CUDA emission MUST fail explicitly until the host can
 construct and pass encoded tensor maps; it MUST NOT substitute a bulk or
-thread-issued copy. `CopyReduceAsyncTensor` has the same explicit unsupported
-boundary; it MUST NOT substitute a copy that drops the reduction. `StMatrix` likewise MUST fail explicitly until stmatrix
-runtime support exists.
+thread-issued copy. `CopyReduceAsyncTensor` has the same boundary and MUST NOT
+substitute a copy that drops the reduction. `StMatrix` MUST fail explicitly
+until stmatrix runtime support exists.
 
 ## 3. Runtime-owned op dispatch
 

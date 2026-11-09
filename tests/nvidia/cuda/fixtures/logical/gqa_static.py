@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 S = 1
 C = 4096
@@ -23,13 +23,13 @@ GQA_GROUP = NUM_Q_HEADS // NUM_KV_HEADS
 SCALE = 1.0 / math.sqrt(HEAD_DIM)
 
 
-@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
+@func(target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
 def static_online_attend(
     q: Tensor[(1, S, NUM_Q_HEADS, HEAD_DIM), "bf16"],
     k_cache: Tensor[(1, C, NUM_KV_HEADS, HEAD_DIM), "bf16"],
     v_cache: Tensor[(1, C, NUM_KV_HEADS, HEAD_DIM), "bf16"],
 ) -> Tensor[(1, S, NUM_Q_HEADS, HEAD_DIM), "bf16"]:
-    with Mesh(("cta",), layout=(132,)) as cta:  # noqa: F841
+    with Mesh(("cta",), layout=(132,)) as cta:
         q_sh = tf.reshard(q, layout=(1, S, NUM_Q_HEADS, HEAD_DIM))
         q_f = tf.cast(q_sh, dtype="f32")
         q_s = q_f * tf.full_like(q_f, value=SCALE)

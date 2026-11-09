@@ -7,41 +7,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from math import prod
 
-from tilefoundry.ir.core import (
-    Call,
-    Expr,
-    SSAValue,
-    VerifyError,
-    describe_expr,
-    get_metadata,
-)
-from tilefoundry.ir.core import attach_metadata as attach
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.types import TensorType, TupleType, Type
-from tilefoundry.ir.types.mesh import Mesh, separate, within_scope
-from tilefoundry.ir.types.shard_layout import shard_layout_of
-from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.types.utils import (
-    bytes_by_storage,
-    is_unsharded_layout,
-    leaves_of,
-    participant_layout,
-    physical_layout,
-)
-from tilefoundry.target.facts import TopologyFacts
-from tilefoundry.utils.units import format_bytes
-from tilefoundry.visitor_registry.access_relation import (
-    access_relation_registry,
-    projected,
-    reached_elements,
-    reached_leaves,
-    relations_of,
-    static_bytes,
-)
-from tilefoundry.visitor_registry.contexts import Cost, CostContext
-from tilefoundry.visitor_registry.valuation import ValuationVisitor
-from tilefoundry.visitor_registry.visitors import CostEvaluator
+from tilefoundry import target, utils
+from tilefoundry.interfaces import access, cost, valuation
+from tilefoundry.ir import core, expr, types
+from tilefoundry.ir import utils as ir_utils
 
 from .access import AliasKind
 from .allocation import (
@@ -50,33 +19,23 @@ from .allocation import (
     solve_allocation,
 )
 from .compute_cost import accumulate_logical, grouped_breakdown, with_dependencies
-from .errors import AnalysisError
-from .facts import TARGET_MEMORY_OWNER, MemoryHierarchyFacts
+from .errors import Error
 from .footprint import (
     cached_level,
-    footprint_of,
     reached_by,
     reuse_windows,
     wave_of,
 )
 from .iteration_scope import IterationScope, Repeats
 from .liveness import analyze_liveness, result_copies
-from .metadata import (
-    Breakdown,
-    Footprint,
-    MemoryLevelPeak,
-    MemoryMetadata,
-    RegionMemoryMetadata,
-    Spread,
-    Traffic,
-    TrafficBytes,
-    ValueLifetime,
-)
-from .precision import AnalysisPrecision
+from .metadata import MemoryLevelPeak, MemoryMetadata, RegionMemoryMetadata, Traffic, ValueLifetime
+from .precision import Precision
+from .quantity import Breakdown, Spread
+from .reach import Footprint, footprint_of
 from .visitor import AnalyzeContext
 
 SELECTOR = "memory"
-_UMAT_CONSUMPTION_LEVEL = str(StorageKind.RMEM)
+UMAT_CONSUMPTION_LEVEL = str(expr.StorageKind.RMEM)
 
 
 @dataclass(frozen=True)
@@ -88,8 +47,8 @@ class MemoryOptions:
     random_seed: int = 0
 
 
-def _reached_bytes(
-    boundaries: tuple[tuple[Type, object], ...], umat_level: str | None
+def reached_bytes(
+    boundaries: tuple[tuple[types.Type, object], ...], umat_level: str | None
 ) -> tuple[int, dict[str, int]] | None:
     """What one operand's boundaries reach, in bytes and per level.
 
@@ -102,29 +61,29 @@ def _reached_bytes(
     """
     total = 0
     by_memory_level: dict[str, int] = {}
-    for held, access in boundaries:
-        leaves = leaves_of(held)
+    for held, acc in boundaries:
+        leaves = ir_utils.leaves_of(held)
         if not leaves:
             return None
         if len(leaves) == 1:
-            taken = {0: _bytes_for(leaves[0], reached_elements(access))}
+            taken = {0: bytes_for(leaves[0], access.reached_elements(acc))}
         else:
-            reached = reached_leaves(access, len(leaves))
+            reached = access.reached_leaves(acc, len(leaves))
             if reached is None:
                 return None
-            taken = {index: static_bytes(leaves[index]) for index in sorted(reached)}
+            taken = {index: access.static_bytes(leaves[index]) for index in sorted(reached)}
         for index, size in taken.items():
             if size is None:
                 return None
             total += size
             leaf = leaves[index]
-            memory_level = umat_level if leaf.storage is StorageKind.UMAT else str(leaf.storage)
+            memory_level = umat_level if leaf.storage is expr.StorageKind.UMAT else str(leaf.storage)
             if memory_level is not None:
                 by_memory_level[memory_level] = by_memory_level.get(memory_level, 0) + size
     return total, by_memory_level
 
 
-def _bytes_for(held: Type, elements: int | None) -> int | None:
+def bytes_for(held: types.Type, elements: int | None) -> int | None:
     """The bytes *elements* of *held* occupy, or ``None`` when unanswerable.
 
     Counted from how wide one element is, rounded up: a packed dtype has no
@@ -132,7 +91,7 @@ def _bytes_for(held: Type, elements: int | None) -> int | None:
     bool to nothing and nine of them to one byte instead of two. A value whose
     element width nobody states is not one this can answer for.
     """
-    if elements is None or not isinstance(held, TensorType):
+    if elements is None or not isinstance(held, types.TensorType):
         return None
     bits = getattr(held.dtype, "bit_width", None)
     if not isinstance(bits, int) or isinstance(bits, bool) or bits <= 0:
@@ -140,13 +99,13 @@ def _bytes_for(held: Type, elements: int | None) -> int | None:
     return -(-elements * bits // 8)
 
 
-def _movement(
-    call: Call,
-    cost: Cost,
-    ctx: CostContext,
-    types: tuple[Type, ...],
+def movement(
+    call: expr.Call,
+    cost_value: cost.Cost,
+    ctx: cost.Context,
+    type_list: tuple[types.Type, ...],
     scope: IterationScope | None = None,
-) -> tuple[tuple[tuple[str, TrafficBytes], ...], tuple[TrafficBytes, ...]]:
+) -> tuple[tuple[tuple[str, cost.TrafficBytes], ...], tuple[cost.TrafficBytes, ...]]:
     """What each operand of *call* moves, and the levels those bytes are at.
 
     A Type says how big a value is, not how much of it this occurrence touches,
@@ -158,55 +117,55 @@ def _movement(
     is refused, as is a boundary nothing can charge in bytes.
     """
     operands = (*call.args, call)
-    if len(cost.traffic) != len(operands):
-        raise AnalysisError(
-            f"{describe_expr(call)}: cost reports {len(cost.traffic)} operands, "
+    if len(cost_value.traffic) != len(operands):
+        raise Error(
+            f"{expr.describe_value(call)}: cost reports {len(cost_value.traffic)} operands, "
             f"the call has {len(operands)}"
         )
-    traffic = cost.traffic
-    if isinstance(call.target, Function):
+    traffic = cost_value.traffic
+    if isinstance(call.target, core.Function):
         charged = [
-            bytes_by_storage(
+            ir_utils.bytes_by_storage(
                 type_,
-                umat_level=_UMAT_CONSUMPTION_LEVEL if index < len(call.args) else None,
+                umat_level=UMAT_CONSUMPTION_LEVEL if index < len(call.args) else None,
             )
-            for index, type_ in enumerate(types)
+            for index, type_ in enumerate(type_list)
         ]
     else:
-        if access_relation_registry.lookup(type(call.target)) is None:
-            raise AnalysisError(
-                f"{describe_expr(call)}: states no access relations, so nothing here "
+        if not access.relation_registry.has(type(call.target)):
+            raise Error(
+                f"{expr.describe_value(call)}: states no access relations, so nothing here "
                 "says what it moves"
             )
         local_relations = (
             scope.access.projected_relations(call, ctx)
             if scope is not None
-            else projected(relations_of(call, ctx), call, ctx)
+            else access.projected(access.relations_of(call, ctx), call, ctx)
         )
         result = ctx.local_type_of(call)
-        fields = result.fields if isinstance(result, TupleType) else (result,)
+        fields = result.fields if isinstance(result, types.TupleType) else (result,)
         outputs = local_relations[len(call.args) :]
         if len(fields) > len(outputs):
-            raise AnalysisError(
-                f"{describe_expr(call)}: states {len(outputs)} output "
+            raise Error(
+                f"{expr.describe_value(call)}: states {len(outputs)} output "
                 f"boundaries for a result of {len(fields)} fields"
             )
         amounts, charged = [], []
-        for index, moved in enumerate(cost.traffic):
+        for index, moved in enumerate(cost_value.traffic):
             if index == len(call.args):
                 asked = tuple((field_, outputs[position]) for position, field_ in enumerate(fields))
                 memory_level = None
             else:
-                asked = ((types[index], local_relations[index]),)
-                memory_level = _UMAT_CONSUMPTION_LEVEL
-            answer = _reached_bytes(asked, memory_level)
+                asked = ((type_list[index], local_relations[index]),)
+                memory_level = UMAT_CONSUMPTION_LEVEL
+            answer = reached_bytes(asked, memory_level)
             if answer is None:
-                raise AnalysisError(
-                    f"{describe_expr(call)}: boundary {index} reaches coordinates "
+                raise Error(
+                    f"{expr.describe_value(call)}: boundary {index} reaches coordinates "
                     "nothing here can charge in bytes"
                 )
             moving, by_memory_level = answer
-            amounts.append(TrafficBytes(moving if moved.read else 0, moving if moved.write else 0))
+            amounts.append(cost.TrafficBytes(moving if moved.read else 0, moving if moved.write else 0))
             charged.append(by_memory_level)
         traffic = tuple(amounts)
     reads: dict[str, int] = {}
@@ -220,7 +179,7 @@ def _movement(
     moving = any(item.read or item.write for item in traffic)
     levels = (
         tuple(
-            (name, TrafficBytes(reads.get(name, 0), writes.get(name, 0)))
+            (name, cost.TrafficBytes(reads.get(name, 0), writes.get(name, 0)))
             for name in sorted(set(reads) | set(writes))
         )
         if moving
@@ -230,9 +189,9 @@ def _movement(
 
 
 def call_traffic(
-    expr: Call,
-    whole: CostContext,
-    locals_by_unit: "dict[str, CostContext]",
+    node: expr.Call,
+    whole: cost.Context,
+    locals_by_unit: "dict[str, cost.Context]",
     scope: IterationScope | None = None,
     counted: str | None = None,
 ) -> MemoryMetadata:
@@ -245,28 +204,28 @@ def call_traffic(
     The Type of the leaf it reached names the level those bytes are charged at,
     and an allocation does not correct either answer.
     """
-    storage_whole: dict[str, TrafficBytes] = {}
-    storage_per_unit: dict[str, dict[str, TrafficBytes]] = {}
-    crossing_whole: dict[str, TrafficBytes] = {}
-    crossing_per_unit: dict[str, dict[str, TrafficBytes]] = {}
-    operands: tuple[TrafficBytes, ...] = ()
+    storage_whole: dict[str, cost.TrafficBytes] = {}
+    storage_per_unit: dict[str, dict[str, cost.TrafficBytes]] = {}
+    crossing_whole: dict[str, cost.TrafficBytes] = {}
+    crossing_per_unit: dict[str, dict[str, cost.TrafficBytes]] = {}
+    operands: tuple[cost.TrafficBytes, ...] = ()
     for unit, ctx in ((None, whole), *locals_by_unit.items()):
         try:
-            cost = CostEvaluator().visit(expr, ctx)
-        except (ValueError, VerifyError) as error:
-            raise AnalysisError(str(error)) from None
-        types = (
-            *(ctx.local_type_of(arg) for arg in expr.args),
-            ctx.local_type_of(expr),
+            cost_value = cost.Visitor().visit(node, ctx)
+        except (ValueError, expr.VerifyError) as error:
+            raise Error(str(error)) from None
+        type_list = (
+            *(ctx.local_type_of(arg) for arg in node.args),
+            ctx.local_type_of(node),
         )
-        levels, positional = _movement(expr, cost, ctx, types, scope)
+        levels, positional = movement(node, cost_value, ctx, type_list, scope)
         for memory_level, moved in levels:
             if unit is None:
                 storage_whole[memory_level] = moved
             else:
                 storage_per_unit.setdefault(memory_level, {})[unit] = moved
-        for boundary, moved in cost.sent:
-            if unit is not None and _finer_than(unit, boundary, locals_by_unit):
+        for boundary, moved in cost_value.sent:
+            if unit is not None and finer_than(unit, boundary, locals_by_unit):
                 continue
             if unit is None:
                 crossing_whole[boundary] = moved
@@ -274,15 +233,15 @@ def call_traffic(
                 crossing_per_unit.setdefault(boundary, {})[unit] = moved
         if unit is None:
             operands = positional
-    positions = scope.mesh_positions if scope is not None else lambda _unit: 1
+    positions = scope.mesh_positions if scope is not None else lambda _: 1
     counted = counted or next(iter(locals_by_unit))
     return MemoryMetadata(
         topologies=tuple(locals_by_unit),
         traffic=Traffic(
-            storage=_occurrence_shares(
+            storage=occurrence_shares(
                 storage_whole, storage_per_unit, tuple(locals_by_unit), counted, positions
             ),
-            communication=_occurrence_shares(
+            communication=occurrence_shares(
                 crossing_whole, crossing_per_unit, tuple(locals_by_unit), None, positions
             ),
         ),
@@ -290,7 +249,7 @@ def call_traffic(
     )
 
 
-def _finer_than(unit: str, boundary: str, ordered: "dict[str, CostContext]") -> bool:
+def finer_than(unit: str, boundary: str, ordered: "dict[str, cost.Context]") -> bool:
     """Whether *unit* sits inside *boundary* rather than at or around it.
 
     Crossing a boundary is what the units on either side of it do. A unit
@@ -303,13 +262,13 @@ def _finer_than(unit: str, boundary: str, ordered: "dict[str, CostContext]") -> 
     return names.index(unit) > names.index(boundary)
 
 
-def _occurrence_shares(
-    whole: dict[str, TrafficBytes],
-    per_unit: dict[str, dict[str, TrafficBytes]],
+def occurrence_shares(
+    whole: dict[str, cost.TrafficBytes],
+    per_unit: dict[str, dict[str, cost.TrafficBytes]],
     topologies: tuple[str, ...],
     counted: str | None,
     positions: Callable[[str | None], int],
-) -> "Breakdown[TrafficBytes]":
+) -> "Breakdown[cost.TrafficBytes]":
     """One entry per level, each carrying the whole and every level's share.
 
     ``counted`` selects storage's unit; None counts each communication boundary
@@ -322,17 +281,17 @@ def _occurrence_shares(
     for name in sorted({*whole, *per_unit}):
         unit = counted if counted is not None else name
         if unit not in topologies:
-            raise AnalysisError(f"memory: counted topology {unit!r} is not declared")
-        moved = per_unit.get(name, {}).get(unit, TrafficBytes())
+            raise Error(f"memory: counted topology {unit!r} is not declared")
+        moved = per_unit.get(name, {}).get(unit, cost.TrafficBytes())
         factor = positions(unit)
         entries.append(
             (
                 name,
                 Spread(
-                    logical_groups=(((), whole.get(name, TrafficBytes())),),
-                    total=TrafficBytes(moved.read * factor, moved.write * factor),
+                    logical_groups=(((), whole.get(name, cost.TrafficBytes())),),
+                    total=cost.TrafficBytes(moved.read * factor, moved.write * factor),
                     per_unit=tuple(
-                        per_unit.get(name, {}).get(level, TrafficBytes()) for level in topologies
+                        per_unit.get(name, {}).get(level, cost.TrafficBytes()) for level in topologies
                     ),
                 ),
             )
@@ -341,17 +300,17 @@ def _occurrence_shares(
 
 
 @dataclass
-class _TrafficAccounts:
+class TrafficAccounts:
     """Function traffic kept separate in its three counting domains."""
 
     groups: dict = field(default_factory=dict)
-    total: dict[str, TrafficBytes] = field(default_factory=dict)
-    per_unit: dict[str, dict[str, TrafficBytes]] = field(default_factory=dict)
+    total: dict[str, cost.TrafficBytes] = field(default_factory=dict)
+    per_unit: dict[str, dict[str, cost.TrafficBytes]] = field(default_factory=dict)
 
 
-def _account_shares(
-    accounts: _TrafficAccounts, topologies: tuple[str, ...]
-) -> Breakdown[TrafficBytes]:
+def account_shares(
+    accounts: TrafficAccounts, topologies: tuple[str, ...]
+) -> Breakdown[cost.TrafficBytes]:
     """Build a breakdown without encoding an account as a topology key."""
     names = sorted({*accounts.total, *accounts.per_unit})
     return grouped_breakdown(
@@ -360,9 +319,9 @@ def _account_shares(
                 (
                     name,
                     Spread(
-                        total=accounts.total.get(name, TrafficBytes()),
+                        total=accounts.total.get(name, cost.TrafficBytes()),
                         per_unit=tuple(
-                            accounts.per_unit.get(name, {}).get(unit, TrafficBytes())
+                            accounts.per_unit.get(name, {}).get(unit, cost.TrafficBytes())
                             for unit in topologies
                         ),
                     ),
@@ -374,17 +333,19 @@ def _account_shares(
     )
 
 
-def _accumulate(into: dict[str, TrafficBytes], name: str, moved: TrafficBytes, trips: int) -> None:
-    running = into.get(name, TrafficBytes())
-    into[name] = TrafficBytes(
+def accumulate_traffic(
+    into: dict[str, cost.TrafficBytes], name: str, moved: cost.TrafficBytes, trips: int
+) -> None:
+    running = into.get(name, cost.TrafficBytes())
+    into[name] = cost.TrafficBytes(
         running.read + moved.read * trips,
         running.write + moved.write * trips,
     )
 
 
 def add_traffic(
-    storage: _TrafficAccounts,
-    communication: _TrafficAccounts,
+    storage: TrafficAccounts,
+    communication: TrafficAccounts,
     record: MemoryMetadata,
     repeats: Repeats,
     ctx: MemoryContext,
@@ -396,12 +357,14 @@ def add_traffic(
     ):
         for name, spread in stated.kinds:
             accumulate_logical(into.groups, name, spread, ctx)
-            _accumulate(into.total, name, spread.total, repeats.loop_trips)
+            accumulate_traffic(into.total, name, spread.total, repeats.loop_trips)
             for unit, moved in zip(record.topologies, spread.per_unit, strict=False):
-                _accumulate(into.per_unit.setdefault(name, {}), unit, moved, repeats.loop_trips)
+                accumulate_traffic(
+                    into.per_unit.setdefault(name, {}), unit, moved, repeats.loop_trips
+                )
 
 
-def held_in_region(value_mesh: Mesh, region_mesh: Mesh) -> bool:
+def held_in_region(value_mesh: types.Mesh, region_mesh: types.Mesh) -> bool:
     """Whether the region selects holders of *value_mesh* at every level it names.
 
     A value mesh may also name enclosing levels. Those do not reject a region
@@ -410,22 +373,22 @@ def held_in_region(value_mesh: Mesh, region_mesh: Mesh) -> bool:
     """
     value_levels = {
         getattr(level.topologies[0], "name", level.topologies[0]): level
-        for level in separate(value_mesh)
+        for level in types.separate(value_mesh)
     }
-    for region_level in separate(region_mesh):
+    for region_level in types.separate(region_mesh):
         name = getattr(region_level.topologies[0], "name", region_level.topologies[0])
         value_level = value_levels.get(name)
-        if value_level is None or not within_scope(value_level, region_level):
+        if value_level is None or not types.within_scope(value_level, region_level):
             return False
     return True
 
 
 def values_in_region(
     values: tuple[ValueLifetime, ...],
-    region: MeshRegion,
+    region: core.MeshRegion,
     entered_at: int,
     exited_at: int,
-    facts: MemoryHierarchyFacts,
+    facts: target.MemoryHierarchyFacts,
     topology_names: tuple[str, ...],
     owners,
 ) -> tuple[ValueLifetime, ...]:
@@ -448,26 +411,30 @@ def values_in_region(
             continue
         declared = facts.explicit(lifetime.memory_level)
         if declared is None or not declared.owner:
-            raise AnalysisError(f"memory: level {lifetime.memory_level!r} has no declared owner")
-        if declared.owner == TARGET_MEMORY_OWNER:
+            raise Error(f"memory: level {lifetime.memory_level!r} has no declared owner")
+        if declared.owner == expr.TARGET_MEMORY_OWNER:
             continue
         try:
             private = owners.private(lifetime.memory_level, topology_names[outermost_region])
         except ValueError:
-            raise AnalysisError(
+            raise Error(
                 f"memory: level {lifetime.memory_level!r} owner {declared.owner!r} "
                 f"is not a declared topology in {topology_names}"
             )
-        held = leaves_of(lifetime.value.expr.type)[lifetime.value.index]
-        if isinstance(held, TensorType) and is_unsharded_layout(held.layout):
+        held = ir_utils.leaves_of(lifetime.value.expr.type)[lifetime.value.index]
+        if isinstance(held, types.TensorType) and ir_utils.is_unsharded_layout(held.layout):
             if not entered_at < lifetime.defined_at < exited_at:
                 continue
         else:
             if not private:
                 continue
-            layout = shard_layout_of(getattr(held, "layout", None))
-            layout = shard_layout_of(physical_layout(layout)) if layout is not None else None
-            if layout is None or not held_in_region(participant_layout(layout).mesh, region.mesh):
+            layout = types.shard_layout_of(getattr(held, "layout", None))
+            layout = (
+                types.shard_layout_of(ir_utils.physical_layout(layout))
+                if layout is not None
+                else None
+            )
+            if layout is None or not held_in_region(ir_utils.participant_layout(layout).mesh, region.mesh):
                 continue
         result.append(item)
     return tuple(result)
@@ -478,28 +445,28 @@ class MemoryContext(AnalyzeContext):
     """State carried through the memory-family expression walk."""
 
     units: tuple[str, ...] = ()
-    storage: _TrafficAccounts = field(default_factory=_TrafficAccounts)
-    communication: _TrafficAccounts = field(default_factory=_TrafficAccounts)
+    storage: TrafficAccounts = field(default_factory=TrafficAccounts)
+    communication: TrafficAccounts = field(default_factory=TrafficAccounts)
     memory_level: str | None = None
     wave: tuple[int, int] | None = None
 
 
-class MemoryVisitor(ValuationVisitor[None]):
+class MemoryVisitor(valuation.Visitor[None]):
     """Attach per-Call traffic and aggregate it over each enclosing loop."""
 
     def default_visit_leaf(
-        self, expr: Expr, _operands: tuple[None, ...], ctx: MemoryContext
+        self, node: expr.Expr, operands: tuple[None, ...], ctx: MemoryContext
     ) -> None:
-        if not isinstance(expr, Call):
+        if not isinstance(node, expr.Call):
             return
-        recorded = (SSAValue(expr),) in ctx.scope.access.accesses.get("narrow", {})
+        recorded = (core.SSAValue(node),) in ctx.scope.access.accesses.get("narrow", {})
         if not ctx.units:
-            raise AnalysisError("memory: visitor context is missing cost contexts")
+            raise Error("memory: visitor context is missing cost contexts")
         callee = ctx.callee
         if callee is None:
             moved = (
                 call_traffic(
-                    expr,
+                    node,
                     replace(ctx, topology_level=None),
                     {unit: replace(ctx, topology_level=unit) for unit in ctx.units},
                     ctx.scope,
@@ -508,7 +475,7 @@ class MemoryVisitor(ValuationVisitor[None]):
                 if recorded
                 else MemoryMetadata()
             )
-            dependencies = ctx.scope.provenance.dependencies(expr)
+            dependencies = ctx.scope.provenance.dependencies(node)
 
             moved = replace(
                 moved,
@@ -518,12 +485,12 @@ class MemoryVisitor(ValuationVisitor[None]):
                 ),
             )
         else:
-            summary = get_metadata(callee, RegionMemoryMetadata, ctx=ctx)
+            summary = expr.get_metadata(callee, RegionMemoryMetadata, ctx=ctx)
             if summary is None:
-                raise AnalysisError(f"memory: missing summary for {callee.name!r}")
+                raise Error(f"memory: missing summary for {callee.name!r}")
             moved = MemoryMetadata(topologies=summary.topologies, traffic=summary.traffic)
-        attach(expr, moved)
-        repeats = ctx.scope.repeats_of(expr, ctx.topology_level)
+        node.attach_metadata(moved)
+        repeats = ctx.scope.repeats_of(node, ctx.topology_level)
         add_traffic(
             ctx.storage,
             ctx.communication,
@@ -533,21 +500,21 @@ class MemoryVisitor(ValuationVisitor[None]):
         )
 
 
-def analyze_memory(function: Function, context: AnalyzeContext) -> None:
+def analyze_memory(function: core.Function, context: AnalyzeContext) -> None:
     """Attach one definition's movement, reached addresses and liveness."""
     module = context.module
     topology_level = context.topology_level
-    facts = context.target.get_facts(MemoryHierarchyFacts)
+    facts = context.target.get_facts(target.MemoryHierarchyFacts)
     owner_topologies = tuple(
-        level.name for level in context.target.get_facts(TopologyFacts).topologies
+        level.name for level in context.target.get_facts(target.TopologyFacts).topologies
     )
     for level in facts.explicit_levels:
         if not level.owner:
-            raise AnalysisError(f"memory: level {level.name!r} has no declared owner")
+            raise Error(f"memory: level {level.name!r} has no declared owner")
         try:
             context.target.storage_owners
         except ValueError:
-            raise AnalysisError(
+            raise Error(
                 f"memory: level {level.name!r} owner {level.owner!r} is not a "
                 f"target topology in {owner_topologies}"
             )
@@ -570,24 +537,24 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     )
     MemoryVisitor().visit(function.body, memory_context)
     liveness = analyze_liveness(function, context, is_callee=function is not context.entry)
-    attach(function, liveness)
+    function.attach_metadata(liveness)
     allocation = AllocationConstraintVisitor()
-    attach(function, allocation.run(function, context))
+    function.attach_metadata(allocation.run(function, context))
     for value in allocation.by_value.values():
-        expr = value.value.expr
-        if id(expr) not in context.scope.snapshot.definition.locations:
+        node = value.value.expr
+        if id(node) not in context.scope.snapshot.definition.locations:
             continue
-        moved = get_metadata(expr, MemoryMetadata)
+        moved = expr.get_metadata(node, MemoryMetadata)
         if moved is not None:
-            attach(expr, replace(moved, buffer_bytes=None, offsets=()))
+            node.attach_metadata(replace(moved, buffer_bytes=None, offsets=()))
     footprint = None
     if memory_level is not None and wave is not None:
         groups = defaultdict(list)
         available = True
-        for path, (call, _accesses) in context.scope.root.access.accesses.get("narrow", {}).items():
+        for path, (call, _) in context.scope.root.access.accesses.get("narrow", {}).items():
             scope = context.scope.root.at(path[:1])
-            moved = get_metadata(call, MemoryMetadata)
-            origin, loops = scope._access_environment(path)
+            moved = expr.get_metadata(call, MemoryMetadata)
+            origin, loops = scope.access_environment(path)
             evidence = reached_by(
                 scope,
                 call,
@@ -608,12 +575,10 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             key = (path[:-1], origin, windows * trips)
             groups[key].extend(evidence)
             if len(path) == 1 and moved is not None:
-                attach(call, replace(moved, footprint=footprint_of(evidence, windows=windows)))
+                call.attach_metadata(replace(moved, footprint=footprint_of(evidence, windows=windows)))
         if available:
             footprint = Footprint(
-                tuple(
-                    (windows, tuple(items)) for (_path, _origin, windows), items in groups.items()
-                )
+                tuple((windows, tuple(items)) for (_, _, windows), items in groups.items())
             )
     reuse = (
         ()
@@ -628,7 +593,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     )
     peaks, lifetimes, status = (), (), "not_run"
     if function is context.entry:
-        peaks, lifetimes, status = _place(allocation, facts, memory_context.units)
+        peaks, lifetimes, status = place(allocation, facts, memory_context.units)
         occupied = {peak.memory_level for peak in peaks}
         peaks += tuple(
             MemoryLevelPeak(name, 0, 0, facts.explicit(name).capacity_bytes)
@@ -636,14 +601,13 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             if name not in occupied and facts.explicit(name) is not None
         )
         peaks = tuple(sorted(peaks, key=lambda peak: peak.memory_level))
-    errors, advisories = _memory_findings(peaks, footprint, reuse, cache, wave)
-    attach(
-        function,
+    errors, advisories = memory_findings(peaks, footprint, reuse, cache, wave)
+    function.attach_metadata(
         RegionMemoryMetadata(
             topologies=memory_context.units,
             traffic=Traffic(
-                storage=_account_shares(memory_context.storage, memory_context.units),
-                communication=_account_shares(memory_context.communication, memory_context.units),
+                storage=account_shares(memory_context.storage, memory_context.units),
+                communication=account_shares(memory_context.communication, memory_context.units),
             ),
             footprint=footprint,
             peaks=peaks,
@@ -652,11 +616,10 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             reuse_windows=reuse,
             errors=errors,
             advisories=advisories,
-        ),
-    )
+        ))
 
 
-def _resident_peaks(model, windows, offsets, facts, sizes, *, interval=None):
+def resident_peaks(model, windows, offsets, facts, sizes, *, interval=None):
     """Count live root spans, using address unions only for solved arenas."""
     levels = {}
     for window in windows:
@@ -666,7 +629,7 @@ def _resident_peaks(model, windows, offsets, facts, sizes, *, interval=None):
     peaks = []
     for name, items in sorted(levels.items()):
         events = {
-            point for _value, window in items for point in (window.defined_at, window.last_used_at)
+            point for _, window in items for point in (window.defined_at, window.last_used_at)
         }
         if interval is not None:
             start, end = interval
@@ -702,9 +665,9 @@ def _resident_peaks(model, windows, offsets, facts, sizes, *, interval=None):
     return tuple(peaks)
 
 
-def _place(model, facts, topologies):
+def place(model, facts, topologies):
     """Solve the entry's flat windows once and publish shared definition addresses."""
-    model._groups = model._occupancy = None
+    model.forget_indexes()
     options = (
         model.context.options
         if isinstance(model.context.options, MemoryOptions)
@@ -713,7 +676,7 @@ def _place(model, facts, topologies):
     offsets, high_water = {}, {}
     for name in ("gmem", "smem"):
         solved = solve_allocation(
-            get_metadata(model.context.function, AllocationSummaryMetadata),
+            expr.get_metadata(model.context.function, AllocationSummaryMetadata),
             model.context,
             options,
             memory_level=name,
@@ -733,32 +696,30 @@ def _place(model, facts, topologies):
         ):
             continue
         grouped.setdefault(id(value.value.expr), (value.value.expr, []))[1].append(value)
-    for expr, values in grouped.values():
-        moved = get_metadata(expr, MemoryMetadata) or MemoryMetadata()
+    for node, values in grouped.values():
+        moved = expr.get_metadata(node, MemoryMetadata) or MemoryMetadata()
         values.sort(key=lambda value: value.value.index)
         addresses = tuple(
             offsets[model.root(value)] for value in values if not value.lifetime.persistent
         )
-        copies = result_copies(expr)
+        copies = result_copies(node)
         size = values[0].lifetime.bytes // copies
         if len(values) == 1 and addresses:
             addresses = tuple(addresses[0] + copy * size for copy in range(copies))
-        attach(
-            expr,
-            replace(
+        node.attach_metadata(replace(
                 moved,
                 offsets=addresses,
-                buffer_bytes=None if isinstance(expr.type, TupleType) else size,
-            ),
+                buffer_bytes=None if isinstance(node.type, types.TupleType) else size,
+            )
         )
-    peaks = _resident_peaks(model, model.windows, offsets, facts, sizes)
+    peaks = resident_peaks(model, model.windows, offsets, facts, sizes)
     peaks = tuple(
         replace(peak, peak_bytes=high_water.get(peak.memory_level, peak.peak_bytes))
         for peak in peaks
     )
     regions, claimed = {}, set()
     rmem_peak = 0
-    names = tuple(level.name for level in model.context.target.get_facts(TopologyFacts).topologies)
+    names = tuple(level.name for level in model.context.target.get_facts(target.TopologyFacts).topologies)
     for window in model.liveness.regions:
         resident = values_in_region(
             tuple(model.windows),
@@ -769,7 +730,7 @@ def _place(model, facts, topologies):
             names,
             model.context.target.storage_owners,
         )
-        levels = _resident_peaks(
+        levels = resident_peaks(
             model, resident, offsets, facts, sizes, interval=(window.entered_at, window.exited_at)
         )
         if not levels:
@@ -790,14 +751,11 @@ def _place(model, facts, topologies):
                 rmem_peak = max(rmem_peak, level.peak_bytes)
                 claimed.update(id(value) for value in resident if value.memory_level == "rmem")
     for region, held in regions.values():
-        attach(
-            region,
-            RegionMemoryMetadata(
+        region.attach_metadata(RegionMemoryMetadata(
                 solver_status="feasible", topologies=topologies, peaks=tuple(held.values())
-            ),
-        )
+            ))
     if claimed:
-        others = _resident_peaks(
+        others = resident_peaks(
             model, tuple(w for w in model.windows if id(w) not in claimed), offsets, facts, sizes
         )
         other = next((p.peak_bytes for p in others if p.memory_level == "rmem"), 0)
@@ -819,35 +777,31 @@ def _place(model, facts, topologies):
     return peaks, tuple(lifetimes), "feasible"
 
 
-def _memory_findings(peaks, footprint, reuse, cache, wave):
+def memory_findings(peaks, footprint, reuse, cache, wave):
     """Build placement and cache findings from this definition's conclusions."""
     errors = tuple(
-        f"{peak.memory_level} placement peak {format_bytes(peak.peak_bytes)} exceeds "
-        f"capacity {format_bytes(peak.capacity_bytes)}"
+        f"{peak.memory_level} placement peak {utils.format_bytes(peak.peak_bytes)} exceeds "
+        f"capacity {utils.format_bytes(peak.capacity_bytes)}"
         for peak in peaks
         if peak.exceeds_capacity
     )
     advisories = ()
     if cache is not None and wave is not None and footprint is not None:
-        reliable = (AnalysisPrecision.EXACT, AnalysisPrecision.LOWER_BOUND)
+        reliable = (Precision.EXACT, Precision.LOWER_BOUND)
         messages = {}
         for row in reuse:
             if not row.fits:
                 messages.setdefault(row.time or row.space, (row.holds_bytes, row.precision))
         for window, (held, precision) in messages.items():
             message = (
-                f"{cache[0]} reuse window {window} holds {format_bytes(held)} at a "
-                f"{wave[0]}-unit wave, exceeding capacity {format_bytes(cache[2])}"
+                f"{cache[0]} reuse window {window} holds {utils.format_bytes(held)} at a "
+                f"{wave[0]}-unit wave, exceeding capacity {utils.format_bytes(cache[2])}"
             )
             if precision in reliable:
                 errors += (message,)
             else:
                 advisories += (message,)
-        used = sum(
-            spread.logical
-            for _value, _ownership, held in footprint.buffers
-            for _level, spread in held.kinds
-        )
+        used = sum(spread.logical for _, _, held in footprint.buffers for _, spread in held.kinds)
         if used >= cache[2] and not any(
             not row.fits
             and not row.time
@@ -856,8 +810,8 @@ def _memory_findings(peaks, footprint, reuse, cache, wave):
             for row in reuse
         ):
             message = (
-                f"{cache[0]} working set {format_bytes(used)} at the first iteration of a "
-                f"{wave[0]}-unit wave exceeds capacity {format_bytes(cache[2])}"
+                f"{cache[0]} working set {utils.format_bytes(used)} at the first iteration of a "
+                f"{wave[0]}-unit wave exceeds capacity {utils.format_bytes(cache[2])}"
             )
             if footprint.precision in reliable:
                 errors += (message,)
@@ -866,7 +820,7 @@ def _memory_findings(peaks, footprint, reuse, cache, wave):
     return errors, advisories
 
 
-def owned_bytes(summary: AllocationSummaryMetadata, leaf: SSAValue) -> tuple[int, int] | None:
+def owned_bytes(summary: AllocationSummaryMetadata, leaf: core.SSAValue) -> tuple[int, int] | None:
     """The shared memory bytes *leaf*'s allocation owns, as the memory family placed them.
 
     Every stage's offset with the stage size, all stages together; a Tuple
@@ -874,7 +828,7 @@ def owned_bytes(summary: AllocationSummaryMetadata, leaf: SSAValue) -> tuple[int
     when the allocation has no placed offset.
     """
     root = summary.root(leaf)
-    placed = get_metadata(root.value.expr, MemoryMetadata)
+    placed = expr.get_metadata(root.value.expr, MemoryMetadata)
     offsets = () if placed is None else placed.offsets
     if not offsets:
         return None
@@ -886,5 +840,8 @@ __all__ = [
     "MemoryOptions",
     "SELECTOR",
     "analyze_memory",
+    "bytes_for",
+    "call_traffic",
     "owned_bytes",
+    "reached_bytes",
 ]

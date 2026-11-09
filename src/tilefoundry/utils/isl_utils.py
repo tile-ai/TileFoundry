@@ -13,8 +13,8 @@ __all__ = [
     "has_unbounded_param",
     "PARAM_POINT_LIMIT",
     "ParameterBoxError",
-    "ParameterBoxTooLarge",
-    "UnboundedParameterBox",
+    "ParameterBoxTooLargeError",
+    "UnboundedParameterBoxError",
     "param_points",
 ]
 
@@ -25,7 +25,7 @@ class ParameterBoxError(ValueError):
     """A parameter box cannot be enumerated exactly."""
 
 
-class UnboundedParameterBox(ParameterBoxError):
+class UnboundedParameterBoxError(ParameterBoxError):
     """A named parameter has no finite integer bounds."""
 
     def __init__(self, parameter: str | None) -> None:
@@ -33,14 +33,14 @@ class UnboundedParameterBox(ParameterBoxError):
         super().__init__(f"parameter {parameter!r} is unbounded")
 
 
-class ParameterBoxTooLarge(ParameterBoxError):
+class ParameterBoxTooLargeError(ParameterBoxError):
     """A parameter box exceeds the exact-enumeration limit."""
 
     def __init__(self) -> None:
         super().__init__(f"parameter box exceeds {PARAM_POINT_LIMIT} points")
 
 
-def _count(image: "isl.set") -> int | None:
+def count_points(image: "isl.set") -> int | None:
     """Count *image* without enumerating its parameter space."""
     image = image.coalesce()
     if not image.is_bounded():
@@ -60,7 +60,7 @@ def _count(image: "isl.set") -> int | None:
     return amount.get_num_si() if amount.is_int() else None
 
 
-def _parameters_are_fixed(context: "isl.set") -> bool:
+def parameters_are_fixed(context: "isl.set") -> bool:
     """Whether every retained parameter has one explicit integer value."""
     return all(
         context.plain_get_val_if_fixed(isl.dim_type.PARAM, axis).is_int()
@@ -71,8 +71,8 @@ def _parameters_are_fixed(context: "isl.set") -> bool:
 def param_points(image: "isl.set") -> tuple["isl.set", ...]:
     """Return sets fixing parameters to each feasible point of a small box.
 
-    Raises :class:`UnboundedParameterBox` when an axis has no finite integer
-    bounds and :class:`ParameterBoxTooLarge` when exact enumeration would
+    Raises :class:`UnboundedParameterBoxError` when an axis has no finite integer
+    bounds and :class:`ParameterBoxTooLargeError` when exact enumeration would
     exceed :data:`PARAM_POINT_LIMIT`.
     """
     context = image.params()
@@ -90,16 +90,16 @@ def param_points(image: "isl.set") -> tuple["isl.set", ...]:
     box_points = 1
     for axis in range(param_count):
         if not axes.dim_is_bounded(isl.dim_type.SET, axis):
-            raise UnboundedParameterBox(axes.get_dim_name(isl.dim_type.SET, axis))
+            raise UnboundedParameterBoxError(axes.get_dim_name(isl.dim_type.SET, axis))
         low = axes.dim_min_val(axis)
         high = axes.dim_max_val(axis)
         if not (low.is_int() and high.is_int()):
-            raise UnboundedParameterBox(axes.get_dim_name(isl.dim_type.SET, axis))
+            raise UnboundedParameterBoxError(axes.get_dim_name(isl.dim_type.SET, axis))
         lo, hi = low.get_num_si(), high.get_num_si()
         choices = range(lo, hi + 1)
         box_points *= len(choices)
         if box_points > PARAM_POINT_LIMIT:
-            raise ParameterBoxTooLarge
+            raise ParameterBoxTooLargeError
         values.append(choices)
     points = []
     for point in product(*values):
@@ -139,15 +139,15 @@ def cardinality(image: "isl.set", *, union=()) -> int | None:
             merged = piece if merged is None else merged.union(piece)
         return 0 if merged is None else cardinality(merged.coalesce())
     if not image.dim(isl.dim_type.PARAM):
-        return _count(image)
+        return count_points(image)
     context = image.params()
-    if context.is_empty() or _parameters_are_fixed(context):
-        return _count(image)
+    if context.is_empty() or parameters_are_fixed(context):
+        return count_points(image)
     try:
         points = param_points(image)
     except ParameterBoxError:
         return None
-    counts = tuple(_count(image.intersect_params(point)) for point in points)
+    counts = tuple(count_points(image.intersect_params(point)) for point in points)
     if any(amount is None for amount in counts):
         return None
     return max(counts, default=0)
@@ -187,7 +187,7 @@ def as_multi_aff(relation: "isl.map") -> "isl.multi_aff":
     access has no reading for two.
     """
     pieces: list[isl.multi_aff] = []
-    relation.as_pw_multi_aff().foreach_piece(lambda _domain, access: pieces.append(access))
+    relation.as_pw_multi_aff().foreach_piece(lambda _, access: pieces.append(access))
     if len(pieces) != 1:
         raise ValueError(f"expected one affine access piece, got {len(pieces)}")
     return pieces[0]

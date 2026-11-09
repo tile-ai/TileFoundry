@@ -3,21 +3,25 @@
 from __future__ import annotations
 
 import re
+import sys
+from collections import Counter
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from importlib.resources import files
 from pathlib import Path
+from types import MappingProxyType
 
-from tilefoundry.cli import data
-from tilefoundry.utils.markdown import headings
+from tilefoundry import utils
 
-_SPEC_TOPICS = {
+from . import data
+
+SPEC_TOPICS = MappingProxyType({
     "cli": "cli",
     "dsl": "hir",
-}
+})
 
 
-_ADDRESSABLE = 2
+ADDRESSABLE = 2
 
 
 def spec_path(topic: str) -> Path:
@@ -50,7 +54,7 @@ def topics() -> dict[str, Path]:
             for path in sorted(directory.iterdir(), key=lambda path: path.name):
                 if path.is_file() and path.name.endswith(".md"):
                     found[f"{ep.name}/{path.name[:-3]}"] = path
-    for topic, name in _SPEC_TOPICS.items():
+    for topic, name in SPEC_TOPICS.items():
         if name in found:
             found.setdefault(topic, found[name])
     return found
@@ -67,26 +71,24 @@ class Section:
     end: int
 
 
-def _slug(text: str) -> str:
+def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.replace("`", "").lower()).strip("-")
 
 
-def _key_and_title(heading) -> tuple[str, str]:
+def key_and_title(heading) -> tuple[str, str]:
     if heading.number is not None:
         return heading.number, heading.title
 
 
-    return _slug(heading.title), heading.title
+    return slugify(heading.title), heading.title
 
 
-def _disambiguate(bases: list[str], ancestries: list[tuple[str, ...]]) -> list[str]:
+def disambiguate(bases: list[str], ancestries: list[tuple[str, ...]]) -> list[str]:
     """One key per section, no two alike.
 
     A clash takes on the name of its enclosing heading, then the one above that,
     until the keys separate.
     """
-    from collections import Counter  # noqa: PLC0415
-
     def compose(index: int, depth: int) -> str:
         ancestry = ancestries[index]
         return "/".join((*ancestry[len(ancestry) - depth :], bases[index]))
@@ -119,17 +121,17 @@ def sections(text: str) -> tuple[Section, ...]:
     scanned: list[tuple[int, str, str, int]] = []
     ancestries: list[tuple[str, ...]] = []
     enclosing: dict[int, str] = {}
-    for heading in headings(text):
-        if heading.level < _ADDRESSABLE:
+    for heading in utils.headings(text):
+        if heading.level < ADDRESSABLE:
             continue
         level = heading.level
-        key, title = _key_and_title(heading)
+        key, title = key_and_title(heading)
         enclosing = {at: slug for at, slug in enclosing.items() if at < level}
         ancestries.append(tuple(enclosing[at] for at in sorted(enclosing)))
-        enclosing[level] = _slug(title)
+        enclosing[level] = slugify(title)
         scanned.append((level, key, title, heading.line))
 
-    keys = _disambiguate([key for _, key, _, _ in scanned], ancestries)
+    keys = disambiguate([key for _, key, _, _ in scanned], ancestries)
     found = [
         Section(key=key, title=title, level=level, start=start, end=len(lines))
         for key, (level, _, title, start) in zip(keys, scanned)
@@ -150,7 +152,7 @@ def render_topics() -> str:
     """The documents there are, and which name reaches each."""
     found = topics()
     aliases = {
-        topic: name for topic, name in _SPEC_TOPICS.items() if topic != name
+        topic: name for topic, name in SPEC_TOPICS.items() if topic != name
     }
     width = max(len(name) for name in found)
     lines = [f"Specifications in {spec_directory()}:", ""]
@@ -177,7 +179,7 @@ def render_outline(topic: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _neighbours(found: tuple[Section, ...], index: int) -> list[str]:
+def neighbours(found: tuple[Section, ...], index: int) -> list[str]:
     """The sections beside this one, so a reader can walk without the outline."""
     chosen = found[index]
     siblings = [
@@ -205,7 +207,7 @@ def render_section(topic: str, key: str) -> str:
     for index, section in enumerate(found):
         if section.key == key:
             body = "\n".join(text.splitlines()[section.start : section.end]).rstrip()
-            beside = _neighbours(found, index)
+            beside = neighbours(found, index)
             if not beside:
                 return body + "\n"
             return body + "\n\n" + "\n".join(f"# {line}" for line in beside) + "\n"
@@ -215,8 +217,6 @@ def render_section(topic: str, key: str) -> str:
 
 def run_spec(topic: str | None, section: str | None) -> int:
     """Print the documents, one document's outline, or one of its sections."""
-    import sys  # noqa: PLC0415
-
     if topic is None:
         sys.stdout.write(render_topics())
     elif section is None:

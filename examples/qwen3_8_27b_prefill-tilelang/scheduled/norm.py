@@ -19,9 +19,9 @@ tir/rmsnorm_{n}.py and kernels/elementwise.py `rmsnorm_kernel` implements it:
   store     bf16(x * rsqrt(ms + eps) * (1 + gamma)), the same 8-byte vectors.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 H, R, EPS = 5120, 2, 1e-6
 KV, TV, VEC = 5, 256, 4          # H = KV * TV * VEC
 

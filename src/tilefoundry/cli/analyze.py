@@ -7,32 +7,27 @@ import sys
 import textwrap
 import threading
 from pathlib import Path
-from typing import Sequence
+from types import MappingProxyType
+from typing import Mapping, Sequence
 
-from tilefoundry.analysis import analyze
-from tilefoundry.cli.source import checked_program
-from tilefoundry.inspection import PythonPrintOptions, as_script
-from tilefoundry.inspection.analysis_report import (
-    render_analysis,
-    render_json,
-    render_text,
-)
-from tilefoundry.visitor_registry.contexts import ValuationContext
-from tilefoundry.visitor_registry.valuation import ValuationVisitor
+from tilefoundry import analysis, inspection
+from tilefoundry.interfaces import valuation
 
-EVIDENCE: dict[str, str] = {
+from .source import checked_program
+
+EVIDENCE: Mapping[str, str] = MappingProxyType({
     "compute-cost": "the logical work and traffic of every value: flops by dtype, bytes moved",
     "memory": "where traffic lands and what storage remains live against capacity",
     "roofline": "which of compute or memory limits each value, and the limit in time",
     "performance": "when each value runs, where its buffers fit, and the time that takes",
-}
+})
 
 
 ANALYSES: tuple[str, ...] = tuple(EVIDENCE)
-_ANALYSIS_TIMEOUT_SECONDS = 300.0
+ANALYSIS_TIMEOUT_SECONDS = 300.0
 
 
-def _watch(limit: float) -> threading.Event:
+def watch(limit: float) -> threading.Event:
     """Bound the whole analyze command until its caller disarms the timer."""
     disarmed = threading.Event()
 
@@ -122,7 +117,7 @@ def run_authored_analysis(
     runs once on one view, and Metadata ownership keeps one family from changing
     another's records.
     """
-    disarmed = _watch(_ANALYSIS_TIMEOUT_SECONDS)
+    disarmed = watch(ANALYSIS_TIMEOUT_SECONDS)
     try:
         program = checked_program(
             source, dims, command="analyze", topology_level=topology if analyses else None
@@ -130,33 +125,33 @@ def run_authored_analysis(
         checked, root = program.module, program.entry
         if not analyses:
             annotated = "\n".join(
-                as_script(frame.function, options=PythonPrintOptions(show_types=True))
-                for frame in ValuationVisitor.definitions(ValuationContext(checked, root))
+                inspection.as_script(frame.function, options=inspection.PythonPrintOptions(show_types=True))
+                for frame in valuation.definitions(valuation.Context(checked, root))
             )
-            _write_report(out_path, annotated)
+            write_report(out_path, annotated)
             return 0
 
-        result = analyze(
+        result = analysis.analyze(
             checked,
             root,
             analysis=analyses,
             topology_level=topology,
         )
-        rendered = render_analysis(result, operands=operands and not as_json)
+        rendered = inspection.render_analysis(result, operands=operands and not as_json)
         if as_json:
-            _write_report(
+            write_report(
                 out_path,
-                f"{render_json({**rendered.data, 'source': rendered.annotated})}\n",
+                f"{inspection.render_json({**rendered.data, 'source': rendered.annotated})}\n",
             )
             return 0
 
-        _write_report(out_path, f"{render_text(rendered)}\n\n{rendered.annotated}")
+        write_report(out_path, f"{inspection.render_text(rendered)}\n\n{rendered.annotated}")
         return 0
     finally:
         disarmed.set()
 
 
-def _write_report(out_path: str | None, text: str) -> None:
+def write_report(out_path: str | None, text: str) -> None:
     """Write the report to PATH, or to stdout when no PATH was given."""
     if out_path is None:
         sys.stdout.write(text)
@@ -164,4 +159,11 @@ def _write_report(out_path: str | None, text: str) -> None:
     Path(out_path).write_text(text, encoding="utf-8")
 
 
-__all__ = ["ANALYSES", "EVIDENCE", "guidance", "run_authored_analysis"]
+__all__ = [
+    "ANALYSES",
+    "ANALYSIS_TIMEOUT_SECONDS",
+    "EVIDENCE",
+    "guidance",
+    "run_authored_analysis",
+    "watch",
+]

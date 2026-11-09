@@ -1,1044 +1,1019 @@
-from tilefoundry.ir.core import OpCapability
-from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.math.unary import Unary
-from tilefoundry.ir.hir.nn.matmul import MatMul
-from tilefoundry.ir.pattern import (
-    LayoutPattern,
-    OrPattern,
-    RangePattern,
-    SwitchPattern,
-    TensorPattern,
-    WildcardPattern,
-)
-from tilefoundry.ir.types import DType, StorageKind
-from tilefoundry.visitor_registry.candidates import HirMatch
+"""AMX FMA and FMS Ops."""
+
+from tilefoundry.interfaces import schedule
+from tilefoundry.ir import expr, pattern
+from tilefoundry.ir.hir import math, nn
 
 from .common import (
     AmxOp,
     ProductMode,
-    bind,
 )
+from .semantics import register_semantics
 
-R = MemoryEffect.READ
-W = MemoryEffect.WRITE
+R = expr.MemoryEffect.READ
+W = expr.MemoryEffect.WRITE
 
 
-@register_op(dialect="T", namespace="amx", category="nn", name="fma16")
+@expr.register_op(dialect="T", namespace="amx", category="nn", name="fma16")
 class Fma16(AmxOp):
     hir_matches = (
-        HirMatch(
-            MatMul,
+        schedule.HirMatch(
+            nn.MatMul,
             when={"a_layout": "MK", "b_layout": "KN"},
             attributes={"mode": ProductMode.MATRIX},
             operands={"acc": "result", "lhs": "lhs", "rhs": "rhs"},
         ),
-        HirMatch(
-            Binary,
-            when={"kind": BinaryKind.MUL},
+        schedule.HirMatch(
+            math.Binary,
+            when={"kind": expr.BinaryKind.MUL},
             attributes={"mode": ProductMode.VECTOR, "skip_z": True},
             operands={"acc": "result", "lhs": "lhs", "rhs": "rhs"},
         ),
-        HirMatch(
-            Binary,
-            when={"kind": BinaryKind.ADD},
+        schedule.HirMatch(
+            math.Binary,
+            when={"kind": expr.BinaryKind.ADD},
             attributes={"mode": ProductMode.VECTOR, "skip_y": True, "skip_z": False},
             operands={"acc": "lhs", "lhs": "rhs", "rhs": "rhs"},
         ),
     )
     """One 16-bit instruction; relative physical layouts retain only its logical operands."""
     mnemonic = "FMA16"
-    capability = OpCapability("amx_fma16")
+    capability = expr.OpCapability("amx_fma16")
     resource = "amx_engine"
     roles = ("acc", "lhs", "rhs")
     writes = ("acc",)
     register_roles = {"acc": "z", "lhs": "y", "rhs": "x"}
-    mode = ParamDef(
+    mode = expr.ParamDef(
         kind="attribute",
         annotation=ProductMode,
-        pattern=WildcardPattern("mode"),
+        pattern=pattern.Wildcard("mode"),
         default=ProductMode.MATRIX,
     )
-    acc_dtype = ParamDef(
+    acc_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern(
+        annotation=expr.DType,
+        pattern=pattern.Wildcard(
             "acc_dtype",
             predicates=(
-                SwitchPattern(
+                pattern.Switch(
                     "mode",
                     {
-                        ProductMode.MATRIX: OrPattern(DType.f16, DType.f32),
-                        ProductMode.VECTOR: DType.f16,
+                        ProductMode.MATRIX: pattern.Or(expr.DType.f16, expr.DType.f32),
+                        ProductMode.VECTOR: expr.DType.f16,
                     },
                 ),
             ),
         ),
-        default=DType.f32,
+        default=expr.DType.f32,
     )
-    x_dtype = ParamDef(
+    x_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("x_dtype", predicates=(DType.f16,)),
-        default=DType.f16,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("x_dtype", predicates=(expr.DType.f16,)),
+        default=expr.DType.f16,
     )
-    y_dtype = ParamDef(
+    y_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("y_dtype", predicates=(DType.f16,)),
-        default=DType.f16,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("y_dtype", predicates=(expr.DType.f16,)),
+        default=expr.DType.f16,
     )
-    out_dtype = ParamDef(
+    out_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
+        annotation=expr.DType,
         optional=True,
         default=None,
-        pattern=WildcardPattern("out_dtype", predicates=(WildcardPattern("acc_dtype"),)),
+        pattern=pattern.Wildcard("out_dtype", predicates=(pattern.Wildcard("acc_dtype"),)),
     )
-    x_offset = ParamDef(
+    x_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("x_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("x_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    y_offset = ParamDef(
+    y_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("y_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("y_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    z_row = ParamDef(
+    z_row = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("z_row", predicates=(RangePattern(lo=0, hi=63),)),
+        pattern=pattern.Wildcard("z_row", predicates=(pattern.Range(lo=0, hi=63),)),
         default=0,
     )
-    skip_x = ParamDef(
+    skip_x = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_x", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_x", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    skip_y = ParamDef(
+    skip_y = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_y", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_y", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    skip_z = ParamDef(
+    skip_z = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_z", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_z", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    x_mask = ParamDef(
+    x_mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("x_mask", predicates=(RangePattern(lo=0, hi=127),)),
+        pattern=pattern.Wildcard("x_mask", predicates=(pattern.Range(lo=0, hi=127),)),
         default=0,
     )
-    y_mask = ParamDef(
+    y_mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "y_mask",
             predicates=(
-                SwitchPattern(
-                    "mode", {ProductMode.MATRIX: RangePattern(lo=0, hi=127), ProductMode.VECTOR: 0}
+                pattern.Switch(
+                    "mode", {ProductMode.MATRIX: pattern.Range(lo=0, hi=127), ProductMode.VECTOR: 0}
                 ),
             ),
         ),
         default=0,
     )
-    acc = ParamDef(
+    acc = expr.ParamDef(
         kind="input",
         effect=R | W,
-        pattern=TensorPattern(
-            shape=(SwitchPattern("mode", {ProductMode.MATRIX: 32, ProductMode.VECTOR: 1}), 32),
-            dtype=WildcardPattern("acc_dtype"),
-            storage=StorageKind.RMEM,
-            layout=SwitchPattern(
+        pattern=pattern.Tensor(
+            shape=(pattern.Switch("mode", {ProductMode.MATRIX: 32, ProductMode.VECTOR: 1}), 32),
+            dtype=pattern.Wildcard("acc_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Switch(
                 "mode",
                 {
-                    ProductMode.MATRIX: SwitchPattern(
+                    ProductMode.MATRIX: pattern.Switch(
                         "acc_dtype",
                         {
-                            DType.f16: LayoutPattern((32, 32), (64, 1)),
-                            DType.f32: LayoutPattern((32, (2, 16)), (32, (16, 1))),
+                            expr.DType.f16: pattern.Layout((32, 32), (64, 1)),
+                            expr.DType.f32: pattern.Layout((32, (2, 16)), (32, (16, 1))),
                         },
                     ),
-                    ProductMode.VECTOR: LayoutPattern((1, 32), (0, 1)),
+                    ProductMode.VECTOR: pattern.Layout((1, 32), (0, 1)),
                 },
             ),
         ),
     )
-    lhs = ParamDef(
+    lhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
+        pattern=pattern.Tensor(
             shape=(
-                SwitchPattern("mode", {ProductMode.MATRIX: 32, ProductMode.VECTOR: 1}),
-                SwitchPattern("mode", {ProductMode.MATRIX: 1, ProductMode.VECTOR: 32}),
+                pattern.Switch("mode", {ProductMode.MATRIX: 32, ProductMode.VECTOR: 1}),
+                pattern.Switch("mode", {ProductMode.MATRIX: 1, ProductMode.VECTOR: 32}),
             ),
-            dtype=WildcardPattern("y_dtype"),
-            storage=StorageKind.RMEM,
-            layout=SwitchPattern(
+            dtype=pattern.Wildcard("y_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Switch(
                 "mode",
                 {
-                    ProductMode.MATRIX: LayoutPattern((32, 1), (1, 0)),
-                    ProductMode.VECTOR: LayoutPattern((1, 32), (0, 1)),
+                    ProductMode.MATRIX: pattern.Layout((32, 1), (1, 0)),
+                    ProductMode.VECTOR: pattern.Layout((1, 32), (0, 1)),
                 },
             ),
         ),
     )
-    rhs = ParamDef(
+    rhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
+        pattern=pattern.Tensor(
             shape=(1, 32),
-            dtype=WildcardPattern("x_dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern((1, 32), (0, 1)),
+            dtype=pattern.Wildcard("x_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout((1, 32), (0, 1)),
         ),
     )
 
-    def __init__(self, **attrs):
-        bind(self, attrs)
 
-
-@register_op(dialect="T", namespace="amx", category="nn", name="fma32")
+@expr.register_op(dialect="T", namespace="amx", category="nn", name="fma32")
 class Fma32(AmxOp):
     hir_matches = (
-        HirMatch(
-            MatMul,
+        schedule.HirMatch(
+            nn.MatMul,
             when={"a_layout": "MK", "b_layout": "KN"},
             attributes={"mode": ProductMode.MATRIX},
             operands={"acc": "result", "lhs": "lhs", "rhs": "rhs"},
         ),
-        HirMatch(
-            Binary,
-            when={"kind": BinaryKind.MUL},
+        schedule.HirMatch(
+            math.Binary,
+            when={"kind": expr.BinaryKind.MUL},
             attributes={"mode": ProductMode.VECTOR, "skip_z": True},
             operands={"acc": "result", "lhs": "lhs", "rhs": "rhs"},
         ),
-        HirMatch(
-            Binary,
-            when={"kind": BinaryKind.ADD},
+        schedule.HirMatch(
+            math.Binary,
+            when={"kind": expr.BinaryKind.ADD},
             attributes={"mode": ProductMode.VECTOR, "skip_y": True, "skip_z": False},
             operands={"acc": "lhs", "lhs": "rhs", "rhs": "rhs"},
         ),
     )
     """One 32-bit instruction; relative physical layouts retain only its logical operands."""
     mnemonic = "FMA32"
-    capability = OpCapability("amx_fma32")
+    capability = expr.OpCapability("amx_fma32")
     resource = "amx_engine"
     roles = ("acc", "lhs", "rhs")
     writes = ("acc",)
     register_roles = {"acc": "z", "lhs": "y", "rhs": "x"}
-    mode = ParamDef(
+    mode = expr.ParamDef(
         kind="attribute",
         annotation=ProductMode,
-        pattern=WildcardPattern("mode"),
+        pattern=pattern.Wildcard("mode"),
         default=ProductMode.MATRIX,
     )
-    acc_dtype = ParamDef(
+    acc_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("acc_dtype", predicates=(DType.f32,)),
-        default=DType.f32,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("acc_dtype", predicates=(expr.DType.f32,)),
+        default=expr.DType.f32,
     )
-    x_dtype = ParamDef(
+    x_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("x_dtype", predicates=(OrPattern(DType.f16, DType.f32),)),
-        default=DType.f32,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("x_dtype", predicates=(pattern.Or(expr.DType.f16, expr.DType.f32),)),
+        default=expr.DType.f32,
     )
-    y_dtype = ParamDef(
+    y_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("y_dtype", predicates=(OrPattern(DType.f16, DType.f32),)),
-        default=DType.f32,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("y_dtype", predicates=(pattern.Or(expr.DType.f16, expr.DType.f32),)),
+        default=expr.DType.f32,
     )
-    out_dtype = ParamDef(
+    out_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
+        annotation=expr.DType,
         optional=True,
         default=None,
-        pattern=WildcardPattern("out_dtype", predicates=(WildcardPattern("acc_dtype"),)),
+        pattern=pattern.Wildcard("out_dtype", predicates=(pattern.Wildcard("acc_dtype"),)),
     )
-    x_offset = ParamDef(
+    x_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("x_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("x_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    y_offset = ParamDef(
+    y_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("y_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("y_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    z_row = ParamDef(
+    z_row = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("z_row", predicates=(RangePattern(lo=0, hi=63),)),
+        pattern=pattern.Wildcard("z_row", predicates=(pattern.Range(lo=0, hi=63),)),
         default=0,
     )
-    skip_x = ParamDef(
+    skip_x = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_x", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_x", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    skip_y = ParamDef(
+    skip_y = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_y", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_y", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    skip_z = ParamDef(
+    skip_z = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_z", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_z", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    x_mask = ParamDef(
+    x_mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("x_mask", predicates=(RangePattern(lo=0, hi=127),)),
+        pattern=pattern.Wildcard("x_mask", predicates=(pattern.Range(lo=0, hi=127),)),
         default=0,
     )
-    y_mask = ParamDef(
+    y_mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "y_mask",
             predicates=(
-                SwitchPattern(
-                    "mode", {ProductMode.MATRIX: RangePattern(lo=0, hi=127), ProductMode.VECTOR: 0}
+                pattern.Switch(
+                    "mode", {ProductMode.MATRIX: pattern.Range(lo=0, hi=127), ProductMode.VECTOR: 0}
                 ),
             ),
         ),
         default=0,
     )
-    acc = ParamDef(
+    acc = expr.ParamDef(
         kind="input",
         effect=R | W,
-        pattern=TensorPattern(
-            shape=(SwitchPattern("mode", {ProductMode.MATRIX: 16, ProductMode.VECTOR: 1}), 16),
-            dtype=WildcardPattern("acc_dtype"),
-            storage=StorageKind.RMEM,
-            layout=SwitchPattern(
+        pattern=pattern.Tensor(
+            shape=(pattern.Switch("mode", {ProductMode.MATRIX: 16, ProductMode.VECTOR: 1}), 16),
+            dtype=pattern.Wildcard("acc_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Switch(
                 "mode",
                 {
-                    ProductMode.MATRIX: LayoutPattern((16, 16), (64, 1)),
-                    ProductMode.VECTOR: LayoutPattern((1, 16), (0, 1)),
+                    ProductMode.MATRIX: pattern.Layout((16, 16), (64, 1)),
+                    ProductMode.VECTOR: pattern.Layout((1, 16), (0, 1)),
                 },
             ),
         ),
     )
-    lhs = ParamDef(
+    lhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
+        pattern=pattern.Tensor(
             shape=(
-                SwitchPattern("mode", {ProductMode.MATRIX: 16, ProductMode.VECTOR: 1}),
-                SwitchPattern("mode", {ProductMode.MATRIX: 1, ProductMode.VECTOR: 16}),
+                pattern.Switch("mode", {ProductMode.MATRIX: 16, ProductMode.VECTOR: 1}),
+                pattern.Switch("mode", {ProductMode.MATRIX: 1, ProductMode.VECTOR: 16}),
             ),
-            dtype=WildcardPattern("y_dtype"),
-            storage=StorageKind.RMEM,
-            layout=SwitchPattern(
+            dtype=pattern.Wildcard("y_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Switch(
                 "mode",
                 {
-                    ProductMode.MATRIX: LayoutPattern(
-                        (16, 1), (SwitchPattern("y_dtype", {DType.f16: 2, DType.f32: 1}), 0)
+                    ProductMode.MATRIX: pattern.Layout(
+                        (16, 1), (pattern.Switch("y_dtype", {expr.DType.f16: 2, expr.DType.f32: 1}), 0)
                     ),
-                    ProductMode.VECTOR: LayoutPattern(
-                        (1, 16), (0, SwitchPattern("y_dtype", {DType.f16: 2, DType.f32: 1}))
+                    ProductMode.VECTOR: pattern.Layout(
+                        (1, 16), (0, pattern.Switch("y_dtype", {expr.DType.f16: 2, expr.DType.f32: 1}))
                     ),
                 },
             ),
         ),
     )
-    rhs = ParamDef(
+    rhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
+        pattern=pattern.Tensor(
             shape=(1, 16),
-            dtype=WildcardPattern("x_dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern(
-                (1, 16), (0, SwitchPattern("x_dtype", {DType.f16: 2, DType.f32: 1}))
+            dtype=pattern.Wildcard("x_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout(
+                (1, 16), (0, pattern.Switch("x_dtype", {expr.DType.f16: 2, expr.DType.f32: 1}))
             ),
         ),
     )
 
-    def __init__(self, **attrs):
-        bind(self, attrs)
 
-
-@register_op(dialect="T", namespace="amx", category="nn", name="fma64")
+@expr.register_op(dialect="T", namespace="amx", category="nn", name="fma64")
 class Fma64(AmxOp):
     hir_matches = (
-        HirMatch(
-            MatMul,
+        schedule.HirMatch(
+            nn.MatMul,
             when={"a_layout": "MK", "b_layout": "KN"},
             attributes={"mode": ProductMode.MATRIX},
             operands={"acc": "result", "lhs": "lhs", "rhs": "rhs"},
         ),
-        HirMatch(
-            Binary,
-            when={"kind": BinaryKind.MUL},
+        schedule.HirMatch(
+            math.Binary,
+            when={"kind": expr.BinaryKind.MUL},
             attributes={"mode": ProductMode.VECTOR, "skip_z": True},
             operands={"acc": "result", "lhs": "lhs", "rhs": "rhs"},
         ),
-        HirMatch(
-            Binary,
-            when={"kind": BinaryKind.ADD},
+        schedule.HirMatch(
+            math.Binary,
+            when={"kind": expr.BinaryKind.ADD},
             attributes={"mode": ProductMode.VECTOR, "skip_y": True, "skip_z": False},
             operands={"acc": "lhs", "lhs": "rhs", "rhs": "rhs"},
         ),
     )
     """One 64-bit instruction; relative physical layouts retain only its logical operands."""
     mnemonic = "FMA64"
-    capability = OpCapability("amx_fma64")
+    capability = expr.OpCapability("amx_fma64")
     resource = "amx_engine"
     roles = ("acc", "lhs", "rhs")
     writes = ("acc",)
     register_roles = {"acc": "z", "lhs": "y", "rhs": "x"}
-    mode = ParamDef(
+    mode = expr.ParamDef(
         kind="attribute",
         annotation=ProductMode,
-        pattern=WildcardPattern("mode"),
+        pattern=pattern.Wildcard("mode"),
         default=ProductMode.MATRIX,
     )
-    acc_dtype = ParamDef(
+    acc_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("acc_dtype", predicates=(DType.f64,)),
-        default=DType.f64,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("acc_dtype", predicates=(expr.DType.f64,)),
+        default=expr.DType.f64,
     )
-    x_dtype = ParamDef(
+    x_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("x_dtype", predicates=(DType.f64,)),
-        default=DType.f64,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("x_dtype", predicates=(expr.DType.f64,)),
+        default=expr.DType.f64,
     )
-    y_dtype = ParamDef(
+    y_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("y_dtype", predicates=(DType.f64,)),
-        default=DType.f64,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("y_dtype", predicates=(expr.DType.f64,)),
+        default=expr.DType.f64,
     )
-    out_dtype = ParamDef(
+    out_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
+        annotation=expr.DType,
         optional=True,
         default=None,
-        pattern=WildcardPattern("out_dtype", predicates=(WildcardPattern("acc_dtype"),)),
+        pattern=pattern.Wildcard("out_dtype", predicates=(pattern.Wildcard("acc_dtype"),)),
     )
-    x_offset = ParamDef(
+    x_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("x_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("x_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    y_offset = ParamDef(
+    y_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("y_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("y_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    z_row = ParamDef(
+    z_row = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("z_row", predicates=(RangePattern(lo=0, hi=63),)),
+        pattern=pattern.Wildcard("z_row", predicates=(pattern.Range(lo=0, hi=63),)),
         default=0,
     )
-    skip_x = ParamDef(
+    skip_x = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_x", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_x", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    skip_y = ParamDef(
+    skip_y = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_y", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_y", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    skip_z = ParamDef(
+    skip_z = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_z", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_z", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    x_mask = ParamDef(
+    x_mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("x_mask", predicates=(RangePattern(lo=0, hi=127),)),
+        pattern=pattern.Wildcard("x_mask", predicates=(pattern.Range(lo=0, hi=127),)),
         default=0,
     )
-    y_mask = ParamDef(
+    y_mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "y_mask",
             predicates=(
-                SwitchPattern(
-                    "mode", {ProductMode.MATRIX: RangePattern(lo=0, hi=127), ProductMode.VECTOR: 0}
+                pattern.Switch(
+                    "mode", {ProductMode.MATRIX: pattern.Range(lo=0, hi=127), ProductMode.VECTOR: 0}
                 ),
             ),
         ),
         default=0,
     )
-    acc = ParamDef(
+    acc = expr.ParamDef(
         kind="input",
         effect=R | W,
-        pattern=TensorPattern(
-            shape=(SwitchPattern("mode", {ProductMode.MATRIX: 8, ProductMode.VECTOR: 1}), 8),
-            dtype=WildcardPattern("acc_dtype"),
-            storage=StorageKind.RMEM,
-            layout=SwitchPattern(
+        pattern=pattern.Tensor(
+            shape=(pattern.Switch("mode", {ProductMode.MATRIX: 8, ProductMode.VECTOR: 1}), 8),
+            dtype=pattern.Wildcard("acc_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Switch(
                 "mode",
                 {
-                    ProductMode.MATRIX: LayoutPattern((8, 8), (64, 1)),
-                    ProductMode.VECTOR: LayoutPattern((1, 8), (0, 1)),
+                    ProductMode.MATRIX: pattern.Layout((8, 8), (64, 1)),
+                    ProductMode.VECTOR: pattern.Layout((1, 8), (0, 1)),
                 },
             ),
         ),
     )
-    lhs = ParamDef(
+    lhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
+        pattern=pattern.Tensor(
             shape=(
-                SwitchPattern("mode", {ProductMode.MATRIX: 8, ProductMode.VECTOR: 1}),
-                SwitchPattern("mode", {ProductMode.MATRIX: 1, ProductMode.VECTOR: 8}),
+                pattern.Switch("mode", {ProductMode.MATRIX: 8, ProductMode.VECTOR: 1}),
+                pattern.Switch("mode", {ProductMode.MATRIX: 1, ProductMode.VECTOR: 8}),
             ),
-            dtype=WildcardPattern("y_dtype"),
-            storage=StorageKind.RMEM,
-            layout=SwitchPattern(
+            dtype=pattern.Wildcard("y_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Switch(
                 "mode",
                 {
-                    ProductMode.MATRIX: LayoutPattern((8, 1), (1, 0)),
-                    ProductMode.VECTOR: LayoutPattern((1, 8), (0, 1)),
+                    ProductMode.MATRIX: pattern.Layout((8, 1), (1, 0)),
+                    ProductMode.VECTOR: pattern.Layout((1, 8), (0, 1)),
                 },
             ),
         ),
     )
-    rhs = ParamDef(
+    rhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
+        pattern=pattern.Tensor(
             shape=(1, 8),
-            dtype=WildcardPattern("x_dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern((1, 8), (0, 1)),
+            dtype=pattern.Wildcard("x_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout((1, 8), (0, 1)),
         ),
     )
 
-    def __init__(self, **attrs):
-        bind(self, attrs)
 
-
-@register_op(dialect="T", namespace="amx", category="nn", name="fms16")
+@expr.register_op(dialect="T", namespace="amx", category="nn", name="fms16")
 class Fms16(AmxOp):
     hir_matches = (
-        HirMatch(
-            Unary,
-            when={"kind": UnaryKind.NEG},
+        schedule.HirMatch(
+            math.Unary,
+            when={"kind": expr.UnaryKind.NEG},
             attributes={"mode": ProductMode.VECTOR, "skip_y": True, "skip_z": True},
             operands={"acc": "result", "lhs": "x", "rhs": "x"},
         ),
-        HirMatch(
-            Binary,
-            when={"kind": BinaryKind.SUB},
+        schedule.HirMatch(
+            math.Binary,
+            when={"kind": expr.BinaryKind.SUB},
             attributes={"mode": ProductMode.VECTOR, "skip_y": True, "skip_z": False},
             operands={"acc": "lhs", "lhs": "rhs", "rhs": "rhs"},
         ),
     )
     """One 16-bit instruction; relative physical layouts retain only its logical operands."""
     mnemonic = "FMS16"
-    capability = OpCapability("amx_fms16")
+    capability = expr.OpCapability("amx_fms16")
     resource = "amx_engine"
     roles = ("acc", "lhs", "rhs")
     writes = ("acc",)
     register_roles = {"acc": "z", "lhs": "y", "rhs": "x"}
-    mode = ParamDef(
+    mode = expr.ParamDef(
         kind="attribute",
         annotation=ProductMode,
-        pattern=WildcardPattern("mode"),
+        pattern=pattern.Wildcard("mode"),
         default=ProductMode.MATRIX,
     )
-    acc_dtype = ParamDef(
+    acc_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern(
+        annotation=expr.DType,
+        pattern=pattern.Wildcard(
             "acc_dtype",
             predicates=(
-                SwitchPattern(
+                pattern.Switch(
                     "mode",
                     {
-                        ProductMode.MATRIX: OrPattern(DType.f16, DType.f32),
-                        ProductMode.VECTOR: DType.f16,
+                        ProductMode.MATRIX: pattern.Or(expr.DType.f16, expr.DType.f32),
+                        ProductMode.VECTOR: expr.DType.f16,
                     },
                 ),
             ),
         ),
-        default=DType.f32,
+        default=expr.DType.f32,
     )
-    x_dtype = ParamDef(
+    x_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("x_dtype", predicates=(DType.f16,)),
-        default=DType.f16,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("x_dtype", predicates=(expr.DType.f16,)),
+        default=expr.DType.f16,
     )
-    y_dtype = ParamDef(
+    y_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("y_dtype", predicates=(DType.f16,)),
-        default=DType.f16,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("y_dtype", predicates=(expr.DType.f16,)),
+        default=expr.DType.f16,
     )
-    out_dtype = ParamDef(
+    out_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
+        annotation=expr.DType,
         optional=True,
         default=None,
-        pattern=WildcardPattern("out_dtype", predicates=(WildcardPattern("acc_dtype"),)),
+        pattern=pattern.Wildcard("out_dtype", predicates=(pattern.Wildcard("acc_dtype"),)),
     )
-    x_offset = ParamDef(
+    x_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("x_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("x_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    y_offset = ParamDef(
+    y_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("y_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("y_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    z_row = ParamDef(
+    z_row = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("z_row", predicates=(RangePattern(lo=0, hi=63),)),
+        pattern=pattern.Wildcard("z_row", predicates=(pattern.Range(lo=0, hi=63),)),
         default=0,
     )
-    skip_x = ParamDef(
+    skip_x = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_x", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_x", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    skip_y = ParamDef(
+    skip_y = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_y", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_y", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    skip_z = ParamDef(
+    skip_z = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_z", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_z", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    x_mask = ParamDef(
+    x_mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("x_mask", predicates=(RangePattern(lo=0, hi=127),)),
+        pattern=pattern.Wildcard("x_mask", predicates=(pattern.Range(lo=0, hi=127),)),
         default=0,
     )
-    y_mask = ParamDef(
+    y_mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "y_mask",
             predicates=(
-                SwitchPattern(
-                    "mode", {ProductMode.MATRIX: RangePattern(lo=0, hi=127), ProductMode.VECTOR: 0}
+                pattern.Switch(
+                    "mode", {ProductMode.MATRIX: pattern.Range(lo=0, hi=127), ProductMode.VECTOR: 0}
                 ),
             ),
         ),
         default=0,
     )
-    acc = ParamDef(
+    acc = expr.ParamDef(
         kind="input",
         effect=R | W,
-        pattern=TensorPattern(
-            shape=(SwitchPattern("mode", {ProductMode.MATRIX: 32, ProductMode.VECTOR: 1}), 32),
-            dtype=WildcardPattern("acc_dtype"),
-            storage=StorageKind.RMEM,
-            layout=SwitchPattern(
+        pattern=pattern.Tensor(
+            shape=(pattern.Switch("mode", {ProductMode.MATRIX: 32, ProductMode.VECTOR: 1}), 32),
+            dtype=pattern.Wildcard("acc_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Switch(
                 "mode",
                 {
-                    ProductMode.MATRIX: SwitchPattern(
+                    ProductMode.MATRIX: pattern.Switch(
                         "acc_dtype",
                         {
-                            DType.f16: LayoutPattern((32, 32), (64, 1)),
-                            DType.f32: LayoutPattern((32, (2, 16)), (32, (16, 1))),
+                            expr.DType.f16: pattern.Layout((32, 32), (64, 1)),
+                            expr.DType.f32: pattern.Layout((32, (2, 16)), (32, (16, 1))),
                         },
                     ),
-                    ProductMode.VECTOR: LayoutPattern((1, 32), (0, 1)),
+                    ProductMode.VECTOR: pattern.Layout((1, 32), (0, 1)),
                 },
             ),
         ),
     )
-    lhs = ParamDef(
+    lhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
+        pattern=pattern.Tensor(
             shape=(
-                SwitchPattern("mode", {ProductMode.MATRIX: 32, ProductMode.VECTOR: 1}),
-                SwitchPattern("mode", {ProductMode.MATRIX: 1, ProductMode.VECTOR: 32}),
+                pattern.Switch("mode", {ProductMode.MATRIX: 32, ProductMode.VECTOR: 1}),
+                pattern.Switch("mode", {ProductMode.MATRIX: 1, ProductMode.VECTOR: 32}),
             ),
-            dtype=WildcardPattern("y_dtype"),
-            storage=StorageKind.RMEM,
-            layout=SwitchPattern(
+            dtype=pattern.Wildcard("y_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Switch(
                 "mode",
                 {
-                    ProductMode.MATRIX: LayoutPattern((32, 1), (1, 0)),
-                    ProductMode.VECTOR: LayoutPattern((1, 32), (0, 1)),
+                    ProductMode.MATRIX: pattern.Layout((32, 1), (1, 0)),
+                    ProductMode.VECTOR: pattern.Layout((1, 32), (0, 1)),
                 },
             ),
         ),
     )
-    rhs = ParamDef(
+    rhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
+        pattern=pattern.Tensor(
             shape=(1, 32),
-            dtype=WildcardPattern("x_dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern((1, 32), (0, 1)),
+            dtype=pattern.Wildcard("x_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout((1, 32), (0, 1)),
         ),
     )
 
-    def __init__(self, **attrs):
-        bind(self, attrs)
 
-
-@register_op(dialect="T", namespace="amx", category="nn", name="fms32")
+@expr.register_op(dialect="T", namespace="amx", category="nn", name="fms32")
 class Fms32(AmxOp):
     hir_matches = (
-        HirMatch(
-            Unary,
-            when={"kind": UnaryKind.NEG},
+        schedule.HirMatch(
+            math.Unary,
+            when={"kind": expr.UnaryKind.NEG},
             attributes={"mode": ProductMode.VECTOR, "skip_y": True, "skip_z": True},
             operands={"acc": "result", "lhs": "x", "rhs": "x"},
         ),
-        HirMatch(
-            Binary,
-            when={"kind": BinaryKind.SUB},
+        schedule.HirMatch(
+            math.Binary,
+            when={"kind": expr.BinaryKind.SUB},
             attributes={"mode": ProductMode.VECTOR, "skip_y": True, "skip_z": False},
             operands={"acc": "lhs", "lhs": "rhs", "rhs": "rhs"},
         ),
     )
     """One 32-bit instruction; relative physical layouts retain only its logical operands."""
     mnemonic = "FMS32"
-    capability = OpCapability("amx_fms32")
+    capability = expr.OpCapability("amx_fms32")
     resource = "amx_engine"
     roles = ("acc", "lhs", "rhs")
     writes = ("acc",)
     register_roles = {"acc": "z", "lhs": "y", "rhs": "x"}
-    mode = ParamDef(
+    mode = expr.ParamDef(
         kind="attribute",
         annotation=ProductMode,
-        pattern=WildcardPattern("mode"),
+        pattern=pattern.Wildcard("mode"),
         default=ProductMode.MATRIX,
     )
-    acc_dtype = ParamDef(
+    acc_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("acc_dtype", predicates=(DType.f32,)),
-        default=DType.f32,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("acc_dtype", predicates=(expr.DType.f32,)),
+        default=expr.DType.f32,
     )
-    x_dtype = ParamDef(
+    x_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("x_dtype", predicates=(OrPattern(DType.f16, DType.f32),)),
-        default=DType.f32,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("x_dtype", predicates=(pattern.Or(expr.DType.f16, expr.DType.f32),)),
+        default=expr.DType.f32,
     )
-    y_dtype = ParamDef(
+    y_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("y_dtype", predicates=(OrPattern(DType.f16, DType.f32),)),
-        default=DType.f32,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("y_dtype", predicates=(pattern.Or(expr.DType.f16, expr.DType.f32),)),
+        default=expr.DType.f32,
     )
-    out_dtype = ParamDef(
+    out_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
+        annotation=expr.DType,
         optional=True,
         default=None,
-        pattern=WildcardPattern("out_dtype", predicates=(WildcardPattern("acc_dtype"),)),
+        pattern=pattern.Wildcard("out_dtype", predicates=(pattern.Wildcard("acc_dtype"),)),
     )
-    x_offset = ParamDef(
+    x_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("x_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("x_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    y_offset = ParamDef(
+    y_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("y_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("y_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    z_row = ParamDef(
+    z_row = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("z_row", predicates=(RangePattern(lo=0, hi=63),)),
+        pattern=pattern.Wildcard("z_row", predicates=(pattern.Range(lo=0, hi=63),)),
         default=0,
     )
-    skip_x = ParamDef(
+    skip_x = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_x", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_x", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    skip_y = ParamDef(
+    skip_y = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_y", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_y", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    skip_z = ParamDef(
+    skip_z = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_z", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_z", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    x_mask = ParamDef(
+    x_mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("x_mask", predicates=(RangePattern(lo=0, hi=127),)),
+        pattern=pattern.Wildcard("x_mask", predicates=(pattern.Range(lo=0, hi=127),)),
         default=0,
     )
-    y_mask = ParamDef(
+    y_mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "y_mask",
             predicates=(
-                SwitchPattern(
-                    "mode", {ProductMode.MATRIX: RangePattern(lo=0, hi=127), ProductMode.VECTOR: 0}
+                pattern.Switch(
+                    "mode", {ProductMode.MATRIX: pattern.Range(lo=0, hi=127), ProductMode.VECTOR: 0}
                 ),
             ),
         ),
         default=0,
     )
-    acc = ParamDef(
+    acc = expr.ParamDef(
         kind="input",
         effect=R | W,
-        pattern=TensorPattern(
-            shape=(SwitchPattern("mode", {ProductMode.MATRIX: 16, ProductMode.VECTOR: 1}), 16),
-            dtype=WildcardPattern("acc_dtype"),
-            storage=StorageKind.RMEM,
-            layout=SwitchPattern(
+        pattern=pattern.Tensor(
+            shape=(pattern.Switch("mode", {ProductMode.MATRIX: 16, ProductMode.VECTOR: 1}), 16),
+            dtype=pattern.Wildcard("acc_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Switch(
                 "mode",
                 {
-                    ProductMode.MATRIX: LayoutPattern((16, 16), (64, 1)),
-                    ProductMode.VECTOR: LayoutPattern((1, 16), (0, 1)),
+                    ProductMode.MATRIX: pattern.Layout((16, 16), (64, 1)),
+                    ProductMode.VECTOR: pattern.Layout((1, 16), (0, 1)),
                 },
             ),
         ),
     )
-    lhs = ParamDef(
+    lhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
+        pattern=pattern.Tensor(
             shape=(
-                SwitchPattern("mode", {ProductMode.MATRIX: 16, ProductMode.VECTOR: 1}),
-                SwitchPattern("mode", {ProductMode.MATRIX: 1, ProductMode.VECTOR: 16}),
+                pattern.Switch("mode", {ProductMode.MATRIX: 16, ProductMode.VECTOR: 1}),
+                pattern.Switch("mode", {ProductMode.MATRIX: 1, ProductMode.VECTOR: 16}),
             ),
-            dtype=WildcardPattern("y_dtype"),
-            storage=StorageKind.RMEM,
-            layout=SwitchPattern(
+            dtype=pattern.Wildcard("y_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Switch(
                 "mode",
                 {
-                    ProductMode.MATRIX: LayoutPattern(
-                        (16, 1), (SwitchPattern("y_dtype", {DType.f16: 2, DType.f32: 1}), 0)
+                    ProductMode.MATRIX: pattern.Layout(
+                        (16, 1), (pattern.Switch("y_dtype", {expr.DType.f16: 2, expr.DType.f32: 1}), 0)
                     ),
-                    ProductMode.VECTOR: LayoutPattern(
-                        (1, 16), (0, SwitchPattern("y_dtype", {DType.f16: 2, DType.f32: 1}))
+                    ProductMode.VECTOR: pattern.Layout(
+                        (1, 16), (0, pattern.Switch("y_dtype", {expr.DType.f16: 2, expr.DType.f32: 1}))
                     ),
                 },
             ),
         ),
     )
-    rhs = ParamDef(
+    rhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
+        pattern=pattern.Tensor(
             shape=(1, 16),
-            dtype=WildcardPattern("x_dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern(
-                (1, 16), (0, SwitchPattern("x_dtype", {DType.f16: 2, DType.f32: 1}))
+            dtype=pattern.Wildcard("x_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout(
+                (1, 16), (0, pattern.Switch("x_dtype", {expr.DType.f16: 2, expr.DType.f32: 1}))
             ),
         ),
     )
 
-    def __init__(self, **attrs):
-        bind(self, attrs)
 
-
-@register_op(dialect="T", namespace="amx", category="nn", name="fms64")
+@expr.register_op(dialect="T", namespace="amx", category="nn", name="fms64")
 class Fms64(AmxOp):
     hir_matches = (
-        HirMatch(
-            Unary,
-            when={"kind": UnaryKind.NEG},
+        schedule.HirMatch(
+            math.Unary,
+            when={"kind": expr.UnaryKind.NEG},
             attributes={"mode": ProductMode.VECTOR, "skip_y": True, "skip_z": True},
             operands={"acc": "result", "lhs": "x", "rhs": "x"},
         ),
-        HirMatch(
-            Binary,
-            when={"kind": BinaryKind.SUB},
+        schedule.HirMatch(
+            math.Binary,
+            when={"kind": expr.BinaryKind.SUB},
             attributes={"mode": ProductMode.VECTOR, "skip_y": True, "skip_z": False},
             operands={"acc": "lhs", "lhs": "rhs", "rhs": "rhs"},
         ),
     )
     """One 64-bit instruction; relative physical layouts retain only its logical operands."""
     mnemonic = "FMS64"
-    capability = OpCapability("amx_fms64")
+    capability = expr.OpCapability("amx_fms64")
     resource = "amx_engine"
     roles = ("acc", "lhs", "rhs")
     writes = ("acc",)
     register_roles = {"acc": "z", "lhs": "y", "rhs": "x"}
-    mode = ParamDef(
+    mode = expr.ParamDef(
         kind="attribute",
         annotation=ProductMode,
-        pattern=WildcardPattern("mode"),
+        pattern=pattern.Wildcard("mode"),
         default=ProductMode.MATRIX,
     )
-    acc_dtype = ParamDef(
+    acc_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("acc_dtype", predicates=(DType.f64,)),
-        default=DType.f64,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("acc_dtype", predicates=(expr.DType.f64,)),
+        default=expr.DType.f64,
     )
-    x_dtype = ParamDef(
+    x_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("x_dtype", predicates=(DType.f64,)),
-        default=DType.f64,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("x_dtype", predicates=(expr.DType.f64,)),
+        default=expr.DType.f64,
     )
-    y_dtype = ParamDef(
+    y_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("y_dtype", predicates=(DType.f64,)),
-        default=DType.f64,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("y_dtype", predicates=(expr.DType.f64,)),
+        default=expr.DType.f64,
     )
-    out_dtype = ParamDef(
+    out_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
+        annotation=expr.DType,
         optional=True,
         default=None,
-        pattern=WildcardPattern("out_dtype", predicates=(WildcardPattern("acc_dtype"),)),
+        pattern=pattern.Wildcard("out_dtype", predicates=(pattern.Wildcard("acc_dtype"),)),
     )
-    x_offset = ParamDef(
+    x_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("x_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("x_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    y_offset = ParamDef(
+    y_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("y_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("y_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    z_row = ParamDef(
+    z_row = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("z_row", predicates=(RangePattern(lo=0, hi=63),)),
+        pattern=pattern.Wildcard("z_row", predicates=(pattern.Range(lo=0, hi=63),)),
         default=0,
     )
-    skip_x = ParamDef(
+    skip_x = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_x", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_x", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    skip_y = ParamDef(
+    skip_y = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_y", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_y", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    skip_z = ParamDef(
+    skip_z = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("skip_z", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("skip_z", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    x_mask = ParamDef(
+    x_mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("x_mask", predicates=(RangePattern(lo=0, hi=127),)),
+        pattern=pattern.Wildcard("x_mask", predicates=(pattern.Range(lo=0, hi=127),)),
         default=0,
     )
-    y_mask = ParamDef(
+    y_mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "y_mask",
             predicates=(
-                SwitchPattern(
-                    "mode", {ProductMode.MATRIX: RangePattern(lo=0, hi=127), ProductMode.VECTOR: 0}
+                pattern.Switch(
+                    "mode", {ProductMode.MATRIX: pattern.Range(lo=0, hi=127), ProductMode.VECTOR: 0}
                 ),
             ),
         ),
         default=0,
     )
-    acc = ParamDef(
+    acc = expr.ParamDef(
         kind="input",
         effect=R | W,
-        pattern=TensorPattern(
-            shape=(SwitchPattern("mode", {ProductMode.MATRIX: 8, ProductMode.VECTOR: 1}), 8),
-            dtype=WildcardPattern("acc_dtype"),
-            storage=StorageKind.RMEM,
-            layout=SwitchPattern(
+        pattern=pattern.Tensor(
+            shape=(pattern.Switch("mode", {ProductMode.MATRIX: 8, ProductMode.VECTOR: 1}), 8),
+            dtype=pattern.Wildcard("acc_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Switch(
                 "mode",
                 {
-                    ProductMode.MATRIX: LayoutPattern((8, 8), (64, 1)),
-                    ProductMode.VECTOR: LayoutPattern((1, 8), (0, 1)),
+                    ProductMode.MATRIX: pattern.Layout((8, 8), (64, 1)),
+                    ProductMode.VECTOR: pattern.Layout((1, 8), (0, 1)),
                 },
             ),
         ),
     )
-    lhs = ParamDef(
+    lhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
+        pattern=pattern.Tensor(
             shape=(
-                SwitchPattern("mode", {ProductMode.MATRIX: 8, ProductMode.VECTOR: 1}),
-                SwitchPattern("mode", {ProductMode.MATRIX: 1, ProductMode.VECTOR: 8}),
+                pattern.Switch("mode", {ProductMode.MATRIX: 8, ProductMode.VECTOR: 1}),
+                pattern.Switch("mode", {ProductMode.MATRIX: 1, ProductMode.VECTOR: 8}),
             ),
-            dtype=WildcardPattern("y_dtype"),
-            storage=StorageKind.RMEM,
-            layout=SwitchPattern(
+            dtype=pattern.Wildcard("y_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Switch(
                 "mode",
                 {
-                    ProductMode.MATRIX: LayoutPattern((8, 1), (1, 0)),
-                    ProductMode.VECTOR: LayoutPattern((1, 8), (0, 1)),
+                    ProductMode.MATRIX: pattern.Layout((8, 1), (1, 0)),
+                    ProductMode.VECTOR: pattern.Layout((1, 8), (0, 1)),
                 },
             ),
         ),
     )
-    rhs = ParamDef(
+    rhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
+        pattern=pattern.Tensor(
             shape=(1, 8),
-            dtype=WildcardPattern("x_dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern((1, 8), (0, 1)),
+            dtype=pattern.Wildcard("x_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout((1, 8), (0, 1)),
         ),
     )
 
-    def __init__(self, **attrs):
-        bind(self, attrs)
+register_semantics((Fma16, Fma32, Fma64, Fms16, Fms32, Fms64,))
+
+
+__all__ = ["Fma16", "Fma32", "Fma64", "Fms16", "Fms32", "Fms64"]

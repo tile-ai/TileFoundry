@@ -1,9 +1,9 @@
 """Keep a cropped 24x512 row's 512 stride when returning 24x256 elements."""
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 32), Topology("thread", 1)))
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 32), Topology("thread", 1)))
 class StridedReturnWindow:
     @func
     def gemm(x: Tensor[(32, 14336), "bf16"]) -> Tensor[(24, 256), "bf16", "rmem"]:

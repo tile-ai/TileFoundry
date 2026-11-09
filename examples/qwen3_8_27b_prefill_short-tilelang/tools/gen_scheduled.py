@@ -60,7 +60,7 @@ Structure: one CTA per ({BM} x {BN}) output tile{split_txt}, tiles launched M-fa
 the checkpoint's (out, in) weight, read K-major (b_major=K) through a bitcast view.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = {M}
 N = {N}
@@ -166,7 +166,7 @@ def gemm_source(linear, T, cfg):
     out_init = 'tf.zeros(Tensor[(SPLIT, M, N), "f32"])' if SK > 1 else 'tf.zeros(Tensor[(M, N), "bf16"])'
     src += f'''
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", {topo}), Topology("thread", 384)))
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", {topo}), Topology("thread", 384)))
 class {cls}:
     @func
     def gemm({params}) -> {ret}:
@@ -259,7 +259,7 @@ Differences to the kernel:
   40 / 232; TileFoundry derives the order from the data flow.
 {diffs}\"\"\"
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = {M}
 N = {N}
@@ -360,7 +360,7 @@ def ws_source(linear, T, cfg, epi_ws):
             else 'Mesh(("cta",), layout=(GN, GM), names=("bn", "bm"))')
     src += f'''
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", {"NSM" if persist else "UNITS"}), Topology("thread", 384)))
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", {"NSM" if persist else "UNITS"}), Topology("thread", 384)))
 class {cls}:
     @func
     def gemm({params}) -> Tensor[(M, N), "bf16"]:

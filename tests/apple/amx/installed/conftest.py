@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tests.core.installed.conftest import (  # noqa: F401
+from tests.core.installed.conftest import (
     installation,
     outside,
     tf,

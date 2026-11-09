@@ -17,9 +17,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import product
 
-from tilefoundry.ir.types.int_tuple import product as product_of
-from tilefoundry.ir.types.layout import apply
-from tilefoundry.ir.types.mesh import Mesh, Topology, _named, levels
+from .int_tuple import product as int_tuple_product
+from .layout import apply
+from .mesh import Mesh, levels, topology_names
+from .topology import Topology
+
+__all__ = ["Placement"]
 
 
 @dataclass(frozen=True)
@@ -57,14 +60,11 @@ class Placement:
         return cls({topology_level: int(rank)})
 
     @classmethod
-    def each(cls, mesh: Mesh) -> "tuple[Placement, ...]":
+    def from_mesh(cls, mesh: Mesh) -> "tuple[Placement, ...]":
         """Every placement of *mesh*: each level's program ids are its arrangement's values."""
         arrangements = levels(mesh)
-        names = _named(mesh)
+        names = topology_names(mesh)
         return tuple(
             cls(dict(zip(names, map(apply, arrangements, at), strict=True)))
-            for at in product(*(range(product_of(level.shape)) for level in arrangements))
+            for at in product(*(range(int_tuple_product(level.shape)) for level in arrangements))
         )
-
-
-__all__ = ["Placement"]

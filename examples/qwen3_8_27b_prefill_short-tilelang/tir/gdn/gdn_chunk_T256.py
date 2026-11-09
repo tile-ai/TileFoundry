@@ -6,10 +6,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def gdn_chunk(
     q: Tensor[(256, 16, 128), "bf16"], k: Tensor[(256, 16, 128), "bf16"], v: Tensor[(256, 48, 128), "bf16"], g: Tensor[(256, 48), "f32"], beta: Tensor[(256, 48), "bf16"], tri: Tensor[(3, 64, 64), "f32"], scratch: Tensor[(4096,), "f32"], scratch_1: Tensor[(192,), "f32"], scratch_2: Tensor[(8192,), "f32"], scratch_3: Tensor[(8192,), "f32"], scratch_4: Tensor[(8192,), "f32"], out: Tensor[(48, 4, 28864), "f32"]
 ):

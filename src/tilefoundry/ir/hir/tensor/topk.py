@@ -10,49 +10,16 @@ from __future__ import annotations
 
 import isl
 
-from tilefoundry.core import ShardTensor, local_type
-from tilefoundry.evaluator.dim import resolve_dim
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue, TupleValue, to_torch_dtype
-from tilefoundry.ir.core import Call, Constant, Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import DType, TensorType, TupleType
-from tilefoundry.ir.types.dim import (
-    DimAdd,
-    DimFloorDiv,
-    DimMax,
-    DimMin,
-    DimMod,
-    DimMul,
-    DimVar,
-    is_dim_expr,
-)
-from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
-from tilefoundry.ir.types.layout import Layout
-from tilefoundry.ir.types.shard_layout import (
-    ShardLayout,
-    Split,
-    shard_layout_of,
-)
-from tilefoundry.ir.types.storage import StorageOwners
-from tilefoundry.ir.types.tensor_type import ShapeDim
-from tilefoundry.ir.types.utils import reject_partials
-from tilefoundry.ir.visitor import ExprVisitor
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    iterating,
-    register_access_relation,
-    relations_of,
-)
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import core as ir_core
+from tilefoundry.ir import dim, expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
+from tilefoundry.ir.types import int_tuple
 
 
-@register_op(dialect='tf', category='tensor')
-class TopK(Op):
+@expr.register_op(dialect='tf', category='tensor')
+class TopK(expr.Op):
     """Multi-output (values, indices). Reduces the ``axis`` dim to length ``k``.
 
     ``largest`` selects the greatest (vs smallest) elements; ``sorted`` requests
@@ -60,19 +27,19 @@ class TopK(Op):
 
     ``k`` is a ``ShapeDim`` (``int | DimVar | Expr``): a static ``int``, or a
     dynamic k derived from a context-length ``DimVar`` (e.g.
-    ``dim_min(512, CTX_LEN // 4)``) is a first-class value propagated through
+    ``minimum(512, CTX_LEN // 4)``) is a first-class value propagated through
     typeinfer as a symbolic output-axis length and resolved to a concrete
     ``int`` at evaluation time — not a pad+mask workaround.
     """
 
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
-    k = ParamDef(kind="attribute", annotation=ShapeDim)
-    axis = ParamDef(kind="attribute", annotation=int, default=-1)
-    largest = ParamDef(kind="attribute", annotation=bool, default=True)
-    sorted = ParamDef(kind="attribute", annotation=bool, default=True)
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    k = expr.ParamDef(kind="attribute", annotation=types.ShapeDim)
+    axis = expr.ParamDef(kind="attribute", annotation=int, default=-1)
+    largest = expr.ParamDef(kind="attribute", annotation=bool, default=True)
+    sorted = expr.ParamDef(kind="attribute", annotation=bool, default=True)
 
 
-def _static_dim_value(d) -> "int | None":
+def static_dim_value(d) -> "int | None":
     """The concrete ``int`` value of a ``ShapeDim`` *d* if statically known, else ``None``.
 
     The concrete ``int`` value of a ``ShapeDim`` *d* if statically known (a
@@ -83,46 +50,46 @@ def _static_dim_value(d) -> "int | None":
         return None
     if isinstance(d, int):
         return d
-    if isinstance(d, Constant) and isinstance(d.value, int) and not isinstance(d.value, bool):
+    if isinstance(d, expr.Constant) and isinstance(d.value, int) and not isinstance(d.value, bool):
         return d.value
     return None
 
 
-class _DimUpperBoundVisitor(ExprVisitor[int | None]):
-    def visit_Constant(self, d: Constant, ctx=None) -> int | None:
+class DimUpperBoundVisitor(ir_core.ExprVisitor[int | None]):
+    def visit_Constant(self, d: expr.Constant, ctx=None) -> int | None:
         value = d.value
         return value if isinstance(value, int) and not isinstance(value, bool) else None
 
-    def visit_DimVar(self, d: DimVar, ctx=None) -> int:
+    def visit_DimVar(self, d: expr.DimVar, ctx=None) -> int:
         return d.hi
 
-    def visit_Call(self, d: Call, ctx=None) -> int | None:
+    def visit_Call(self, d: expr.Call, ctx=None) -> int | None:
         target = d.target
-        if isinstance(target, (DimMin, DimMax, DimAdd, DimMul)):
+        if isinstance(target, (expr.DimMin, expr.DimMax, expr.DimAdd, expr.DimMul)):
             a_hi = self.visit(d.args[0], ctx)
             b_hi = self.visit(d.args[1], ctx)
             if a_hi is None or b_hi is None:
                 return None
-            if isinstance(target, DimMin):
+            if isinstance(target, expr.DimMin):
                 return min(a_hi, b_hi)
-            if isinstance(target, DimMax):
+            if isinstance(target, expr.DimMax):
                 return max(a_hi, b_hi)
-            if isinstance(target, DimAdd):
+            if isinstance(target, expr.DimAdd):
                 return a_hi + b_hi
             return None if a_hi < 0 or b_hi < 0 else a_hi * b_hi
-        if isinstance(target, (DimFloorDiv, DimMod)):
+        if isinstance(target, (expr.DimFloorDiv, expr.DimMod)):
             a_hi = self.visit(d.args[0], ctx)
-            b_val = _static_dim_value(d.args[1])
+            b_val = static_dim_value(d.args[1])
             if a_hi is None or b_val is None or b_val <= 0:
                 return None
-            return a_hi // b_val if isinstance(target, DimFloorDiv) else b_val - 1
+            return a_hi // b_val if isinstance(target, expr.DimFloorDiv) else b_val - 1
         return None
 
     def default_visit(self, d, ctx=None) -> int | None:
         return None
 
 
-def _dim_upper_bound(d) -> "int | None":
+def dim_upper_bound(d) -> "int | None":
     """Return a best-effort inclusive static upper bound.
 
     Constants are exact and ``DimVar`` uses ``hi``. Supported arithmetic
@@ -135,16 +102,16 @@ def _dim_upper_bound(d) -> "int | None":
         return None
     if isinstance(d, int):
         return d
-    if isinstance(d, Constant):
+    if isinstance(d, expr.Constant):
         v = d.value
         return v if isinstance(v, int) and not isinstance(v, bool) else None
-    if isinstance(d, (DimVar, Call)):
-        return _DimUpperBoundVisitor().visit(d)
+    if isinstance(d, (expr.DimVar, expr.Call)):
+        return DimUpperBoundVisitor().visit(d)
     return None
 
 
-@register_typeinfer(TopK)
-def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
+@typeinfer.register(TopK)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TupleType:
     x_ty = ctx.type_of(call.args[0])
     if not x_ty.shape:
         ctx.error(call, "x must be at least rank-1")
@@ -155,9 +122,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     if axis < 0 or axis >= rank:
         ctx.error(call, f"axis {call.target.axis} out of range for rank {rank}")
     k = call.target.k
-    if not is_dim_expr(k):
+    if not dim.is_dimension(k):
         ctx.error(call, f"k must be an int, DimVar, or dim expression, got {type(k).__name__}")
-    k_static = _static_dim_value(k)
+    k_static = static_dim_value(k)
     if k_static is not None and k_static < 0:
         ctx.error(call, f"k must be non-negative, got {k_static}")
     axis_len = x_ty.shape[axis]
@@ -165,28 +132,28 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
         if isinstance(axis_len, int) and k_static > axis_len:
             ctx.error(call, f"k={k_static} exceeds axis {axis} length {axis_len}")
     elif isinstance(axis_len, int):
-        k_hi = _dim_upper_bound(k)
+        k_hi = dim_upper_bound(k)
         if k_hi is not None and k_hi > axis_len:
             ctx.error(
                 call,
                 f"k's statically-derivable upper bound {k_hi} exceeds axis "
                 f"{axis} length {axis_len}",
             )
-    source_shard = shard_layout_of(x_ty.layout)
+    source_shard = types.shard_layout_of(x_ty.layout)
     if source_shard is not None:
-        la2ta = mode_axes(compatible_profile(source_shard.layout.shape, x_ty.shape))
-        if any(isinstance(a, Split) and la2ta[a.axis] == axis for a in source_shard.attrs):
+        la2ta = int_tuple.mode_axes(int_tuple.compatible_profile(source_shard.layout.shape, x_ty.shape))
+        if any(isinstance(a, types.Split) and la2ta[a.axis] == axis for a in source_shard.attrs):
             ctx.error(call, f"selected axis {axis} must not be Split-sharded")
 
-    reject_partials("x", x_ty.layout)
+    ir_utils.reject_partials("x", x_ty.layout)
     out_shape = list(x_ty.shape)
     out_shape[axis] = k
     out_shape = tuple(out_shape)
 
-    new_layout = Layout(out_shape)
+    new_layout = types.Layout(out_shape)
     if source_shard is not None:
-        relation = relations_of(call, ctx)
-        derived = derive_output_shard_layout(
+        relation = access.relations_of(call, ctx)
+        derived = typeinfer.derive_output_shard_layout(
             (x_ty,),
             relation,
             out_shape,
@@ -198,27 +165,27 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
         new_layout = (
             derived
             if derived is not None
-            else ShardLayout.default(
+            else types.ShardLayout.from_logical(
                 out_shape,
                 source_shard.mesh,
                 source_shard.attrs,
                 storage=x_ty.storage,
                 owners=ctx.target.storage_owners
                 if ctx is not None and ctx.target is not None
-                else StorageOwners((), {}),
+                else expr.StorageOwners((), {}),
             )
         )
-    values_ty = TensorType(
+    values_ty = types.TensorType(
         shape=out_shape, dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage
     )
-    indices_ty = TensorType(
-        shape=out_shape, dtype=DType.i64, layout=new_layout, storage=x_ty.storage
+    indices_ty = types.TensorType(
+        shape=out_shape, dtype=expr.DType.i64, layout=new_layout, storage=x_ty.storage
     )
-    return TupleType(fields=(values_ty, indices_ty))
+    return types.TupleType(fields=(values_ty, indices_ty))
 
 
-@register_access_relation(TopK)
-def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> tuple[AccessRelation, ...]:
+@access.register_relation(TopK)
+def topk_access_relation(call: "expr.Call", ctx: "TypeInferContext") -> tuple[access.Relation, ...]:
     """One selection per kept position, scanning the whole axis it selects from.
 
     The axis a selection lands on is not a view of the axis it came from -- which
@@ -231,7 +198,7 @@ def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> tuple[Access
     axis = call.target.axis
     if axis < 0:
         axis += rank
-    picked = _static_dim_value(call.target.k)
+    picked = static_dim_value(call.target.k)
     if picked is None:
         raise NotImplementedError(
             f"TopK access relation: k must be a static extent here, got {call.target.k!r}"
@@ -241,48 +208,57 @@ def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> tuple[Access
     scanned = dims[rank]
     reads = ", ".join(scanned if index == axis else dims[index] for index in range(rank))
     kept = ", ".join(dims[:rank])
-    written = AccessRelation(isl.map(f"{{ [{walked}] -> [{kept}] }}"))
+    written = access.Relation(isl.map(f"{{ [{walked}] -> [{kept}] }}"))
     out_shape = (*x_ty.shape[:axis], picked, *x_ty.shape[axis + 1 :])
-    return iterating(
+    return access.iterating(
         (*out_shape, x_ty.shape[axis]),
-        (AccessRelation(isl.map(f"{{ [{walked}] -> [{reads}] }}")), written, written),
+        (access.Relation(isl.map(f"{{ [{walked}] -> [{reads}] }}")), written, written),
     )
 
 
-def _local_dim_bindings(type, data) -> dict:
+def local_dim_bindings(type, data) -> dict:
     """Recover bare ``DimVar`` bindings by pairing *type*'s shape with *data*'s.
 
     This call-local evaluator cannot recover dimensions that occur only in
     another enclosing function argument.
     """
     bindings: dict = {}
-    for axis, dim in enumerate(type.shape):
-        if isinstance(dim, DimVar) and axis < len(data.shape):
-            bindings[dim.name] = int(data.shape[axis])
+    for axis, dim_value in enumerate(type.shape):
+        if isinstance(dim_value, expr.DimVar) and axis < len(data.shape):
+            bindings[dim_value.name] = int(data.shape[axis])
     return bindings
 
 
-@register_eval(TopK)
-def _eval_topk(ctx):
+@evaluator.register(TopK)
+def eval_topk(ctx):
     fields = ctx.result_type.fields
 
     def topk(x, type):
-        k = resolve_dim(ctx.op.k, _local_dim_bindings(type, x))
-        vals, idx = torch.topk(x, k, dim=ctx.op.axis, largest=ctx.op.largest, sorted=ctx.op.sorted)
+        k = evaluator.resolve_dim(ctx.op.k, local_dim_bindings(type, x))
+        vals, idx = utils.torch.topk(x, k, dim=ctx.op.axis, largest=ctx.op.largest, sorted=ctx.op.sorted)
         return tuple(
-            out.to(to_torch_dtype(field.dtype)) for out, field in zip((vals, idx), fields, strict=True)
+            out.to(evaluator.to_torch_dtype(field.dtype)) for out, field in zip((vals, idx), fields, strict=True)
         )
 
     x = ctx.args[0].tensor
     if x.is_global:
         held = topk(x.tensor, x.type)
     else:
-        piece = local_type(x.type)
+        piece = core.local_type(x.type)
         each = [(p, topk(t, piece)) for p, t in x.tensor]
         held = tuple(tuple((p, out[i]) for p, out in each) for i in range(len(fields)))
-    return TupleValue(
-        tuple(TensorValue(ShardTensor(field, data)) for field, data in zip(fields, held, strict=True))
+    return evaluator.TupleValue(
+        tuple(evaluator.TensorValue(core.ShardTensor(field, data)) for field, data in zip(fields, held, strict=True))
     )
 
 
 __all__ = ["TopK"]
+
+
+@cost.register(TopK)
+def topk_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    inputs = cost.input_types(call, ctx)
+    output = cost.output_type(call, ctx)
+    source = inputs[0]
+    dtype = source.dtype if isinstance(source, types.TensorType) else expr.DType.f32
+    return cost.operation(dtype, ir_utils.numel(source), cost.traffic(inputs, output))

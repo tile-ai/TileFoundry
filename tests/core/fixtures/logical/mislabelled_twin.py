@@ -1,9 +1,9 @@
 """A deliberate negative: the runtime implementation labels a non-Module value."""
 
-from tilefoundry.runtime import RuntimeModule
+from tilefoundry import runtime
 
 
-class Mislabelled(RuntimeModule):
+class Mislabelled(runtime.Module):
     module = "not a Module"
 
     def __init__(self):

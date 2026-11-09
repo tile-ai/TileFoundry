@@ -3,13 +3,13 @@
 import torch
 import tvm_ffi
 
+from tilefoundry import runtime
 from tilefoundry.dsl import *
-from tilefoundry.runtime.module import RuntimeModule
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
 S = DimVar("S", 1, 16)
-CUDA = CudaTarget("nvidia.h200_sxm")
+CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 @module(entry="run", topologies=(Topology("thread", 64),))
@@ -18,11 +18,11 @@ class Child:
     def run(x: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]):
         pass
 
-    @run.specialize(RangePattern("S", 1, 8))
+    @run.specialize(pattern.Range("S", 1, 8))
     def small(x: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]):
         pass
 
-    @run.specialize(RangePattern("S", 9, 16))
+    @run.specialize(pattern.Range("S", 9, 16))
     def large(x: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]):
         pass
 
@@ -35,14 +35,14 @@ class Root:
     def first(x: Tensor[(S, 8), "f32"], w_root: ConstTensor[(8,), "f32"]):
         pass
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def host(x: Tensor[(S, 8), "f32"], w_root: ConstTensor[(8,), "f32"],
              w_child: ConstTensor[(8,), "f32"]):
-        launch(first, x, w_root, grid=(1, 1, 1), block=(32, 1, 1))  # noqa: F821
+        launch(first, x, w_root, grid=(1, 1, 1), block=(32, 1, 1))
         launch(child.run, x, w_child, grid=(1, 1, 1), block=(64, 1, 1))
 
 
-class Runtime(RuntimeModule):
+class Runtime(runtime.Module):
     def __init__(self, library_path):
         super().__init__("Root", entry="host")
         self.library = tvm_ffi.load_module(str(library_path))

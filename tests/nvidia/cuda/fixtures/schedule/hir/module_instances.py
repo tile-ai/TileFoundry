@@ -1,13 +1,13 @@
 """Retain indexed, repeated, constant-index, and local calls to scheduled definitions."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 def _program():
     @module(
         entry="run",
-        target=CudaTarget("nvidia.h200_sxm"),
+        target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1), Topology("thread", 32)),
     )
     class ScheduledScale:
@@ -26,7 +26,7 @@ def _program():
 
     @module(
         entry="gemm",
-        target=CudaTarget("nvidia.h200_sxm"),
+        target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1), Topology("thread", 32)),
     )
     class ModuleInstances:
@@ -50,12 +50,12 @@ def _program():
                     out = tf.empty(Tensor[(32,), "f32", None, "gmem"])
                     state = tf.schedule((x, out), op=T.copy())
                 for i in range(3):
-                    updated = layers[i](state)  # noqa: F821 -- class-body binding
+                    updated = layers[i](state)
                     with Mesh(("thread",), layout=(32,), names=("lane",)) as _thread:
                         state = tf.schedule((updated, state), op=T.copy())
-                x = mm(mm(state))  # noqa: F821 -- class-body binding
-                x = layers[0](x)  # noqa: F821 -- class-body binding
-                return helper(x, w)  # noqa: F821 -- class-body binding
+                x = mm(mm(state))
+                x = layers[0](x)
+                return helper(x, w)
 
 
     return ModuleInstances

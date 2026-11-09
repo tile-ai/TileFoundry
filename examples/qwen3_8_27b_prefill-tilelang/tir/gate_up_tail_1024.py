@@ -5,10 +5,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def tail(
     out: Tensor[(1024, 17408), "bf16"], ws: Tensor[(16384, 256), "f32"], out_1: Tensor[(1024, 17408), "bf16"]
 ):

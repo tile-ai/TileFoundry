@@ -2,51 +2,51 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Call, Constant, Tuple, Var
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMod, DimMul, DimSub
-from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.visitor_registry.registries import Role, register_codegen
-from tilefoundry_nvidia.cuda import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext, scalar_read
+from types import MappingProxyType
 
-_DIM_SYMBOLS = {
-    DimAdd: "+",
-    DimSub: "-",
-    DimMul: "*",
-    DimFloorDiv: "/",
-    DimMod: "%",
-}
+from tilefoundry import codegen
+from tilefoundry.ir import expr
+from tilefoundry.ir.hir import tensor
+from tilefoundry_nvidia.cuda import target
+from tilefoundry_nvidia.cuda.codegen import context
 
-
-def _value(expr, ctx: CudaCodegenContext) -> str:
-    if isinstance(expr, Constant):
-        if isinstance(expr.value, bool):
-            return "true" if expr.value else "false"
-        return str(expr.value)
-    name = ctx.name_for(expr)
-    return f"{name}_tensor" if ctx.is_kernel_param(expr) else name
+DIM_SYMBOLS = MappingProxyType({
+    expr.DimAdd: "+",
+    expr.DimSub: "-",
+    expr.DimMul: "*",
+    expr.DimFloorDiv: "/",
+    expr.DimMod: "%",
+})
 
 
-def _index(expr, ctx: CudaCodegenContext) -> str:
-    if isinstance(expr, Constant) and isinstance(expr.value, int):
-        return str(expr.value)
-    if isinstance(expr, Var):
-        type_ = getattr(expr, "type", None)
-        if getattr(type_, "storage", None) in (None, StorageKind.UMAT):
-            return ctx.name_for(expr)
-        return scalar_read(expr, ctx)
-    if isinstance(expr, Call):
-        for op_type, symbol in _DIM_SYMBOLS.items():
-            if isinstance(expr.target, op_type):
-                lhs, rhs = expr.args
-                return f"({_index(lhs, ctx)} {symbol} {_index(rhs, ctx)})"
+def value(node, ctx: context.Context) -> str:
+    if isinstance(node, expr.Constant):
+        if isinstance(node.value, bool):
+            return "true" if node.value else "false"
+        return str(node.value)
+    name = ctx.name_for(node)
+    return f"{name}_tensor" if ctx.is_kernel_param(node) else name
+
+
+def scalar_index(node, ctx: context.Context) -> str:
+    if isinstance(node, expr.Constant) and isinstance(node.value, int):
+        return str(node.value)
+    if isinstance(node, expr.Var):
+        type_ = getattr(node, "type", None)
+        if getattr(type_, "storage", None) in (None, expr.StorageKind.UMAT):
+            return ctx.name_for(node)
+        return context.scalar_read(node, ctx)
+    if isinstance(node, expr.Call):
+        for op_type, symbol in DIM_SYMBOLS.items():
+            if isinstance(node.target, op_type):
+                lhs, rhs = node.args
+                return f"({scalar_index(lhs, ctx)} {symbol} {scalar_index(rhs, ctx)})"
     raise NotImplementedError(
-        f"CUDA TupleGetItem index {type(expr).__name__} is not scalar dimension arithmetic"
+        f"CUDA TupleGetItem index {type(node).__name__} is not scalar dimension arithmetic"
     )
 
 
-def _constant_index(index: Constant) -> int:
+def constant_index(index: expr.Constant) -> int:
     """The element a constant TupleGetItem index selects."""
     selected = index.value
     if not isinstance(selected, int) or isinstance(selected, bool):
@@ -54,11 +54,11 @@ def _constant_index(index: Constant) -> int:
     return selected
 
 
-@register_codegen(CudaTarget, Role.EMIT, Tuple)
-def _bind_tuple(let_stmt, ctx: CudaCodegenContext) -> None:
+@codegen.register(target.Target, codegen.Role.EMIT, expr.Tuple)
+def bind_tuple(let_stmt, ctx: context.Context) -> None:
     """Declare one C++ variable for every tuple binding."""
     elements = let_stmt.value.elements
-    rendered = tuple(_value(element, ctx) for element in elements)
+    rendered = tuple(value(element, ctx) for element in elements)
     name, values = ctx.name_for(let_stmt.var), ", ".join(rendered)
     if elements and all(element.type == elements[0].type for element in elements[1:]):
         ctx.emit(f"cute::array<decltype({rendered[0]}), {len(elements)}> {name}{{{values}}};")
@@ -66,11 +66,14 @@ def _bind_tuple(let_stmt, ctx: CudaCodegenContext) -> None:
         ctx.emit(f"auto {name} = cute::make_tuple({values});")
 
 
-@register_codegen(CudaTarget, Role.EMIT, TupleGetItem)
-def _emit(let_stmt, ctx: CudaCodegenContext) -> None:
+@codegen.register(target.Target, codegen.Role.EMIT, tensor.TupleGetItem)
+def emit(let_stmt, ctx: context.Context) -> None:
     tuple_var, index = let_stmt.value.args
     held, result = ctx.name_for(tuple_var), ctx.name_for(let_stmt.var)
-    if isinstance(index, Constant):
-        ctx.emit(f"auto {result} = cute::get<{_constant_index(index)}>({held});")
+    if isinstance(index, expr.Constant):
+        ctx.emit(f"auto {result} = cute::get<{constant_index(index)}>({held});")
         return
-    ctx.emit(f"auto {result} = {held}[{_index(index, ctx)}];")
+    ctx.emit(f"auto {result} = {held}[{scalar_index(index, ctx)}];")
+
+
+__all__: list[str] = []

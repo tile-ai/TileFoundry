@@ -10,16 +10,16 @@ from dataclasses import replace
 
 import pytest
 
-from tilefoundry.ir.core.module import Module
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.ir import core
+from tilefoundry_nvidia import cuda
 
 CUDA_TARGETS = (
-    pytest.param(CudaTarget("nvidia.h200_sxm"), id="sm_90"),
-    pytest.param(CudaTarget("nvidia.rtx_6000_ada"), id="sm_89", marks=pytest.mark.sm89),
+    pytest.param(cuda.Target("nvidia.h200_sxm"), id="sm_90"),
+    pytest.param(cuda.Target("nvidia.rtx_6000_ada"), id="sm_89", marks=pytest.mark.sm89),
 )
 
 
-def retarget(module: Module, target: CudaTarget) -> Module:
+def retarget(module: core.Module, target: cuda.Target) -> core.Module:
     """*module* with itself and each of its CUDA functions on *target*.
 
     A launch names its callee, so the host entry reaches the retargeted device function.
@@ -29,7 +29,7 @@ def retarget(module: Module, target: CudaTarget) -> Module:
         target=target,
         functions=tuple(
             replace(function, target=target)
-            if isinstance(function.target, CudaTarget)
+            if isinstance(function.target, cuda.Target)
             else function
             for function in module.functions
         ),

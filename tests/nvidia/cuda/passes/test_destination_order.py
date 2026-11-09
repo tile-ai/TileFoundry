@@ -10,32 +10,28 @@ from pathlib import Path
 import pytest
 
 from tests.nvidia.cuda.schedule._support import _RetainedStatements
-from tilefoundry.analysis import AnalysisError
-from tilefoundry.analysis.api import analyze
-from tilefoundry.analysis.check import check_program
-from tilefoundry.analysis.liveness import LivenessMetadata
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.ir.core import get_metadata
-from tilefoundry.ir.tir.memory import Copy
-from tilefoundry.ir.types import StorageKind
-from tilefoundry.schedule import finalize
+from tilefoundry import analysis, cli, schedule
+from tilefoundry.ir import expr
+from tilefoundry.ir.tir import memory
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/passes/destination_order.py"
 
 
 def _analyzed(name: str):
-    module = load_authored_ir(f"{FIXTURE}:{name}")
-    return analyze(*check_program(module, module.entry_function()), analysis=("memory", "sync"))
+    module = cli.load_authored_ir(f"{FIXTURE}:{name}")
+    return analysis.analyze(
+        *analysis.check_program(module, module.entry_function()), analysis=("memory", "sync")
+    )
 
 
 def _lowered(result) -> list[str]:
     """The copies of an analysed program in TIR order: read from shared memory or written to it."""
     statements = _RetainedStatements()
-    statements.visit(finalize(result).lookup(result.function.name).body)
+    statements.visit(schedule.finalize(result).lookup(result.function.name).body)
     return [
-        "read" if stmt.args[0].type.storage is StorageKind.SMEM else "write"
+        "read" if stmt.args[0].type.storage is expr.StorageKind.SMEM else "write"
         for stmt in statements.statements
-        if isinstance(stmt.callable, Copy)
+        if isinstance(stmt.callable, memory.Copy)
     ]
 
 
@@ -59,7 +55,7 @@ def _lowered(result) -> list[str]:
 def test_old_data_is_read_before_it_is_overwritten(name, order):
     """Events and statements follow the order liveness records for each reordered scope."""
     result = _analyzed(name)
-    liveness = get_metadata(result.function, LivenessMetadata)
+    liveness = expr.get_metadata(result.function, analysis.LivenessMetadata)
     defined = {id(item.value.expr): item.defined_at for item in liveness.intervals}
     assert liveness.orders
     for children in liveness.orders.values():
@@ -81,7 +77,7 @@ def test_old_data_is_read_before_it_is_overwritten(name, order):
 )
 def test_reads_already_before_the_overwrite_keep_the_order(name):
     """A read that cannot touch what a write replaces, or already precedes it, keeps its order."""
-    assert get_metadata(_analyzed(name).function, LivenessMetadata).orders == {}
+    assert expr.get_metadata(_analyzed(name).function, analysis.LivenessMetadata).orders == {}
 
 
 @pytest.mark.parametrize(
@@ -94,5 +90,5 @@ def test_reads_already_before_the_overwrite_keep_the_order(name):
     ),
 )
 def test_an_overwrite_the_analysis_cannot_order_is_refused(name):
-    with pytest.raises(AnalysisError, match="cannot order every use"):
+    with pytest.raises(analysis.Error, match="cannot order every use"):
         _analyzed(name)

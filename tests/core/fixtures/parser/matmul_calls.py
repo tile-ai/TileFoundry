@@ -3,24 +3,24 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="default_layout", target=CpuTarget())
+@module(entry="default_layout", target=cpu.Target())
 class DefaultLayout:
     @func
     def default_layout(a: Tensor[(2, 3), "f32"], b: Tensor[(3, 4), "f32"]) -> Tensor[(2, 4), "f32"]:
         return tf.matmul(a, b)
 
 
-@module(entry="infix", target=CpuTarget())
+@module(entry="infix", target=cpu.Target())
 class InfixMatmul:
     @func
     def infix(a: Tensor[(2, 4), "bf16"], b: Tensor[(4, 3), "bf16"]) -> Tensor[(2, 3), "bf16"]:
         return a @ b
 
 
-@module(entry="spelled", target=CpuTarget())
+@module(entry="spelled", target=cpu.Target())
 class SpelledMatmul:
     @func
     def spelled(a: Tensor[(2, 4), "bf16"], b: Tensor[(4, 3), "bf16"]) -> Tensor[(2, 3), "bf16"]:

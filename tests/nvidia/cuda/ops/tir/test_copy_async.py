@@ -17,55 +17,49 @@ import pytest
 import torch
 
 import tilefoundry
-import tilefoundry_nvidia.cuda.codegen  # noqa: F401 — trigger emitter autodiscovery
 from tests.nvidia.cuda.ops.tir.targets import CUDA_TARGETS, retarget
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.ir.core import Var, VerifyError
-from tilefoundry.ir.tir.async_copy import CopyAsync, CpAsyncWait
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
-from tilefoundry.ir.types import DType, Layout, Mesh, TensorType, Topology, make_tensor_type
-from tilefoundry.visitor_registry.verify import verify_module, verify_prim_function
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry import cli, verifier
+from tilefoundry.ir import core, expr, tir, types
+from tilefoundry_nvidia import cuda
 
 TIR = Path(__file__).parents[2] / "fixtures" / "tir"
 
 
-def _copy_async_pf(src_ty: TensorType, dst_ty: TensorType) -> PrimFunction:
-    src = Var(type=src_ty, name="src")
-    dst = Var(type=dst_ty, name="dst")
-    mesh = Mesh((Topology("thread", 32),), Layout((32,), (1,)))
-    return PrimFunction(
-        target=CudaTarget("nvidia.h200_sxm"),
+def _copy_async_pf(src_ty: types.TensorType, dst_ty: types.TensorType) -> core.PrimFunction:
+    src = expr.Var(type=src_ty, name="src")
+    dst = expr.Var(type=dst_ty, name="dst")
+    mesh = types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,)))
+    return core.PrimFunction(
+        target=cuda.Target("nvidia.h200_sxm"),
         name="fn",
         params=(src, dst),
-        body=Sequential(
+        body=core.Sequential(
             body=(
-                MeshScope(
+                core.MeshScope(
                     mesh,
-                    Var(name="thread", type=mesh),
-                    Sequential(body=(Evaluate(callable=CopyAsync(), args=(src, dst)),)),
+                    expr.Var(name="thread", type=mesh),
+                    core.Sequential(body=(core.Evaluate(callable=tir.async_copy.CopyAsync(), args=(src, dst)),)),
                 ),
-                Return(),
+                core.Return(),
             )
         ),
     )
 
 
-def _wait_pf(n: int) -> PrimFunction:
-    mesh = Mesh((Topology("thread", 32),), Layout((32,), (1,)))
-    return PrimFunction(
-        target=CudaTarget("nvidia.h200_sxm"),
+def _wait_pf(n: int) -> core.PrimFunction:
+    mesh = types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,)))
+    return core.PrimFunction(
+        target=cuda.Target("nvidia.h200_sxm"),
         name="fn",
         params=(),
-        body=Sequential(
+        body=core.Sequential(
             body=(
-                MeshScope(
+                core.MeshScope(
                     mesh,
-                    Var(name="thread", type=mesh),
-                    Sequential(body=(Evaluate(callable=CpAsyncWait(n=n), args=()),)),
+                    expr.Var(name="thread", type=mesh),
+                    core.Sequential(body=(core.Evaluate(callable=tir.async_copy.CpAsyncWait(n=n), args=()),)),
                 ),
-                Return(),
+                core.Return(),
             )
         ),
     )
@@ -74,24 +68,24 @@ def _wait_pf(n: int) -> PrimFunction:
 REJECTED = [
     pytest.param(
         _copy_async_pf(
-            make_tensor_type((128, 4), DType.from_name("f32"), storage="gmem"),
-            make_tensor_type((128, 4), DType.from_name("f32"), storage="gmem"),
+            types.TensorType.from_shape((128, 4), expr.DType.from_name("f32"), storage="gmem"),
+            types.TensorType.from_shape((128, 4), expr.DType.from_name("f32"), storage="gmem"),
         ),
         "dst: gmem does not match smem",
         id="non_smem_destination",
     ),
     pytest.param(
         _copy_async_pf(
-            make_tensor_type((128, 4), DType.from_name("f32"), storage="smem"),
-            make_tensor_type((128, 4), DType.from_name("f32"), storage="smem"),
+            types.TensorType.from_shape((128, 4), expr.DType.from_name("f32"), storage="smem"),
+            types.TensorType.from_shape((128, 4), expr.DType.from_name("f32"), storage="smem"),
         ),
         "src: smem does not match gmem",
         id="non_gmem_source",
     ),
     pytest.param(
         _copy_async_pf(
-            make_tensor_type((128, 4), DType.from_name("f16"), storage="gmem"),
-            make_tensor_type((128, 4), DType.from_name("f32"), storage="smem"),
+            types.TensorType.from_shape((128, 4), expr.DType.from_name("f16"), storage="gmem"),
+            types.TensorType.from_shape((128, 4), expr.DType.from_name("f32"), storage="smem"),
         ),
         "reads src.dtype = dst.dtype",
         id="dtype_mismatch",
@@ -102,17 +96,17 @@ REJECTED = [
 
 @pytest.mark.parametrize(("stated", "refusal"), REJECTED)
 def test_verify_rejects_invalid_async_copy(stated, refusal) -> None:
-    with pytest.raises(VerifyError, match=refusal):
-        verify_prim_function(stated)
+    with pytest.raises(expr.VerifyError, match=refusal):
+        verifier.verify_prim_function(stated)
 
 
 @pytest.mark.parametrize("target", CUDA_TARGETS)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_async_copy_stage_matches_input(target: CudaTarget) -> None:
+def test_async_copy_stage_matches_input(target: cuda.Target) -> None:
     torch.manual_seed(3)
     source = torch.randn(128, 4, dtype=torch.float32, device="cuda")
     out = torch.empty_like(source)
-    AsyncStage = load_authored_ir(f"{TIR / 'async_sync.py'}:AsyncStage")
+    AsyncStage = cli.load_authored_ir(f"{TIR / 'async_sync.py'}:AsyncStage")
     runtime = tilefoundry.compile(retarget(AsyncStage, target), target=target)
     runtime(source, out)
     torch.cuda.synchronize()
@@ -121,10 +115,10 @@ def test_async_copy_stage_matches_input(target: CudaTarget) -> None:
 
 @pytest.mark.parametrize("target", CUDA_TARGETS)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_async_copy_stages_two_runs(target: CudaTarget) -> None:
+def test_async_copy_stages_two_runs(target: cuda.Target) -> None:
     """Each thread's second run lands 512 elements after its first, as the destination states."""
-    module = retarget(load_authored_ir(f"{TIR / 'split_stage.py'}:SplitStage"), target)
-    verify_module(module)
+    module = retarget(cli.load_authored_ir(f"{TIR / 'split_stage.py'}:SplitStage"), target)
+    verifier.verify_module(module)
     runtime = tilefoundry.compile(module, target=target)
     torch.manual_seed(4)
     source = torch.randn(2, 128, 4, dtype=torch.float32, device="cuda")

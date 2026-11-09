@@ -3,31 +3,31 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="negative_float_literal", target=CpuTarget())
+@module(entry="negative_float_literal", target=cpu.Target())
 class NegativeFloatLiteral:
     @func
     def negative_float_literal(x: Tensor[(), "f32"]):
         return -1.0
 
 
-@module(entry="negative_integer_literal", target=CpuTarget())
+@module(entry="negative_integer_literal", target=cpu.Target())
 class NegativeIntegerLiteral:
     @func
     def negative_integer_literal(x: Tensor[(), "f32"]):
         return -3
 
 
-@module(entry="negative_infinity_literal", target=CpuTarget())
+@module(entry="negative_infinity_literal", target=cpu.Target())
 class NegativeInfinityLiteral:
     @func
     def negative_infinity_literal(x: Tensor[(), "f32"]):
         return -1e999
 
 
-@module(entry="negated_value", target=CpuTarget())
+@module(entry="negated_value", target=cpu.Target())
 class NegatedValue:
     @func
     def negated_value(x: Tensor[(), "f32"]):

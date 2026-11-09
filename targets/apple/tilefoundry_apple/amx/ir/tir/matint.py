@@ -1,18 +1,8 @@
-from tilefoundry.ir.core import OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.hir.nn.matmul import MatMul
-from tilefoundry.ir.pattern import (
-    LayoutPattern,
-    OrPattern,
-    RangePattern,
-    SwitchPattern,
-    TensorPattern,
-    WildcardPattern,
-)
-from tilefoundry.ir.pattern import predicates as P
-from tilefoundry.ir.pattern.predicates import Bits, In, Table, variable
-from tilefoundry.ir.types import DType, StorageKind
-from tilefoundry.visitor_registry.candidates import HirMatch
+"""AMX MATINT Ops."""
+
+from tilefoundry.interfaces import schedule
+from tilefoundry.ir import expr, pattern
+from tilefoundry.ir.hir import nn
 
 from .common import (
     I8,
@@ -24,18 +14,18 @@ from .common import (
     IntLane,
     Repeat,
     Shuffle,
-    bind,
     instruction_versions,
 )
+from .semantics import register_semantics
 
-R = MemoryEffect.READ
-W = MemoryEffect.WRITE
+R = expr.MemoryEffect.READ
+W = expr.MemoryEffect.WRITE
 
 
 class Matint(AmxOp):
     hir_matches = tuple(
-        HirMatch(
-            MatMul,
+        schedule.HirMatch(
+            nn.MatMul,
             when={"a_layout": "MK", "b_layout": "KN"},
             attributes={"lane_mode": lane, "alu": IntALU.ADD_PRODUCT},
             operands={"acc": "result", "lhs": "lhs", "rhs": "rhs"},
@@ -43,19 +33,19 @@ class Matint(AmxOp):
         for lane in IntLane
     )
     mnemonic = "MATINT"
-    capability = OpCapability("amx_matint")
+    capability = expr.OpCapability("amx_matint")
     resource = "amx_engine"
     roles = ("acc", "lhs", "rhs", "table")
     writes = ("acc",)
     register_roles = {"acc": "z", "lhs": "y", "rhs": "x", "table": "indexed_bank"}
-    alu = ParamDef(
+    alu = expr.ParamDef(
         kind="attribute",
         annotation=IntALU,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "alu",
             predicates=(
-                In(
-                    variable("alu"),
+                pattern.In(
+                    pattern.variable("alu"),
                     (
                         IntALU.ADD_PRODUCT,
                         IntALU.SUB_PRODUCT,
@@ -68,23 +58,23 @@ class Matint(AmxOp):
                         IntALU.POPCOUNT,
                     ),
                 ),
-                (variable("amx_generation") >= 2) | (variable("alu") < 10),
+                (pattern.variable("amx_generation") >= 2) | (pattern.variable("alu") < 10),
             ),
         ),
         default=IntALU.ADD_PRODUCT,
     )
-    lane_mode = ParamDef(
+    lane_mode = expr.ParamDef(
         kind="attribute",
         annotation=IntLane,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "lane_mode",
             predicates=(
                 (
                     (
-                        (variable("alu") == IntALU.SHIFT)
+                        (pattern.variable("alu") == IntALU.SHIFT)
                         & (
-                            In(
-                                variable("lane_mode"),
+                            pattern.In(
+                                pattern.variable("lane_mode"),
                                 (
                                     IntLane.NARROW16,
                                     IntLane.WIDE16,
@@ -96,14 +86,14 @@ class Matint(AmxOp):
                         )
                     )
                     | (
-                        (In(variable("alu"), (IntALU.SQRDMLAH, IntALU.SQRDMLSH)))
-                        & (variable("lane_mode") == IntLane.NARROW16)
+                        (pattern.In(pattern.variable("alu"), (IntALU.SQRDMLAH, IntALU.SQRDMLSH)))
+                        & (pattern.variable("lane_mode") == IntLane.NARROW16)
                     )
                     | (
-                        (variable("alu") == IntALU.WIDE_PRODUCT)
+                        (pattern.variable("alu") == IntALU.WIDE_PRODUCT)
                         & (
-                            In(
-                                variable("lane_mode"),
+                            pattern.In(
+                                pattern.variable("lane_mode"),
                                 (
                                     IntLane.NARROW16,
                                     IntLane.I8_I8_I32,
@@ -114,18 +104,18 @@ class Matint(AmxOp):
                         )
                     )
                     | (
-                        (variable("alu") == IntALU.POPCOUNT)
+                        (pattern.variable("alu") == IntALU.POPCOUNT)
                         & (
-                            In(
-                                variable("lane_mode"),
+                            pattern.In(
+                                pattern.variable("lane_mode"),
                                 (IntLane.NARROW16, IntLane.WIDE16, IntLane.I32),
                             )
                         )
                     )
                     | (
                         (
-                            ~In(
-                                variable("alu"),
+                            ~pattern.In(
+                                pattern.variable("alu"),
                                 (
                                     IntALU.SHIFT,
                                     IntALU.SQRDMLAH,
@@ -135,33 +125,33 @@ class Matint(AmxOp):
                                 ),
                             )
                         )
-                        & (In(variable("lane_mode"), (IntLane.NARROW16, IntLane.WIDE16)))
+                        & (pattern.In(pattern.variable("lane_mode"), (IntLane.NARROW16, IntLane.WIDE16)))
                     )
                 ),
             ),
         ),
         default=IntLane.NARROW16,
     )
-    x_dtype = ParamDef(
+    x_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern(
+        annotation=expr.DType,
+        pattern=pattern.Wildcard(
             "x_dtype",
             predicates=(
                 (
-                    ((variable("alu") == IntALU.SHIFT) & (variable("x_dtype") == DType.u8))
+                    ((pattern.variable("alu") == IntALU.SHIFT) & (pattern.variable("x_dtype") == expr.DType.u8))
                     | (
-                        (variable("alu") != IntALU.SHIFT)
+                        (pattern.variable("alu") != IntALU.SHIFT)
                         & (
-                            (In(variable("x_dtype"), (*I8, *I16, *I32)))
+                            (pattern.In(pattern.variable("x_dtype"), (*I8, *I16, *I32)))
                             & (
-                                ((variable("alu") == IntALU.WIDE_PRODUCT) & (Bits("x_dtype") == 8))
+                                ((pattern.variable("alu") == IntALU.WIDE_PRODUCT) & (pattern.Bits("x_dtype") == 8))
                                 | (
-                                    (variable("alu") != IntALU.WIDE_PRODUCT)
+                                    (pattern.variable("alu") != IntALU.WIDE_PRODUCT)
                                     & (
-                                        Bits("x_dtype")
-                                        == Table((0, 0, 16, 16, 32, 0, 0, 0, 0, 8, 8, 8, 8, 16))[
-                                            variable("lane_mode")
+                                        pattern.Bits("x_dtype")
+                                        == pattern.Table((0, 0, 16, 16, 32, 0, 0, 0, 0, 8, 8, 8, 8, 16))[
+                                            pattern.variable("lane_mode")
                                         ]
                                     )
                                 )
@@ -171,41 +161,41 @@ class Matint(AmxOp):
                 ),
             ),
         ),
-        default=DType.i16,
+        default=expr.DType.i16,
     )
-    y_dtype = ParamDef(
+    y_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern(
+        annotation=expr.DType,
+        pattern=pattern.Wildcard(
             "y_dtype",
             predicates=(
-                ((variable("alu") == IntALU.SHIFT) & (variable("y_dtype") == DType.u8))
+                ((pattern.variable("alu") == IntALU.SHIFT) & (pattern.variable("y_dtype") == expr.DType.u8))
                 | (
-                    (variable("alu") != IntALU.SHIFT)
+                    (pattern.variable("alu") != IntALU.SHIFT)
                     & (
-                        (In(variable("y_dtype"), (*I8, *I16, *I32)))
+                        (pattern.In(pattern.variable("y_dtype"), (*I8, *I16, *I32)))
                         & (
                             (
-                                (variable("lane_mode") == IntLane.I8_I16_I32)
+                                (pattern.variable("lane_mode") == IntLane.I8_I16_I32)
                                 & (
-                                    ((variable("amx_generation") < 3) & (Bits("y_dtype") == 8))
-                                    | ((variable("amx_generation") >= 3) & (Bits("y_dtype") == 16))
+                                    ((pattern.variable("amx_generation") < 3) & (pattern.Bits("y_dtype") == 8))
+                                    | ((pattern.variable("amx_generation") >= 3) & (pattern.Bits("y_dtype") == 16))
                                 )
                             )
                             | (
-                                (variable("lane_mode") != IntLane.I8_I16_I32)
+                                (pattern.variable("lane_mode") != IntLane.I8_I16_I32)
                                 & (
                                     (
-                                        (variable("alu") == IntALU.WIDE_PRODUCT)
-                                        & (Bits("y_dtype") == 8)
+                                        (pattern.variable("alu") == IntALU.WIDE_PRODUCT)
+                                        & (pattern.Bits("y_dtype") == 8)
                                     )
                                     | (
-                                        (variable("alu") != IntALU.WIDE_PRODUCT)
+                                        (pattern.variable("alu") != IntALU.WIDE_PRODUCT)
                                         & (
-                                            Bits("y_dtype")
-                                            == Table(
+                                            pattern.Bits("y_dtype")
+                                            == pattern.Table(
                                                 (0, 0, 16, 16, 32, 0, 0, 0, 0, 8, 8, 8, 16, 8)
-                                            )[variable("lane_mode")]
+                                            )[pattern.variable("lane_mode")]
                                         )
                                     )
                                 )
@@ -213,34 +203,34 @@ class Matint(AmxOp):
                         )
                     )
                 ),
-                variable("x_lanes") == 512 // Bits("x_dtype"),
-                variable("y_lanes") == 512 // Bits("y_dtype"),
+                pattern.variable("x_lanes") == 512 // pattern.Bits("x_dtype"),
+                pattern.variable("y_lanes") == 512 // pattern.Bits("y_dtype"),
             ),
         ),
-        default=DType.i16,
+        default=expr.DType.i16,
     )
-    acc_dtype = ParamDef(
+    acc_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern(
+        annotation=expr.DType,
+        pattern=pattern.Wildcard(
             "acc_dtype",
             predicates=(
                 (
-                    (In(variable("acc_dtype"), (*I8, *I16, *I32)))
+                    (pattern.In(pattern.variable("acc_dtype"), (*I8, *I16, *I32)))
                     & (
                         (
-                            (variable("lane_mode") == IntLane.I8_I16_I32)
+                            (pattern.variable("lane_mode") == IntLane.I8_I16_I32)
                             & (
-                                ((variable("amx_generation") < 3) & (Bits("acc_dtype") == 16))
-                                | ((variable("amx_generation") >= 3) & (Bits("acc_dtype") == 32))
+                                ((pattern.variable("amx_generation") < 3) & (pattern.Bits("acc_dtype") == 16))
+                                | ((pattern.variable("amx_generation") >= 3) & (pattern.Bits("acc_dtype") == 32))
                             )
                         )
                         | (
-                            (variable("lane_mode") != IntLane.I8_I16_I32)
+                            (pattern.variable("lane_mode") != IntLane.I8_I16_I32)
                             & (
-                                Bits("acc_dtype")
-                                == Table((0, 0, 16, 32, 32, 0, 0, 0, 0, 8, 32, 16, 32, 32))[
-                                    variable("lane_mode")
+                                pattern.Bits("acc_dtype")
+                                == pattern.Table((0, 0, 16, 32, 32, 0, 0, 0, 0, 8, 32, 16, 32, 32))[
+                                    pattern.variable("lane_mode")
                                 ]
                             )
                         )
@@ -248,267 +238,267 @@ class Matint(AmxOp):
                 ),
             ),
         ),
-        default=DType.i16,
+        default=expr.DType.i16,
     )
-    index_mode = ParamDef(
+    index_mode = expr.ParamDef(
         kind="attribute",
         annotation=IndexMode,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "index_mode",
             predicates=(
-                In(variable("alu"), (IntALU.ADD_PRODUCT, IntALU.WIDE_PRODUCT))
-                | (variable("index_mode") == IndexMode.NONE),
+                pattern.In(pattern.variable("alu"), (IntALU.ADD_PRODUCT, IntALU.WIDE_PRODUCT))
+                | (pattern.variable("index_mode") == IndexMode.NONE),
             ),
         ),
         default=IndexMode.NONE,
     )
-    index_register = ParamDef(
+    index_register = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "index_register",
             predicates=(
-                RangePattern(lo=0, hi=7),
-                (variable("index_mode") != IndexMode.NONE) | (variable("index_register") == 0),
+                pattern.Range(lo=0, hi=7),
+                (pattern.variable("index_mode") != IndexMode.NONE) | (pattern.variable("index_register") == 0),
             ),
         ),
         default=0,
     )
-    x_offset = ParamDef(
+    x_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("x_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("x_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    y_offset = ParamDef(
+    y_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("y_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("y_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=64,
     )
-    z_row = ParamDef(
+    z_row = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("z_row", predicates=(RangePattern(lo=0, hi=3),)),
+        pattern=pattern.Wildcard("z_row", predicates=(pattern.Range(lo=0, hi=3),)),
         default=0,
     )
-    shift = ParamDef(
+    shift = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("shift", predicates=(RangePattern(lo=0, hi=31),)),
+        pattern=pattern.Wildcard("shift", predicates=(pattern.Range(lo=0, hi=31),)),
         default=0,
     )
-    mask = ParamDef(
+    mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("mask", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("mask", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    mask_y = ParamDef(
+    mask_y = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("mask_y", predicates=(OrPattern(False, True),)),
+        pattern=pattern.Wildcard("mask_y", predicates=(pattern.Or(False, True),)),
         default=False,
     )
-    saturate = ParamDef(
+    saturate = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "saturate",
             predicates=(
-                In(variable("saturate"), (False, True)),
-                (variable("alu") == IntALU.SHIFT) | (P.In(variable("saturate"), (False,))),
+                pattern.In(pattern.variable("saturate"), (False, True)),
+                (pattern.variable("alu") == IntALU.SHIFT) | (pattern.In(pattern.variable("saturate"), (False,))),
             ),
         ),
         default=False,
     )
-    rounding = ParamDef(
+    rounding = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "rounding",
             predicates=(
-                In(variable("rounding"), (False, True)),
-                (variable("alu") == IntALU.SHIFT) | (P.In(variable("rounding"), (False,))),
+                pattern.In(pattern.variable("rounding"), (False, True)),
+                (pattern.variable("alu") == IntALU.SHIFT) | (pattern.In(pattern.variable("rounding"), (False,))),
             ),
         ),
         default=False,
     )
-    signed_output = ParamDef(
+    signed_output = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "signed_output",
             predicates=(
-                In(variable("signed_output"), (False, True)),
-                (variable("alu") == IntALU.SHIFT) | (P.In(variable("signed_output"), (False,))),
+                pattern.In(pattern.variable("signed_output"), (False, True)),
+                (pattern.variable("alu") == IntALU.SHIFT) | (pattern.In(pattern.variable("signed_output"), (False,))),
             ),
         ),
         default=False,
     )
-    shuffle_x = ParamDef(
+    shuffle_x = expr.ParamDef(
         kind="attribute",
         annotation=Shuffle,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "shuffle_x",
             predicates=(
-                (variable("alu") != IntALU.SHIFT) | (variable("shuffle_x") == Shuffle.NONE),
+                (pattern.variable("alu") != IntALU.SHIFT) | (pattern.variable("shuffle_x") == Shuffle.NONE),
             ),
         ),
         default=Shuffle.NONE,
     )
-    shuffle_y = ParamDef(
+    shuffle_y = expr.ParamDef(
         kind="attribute",
         annotation=Shuffle,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "shuffle_y",
             predicates=(
-                (variable("alu") != IntALU.SHIFT) | (variable("shuffle_y") == Shuffle.NONE),
+                (pattern.variable("alu") != IntALU.SHIFT) | (pattern.variable("shuffle_y") == Shuffle.NONE),
             ),
         ),
         default=Shuffle.NONE,
     )
-    repeat = ParamDef(
+    repeat = expr.ParamDef(
         kind="attribute",
         annotation=Repeat,
-        pattern=WildcardPattern("repeat", predicates=(Repeat.ONE,)),
+        pattern=pattern.Wildcard("repeat", predicates=(Repeat.ONE,)),
         default=Repeat.ONE,
     )
-    broadcast_mode = ParamDef(
+    broadcast_mode = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "broadcast_mode",
             predicates=(
-                RangePattern(lo=0, hi=7),
-                (variable("repeat") != Repeat.ONE) | (variable("broadcast_mode") == 0),
-                (variable("rows") == 1),
-                (variable("z_step") == 512 // Bits("acc_dtype")),
+                pattern.Range(lo=0, hi=7),
+                (pattern.variable("repeat") != Repeat.ONE) | (pattern.variable("broadcast_mode") == 0),
+                (pattern.variable("rows") == 1),
+                (pattern.variable("z_step") == 512 // pattern.Bits("acc_dtype")),
                 (
                     (
-                        (variable("alu") == IntALU.SHIFT)
+                        (pattern.variable("alu") == IntALU.SHIFT)
                         & (
-                            (variable("acc_rows") == 512 // Bits("acc_dtype"))
-                            & (variable("acc_lanes") == 512 // Bits("acc_dtype"))
-                            & (variable("acc_step") == 64)
-                            & (variable("acc_ratio") == 1)
-                            & (variable("acc_inner") == 512 // Bits("acc_dtype"))
-                            & (variable("acc_wide") == 0)
+                            (pattern.variable("acc_rows") == 512 // pattern.Bits("acc_dtype"))
+                            & (pattern.variable("acc_lanes") == 512 // pattern.Bits("acc_dtype"))
+                            & (pattern.variable("acc_step") == 64)
+                            & (pattern.variable("acc_ratio") == 1)
+                            & (pattern.variable("acc_inner") == 512 // pattern.Bits("acc_dtype"))
+                            & (pattern.variable("acc_wide") == 0)
                         )
                     )
                     | (
-                        (variable("alu") != IntALU.SHIFT)
+                        (pattern.variable("alu") != IntALU.SHIFT)
                         & (
                             (
-                                (Bits("x_dtype") == 8)
-                                & (variable("acc_rows") == 512 // Bits("acc_dtype"))
-                                & (variable("acc_lanes") == 512 // Bits("x_dtype"))
-                                & (variable("acc_step") == 64)
-                                & (variable("acc_ratio") == Bits("acc_dtype") // Bits("x_dtype"))
-                                & (variable("acc_inner") == 512 // Bits("acc_dtype"))
+                                (pattern.Bits("x_dtype") == 8)
+                                & (pattern.variable("acc_rows") == 512 // pattern.Bits("acc_dtype"))
+                                & (pattern.variable("acc_lanes") == 512 // pattern.Bits("x_dtype"))
+                                & (pattern.variable("acc_step") == 64)
+                                & (pattern.variable("acc_ratio") == pattern.Bits("acc_dtype") // pattern.Bits("x_dtype"))
+                                & (pattern.variable("acc_inner") == 512 // pattern.Bits("acc_dtype"))
                                 & (
-                                    variable("acc_wide")
-                                    == Table((0, 0, 1, 1, 1))[Bits("acc_dtype") // Bits("x_dtype")]
+                                    pattern.variable("acc_wide")
+                                    == pattern.Table((0, 0, 1, 1, 1))[pattern.Bits("acc_dtype") // pattern.Bits("x_dtype")]
                                 )
                             )
                             | (
-                                (Bits("x_dtype") != 8)
+                                (pattern.Bits("x_dtype") != 8)
                                 & (
-                                    (variable("acc_rows") == 512 // Bits("x_dtype"))
-                                    & (variable("acc_lanes") == 512 // Bits("x_dtype"))
+                                    (pattern.variable("acc_rows") == 512 // pattern.Bits("x_dtype"))
+                                    & (pattern.variable("acc_lanes") == 512 // pattern.Bits("x_dtype"))
                                     & (
-                                        variable("acc_ratio")
-                                        == Bits("acc_dtype") // Bits("x_dtype")
+                                        pattern.variable("acc_ratio")
+                                        == pattern.Bits("acc_dtype") // pattern.Bits("x_dtype")
                                     )
-                                    & (variable("acc_inner") == 512 // Bits("acc_dtype"))
+                                    & (pattern.variable("acc_inner") == 512 // pattern.Bits("acc_dtype"))
                                     & (
-                                        variable("acc_wide")
-                                        == Table((0, 0, 1, 1, 1))[
-                                            Bits("acc_dtype") // Bits("x_dtype")
+                                        pattern.variable("acc_wide")
+                                        == pattern.Table((0, 0, 1, 1, 1))[
+                                            pattern.Bits("acc_dtype") // pattern.Bits("x_dtype")
                                         ]
                                     )
                                 )
                                 & (
-                                    variable("acc_step")
-                                    == (Bits("x_dtype") // 8) * 512 // Bits("acc_dtype")
+                                    pattern.variable("acc_step")
+                                    == (pattern.Bits("x_dtype") // 8) * 512 // pattern.Bits("acc_dtype")
                                 )
                             )
                         )
                     )
                 ),
                 (
-                    variable("has_inputs")
-                    == Table((1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1))[variable("alu")]
+                    pattern.variable("has_inputs")
+                    == pattern.Table((1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1))[pattern.variable("alu")]
                 ),
-                (variable("table_side") == Table((0, 1, 2, 1, 2))[variable("index_mode")]),
+                (pattern.variable("table_side") == pattern.Table((0, 1, 2, 1, 2))[pattern.variable("index_mode")]),
                 (
-                    variable("lhs_count")
+                    pattern.variable("lhs_count")
                     == (
-                        (512 // Bits("y_dtype")) * Table((8, 8, 2, 8, 4))[variable("index_mode")]
+                        (512 // pattern.Bits("y_dtype")) * pattern.Table((8, 8, 2, 8, 4))[pattern.variable("index_mode")]
                         + 7
                     )
                     // 8
                 ),
-                (variable("lhs_packed") == Table((0, 0, 1, 0, 1))[variable("index_mode")]),
+                (pattern.variable("lhs_packed") == pattern.Table((0, 0, 1, 0, 1))[pattern.variable("index_mode")]),
                 (
-                    variable("rhs_count")
+                    pattern.variable("rhs_count")
                     == (
-                        (512 // Bits("x_dtype")) * Table((8, 2, 8, 4, 8))[variable("index_mode")]
+                        (512 // pattern.Bits("x_dtype")) * pattern.Table((8, 2, 8, 4, 8))[pattern.variable("index_mode")]
                         + 7
                     )
                     // 8
                 ),
-                (variable("rhs_packed") == Table((0, 1, 0, 1, 0))[variable("index_mode")]),
+                (pattern.variable("rhs_packed") == pattern.Table((0, 1, 0, 1, 0))[pattern.variable("index_mode")]),
             ),
         ),
         default=0,
     )
-    acc = ParamDef(
+    acc = expr.ParamDef(
         kind="input",
         effect=R | W,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("acc_rows"), WildcardPattern("acc_lanes")),
-            dtype=WildcardPattern("acc_dtype"),
-            storage=StorageKind.RMEM,
-            layout=SwitchPattern(
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("acc_rows"), pattern.Wildcard("acc_lanes")),
+            dtype=pattern.Wildcard("acc_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Switch(
                 "acc_wide",
                 {
-                    0: LayoutPattern(
-                        (WildcardPattern("acc_rows"), WildcardPattern("acc_lanes")),
-                        (WildcardPattern("acc_step"), 1),
+                    0: pattern.Layout(
+                        (pattern.Wildcard("acc_rows"), pattern.Wildcard("acc_lanes")),
+                        (pattern.Wildcard("acc_step"), 1),
                     ),
-                    1: LayoutPattern(
+                    1: pattern.Layout(
                         (
-                            WildcardPattern("acc_rows"),
-                            (WildcardPattern("acc_ratio"), WildcardPattern("acc_inner")),
+                            pattern.Wildcard("acc_rows"),
+                            (pattern.Wildcard("acc_ratio"), pattern.Wildcard("acc_inner")),
                         ),
-                        (WildcardPattern("acc_step"), (WildcardPattern("z_step"), 1)),
+                        (pattern.Wildcard("acc_step"), (pattern.Wildcard("z_step"), 1)),
                     ),
                 },
             ),
         ),
     )
-    lhs = ParamDef(
+    lhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=SwitchPattern(
+        pattern=pattern.Switch(
             "has_inputs",
             {
                 0: None,
-                1: SwitchPattern(
+                1: pattern.Switch(
                     "lhs_packed",
                     {
-                        0: TensorPattern(
-                            shape=(WildcardPattern("y_lanes"), 1),
-                            dtype=WildcardPattern("y_dtype"),
-                            storage=StorageKind.RMEM,
-                            layout=LayoutPattern((WildcardPattern("y_lanes"), 1), (1, 0)),
+                        0: pattern.Tensor(
+                            shape=(pattern.Wildcard("y_lanes"), 1),
+                            dtype=pattern.Wildcard("y_dtype"),
+                            storage=expr.StorageKind.RMEM,
+                            layout=pattern.Layout((pattern.Wildcard("y_lanes"), 1), (1, 0)),
                         ),
-                        1: TensorPattern(
-                            shape=(WildcardPattern("lhs_count"),),
-                            dtype=DType.u8,
-                            storage=StorageKind.RMEM,
-                            layout=LayoutPattern((WildcardPattern("lhs_count"),), (1,)),
+                        1: pattern.Tensor(
+                            shape=(pattern.Wildcard("lhs_count"),),
+                            dtype=expr.DType.u8,
+                            storage=expr.StorageKind.RMEM,
+                            layout=pattern.Layout((pattern.Wildcard("lhs_count"),), (1,)),
                         ),
                     },
                 ),
@@ -517,27 +507,27 @@ class Matint(AmxOp):
         optional=True,
         default=None,
     )
-    rhs = ParamDef(
+    rhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=SwitchPattern(
+        pattern=pattern.Switch(
             "has_inputs",
             {
                 0: None,
-                1: SwitchPattern(
+                1: pattern.Switch(
                     "rhs_packed",
                     {
-                        0: TensorPattern(
-                            shape=(1, WildcardPattern("x_lanes")),
-                            dtype=WildcardPattern("x_dtype"),
-                            storage=StorageKind.RMEM,
-                            layout=LayoutPattern((1, WildcardPattern("x_lanes")), (0, 1)),
+                        0: pattern.Tensor(
+                            shape=(1, pattern.Wildcard("x_lanes")),
+                            dtype=pattern.Wildcard("x_dtype"),
+                            storage=expr.StorageKind.RMEM,
+                            layout=pattern.Layout((1, pattern.Wildcard("x_lanes")), (0, 1)),
                         ),
-                        1: TensorPattern(
-                            shape=(WildcardPattern("rhs_count"),),
-                            dtype=DType.u8,
-                            storage=StorageKind.RMEM,
-                            layout=LayoutPattern((WildcardPattern("rhs_count"),), (1,)),
+                        1: pattern.Tensor(
+                            shape=(pattern.Wildcard("rhs_count"),),
+                            dtype=expr.DType.u8,
+                            storage=expr.StorageKind.RMEM,
+                            layout=pattern.Layout((pattern.Wildcard("rhs_count"),), (1,)),
                         ),
                     },
                 ),
@@ -546,24 +536,24 @@ class Matint(AmxOp):
         optional=True,
         default=None,
     )
-    table = ParamDef(
+    table = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=SwitchPattern(
+        pattern=pattern.Switch(
             "table_side",
             {
                 0: None,
-                1: TensorPattern(
-                    shape=(WildcardPattern("x_lanes"),),
-                    dtype=WildcardPattern("x_dtype"),
-                    storage=StorageKind.RMEM,
-                    layout=LayoutPattern((WildcardPattern("x_lanes"),), (1,)),
+                1: pattern.Tensor(
+                    shape=(pattern.Wildcard("x_lanes"),),
+                    dtype=pattern.Wildcard("x_dtype"),
+                    storage=expr.StorageKind.RMEM,
+                    layout=pattern.Layout((pattern.Wildcard("x_lanes"),), (1,)),
                 ),
-                2: TensorPattern(
-                    shape=(WildcardPattern("y_lanes"),),
-                    dtype=WildcardPattern("y_dtype"),
-                    storage=StorageKind.RMEM,
-                    layout=LayoutPattern((WildcardPattern("y_lanes"),), (1,)),
+                2: pattern.Tensor(
+                    shape=(pattern.Wildcard("y_lanes"),),
+                    dtype=pattern.Wildcard("y_dtype"),
+                    storage=expr.StorageKind.RMEM,
+                    layout=pattern.Layout((pattern.Wildcard("y_lanes"),), (1,)),
                 ),
             },
         ),
@@ -571,8 +561,10 @@ class Matint(AmxOp):
         default=None,
     )
 
-    def __init__(self, **attrs):
-        bind(self, attrs)
-
 
 MatintV1, MatintV2 = instruction_versions(Matint, (1, 3), name="matint", category="nn")
+
+register_semantics((MatintV1, MatintV2,))
+
+
+__all__ = ["MatintV1", "MatintV2"]

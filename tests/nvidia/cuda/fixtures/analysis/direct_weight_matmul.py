@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _H200 = "nvidia.h200_sxm"
 _CTA = (Topology("cta", 132),)
 
 
-@module(entry="direct", target=CudaTarget(_H200), topologies=_CTA)
+@module(entry="direct", target=cuda.Target(_H200), topologies=_CTA)
 class _Direct:
     @func
     def direct(

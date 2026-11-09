@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.types import DType
-from tilefoundry.target.base import Architecture
+from tilefoundry import target
+from tilefoundry.ir import expr
 
 
 @dataclass(frozen=True)
-class AppleAmx(Architecture):
+class Architecture(target.Architecture):
     """Apple AMX compilation identity and structural capabilities.
 
     The register files live here rather than on a device: they are ISA
@@ -21,16 +21,16 @@ class AppleAmx(Architecture):
     """
 
     name: str
-    supported_compute_dtypes: tuple[DType, ...]
+    supported_compute_dtypes: tuple[expr.DType, ...]
     capabilities: tuple[str, ...]
     staging_bytes: int
     accumulator_bytes: int
     rmem_owner: str
 
-    def supports_compute_dtype(self, dtype: DType) -> bool:
+    def supports_compute_dtype(self, dtype: expr.DType) -> bool:
         """Return whether AMX has a compute instruction for ``dtype``."""
         return dtype in self.supported_compute_dtypes
 
 
 
-__all__ = ["AppleAmx"]
+__all__ = ["Architecture"]

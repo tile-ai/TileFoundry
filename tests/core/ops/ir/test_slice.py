@@ -11,20 +11,13 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import torch
 
-from tilefoundry.cli.source import load_authored_ir
+from tilefoundry import cli, services
 from tilefoundry.dsl import *
-from tilefoundry.evaluator.dim import resolve_dim
-from tilefoundry.ir.core import Call, Constant, Tuple, TypeInferContext, Var
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.tensor.slice import Slice, slice_size
-from tilefoundry.ir.isl_interop import normalize_dim
-from tilefoundry.ir.types.dim import DimMul, simplify_dim
-from tilefoundry.ir.types.shard_layout import ShardLayout, Split, shard_layout_of
-from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes
-from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
-from tilefoundry.visitor_registry.visitors import CostEvaluator
+from tilefoundry.interfaces import cost, evaluator, typeinfer
+from tilefoundry.ir import expr, types
+from tilefoundry.ir.hir import math, tensor
 
 _F = DType.f32
 _M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
@@ -33,30 +26,30 @@ _M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 def _slice_call(source, starts, sizes, strides, *, source_expr=None):
     start_exprs = tuple(
         start
-        if isinstance(start, Var)
-        else Constant(type=make_tensor_type((), DType.i64), value=start)
+        if isinstance(start, expr.Var)
+        else expr.Constant(type=TensorType.from_shape((), DType.i64), value=start)
         for start in starts
     )
-    starts_expr = Tuple(
+    starts_expr = expr.Tuple(
         type=TupleType(fields=tuple(start.type for start in start_exprs)),
         elements=start_exprs,
     )
     if source_expr is None:
-        source_expr = Var(type=source, name="source")
-    call = Call(
+        source_expr = expr.Var(type=source, name="source")
+    call = expr.Call(
         type=source,
-        target=Slice(sizes=sizes, strides=strides),
+        target=tensor.Slice(sizes=sizes, strides=strides),
         args=(source_expr, starts_expr),
     )
-    return replace(call, type=TypeInferVisitor().visit(call, TypeInferContext()))
+    return replace(call, type=typeinfer.TypeInferVisitor().visit(call, typeinfer.TypeInferContext()))
 
 
 def _slice_type(source, starts, sizes, strides):
     return _slice_call(source, starts, sizes, strides).type
 
 
-def _windowed_shard(source, shape, strides) -> ShardLayout:
-    return ShardLayout(
+def _windowed_shard(source, shape, strides) -> types.ShardLayout:
+    return types.ShardLayout(
         layout=Layout(shape=shape, strides=strides),
         attrs=source.layout.attrs,
         mesh=source.layout.mesh,
@@ -64,22 +57,22 @@ def _windowed_shard(source, shape, strides) -> ShardLayout:
 
 
 def test_reversed_window_slices_empty() -> None:
-    scalar = make_tensor_type((), DType.i64)
-    size = normalize_dim(
-        slice_size(
-            Constant(type=scalar, value=8),
-            Constant(type=scalar, value=4),
-            Constant(type=scalar, value=1),
+    scalar = TensorType.from_shape((), DType.i64)
+    size = services.normalize_dim(
+        tensor.slice_size(
+            expr.Constant(type=scalar, value=8),
+            expr.Constant(type=scalar, value=4),
+            expr.Constant(type=scalar, value=1),
         )
     )
 
-    actual = _slice_type(make_tensor_type((8, 4), _F), (8, 0), (size, 4), (1, 1))
+    actual = _slice_type(TensorType.from_shape((8, 4), _F), (8, 0), (size, 4), (1, 1))
 
     assert actual.shape == (0, 4)
 
 
 def test_slice_unbound_axis_keeps_shard():
-    source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(Split(0),))
+    source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(types.Split(0),))
     actual = _slice_type(
         source,
         (0, 0),
@@ -91,7 +84,7 @@ def test_slice_unbound_axis_keeps_shard():
 
 
 def test_slice_step_scales_stride():
-    source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(Split(0),))
+    source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(types.Split(0),))
 
     actual = _slice_type(source, (0, 0), (16, 8), (1, 2))
 
@@ -100,28 +93,28 @@ def test_slice_step_scales_stride():
 
 def test_slice_step_scales_symbolic_stride():
     stride_dim = DimVar("slice_stride", 1, 64)
-    source = make_tensor_type(
+    source = TensorType.from_shape(
         (16, 32),
         _F,
-        layout=ShardLayout(
+        layout=types.ShardLayout(
             layout=Layout(
                 shape=(16, 4, 8),
-                strides=(simplify_dim(DimMul, (stride_dim, 2)), 8, 1),
+                strides=(services.simplify_dim("mul", (stride_dim, 2)), 8, 1),
             ),
-            attrs=(Split(1),),
+            attrs=(types.Split(1),),
             mesh=_M,
         ),
     )
 
     actual = _slice_type(source, (0, 0), (8, 32), (2, 1))
 
-    assert isinstance(actual.layout, ShardLayout)
+    assert isinstance(actual.layout, types.ShardLayout)
     stride = actual.layout.layout.strides[0]
-    assert resolve_dim(stride, {"slice_stride": 3}) == 12
+    assert evaluator.resolve_dim(stride, {"slice_stride": 3}) == 12
 
 
 def test_slice_split_axis_rejected():
-    source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(Split(0),))
+    source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(types.Split(0),))
 
     with pytest.raises(
         ValueError,
@@ -134,8 +127,8 @@ def test_slice_split_axis_rejected():
 
 
 def test_runtime_window_keeps_distribution():
-    source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(Split(0),))
-    start = Var(type=make_tensor_type((), DType.i64), name="start")
+    source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(types.Split(0),))
+    start = expr.Var(type=TensorType.from_shape((), DType.i64), name="start")
 
     actual = _slice_type(source, (0, start), (16, 16), (1, 1))
 
@@ -145,14 +138,14 @@ def test_runtime_window_keeps_distribution():
 def test_runtime_window_keeps_split_target():
     seq = DimVar("slice_seq", 1, 4096)
     mesh = Mesh((Topology("gpu", 16),), Layout((16,), (1,)), ("g",))
-    source = make_shard_tensor_type((1, seq, 16, 128), mesh=mesh, attrs=(Split(2),))
-    start = Var(type=make_tensor_type((), DType.i64), name="start")
+    source = make_shard_tensor_type((1, seq, 16, 128), mesh=mesh, attrs=(types.Split(2),))
+    start = expr.Var(type=TensorType.from_shape((), DType.i64), name="start")
 
     actual = _slice_type(source, (0, start, 0, 0), (1, 128, 16, 128), (1, 1, 1, 1))
 
-    assert actual.layout == ShardLayout(
+    assert actual.layout == types.ShardLayout(
         layout=Layout(shape=(1, 128, 16, 128), strides=(0, 2048, 128, 1)),
-        attrs=(Split(2),),
+        attrs=(types.Split(2),),
         mesh=mesh,
     )
 
@@ -160,17 +153,17 @@ def test_runtime_window_keeps_split_target():
 def test_qkv_slices_keep_distribution():
     """32 Q / 8 KV heads use group slices 4/1/1 and retain HKV sharding."""
     mesh = Mesh((Topology("gpu", 8),), Layout((8,), (1,)), ("g",))
-    source = make_tensor_type(
+    source = TensorType.from_shape(
         (64, 8, 6, 16),
         _F,
         storage="smem",
-        layout=ShardLayout(
+        layout=types.ShardLayout(
             layout=Layout((64, 8, 6, 16), (768, 96, 16, 1)),
-            attrs=(Split(1),),
+            attrs=(types.Split(1),),
             mesh=mesh,
         ),
     )
-    source_expr = Var(type=source, name="source")
+    source_expr = expr.Var(type=source, name="source")
     q = _slice_call(
         source,
         (0, 0, 0, 0),
@@ -193,42 +186,42 @@ def test_qkv_slices_keep_distribution():
         source_expr=source_expr,
     )
 
-    assert isinstance(q.type.layout, ShardLayout)
-    assert isinstance(k.type.layout, ShardLayout)
-    assert isinstance(v.type.layout, ShardLayout)
-    assert shard_layout_of(k.type.layout) is not None
-    assert shard_layout_of(v.type.layout) is not None
+    assert isinstance(q.type.layout, types.ShardLayout)
+    assert isinstance(k.type.layout, types.ShardLayout)
+    assert isinstance(v.type.layout, types.ShardLayout)
+    assert types.shard_layout_of(k.type.layout) is not None
+    assert types.shard_layout_of(v.type.layout) is not None
 
-    add = Binary(kind=BinaryKind.ADD)
-    q_used = Call(type=q.type, target=add, args=(q, q))
-    q_used = replace(q_used, type=TypeInferVisitor().visit(q_used, TypeInferContext()))
-    kv_used = Call(type=k.type, target=add, args=(k, v))
-    kv_used = replace(kv_used, type=TypeInferVisitor().visit(kv_used, TypeInferContext()))
+    add = math.Binary(kind=expr.BinaryKind.ADD)
+    q_used = expr.Call(type=q.type, target=add, args=(q, q))
+    q_used = replace(q_used, type=typeinfer.TypeInferVisitor().visit(q_used, typeinfer.TypeInferContext()))
+    kv_used = expr.Call(type=k.type, target=add, args=(k, v))
+    kv_used = replace(kv_used, type=typeinfer.TypeInferVisitor().visit(kv_used, typeinfer.TypeInferContext()))
 
-    assert isinstance(q_used.type.layout, ShardLayout)
-    assert isinstance(kv_used.type.layout, ShardLayout)
+    assert isinstance(q_used.type.layout, types.ShardLayout)
+    assert isinstance(kv_used.type.layout, types.ShardLayout)
 
 
 def test_slice_charges_only_coordinates():
     call = _slice_call(
-        make_tensor_type((64, 8, 6, 16), _F),
+        TensorType.from_shape((64, 8, 6, 16), _F),
         (0, 0, 4, 0),
         (64, 8, 1, 16),
         (1, 1, 1, 1),
     )
 
-    cost = CostEvaluator().visit(call, CostContext())
+    cost_value = cost.Visitor().visit(call, cost.Context())
 
-    assert cost.flops == {}
-    assert cost.traffic == (
-        TrafficBytes(),
-        TrafficBytes(read=4 * 8),
-        TrafficBytes(),
+    assert cost_value.flops == {}
+    assert cost_value.traffic == (
+        cost.TrafficBytes(),
+        cost.TrafficBytes(read=4 * 8),
+        cost.TrafficBytes(),
     )
 
 
 def test_nested_slices_keep_shard_window():
-    source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(Split(0),))
+    source = make_shard_tensor_type((16, 32), mesh=_M, attrs=(types.Split(0),))
     first = _slice_type(source, (0, 4), (16, 16), (1, 1))
 
     second = _slice_type(first, (0, 2), (16, 8), (1, 1))
@@ -237,7 +230,7 @@ def test_nested_slices_keep_shard_window():
 
 
 def test_row_column_slices_derive_layouts():
-    source = make_tensor_type(
+    source = TensorType.from_shape(
         (1024, 2048),
         _F,
         layout=Layout(shape=(1024, 2048), strides=(2048, 1)),
@@ -251,10 +244,10 @@ def test_row_column_slices_derive_layouts():
 
 
 def test_runtime_start_keeps_static_strides():
-    start = Var(type=make_tensor_type((), DType.i64), name="start")
+    start = expr.Var(type=TensorType.from_shape((), DType.i64), name="start")
 
     sliced = _slice_type(
-        make_tensor_type(
+        TensorType.from_shape(
             (1024, 2048),
             _F,
             layout=Layout(shape=(1024, 2048), strides=(2048, 1)),
@@ -266,14 +259,10 @@ def test_runtime_start_keeps_static_strides():
 
     assert sliced.layout == Layout(shape=(256, 2048), strides=(2048, 1))
     assert (
-        _slice_type(make_tensor_type((1024, 2048), _F), (0, 0), (256, 2048), (1, 1)).layout
+        _slice_type(TensorType.from_shape((1024, 2048), _F), (0, 0), (256, 2048), (1, 1)).layout
         == Layout(shape=(256, 2048), strides=(2048, 1))
     )
 
-
-import torch  # noqa: E402
-
-from tilefoundry.evaluator import evaluate  # noqa: E402
 
 _HALF, _COLS = 4, 4
 MOVED_WINDOW = Path(__file__).parents[2] / "fixtures" / "ops" / "moved_window.py"
@@ -286,7 +275,7 @@ def _moved_reference(gu):
 def test_moved_window_reads_far_half():
     gu = torch.arange(2 * _HALF * _COLS, dtype=torch.float32).reshape(2 * _HALF, _COLS)
 
-    _MovedWindow = load_authored_ir(str(MOVED_WINDOW))
-    actual = evaluate(_MovedWindow.lookup("moved_copy"), gu)
+    _MovedWindow = cli.load_authored_ir(str(MOVED_WINDOW))
+    actual = evaluator.evaluate(_MovedWindow.lookup("moved_copy"), gu)
 
     torch.testing.assert_close(actual, _moved_reference(gu))

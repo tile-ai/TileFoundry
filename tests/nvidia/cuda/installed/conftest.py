@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.core.installed.conftest import (  # noqa: F401
+from tests.core.installed.conftest import (
     REPO,
     installation,
     outside,

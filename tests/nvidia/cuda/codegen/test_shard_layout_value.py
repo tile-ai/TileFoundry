@@ -9,29 +9,26 @@ import re
 
 import pytest
 
-from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.types import Layout, Mesh, ShardLayout, Split, Topology
-from tilefoundry.ir.types.layout import ComposedLayout
-from tilefoundry_nvidia.cuda.codegen.tir.memory.tensor_view import render_shard_layout_value
-from tilefoundry_nvidia.cuda.codegen.tir.stmts.mesh_scope import mesh_type
+from tilefoundry.ir import expr, types
+from tilefoundry_nvidia.cuda.codegen.tir import memory, stmts
 
-_BLOCK = Mesh(
-    (Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")
+_BLOCK = types.Mesh(
+    (types.Topology("thread", 128),), types.Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")
 )
 
 
-def _shard_layout(mesh: Mesh) -> ShardLayout:
+def _shard_layout(mesh: types.Mesh) -> types.ShardLayout:
     """A (4, 32) operand split both ways over *mesh*."""
-    return ShardLayout(
-        layout=Layout(shape=(4, 32), strides=(32, 1)),
-        attrs=(Split(0), Split(1)),
+    return types.ShardLayout(
+        layout=types.Layout(shape=(4, 32), strides=(32, 1)),
+        attrs=(types.Split(0), types.Split(1)),
         mesh=mesh,
     )
 
 
-def _mesh_layout_line(mesh: Mesh) -> str:
+def _mesh_layout_line(mesh: types.Mesh) -> str:
     """The one preamble line that builds the mesh layout value."""
-    preamble, _ = render_shard_layout_value("v", _shard_layout(mesh))
+    preamble, _ = memory.render_shard_layout_value("v", _shard_layout(mesh))
     (line,) = [entry for entry in preamble if entry.startswith("auto v__mesh_layout")]
     return line
 
@@ -51,7 +48,7 @@ def test_the_sliced_mesh_type_and_value_state_the_same_geometry() -> None:
     sliced = _BLOCK[2:4, :]
     numbers = re.compile(r"cute::Int<(-?\d+)>")
     assert numbers.findall(_mesh_layout_line(sliced)) == ["64", "2", "32", "32", "1"]
-    mesh_only = mesh_type(sliced)
+    mesh_only = stmts.mesh_type(sliced)
     assert numbers.findall(mesh_only) == ["64", "2", "32", "32", "1"]
 
 
@@ -67,15 +64,15 @@ def test_an_unsliced_mesh_value_stays_a_plain_layout() -> None:
 
 def test_a_non_contiguous_mesh_slice_is_refused() -> None:
     """A slice that is not one run of instances has no single offset to emit."""
-    with pytest.raises(VerifyError, match="contiguous thread interval"):
+    with pytest.raises(expr.VerifyError, match="contiguous thread interval"):
         _mesh_layout_line(_BLOCK[:, 1:])
 
 
 def test_an_identity_participating_box_is_refused() -> None:
     """An identity ``outer`` names no sub-box, so no offset can start in one."""
-    identity_box = Mesh(
-        (Topology("thread", 128),),
-        ComposedLayout(inner=Layout(shape=(4, 32), strides=(32, 1)), offset=0, outer=None),
+    identity_box = types.Mesh(
+        (types.Topology("thread", 128),),
+        types.ComposedLayout(inner=types.Layout(shape=(4, 32), strides=(32, 1)), offset=0, outer=None),
         ("w", "t"),
     )
     with pytest.raises(NotImplementedError, match="states an identity box"):

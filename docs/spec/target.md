@@ -23,7 +23,7 @@ class Target:
     def identity(self) -> str: ...
 
     @classmethod
-    def available(cls) -> tuple[Target, ...]: ...
+    def from_installed(cls) -> tuple[Target, ...]: ...
 
     def get_analyzer(self, selector: str) -> Analyzer: ...
     def resolve(self, base: type[T], *args) -> T: ...
@@ -36,10 +36,10 @@ class Target:
     ) -> FactsT: ...
 
 
-def register_target(cls: type[TargetT]) -> type[TargetT]: ...
+def register(cls: type[TargetT]) -> type[TargetT]: ...
 
 
-def registered_targets() -> Mapping[str, type[Target]]: ...
+def registered() -> Mapping[str, type[Target]]: ...
 
 
 def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]: ...
@@ -51,12 +51,12 @@ def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]: ...
     MUST NOT add a product-specific Target subclass. A new backend implements
     the Target interface directly and answers its hardware through `get_facts`;
     it need not expose Architecture, Device, or hardware documents.
-  - Inheriting bare Architecture or Device values and injecting them into an
-    existing document-backed Target is not a supported custom Target mode. It
-    bypasses both document schema validation and the `facts_result` projection
-    boundary.
+  - Injecting bare Architecture or Device values into an existing
+    document-backed Target is not a supported mode: it bypasses document schema
+    validation and the `facts_result` projection boundary.
   - `bind(target, base)` MUST register a subclass implementation under the exact
-    `(Target class, base class)` pair. A second binding for the pair MUST raise
+    `(Target class, base class)` pair. An implementation that is not a subclass of
+    `base` MUST raise `TypeError`; a second binding for the pair MUST raise
     `ValueError` naming the Target, base, and existing implementation.
   - `resolve(base, *args)` MUST call `create(self, *args)` on the implementation
     bound to `(type(self), base)`, or on `base` when unbound. Bindings MUST live
@@ -68,33 +68,32 @@ def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]: ...
     only requested Facts, so a backend reuses them by answering `get_facts`, not
     by inheriting a backend-specific analysis base class. A missing Facts
     projection MUST fail when the selected analyzer requests it.
-  - `facts_result`, `TargetFactsError`, `TopologyFacts`, `TopologyLevelFacts`,
-    `MemoryExecutionFacts`,
-    `MemoryHierarchyFacts`, `ThroughputFacts`, and `PerformanceServiceFacts`
-    MUST be importable from `tilefoundry.target` for provider implementations.
+  - `facts_result`, `FactsError`, `TopologyFacts`, `TopologyLevelFacts`,
+    `MemoryExecutionFacts`, `MemoryHierarchyFacts`, `ThroughputFacts`, and
+    `PerformanceServiceFacts` MUST be importable from `tilefoundry.target`.
   - `name` MUST be a non-empty class variable declared directly by every
     concrete registered Target class. It is the stable class registration
     identity, not a backend-family selector and not an instance value field.
-  - `@register_target` MUST be the only Target registration form. It takes the
+  - `@register` MUST be the only Target registration form. It takes the
     class directly, accepts no decorator arguments, never constructs the class,
     and returns it unchanged.
   - Re-registering a class with the same module, qualified name, and registered
     name MUST be idempotent, including after a provider reload. A different
     provider claiming the same name MUST fail rather than replace the owner.
-  - `registered_targets()` MUST expose one read-only `name -> class` view. The
+  - `registered()` MUST expose one read-only `name -> class` view. The
     view MAY be used for inspection but MUST NOT construct a Target.
   - `identity` MUST name one concrete Target value. It MUST be the device
     document ID for a document-backed Target and the registered class `name`
     for a Target with no device document.
-  - `available()` MUST return every value of that registered class which can be
+  - `from_installed()` MUST return every value of that registered class which can be
     constructed in the current environment. A class with no hardware documents
     MUST return its one parameterless value by default.
   - Authored Target parameters MUST accept a constructed Target instance or
     their documented omitted state. A string MUST fail and MUST NOT be resolved
     through registration.
-  - Target values MUST remain immutable hardware values. Their service getters
-    select immutable descriptors and Facts; normal Python inheritance carries
-    those selections to a subclass unless it overrides or refuses them.
+  - Target values MUST remain immutable hardware values. Their getters select
+    immutable descriptors and Facts, and a subclass inherits those selections
+    unless it overrides or refuses them.
   - `get_facts(TopologyFacts)` MUST list every topology level the Target
     admits, coarsest first, as the `TopologyLevelFacts` of each. A Target that
     states none MUST answer the empty tuple: it runs one program per call.
@@ -103,15 +102,15 @@ def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]: ...
     positive or exceeds that level's finite `max_logical_units`. The shared
     program check MUST use this method rather than reproduce a backend's
     topology limits.
-  - A provider MAY import `Analyzer` from `tilefoundry.target` to construct
-    getter results. Codegen base classes MUST be imported from their owning
-    `codegen` modules.
+  - A provider MAY import `Analyzer` from `tilefoundry.target`. Codegen base
+    classes MUST be imported from their owning `codegen` modules.
   - `torch_device_type()` MUST return the torch device type holding the
-    program's tensor arguments. The base implementation returns `"cpu"`,
-    inherited by CPU. A backend MUST override it for another device type. CLI input generation MUST
+    program's tensor arguments. The base implementation returns `"cpu"`; a
+    backend for another device type MUST override it. CLI input generation MUST
     use this answer and reject an unavailable non-CPU device.
-  - A missing getter capability MUST fail and name the concrete Target class,
-    its registration name, and the requested selector, topology, or Facts type.
+  - A missing getter capability MUST raise `UnsupportedCapabilityError` naming the
+    concrete Target class, its registration name, and the requested selector or
+    Facts type.
   - Target values MUST NOT own code emission, linking, loading, or the public
     Analyze, compile, build, or jit orchestration.
 
@@ -133,8 +132,8 @@ class Architecture:
     backend-specific concrete Architecture type. A further product adds a
     document of that backend's schema; a further backend implements `Target`
     and `get_facts` directly.
-  - Concrete backend architecture values MUST be immutable.
-  - `name` MUST be the stable architecture identity.
+  - Concrete backend architecture values MUST be immutable; `name` MUST be the
+    stable architecture identity.
   - `max_threads_per_cta` MUST describe the architecture's static CTA thread
     limit when the architecture has a CTA thread level.
 
@@ -156,45 +155,44 @@ class Device:
     backend-specific concrete Device type. A further product adds a document
     of that backend's schema; a further backend implements `Target` and
     `get_facts` directly.
-  - Concrete backend device values MUST be immutable and describe one device.
-  - `name` MUST be the stable product identity.
-  - Device-specific capacity, bandwidth, and compute-throughput facts belong
-    to concrete subclasses.
-  - The split between the two is by what the fact is a property of, not by
-    which consumer reads it. An Architecture owns instruction legality and the
-    per-parallel-unit structural limits, which every product built on it
-    shares. A Device owns how many such units the product has, its memory
-    system, and its measured or published throughput. A fact MUST be recorded on
-    exactly one side, and the other side MUST NOT restate it.
+  - Concrete backend device values MUST be immutable and describe one device;
+    `name` MUST be the stable product identity. Capacity, bandwidth, and
+    throughput facts belong to concrete subclasses.
+  - The split is by what the fact is a property of, not by which consumer reads
+    it. An Architecture owns instruction legality and the per-parallel-unit
+    structural limits every product built on it shares. A Device owns how many
+    such units the product has, its memory system, and its throughput. A fact
+    MUST be recorded on exactly one side; the other side MUST NOT restate it.
 
 ### 1.3 Target loading and extensions
 
 ```python
-class TargetLoadError(RuntimeError): ...
+class LoadError(RuntimeError): ...
 
 
-def load_targets() -> Mapping[str, type[Target]]: ...
+def load() -> Mapping[str, type[Target]]: ...
 ```
 
 - constraints:
-  - `load_targets()` MUST load `tilefoundry.targets` entry points in name order.
-    Each `<name>` MUST point to `tilefoundry_<vendor>.<name>`; importing it MUST
-    complete target, operation, visitor, evaluator and pass registrations.
+  - `load()` MUST import each `tilefoundry.targets` entry point once. Each
+    `<name>` MUST point to `tilefoundry_<vendor>.<name>`; importing it MUST
+    complete target, operation, visitor, evaluator and pass registrations, and
+    MUST register a Target named `<name>`, or `load()` raises `LoadError`.
   - A backend MUST ship as `tilefoundry-<vendor>` with only the top-level package
     `tilefoundry_<vendor>` and depend on `tilefoundry==V` at its own version `V`.
-    `load_targets()` MUST reject other top-level packages.
-  - A load failure MUST raise `TargetLoadError` naming the entry point or
+    `load()` MUST reject other top-level packages.
+  - A load failure MUST raise `LoadError` naming the entry point or
     distribution and cause. A failed load MUST allow retry; a successful load
     MUST make later calls no-ops.
   - Core MUST NOT import or re-export plugin implementations. CPU MUST remain
     available from `tilefoundry.target`; other backends MUST export target values
     from `tilefoundry_<vendor>`.
-  - Importing `tilefoundry` MUST call `load_targets()` once at the end of core
-    initialization. CLI, DSL lookup, stub generation and spec discovery MUST
-    use the registrations established by that import, without loading again.
-    A plugin package already present in `sys.modules` MUST be skipped: when a
-    user imports a plugin first, that partially initialized package completes
-    its own registrations after core initialization returns.
+  - Importing `tilefoundry` MUST call `load()` once at the end of core
+    initialization (`tilefoundry/bootstrap.py`); CLI, DSL lookup, stub generation
+    and spec discovery use those registrations without loading again. A plugin
+    package already in `sys.modules` is skipped: a user who imports a plugin
+    first has that package complete its own registrations after core
+    initialization returns.
   - A plugin MUST install its specifications as package data under `docs/spec/`.
     After loading targets, `tilefoundry spec` MUST discover those files through
     `importlib.resources.files(entry_point.value)` in source and installed modes,
@@ -203,17 +201,18 @@ def load_targets() -> Mapping[str, type[Target]]: ...
     subclassed and bound with `@bind(TargetClass, BaseClass)`. The implementation's
     `create(target, *args)` MUST provide the instance selected by `resolve`.
     `InsertHostEntryPass` and `ConvertHIRToTIR` MAY be bound the same way; their
-    `create` takes the Target and the `CodegenOptions`
+    `create` takes the Target and the `passes.Options`
     ([passes §7](./passes.md#7-implemented-passes)).
     `LinkableModule.link(project)` MUST contribute source and build settings to
     the shared `CMakeProject`; core MUST build the combined project once.
-    `LinkableFunction` and whole-program `CodegenContext` MAY be subclassed, but
+    `LinkableFunction` and whole-program `codegen.Context` MAY be subclassed, but
     MUST NOT be constructed through `Target.resolve` by core orchestration.
 
-## 5. `CpuTarget`
+## 5. `cpu.Target`
 
 ```python
-class CpuTarget(Target):
+# tilefoundry.target.cpu
+class Target(tilefoundry.target.Target):
     """Identify the CPU host backend."""
 
     name: ClassVar[str] = "cpu"
@@ -226,34 +225,29 @@ class CpuTarget(Target):
 
 ## 6. Target ownership and compile resolution
 
-- `tilefoundry.target` MUST own the Target abstraction and CPU implementation;
+- `tilefoundry.target` MUST own the Target abstraction and CPU implementation (`tilefoundry.target.cpu`);
   plugins MUST own their concrete targets. The IR package MUST NOT own Target
   classes.
-- `default_target()` MUST return a new `CpuTarget()`. It is the omitted-target
-  policy for `PrimFunction` / `@prim_func` and `jit()`, not a string lookup.
-- There MUST be no global string-to-Target resolver. A registered name returns
-  class identity only through `registered_targets()` and never constructs a
-  value.
-- A `Target` belongs to a `Module` rather than an authored HIR `Function`.
+- `cpu.Target()` MUST be the omitted-target policy for `core.PrimFunction` /
+  `@prim_func` and `jit()`.
+- There MUST be no global string-to-Target resolver: a registered name yields a
+  class only through `registered()` and never constructs a value.
+- A `Target` belongs to a `core.Module` rather than an authored HIR `core.Function`.
   Target inheritance and its declaration rules are defined by
   [core-ir `target-inheritance`](./core-ir.md#target-inheritance).
-- Analyze MUST obtain the Target from `Module.resolve_target()` and from
-  nowhere else. It does not accept a bare `Function`, and it does not resolve
-  an undeclared Target to a default: it reports hardware-dependent results, so
-  measuring against a device the author never declared is a silent wrong
-  answer. In particular it does not read a Target out of `Module.metadata`; the
-  `metadata["target"]` the compile pipeline carries is the codegen boundary's
-  own record ([passes §6](./passes.md#6-top-level-api)), not a Target source
-  for Analyze.
+- Analyze MUST obtain the Target from `Module.resolve_target()` and nowhere
+  else. It does not accept a bare `Function`, does not default an undeclared
+  Target (hardware-dependent results measured against an undeclared device are
+  silently wrong), and does not read `Module.metadata["target"]`, which is the
+  codegen boundary's own record ([passes §6](./passes.md#6-top-level-api)).
 - The compile boundary resolves no default: `build` reports a Module that
   declares no Target ([passes §6](./passes.md#6-top-level-api)) rather than
-  compiling it against a guess. `default_target()` is the omitted-target policy
-  of the authoring surface — the value a `PrimFunction` constructed without one
-  takes — not a Target the compile supplies.
-- A TIR `PrimFunction` retains its own `target`: it MUST be the exact Target
+  compiling against a guess. `cpu.Target()` is the authoring surface's
+  omitted-target value, not one the compile supplies.
+- A TIR `core.PrimFunction` retains its own `target`: it MUST be the exact Target
   instance resolved from its Module, and no later stage rewrites it. It selects
   the bound emission classes that emit it. A synthesized host entry carries a
-  `CpuTarget()`.
+  `cpu.Target()`.
 - Device Functions MUST be grouped by equal Target values in source order.
   More than one unequal device Target group MUST fail before any generator runs.
 

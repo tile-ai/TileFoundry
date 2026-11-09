@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from tilefoundry.inspection import as_script
-from tilefoundry.ir.clause import LayoutClause, clause_metadata
-from tilefoundry.ir.core import Call, Tuple
-from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir import clause
+from tilefoundry.ir.core import Function
+from tilefoundry.ir.expr import Call, Tuple
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reduce import Reduce
@@ -53,8 +53,8 @@ def test_moe_root_keeps_model_shapes() -> None:
         for call in _calls(deepseek_v4_flash_moe)
         if isinstance(call.target, Function) and call.target.name == "moe_topk"
     )
-    routed = clause_metadata(routed_call).constraints[0]
-    assert isinstance(routed, LayoutClause)
+    routed = clause.metadata(routed_call).constraints[0]
+    assert isinstance(routed, clause.Layout)
     assert repr(routed.layout.shape[0]) == "_"
     assert routed.layout.shape[1:] == (N_ACT, DIM)
     assert routed.bindings == (("cta", Split(1)),)
@@ -65,8 +65,8 @@ def test_moe_root_keeps_model_shapes() -> None:
         for call in _calls(deepseek_v4_flash_moe)
         if isinstance(call.target, Function) and call.target.name == "combine_expert_outputs"
     )
-    combined = clause_metadata(combined_call).constraints[0]
-    assert isinstance(combined, LayoutClause)
+    combined = clause.metadata(combined_call).constraints[0]
+    assert isinstance(combined, clause.Layout)
     assert combined.bindings == (("cta", Broadcast()),)
 
 

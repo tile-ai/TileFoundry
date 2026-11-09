@@ -1,7 +1,7 @@
 """A retained callee returns a WGMMA accumulator before its group completes."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 @module(entry="issue")
@@ -41,7 +41,7 @@ class Issue:
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 128)),
 )
 class WgmmaReturn:
@@ -54,7 +54,7 @@ class WgmmaReturn:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as _t:
                 output = tf.zeros(Tensor[(64, 16), "f32"])
-                return tf.insert_slice(output, issued(a, b), (0, 0))  # noqa: F821
+                return tf.insert_slice(output, issued(a, b), (0, 0))
 
 
 del Issue

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="positional_attribute", target=CpuTarget())
+@module(entry="positional_attribute", target=cpu.Target())
 class ConcatPositionalAxis:
     @func
     def positional_attribute(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 CONTEXT_CTA = Topology("cta", 132)
 CONTEXT_WARP = Topology("warp", 4)
@@ -12,7 +12,7 @@ CONTEXT_THREAD = Topology("thread", 32)
 
 @module(
     entry="forward",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(CONTEXT_CTA, CONTEXT_WARP),
 )
 class ContextTree:

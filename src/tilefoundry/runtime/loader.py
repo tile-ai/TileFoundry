@@ -8,18 +8,32 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from tilefoundry.runtime.module import CompiledModule
+from tilefoundry import utils
 
-_LIBRARIES: list = []
+from .module import CompiledModule
+
+tvm_ffi = utils.LazyModule("tvm_ffi")
+
+
+class Libraries:
+    """The shared libraries loaded so far, kept alive for the life of the process."""
+
+    def __init__(self) -> None:
+        self.loaded: list = []
+
+    def keep(self, library) -> None:
+        """Hold *library* so its global registrations stay valid."""
+        self.loaded.append(library)
+
+
+libraries = Libraries()
 
 
 def load_linked_module(linked: "LinkedModule") -> CompiledModule:
     """Load *linked*'s shared library and bind its entry into a ``CompiledModule``."""
-    import tvm_ffi  # noqa: PLC0415
-
     entry = linked.functions[0]
     loaded = tvm_ffi.load_module(str(linked.library_path))
-    _LIBRARIES.append(loaded)
+    libraries.keep(loaded)
     try:
         entry_callable = tvm_ffi.get_global_func(entry.name)
     except ValueError as e:

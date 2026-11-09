@@ -2,38 +2,31 @@
 
 import pytest
 
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.types import (
-    DType,
-    Layout,
-    Mesh,
-    P,
-    ShardLayout,
-    StorageKind,
-    TensorType,
-    Topology,
-)
-from tilefoundry.ir.types.utils import check_multilinear_partials
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.ir import expr, types, utils
+from tilefoundry_nvidia import cuda
 
 
 @pytest.mark.parametrize("levels", (("thread", "gpu"), ("gpu", "thread")))
 def test_plain_multilinear_operand_reads_every_frame(levels):
-    target = CudaTarget("nvidia.h200_sxm")
-    address = Layout((8,), (1,))
-    types = tuple(
-        TensorType(
+    target = cuda.Target("nvidia.h200_sxm")
+    address = types.Layout((8,), (1,))
+    operands = tuple(
+        types.TensorType(
             (8,),
-            DType.f32,
-            ShardLayout(address, (P("max"),), Mesh((Topology(level, 2),), Layout((2,), (1,)))),
-            StorageKind.SMEM,
+            expr.DType.f32,
+            types.ShardLayout(
+                address,
+                (types.P("max"),),
+                types.Mesh((types.Topology(level, 2),), types.Layout((2,), (1,))),
+            ),
+            expr.StorageKind.SMEM,
         )
         for level in levels
     )
-    plain = TensorType((8,), DType.f32, address, StorageKind.SMEM)
+    plain = types.TensorType((8,), expr.DType.f32, address, expr.StorageKind.SMEM)
     with pytest.raises(ValueError, match="carries Partial.*operand plain:.*Varying"):
-        check_multilinear_partials(
-            (("a", types[0]), ("b", types[1]), ("plain", plain)),
+        utils.check_multilinear_partials(
+            (("a", operands[0]), ("b", operands[1]), ("plain", plain)),
             target,
-            kind=BinaryKind.ADD,
+            kind=expr.BinaryKind.ADD,
         )

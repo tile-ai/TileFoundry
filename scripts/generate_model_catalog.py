@@ -8,29 +8,31 @@ models themselves. What the catalog is for is in [cli.md](../docs/spec/cli.md).
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import re
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
+from tests.nvidia.cuda.models.registry import MODELS
+from tilefoundry.ir import core, types
+
 _MODELS_ROOT = Path(files("tilefoundry_nvidia.cuda") / "models")
 
 
 def _annotation(param: Any) -> str:
     """The parameter's type as the DSL spells it."""
-    from tilefoundry.ir.types import TensorType, TupleType  # noqa: PLC0415
-
     def extent_text(extent: object) -> str:
 
         return getattr(extent, "name", None) or str(extent)
 
     def render(ty: object) -> str:
-        if isinstance(ty, TensorType):
+        if isinstance(ty, types.TensorType):
             shape = ", ".join(extent_text(extent) for extent in ty.shape)
             suffix = "," if len(ty.shape) == 1 else ""
             return f'[({shape}{suffix}), "{ty.dtype.name}"]'
-        if isinstance(ty, TupleType):
+        if isinstance(ty, types.TupleType):
             return "Tuple[" + ", ".join(render(field) for field in ty.fields) + "]"
         return repr(ty)
 
@@ -102,12 +104,10 @@ def _node(module: Any, counts: dict[str, int], seen: set[int]) -> dict[str, Any]
 
 def _roots(model: Any) -> list[Any]:
     """Publish target-declaring definitions that no other published definition holds."""
-    from tilefoundry.ir.core.module import Module  # noqa: PLC0415
-
     published: list[Any] = []
     seen: set[int] = set()
     for value in vars(model).values():
-        if isinstance(value, Module) and value.target is not None and id(value) not in seen:
+        if isinstance(value, core.Module) and value.target is not None and id(value) not in seen:
             seen.add(id(value))
             published.append(value)
     held: set[int] = set()
@@ -126,10 +126,6 @@ def _roots(model: Any) -> list[Any]:
 
 def catalog() -> dict[str, Any]:
     """The catalog as the live corpus describes it right now."""
-    import importlib  # noqa: PLC0415
-
-    from tests.nvidia.cuda.models.registry import MODELS  # noqa: PLC0415
-
     models = []
     for name in sorted(MODELS):
         counts = {"leaf_modules": 0, "functions": 0}

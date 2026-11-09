@@ -7,69 +7,31 @@ from typing import Tuple
 
 import isl
 
-from tilefoundry.evaluator.registry import register_eval, schedule_eval_registry
-from tilefoundry.evaluator.value import EvalError
-from tilefoundry.ir.core import Call, Op
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import get_registered_name, register_op
-from tilefoundry.ir.pattern import (
-    PatternMatcher,
-    is_ranked_tensor,
-)
-from tilefoundry.ir.pattern.utils import (
-    declared_symbol_axes,
-    variants,
-)
-from tilefoundry.ir.types import TensorType
-from tilefoundry.utils.isl_utils import cardinality
-from tilefoundry.visitor_registry import (
-    register_cost_evaluator,
-    register_typeinfer,
-)
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    iteration_universe,
-    projected,
-    reached_elements,
-    register_access_relation,
-    relations_of,
-)
-from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
-from tilefoundry.visitor_registry.contexts import (
-    Cost,
-    TrafficBytes,
-)
-from tilefoundry.visitor_registry.cost_utils import operation_cost
-from tilefoundry.visitor_registry.instruction import (
-    ScheduleRefusal,
-    admit_fields,
-    check_call,
-    operand_relations,
-    project,
-)
-from tilefoundry.visitor_registry.registries import cost_evaluator_registry
+from tilefoundry import utils
+from tilefoundry.interfaces import access, cost, evaluator, schedule, typeinfer
+from tilefoundry.ir import expr, pattern, types
 
 
 @dataclass(frozen=True)
 class InstructionMatch:
     """An accepted constructed instruction and its closed matcher's ordered bindings."""
 
-    op: Op
+    op: expr.Op
     path: tuple[tuple[str, object], ...]
 
 
-@register_op(dialect="tf", category="schedule", name="schedule")
-class ScheduleOp(Op):
+@expr.register_op(dialect="tf", category="schedule", name="schedule")
+class ScheduleOp(expr.Op):
     """Apply one TIR instruction repeatedly over a tuple of HIR operands."""
 
     scope_inputs = ()
 
-    operands = ParamDef(
-        kind="input", annotation=Tuple[is_ranked_tensor()], pattern=is_ranked_tensor()
+    operands = expr.ParamDef(
+        kind="input", annotation=Tuple[pattern.is_ranked_tensor()], pattern=pattern.is_ranked_tensor()
     )
-    op = ParamDef(kind="attribute", annotation=Op)
-    repeat = ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
-    order = ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
+    op = expr.ParamDef(kind="attribute", annotation=expr.Op)
+    repeat = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
+    order = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
 
     def __init__(self, **attrs) -> None:
         super().__init__(**attrs)
@@ -84,19 +46,19 @@ class ScheduleOp(Op):
             raise ValueError("schedule order must be a tuple of integer positions")
 
 
-@register_eval(ScheduleOp)
-def _eval_schedule(ctx):
+@evaluator.register(ScheduleOp)
+def eval_schedule(ctx):
     selected = ctx.op.op
-    handler = schedule_eval_registry.lookup(type(selected))
+    handler = evaluator.registry.get(type(selected), None)
     if handler is None:
-        raise EvalError(f"no schedule evaluator registered for {type(selected).__name__}")
+        raise evaluator.EvalError(f"no schedule evaluator registered for {type(selected).__name__}")
     return handler(ctx.for_op(selected, ctx.args, ctx.result_type))
 
 
 def instruction_schema(
-    op: Op, operand_count: int | None = None
-) -> tuple[tuple[ParamDef, ...], ...]:
-    schema = getattr(type(op), "_op_schema", None)
+    op: expr.Op, operand_count: int | None = None
+) -> tuple[tuple[expr.ParamDef, ...], ...]:
+    schema = expr.schema_of(type(op))
     if schema is None:
         raise ValueError(f"{type(op).__name__} is not a registered operation")
     params = tuple(param for param in schema.signature if param.kind == "input")
@@ -108,18 +70,18 @@ def instruction_schema(
         supplied_optional = operand_count - required
         included = {id(param) for param in optional[: max(0, supplied_optional)]}
         params = tuple(param for param in params if not param.optional or id(param) in included)
-    writes = tuple(param for param in params if param.effect & MemoryEffect.WRITE)
+    writes = tuple(param for param in params if param.effect & expr.MemoryEffect.WRITE)
     if not writes:
         raise ValueError(f"{type(op).__name__} writes no result operand")
     return params, writes
 
 
-def _outer_band(
-    relations: tuple[AccessRelation, ...],
+def outer_band(
+    relations: tuple[access.Relation, ...],
     repeat: tuple[int, ...],
     order: tuple[int, ...],
     single_shape: tuple[int, ...],
-) -> tuple[AccessRelation, ...]:
+) -> tuple[access.Relation, ...]:
     """Compose repeat coordinates with one issue's affine coordinate equations."""
     if all(count == 1 for count in repeat):
         return relations
@@ -137,99 +99,99 @@ def _outer_band(
         f"{{ [{', '.join(domain)}] -> [{', '.join(global_)}] : {' and '.join(constraints)} }}"
     )
 
-    def lifted(access: AccessRelation) -> AccessRelation:
-        relation = band.apply_range(access.relation.affine_hull())
+    def lifted(acc: access.Relation) -> access.Relation:
+        relation = band.apply_range(acc.relation.affine_hull())
         names = (
             relation.get_dim_name(isl.dim_type.PARAM, index)
             for index in range(relation.dim(isl.dim_type.PARAM))
         )
-        return AccessRelation(
+        return access.Relation(
             relation,
-            {name: access.values[name] for name in names if name in access.values},
-            access.may_access,
+            {name: acc.values[name] for name in names if name in acc.values},
+            acc.may_access,
         )
 
-    return tuple(lifted(access) for access in relations)
+    return tuple(lifted(acc) for acc in relations)
 
 
-@register_access_relation(ScheduleOp)
-def _schedule_access_relation(call: Call, ctx) -> tuple[AccessRelation, ...]:
-    schedule = call.target
-    tiles = project(
-        schedule.op,
+@access.register_relation(ScheduleOp)
+def schedule_access_relation(call: expr.Call, ctx) -> tuple[access.Relation, ...]:
+    sched = call.target
+    tiles = schedule.project(
+        sched.op,
         tuple(ctx.type_of(arg) for arg in call.args),
         ctx.current_mesh,
-        repeat=schedule.repeat,
-        order=schedule.order,
+        repeat=sched.repeat,
+        order=sched.order,
         fragments=False,
     )
-    scheduled = _outer_band(
-        operand_relations(schedule.op, tiles.tiles), tiles.repeat, tiles.order, tiles.shape
+    scheduled = outer_band(
+        schedule.operand_relations(sched.op, tiles.tiles), tiles.repeat, tiles.order, tiles.shape
     )
     return scheduled
 
 
-@register_cost_evaluator(ScheduleOp)
-def _schedule_cost(call: Call, ctx) -> Cost:
-    evaluator = cost_evaluator_registry.lookup(type(call.target.op))
-    if evaluator is not None:
-        return evaluator(Call(call.target.op, call.args, type=call.type), ctx)
-    stated = relations_of(call, ctx)
-    local = projected(stated, call, ctx)
-    types = (*(ctx.local_type_of(arg) for arg in call.args), ctx.local_output_type(call))
+@cost.register(ScheduleOp)
+def schedule_cost(call: expr.Call, ctx) -> cost.Cost:
+    evaluator_value = cost.registry.get(type(call.target.op), None)
+    if evaluator_value is not None:
+        return evaluator_value(expr.Call(call.target.op, call.args, type=call.type), ctx)
+    stated = access.relations_of(call, ctx)
+    local = access.projected(stated, call, ctx)
+    type_list = (*(ctx.local_type_of(arg) for arg in call.args), ctx.local_output_type(call))
     params, writes = instruction_schema(call.target.op, len(call.args))
     moved = []
-    for index, (type_, boundary) in enumerate(zip(types, local, strict=True)):
-        if not isinstance(type_, TensorType):
+    for index, (type_, boundary) in enumerate(zip(type_list, local, strict=True)):
+        if not isinstance(type_, types.TensorType):
             raise ValueError("ScheduleOp cost requires tensor operands and output")
-        elements = reached_elements(boundary)
+        elements = access.reached_elements(boundary)
         if elements is None:
             raise ValueError(f"ScheduleOp boundary {index} has no finite traffic")
         amount = -(-(elements * type_.dtype.bit_width) // 8)
         moved.append(
-            TrafficBytes(
+            cost.TrafficBytes(
                 read=amount
-                if index < len(params) and params[index].effect & MemoryEffect.READ
+                if index < len(params) and params[index].effect & expr.MemoryEffect.READ
                 else 0,
                 write=amount
-                if index < len(params) and params[index].effect & MemoryEffect.WRITE
+                if index < len(params) and params[index].effect & expr.MemoryEffect.WRITE
                 else 0,
             )
         )
-    if any(param.effect & MemoryEffect.READ for param in writes):
-        iterations = cardinality(iteration_universe(local))
+    if any(param.effect & expr.MemoryEffect.READ for param in writes):
+        iterations = utils.cardinality(access.iteration_universe(local))
         if iterations is None:
             raise ValueError("ScheduleOp has no finite floating-point iteration count")
         dtype = next(
             (
                 type_.dtype
-                for param, type_ in zip(params, types, strict=False)
-                if not param.effect & MemoryEffect.WRITE and isinstance(type_, TensorType)
+                for param, type_ in zip(params, type_list, strict=False)
+                if not param.effect & expr.MemoryEffect.WRITE and isinstance(type_, types.TensorType)
             ),
-            types[-1].dtype,
+            type_list[-1].dtype,
         )
-        return operation_cost(dtype, 2 * iterations, tuple(moved))
-    return Cost({}, tuple(moved))
+        return cost.operation(dtype, 2 * iterations, tuple(moved))
+    return cost.Cost({}, tuple(moved))
 
 
 def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat=None, order=None):
     """Enumerate atoms, admitting each concrete call through the shared checker."""
     op = op_type(**attributes)
-    params, _writes = instruction_schema(op, len(operand_types))
-    if not all(isinstance(type_, TensorType) for type_ in operand_types):
-        raise ScheduleRefusal(f"{op_type.__name__} schedule operands must be tensors", op=op)
+    params, _ = instruction_schema(op, len(operand_types))
+    if not all(isinstance(type_, types.TensorType) for type_ in operand_types):
+        raise schedule.RefusalError(f"{op_type.__name__} schedule operands must be tensors", op=op)
     atom = getattr(op, "atom", None)
     if not isinstance(atom, type):
-        matcher = PatternMatcher(dict(getattr(atom, "bindings", {})))
-        admit_fields(op, operand_types, mesh, matcher, target=None if frame is None else frame.target)
-        tiles = project(op, operand_types, mesh, bindings=matcher.bindings, repeat=repeat, order=order)
-        bindings, _tiles = check_call(
+        matcher = pattern.Matcher(dict(getattr(atom, "bindings", {})))
+        schedule.admit_fields(op, operand_types, mesh, matcher, target=None if frame is None else frame.target)
+        tiles = schedule.project(op, operand_types, mesh, bindings=matcher.bindings, repeat=repeat, order=order)
+        bindings, _ = schedule.check_call(
             op, operand_types, mesh, frame=frame, repeat=repeat, order=order, projection=tiles
         )
         return (InstructionMatch(op, tuple(bindings.items())),)
-    atom_param = next(param for param in op_type._op_schema.signature if param.name == "atom")
+    atom_param = next(param for param in expr.schema_of(op_type).signature if param.name == "atom")
     if atom not in atom_param.pattern.declarations:
-        raise ScheduleRefusal(
+        raise schedule.RefusalError(
             f"{atom.__name__} is not a declared atom of {op_type.__name__}", op=op
         )
     largest = max(
@@ -237,22 +199,22 @@ def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat
         default=1,
     )
     integers = tuple(param for param in atom.parameters if param.annotation is int)
-    partial = variants(
+    partial = pattern.variants(
         tuple(param for param in atom.parameters if param.annotation is not int),
         vary_defaulted=True,
     )
     states = []
     refusal = None
     for seed in partial:
-        matcher = PatternMatcher(seed)
+        matcher = pattern.Matcher(seed)
         try:
-            admit_fields(op, operand_types, mesh, matcher, target=None if frame is None else frame.target)
-        except ScheduleRefusal as error:
+            schedule.admit_fields(op, operand_types, mesh, matcher, target=None if frame is None else frame.target)
+        except schedule.RefusalError as error:
             refusal = refusal or error
             continue
         held = [seed]
         for param in integers:
-            axes = declared_symbol_axes(params, op, matcher.bindings, param.name)
+            axes = pattern.declared_symbol_axes(params, op, matcher.bindings, param.name)
             held = [
                 {**state, param.name: value}
                 for state in held
@@ -262,7 +224,7 @@ def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat
                     or extent % value == 0
                     for index, axis in axes
                 )
-                and (probe := PatternMatcher(state)).match(param.pattern, value)
+                and (probe := pattern.Matcher(state)).match(param.pattern, value)
                 and probe.solve()
             ]
         states.extend(held)
@@ -273,8 +235,8 @@ def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat
     for state in states:
         instance = op_type(**{**attributes, "atom": atom(**state)})
         try:
-            tiles = project(instance, operand_types, mesh, repeat=repeat, order=order)
-            bindings, _tiles = check_call(
+            tiles = schedule.project(instance, operand_types, mesh, repeat=repeat, order=order)
+            bindings, _ = schedule.check_call(
                 instance,
                 operand_types,
                 mesh,
@@ -283,27 +245,27 @@ def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat
                 order=order,
                 projection=tiles,
             )
-        except ScheduleRefusal as error:
+        except schedule.RefusalError as error:
             refusal = refusal or error
         else:
             accepted.append(InstructionMatch(instance, tuple(bindings.items())))
     if not accepted:
-        raise refusal or ScheduleRefusal(
-            f"{get_registered_name(atom)} has no admitted tile parameters", op=op
+        raise refusal or schedule.RefusalError(
+            f"{expr.get_registered_name(atom)} has no admitted tile parameters", op=op
         )
     return tuple(accepted)
 
 
-@register_typeinfer(ScheduleOp)
-def _infer_schedule(call: Call, ctx) -> TensorType:
+@typeinfer.register(ScheduleOp)
+def infer_schedule(call: expr.Call, ctx) -> types.TensorType:
     op = call.target.op
-    if not all(isinstance(ctx.type_of(arg), TensorType) for arg in call.args):
+    if not all(isinstance(ctx.type_of(arg), types.TensorType) for arg in call.args):
         ctx.error(call, f"{type(op).__name__} schedule operands must be tensors")
     try:
         if isinstance(getattr(op, "atom", None), type):
             attributes = {
                 param.name: getattr(op, param.name)
-                for param in type(op)._op_schema.signature
+                for param in expr.schema_of(type(op)).signature
                 if param.kind == "attribute"
             }
             match_instruction(
@@ -316,21 +278,21 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
                 order=call.target.order,
             )
         else:
-            admit_fields(
+            schedule.admit_fields(
                 op,
                 tuple(ctx.type_of(arg) for arg in call.args),
                 ctx.current_mesh,
-                PatternMatcher(dict(getattr(getattr(op, "atom", None), "bindings", {}))),
+                pattern.Matcher(dict(getattr(getattr(op, "atom", None), "bindings", {}))),
                 target=ctx.target,
             )
-            tiles = project(
+            tiles = schedule.project(
                 op,
                 tuple(ctx.type_of(arg) for arg in call.args),
                 ctx.current_mesh,
                 repeat=call.target.repeat,
                 order=call.target.order,
             )
-            check_call(
+            schedule.check_call(
                 op,
                 tuple(ctx.type_of(arg) for arg in call.args),
                 ctx.current_mesh,
@@ -339,23 +301,21 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
                 order=call.target.order,
                 projection=tiles,
             )
-    except ScheduleRefusal as error:
+    except schedule.RefusalError as error:
         ctx.error(call, str(error))
     params, writes = instruction_schema(op, len(call.args))
     return ctx.type_of(call.args[params.index(writes[0])])
 
 
-@register_buffer_alias(ScheduleOp)
-def _schedule_result_operand(call: Call) -> int:
+@access.register_alias(ScheduleOp)
+def schedule_result_operand(call: expr.Call) -> int:
     params, writes = instruction_schema(call.target.op, len(call.args))
     return params.index(writes[0])
 
 
 __all__ = [
     "ScheduleOp",
-    "ScheduleRefusal",
     "InstructionMatch",
     "instruction_schema",
     "match_instruction",
-    "operand_relations",
 ]

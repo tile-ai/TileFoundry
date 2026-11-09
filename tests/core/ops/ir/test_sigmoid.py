@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
-from tilefoundry.ir.hir.nn.sigmoid import Sigmoid
-from tilefoundry.ir.types import Layout, Mesh, Topology, make_shard_tensor_type
-from tilefoundry.ir.types.shard_layout import Partial
+from tilefoundry.ir import types, utils
+from tilefoundry.ir.hir import nn
 
-_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
+_M = types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",))
 CASES = (
     OpCase(
         "partial_sum_errors",
-        Sigmoid(),
-        (make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),)),),
+        nn.Sigmoid(),
+        (utils.make_shard_tensor_type((16, 8), mesh=_M, attrs=(types.Partial("sum"),)),),
         error=ExpectedError(match="Sigmoid"),
     ),
 )

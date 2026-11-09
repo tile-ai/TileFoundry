@@ -10,12 +10,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.types import DType
-from tilefoundry.target.base import Device
+from tilefoundry import target
+from tilefoundry.ir import expr
 
 
 @dataclass(frozen=True)
-class CudaDevice(Device):
+class Device(target.Device):
     """One CUDA device: how many SMs, and the memory and compute rates."""
 
     name: str
@@ -26,21 +26,21 @@ class CudaDevice(Device):
     hbm_bandwidth_bytes_per_second: int
 
     l2_capacity_bytes: int | None
-    _dense_flops: tuple[tuple[DType, int], ...]
-    _service_ops: tuple[tuple[str, int], ...]
+    dense_flops: tuple[tuple[expr.DType, int], ...]
+    service_ops: tuple[tuple[str, int], ...]
     gmem_latency_ns: int | None = None
 
     @property
-    def dense_flops_per_second(self) -> dict[DType, int]:
+    def dense_flops_per_second(self) -> dict[expr.DType, int]:
         """Return the dense compute-throughput map."""
-        return dict(self._dense_flops)
+        return dict(self.dense_flops)
 
     @property
     def service_ops_per_second(self) -> dict[str, int]:
         """What one CTA gets through of each service this device states."""
-        return dict(self._service_ops)
+        return dict(self.service_ops)
 
-    def peak_for(self, dtype: DType) -> int:
+    def peak_for(self, dtype: expr.DType) -> int:
         """Return dense device throughput for a compute ``dtype``."""
         try:
             return self.dense_flops_per_second[dtype]
@@ -51,4 +51,4 @@ class CudaDevice(Device):
             ) from None
 
 
-__all__ = ["CudaDevice"]
+__all__ = ["Device"]

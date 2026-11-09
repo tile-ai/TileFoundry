@@ -20,12 +20,12 @@ def _v100_qwen(tf, tmp_path: Path) -> Path:
     model.write_text(
         model.read_text(encoding="utf-8")
         .replace(
-            "from tilefoundry_nvidia import CudaTarget",
-            "from pathlib import Path\nfrom tilefoundry_nvidia import CudaTarget",
+            "from tilefoundry_nvidia import cuda",
+            "from pathlib import Path\nfrom tilefoundry_nvidia import cuda",
         )
         .replace(
-            'CudaTarget("nvidia.h200_sxm")',
-            "CudaTarget(\n"
+            'cuda.Target("nvidia.h200_sxm")',
+            "cuda.Target(\n"
             '    Path(__file__).parent / "hw" / "vendor_v100_sxm2_32gb.toml",\n'
             '    Path(__file__).parent / "hw" / "vendor_sm70.toml",\n'
             ")",

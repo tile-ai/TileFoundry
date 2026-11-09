@@ -5,35 +5,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import prod
 
-from tilefoundry.ir.types import (
-    Broadcast,
-    ComposedLayout,
-    Layout,
-    Partial,
-    ShardLayout,
-    Swizzle,
-    Varying,
-)
-from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.tensor_type import TensorType
+from tilefoundry.ir import types
 
-from .match import _named
+from .match import named
 
 
 def strided_arrangement(layout, *, allow_partial=False):
     """Read a strided address layout beneath permitted value-state wrappers."""
-    if isinstance(layout, ShardLayout):
+    if isinstance(layout, types.ShardLayout):
         if not all(
-            isinstance(attr, (Broadcast, Varying)) or (allow_partial and isinstance(attr, Partial))
+            isinstance(attr, (types.Broadcast, types.Varying))
+            or (allow_partial and isinstance(attr, types.Partial))
             for attr in layout.attrs
         ):
             return None
         layout = layout.layout
-    if isinstance(layout, ComposedLayout):
-        if layout.inner is not None and not isinstance(layout.inner, Swizzle):
+    if isinstance(layout, types.ComposedLayout):
+        if layout.inner is not None and not isinstance(layout.inner, types.Swizzle):
             return None
         layout = layout.outer
-    return layout if isinstance(layout, Layout) else None
+    return layout if isinstance(layout, types.Layout) else None
 
 
 @dataclass(frozen=True)
@@ -63,8 +54,8 @@ class Constraint:
             return self.written()
         left, right = pair
         return (
-            f"{self.left}.{self.field}={_named(left)} "
-            f"{self.right}.{self.field}={_named(right)}, reads {self.written()}"
+            f"{self.left}.{self.field}={named(left)} "
+            f"{self.right}.{self.field}={named(right)}, reads {self.written()}"
         )
 
 
@@ -88,6 +79,35 @@ class SameConstraint(Constraint):
         return f"{self.left}.{self.field} = {self.right}.{self.field}"
 
 
+def read_mode(tensor: types.TensorType, arrangement=None, *, allow_partial=False):
+    layout = strided_arrangement(
+        tensor.layout if arrangement is None else arrangement, allow_partial=allow_partial
+    )
+    if layout is None:
+        return None, f"{tensor.layout!r} is no strided arrangement"
+    shape, strides = tuple(layout.shape), tuple(layout.strides)
+    extents = tuple(tensor.shape)
+    if len(shape) != len(extents) or any(
+        prod(types.flatten(group)) != extent for group, extent in zip(shape, extents)
+    ):
+        return None, (
+            f"{layout!r} is not one group of modes per axis of the {extents} tile it arranges"
+        )
+    unit = []
+    for axis, (group, steps) in enumerate(zip(shape, strides)):
+        walked = tuple(
+            step for extent, step in zip(types.flatten(group), types.flatten(steps)) if extent > 1
+        )
+        unit += [
+            (axis, position, position == len(walked) - 1)
+            for position, step in enumerate(walked)
+            if step == 1
+        ]
+    if len(unit) != 1:
+        return None, f"{layout!r} has {len(unit)} modes at step 1, not one"
+    return unit[0], None
+
+
 @dataclass(frozen=True, init=False)
 class SameModesConstraint(Constraint):
     """Require two tensor layouts to run along the same final mode of one axis."""
@@ -102,43 +122,14 @@ class SameModesConstraint(Constraint):
 
     def pair(self, operands: dict):
         held = tuple(operands.get(name) for name in (self.left, self.right))
-        return None if any(not isinstance(value, TensorType) for value in held) else held
+        return None if any(not isinstance(value, types.TensorType) for value in held) else held
 
-    @staticmethod
-    def reading(tensor: TensorType, arrangement=None, *, allow_partial=False):
-        layout = strided_arrangement(
-            tensor.layout if arrangement is None else arrangement, allow_partial=allow_partial
-        )
-        if layout is None:
-            return None, f"{tensor.layout!r} is no strided arrangement"
-        shape, strides = tuple(layout.shape), tuple(layout.strides)
-        extents = tuple(tensor.shape)
-        if len(shape) != len(extents) or any(
-            prod(flatten(group)) != extent for group, extent in zip(shape, extents)
-        ):
-            return None, (
-                f"{layout!r} is not one group of modes per axis of the {extents} tile it arranges"
-            )
-        unit = []
-        for axis, (group, steps) in enumerate(zip(shape, strides)):
-            walked = tuple(
-                step for extent, step in zip(flatten(group), flatten(steps)) if extent > 1
-            )
-            unit += [
-                (axis, position, position == len(walked) - 1)
-                for position, step in enumerate(walked)
-                if step == 1
-            ]
-        if len(unit) != 1:
-            return None, f"{layout!r} has {len(unit)} modes at step 1, not one"
-        return unit[0], None
-
-    def readings(self, pair: tuple[TensorType, TensorType]):
+    def readings(self, pair: tuple[types.TensorType, types.TensorType]):
         """Read below one shared shard frame only after proving it is the same."""
         left, right = (value.layout for value in pair)
         if (
-            isinstance(left, ShardLayout)
-            and isinstance(right, ShardLayout)
+            isinstance(left, types.ShardLayout)
+            and isinstance(right, types.ShardLayout)
             and left.attrs == right.attrs
             and left.mesh == right.mesh
         ):
@@ -146,7 +137,7 @@ class SameModesConstraint(Constraint):
         else:
             arrangements = (None, None)
         return tuple(
-            self.reading(value, arrangement, allow_partial=self.allow_partial)
+            read_mode(value, arrangement, allow_partial=self.allow_partial)
             for value, arrangement in zip(pair, arrangements)
         )
 
@@ -201,4 +192,5 @@ __all__ = [
     "DistinctConstraint",
     "SameConstraint",
     "SameModesConstraint",
+    "strided_arrangement",
 ]

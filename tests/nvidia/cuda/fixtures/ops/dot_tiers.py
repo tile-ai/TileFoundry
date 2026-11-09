@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.ir.types.shard_layout import Broadcast
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.ir import types
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
 
 @module(topologies=(Topology("thread", 32),))
 class DotWarp:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def dot_warp(
         warp_a: Tensor[(32, 32), "f32"],
         warp_b: Tensor[(32,), "f32"],
@@ -28,7 +28,7 @@ class DotWarp:
             warp_b_view = T.tensor_view(
                 T.ptr_of(warp_b),
                 layout=ShardLayout(
-                    layout=Layout(shape=(32,), strides=(1,)), attrs=(Broadcast(),), mesh=mw
+                    layout=Layout(shape=(32,), strides=(1,)), attrs=(types.Broadcast(),), mesh=mw
                 ),
             )
             warp_c_view = T.tensor_view(
@@ -42,7 +42,7 @@ class DotWarp:
 
 @module(topologies=(Topology("thread", 128),))
 class DotCta:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def dot_cta(
         cta_a: Tensor[(128,), "f32"], cta_b: Tensor[(128,), "f32"], cta_c: Tensor[(1,), "f32"]
     ):
@@ -54,18 +54,18 @@ class DotCta:
                 T.ptr_of(cta_b), layout=ShardLayout(Layout((128,), (1,)), (Split(0),), mc)
             )
             cta_c_view = T.tensor_view(
-                T.ptr_of(cta_c), layout=ShardLayout(Layout((1,), (1,)), (Broadcast(),), mc)
+                T.ptr_of(cta_c), layout=ShardLayout(Layout((1,), (1,)), (types.Broadcast(),), mc)
             )
             cta_ws = T.alloc_tensor(Tensor[(4,), "f32", None, "smem"])
             T.dot(cta_a_view, cta_b_view, cta_c_view, cta_ws)
 
 
-@module(entry="dot_tiers_host", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="dot_tiers_host", target=cuda.Target("nvidia.h200_sxm"))
 class DotTiers:
     warp = DotWarp
     cta = DotCta
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def dot_tiers_host(
         warp_a: Tensor[(32, 32), "f32"],
         warp_b: Tensor[(32,), "f32"],

@@ -1,10 +1,8 @@
 # TileFoundry Spec — passes
 
-The pass framework: `Pass` / `ModulePass` / `FunctionPass` /
-`PrimFuncPass` / `PassManager`. A `Pass` is the unit the compiler
-schedules over a `Module`; a transform is one stage in this pipeline,
-not a free function. After the framework, this spec lists the
-implemented passes and their per-pass contracts.
+The pass framework (`Pass`, `ModulePass`, `FunctionPass`, `PrimFuncPass`,
+`PassManager`), then the implemented passes and their contracts. A `Pass` is
+the unit the compiler schedules over a `Module`.
 
 ```mermaid
 flowchart TB
@@ -22,28 +20,19 @@ flowchart TB
 
 ## 1. Role
 
-A `Pass` abstracts every Module-reading or Module-rewriting compile
-step; `PassManager` runs registered passes in registration order. The
-pass framework is:
-
-- a linear pipeline — passes run sequentially in registration order;
-- three pass granularities: `ModulePass` / `FunctionPass` /
-  `PrimFuncPass`;
-- explicit registration — passes are added via `PassManager.add(...)`.
+A `Pass` abstracts every Module-reading or Module-rewriting compile step.
+`PassManager` runs the passes added with `PassManager.add(...)` sequentially,
+in registration order. A pass has one of three granularities: `ModulePass`,
+`FunctionPass` or `PrimFuncPass`.
 
 ## 2. `Pass` base class
 
-
 ```python
 from abc import ABC, abstractmethod
-from tilefoundry.ir.core import Module
+from tilefoundry.ir import core
 
 class Pass(ABC):
-    """A Module → Module pure function.
-
-    Side-effect logging is allowed, but the input Module MUST NOT be
-    mutated — Module is a frozen dataclass, so a mutator returns a new
-    instance.
+    """A Module → Module function.
 
     Attributes:
         name: attribute; Stable dump and log name.
@@ -54,11 +43,15 @@ class Pass(ABC):
     requires: tuple[str, ...] = ()
 
     @abstractmethod
-    def run(self, module: Module) -> Module: ...
+    def run(self, module: core.Module) -> core.Module: ...
 ```
 
 - constraints:
-  - `run(module)` returns a new `Module`; it does not mutate input.
+  - `run(module)` returns the resulting `Module`. `Module` is mutable, and a
+    pass MAY rewrite the Module tree in place (`Module.replace_functions`) and
+    return the same object; child Modules are shared by identity. The default
+    `FunctionPass.run` / `PrimFuncPass.run` return the input unchanged when no
+    function changed, and otherwise a `dataclasses.replace` copy.
   - Passes MUST NOT depend on global state. All configuration enters
     through constructor parameters or pass-local attributes.
   - Pass failures raise named exceptions (e.g. `VerifyError`); they
@@ -68,9 +61,8 @@ class Pass(ABC):
 
 ### 3.1 `ModulePass`
 
-Runs over the whole `Module` and may add / remove / reorder
-functions. Examples: module-level inline, dead-function elimination,
-synthesizing an entry the module does not yet declare
+Runs over the whole `Module` and may add, remove or reorder functions, for
+example by synthesizing an entry the module does not declare
 ([§7.3](#73-inserthostentrypass)).
 
 ```python
@@ -78,74 +70,54 @@ class ModulePass(Pass):
     """Run over a complete Module."""
 
     @abstractmethod
-    def run(self, module: Module) -> Module: ...
+    def run(self, module: core.Module) -> core.Module: ...
 ```
 
-- constraints:
-  - `run` returns a new `Module`; inherits the `Pass` no-mutation / no-global-state
-    contract ([§2](#2-pass-base-class)).
+A `ModulePass` inherits the [§2](#2-pass-base-class) contract.
 
 ### 3.2 `FunctionPass`
 
-Visits each `hir.Function`. The framework supplies a default `run`
-that walks `module.functions`, calls `run_function` for HIR
-entries, and reassembles the `Module`.
+Visits each `core.Function` in `module.functions`. The default `run` calls
+`run_function` for HIR entries, passes other entries through, and reassembles
+the `Module`.
 
 ```python
-from tilefoundry.ir.hir import Function as HirFunction
-
 class FunctionPass(Pass):
     """Run independently over each HIR Function."""
 
     @abstractmethod
-    def run_function(self, fn: HirFunction, module: Module) -> HirFunction: ...
-    def run(self, module: Module) -> Module: ...
+    def run_function(self, fn: core.Function, module: core.Module) -> core.Function: ...
+    def run(self, module: core.Module) -> core.Module: ...
 ```
-
-- constraints:
-  - inherits the `Pass` contract ([§2](#2-pass-base-class)); the default `run` reassembles the `Module`
-    from `run_function` results.
 
 ### 3.3 `PrimFuncPass`
 
-Same shape as `FunctionPass`, but visits `tir.PrimFunction`.
+Same shape as `FunctionPass`, but visits `core.PrimFunction` entries and
+passes HIR entries through.
 
 ```python
-from tilefoundry.ir.tir import PrimFunction
-
 class PrimFuncPass(Pass):
     """Run independently over each TIR PrimFunction."""
 
     @abstractmethod
-    def run_prim_func(self, fn: PrimFunction, module: Module) -> PrimFunction: ...
-    def run(self, module: Module) -> Module: ...
+    def run_prim_func(self, fn: core.PrimFunction, module: core.Module) -> core.PrimFunction: ...
+    def run(self, module: core.Module) -> core.Module: ...
 ```
-
-- constraints:
-  - inherits the `Pass` contract ([§2](#2-pass-base-class)); same shape as `FunctionPass` over
-    `tir.PrimFunction`.
 
 ## 4. Transform pass idiom
 
 Transform passes use the visitor / mutator base classes from
-[visitor-mutator](./visitor-mutator.md) rather than hand-written
-`isinstance` dispatch.
-
-A transform `PrimFuncPass` wraps a `StmtExprMutator` subclass: `run_prim_func`
-runs the mutator over `fn.body`, returns `fn` unchanged when the mutator
-preserves identity (the returned body is the same object), and otherwise
-returns `replace(fn, body=new_body)`. The inner mutator matches on `Evaluate`
-and dispatches on `type(stmt.callable)`.
-
-The visit-and-rewrite contract — including the `visit_Evaluate`
-entry form for TIR effect Ops — is owned by
+[visitor-mutator](./visitor-mutator.md) rather than hand-written `isinstance`
+dispatch. A transform `PrimFuncPass` wraps a `StmtExprMutator` subclass:
+`run_prim_func` runs the mutator over `fn.body`, returns `fn` when the returned
+body is the same object, and otherwise `replace(fn, body=new_body)`. The
+visit-and-rewrite contract, including the `visit_Evaluate` entry form for TIR
+effect Ops, is owned by
 [visitor-mutator §7](./visitor-mutator.md#7-visitor-entry-forms-for-evaluate).
 
 ## 5. `PassManager`
 
-A linear scheduler that runs passes in registration order and
-optionally drops per-pass IR dumps when wrapped in a
-`tilefoundry.dump.DumpScope`.
+A linear scheduler that runs passes in registration order.
 
 ```python
 class PassManager:
@@ -158,71 +130,73 @@ class PassManager:
     passes: list[Pass] = field(default_factory=list)
 
     def add(self, p: Pass) -> "PassManager": ...      # register a pass; returns self for chaining
-    def run(self, module: Module) -> Module: ...      # run passes in registration order
+    def run(self, module: core.Module) -> core.Module: ...      # run passes in registration order
 ```
 
 - constraints:
-  - `requires` is an ordering assertion checked before the run, not a topological sort.
+  - `run` first checks `requires`: each name MUST be the `name` of a pass added
+    earlier, otherwise `ValueError`. It is an ordering assertion, not a
+    topological sort.
 
-`PassManager` does not own a dump destination. When the caller
-wraps the run in a `DumpScope` and `DumpFlags.PASS_IR` is enabled,
-each pass writes `before.txt` / `after.txt` under
-`<scope-root>/{NN}_{pass_name}/`. Without an active scope or with
-the flag off, `dump(...)` is a no-op. The before/after representations MUST
-be passed as no-argument producers, so `repr` is evaluated only when
-`PASS_IR` is enabled in an active scope.
+`PassManager` does not own a dump destination. When the caller wraps the run in
+a `tilefoundry.dump.Scope` and `Flags.PASS_IR` is enabled, each pass writes
+`before.txt` / `after.txt` under `<scope-root>/{NN}_{pass_name}/`. Otherwise
+`dump(...)` is a no-op. The before/after representations MUST be passed as
+no-argument producers, so `repr` is evaluated only when `PASS_IR` is enabled in
+an active scope.
 
 ## 6. Top-level API
 
-Three public verbs operate on `Module` (no bare `HirFunction` /
-`PrimFunction`):
+Two public verbs operate on `core.Module` only:
 
 ```python
-class CompilerOptions:
-    """Carry deterministic compiler configuration.
+class Options:  # compiler.Options; the root re-exports it as CompilerOptions
+    """Gather the options of every stage, one part per stage.
 
     Attributes:
         target: attribute; Constructed compilation Target.
+        passes: attribute; ``passes.Options`` handed to ``passes.default_pipeline``.
+        codegen: attribute; ``codegen.Options`` handed to ``codegen.link_program``.
+        dump: attribute; ``dump.Flags`` that choose what the pipeline dumps.
     """
 
     target: Target
+    passes: passes.Options = passes.Options()
+    codegen: codegen.Options = codegen.Options()
+    dump: dump.Flags = dump.Flags.ALL
 
-    def canonical_text(self) -> str: ...
 
-
-def build(mod: Module, /, *, target: Target | None = None) -> RuntimeModule: ...
-def compile(mod: Module, /, *, target: Target | None = None) -> RuntimeModule: ...
+def build(mod: core.Module, /, *, target: Target | None = None, options: Options | None = None) -> runtime.Module: ...
+def compile(mod: core.Module, /, *, target: Target | None = None, options: Options | None = None) -> runtime.Module: ...
 ```
 
 `build` takes a TIR `Module` whose `Module.entry` is a CPU host entry, then
-codegen → toolchain link → loader, and returns a `RuntimeModule`
+codegen → toolchain link → loader, and returns a `runtime.Module`
 ([runtime](./runtime.md)). It requires the Module to own its Target; an
 explicit Target that disagrees with the declared one is an error.
 
-`compile` runs `default_pipeline` over the Module, then `build`. Finalize and
-scaffold run the same `default_pipeline`. The `jit` convenience and cache contract are owned by
-[runtime §1.6](./runtime.md#16-compilepy).
+`compile` runs `passes.default_pipeline(module, options.passes)` over the
+Module, then `build`, which hands `options.codegen` to `codegen.link_program`;
+both run inside a `dump.Scope` opened with `options.dump`, which only narrows
+the scope already active. The pass list is [§7.2](#72-target-pass-points). The
+`jit` convenience, which also accepts a bare Function, and its cache contract
+are owned by [runtime §1.6](./runtime.md#16-compiler).
 
 ### Dirty-scope retype / verify
 
-`typeinfer` and `verify` are not standalone pipeline stages. The
-parser already runs eager typeinfer ([parser](./parser.md)), so a
-`Module` entering the pipeline has `Expr.type` filled. After each
-pass runs, `PassManager` re-runs the relevant analysis on that
-pass's **dirty scope**:
+`typeinfer` and `verify` are not standalone pipeline stages, and there is no
+`TypeInferPass`. The parser already runs eager typeinfer
+([parser](./parser.md)), so a `Module` entering the pipeline has `Expr.type`
+filled. After each pass, `PassManager` rechecks the pass's **dirty scope**: every
+function on the Module's call paths whose object identity was not on them before
+the pass. Rechecking is per whole function.
 
-- HIR-side: changed `Function`s rerun the existing checks and refresh available
-  `RangeMetadata` over the complete function without rewriting `.type`.
-- TIR-side: changed `PrimFunction`s rerun `verify`, which
-  recursively retriggers `typeinfer` on the embedded Expr fields
-  and refreshes their `.type`.
-- A `ModulePass` whose effect crosses functions (e.g. rewriting an
-  `Evaluate(SymbolRef)` callee) MUST report its changed-function set
-  or conservatively trigger a whole-module fallback.
+- HIR: `verify_function`, then type inference with ranges, which refreshes
+  `RangeMetadata` over the complete function.
+- TIR: `verify_prim_function`, which retriggers `typeinfer` on the embedded Expr
+  fields and refreshes their `.type`.
 
-Consequence: there is no separate `TypeInferPass`, and `verify` is
-not inserted as a public `ModulePass`. Passes own rewrite work; the
-unified retype / verify is scheduled by `PassManager`.
+A rewrite that keeps a function's identity is therefore not rechecked.
 
 ## 7. Implemented passes
 
@@ -233,19 +207,21 @@ class ConvertHIRToTIR(ModulePass):
     """Replace one selected scheduled HIR entry with verified TIR."""
 
     visitor: ClassVar[type[Lowering]] = Lowering
-    options: CodegenOptions = CodegenOptions()
+    options: passes.Options = passes.Options()
     name: str = "convert-hir-to-tir"
     requires: tuple[str, ...] = ()
     analyses: tuple[str, ...] = ("memory",)
 
     @classmethod
-    def create(cls, target: Target, options: CodegenOptions) -> ConvertHIRToTIR: ...
-    def run(self, module: Module) -> Module: ...
+    def create(cls, target: Target, options: passes.Options) -> ConvertHIRToTIR: ...
+    def run(self, module: core.Module) -> core.Module: ...
 ```
 
 - constraints:
   - The pass lowers the device root of the Module it receives, in place, and
-    its retained calls. That function MUST carry the memory analysis
+    its retained calls. The device root is the callee of the `Launch` in
+    `Module.entry` when that entry is a CPU host, otherwise `Module.entry`
+    itself. The root MUST carry the memory analysis
     (`AllocationSummaryMetadata`); otherwise the pass raises `LoweringError`. It
     never checks or analyzes again, and it takes nothing but configuration at
     construction. Generated names come from the `BindingMetadata` on that IR.
@@ -285,10 +261,10 @@ class ConvertHIRToTIR(ModulePass):
     the loop's builder region.
   - The pass lowers the device root: the callee of the `Launch` in `Module.entry`
     when that entry is a CPU host, otherwise `Module.entry` itself. It returns the
-    Module unchanged under `CodegenOptions(emit="skeleton")` or when the Module
-    has no HIR function. When lowering HIR from a CPU host root, exactly one
-    `Launch` MUST resolve to an HIR function; otherwise `LoweringError` names
-    the host and the number of such launches.
+    Module unchanged under `passes.Options(lower=False)` or when the Module has no
+    HIR function. When lowering HIR from a CPU host root, exactly one `Launch` MUST
+    resolve to an HIR function; otherwise `LoweringError` names the host and the
+    number of such launches.
   - Address placement comes only from `MemoryMetadata`: integer shared-memory
     addresses are byte offsets, and every analyzed offset becomes one concrete
     buffer view. Multiple offsets bind one view per offset and one tuple of
@@ -438,6 +414,7 @@ input or schedule logical HIR automatically. Existing root output copying is
 unchanged. Codegen does not support these retained TIR calls and MUST refuse them
 with `no codegen handler for Op <type>` when emission reaches one.
 
+### 7.2 Target pass points
 
 The target pass registry in `passes/pass_manager.py` exposes these fixed points:
 
@@ -448,24 +425,30 @@ class PassPoint(Enum):
     BEFORE_CODEGEN = "before_codegen"
 
 
+registry: Registry  # keyed by (target class, PassPoint, pass class)
+
+
 def register_pass(
     target: type[Target], point: PassPoint
 ) -> Callable[[type[ModulePass]], type[ModulePass]]: ...
 
 
-def target_passes(module: Module, point: PassPoint) -> list[ModulePass]: ...
+def for_target(module: core.Module, point: PassPoint) -> list[ModulePass]: ...
 ```
 
 - constraints:
-  - `target_passes` MUST collect PrimFunction targets from each function and
+  - `passes.for_target` MUST collect PrimFunction targets from each function and
     HIR targets from the corresponding `list_call_paths` frame. A frame with
     no Target MUST contribute no target. It MUST order
     targets by registered name and preserve registration order within a target.
   - A pass class MUST be registered at most once per point; a duplicate MUST
     raise `ValueError` naming the Target and pass.
-  - Finalize, compile and scaffold MUST run the same pass list: `BEFORE_LOWER`
-    target passes, `InsertHostEntryPass`, `ConvertHIRToTIR`, `AFTER_LOWER` target
-    passes, `BEFORE_CODEGEN` target passes. Scaffold passes `CodegenOptions(emit="skeleton")`.
+  - Finalize, compile and scaffold MUST run the same pass list
+    (`passes.default_pipeline`): `BEFORE_LOWER` target passes,
+    `InsertHostEntryPass`, `ConvertHIRToTIR`, `AFTER_LOWER` target passes,
+    `BEFORE_CODEGEN` target passes. Scaffold passes
+    `passes.Options(lower=False)` here and `codegen.Options(emit="skeleton")` to
+    `link_program`.
 
 ### 7.3 `InsertHostEntryPass`
 
@@ -475,8 +458,8 @@ class InsertHostEntryPass(ModulePass):
     requires: tuple[str, ...] = ()
 
     @classmethod
-    def create(cls, target: Target, options: CodegenOptions) -> InsertHostEntryPass: ...
-    def run(self, module: Module) -> Module: ...
+    def create(cls, target: Target, options: passes.Options) -> InsertHostEntryPass: ...
+    def run(self, module: core.Module) -> core.Module: ...
 ```
 
 Core defines the pass with `create(target, options)`; its default `run` returns

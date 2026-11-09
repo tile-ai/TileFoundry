@@ -4,52 +4,41 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
-from tilefoundry.ir.core import Call, Expr, VerifyError, get_metadata
-from tilefoundry.ir.core import attach_metadata as attach
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types import DType
-from tilefoundry.target.facts import TopologyFacts
-from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes
-from tilefoundry.visitor_registry.valuation import ValuationVisitor
-from tilefoundry.visitor_registry.visitors import CostEvaluator
+from tilefoundry import target
+from tilefoundry.interfaces import cost, valuation
+from tilefoundry.ir import core, expr
 
-from .errors import AnalysisError
-from .facts import PerformanceServiceFacts, ThroughputFacts
+from .errors import Error
 from .iteration_scope import Repeats
 from .liveness import result_copies
-from .metadata import (
-    Breakdown,
-    ComputeCostMetadata,
-    MemoryMetadata,
-    added,
-    breakdown,
-    scaled,
-    shares,
-)
-from .precision import AnalysisPrecision
+from .metadata import ComputeCostMetadata, MemoryMetadata
+from .precision import Precision
+from .quantity import Breakdown, added, breakdown, scaled, shares
 from .visitor import AnalyzeContext
 
 SELECTOR = "compute-cost"
 
 
-def _counts(values: dict) -> tuple[tuple[str, int], ...]:
+def counts(values: dict) -> tuple[tuple[str, int], ...]:
     return tuple(sorted((getattr(kind, "name", kind), value) for kind, value in values.items()))
 
 
-def _at(held: Breakdown[int], topologies: tuple[str, ...], level: str | None):
+def level_value(held: Breakdown[int], topologies: tuple[str, ...], level: str | None):
     return tuple(shares(held, topologies, level).items())
 
 
-def _is_structural_occurrence(
-    cost: ComputeCostMetadata,
+def is_structural_occurrence(
+    cost_value: ComputeCostMetadata,
     moved: MemoryMetadata | None = None,
     *,
     unit: str,
 ) -> bool:
     """Whether an occurrence asks for nothing this model puts on a clock."""
     return (
-        all(not value for _name, value in _at(cost.flops, cost.topologies, unit))
-        and all(not value for _kind, value in _at(cost.other_ops, cost.topologies, unit))
+        all(not value for _, value in level_value(cost_value.flops, cost_value.topologies, unit))
+        and all(
+            not value for _, value in level_value(cost_value.other_ops, cost_value.topologies, unit)
+        )
         and not any(
             traffic.total_bytes
             for traffic in (
@@ -62,9 +51,9 @@ def _is_structural_occurrence(
 
 
 def local_duration_ns(
-    cost: ComputeCostMetadata,
-    facts: ThroughputFacts,
-    services: PerformanceServiceFacts,
+    cost_value: ComputeCostMetadata,
+    facts: target.ThroughputFacts,
+    services: target.PerformanceServiceFacts,
     *,
     moved: MemoryMetadata | None = None,
     topology_level: str | None = None,
@@ -79,36 +68,36 @@ def local_duration_ns(
     """
     topology_level = topology_level if topology_level is not None else level
     if topology_level is None:
-        raise AnalysisError("performance: no topology level was selected")
+        raise Error("performance: no topology level was selected")
     if services.unit != topology_level:
-        raise AnalysisError(
+        raise Error(
             f"performance: selected topology level {topology_level!r}, but the "
             f"target's one-unit throughputs are stated for {services.unit!r}"
         )
-    if _is_structural_occurrence(cost, moved, unit=topology_level):
+    if is_structural_occurrence(cost_value, moved, unit=topology_level):
         return 0
 
     compute_ns = 0
-    for name, value in _at(cost.flops, cost.topologies, topology_level):
+    for name, value in level_value(cost_value.flops, cost_value.topologies, topology_level):
         if not value:
             continue
-        dtype = getattr(DType, name, None)
+        dtype = getattr(expr.DType, name, None)
         if dtype is None:
-            raise AnalysisError(f"performance: unknown compute dtype {name!r}")
+            raise Error(f"performance: unknown compute dtype {name!r}")
         throughput = services.flops(dtype)
         if throughput is None or throughput <= 0:
-            raise AnalysisError(
+            raise Error(
                 f"performance: target states no one-unit throughput for dtype "
                 f"{name!r} at {topology_level!r}"
             )
         compute_ns += -(-(value * scale * 1_000_000_000) // throughput)
 
-    for kind, value in _at(cost.other_ops, cost.topologies, topology_level):
+    for kind, value in level_value(cost_value.other_ops, cost_value.topologies, topology_level):
         if not value:
             continue
         throughput = services.ops(kind)
         if throughput is None or throughput <= 0:
-            raise AnalysisError(
+            raise Error(
                 f"performance: target states no one-unit throughput for {kind!r} "
                 f"work at {topology_level!r}"
             )
@@ -127,7 +116,7 @@ def local_duration_ns(
         if not crossed or throughput is None:
             continue
         if throughput <= 0:
-            raise AnalysisError(
+            raise Error(
                 f"performance: target states no one-unit throughput for level "
                 f"{memory_level!r} at {topology_level!r}"
             )
@@ -135,7 +124,7 @@ def local_duration_ns(
         memory_ns = max(memory_ns, duration)
 
     sent = (
-        _bytes(
+        traffic_bytes(
             moved.traffic.communication,
             moved.topologies,
             topology_level,
@@ -153,7 +142,7 @@ def local_duration_ns(
     return max(compute_ns, memory_ns, link_ns)
 
 
-def inflight_bytes(call: Call, scope, target, level: str) -> int | None:
+def inflight_bytes(call: expr.Call, scope, tgt, level: str) -> int | None:
     """Bytes one parallel unit keeps in flight for *call*'s traffic at *level*.
 
     An asynchronous copy (TMA, ``cp.async``) keeps every stage of its buffer in
@@ -161,13 +150,13 @@ def inflight_bytes(call: Call, scope, target, level: str) -> int | None:
     synchronous access keeps one 16-byte access per thread of the unit, and as
     many threads as the finest level allows when the program states none.
     """
-    facts = target.get_facts(TopologyFacts)
+    facts = tgt.get_facts(target.TopologyFacts)
     unit = facts.parallel()
     if unit is None or not facts.topologies:
         return None
     op = getattr(call.target, "op", call.target)
-    if getattr(getattr(type(op), "_op_schema", None), "category", None) == "async":
-        moved = get_metadata(call, MemoryMetadata)
+    if getattr(expr.schema_of(type(op)), "category", None) == "async":
+        moved = expr.get_metadata(call, MemoryMetadata)
         stage = None if moved is None else shares(moved.traffic.storage, moved.topologies, unit.name).get(level)
         slots = max((result_copies(scope.capture_root(arg)) for arg in call.args), default=1)
         return None if stage is None else stage.total_bytes * slots
@@ -178,11 +167,11 @@ def inflight_bytes(call: Call, scope, target, level: str) -> int | None:
     return None if threads is None else threads * 16
 
 
-def _call_cost_record(
-    expr: Call,
-    locals_by_unit: dict[str, CostContext],
+def call_cost_record(
+    node: expr.Call,
+    locals_by_unit: dict[str, cost.Context],
     positions: int,
-    whole: CostContext,
+    whole: cost.Context,
     asked: str | None = None,
 ) -> ComputeCostMetadata:
     """Measure one Call in logical, expanded, and every topology-unit domain."""
@@ -191,16 +180,16 @@ def _call_cost_record(
     total_flops: tuple[tuple[str, int], ...] = ()
     total_other_ops: tuple[tuple[str, int], ...] = ()
     try:
-        logical = CostEvaluator().visit(expr, whole)
-    except (ValueError, VerifyError) as error:
-        raise AnalysisError(str(error)) from None
+        logical = cost.Visitor().visit(node, whole)
+    except (ValueError, expr.VerifyError) as error:
+        raise Error(str(error)) from None
     for unit, local in locals_by_unit.items():
         try:
-            cost = CostEvaluator().visit(expr, local)
-        except (ValueError, VerifyError) as error:
-            raise AnalysisError(str(error)) from None
-        unit_flops = _counts(cost.flops)
-        unit_other_ops = _counts(cost.service)
+            cost_value = cost.Visitor().visit(node, local)
+        except (ValueError, expr.VerifyError) as error:
+            raise Error(str(error)) from None
+        unit_flops = counts(cost_value.flops)
+        unit_other_ops = counts(cost_value.service)
         flops_by_unit.append(unit_flops)
         other_ops_by_unit.append(unit_other_ops)
         if unit == (asked or next(iter(locals_by_unit))):
@@ -212,19 +201,19 @@ def _call_cost_record(
             dict(total_flops),
             tuple(dict(values) for values in flops_by_unit),
             0,
-            logical=dict(_counts(logical.flops)),
+            logical=dict(counts(logical.flops)),
         ),
         other_ops=breakdown(
             dict(total_other_ops),
             tuple(dict(values) for values in other_ops_by_unit),
             0,
-            logical=dict(_counts(logical.service)),
+            logical=dict(counts(logical.service)),
         ),
     )
 
 
-def _bytes(
-    held: Breakdown[TrafficBytes],
+def traffic_bytes(
+    held: Breakdown[cost.TrafficBytes],
     topologies: tuple[str, ...],
     kind: str,
     topology_level: str | None,
@@ -233,21 +222,21 @@ def _bytes(
     return moved.total_bytes if moved is not None else 0
 
 
-def _add(target: dict[str, int], values, trips: int) -> None:
+def add_counts(tgt: dict[str, int], values, trips: int) -> None:
     for name, value in values:
-        target[name] = target.get(name, 0) + value * trips
+        tgt[name] = tgt.get(name, 0) + value * trips
 
 
-def _domain_values(held: Breakdown[int], domain: str) -> tuple[tuple[str, int], ...]:
+def domain_values(held: Breakdown[int], domain: str) -> tuple[tuple[str, int], ...]:
     return tuple((name, getattr(spread, domain)) for name, spread in held.kinds)
 
 
 def accumulate_logical(into, name, spread, ctx):
     """Consume local loop dependencies, retaining only this definition's formals."""
-    precision = AnalysisPrecision.EXACT
+    precision = Precision.EXACT
     scope = (
         ctx.callee_scope
-        if ctx.call_site is not None and ctx._callee_context() is not None
+        if ctx.call_site is not None and ctx.callee_context() is not None
         else ctx.scope
     )
     for dependencies, value in spread.logical_groups:
@@ -287,7 +276,7 @@ def grouped_breakdown(held, groups):
                     spread,
                     logical_groups=tuple(
                         (dependencies, value)
-                        for (kind, _ids), (dependencies, value) in groups.items()
+                        for (kind, _), (dependencies, value) in groups.items()
                         if kind == name
                     ),
                 ),
@@ -297,7 +286,7 @@ def grouped_breakdown(held, groups):
     )
 
 
-def _accumulate(
+def accumulate(
     ctx: "ComputeCostContext",
     record: ComputeCostMetadata,
     repeats: Repeats,
@@ -308,17 +297,17 @@ def _accumulate(
     ):
         for name, spread in held.kinds:
             bounded = accumulate_logical(groups, name, spread, ctx)
-            ctx.precision[0] = ctx.precision[0].join(bounded)
-    _add(ctx.flops, _domain_values(record.flops, "total"), repeats.loop_trips)
-    _add(ctx.other_ops, _domain_values(record.other_ops, "total"), repeats.loop_trips)
+            ctx.widen(bounded)
+    add_counts(ctx.flops, domain_values(record.flops, "total"), repeats.loop_trips)
+    add_counts(ctx.other_ops, domain_values(record.other_ops, "total"), repeats.loop_trips)
     for index, unit in enumerate(record.topologies):
         held = ctx.by_unit.setdefault(unit, {"flops": {}, "other_ops": {}})
-        _add(
+        add_counts(
             held["flops"],
             ((name, spread.at(index)) for name, spread in record.flops.kinds),
             repeats.loop_trips,
         )
-        _add(
+        add_counts(
             held["other_ops"],
             ((name, spread.at(index)) for name, spread in record.other_ops.kinds),
             repeats.loop_trips,
@@ -333,30 +322,34 @@ class ComputeCostContext(AnalyzeContext):
     flops: dict[str, int] = field(default_factory=dict)
     other_ops: dict[str, int] = field(default_factory=dict)
     by_unit: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
-    precision: list[AnalysisPrecision] = field(default_factory=lambda: [AnalysisPrecision.EXACT])
+    precision: list[Precision] = field(default_factory=lambda: [Precision.EXACT])
+
+    def widen(self, precision: Precision) -> None:
+        """Fold *precision* into the one every counted quantity so far has."""
+        self.precision[0] = self.precision[0].join(precision)
 
 
-class ComputeCostVisitor(ValuationVisitor[None]):
+class ComputeCostVisitor(valuation.Visitor[None]):
     """Attach per-Call work and accumulate multiplicity-aware totals."""
 
     def default_visit_leaf(
-        self, expr: Expr, _operands: tuple[None, ...], ctx: ComputeCostContext
+        self, node: expr.Expr, operands: tuple[None, ...], ctx: ComputeCostContext
     ) -> None:
-        if not isinstance(expr, Call):
+        if not isinstance(node, expr.Call):
             return
         if not ctx.units:
-            raise AnalysisError("compute-cost: visitor context is missing its cost context")
-        repeats = ctx.scope.repeats_of(expr, ctx.topology_level)
+            raise Error("compute-cost: visitor context is missing its cost context")
+        repeats = ctx.scope.repeats_of(node, ctx.topology_level)
         callee = ctx.callee
         if callee is None:
-            record = _call_cost_record(
-                expr,
+            record = call_cost_record(
+                node,
                 {unit: replace(ctx, topology_level=unit) for unit in ctx.units},
                 repeats.mesh_positions,
                 replace(ctx, topology_level=None),
                 ctx.topology_level,
             )
-            dependencies = ctx.scope.provenance.dependencies(expr)
+            dependencies = ctx.scope.provenance.dependencies(node)
 
             record = replace(
                 record,
@@ -364,13 +357,14 @@ class ComputeCostVisitor(ValuationVisitor[None]):
                 other_ops=with_dependencies(record.other_ops, dependencies),
             )
         else:
-            record = get_metadata(callee, ComputeCostMetadata, ctx=ctx)
-        attach(expr, record)
-        ctx.precision[0] = ctx.precision[0].join(repeats.trips_precision).join(record.precision)
-        _accumulate(ctx, record, repeats)
+            record = expr.get_metadata(callee, ComputeCostMetadata, ctx=ctx)
+        node.attach_metadata(record)
+        ctx.widen(repeats.trips_precision)
+        ctx.widen(record.precision)
+        accumulate(ctx, record, repeats)
 
 
-def analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
+def analyze_compute_cost(function: core.Function, context: AnalyzeContext) -> None:
     """Attach one-trip work per Call and multiplicity-aware totals per Function."""
     topology_level = context.topology_level
     topologies = context.topologies
@@ -379,10 +373,10 @@ def analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
         **vars(context), units=tuple(dict.fromkeys(unit for unit in units if unit is not None))
     )
     ComputeCostVisitor().visit(function.body, cost_context)
-    attach(function, _summary(cost_context))
+    function.attach_metadata(summary(cost_context))
 
 
-def _summary(ctx):
+def summary(ctx):
     units = tuple(ctx.by_unit)
     return ComputeCostMetadata(
         topologies=units,
@@ -406,4 +400,12 @@ def _summary(ctx):
     )
 
 
-__all__ = ["SELECTOR", "analyze_compute_cost"]
+__all__ = [
+    "SELECTOR",
+    "accumulate_logical",
+    "analyze_compute_cost",
+    "grouped_breakdown",
+    "inflight_bytes",
+    "local_duration_ns",
+    "with_dependencies",
+]

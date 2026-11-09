@@ -6,12 +6,8 @@ from pathlib import Path
 
 from tests.core._corpus import case
 from tests.nvidia.cuda.analysis.sync_cases import FIXTURES, GEMM, SyncCase, _planned
-from tilefoundry.ir.core import Call, get_metadata
-from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.types import StorageKind
-from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry_nvidia.cuda.analysis.sync import StepKind, SyncMetadata
+from tilefoundry.ir import core, expr
+from tilefoundry_nvidia.cuda import analysis
 
 
 def _kinds(steps):
@@ -19,13 +15,13 @@ def _kinds(steps):
 
 
 def _of_kind(owner, kind):
-    return [expr for expr in collect_exprs(owner.body) if isinstance(expr, kind)]
+    return [node for node in core.collect_exprs(owner.body) if isinstance(node, kind)]
 
 
 def _thread_regions(function):
     return [
         region
-        for region in _of_kind(function, MeshRegion)
+        for region in _of_kind(function, core.MeshRegion)
         if {topology.name for topology in region.mesh.topologies} == {"thread"}
     ]
 
@@ -46,10 +42,10 @@ class CpAsyncGemm(SyncCase):
             for owner, tagged in attached
             for tag, steps in tagged
         ] == [
-            ("CopyAsync", None, (StepKind.BARRIER,)),
-            ("Copy", None, (StepKind.COMMIT, StepKind.WAIT, StepKind.BARRIER)),
-            ("CopyAsync", None, (StepKind.BARRIER,)),
-            ("Copy", None, (StepKind.COMMIT, StepKind.WAIT, StepKind.BARRIER)),
+            ("CopyAsync", None, (analysis.StepKind.BARRIER,)),
+            ("Copy", None, (analysis.StepKind.COMMIT, analysis.StepKind.WAIT, analysis.StepKind.BARRIER)),
+            ("CopyAsync", None, (analysis.StepKind.BARRIER,)),
+            ("Copy", None, (analysis.StepKind.COMMIT, analysis.StepKind.WAIT, analysis.StepKind.BARRIER)),
         ]
         (threads,) = _thread_regions(function)
         meshes = {
@@ -67,27 +63,27 @@ class NestedSubsets(SyncCase):
     def guard(self, state, problems):
         function, attached = _planned(state)
         regions = _thread_regions(function)
-        (threads,) = [region for region in regions if _of_kind(region, MeshRegion)]
+        (threads,) = [region for region in regions if _of_kind(region, core.MeshRegion)]
         halves = [region for region in regions if region is not threads]
         (producer,) = [
             region
             for region in halves
             if any(
-                getattr(call.type, "storage", None) is StorageKind.SMEM
-                for call in _of_kind(region, Call)
+                getattr(call.type, "storage", None) is expr.StorageKind.SMEM
+                for call in _of_kind(region, expr.Call)
             )
         ]
         (consumer,) = [region for region in halves if region is not producer]
-        (loop,) = _of_kind(producer, LoopRegion)
+        (loop,) = _of_kind(producer, core.LoopRegion)
         by_owner = {id(owner): tagged for owner, tagged in attached}
         ((between_tag, (between,)),) = by_owner.pop(id(consumer))
         ((owner, ((inner_tag, (inner,)),)),) = [
             (owner, tagged) for owner, tagged in attached if id(owner) in by_owner
         ]
         assert (between_tag, inner_tag) == (None, None)
-        assert (inner.kind, between.kind) == (StepKind.BARRIER, StepKind.BARRIER)
+        assert (inner.kind, between.kind) == (analysis.StepKind.BARRIER, analysis.StepKind.BARRIER)
         assert (inner.mesh, between.mesh) == (producer.mesh, threads.mesh)
-        assert any(owner is expr for expr in collect_exprs(loop.body))
+        assert any(owner is node for node in core.collect_exprs(loop.body))
 
 
 @case
@@ -98,5 +94,5 @@ class CapturedInsertUpdate(SyncCase):
 
     def guard(self, state, problems):
         function, _attached = _planned(state)
-        (loop,) = _of_kind(function, LoopRegion)
-        assert _kinds(get_metadata(loop, SyncMetadata).at()) == (StepKind.BARRIER,)
+        (loop,) = _of_kind(function, core.LoopRegion)
+        assert _kinds(expr.get_metadata(loop, analysis.SyncMetadata).at()) == (analysis.StepKind.BARRIER,)

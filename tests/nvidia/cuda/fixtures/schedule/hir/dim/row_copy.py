@@ -1,14 +1,14 @@
 """Finalize an explicitly scheduled copy after binding its row extent."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 ROWS = DimVar("rows", 1, 256)
 
 
 @module(
     entry="copy_rows",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 32)),
 )
 class RowCopy:

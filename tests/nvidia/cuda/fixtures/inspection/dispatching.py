@@ -1,5 +1,5 @@
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _N = DimVar("n_print", 1, 8)
 
@@ -10,7 +10,7 @@ class _WeightedAtAnySize:
         return tf.matmul(x, w)
 
 
-@module(entry="dispatch", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="dispatch", target=cuda.Target("nvidia.h200_sxm"))
 class _Dispatching:
     leaf = _WeightedAtAnySize
 
@@ -18,6 +18,6 @@ class _Dispatching:
     def dispatch(x: Tensor[(_N, 8), "f32"]) -> Tensor[(_N, 8), "f32"]:
         pass
 
-    @dispatch.specialize(RangePattern("n_print", 1, 8))
+    @dispatch.specialize(pattern.Range("n_print", 1, 8))
     def child_dispatch(x: Tensor[(_N, 8), "f32"]) -> Tensor[(_N, 8), "f32"]:
-        return leaf(x)  # noqa: F821
+        return leaf(x)

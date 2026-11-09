@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="documented", target=CpuTarget())
+@module(entry="documented", target=cpu.Target())
 class Documented:
     @func
     def documented(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:

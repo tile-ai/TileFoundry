@@ -13,36 +13,16 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.evaluator import eval_registry
-from tilefoundry.ir.core import Constant, Op, Var
-from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.core.op_registry import iter_schemas
-from tilefoundry.ir.tir.memory import Copy
-from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, Return
-from tilefoundry.ir.types import (
-    DType,
-    Layout,
-    Mesh,
-    ShardLayout,
-    TensorType,
-    Topology,
-)
-from tilefoundry.ir.types.shard_layout import Broadcast
-from tilefoundry.visitor_registry.contexts import VerifyContext
-from tilefoundry.visitor_registry.registries import (
-    cost_evaluator_registry,
-    typeinfer_registry,
-)
-from tilefoundry.visitor_registry.visitors import (
-    VerifyVisitor,
-)
+from tilefoundry.interfaces import cost, evaluator, typeinfer, verify
+from tilefoundry.ir import core, expr, types
+from tilefoundry.ir.tir import memory
 
 
-def _t() -> TensorType:
-    return TensorType.scalar(DType.f32)
+def _t() -> types.TensorType:
+    return types.TensorType.from_scalar(expr.DType.f32)
 
 
-def _is_builtin_hir_op(op_class: type[Op]) -> bool:
+def _is_builtin_hir_op(op_class: type[expr.Op]) -> bool:
     parts = op_class.__module__.split(".")
     return len(parts) >= 5 and parts[:3] == ["tilefoundry", "ir", "hir"]
 
@@ -51,10 +31,10 @@ def test_every_real_op_has_typeinfer_value_and_cost() -> None:
     """Report every builtin HIR Op whose analysis registries are incomplete."""
     schemas = [
         schema
-        for schema in iter_schemas()
+        for schema in expr.iter_schemas()
         if not schema.is_alias and _is_builtin_hir_op(schema.op_class)
     ]
-    registries = (typeinfer_registry, eval_registry, cost_evaluator_registry)
+    registries = (typeinfer.registry, evaluator.registry, cost.registry)
     missing = {
         schema.name: [registry.name for registry in registries if not registry.has(schema.op_class)]
         for schema in schemas
@@ -63,16 +43,16 @@ def test_every_real_op_has_typeinfer_value_and_cost() -> None:
     assert {name: gaps for name, gaps in missing.items() if gaps} == {}
 
 
-_THREAD = Topology("thread", 32)
+_THREAD = types.Topology("thread", 32)
 
 
-_BUFFER = ShardLayout(
-    Layout((8,), (1,)), (Broadcast(),), Mesh((_THREAD,), Layout((32,), (1,)), ("t",))
+_BUFFER = types.ShardLayout(
+    types.Layout((8,), (1,)), (types.Broadcast(),), types.Mesh((_THREAD,), types.Layout((32,), (1,)), ("t",))
 )
 
 
-def _copied(shape: tuple, layout=None) -> TensorType:
-    return TensorType(shape=shape, dtype=DType.f32, layout=layout, storage="rmem")
+def _copied(shape: tuple, layout=None) -> types.TensorType:
+    return types.TensorType(shape=shape, dtype=expr.DType.f32, layout=layout, storage="rmem")
 
 
 @pytest.mark.parametrize(
@@ -96,16 +76,16 @@ def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough(src,
     rather than an absent leaf verifier or an access-relation projection error.
     Structural Return and LetStmt still traverse without a custom verifier.
     """
-    src_var, dst_var = Var(type=src, name="src"), Var(type=dst, name="dst")
-    stmt = Evaluate(callable=Copy(), args=(src_var, dst_var))
-    ctx = VerifyContext(current_mesh=_BUFFER.mesh, mesh_scope=(_BUFFER.mesh,))
-    with pytest.raises(VerifyError, match=r"reads src.shape = dst.shape"):
-        VerifyVisitor(ctx).visit(stmt)
+    src_var, dst_var = expr.Var(type=src, name="src"), expr.Var(type=dst, name="dst")
+    stmt = core.Evaluate(callable=memory.Copy(), args=(src_var, dst_var))
+    ctx = verify.Context(current_mesh=_BUFFER.mesh, mesh_scope=(_BUFFER.mesh,))
+    with pytest.raises(expr.VerifyError, match=r"reads src.shape = dst.shape"):
+        verify.Visitor(ctx).visit(stmt)
 
-    VerifyVisitor(VerifyContext()).visit(Return())
-    VerifyVisitor(VerifyContext()).visit(
-        LetStmt(
-            var=Var(type=_t(), name="x"),
-            value=Constant(type=_t(), value=1.0),
+    verify.Visitor(verify.Context()).visit(core.Return())
+    verify.Visitor(verify.Context()).visit(
+        core.LetStmt(
+            var=expr.Var(type=_t(), name="x"),
+            value=expr.Constant(type=_t(), value=1.0),
         )
     )

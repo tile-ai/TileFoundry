@@ -9,22 +9,21 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.storage import StorageKind, resolve_storage
+from tilefoundry.ir import expr, types
 
 
 def test_legacy_long_aliases_rejected() -> None:
     for legacy in ("global", "meta"):
         with pytest.raises(ValueError, match=r"unknown storage"):
-            resolve_storage(legacy)
+            expr.resolve_storage(legacy)
 
 
 def test_surface_storage_uses_the_exact_enum_spellings() -> None:
-    assert tuple(resolve_storage(str(kind)) for kind in StorageKind) == tuple(StorageKind)
+    assert tuple(expr.resolve_storage(str(kind)) for kind in expr.StorageKind) == tuple(expr.StorageKind)
     for spelling in ("GMEM", "Gmem"):
         with pytest.raises(ValueError, match=r"unknown storage"):
-            resolve_storage(spelling)
+            expr.resolve_storage(spelling)
 
 
 def test_scalar_defaults_to_unmaterialized_storage() -> None:
-    assert TensorType.scalar(DType.i64).storage is StorageKind.UMAT
+    assert types.TensorType.from_scalar(expr.DType.i64).storage is expr.StorageKind.UMAT

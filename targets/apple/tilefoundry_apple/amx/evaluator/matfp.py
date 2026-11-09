@@ -1,19 +1,19 @@
 """Python port of corsix/amx matfp.c (c) 2022 Peter Cawley; MIT; see LICENSE."""
 
 from .common import bit_select, parse_writemask, read_uint, write_uint
-from .vecfp import _alu, _load, _types, _value
+from .vecfp import lane_alu, lane_types, lane_value, load_operands
 
 
-def emulate_AMX_MATFP(state, operand):
+def emulate_amx_matfp(state, operand):
     if (operand >> 54) & 7:
         return
     operand &= ~((1 << 37) | (1 << 63))
     mode = 0 if operand & (1 << 53) else (operand >> 47) & 63
     if mode in (2, 3) or mode >= 5:
         return
-    xybits, zbits, bf16 = _types(state, operand)
+    xybits, zbits, bf16 = lane_types(state, operand)
     n = xybits // 8
-    x, y = _load(state, operand, (operand >> 10) & 511, operand & 511, xybits)
+    x, y = load_operands(state, operand, (operand >> 10) & 511, operand & 511, xybits)
     xe = parse_writemask(operand >> 32, n, 9)
     ye = parse_writemask((((operand >> 23) & 7) << 6) | (operand >> 58), n, 9)
     omask = True
@@ -46,12 +46,15 @@ def emulate_AMX_MATFP(state, operand):
                 row = bit_select(j * n, zr, n - 1)
                 index = i
             off = row * 64 + index * (zbits // 8)
-            xv = _value(x, i, xybits, zbits, bf16)
-            yv = _value(y, j, xybits, zbits, bf16)
+            xv = lane_value(x, i, xybits, zbits, bf16)
+            yv = lane_value(y, j, xybits, zbits, bf16)
             z = read_uint(state.z, off, zbits // 8)
             write_uint(
                 state.z,
                 off,
                 zbits // 8,
-                _alu(xv, yv, z, zbits, mode, bf16 and zbits == 16) if omask else 0,
+                lane_alu(xv, yv, z, zbits, mode, bf16 and zbits == 16) if omask else 0,
             )
+
+
+__all__ = ["emulate_amx_matfp"]

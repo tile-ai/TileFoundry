@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
-from tilefoundry.cli import main
+from .app import main
+
+__all__: list[str] = []
 
 raise SystemExit(main())

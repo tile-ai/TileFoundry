@@ -10,14 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from enum import Enum, auto
 
-from tilefoundry.ir.core.param_def import MemoryEffect
-from tilefoundry.ir.tir.async_copy import CopyAsync
-from tilefoundry.ir.types import DType, Mesh, StorageKind
-from tilefoundry.visitor_registry.registries import DispatchRegistry
-from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import CopyAsyncTensor
-from tilefoundry_nvidia.cuda.ir.tir.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
-from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
-from tilefoundry_nvidia.cuda.ir.tir.nn.wgmma import WARPGROUP, Wgmma
+from tilefoundry import dispatch
+from tilefoundry.ir import expr, tir, types
+from tilefoundry_nvidia.cuda.ir.tir import memory, nn
 
 
 class Mechanism(Enum):
@@ -57,8 +52,8 @@ class Effect:
     ``ON_RETURN`` effects are complete for the issuing threads when the statement
     returns, ``GROUP`` ones once those threads wait for ``group``. ``proxy`` is
     the path to shared or global memory. ``unit`` is the mesh of one group of
-    threads that run the group's steps, and the issue itself, together. A ``fence`` effect on
-    registers needs the group's fence since any other access to them, except an
+    threads that run the group's steps, and the issue itself, together. A
+    ``fence`` effect on registers needs the group's fence since any other access to them, except an
     earlier one with the same ``chain``.
     """
 
@@ -67,12 +62,12 @@ class Effect:
     mechanism: Mechanism
     group: Group | None = None
     proxy: Proxy = Proxy.GENERIC
-    unit: Mesh | None = None
+    unit: types.Mesh | None = None
     fence: bool = False
-    chain: tuple[int, DType] | None = None
+    chain: tuple[int, expr.DType] | None = None
 
 
-completion_registry: DispatchRegistry = DispatchRegistry("completion")
+completion_registry: dispatch.Registry = dispatch.Registry("completion")
 
 
 def effects(issued: Issued, **fields) -> tuple[Effect, ...]:
@@ -81,17 +76,17 @@ def effects(issued: Issued, **fields) -> tuple[Effect, ...]:
         Effect(param.name, write, **fields)
         for param in issued.params
         for write in (False, True)
-        if param.effect & (MemoryEffect.WRITE if write else MemoryEffect.READ)
+        if param.effect & (expr.MemoryEffect.WRITE if write else expr.MemoryEffect.READ)
     )
 
 
 def completion_of(issued: Issued, *, key: type | None = None) -> tuple[Effect, ...]:
     """The effects declared for *issued*, looked up by *key* or its Op's exact class."""
-    handler = completion_registry.lookup(type(issued.op) if key is None else key)
+    handler = completion_registry.get(type(issued.op) if key is None else key, None)
     return effects(issued, mechanism=Mechanism.ON_RETURN) if handler is None else handler(issued)
 
 
-def _wgmma_effects(issued: Issued) -> tuple[Effect, ...]:
+def wgmma_effects(issued: Issued) -> tuple[Effect, ...]:
     """Every operand completes at the warpgroup's wgmma wait.
 
     Shared operands go through the async proxy. Registers need ``wgmma.fence``,
@@ -101,17 +96,17 @@ def _wgmma_effects(issued: Issued) -> tuple[Effect, ...]:
     shape = (issued.op.atom.bindings["n"], issued.op.atom.bindings["dtype"])
 
     def declared(effect):
-        if storage[effect.param].storage is StorageKind.SMEM:
+        if storage[effect.param].storage is expr.StorageKind.SMEM:
             return replace(effect, proxy=Proxy.ASYNC)
         return replace(effect, fence=True, chain=shape if effect.param == "acc" else None)
 
     return tuple(
         declared(effect)
-        for effect in effects(issued, mechanism=Mechanism.GROUP, group=Group.WGMMA, unit=WARPGROUP)
+        for effect in effects(issued, mechanism=Mechanism.GROUP, group=Group.WGMMA, unit=nn.WARPGROUP)
     )
 
 
-def _tensor_map_effects(issued: Issued) -> tuple[Effect, ...]:
+def tensor_map_effects(issued: Issued) -> tuple[Effect, ...]:
     """Every operand completes on return, through the async proxy.
 
     The emitter finishes each copy before the operation ends, so no completion
@@ -121,13 +116,13 @@ def _tensor_map_effects(issued: Issued) -> tuple[Effect, ...]:
 
 
 completion_registry.register(
-    CopyAsync, lambda issued: effects(issued, mechanism=Mechanism.GROUP, group=Group.CP_ASYNC)
+    tir.async_copy.CopyAsync, lambda issued: effects(issued, mechanism=Mechanism.GROUP, group=Group.CP_ASYNC)
 )
-completion_registry.register(Wgmma, _wgmma_effects)
-completion_registry.register(CopyAsyncTensor, _tensor_map_effects)
-completion_registry.register(CopyReduceAsyncTensor, _tensor_map_effects)
+completion_registry.register(nn.Wgmma, wgmma_effects)
+completion_registry.register(memory.CopyAsyncTensor, tensor_map_effects)
+completion_registry.register(memory.CopyReduceAsyncTensor, tensor_map_effects)
 completion_registry.register(
-    TiledMma, lambda issued: completion_of(issued, key=type(issued.op.atom))
+    nn.TiledMma, lambda issued: completion_of(issued, key=type(issued.op.atom))
 )
 
 

@@ -51,7 +51,7 @@ Differences to the kernel:
   scheduled gdn_chunk states them packed in one f32 tensor (see its header).
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 T_ = 256
 NC = T_ // 64
@@ -61,7 +61,7 @@ C = 64
 S_ROW = T_
 
 
-@module(entry="gdn_scan", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", HV * 2), Topology("thread", 384)))
+@module(entry="gdn_scan", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", HV * 2), Topology("thread", 384)))
 class SCHED_GDN_SCAN_T256:
     @func
     def gdn_scan(q: Tensor[(T_, 16, D), "bf16"], k: Tensor[(T_, 16, D), "bf16"], ut: Tensor[(HV, NC, D, C), "f32"],

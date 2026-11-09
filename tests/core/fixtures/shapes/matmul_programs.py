@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 DYNAMIC_M = DimVar("seq", 1, 127)
 
 
-@module(entry="gemm_rms_norm", target=CpuTarget())
+@module(entry="gemm_rms_norm", target=cpu.Target())
 class GemmRmsNorm:
     @func
     def gemm_rms_norm(
@@ -18,7 +18,7 @@ class GemmRmsNorm:
         return tf.rms_norm(h, weight)
 
 
-@module(entry="dynamic_bf16_gemm", target=CpuTarget())
+@module(entry="dynamic_bf16_gemm", target=cpu.Target())
 class DynamicBf16Gemm:
     @func
     def dynamic_bf16_gemm(

@@ -1,9 +1,9 @@
 """Schedules that overwrite data in place while another region or the result still needs it."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
-TARGET = CudaTarget("nvidia.rtx_6000_ada")
+TARGET = cuda.Target("nvidia.rtx_6000_ada")
 TOPOLOGIES = (Topology("cta", 1), Topology("thread", 64))
 TILE = Tensor[(32,), "f32", Layout((32,), (1,)), "smem"]
 WIDE = Tensor[(64,), "f32", Layout((64,), (1,)), "smem"]

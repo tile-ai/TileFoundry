@@ -24,7 +24,7 @@ Rounding (HIR attend): f32 scores, running max and sum in f32, P bf16 for the PV
 f32 accumulation, O / l landed in bf16, gate product in f32 landed in bf16.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 T_ = 1024
 D = 256
@@ -42,7 +42,7 @@ NEG = float("-inf")
 QKV = 14336
 
 
-@module(entry="attn_core", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", NG * NB), Topology("thread", 384)))
+@module(entry="attn_core", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", NG * NB), Topology("thread", 384)))
 class SCHED_ATTN_CORE_T1024:
     @func
     def attn_core(q: Tensor[(T_, NQ, D), "bf16"], k: Tensor[(T_, 4, D), "bf16"], v: Tensor[(T_, 4, D), "bf16"],

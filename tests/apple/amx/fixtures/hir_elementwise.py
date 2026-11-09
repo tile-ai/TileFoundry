@@ -1,9 +1,9 @@
 """Pointwise HIR inputs are authored independently of AMX operand Patterns."""
 from tilefoundry.dsl import *
-from tilefoundry_apple import AmxTarget
+from tilefoundry_apple import amx
 
 
-@module(entry="hir_elementwise", target=AmxTarget(), topologies=(Topology("thread", 12),))
+@module(entry="hir_elementwise", target=amx.Target(), topologies=(Topology("thread", 12),))
 class Program:
     @func
     def hir_elementwise(

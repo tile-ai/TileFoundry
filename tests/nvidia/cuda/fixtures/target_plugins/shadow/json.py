@@ -1,6 +1,6 @@
-from tilefoundry.target import Target, register_target
+from tilefoundry import target
 
 
-@register_target
-class JsonTarget(Target):
+@target.register
+class JsonTarget(target.Target):
     name = 'vendor.json'

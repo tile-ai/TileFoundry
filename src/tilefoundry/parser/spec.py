@@ -32,7 +32,7 @@ from .ast_pattern import (
 from .grammar_render import render_grammar
 from .pattern_nodes import FunctionPattern
 
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
 @dataclass(frozen=True, order=True)
@@ -43,32 +43,32 @@ class RuleRow:
     statement: str
     source: str
 
+    @classmethod
+    def from_rule(cls, owner: str, situation: str, rule: object) -> RuleRow:
+        return cls(
+            owner=owner,
+            situation=situation,
+            rule=type(rule).__name__,
+            statement=rule.STATEMENT,
+            source=rule_source(rule),
+        )
 
-def _source(rule: object) -> str:
+
+def rule_source(rule: object) -> str:
     filename = inspect.getsourcefile(type(rule))
     if filename is None:
         return "<unknown>"
     path = Path(filename).resolve()
     try:
-        return path.relative_to(_REPOSITORY_ROOT).as_posix()
+        return path.relative_to(REPOSITORY_ROOT).as_posix()
     except ValueError:
         return path.as_posix()
 
 
-def _row(owner: str, situation: str, rule: object) -> RuleRow:
-    return RuleRow(
-        owner=owner,
-        situation=situation,
-        rule=type(rule).__name__,
-        statement=rule.STATEMENT,
-        source=_source(rule),
-    )
-
-
-class _RuleVisitor:
+class RuleVisitor:
     def __init__(self) -> None:
-        self._seen_elements: set[tuple[str, str]] = set()
-        self._rows: set[RuleRow] = set()
+        self.seen_elements: set[tuple[str, str]] = set()
+        self.collected: set[RuleRow] = set()
 
     def visit(self, pattern: object, situation: str) -> None:
         if isinstance(pattern, ElementPattern):
@@ -76,10 +76,13 @@ class _RuleVisitor:
             if not name:
                 raise TypeError(f"{type(pattern).__name__} has no element_name")
             key = (name, situation)
-            if key in self._seen_elements:
+            if key in self.seen_elements:
                 return
-            self._seen_elements.add(key)
-            self._rows.update(_row(name, situation, rule) for rule in (*pattern.BIND_RULES, *pattern.RULES))
+            self.seen_elements.add(key)
+            self.collected.update(
+                RuleRow.from_rule(name, situation, rule)
+                for rule in (*pattern.BIND_RULES, *pattern.RULES)
+            )
             if pattern.syntax is None:
                 raise TypeError(f"{type(pattern).__name__} has no executable syntax")
             self.visit(pattern.syntax, situation)
@@ -87,8 +90,8 @@ class _RuleVisitor:
                 self.visit(pattern_class(), "call_attribute")
             return
         if isinstance(pattern, ReferencePattern):
-            self._rows.update(
-                _row("reference", situation, rule) for rule in pattern.REFERENCE_RULES
+            self.collected.update(
+                RuleRow.from_rule("reference", situation, rule) for rule in pattern.REFERENCE_RULES
             )
             return
         if isinstance(pattern, LazyPattern):
@@ -126,25 +129,28 @@ class _RuleVisitor:
         raise TypeError(f"unsupported executable pattern {type(pattern).__name__}")
 
     def rows(self) -> tuple[RuleRow, ...]:
-        return tuple(sorted(self._rows))
+        return tuple(sorted(self.collected))
 
 
-def _collect_rule_rows(root: ElementPattern[Any]) -> tuple[RuleRow, ...]:
-    visitor = _RuleVisitor()
+def collect_rule_rows(root: ElementPattern[Any]) -> tuple[RuleRow, ...]:
+    visitor = RuleVisitor()
     visitor.visit(root, "function")
     return visitor.rows()
 
 
-def _collect_module_rule_rows() -> tuple[RuleRow, ...]:
-    rows = [_row("module", "module_function", rule) for rule in ModuleBuildContext.FUNCTION_RULES]
+def collect_module_rule_rows() -> tuple[RuleRow, ...]:
+    rows = [
+        RuleRow.from_rule("module", "module_function", rule)
+        for rule in ModuleBuildContext.FUNCTION_RULES
+    ]
     rows.extend(
-        _row("module", "module_finalization", rule)
+        RuleRow.from_rule("module", "module_finalization", rule)
         for rule in ModuleBuildContext.FINALIZATION_RULES
     )
     return tuple(rows)
 
 
-def _merge_rule_rows(rows: tuple[RuleRow, ...]) -> tuple[RuleRow, ...]:
+def merge_rule_rows(rows: tuple[RuleRow, ...]) -> tuple[RuleRow, ...]:
     """Render one row per rule, listing every element and situation it governs.
 
     A rule shared by several elements states one thing, so it reads as one row.
@@ -171,13 +177,13 @@ def _merge_rule_rows(rows: tuple[RuleRow, ...]) -> tuple[RuleRow, ...]:
     )
 
 
-def _escape_cell(value: str) -> str:
+def escape_cell(value: str) -> str:
     return value.replace("|", "\\|").replace("\n", " ")
 
 
 def render_spec_content() -> str:
     root = FunctionPattern()
-    rows = _merge_rule_rows((*_collect_rule_rows(root), *_collect_module_rule_rows()))
+    rows = merge_rule_rows((*collect_rule_rows(root), *collect_module_rule_rows()))
     lines = [
         "# Parser Grammar and Constraints",
         "",
@@ -191,7 +197,7 @@ def render_spec_content() -> str:
     lines.extend(
         "| "
         + " | ".join(
-            _escape_cell(value)
+            escape_cell(value)
             for value in (
                 row.owner,
                 row.situation,
@@ -206,39 +212,39 @@ def render_spec_content() -> str:
     return "\n".join(lines) + "\n"
 
 
-_GRAMMAR_START = "<!-- parser-grammar:start -->"
-_GRAMMAR_END = "<!-- parser-grammar:end -->"
-_CONSTRAINTS_START = "<!-- parser-constraints:start -->"
-_CONSTRAINTS_END = "<!-- parser-constraints:end -->"
+GRAMMAR_START = "<!-- parser-grammar:start -->"
+GRAMMAR_END = "<!-- parser-grammar:end -->"
+CONSTRAINTS_START = "<!-- parser-constraints:start -->"
+CONSTRAINTS_END = "<!-- parser-constraints:end -->"
 
 
-def _replace_generated_section(document: str, start: str, end: str, content: str) -> str:
+def replace_generated_section(document: str, start: str, end: str, content: str) -> str:
     """Replace exactly one marked generated section in *document*."""
     if document.count(start) != 1 or document.count(end) != 1:
         raise ValueError(f"parser spec must contain exactly one {start!r} and {end!r}")
     if document.index(start) > document.index(end):
         raise ValueError(f"parser spec marker {start!r} must precede {end!r}")
     prefix, remainder = document.split(start, 1)
-    _old, suffix = remainder.split(end, 1)
+    _, suffix = remainder.split(end, 1)
     return f"{prefix}{start}\n{content.rstrip()}\n{end}{suffix}"
 
 
-def render_parser_document(document: str) -> str:
+def render_document(document: str) -> str:
     """Update only the marked generated sections of a Parser Spec document."""
     generated = render_spec_content().removeprefix("# Parser Grammar and Constraints\n\n")
     grammar, rules = generated.split("| Owner | Situation | Rule | Statement | Source |", 1)
     rule_rows = rules.split("| --- | --- | --- | --- | --- |", 1)[1].lstrip()
-    updated = _replace_generated_section(document, _GRAMMAR_START, _GRAMMAR_END, grammar)
-    return _replace_generated_section(
+    updated = replace_generated_section(document, GRAMMAR_START, GRAMMAR_END, grammar)
+    return replace_generated_section(
         updated,
-        _CONSTRAINTS_START,
-        _CONSTRAINTS_END,
+        CONSTRAINTS_START,
+        CONSTRAINTS_END,
         "| Owner | Situation | Rule | Statement | Source |\n"
         "| --- | --- | --- | --- | --- |\n" + rule_rows,
     )
 
 
-def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     output = parser.add_mutually_exclusive_group()
     output.add_argument("--write", type=Path, metavar="PATH")
@@ -246,15 +252,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _main(argv: list[str] | None = None) -> int:
-    args = _parse_args(argv)
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     if args.write is not None:
         document = args.write.read_text()
-        args.write.write_text(render_parser_document(document))
+        args.write.write_text(render_document(document))
         return 0
     if args.check is not None:
         actual = args.check.read_text() if args.check.exists() else ""
-        expected = render_parser_document(actual)
+        expected = render_document(actual)
         if actual == expected:
             return 0
         sys.stderr.writelines(
@@ -271,4 +277,11 @@ def _main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(_main())
+    raise SystemExit(main())
+
+
+__all__ = [
+    "RuleRow",
+    "render_document",
+    "render_spec_content",
+]

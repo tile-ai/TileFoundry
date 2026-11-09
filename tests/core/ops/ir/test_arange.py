@@ -6,60 +6,52 @@ import pytest
 import torch
 
 from tests.core.ops.ir.op_case import Cost, OpCase, check_op_case
-from tilefoundry.core import ShardTensor
+from tilefoundry import core
 from tilefoundry.dsl import *
-from tilefoundry.evaluator.context import EvaluateContext
-from tilefoundry.evaluator.registry import eval_registry
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Call, Constant
-from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
-from tilefoundry.ir.hir.tensor.arange import Arange
-from tilefoundry.ir.types.layout import Layout
-from tilefoundry.ir.types.mesh import make_mesh
-from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
-from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
+from tilefoundry.interfaces import cost, evaluator, typeinfer
+from tilefoundry.ir import dim, expr, types
+from tilefoundry.ir.hir import tensor
 
-_COORD_MESH = Mesh((Topology("thread", 4),), Layout((4,), (1,)), ("t",))
-_COORD_INDEX = TensorType.scalar(DType.i64, storage=StorageKind.RMEM)
+_COORD_MESH = types.Mesh((Topology("thread", 4),), types.Layout((4,), (1,)), ("t",))
+_COORD_INDEX = TensorType.from_scalar(DType.i64, storage=StorageKind.RMEM)
 
 
-def _coord(mesh: Mesh = _COORD_MESH) -> Call:
-    axis = Constant(value=0, type=_COORD_INDEX)
-    return Call(type=_COORD_INDEX, target=MeshCoord(mesh=mesh), args=(axis,))
+def _coord(mesh: types.Mesh = _COORD_MESH) -> expr.Call:
+    axis = expr.Constant(value=0, type=_COORD_INDEX)
+    return expr.Call(type=_COORD_INDEX, target=dim.MeshCoord(mesh=mesh), args=(axis,))
 
 
-def _infer(op: Arange) -> TensorType:
-    call = Call(type=TensorType.umat_scalar(), target=op, args=())
-    return TypeInferVisitor().visit(call, TypeInferContext())
+def _infer(op: tensor.Arange) -> TensorType:
+    call = expr.Call(type=TensorType.from_umat_scalar(), target=op, args=())
+    return typeinfer.TypeInferVisitor().visit(call, typeinfer.TypeInferContext())
 
 
 def test_arange_infers_evaluates_and_costs():
-    type_ = TensorType(shape=(3,), dtype=DType.i64, layout=Layout((3,)), storage=StorageKind.GMEM)
-    op = Arange(type=type_, start=2, step=2)
+    type_ = TensorType(shape=(3,), dtype=DType.i64, layout=types.Layout((3,)), storage=StorageKind.GMEM)
+    op = tensor.Arange(type=type_, start=2, step=2)
     assert _infer(op) is type_
     check_op_case(OpCase("half_open", op, (), value=torch.tensor([2, 4, 6], dtype=torch.int64)))
-    check_op_case(OpCase("arange", op, (), cost=Cost(traffic=(TrafficBytes(),))))
+    check_op_case(OpCase("arange", op, (), cost=Cost(traffic=(cost.TrafficBytes(),))))
 
 
 @pytest.mark.parametrize(
     ("op", "message"),
     [
         (
-            Arange(
+            tensor.Arange(
                 type=TensorType(shape=(), dtype=DType.i64, layout=None, storage=StorageKind.GMEM)
             ),
             "type must have rank 1",
         ),
         (
-            Arange(
+            tensor.Arange(
                 type=TensorType(shape=(8,), dtype=DType.i64, layout=None, storage=StorageKind.GMEM),
                 step=0,
             ),
             "step must be a positive static integer",
         ),
         (
-            Arange(
+            tensor.Arange(
                 type=TensorType(shape=(8,), dtype=DType.f32, layout=None, storage=StorageKind.GMEM)
             ),
             "dtype must be i32 or i64",
@@ -67,33 +59,33 @@ def test_arange_infers_evaluates_and_costs():
     ],
 )
 def test_arange_rejects_unsupported_attributes(op, message):
-    with pytest.raises(VerifyError, match=message):
+    with pytest.raises(expr.VerifyError, match=message):
         _infer(op)
 
 
 def test_bound_mesh_coord_is_scalar() -> None:
-    inferred = TypeInferVisitor().visit(_coord(), TypeInferContext(current_mesh=_COORD_MESH))
+    inferred = typeinfer.TypeInferVisitor().visit(_coord(), typeinfer.TypeInferContext(current_mesh=_COORD_MESH))
     assert inferred.shape == ()
     assert inferred.dtype == DType.i64
-    assert inferred.layout == Layout(())
+    assert inferred.layout == types.Layout(())
     assert inferred.storage is StorageKind.RMEM
 
 
 def test_unbound_mesh_coord_rejected() -> None:
     with pytest.raises(ValueError, match="must be bound by the current mesh scope"):
-        TypeInferVisitor().visit(_coord(), TypeInferContext())
+        typeinfer.TypeInferVisitor().visit(_coord(), typeinfer.TypeInferContext())
 
 
 def test_inner_mesh_coord_binds_multilevel() -> None:
-    cta = Mesh((Topology("cta", 2),), Layout((2,), (1,)), ("c",))
-    current = make_mesh(cta, _COORD_MESH)
+    cta = types.Mesh((Topology("cta", 2),), types.Layout((2,), (1,)), ("c",))
+    current = types.Mesh.from_meshes(cta, _COORD_MESH)
     assert (
-        TypeInferVisitor().visit(_coord(), TypeInferContext(current_mesh=current)) == _COORD_INDEX
+        typeinfer.TypeInferVisitor().visit(_coord(), typeinfer.TypeInferContext(current_mesh=current)) == _COORD_INDEX
     )
 
 
 def test_mesh_coord_evaluates_one_value_per_unit() -> None:
-    handler = eval_registry.lookup(MeshCoord)
-    axis = TensorValue(ShardTensor(TensorType.scalar(DType.i64), torch.tensor(0)))
-    result = handler(EvaluateContext(op=MeshCoord(mesh=_COORD_MESH), args=(axis,), result_type=_COORD_INDEX))
+    handler = evaluator.registry.get(dim.MeshCoord, None)
+    axis = evaluator.TensorValue(core.ShardTensor(TensorType.from_scalar(DType.i64), torch.tensor(0)))
+    result = handler(evaluator.EvaluateContext(op=dim.MeshCoord(mesh=_COORD_MESH), args=(axis,), result_type=_COORD_INDEX))
     assert [int(piece) for _, piece in result.tensor.tensor] == [0, 1, 2, 3]

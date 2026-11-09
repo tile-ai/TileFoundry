@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.core.metadata import IRMetadata
+from tilefoundry.ir import expr
 
 
 class Prose(str):
@@ -12,7 +12,7 @@ class Prose(str):
 
 
 @dataclass(frozen=True)
-class ReportIdentity(IRMetadata):
+class ReportIdentity(expr.IRMetadata):
     target: str = ""
     module: str = ""
     function: str = ""
@@ -20,23 +20,23 @@ class ReportIdentity(IRMetadata):
 
 
 @dataclass(frozen=True)
-class ReportSelection(IRMetadata):
+class ReportSelection(expr.IRMetadata):
     requested: tuple[str, ...] = ()
     executed: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
-class AdvisorySummary(IRMetadata):
+class AdvisorySummary(expr.IRMetadata):
     text: Prose
 
 
 @dataclass(frozen=True)
-class ErrorSummary(IRMetadata):
+class ErrorSummary(expr.IRMetadata):
     text: Prose
 
 
 @dataclass(frozen=True)
-class PerformanceSummaryView(IRMetadata):
+class PerformanceSummaryView(expr.IRMetadata):
     root: str = ""
     predicted_ns: int = 0
     wave: str = ""

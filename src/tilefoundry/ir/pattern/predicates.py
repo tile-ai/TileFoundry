@@ -2,487 +2,57 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, is_dataclass, replace
-from itertools import count
-from typing import Callable, Iterable
+import typing
+from dataclasses import dataclass, replace
 
-from tilefoundry.ir.types import (
-    ComposedLayout,
-    Layout,
-    ShardLayout,
-    TensorType,
-)
-from tilefoundry.ir.types.int_tuple import flatten
-from tilefoundry.ir.types.layout_algebra import coalesce, is_inverse_projectable
+from tilefoundry.ir import types
+from tilefoundry.ir.types import layout_algebra
 
 from .constraint import strided_arrangement
-from .match import Unknown, matched
-from .pattern import Pattern, SequencePattern, TensorPattern, WildcardPattern
-
-UNKNOWN = Unknown()
-_MISSING = object()
-_TOKENS = count()
+from .match import matched
+from .pattern import Predicate, Sequence, Tensor, Wildcard
 
 
-def _same(left, right) -> bool:
-    """Compare expression structure without invoking overloaded equality."""
-    if type(left) is not type(right):
-        return False
-    if is_dataclass(left):
-        return all(
-            _same(getattr(left, item.name), getattr(right, item.name)) for item in fields(left)
-        )
-    if isinstance(left, tuple):
-        return len(left) == len(right) and all(_same(a, b) for a, b in zip(left, right))
-    return left == right
+def arrangement(subject, *, allow_partial=False) -> types.Layout | None:
+    """Read the static strided layout beneath shard and composition wrappers."""
+    subject = strided_arrangement(subject, allow_partial=allow_partial)
+    if subject is None:
+        return None
+    extents = tuple(types.flatten(subject.shape))
+    strides = tuple(types.flatten(subject.strides))
+    if any(type(number) is not int for number in (*extents, *strides)):
+        return None
+    if any(extent <= 0 for extent in extents):
+        return None
+    return subject
 
-
-def _as_term(value) -> Term:
-    if isinstance(value, WildcardPattern):
-        return variable(value.name)
-    return value if isinstance(value, Term) else Term("constant", (value,))
-
-
-@dataclass(frozen=True, eq=False)
-class Term:
-    """An integer expression over named pattern bindings."""
-
-    op: str
-    args: tuple
-
-    def _binary(self, op: str, other) -> Term:
-        return Term(op, (self, _as_term(other)))
-
-    def _reflected(self, op: str, other) -> Term:
-        return Term(op, (_as_term(other), self))
-
-    def __add__(self, other):
-        return self._binary("add", other)
-
-    def __radd__(self, other):
-        return self._reflected("add", other)
-
-    def __sub__(self, other):
-        return self._binary("sub", other)
-
-    def __rsub__(self, other):
-        return self._reflected("sub", other)
-
-    def __mul__(self, other):
-        return self._binary("mul", other)
-
-    def __rmul__(self, other):
-        return self._reflected("mul", other)
-
-    def __floordiv__(self, other):
-        return self._binary("floordiv", other)
-
-    def __rfloordiv__(self, other):
-        return self._reflected("floordiv", other)
-
-    def __mod__(self, other):
-        return self._binary("mod", other)
-
-    def __rmod__(self, other):
-        return self._reflected("mod", other)
-
-    def _compare(self, op: str, other) -> Formula:
-        return Formula(op, (self, _as_term(other)))
-
-    def __eq__(self, other):
-        return self._compare("eq", other)
-
-    def __ne__(self, other):
-        return self._compare("ne", other)
-
-    def __lt__(self, other):
-        return self._compare("lt", other)
-
-    def __le__(self, other):
-        return self._compare("le", other)
-
-    def __gt__(self, other):
-        return self._compare("gt", other)
-
-    def __ge__(self, other):
-        return self._compare("ge", other)
-
-
-def variable(name: str | None) -> Term:
-    if not name:
-        raise TypeError("an unnamed WildcardPattern cannot be used in a formula")
-    return Term("variable", (name,))
-
-
-@dataclass(frozen=True)
-class Predicate(Pattern):
-    """A computed condition over a subject and the matcher's bindings."""
-
-    @staticmethod
-    def arrangement(subject, *, allow_partial=False) -> Layout | None:
-        """Read the static strided layout beneath shard and composition wrappers."""
-        subject = strided_arrangement(subject, allow_partial=allow_partial)
-        if subject is None:
-            return None
-        extents = tuple(flatten(subject.shape))
-        strides = tuple(flatten(subject.strides))
-        if any(type(number) is not int for number in (*extents, *strides)):
-            return None
-        if any(extent <= 0 for extent in extents):
-            return None
-        return subject
-
-    def holds(self, subject, bindings: dict) -> bool | None:
-        """Return true, false, or None while required bindings are unknown."""
-        raise NotImplementedError
 
 @dataclass(frozen=True)
 class Ranked(Predicate):
     """Require a tensor with at least one logical axis."""
 
+    @typing.override
     def holds(self, subject, bindings: dict) -> bool:
-        return isinstance(subject, TensorType) and len(subject.shape) > 0
+        return isinstance(subject, types.TensorType) and len(subject.shape) > 0
 
 
-def is_scalar_tensor(**fields) -> TensorPattern:
+def is_scalar_tensor(**fields) -> Tensor:
     """Construct a rank-zero tensor pattern with optional field constraints."""
-    return TensorPattern(shape=(), **fields)
+    return Tensor(shape=(), **fields)
 
 
-def is_ranked_tensor(**fields) -> TensorPattern:
+def is_ranked_tensor(**fields) -> Tensor:
     """Construct a tensor pattern that requires at least one logical axis."""
-    return TensorPattern(predicates=(Ranked(),), **fields)
+    return Tensor(predicates=(Ranked(),), **fields)
 
 
-@dataclass(frozen=True, eq=False)
-class Formula(Predicate):
-    """A Boolean expression evaluated against pattern bindings."""
-
-    op: str
-    args: tuple
-
-    def __eq__(self, other) -> bool:
-        return isinstance(other, Formula) and self.op == other.op and _same(self.args, other.args)
-
-    def __ne__(self, other) -> bool:
-        return not self == other
-
-    def __and__(self, other):
-        if not isinstance(other, Formula):
-            return NotImplemented
-        return Formula("and", (self, other))
-
-    def __rand__(self, other):
-        return self.__and__(other)
-
-    def __or__(self, other):
-        if not isinstance(other, Formula):
-            return NotImplemented
-        return Formula("or", (self, other))
-
-    def __ror__(self, other):
-        return self.__or__(other)
-
-    def __invert__(self):
-        return Formula("not", (self,))
-
-    def __bool__(self) -> bool:
-        if self.op == "eq":
-            return _same(*self.args)
-        if self.op == "ne":
-            return not _same(*self.args)
-        raise TypeError(
-            "Formula has no Python truth value; combine conditions with & / |, "
-            "and use In(term, values) instead of Python 'in' or chained comparisons"
-        )
-
-    def holds(self, subject, bindings: dict) -> bool | None:
-        return evaluate(self, bindings)
-
-def Bits(name: str) -> Term:
-    """Read the bit width of the dtype bound to *name*."""
-    return Term("bits", (name,))
-
-
-@dataclass(frozen=True)
-class Table:
-    values: tuple
-
-    def __init__(self, values: Iterable):
-        object.__setattr__(self, "values", tuple(values))
-
-    def __getitem__(self, index) -> Term:
-        return Term("element", (self.values, _as_term(index)))
-
-
-def In(term, values: Iterable) -> Formula:
-    return Formula("in", (_as_term(term), tuple(values)))
-
-
-def ForAll(term, build: Callable[[Term], Formula]) -> Formula:
-    token = next(_TOKENS)
-    body = build(Term("bound", (token,)))
-    if not isinstance(body, Formula):
-        raise TypeError("ForAll body must produce a Formula")
-    return Formula("forall", (_as_term(term), token, body))
-
-
-def Sum(term) -> Term:
-    return Term("sum", (_as_term(term),))
-
-
-def Count(term) -> Term:
-    return Term("count", (_as_term(term),))
-
-
-def _value(term: Term, env: dict, local: dict | None = None):
-    local = {} if local is None else local
-    if term.op == "constant":
-        return term.args[0]
-    if term.op == "variable":
-        return env.get(term.args[0], _MISSING)
-    if term.op == "bound":
-        return local.get(term.args[0], _MISSING)
-    if term.op == "bits":
-        value = env.get(term.args[0], _MISSING)
-        return _MISSING if value is _MISSING else getattr(value, "bit_width", _MISSING)
-    if term.op == "element":
-        values, index = term.args
-        index = _value(index, env, local)
-        return _MISSING if index is _MISSING else values[index]
-    if term.op in {"sum", "count"}:
-        value = _value(term.args[0], env, local)
-        if value is _MISSING:
-            return _MISSING
-        if not isinstance(value, tuple):
-            raise TypeError(f"{term.op.title()} requires a tuple binding")
-        return sum(value) if term.op == "sum" else len(value)
-    left = _value(term.args[0], env, local)
-    right = _value(term.args[1], env, local)
-    if left is _MISSING or right is _MISSING:
-        return _MISSING
-    return {
-        "add": lambda: left + right,
-        "sub": lambda: left - right,
-        "mul": lambda: left * right,
-        "floordiv": lambda: left // right,
-        "mod": lambda: left % right,
-    }[term.op]()
-
-
-def _truth(formula: Formula, env: dict, local: dict | None = None) -> bool | None:
-    local = {} if local is None else local
-    if formula.op in {"and", "or"}:
-        left = _truth(formula.args[0], env, local)
-        right = _truth(formula.args[1], env, local)
-        if formula.op == "and":
-            return False if False in (left, right) else None if None in (left, right) else True
-        return True if True in (left, right) else None if None in (left, right) else False
-    if formula.op == "not":
-        value = _truth(formula.args[0], env, local)
-        return None if value is None else not value
-    if formula.op == "forall":
-        term, token, body = formula.args
-        values = _value(term, env, local)
-        if values is _MISSING:
-            raise TypeError(
-                "ForAll requires a tuple whose length is known after structural matching"
-            )
-        if not isinstance(values, tuple):
-            raise TypeError("ForAll requires a tuple binding")
-        found = tuple(_truth(body, env, {**local, token: value}) for value in values)
-        return False if False in found else None if None in found else True
-    if formula.op == "in":
-        value = _value(formula.args[0], env, local)
-        return None if value is _MISSING else value in formula.args[1]
-    left = _value(formula.args[0], env, local)
-    right = _value(formula.args[1], env, local)
-    if left is _MISSING or right is _MISSING:
-        return None
-    return {
-        "eq": lambda: left == right,
-        "ne": lambda: left != right,
-        "lt": lambda: left < right,
-        "le": lambda: left <= right,
-        "gt": lambda: left > right,
-        "ge": lambda: left >= right,
-    }[formula.op]()
-
-
-def evaluate(formula: Formula, env) -> bool | None:
-    """Evaluate *formula*, returning None when a named value is unbound."""
-    return _truth(formula, dict(env or {}))
-
-
-class _CpBuilder:
-    """Compile the unresolved portion of formulas into one CP-SAT model."""
-
-    LIMIT = 2**31 - 1
-
-    def __init__(self, model, env):
-        self.model = model
-        self.env = dict(env)
-        self.variables = {}
-        self.serial = count()
-
-    def fresh(self, prefix: str):
-        return self.model.new_int_var(-self.LIMIT, self.LIMIT, f"_{prefix}{next(self.serial)}")
-
-    def term(self, term: Term, local=None):
-        local = {} if local is None else local
-        known = _value(term, self.env, local)
-        if known is not _MISSING:
-            if type(known) is not int:
-                raise TypeError(f"CP-SAT arithmetic requires integers, got {known!r}")
-            return known
-        if term.op == "variable":
-            name = term.args[0]
-            if name not in self.variables:
-                self.variables[name] = self.model.new_int_var(-self.LIMIT, self.LIMIT, name)
-            return self.variables[name]
-        if term.op == "bits":
-            raise TypeError(f"Bits({term.args[0]!r}) requires its dtype binding")
-        if term.op == "bound":
-            raise TypeError("ForAll requires its tuple binding before CP-SAT solving")
-        if term.op == "element":
-            values, index = term.args
-            target = self.fresh("element")
-            self.model.add_element(self.term(index, local), values, target)
-            return target
-        if term.op in {"sum", "count"}:
-            raise TypeError(f"{term.op.title()} requires its tuple binding before CP-SAT solving")
-        left = self.term(term.args[0], local)
-        right = self.term(term.args[1], local)
-        if term.op == "add":
-            return left + right
-        if term.op == "sub":
-            return left - right
-        target = self.fresh(term.op)
-        if term.op == "mul":
-            self.model.add_multiplication_equality(target, (left, right))
-        elif term.op == "floordiv":
-            self.model.add_division_equality(target, left, right)
-        elif term.op == "mod":
-            self.model.add_modulo_equality(target, left, right)
-        else:
-            raise ValueError(f"unknown Term operation {term.op!r}")
-        return target
-
-    def formula(self, formula: Formula, local=None):
-        local = {} if local is None else local
-        known = _truth(formula, self.env, local)
-        if known is not None:
-            return self.model.new_constant(known)
-        if formula.op == "not":
-            return self.formula(formula.args[0], local).Not()
-        if formula.op in {"and", "or"}:
-            parts = tuple(self.formula(part, local) for part in formula.args)
-            result = self.model.new_bool_var(f"_{formula.op}{next(self.serial)}")
-            if formula.op == "and":
-                self.model.add_bool_and(parts).only_enforce_if(result)
-                self.model.add_bool_or(tuple(part.Not() for part in parts)).only_enforce_if(
-                    result.Not()
-                )
-            else:
-                self.model.add_bool_or(parts).only_enforce_if(result)
-                self.model.add_bool_and(tuple(part.Not() for part in parts)).only_enforce_if(
-                    result.Not()
-                )
-            return result
-        if formula.op == "forall":
-            term, token, body = formula.args
-            values = _value(term, self.env, local)
-            if values is _MISSING:
-                raise TypeError(
-                    "ForAll requires a tuple whose length is known after structural matching"
-                )
-            if not isinstance(values, tuple):
-                raise TypeError("ForAll requires a tuple binding")
-            parts = tuple(self.formula(body, {**local, token: value}) for value in values)
-            result = self.model.new_bool_var(f"_forall{next(self.serial)}")
-            self.model.add_bool_and(parts).only_enforce_if(result)
-            self.model.add_bool_or(tuple(part.Not() for part in parts)).only_enforce_if(
-                result.Not()
-            )
-            return result
-        result = self.model.new_bool_var(f"_{formula.op}{next(self.serial)}")
-        if formula.op == "in":
-            value = self.term(formula.args[0], local)
-            rows = tuple((item,) for item in formula.args[1])
-            self.model.add_allowed_assignments((value,), rows).only_enforce_if(result)
-            self.model.add_forbidden_assignments((value,), rows).only_enforce_if(result.Not())
-            return result
-        left = self.term(formula.args[0], local)
-        right = self.term(formula.args[1], local)
-        relation = {
-            "eq": lambda: left == right,
-            "ne": lambda: left != right,
-            "lt": lambda: left < right,
-            "le": lambda: left <= right,
-            "gt": lambda: left > right,
-            "ge": lambda: left >= right,
-        }[formula.op]
-        opposite = {
-            "eq": lambda: left != right,
-            "ne": lambda: left == right,
-            "lt": lambda: left >= right,
-            "le": lambda: left > right,
-            "gt": lambda: left <= right,
-            "ge": lambda: left < right,
-        }[formula.op]
-        self.model.add(relation()).only_enforce_if(result)
-        self.model.add(opposite()).only_enforce_if(result.Not())
-        return result
-
-
-def solve(formulas, env) -> dict | None | Unknown:
-    """Solve unresolved formulas, or return UNKNOWN without treating it as failure."""
-    formulas = tuple(formulas)
-    held = dict(env or {})
-    evaluated = tuple(evaluate(formula, held) for formula in formulas)
-    if False in evaluated:
-        return None
-    unresolved = tuple(
-        formula for formula, value in zip(formulas, evaluated) if value is None
-    )
-    if not unresolved:
-        return held
-
-    from ortools.sat.python import cp_model  # noqa: PLC0415 - only build CP-SAT on demand
-
-    model = cp_model.CpModel()
-    builder = _CpBuilder(model, held)
-    for formula in unresolved:
-        model.add(builder.formula(formula) == 1)
-    solver = cp_model.CpSolver()
-    status = solver.solve(model)
-    if status == cp_model.UNKNOWN:
-        return UNKNOWN
-    if status not in (cp_model.FEASIBLE, cp_model.OPTIMAL):
-        return None
-    held.update({name: solver.value(value) for name, value in builder.variables.items()})
-    return held
-
-
-def failing(formulas, env) -> Formula | None:
-    """Return the first false conjunct, if evaluation can identify one."""
-    for formula in formulas:
-        if formula.op == "and":
-            found = failing(formula.args, env)
-            if found is not None:
-                return found
-        elif evaluate(formula, env) is False:
-            return formula
-    return None
-
-
-def _arrangements(layout: Layout, per_mode: bool) -> tuple[Layout, ...]:
+def arrangements(layout: types.Layout, per_mode: bool) -> tuple[types.Layout, ...]:
     if per_mode:
         return tuple(
-            Layout(tuple(flatten(shape)), tuple(flatten(steps)))
+            types.Layout(tuple(types.flatten(shape)), tuple(types.flatten(steps)))
             for shape, steps in zip(layout.shape, layout.strides)
         )
-    return (Layout(tuple(flatten(layout.shape)), tuple(flatten(layout.strides))),)
+    return (types.Layout(tuple(types.flatten(layout.shape)), tuple(types.flatten(layout.strides))),)
 
 
 @dataclass(frozen=True)
@@ -491,14 +61,16 @@ class Forward(Predicate):
 
     per_mode: bool = False
 
+    @typing.override
     def holds(self, subject, bindings: dict) -> bool:
-        arrangement = self.arrangement(subject)
-        if arrangement is None:
+        held = arrangement(subject)
+        if held is None:
             return False
         return all(
-            all(step >= 0 for step in flatten(part.strides))
-            for part in _arrangements(arrangement, self.per_mode)
+            all(step >= 0 for step in types.flatten(part.strides))
+            for part in arrangements(held, self.per_mode)
         )
+
 
 @dataclass(frozen=True)
 class Injective(Predicate):
@@ -506,47 +78,50 @@ class Injective(Predicate):
 
     per_mode: bool = False
 
+    @typing.override
     def holds(self, subject, bindings: dict) -> bool:
-        arrangement = self.arrangement(subject)
-        if arrangement is None:
+        held = arrangement(subject)
+        if held is None:
             return False
         return all(
-            is_inverse_projectable(part) for part in _arrangements(arrangement, self.per_mode)
+            layout_algebra.is_inverse_projectable(part)
+            for part in arrangements(held, self.per_mode)
         )
 
-def _reverse_group(group):
+
+def reverse_group(group):
     if isinstance(group, tuple):
-        return tuple(_reverse_group(mode) for mode in reversed(group))
+        return tuple(reverse_group(mode) for mode in reversed(group))
     return group
 
 
-def _row_major_groups_for_cute(layout: Layout) -> Layout:
+def row_major_groups_for_cute(layout: types.Layout) -> types.Layout:
     """Reverse modes within each tile axis for CuTe's mode-0-fast algebra."""
-    return Layout(
-        shape=tuple(_reverse_group(group) for group in layout.shape),
-        strides=tuple(_reverse_group(group) for group in layout.strides),
+    return types.Layout(
+        shape=tuple(reverse_group(group) for group in layout.shape),
+        strides=tuple(reverse_group(group) for group in layout.strides),
     )
 
 
-def _vector_widths(layout, element_bits: int, widths: tuple[int, ...]) -> tuple[int, ...]:
+def vector_widths(layout, element_bits: int, widths: tuple[int, ...]) -> tuple[int, ...]:
     """Every requested byte width that divides every run in an arrangement."""
     if not widths:
         return ()
     widest = widths[-1]
-    stated = layout.layout if isinstance(layout, ShardLayout) else layout
+    stated = layout.layout if isinstance(layout, types.ShardLayout) else layout
     inner = getattr(stated, "inner", None)
     if inner is not None and hasattr(inner, "base"):
         widest = min(widest, 1 << inner.base)
-    held = Predicate.arrangement(layout)
+    held = arrangement(layout)
     if held is None:
         return ()
-    grouped = coalesce(
-        _row_major_groups_for_cute(held),
+    grouped = layout_algebra.coalesce(
+        row_major_groups_for_cute(held),
         (0,) * len(held.shape),
     )
     runs = tuple(
         sorted(
-            zip(flatten(grouped.shape), flatten(grouped.strides)),
+            zip(types.flatten(grouped.shape), types.flatten(grouped.strides)),
             key=lambda run: run[1],
         )
     )
@@ -565,15 +140,16 @@ def _vector_widths(layout, element_bits: int, widths: tuple[int, ...]) -> tuple[
 class WholeVectors(Predicate):
     """Require whole vectors at one of the requested byte widths."""
 
-    width: WildcardPattern
+    width: Wildcard
     dtype: str
     widths: tuple[int, ...]
 
     def available_widths(self, subject, captures) -> tuple[int, ...]:
         bits = getattr(dict(captures or {}).get(self.dtype), "bit_width", None)
-        layout = subject.layout if isinstance(subject, ShardLayout) else subject
-        return () if type(bits) is not int else _vector_widths(layout, bits, self.widths)
+        layout = subject.layout if isinstance(subject, types.ShardLayout) else subject
+        return () if type(bits) is not int else vector_widths(layout, bits, self.widths)
 
+    @typing.override
     def holds(self, subject, bindings: dict) -> bool:
         widths = self.available_widths(subject, bindings)
         if not widths:
@@ -582,21 +158,22 @@ class WholeVectors(Predicate):
             return bindings[self.width.name] in widths
         return matched(self.width, widths[-1], bindings) is not None
 
+
 @dataclass(frozen=True)
 class PlainArrangement(Predicate):
     """Require an arrangement with no transform and no nonzero offset."""
 
     allow_partial: bool = False
 
-    @staticmethod
-    def _stated(subject):
-        return subject.layout if isinstance(subject, ShardLayout) else subject
-
+    @typing.override
     def holds(self, subject, bindings: dict) -> bool:
-        stated = self._stated(subject)
-        if isinstance(stated, ComposedLayout) and (stated.inner is not None or stated.offset != 0):
+        stated = subject.layout if isinstance(subject, types.ShardLayout) else subject
+        if isinstance(stated, types.ComposedLayout) and (
+            stated.inner is not None or stated.offset != 0
+        ):
             return False
-        return self.arrangement(subject, allow_partial=self.allow_partial) is not None
+        return arrangement(subject, allow_partial=self.allow_partial) is not None
+
 
 @dataclass(frozen=True)
 class Run:
@@ -609,7 +186,7 @@ class Run:
 
 
 def box_runs(
-    layout: Layout,
+    layout: types.Layout,
     element_bits: int,
     span: int | None,
     limit: int,
@@ -617,7 +194,7 @@ def box_runs(
     """Read box runs by tile axis, ordered by increasing step."""
     runs: list[Run] = []
     for axis, (extents, steps) in enumerate(zip(layout.shape, layout.strides)):
-        modes = tuple(enumerate(zip(flatten(extents), flatten(steps))))
+        modes = tuple(enumerate(zip(types.flatten(extents), types.flatten(steps))))
         for mode, (extent, step) in reversed(modes):
             if extent == 1:
                 continue
@@ -646,7 +223,7 @@ class BoxDims(Predicate):
     allow_partial: bool = False
 
     def reading(self, subject, captures) -> tuple[tuple | None, str | None]:
-        layout = self.arrangement(subject, allow_partial=self.allow_partial)
+        layout = arrangement(subject, allow_partial=self.allow_partial)
         if layout is None:
             return None, f"{subject!r} is no static strided arrangement"
         width = getattr(captures.get(self.dtype), "bit_width", None)
@@ -681,13 +258,15 @@ class BoxDims(Predicate):
         rows = "" if self.span is None else f", rows {self.span} B apart"
         return f"dim 0 fastest{rows}"
 
+    @typing.override
     def holds(self, subject, bindings: dict) -> bool:
         extents, unlaid = self.reading(subject, bindings)
         return (
             extents is not None
             and unlaid is None
-            and matched(SequencePattern(*self.dims), extents, bindings) is not None
+            and matched(Sequence(*self.dims), extents, bindings) is not None
         )
+
 
 @dataclass(frozen=True)
 class TensorMap(Predicate):
@@ -697,13 +276,13 @@ class TensorMap(Predicate):
     dtype: str
 
     def reading(self, subject) -> tuple[tuple | None, str | None]:
-        layout = self.arrangement(subject)
+        layout = arrangement(subject)
         if layout is None:
             return None, f"{subject!r} is no static strided tensor a tensormap describes"
         modes = [
             (extent, step)
             for extents, steps in zip(layout.shape, layout.strides)
-            for extent, step in zip(flatten(extents), flatten(steps))
+            for extent, step in zip(types.flatten(extents), types.flatten(steps))
             if extent > 1
         ]
         unit = [mode for mode in modes if mode[1] == 1]
@@ -719,33 +298,21 @@ class TensorMap(Predicate):
         others = tuple(step for _, step in modes if step != 1)
         return others + (0,) * (len(self.steps) - len(others)), None
 
+    @typing.override
     def holds(self, subject, bindings: dict) -> bool:
         steps, _ = self.reading(subject)
-        return (
-            steps is not None and matched(SequencePattern(*self.steps), steps, bindings) is not None
-        )
+        return steps is not None and matched(Sequence(*self.steps), steps, bindings) is not None
+
 
 __all__ = [
-    "Bits",
     "BoxDims",
-    "Count",
-    "ForAll",
-    "Formula",
     "Forward",
-    "In",
     "Injective",
     "PlainArrangement",
-    "Predicate",
     "Ranked",
-    "Sum",
-    "Table",
-    "Term",
     "TensorMap",
-    "Unknown",
     "WholeVectors",
-    "evaluate",
-    "failing",
+    "arrangement",
     "is_ranked_tensor",
     "is_scalar_tensor",
-    "solve",
 ]

@@ -31,11 +31,11 @@ from typing import Literal
 
 import pytest
 
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.core import Module
+from tilefoundry.interfaces.valuation import list_call_paths
+from tilefoundry.ir.core import Function
 from tilefoundry.ir.types import Topology
-from tilefoundry.target.base import Target
+from tilefoundry.target import Target
 
 MODELS_ROOT = Path(files("tilefoundry_nvidia.cuda") / "models")
 

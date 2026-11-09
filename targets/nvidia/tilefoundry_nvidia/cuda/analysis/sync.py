@@ -13,59 +13,19 @@ from enum import Enum, auto
 from itertools import product
 from math import prod
 from operator import mul
+from typing import ClassVar
 
-from tilefoundry.analysis.access import AliasKind
-from tilefoundry.analysis.allocation import AllocationSummaryMetadata
-from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.liveness import LivenessMetadata
-from tilefoundry.analysis.memory import owned_bytes
-from tilefoundry.analysis.metadata import RegionMemoryMetadata
-from tilefoundry.analysis.report import declare_record
-from tilefoundry.analysis.visitor import AnalyzeContext
-from tilefoundry.ir.core import (
-    Call,
-    Constant,
-    Expr,
-    IRMetadata,
-    SSAValue,
-    Var,
-    VerifyError,
-    detach_metadata,
-    get_metadata,
-)
-from tilefoundry.ir.core import attach_metadata as attach
-from tilefoundry.ir.core.param_def import MemoryEffect
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord, literal_axes
-from tilefoundry.ir.tir.memory import Copy, Fill
-from tilefoundry.ir.tir.sync import SyncBarrier, classify, participation
-from tilefoundry.ir.types import DType, Mesh, ShardLayout, Split, StorageKind, TensorType
-from tilefoundry.ir.types.dim import is_dim_op_call
-from tilefoundry.ir.types.mesh import axis_keys, within_scope
-from tilefoundry.ir.types.utils import leaves_of, static_dim_value
-from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.passes.transforms.convert_hir_to_tir import (
-    accepted_aliases,
-    copy_mesh,
-    issue_owner,
-    lowers_to_dim,
-    operand_types,
-    selected_op,
-)
-from tilefoundry.utils.units import format_bytes
-from tilefoundry.visitor_registry.instruction import call_params
-from tilefoundry_nvidia.cuda.analysis.completion import (
-    Effect,
-    Group,
-    Issued,
-    Mechanism,
-    Proxy,
-    completion_of,
-)
-from tilefoundry_nvidia.cuda.analysis.ctas import axis_numbering, refuse_cta_overlaps
-from tilefoundry_nvidia.cuda.analysis.emission import (
+from tilefoundry import analysis
+from tilefoundry import utils as tf_utils
+from tilefoundry.interfaces import schedule
+from tilefoundry.ir import core, dim, expr, tir, types, utils
+from tilefoundry.ir.tir import memory
+from tilefoundry.passes import transforms
+from tilefoundry_nvidia.cuda.ir.tir import sync
+
+from .completion import Effect, Group, Issued, Mechanism, Proxy, completion_of
+from .ctas import axis_numbering, refuse_cta_overlaps
+from .emission import (
     copies_carry_backedge,
     copies_carry_entry,
     copies_insert_slice_base,
@@ -76,12 +36,10 @@ from tilefoundry_nvidia.cuda.analysis.emission import (
     result_param,
     tensor_map_load,
 )
-from tilefoundry_nvidia.cuda.ir.tir.sync.mbarrier import MBARRIER_BYTES
-from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import whole_groups
 
-_DONE = -1
-_UNCOMMITTED = -2
-_LOOP_LIMIT = 64
+DONE = -1
+UNCOMMITTED = -2
+LOOP_LIMIT = 64
 
 
 class StepKind(Enum):
@@ -104,13 +62,13 @@ class SyncStep:
     """
 
     kind: StepKind
-    mesh: Mesh | None = None
+    mesh: types.Mesh | None = None
     group: Group | None = None
-    storage: StorageKind | None = None
+    storage: expr.StorageKind | None = None
 
 
 @dataclass(frozen=True)
-class SyncMetadata(IRMetadata):
+class SyncMetadata(expr.IRMetadata):
     """The steps lowering emits around what it lowers for one HIR node.
 
     ``steps`` pairs a tag with its steps. The tag None is before the node's own
@@ -130,7 +88,7 @@ class SyncMetadata(IRMetadata):
 
 
 @dataclass(frozen=True)
-class SyncPlanMetadata(IRMetadata):
+class SyncPlanMetadata(expr.IRMetadata):
     """Marks a Function the ``sync`` family planned; the steps sit on its nodes.
 
     ``shared`` is whether any of its actions touches shared memory.
@@ -140,17 +98,16 @@ class SyncPlanMetadata(IRMetadata):
     the async proxy. ``errors`` are non-fatal: the words ending above capacity.
     """
 
+    family: ClassVar[str] = "sync"
+
     shared: bool = False
     barriers: tuple[int, int] | None = None
     global_async: bool = False
     errors: tuple[str, ...] = ()
 
 
-declare_record(SyncPlanMetadata, family="sync")
-
-
 @dataclass(frozen=True)
-class _Use:
+class Use:
     """One effect of an action on shared memory bytes, global memory roots or one register storage.
 
     ``threads`` is the layout that gives each of those bytes to one issuing
@@ -159,13 +116,13 @@ class _Use:
 
     effect: Effect
     spans: tuple = ()
-    register: SSAValue | None = None
-    threads: ShardLayout | None = None
+    register: core.SSAValue | None = None
+    threads: types.ShardLayout | None = None
     global_roots: tuple = ()
 
 
 @dataclass(frozen=True)
-class _Action:
+class Action:
     """One instruction or retained call lowering emits for an HIR node.
 
     ``position`` orders it among its scope's children; ``owner`` and ``tag``
@@ -173,15 +130,15 @@ class _Action:
     """
 
     position: tuple[int, int]
-    owner: Expr
+    owner: expr.Expr
     tag: object
-    uses: tuple[_Use, ...]
+    uses: tuple[Use, ...]
     name: str
-    mesh: Mesh | None
+    mesh: types.Mesh | None
 
 
 @dataclass(frozen=True)
-class _Access:
+class Access:
     """One access a later one may have to follow.
 
     ``ordered`` holds ``(mesh chain, published)`` for each barrier that ordered it;
@@ -195,22 +152,22 @@ class _Access:
     position: tuple[int, int]
     write: bool
     spans: tuple
-    register: SSAValue | None
+    register: core.SSAValue | None
     meshes: tuple[int, ...]
     state: int
     group: Group | None = None
     proxy: Proxy = Proxy.GENERIC
-    chain: tuple[int, DType] | None = None
-    issuers: Mesh | None = None
-    unit: Mesh | None = None
-    threads: ShardLayout | None = None
+    chain: tuple[int, expr.DType] | None = None
+    issuers: types.Mesh | None = None
+    unit: types.Mesh | None = None
+    threads: types.ShardLayout | None = None
     ordered: frozenset = frozenset()
     fenced: bool = False
     group_fenced: bool = False
     global_roots: tuple = ()
 
 
-class _Unplaced(Exception):
+class UnplacedError(Exception):
     """A step that an asynchronous action needs has no place; it completes in place instead."""
 
     def __init__(self, position: tuple[int, int], reason: str):
@@ -218,58 +175,58 @@ class _Unplaced(Exception):
         self.position = position
 
 
-def _event(liveness: LivenessMetadata, expr) -> int | None:
+def event_of(liveness: analysis.LivenessMetadata, node) -> int | None:
     """The liveness event at which lowering emits *expr*'s actions, if it has one."""
-    lifetime = liveness.interval_of(SSAValue(expr, 0))
+    lifetime = liveness.interval_of(core.SSAValue(node, 0))
     return None if lifetime is None else lifetime.defined_at
 
 
-def _region_position(liveness: LivenessMetadata, region) -> tuple[int, int]:
+def region_position(liveness: analysis.LivenessMetadata, region) -> tuple[int, int]:
     """Where an inner region sits among the children of its scope."""
-    if isinstance(region, LoopRegion):
+    if isinstance(region, core.LoopRegion):
         return (liveness.loop_windows[id(region)][0], -1)
     return (next(item.entered_at for item in liveness.regions if item.region is region), -1)
 
 
-def _carry_positions(liveness: LivenessMetadata, loop: LoopRegion, slot: int):
+def carry_positions(liveness: analysis.LivenessMetadata, loop: core.LoopRegion, slot: int):
     """Where a loop slot's entry copy, just before the loop, and backedge copy sit."""
     start, backedge = liveness.loop_windows[id(loop)]
     return (start, slot - len(loop.yield_values) - 1), (backedge, slot)
 
 
-def _overlap(a, b) -> bool:
+def overlap(a, b) -> bool:
     return a is None or b is None or (a[0] < b[1] and b[0] < a[1])
 
 
-def _threads(op, type_, owners) -> ShardLayout | None:
+def threads_of(op, type_, owners) -> types.ShardLayout | None:
     """The layout giving each byte of a shared memory operand of *type_* to one issuing thread.
 
     Each thread issues *op* on its own shard when *op* declares no execution
     mesh. A layout that splits along every mesh axis whose units share shared
     memory, as *owners* states, gives each shard's bytes to that thread alone.
     """
-    if required_execution_mesh(op) is not None or not isinstance(type_, TensorType):
+    if required_execution_mesh(op) is not None or not isinstance(type_, types.TensorType):
         return None
     layout = type_.layout
-    if type_.storage is not StorageKind.SMEM or not isinstance(layout, ShardLayout):
+    if type_.storage is not expr.StorageKind.SMEM or not isinstance(layout, types.ShardLayout):
         return None
-    axes = zip(layout.attrs, axis_keys(layout.mesh), strict=True)
-    shared = (level for attr, (level, _) in axes if not isinstance(attr, Split))
+    axes = zip(layout.attrs, types.axis_keys(layout.mesh), strict=True)
+    shared = (level for attr, (level, _) in axes if not isinstance(attr, types.Split))
     return layout if all(owners.private(type_.storage, level) for level in shared) else None
 
 
-def _mesh_chain(scope) -> tuple[int, ...]:
-    return tuple(id(s.owner) for s in reversed(list(scope.ancestors())) if isinstance(s.owner, MeshRegion))
+def mesh_chain(scope) -> tuple[int, ...]:
+    return tuple(id(s.owner) for s in reversed(list(scope.ancestors())) if isinstance(s.owner, core.MeshRegion))
 
 
-def _region_mesh(scope) -> Mesh | None:
+def region_mesh(scope) -> types.Mesh | None:
     """The mesh of the innermost ``MeshRegion`` around *scope*."""
     return next(
-        (node.owner.mesh for node in scope.ancestors() if isinstance(node.owner, MeshRegion)), None
+        (node.owner.mesh for node in scope.ancestors() if isinstance(node.owner, core.MeshRegion)), None
     )
 
 
-def _one_coordinate(mesh: Mesh, axis: int, size: int, bases: range) -> bool:
+def one_coordinate(mesh: types.Mesh, axis: int, size: int, bases: range) -> bool:
     """Whether each group of *size* threads from *bases* reads one coordinate on *mesh*'s *axis*.
 
     Every thread of a group must be one of *mesh*'s. A thread reads
@@ -293,22 +250,22 @@ def _one_coordinate(mesh: Mesh, axis: int, size: int, bases: range) -> bool:
     return True
 
 
-class _Planner:
+class Planner:
     """One walk of a function in lowering's order, repeated for loops until it settles.
 
     The actions at the positions in *in_place* complete right after they issue.
     """
 
-    def __init__(self, function: Function, context: AnalyzeContext, in_place: frozenset):
+    def __init__(self, function: core.Function, context: analysis.AnalyzeContext, in_place: frozenset):
         self.function = function
         self.context = context
         self.in_place = in_place
-        self.liveness = get_metadata(function, LivenessMetadata)
-        self.summary = get_metadata(function, AllocationSummaryMetadata)
+        self.liveness = expr.get_metadata(function, analysis.LivenessMetadata)
+        self.summary = expr.get_metadata(function, analysis.AllocationSummaryMetadata)
         if self.liveness is None or self.summary is None:
-            raise AnalysisError(f"sync: {function.name!r} has no memory analysis")
+            raise analysis.Error(f"sync: {function.name!r} has no memory analysis")
         self.values = {value.value: value for value in self.summary.values}
-        self.returned = set(self.roots(SSAValue.leaves(function.body)))
+        self.returned = set(self.roots(core.ssa_leaves(function.body)))
         self.root = context.scope
         self.locations = self.root.snapshot.definition.locations
         self.nodes = {}
@@ -319,8 +276,8 @@ class _Planner:
             pending.extend(node.children)
         self.by_id = {id(node): node for node in self.nodes.values()}
         self.kids: dict[int, list] = {id(node): [] for node in self.nodes.values()}
-        self.actions: dict[tuple[int, int], _Action] = {}
-        self.names: dict[tuple[int, int], tuple[Expr, object]] = {}
+        self.actions: dict[tuple[int, int], Action] = {}
+        self.names: dict[tuple[int, int], tuple[expr.Expr, object]] = {}
         self.paths: dict[tuple[int, int], tuple] = {}
         self.planned: dict[tuple[int, int], list[SyncStep]] = {}
         self.issues: dict[tuple[int, int], list[SyncStep]] = {}
@@ -332,36 +289,36 @@ class _Planner:
 
     def aliases_of(self, leaf):
         value = self.values.get(leaf)
-        return () if value is None else accepted_aliases(value)
+        return () if value is None else transforms.accepted_aliases(value)
 
     def build(self) -> None:
-        for expr in collect_exprs(self.function.body):
-            if isinstance(expr, (MeshRegion, LoopRegion)) and id(expr) in self.nodes:
-                node = self.nodes[id(expr)]
-                if not any(child is node for _position, child in self.kids[id(node.parent)]):
-                    position = _region_position(self.liveness, expr)
-                    self.names[position] = (expr, None)
+        for node2 in core.collect_exprs(self.function.body):
+            if isinstance(node2, (core.MeshRegion, core.LoopRegion)) and id(node2) in self.nodes:
+                node = self.nodes[id(node2)]
+                if not any(child is node for _, child in self.kids[id(node.parent)]):
+                    position = region_position(self.liveness, node2)
+                    self.names[position] = (node2, None)
                     self.kids[id(node.parent)].append((position, node))
-                if isinstance(expr, LoopRegion):
-                    self.loop_actions(expr, node)
-            elif isinstance(expr, Call):
-                event = _event(self.liveness, expr)
+                if isinstance(node2, core.LoopRegion):
+                    self.loop_actions(node2, node)
+            elif isinstance(node2, expr.Call):
+                event = event_of(self.liveness, node2)
                 if event is not None:
-                    scope = self.locations[id(expr)]
-                    for action in self.call_actions(expr, event, scope):
+                    scope = self.locations[id(node2)]
+                    for action in self.call_actions(node2, event, scope):
                         self.add(scope, action)
         for children in self.kids.values():
             children.sort(key=lambda item: item[0])
 
-    def add(self, scope, action: _Action) -> None:
+    def add(self, scope, action: Action) -> None:
         self.actions[action.position] = action
         self.names[action.position] = (action.owner, action.tag)
         self.kids[id(scope)].append((action.position, action))
 
-    def loop_actions(self, loop: LoopRegion, inner) -> None:
+    def loop_actions(self, loop: core.LoopRegion, inner) -> None:
         outer = inner.parent
         for slot in range(len(loop.yield_values)):
-            entry, backedge = _carry_positions(self.liveness, loop, slot)
+            entry, backedge = carry_positions(self.liveness, loop, slot)
             target = loop.params[slot]
             if copies_carry_entry(loop, slot, self.aliases_of):
                 self.add(outer, self.copy(
@@ -373,39 +330,39 @@ class _Planner:
                     backedge, loop, ("backedge", slot), source, target, inner, "carry backedge copy"
                 ))
 
-    def copy(self, position, owner, tag, source, target, scope, name: str) -> _Action:
+    def copy(self, position, owner, tag, source, target, scope, name: str) -> Action:
         """A ``Copy`` lowering adds for *owner* from *source* into *target*'s storage."""
-        types = (source.type, target.type)
+        type_list = (source.type, target.type)
         return self.action(
-            position, owner, tag, Copy(), (source, target), types, name, scope, copy_mesh(types)
+            position, owner, tag, memory.Copy(), (source, target), type_list, name, scope, transforms.copy_mesh(type_list)
         )
 
     def action(
-        self, position, owner, tag, op, args, types, name: str, scope, mesh, *, filled=(), result=()
-    ) -> _Action:
+        self, position, owner, tag, op, args, type_list, name: str, scope, mesh, *, filled=(), result=()
+    ) -> Action:
         """*op* issued for *owner* on *mesh* with *args* of *types* in its parameters' order.
 
         A parameter named in *filled* is issued with the call's *result* storage,
         and also with its argument when one is given.
         """
-        if mesh is not None and (scope.mesh is None or not within_scope(mesh, scope.mesh)):
-            raise AnalysisError(f"sync: {name} is issued on a mesh not within its scope's")
-        params = call_params(op, len(args))
+        if mesh is not None and (scope.mesh is None or not types.within_scope(mesh, scope.mesh)):
+            raise analysis.Error(f"sync: {name} is issued on a mesh not within its scope's")
+        params = schedule.call_params(op, len(args))
         leaves = {
-            param.name: (() if arg is None else SSAValue.leaves(arg))
+            param.name: (() if arg is None else core.ssa_leaves(arg))
             + (tuple(result) if param.name in filled else ())
             for param, arg in zip(params, args, strict=True)
         }
         owners = self.context.target.storage_owners
         threads = {
-            param.name: _threads(op, type_, owners)
-            for param, type_ in zip(params, types, strict=True)
+            param.name: threads_of(op, type_, owners)
+            for param, type_ in zip(params, type_list, strict=True)
         }
-        effects = completion_of(Issued(op, params, tuple(types)))
+        effects = completion_of(Issued(op, params, tuple(type_list)))
         uses = self.uses(effects, leaves, threads)
-        return _Action(position, owner, tag, uses, name, mesh)
+        return Action(position, owner, tag, uses, name, mesh)
 
-    def uses(self, effects, leaves, threads=None) -> tuple[_Use, ...]:
+    def uses(self, effects, leaves, threads=None) -> tuple[Use, ...]:
         """Each effect on the shared memory bytes, the global memory roots and each register."""
         threads = threads or {}
         found = []
@@ -413,10 +370,10 @@ class _Planner:
             touched = leaves[effect.param]
             spans, roots = self.spans(touched), self.global_roots(touched)
             if spans:
-                found.append(_Use(effect, spans, threads=threads.get(effect.param)))
+                found.append(Use(effect, spans, threads=threads.get(effect.param)))
             if roots:
-                found.append(_Use(effect, global_roots=roots))
-            found.extend(_Use(effect, register=register) for register in self.registers(touched))
+                found.append(Use(effect, global_roots=roots))
+            found.extend(Use(effect, register=register) for register in self.registers(touched))
         return tuple(found)
 
     def global_roots(self, leaves) -> tuple:
@@ -430,9 +387,9 @@ class _Planner:
         roots = []
         for leaf in leaves:
             if leaf not in self.values:
-                types = leaves_of(leaf.expr.type)
-                stored = types[leaf.index] if leaf.index < len(types) else None
-                if getattr(stored, "storage", None) is StorageKind.GMEM:
+                leaf_types = utils.leaves_of(leaf.expr.type)
+                stored = leaf_types[leaf.index] if leaf.index < len(leaf_types) else None
+                if getattr(stored, "storage", None) is expr.StorageKind.GMEM:
                     roots.append(None)
                 continue
             root = self.summary.root(leaf)
@@ -440,7 +397,7 @@ class _Planner:
                 roots.append(None if root.value in self.returned and not entry else root.value)
         return tuple(dict.fromkeys(roots))
 
-    def registers(self, leaves) -> tuple[SSAValue, ...]:
+    def registers(self, leaves) -> tuple[core.SSAValue, ...]:
         """The register storages lowering gives these values."""
         return tuple(
             dict.fromkeys(
@@ -450,7 +407,7 @@ class _Planner:
             )
         )
 
-    def register_storage(self, leaf: SSAValue) -> SSAValue:
+    def register_storage(self, leaf: core.SSAValue) -> core.SSAValue:
         """The value whose register storage lowering gives *leaf*.
 
         An instruction written in place returns its argument's storage; any other
@@ -459,7 +416,7 @@ class _Planner:
         seen = set()
         while leaf not in seen:
             seen.add(leaf)
-            following = self._in_place(leaf)
+            following = self.following_in_place(leaf)
             if following is None:
                 following = next(
                     (alias.target for alias in self.aliases_of(leaf) if alias.target != leaf), None
@@ -467,90 +424,90 @@ class _Planner:
             if following is None:
                 return leaf
             leaf = following
-        raise AnalysisError(f"sync: the register storage links of {leaf} form a cycle")
+        raise analysis.Error(f"sync: the register storage links of {leaf} form a cycle")
 
-    def _in_place(self, leaf: SSAValue) -> SSAValue | None:
+    def following_in_place(self, leaf: core.SSAValue) -> core.SSAValue | None:
         """The argument an instruction call writes in place, when *leaf* is its result.
 
         A Call issues an instruction when its visit is ``visit_T``, or
         ``visit_Reshard`` of a result that is not a view.
         """
         call = leaf.expr
-        if not isinstance(call, Call) or leaf.index != 0 or lowers_to_dim(call):
+        if not isinstance(call, expr.Call) or leaf.index != 0 or transforms.lowers_to_dim(call):
             return None
         visit = self.visit(call)
         if visit != self.visit_T and (visit != self.visit_Reshard or self.viewed(call)):
             return None
-        op = selected_op(call, self.context.target)
+        op = transforms.selected_op(call, self.context.target)
         if op is None:
             return None
-        params = call_params(op, len(operand_types(call, op)))
+        params = schedule.call_params(op, len(transforms.operand_types(call, op)))
         result = result_param(params)
-        supplied, _produced = operand_roles(call, params)
-        if not result.effect & MemoryEffect.READ or result not in supplied:
+        supplied, _ = operand_roles(call, params)
+        if not result.effect & expr.MemoryEffect.READ or result not in supplied:
             return None
-        return SSAValue(call.args[supplied.index(result)], 0)
+        return core.SSAValue(call.args[supplied.index(result)], 0)
 
-    def call_actions(self, call: Call, event: int, scope) -> list[_Action]:
+    def call_actions(self, call: expr.Call, event: int, scope) -> list[Action]:
         """Each instruction or retained call lowering emits for *call* at *event*, in order.
 
         A Call is dispatched as ``CudaLowering`` dispatches it.
         """
-        if lowers_to_dim(call):
+        if transforms.lowers_to_dim(call):
             return []
         callee = scope.attachment(call)
         if callee is not None:
             return self.call(call, event, callee.owner)
         return self.visit(call)(call, event, scope)
 
-    def visit(self, call: Call):
+    def visit(self, call: expr.Call):
         """The visit of *call*: ``visit_<HIR op>``, else ``visit_T``."""
         return getattr(self, f"visit_{type(call.target).__name__}", self.visit_T)
 
-    def viewed(self, call: Call) -> bool:
+    def viewed(self, call: expr.Call) -> bool:
         """Whether memory accepted a VIEW alias on *call*'s result."""
-        return any(alias.kind is AliasKind.VIEW for alias in self.aliases_of(SSAValue(call)))
+        return any(alias.kind is analysis.AliasKind.VIEW for alias in self.aliases_of(core.SSAValue(call)))
 
-    def _no_action(self) -> list[_Action]:
+    def no_action(self) -> list[Action]:
         """Lowering emits no access for a tuple item, a view, an allocation or a refused Call."""
         return []
 
-    def visit_TupleGetItem(self, call: Call, event: int, scope) -> list[_Action]:
-        return self._no_action()
+    def visit_TupleGetItem(self, call: expr.Call, event: int, scope) -> list[Action]:
+        return self.no_action()
 
-    def visit_Slice(self, call: Call, event: int, scope) -> list[_Action]:
-        return self._no_action()
+    def visit_Slice(self, call: expr.Call, event: int, scope) -> list[Action]:
+        return self.no_action()
 
-    def visit_Reshape(self, call: Call, event: int, scope) -> list[_Action]:
-        return self._no_action()
+    def visit_Reshape(self, call: expr.Call, event: int, scope) -> list[Action]:
+        return self.no_action()
 
-    def visit_Bitcast(self, call: Call, event: int, scope) -> list[_Action]:
-        return self._no_action()
+    def visit_Bitcast(self, call: expr.Call, event: int, scope) -> list[Action]:
+        return self.no_action()
 
-    def visit_Empty(self, call: Call, event: int, scope) -> list[_Action]:
-        return self._no_action()
+    def visit_Empty(self, call: expr.Call, event: int, scope) -> list[Action]:
+        return self.no_action()
 
-    def visit_IndexSelect(self, call: Call, event: int, scope) -> list[_Action]:
-        return self._no_action()
+    def visit_IndexSelect(self, call: expr.Call, event: int, scope) -> list[Action]:
+        return self.no_action()
 
-    def visit_Reshard(self, call: Call, event: int, scope) -> list[_Action]:
+    def visit_Reshard(self, call: expr.Call, event: int, scope) -> list[Action]:
         return [] if self.viewed(call) else self.visit_T(call, event, scope)
 
-    def _fill(self, call: Call, event: int, scope) -> list[_Action]:
+    def fill(self, call: expr.Call, event: int, scope) -> list[Action]:
         """The one ``Fill`` lowering emits into *call*'s result."""
-        types = (call.type, None)
+        type_list = (call.type, None)
         return [self.action(
-            (event, 0), call, None, Fill(), (call, None), types, "Fill", scope,
-            copy_mesh((call.type,)),
+            (event, 0), call, None, memory.Fill(), (call, None), type_list, "Fill", scope,
+            transforms.copy_mesh((call.type,)),
         )]
 
-    def visit_Zeros(self, call: Call, event: int, scope) -> list[_Action]:
-        return self._fill(call, event, scope)
+    def visit_Zeros(self, call: expr.Call, event: int, scope) -> list[Action]:
+        return self.fill(call, event, scope)
 
-    def visit_FullLike(self, call: Call, event: int, scope) -> list[_Action]:
-        return self._fill(call, event, scope)
+    def visit_FullLike(self, call: expr.Call, event: int, scope) -> list[Action]:
+        return self.fill(call, event, scope)
 
-    def visit_InsertSlice(self, call: Call, event: int, scope) -> list[_Action]:
+    def visit_InsertSlice(self, call: expr.Call, event: int, scope) -> list[Action]:
         actions = []
         for tag, source, copies in (
             ("base", call.args[0], copies_insert_slice_base),
@@ -562,15 +519,15 @@ class _Planner:
                 actions.append(self.copy(position, call, tag, source, call, scope, name))
         return actions
 
-    def visit_T(self, call: Call, event: int, scope) -> list[_Action]:
+    def visit_T(self, call: expr.Call, event: int, scope) -> list[Action]:
         """The action that issues the TIR op selected for *call*."""
-        op = selected_op(call, self.context.target)
+        op = transforms.selected_op(call, self.context.target)
         if op is None:
             return []
-        types = operand_types(call, op)
-        if tensor_map_load(op, types):
+        type_list = transforms.operand_types(call, op)
+        if tensor_map_load(op, type_list):
             self.loads = True
-        params = call_params(op, len(types))
+        params = schedule.call_params(op, len(type_list))
         supplied, produced = operand_roles(call, params)
         given = dict(zip((param.name for param in supplied), call.args, strict=True))
         return [
@@ -580,16 +537,16 @@ class _Planner:
                 None,
                 op,
                 tuple(given.get(param.name) for param in params),
-                types,
+                type_list,
                 type(op).__name__,
                 scope,
-                issue_mesh(op, issue_owner(types), scope.mesh),
+                issue_mesh(op, transforms.issue_owner(type_list), scope.mesh),
                 filled=tuple(param.name for param in produced),
-                result=SSAValue.leaves(call),
+                result=core.ssa_leaves(call),
             )
         ]
 
-    def call(self, call: Call, event: int, callee: Function) -> list[_Action]:
+    def call(self, call: expr.Call, event: int, callee: core.Function) -> list[Action]:
         """A retained call, which reads its arguments and writes its results.
 
         Callees are planned before their callers, order their own accesses and
@@ -601,8 +558,8 @@ class _Planner:
         memory through the async proxy, its own temporaries included.
         """
         leaves = {
-            **{f"argument {index}": SSAValue.leaves(arg) for index, arg in enumerate(call.args)},
-            "result": SSAValue.leaves(call),
+            **{f"argument {index}": core.ssa_leaves(arg) for index, arg in enumerate(call.args)},
+            "result": core.ssa_leaves(call),
         }
         effects = tuple(Effect(name, name == "result", Mechanism.ON_RETURN) for name in leaves)
         uses = [
@@ -610,17 +567,17 @@ class _Planner:
             for use in self.uses(effects, leaves)
             if use.register is not None or use.global_roots
         ]
-        plan = get_metadata(callee, SyncPlanMetadata)
+        plan = expr.get_metadata(callee, SyncPlanMetadata)
         if plan is not None and plan.barriers is not None:
             self.loads = True
         if plan is None or plan.shared:
             uses += [
-                _Use(Effect("callee", write, Mechanism.GROUP, Group.CP_ASYNC), (None,))
+                Use(Effect("callee", write, Mechanism.GROUP, Group.CP_ASYNC), (None,))
                 for write in (False, True)
             ]
         if plan is None or plan.global_async:
             uses += [
-                _Use(
+                Use(
                     Effect("callee", write, Mechanism.ON_RETURN, proxy=Proxy.ASYNC),
                     global_roots=(None,),
                 )
@@ -628,7 +585,7 @@ class _Planner:
             ]
         if not uses:
             return []
-        return [_Action((event, 0), call, None, tuple(uses), f"the call to {callee.name!r}", None)]
+        return [Action((event, 0), call, None, tuple(uses), f"the call to {callee.name!r}", None)]
 
     def roots(self, leaves) -> tuple:
         """The allocation roots these values live in."""
@@ -640,7 +597,7 @@ class _Planner:
         A returned allocation may live in the output its caller passes.
         """
         return tuple(
-            None if self.summary.root(leaf).value in self.returned else owned_bytes(self.summary, leaf)
+            None if self.summary.root(leaf).value in self.returned else analysis.owned_bytes(self.summary, leaf)
             for leaf in leaves
             if leaf in self.values and self.summary.root(leaf).lifetime.memory_level == "smem"
         )
@@ -653,7 +610,7 @@ class _Planner:
             steps.append((id(scope), child))
             if scope.parent is None:
                 break
-            child = _region_position(self.liveness, scope.owner)
+            child = region_position(self.liveness, scope.owner)
             scope = scope.parent
         return tuple(reversed(steps))
 
@@ -664,28 +621,28 @@ class _Planner:
         action complete in place.
         """
         state = self.walk(self.root, frozenset())
-        for access, _seq in sorted(state, key=lambda item: item[1]):
-            if access.unit is not None and access.state != _DONE:
+        for access, _ in sorted(state, key=lambda item: item[1]):
+            if access.unit is not None and access.state != DONE:
                 name = self.actions[access.position].name
-                raise _Unplaced(access.position, f"{name} may still be in flight at the return")
-        for expr in collect_exprs(self.function.body):
-            detach_metadata(expr, SyncMetadata)
-        steps: dict[int, tuple[Expr, list]] = {}
+                raise UnplacedError(access.position, f"{name} may still be in flight at the return")
+        for node in core.collect_exprs(self.function.body):
+            node.detach_metadata(SyncMetadata)
+        steps: dict[int, tuple[expr.Expr, list]] = {}
         for position, planned in sorted(self.planned.items()):
             owner, tag = self.names[position]
             steps.setdefault(id(owner), (owner, []))[1].append((tag, tuple(planned)))
         for tag, placed in (("issue", self.issues), ("after", self.after)):
             for position, planned in sorted(placed.items()):
-                owner, _tag = self.names[position]
+                owner, _ = self.names[position]
                 steps.setdefault(id(owner), (owner, []))[1].append((tag, tuple(planned)))
         for owner, tagged in steps.values():
-            attach(owner, SyncMetadata(tuple(tagged)))
+            owner.attach_metadata(SyncMetadata(tuple(tagged)))
         uses = [use for action in self.actions.values() for use in action.uses]
         shared = any(use.spans for use in uses)
         global_async = any(use.global_roots and use.effect.proxy is Proxy.ASYNC for use in uses)
         words = self.barrier_words() if self.loads else None
         errors = () if words is None else self.word_errors(*words)
-        attach(self.function, SyncPlanMetadata(shared, words, global_async, errors))
+        self.function.attach_metadata(SyncPlanMetadata(shared, words, global_async, errors))
 
     def entry_peak(self):
         """The shared memory peak the memory family placed for the entry, if any.
@@ -693,7 +650,7 @@ class _Planner:
         Only the entry places shared memory, so every Function it reaches shares it.
         """
         entry = self.context.entry or self.function
-        region = get_metadata(entry, RegionMemoryMetadata)
+        region = expr.get_metadata(entry, analysis.RegionMemoryMetadata)
         peaks = () if region is None else region.peaks
         return next((level for level in peaks if level.memory_level == "smem"), None)
 
@@ -704,7 +661,7 @@ class _Planner:
         threads = prod(topology.size for topology in topologies if topology.name == "thread")
         warp = self.context.target.architecture.max_threads_per_warp
         end = 0 if peak is None else peak.peak_bytes
-        return -(-end // MBARRIER_BYTES) * MBARRIER_BYTES, -(-threads // warp)
+        return -(-end // sync.MBARRIER_BYTES) * sync.MBARRIER_BYTES, -(-threads // warp)
 
     def word_errors(self, offset: int, count: int) -> tuple[str, ...]:
         """A non-fatal error when the words end above a capacity the placed peak fits in.
@@ -715,12 +672,12 @@ class _Planner:
         peak = self.entry_peak()
         if peak is None or peak.capacity_bytes is None or peak.exceeds_capacity:
             return ()
-        end = offset + MBARRIER_BYTES * count
+        end = offset + sync.MBARRIER_BYTES * count
         if end <= peak.capacity_bytes:
             return ()
         return (
-            f"the mbarrier words end smem at {format_bytes(end)}, above capacity "
-            f"{format_bytes(peak.capacity_bytes)}",
+            f"the mbarrier words end smem at {tf_utils.format_bytes(end)}, above capacity "
+            f"{tf_utils.format_bytes(peak.capacity_bytes)}",
         )
 
     def walk(self, scope, state):
@@ -728,12 +685,12 @@ class _Planner:
             self.seq += 1
             self.entered[position] = self.seq
             self.paths.setdefault(position, self.path(scope, position))
-            action = child if isinstance(child, _Action) else None
+            action = child if isinstance(child, Action) else None
             for step in (*self.planned.get(position, ()), *self.issues.get(position, ())):
                 state = self.effect(step, scope, state, self.entered[position], action)
             if action is not None:
                 state = self.evaluate(action, scope, state)
-            elif isinstance(child.owner, LoopRegion):
+            elif isinstance(child.owner, core.LoopRegion):
                 state = self.loop(child, state)
             else:
                 state = self.walk(child, state)
@@ -744,15 +701,15 @@ class _Planner:
         start = self.seq
         self.seq += 1
         head = state
-        for _ in range(_LOOP_LIMIT):
+        for _ in range(LOOP_LIMIT):
             end = self.walk(scope, head)
             joined = frozenset((access, min(seq, start)) for access, seq in head | end)
             if joined == head:
                 return head
             head = joined
-        raise AnalysisError("sync: the analysis of a loop did not settle within its limit")
+        raise analysis.Error("sync: the analysis of a loop did not settle within its limit")
 
-    def evaluate(self, action: _Action, scope, state):
+    def evaluate(self, action: Action, scope, state):
         units = {use.effect.unit for use in action.uses if use.effect.unit is not None}
         for unit in units:
             self.collective(scope, unit, action.mesh)
@@ -766,7 +723,7 @@ class _Planner:
             state = self.complete_in_place(action, state)
         return state
 
-    def complete_in_place(self, action: _Action, state):
+    def complete_in_place(self, action: Action, state):
         """Commit and wait for *action*'s groups right after it issues, in its issuing region."""
         steps = self.after.setdefault(action.position, [])
         for group in dict.fromkeys(
@@ -776,36 +733,36 @@ class _Planner:
                 if SyncStep(kind, group=group) not in steps:
                     steps.append(SyncStep(kind, group=group))
         return frozenset(
-            (replace(access, state=_DONE) if access.position == action.position else access, seq)
+            (replace(access, state=DONE) if access.position == action.position else access, seq)
             for access, seq in state
         )
 
-    def access(self, action: _Action, use: _Use, scope) -> _Access:
+    def access(self, action: Action, use: Use, scope) -> Access:
         """What *use* leaves for later accesses once *action* is issued in *scope*.
 
         An effect no protocol states is complete when its statement returns.
         """
         effect = use.effect
-        status = _UNCOMMITTED if effect.mechanism is Mechanism.GROUP else _DONE
-        return _Access(
+        status = UNCOMMITTED if effect.mechanism is Mechanism.GROUP else DONE
+        return Access(
             action.position,
             effect.write,
             use.spans,
             use.register,
-            _mesh_chain(scope),
+            mesh_chain(scope),
             status,
             effect.group,
             effect.proxy,
             effect.chain,
-            action.mesh or _region_mesh(scope),
+            action.mesh or region_mesh(scope),
             effect.unit,
             use.threads,
             global_roots=use.global_roots,
         )
 
-    def order(self, action: _Action, use: _Use, scope, state):
+    def order(self, action: Action, use: Use, scope, state):
         """Plan what must run before this use, and apply it to *state*."""
-        meshes = _mesh_chain(scope)
+        meshes = mesh_chain(scope)
         while True:
             pending = [
                 (access, seq)
@@ -816,20 +773,20 @@ class _Planner:
                 return state
             access, seq = pending[0]
             meeting, position = self.meeting(access.position, action.position)
-            if access.state != _DONE:
+            if access.state != DONE:
                 if access.unit is not None:
                     try:
                         self.collective(meeting, access.unit, access.issuers)
-                    except AnalysisError as error:
-                        raise _Unplaced(access.position, str(error)) from None
+                    except analysis.Error as error:
+                        raise UnplacedError(access.position, str(error)) from None
                 group = access.group
-                if access.state == _UNCOMMITTED:
+                if access.state == UNCOMMITTED:
                     commit = SyncStep(StepKind.COMMIT, group=group)
                     state = self.plan(commit, meeting, position, state)
                 state = self.plan(SyncStep(StepKind.WAIT, group=group), meeting, position, state)
             if access.register is None:
                 if use.effect.proxy is Proxy.ASYNC and access.proxy is Proxy.GENERIC:
-                    storage = StorageKind.GMEM if access.global_roots else None
+                    storage = expr.StorageKind.GMEM if access.global_roots else None
                     fence = SyncStep(StepKind.PROXY_FENCE, storage=storage)
                     state = self.plan(fence, meeting, position, state)
                 barrier = SyncStep(StepKind.BARRIER, self.barrier_mesh(meeting))
@@ -840,12 +797,12 @@ class _Planner:
                 and self.conflicts(other, use, meshes)
                 for other, later in state
             ):
-                raise AnalysisError(
+                raise analysis.Error(
                     f"sync: {action.name} cannot be ordered after "
                     f"{self.actions[access.position].name}"
                 )
 
-    def conflicts(self, access, use: _Use, meshes) -> bool:
+    def conflicts(self, access, use: Use, meshes) -> bool:
         """Whether *use* must follow *access*.
 
         A register still in flight in a group takes no other access before the
@@ -856,7 +813,7 @@ class _Planner:
         when one of the two accesses goes through the async proxy.
         """
         if use.register is not None or access.register is not None:
-            if use.register != access.register or access.state == _DONE:
+            if use.register != access.register or access.state == DONE:
                 return False
             if access.group is None or use.effect.group != access.group:
                 return True
@@ -871,9 +828,9 @@ class _Planner:
                 for b in access.global_roots
             ):
                 return False
-        elif not any(_overlap(a, b) for a in use.spans for b in access.spans):
+        elif not any(overlap(a, b) for a in use.spans for b in access.spans):
             return False
-        if use.threads is not None and use.threads == access.threads and access.state == _DONE:
+        if use.threads is not None and use.threads == access.threads and access.state == DONE:
             return False
         visible = use.effect.proxy is Proxy.GENERIC or access.proxy is not Proxy.GENERIC
         return not any(
@@ -881,7 +838,7 @@ class _Planner:
             for tag, published in access.ordered
         )
 
-    def group_fence(self, action: _Action, scope, state):
+    def group_fence(self, action: Action, scope, state):
         """Plan the group's fence before an action whose registers were touched since the last.
 
         An action reading registers no chain links to takes the fence before each issue.
@@ -892,7 +849,7 @@ class _Planner:
         every = any(use.effect.chain is None for use in fenced)
 
         def needed(use) -> bool:
-            seen = [access for access, _seq in state if access.register == use.register]
+            seen = [access for access, _ in state if access.register == use.register]
             return not seen or any(
                 not access.group_fenced
                 and (access.group is not use.effect.group or access.chain != use.effect.chain)
@@ -933,46 +890,46 @@ class _Planner:
             )
         return self.effect(step, scope, state, self.entered[position])
 
-    def barrier_mesh(self, scope) -> Mesh:
+    def barrier_mesh(self, scope) -> types.Mesh:
         """The thread mesh a barrier at *scope* runs over, once every thread reaches it.
 
         It is the mesh of the innermost ``MeshRegion`` around *scope*.
         """
-        mesh = _region_mesh(scope)
+        mesh = region_mesh(scope)
         try:
-            barrier = None if mesh is None else classify(mesh)
-        except VerifyError as error:
-            raise AnalysisError(f"sync: {error}") from None
-        if barrier is None or barrier is SyncBarrier.GRID:
-            raise AnalysisError("sync: a barrier is needed in a scope that no thread mesh binds")
+            barrier = None if mesh is None else tir.sync.classify(mesh)
+        except expr.VerifyError as error:
+            raise analysis.Error(f"sync: {error}") from None
+        if barrier is None or barrier is tir.sync.SyncBarrier.GRID:
+            raise analysis.Error("sync: a barrier is needed in a scope that no thread mesh binds")
         self.uniform_loops(scope, mesh, "a barrier")
         return mesh
 
-    def collective(self, scope, unit: Mesh, threads: Mesh | None) -> None:
+    def collective(self, scope, unit: types.Mesh, threads: types.Mesh | None) -> None:
         """Require whole *unit*s of threads, *threads* among them, to reach *scope* together."""
-        mesh = _region_mesh(scope)
+        mesh = region_mesh(scope)
         if mesh is None:
-            raise AnalysisError(
+            raise analysis.Error(
                 "sync: a collective step is needed in a scope that no thread mesh binds"
             )
         try:
-            size = participation(unit).count
-            held, needed = participation(mesh), participation(threads or mesh)
-            whole = whole_groups(mesh, size)
-        except VerifyError as error:
-            raise AnalysisError(f"sync: {error}") from None
+            size = tir.sync.participation(unit).count
+            held, needed = tir.sync.participation(mesh), tir.sync.participation(threads or mesh)
+            whole = sync.whole_groups(mesh, size)
+        except expr.VerifyError as error:
+            raise analysis.Error(f"sync: {error}") from None
         if not whole:
-            raise AnalysisError(
+            raise analysis.Error(
                 f"sync: a collective step is needed over {held.count} threads from {held.base}, "
                 f"which are not whole groups of {size}"
             )
         if needed.base < held.base or needed.base + needed.count > held.base + held.count:
-            raise AnalysisError(
+            raise analysis.Error(
                 "sync: a collective step is needed outside the threads that issued it"
             )
         self.uniform_loops(scope, mesh, "a collective step", size)
 
-    def uniform_loops(self, scope, mesh: Mesh, what: str, unit: int | None = None) -> None:
+    def uniform_loops(self, scope, mesh: types.Mesh, what: str, unit: int | None = None) -> None:
         """Require every loop around *scope* to have bounds the threads of *mesh* agree on.
 
         A barrier needs all of them to agree. A collective step of *unit* threads
@@ -982,49 +939,49 @@ class _Planner:
         spanned = {topology.name for topology in mesh.topologies}
         groups = None
         if unit is not None and len(mesh.topologies) == 1:
-            held = participation(mesh)
+            held = tir.sync.participation(mesh)
             groups = range(held.base, held.base + held.count, unit)
 
-        def fixed(coordinates: Mesh, axis: int) -> bool:
-            if axis_keys(coordinates)[axis][0] not in spanned:
+        def fixed(coordinates: types.Mesh, axis: int) -> bool:
+            if types.axis_keys(coordinates)[axis][0] not in spanned:
                 return True
-            return groups is not None and _one_coordinate(coordinates, axis, unit, groups)
+            return groups is not None and one_coordinate(coordinates, axis, unit, groups)
 
         entry = self.context.entry is None or self.function is self.context.entry
         uniform = {id(param) for param in self.function.params} if entry else set()
         for node in reversed(list(scope.ancestors())):
             loop = node.owner
-            if not isinstance(loop, LoopRegion):
+            if not isinstance(loop, core.LoopRegion):
                 continue
             bounds = (loop.start, loop.extent, loop.step)
             if not all(self.uniform(bound, uniform, fixed, node) for bound in bounds):
-                raise AnalysisError(
+                raise analysis.Error(
                     f"sync: {what} is needed inside loop {loop.induction_var.name!r}, "
                     "whose bounds may differ between the threads that must reach it"
                 )
             uniform.add(id(loop.induction_var))
 
-    def uniform(self, expr, uniform: set[int], fixed, scope) -> bool:
+    def uniform(self, node, uniform: set[int], fixed, scope) -> bool:
         """Whether the threads that must agree see the same value of a loop bound.
 
         ``fixed(mesh, axis)`` says whether they read one coordinate on that mesh axis.
         """
-        if isinstance(expr, Constant) or static_dim_value(expr) is not None:
+        if isinstance(node, expr.Constant) or expr.static_dim_value(node) is not None:
             return True
-        if isinstance(expr, Var):
-            return id(expr) in uniform or id(scope.capture_root(expr)) in uniform
-        if isinstance(expr, Call) and isinstance(expr.target, MeshCoord):
-            axes = literal_axes(expr.args[0])
-            count = len(axis_keys(expr.target.mesh))
+        if isinstance(node, expr.Var):
+            return id(node) in uniform or id(scope.capture_root(node)) in uniform
+        if isinstance(node, expr.Call) and isinstance(node.target, dim.MeshCoord):
+            axes = dim.literal_axes(node.args[0])
+            count = len(types.axis_keys(node.target.mesh))
             return axes is not None and all(
-                0 <= axis < count and fixed(expr.target.mesh, axis) for axis in axes
+                0 <= axis < count and fixed(node.target.mesh, axis) for axis in axes
             )
-        if isinstance(expr, Call) and is_dim_op_call(expr):
-            return all(self.uniform(arg, uniform, fixed, scope) for arg in expr.args)
+        if isinstance(node, expr.Call) and expr.is_dim_op_call(node):
+            return all(self.uniform(arg, uniform, fixed, scope) for arg in node.args)
         return False
 
     def effect(self, step: SyncStep, scope, state, limit, action=None):
-        meshes = _mesh_chain(scope)
+        meshes = mesh_chain(scope)
         registers = (
             {use.register for use in action.uses if use.register is not None}
             if step.kind is StepKind.FENCE and action is not None
@@ -1034,18 +991,18 @@ class _Planner:
         for access, seq in state:
             issued = seq < limit and access.meshes[: len(meshes)] == meshes
             grouped = access.group == step.group
-            if issued and step.kind is StepKind.COMMIT and grouped and access.state == _UNCOMMITTED:
+            if issued and step.kind is StepKind.COMMIT and grouped and access.state == UNCOMMITTED:
                 access = replace(access, state=0)
             elif issued and step.kind is StepKind.WAIT and grouped and access.state >= 0:
-                access = replace(access, state=_DONE)
+                access = replace(access, state=DONE)
             elif (
                 issued
                 and step.kind is StepKind.PROXY_FENCE
-                and access.state == _DONE
-                and (step.storage is StorageKind.GMEM) == bool(access.global_roots)
+                and access.state == DONE
+                and (step.storage is expr.StorageKind.GMEM) == bool(access.global_roots)
             ):
                 access = replace(access, fenced=True)
-            elif issued and step.kind is StepKind.BARRIER and access.state == _DONE:
+            elif issued and step.kind is StepKind.BARRIER and access.state == DONE:
                 access = replace(access, ordered=access.ordered | {(meshes, access.fenced)})
             elif step.kind is StepKind.FENCE and seq < limit and access.register in registers:
                 access = replace(access, group_fenced=True)
@@ -1053,7 +1010,7 @@ class _Planner:
         return frozenset(out)
 
 
-def analyze_sync(function: Function, context: AnalyzeContext) -> None:
+def analyze_sync(function: core.Function, context: analysis.AnalyzeContext) -> None:
     """Attach the synchronisation plan lowering emits for *function*.
 
     An asynchronous action one of whose steps has no place completes right after
@@ -1062,18 +1019,18 @@ def analyze_sync(function: Function, context: AnalyzeContext) -> None:
     call's reaches count as unknown.
     """
     in_place: frozenset = frozenset()
-    planner = _Planner(function, context, in_place)
+    planner = Planner(function, context, in_place)
     if context.entry is None or function is context.entry:
         refuse_cta_overlaps(planner)
     while True:
         try:
             planner.run()
             return
-        except _Unplaced as unplaced:
+        except UnplacedError as unplaced:
             if unplaced.position in in_place:
-                raise AnalysisError(f"sync: {unplaced}") from None
+                raise analysis.Error(f"sync: {unplaced}") from None
             in_place |= {unplaced.position}
-            planner = _Planner(function, context, in_place)
+            planner = Planner(function, context, in_place)
 
 
 __all__ = [

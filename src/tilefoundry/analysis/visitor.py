@@ -6,23 +6,26 @@ from dataclasses import dataclass, field, replace
 
 import isl
 
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types.utils import local_type_of
-from tilefoundry.utils.isl_utils import has_unbounded_param
-from tilefoundry.visitor_registry.access_relation import AccessRelation
-from tilefoundry.visitor_registry.contexts import TypeInferContext, ValuationContext
+from tilefoundry import utils
+from tilefoundry.interfaces import access, typeinfer, valuation
+from tilefoundry.ir import core
+from tilefoundry.ir import utils as ir_utils
 
-from .errors import AnalysisError
+from .errors import Error
 
 
 @dataclass
-class AnalyzeContext(TypeInferContext):
+class AnalyzeContext(typeinfer.TypeInferContext):
     options: object | None = None
-    entry: Function | None = None
+    entry: core.Function | None = None
     scope: IterationScope | None = None
     definitions: dict[int, IterationScope] = field(default_factory=dict)
     caller_context: AnalyzeContext | None = field(default=None, repr=False)
     topology_level: str | None = None
+
+    def bind_scope(self, scope):
+        """Make *scope* the one this context answers queries from."""
+        self.scope = scope
 
     def type_of(self, expr):
         return expr.type
@@ -32,7 +35,7 @@ class AnalyzeContext(TypeInferContext):
             return expr.type
         key = ("analysis_local", id(expr), self.topology_level, self.topologies)
         if key not in self.instantiated_memo:
-            self.instantiated_memo[key] = local_type_of(
+            self.instantiated_memo[key] = ir_utils.local_type_of(
                 expr.type, topology_level=self.topology_level, topologies=self.topologies
             )
         return self.instantiated_memo[key]
@@ -48,7 +51,7 @@ class AnalyzeContext(TypeInferContext):
 
     def enter_call(self, call):
         inner = super().enter_call(call)
-        frame = inner._callee_context()
+        frame = inner.callee_context()
         if frame is not None:
             arguments, instance = inner.call_bindings(frame)
             self.scope.attach(
@@ -60,10 +63,6 @@ class AnalyzeContext(TypeInferContext):
         return inner
 
     @property
-    def caller_scope(self):
-        return self.scope
-
-    @property
     def callee_scope(self):
         return self.scope.attachment(self.call_site)
 
@@ -72,25 +71,25 @@ class AnalyzeContext(TypeInferContext):
         formals = tuple(
             p
             for p in frame.function.params
-            if isinstance(self.call_site.target, Function) or not p.is_const
+            if isinstance(self.call_site.target, core.Function) or not p.is_const
         )
         arguments = {id(p): arg for p, arg in zip(formals, self.call_site.args, strict=True)}
         instance = None
-        slot, index = ValuationContext.module_slot(self.call_site)
+        slot, index = valuation.module_slot(self.call_site)
         if slot is not None:
             values = {}
             try:
                 relation = (
-                    AccessRelation.affine_of(index, self.scope, values=values)
+                    access.affine_of(index, self.scope, values=values)
                     .insert_domain(isl.set("{ [] }").get_space())
                     .as_map()
                 )
-                instance = AccessRelation(relation, values).constrain(self.scope.domain)
-                if has_unbounded_param(instance.relation):
+                instance = access.Relation(relation, values).constrain(self.scope.domain)
+                if utils.has_unbounded_param(instance.relation):
                     raise ValueError("unbounded module index")
             except (TypeError, ValueError, NotImplementedError, isl.Error):
                 count = len(self.module.children[slot.key].elements)
-                instance = AccessRelation(
+                instance = access.Relation(
                     isl.map(f"{{ [] -> [i] : 0 <= i < {count} }}"), may_access=True
                 )
 
@@ -100,12 +99,12 @@ class AnalyzeContext(TypeInferContext):
                 if key == slot.key:
                     break
                 offset += len(child.elements)
-            instance = instance.compose(AccessRelation(isl.map(f"{{ [i] -> [i + {offset}] }}")))
+            instance = instance.compose(access.Relation(isl.map(f"{{ [i] -> [i + {offset}] }}")))
 
         return arguments, instance
 
     def error(self, node, message):
-        raise AnalysisError(message)
+        raise Error(message)
 
 
 __all__ = ["AnalyzeContext"]

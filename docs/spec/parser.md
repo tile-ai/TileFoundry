@@ -17,8 +17,8 @@ Explicit PrimFunction targets survive deferred parsing.
 
 ```python
 def parse_function(
-    fn: FunctionType, context: FuncParserContext
-) -> hir.Function | tir.PrimFunction: ...
+    fn: FunctionType, context: FuncContext
+) -> Any: ...
 ```
 
 ### 1.1 HIR Return Contracts
@@ -59,14 +59,14 @@ statement span and their carry binding name.
 
 ### 1.4 Context and Diagnostics
 
-`FuncParserContext` carries the dialect, Function role, closure, topology scope, target, and
+`FuncContext` carries the dialect, Function role, closure, topology scope, target, and
 optional base/key for one parse. Call types inferred while parsing use that target's rules
 ([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)), so in a Module that
 declares its Target a type the parser records is the type the built Module later infers. A
 pending Module supplies its declared Target to the parser's current call frame.
 `FunctionRole` is `ROOT`, `VARIANT`, or `CONVERTER`.
 `ParseError` is the single authored-source diagnostic type and includes source location and
-recursive parse situation. These are the only public parser symbols.
+recursive parse situation.
 
 Instance authoring and call contracts follow
 [core-ir §1.3](./core-ir.md#13-modulelist) and [§2.1](./core-ir.md#21-call).
@@ -77,12 +77,11 @@ checked in the enclosing Module context.
 
 ### 1.5 Mesh declarations and region captures
 
-Mesh declarations are values. `Mesh(...)` constructs the compile-time domain
-object used by layout sugar and by a `MeshRegion`; it is not itself a runtime
-expression in the HIR value graph. A `with Mesh(...)` statement uses that value
-to delimit an execution domain and does not describe the placement of its
-result. An `as name` binding is lexical: it is available inside the `with`
-body and expires when the statement ends. When a body changes a name visible
+`Mesh(...)` constructs a compile-time domain value used by layout sugar and by
+a `MeshRegion`; it is not a runtime expression in the HIR value graph. A
+`with Mesh(...)` statement delimits an execution domain and does not describe
+the placement of its result. An `as name` binding is lexical: available inside
+the `with` body, expired when the statement ends. When a body changes a name visible
 before the `with`, or binds a new name in its live-out (the conservative set of
 names read after it), each escaping name is rebound to the enclosing `MeshRegion`
 result (a tuple region with `TupleGetItem` projections when several names escape);
@@ -104,13 +103,10 @@ do not require an execution scope. A function-level `mesh=` covers the whole bod
 HIR functions that open no mesh remain logical programs; TIR is unaffected by
 this restriction.
 
-A function call inside a mesh supplies that execution scope to its callee.
-The callee may omit its own mesh or declare a region that composes with the
-call-site scope ([hir §1.1](./hir.md#11-function)). The parser checks authored
-call sites lexically; it does not exempt an unscoped function call because its
-callee contains a mesh. Authors may place the orchestration calls inside a
-mesh and keep each helper's operations in the inherited or explicitly declared
-scope.
+A function call inside a mesh supplies that execution scope to its callee, which
+may omit its own mesh or declare a region that composes with the call-site scope
+([hir §1.1](./hir.md#11-function)). The parser checks call sites lexically: an
+unscoped function call is not exempt because its callee contains a mesh.
 
 When a captured name denotes a tile window `slice(iv, iv + step, 1)`, the parser
 captures the induction Expr and reconstructs the window with its new parameter.
@@ -137,18 +133,12 @@ path returns the next `Dialect`; otherwise lookup MUST raise `AttributeError`.
 `dir()` and `__all__` MUST list only the current layer's records and immediate
 child namespaces.
 
-`register_op` MUST receive explicit `dialect` and `category`; `namespace=""`
-places the operation at the root. Category organizes documentation, not lookup.
-`register_type(dialect=..., namespace=...)` MUST expose a type in the same tree
-without creating an `OpSchema` or attaching `_op_schema`. Aliases occupy a
-single record like operations. `register_op(..., aliases={name: fixed_attrs})`
-MUST derive alias signatures by removing fixed attributes from the canonical
-signature, retain the canonical class identity, and reject fixed-attribute
-overrides. Parser and printers MUST use the same alias records; printers select
-the first applicable alias through `get_registered_name(op)`.
-Failed registration MUST leave no canonical or alias entries. A duplicate path MUST raise `ValueError` naming
-the existing owner; a record MUST NOT occupy a namespace prefix, in either
-registration order. Missing required decorator arguments MUST raise `TypeError`.
+Registration (`register_op`, `register_type`, aliases, collisions) is specified
+in [core-ir §2.3](./core-ir.md#23-op); category organizes documentation, not
+lookup. Parser and printers MUST use the same alias records; printers select the
+first applicable alias through `get_registered_name(op)`. A record MUST NOT
+occupy a namespace prefix, in either registration order. Missing required
+decorator arguments MUST raise `TypeError`.
 
 Negative integer and floating-point literals are single `Constant` values.
 Negating a name or a runtime expression constructs a `Unary(NEG)` Call.
@@ -420,7 +410,7 @@ placement sugar may use.
 
 ```mermaid
 classDiagram
-    ParserAPI --> FuncParserContext
+    ParserAPI --> FuncContext
     ParserAPI --> FunctionPattern
     AstPattern <|.. Element
     Element o-- AstPattern

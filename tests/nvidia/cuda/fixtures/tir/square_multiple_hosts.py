@@ -1,21 +1,21 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
 _S = DimVar("S", 1, 255)
 
 
 @module(
-    entry="square_host", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 128),)
+    entry="square_host", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("thread", 128),)
 )
 class TirSquareMultipleHosts:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def square_device(x: Tensor[(_S,), "f32"]):
         pass
 
-    @square_device.specialize(RangePattern("S", 1, 127))
+    @square_device.specialize(pattern.Range("S", 1, 127))
     def square_small(x: Tensor[(_S,), "f32"]):
         with Mesh((Topology("thread", 128),), layout=(128,), names=("t",)) as thread:
             for index in range(thread.t, shape_of(x, axis=0), 128):
@@ -29,7 +29,7 @@ class TirSquareMultipleHosts:
                         T.copy(reg, view)
             T.sync(thread)
 
-    @square_device.specialize(RangePattern("S", 128, 255))
+    @square_device.specialize(pattern.Range("S", 128, 255))
     def square_large(x: Tensor[(_S,), "f32"]):
         with Mesh((Topology("thread", 128),), layout=(128,), names=("t",)) as thread:
             for index in range(thread.t, shape_of(x, axis=0), 128):
@@ -43,11 +43,11 @@ class TirSquareMultipleHosts:
                         T.copy(reg, view)
             T.sync(thread)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def secondary_host(x: Tensor[(_S,), "f32"]):
         launch(square_device, x, grid=(1, 1, 1), block=(128, 1, 1))
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def square_host(x: Tensor[(_S,), "f32"]):
         launch(square_device, x, grid=(
         1,

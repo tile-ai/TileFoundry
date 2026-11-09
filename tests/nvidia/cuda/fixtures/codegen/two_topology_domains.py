@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 @module(topologies=(Topology("thread", 32),))
@@ -38,7 +38,7 @@ class _Parent:
     left = _Left
     right = _Right
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def host(
         x0: Tensor[(32,), "f32"],
         o0: Tensor[(32,), "f32"],

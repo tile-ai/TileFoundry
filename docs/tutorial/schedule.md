@@ -35,7 +35,7 @@ but names no TIR instruction.
 """One 128 by 256 output tile per CTA on a 64 by 68 grid."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 8192
 K = 5120
@@ -47,7 +47,7 @@ GM = M // BM
 GN = N // BN
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", GM * GN), Topology("thread", 384)))
 class GRID:
     @func
@@ -93,7 +93,7 @@ this is the same 4352-tile GEMM, covered exactly once.
 """The same GEMM assigned to 132 persistent CTAs."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 8192
 K = 5120
@@ -106,7 +106,7 @@ GN = N // BN
 CTAS = 132
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", CTAS), Topology("thread", 384)))
 class PERSISTENT:
     @func
@@ -268,7 +268,7 @@ issue SS WGMMA, then stage each result in separate SW128 memory for a TMA store.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 8192
 K = 5120
@@ -285,7 +285,7 @@ GROUP_M = 16
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", CTAS), Topology("thread", 384)),
 )
 class GEMM_8192X17408X5120_OPTIMAL:
@@ -382,17 +382,17 @@ sed -n '1,109p' optimal_tir.py
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="gemm_host",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 132), Topology("thread", 384),),
 )
 class GEMM_8192X17408X5120_OPTIMAL:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def gemm(
         a: Tensor[(8192, 5120), "bf16"], b: Tensor[(5120, 17408), "bf16"], out: Tensor[(8192, 17408), "bf16"]
     ):

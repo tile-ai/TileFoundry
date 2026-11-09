@@ -10,7 +10,7 @@ import tvm_ffi
 
 import tilefoundry
 from tests.core._corpus import Case, case, check_case, special
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 class ControlFlowCase(Case):
@@ -18,7 +18,7 @@ class ControlFlowCase(Case):
         torch.manual_seed(0)
         x = torch.randn(128, dtype=torch.float32, device="cuda")
         expected = x.square()
-        runtime = tilefoundry.compile(state, target=CudaTarget("nvidia.h200_sxm"))
+        runtime = tilefoundry.compile(state, target=cuda.Target("nvidia.h200_sxm"))
         assert runtime.name == f"{state.name}.square_host"
         runtime(x)
         torch.cuda.synchronize()

@@ -27,15 +27,15 @@ import os
 
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, tf
-from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target import CudaTarget
+from tilefoundry.ir.types import Topology
+from tilefoundry_nvidia import cuda
 
 D, W = 64, 4
 #: How big the weight nobody asked for is, in GiB.
 BIG_GB = float(os.environ.get("BIG_GB", "1"))
 BIG = int(BIG_GB * (1 << 30) / 2 / D)
 N = DimVar("n", 1, 1024)
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 _CTA = Topology("cta", W)
 
 

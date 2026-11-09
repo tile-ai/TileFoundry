@@ -5,124 +5,51 @@ constructs real TileFoundry values after its declared children have been
 constructed, then applies the owning pattern's immutable rules in order.
 """
 
-# ruff: noqa: PLC0415, D202, E402, F403, F405
-
 from __future__ import annotations
 
 import ast
 import dataclasses
 import operator
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from types import FrameType, SimpleNamespace
+from types import FrameType, MappingProxyType, SimpleNamespace
 from typing import Any, ClassVar, Generic, Protocol, TypeVar, cast
 from typing import Literal as TypingLiteral
 
-from tilefoundry.ir.core import (
-    BindingMetadata,
-    Call,
-    Constant,
-    Expr,
-    SourceSpanMetadata,
-    Var,
-    VerifyError,
-    attach_metadata,
-    get_metadata,
-)
-from tilefoundry.ir.core.expr import Tuple as IrTuple
-from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
-from tilefoundry.ir.core.module import Module, ModuleList
-from tilefoundry.ir.core.op_schema import OpSchema
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.math.unary import Unary
-from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.sharding.local import Local
-from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
-from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.hir.specialize import DISPLAY_NAME
-from tilefoundry.ir.hir.tensor.arange import Arange
-from tilefoundry.ir.hir.tensor.bitcast import Bitcast
-from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.hir.tensor.slice import Slice, slice_size
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.isl_interop import normalize_dim
-from tilefoundry.ir.pattern import RangePattern
-from tilefoundry.ir.tir.memory.tensor_view import TensorView
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.shape import ShapeOf
-from tilefoundry.ir.tir.stmts import (
-    Evaluate,
-    For,
-    If,
-    LetStmt,
-    MeshScope,
-    Return,
-    Sequential,
-    While,
-)
-from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.ir.types import (
-    Broadcast,
-    DType,
-    Layout,
-    Mesh,
-    Partial,
-    PointerType,
-    ShardLayout,
-    Split,
-    TensorType,
-    Topology,
-    TupleType,
-    UnitType,
-)
-from tilefoundry.ir.types.callable_type import CallableType, bind_annotation
-from tilefoundry.ir.types.dim import (
-    DimAdd,
-    DimFloorDiv,
-    DimMod,
-    DimMul,
-    DimSub,
-    DimVar,
-    dim_expr,
-    simplify_dim,
-)
-from tilefoundry.ir.types.layout import LayoutBase
-from tilefoundry.ir.types.mesh import make_mesh
-from tilefoundry.ir.types.storage import StorageKind, resolve_storage
-from tilefoundry.ir.types.stride import compact_row_major
-from tilefoundry.ir.types.utils import static_dim_value
-from tilefoundry.ir.visitor import BindingSubstitutionCloner
-from tilefoundry.target import MemoryHierarchyFacts, Target, UnsupportedCapabilityError
-from tilefoundry.visitor_registry.contexts import TypeInferContext, ValuationContext
-from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor, infer_function
+from tilefoundry import services
+from tilefoundry import target as tilefoundry_target
+from tilefoundry.interfaces import typeinfer, valuation
+from tilefoundry.ir import core, dim, expr, types
+from tilefoundry.ir import pattern as ir_pattern
+from tilefoundry.ir.hir import math, sharding, tensor
+from tilefoundry.ir.tir import memory
 
 T = TypeVar("T")
-_TYPE_INFER_CONTEXT = "<type_infer_context>"
+TYPE_INFER_CONTEXT = "<type_infer_context>"
 
 
-def _hardware_context(target: Target | None) -> dict[str, object]:
+def target_hardware_context(target: tilefoundry_target.Target | None) -> dict[str, object]:
     if target is None:
         return {}
     try:
-        facts = target.get_facts(MemoryHierarchyFacts)
-    except UnsupportedCapabilityError:
+        facts = target.get_facts(tilefoundry_target.MemoryHierarchyFacts)
+    except tilefoundry_target.UnsupportedCapabilityError:
         return {}
-    allowed = tuple(resolve_storage(level.name) for level in facts.explicit_levels)
-    return {"allowed_storage": (*allowed, StorageKind.UMAT)}
+    allowed = tuple(expr.resolve_storage(level.name) for level in facts.explicit_levels)
+    return {"allowed_storage": (*allowed, expr.StorageKind.UMAT)}
 
 
-def _resolve_mesh_topologies(
-    topologies: tuple[Topology | str, ...],
-    declared: Mapping[str, Topology],
-) -> tuple[Topology, ...]:
+def resolve_mesh_topologies(
+    topologies: tuple[types.Topology | str, ...],
+    declared: Mapping[str, types.Topology],
+) -> tuple[types.Topology, ...]:
     """Resolve string topology names against one function's declared hierarchy."""
     if all(isinstance(topology, str) for topology in topologies):
         return tuple(declared[topology] for topology in topologies)
     if all(hasattr(topology, "name") for topology in topologies):
-        return cast(tuple[Topology, ...], topologies)
+        return cast(tuple[types.Topology, ...], topologies)
     raise TypeError("Mesh topologies must be names or Topology objects")
 
 
@@ -199,122 +126,122 @@ def authored_source_range(
     )
 
 
-def _unsourced_calls(value: Call) -> tuple[Call, ...]:
+def unsourced_calls(value: expr.Call) -> tuple[expr.Call, ...]:
     """Calls reachable through Call operands and IR Tuples without a source span."""
-    found: list[Call] = []
-    pending: list[Expr] = [value]
+    found: list[expr.Call] = []
+    pending: list[expr.Expr] = [value]
     seen: set[int] = set()
     while pending:
-        expr = pending.pop()
-        if id(expr) in seen:
+        node = pending.pop()
+        if id(node) in seen:
             continue
-        seen.add(id(expr))
-        if isinstance(expr, Call):
-            if get_metadata(expr, SourceSpanMetadata) is not None:
+        seen.add(id(node))
+        if isinstance(node, expr.Call):
+            if expr.get_metadata(node, expr.SourceSpanMetadata) is not None:
                 continue
-            found.append(expr)
-            pending.extend(reversed(expr.args))
-            if isinstance(expr.target, Call):
-                pending.append(expr.target)
-        elif isinstance(expr, IrTuple):
-            pending.extend(reversed(expr.elements))
+            found.append(node)
+            pending.extend(reversed(node.args))
+            if isinstance(node.target, expr.Call):
+                pending.append(node.target)
+        elif isinstance(node, expr.Tuple):
+            pending.extend(reversed(node.elements))
     return tuple(found)
 
 
 def attach_authored_metadata(value: object, node: ast.AST, context: "MatchContext") -> object:
     """Attach *node*'s source identity to each unmarked Call it constructs."""
-    if not isinstance(value, Call):
+    if not isinstance(value, expr.Call):
         return value
     source_range = authored_source_range(node, context)
     if source_range is None:
         return value
     source_filename, line, column, end_line, end_column = source_range
-    span = SourceSpanMetadata(
+    span = expr.SourceSpanMetadata(
         source_filename,
         line,
         column + 1,
         end_line,
         end_column,
     )
-    for call in _unsourced_calls(value):
-        attach_metadata(call, span)
+    for call in unsourced_calls(value):
+        call.attach_metadata(span)
         if context.binding_name:
-            attach_metadata(call, BindingMetadata(context.binding_name))
+            call.attach_metadata(expr.BindingMetadata(context.binding_name))
     return value
 
 
 runtime = SimpleNamespace(
-    Call=Call,
-    CallableType=CallableType,
-    BindingSubstitutionCloner=BindingSubstitutionCloner,
-    Broadcast=Broadcast,
-    Partial=Partial,
-    PointerType=PointerType,
-    Binary=Binary,
-    BinaryKind=BinaryKind,
-    Constant=Constant,
-    DType=DType,
-    DimAdd=DimAdd,
-    DimFloorDiv=DimFloorDiv,
-    DimMod=DimMod,
-    DimMul=DimMul,
-    DimSub=DimSub,
-    DimVar=DimVar,
-    RangePattern=RangePattern,
-    Evaluate=Evaluate,
-    For=For,
-    Expr=Expr,
-    Function=Function,
-    LoopRegion=LoopRegion,
-    Arange=Arange,
-    IrTuple=IrTuple,
-    Layout=Layout,
-    LayoutBase=LayoutBase,
-    Local=Local,
-    LetStmt=LetStmt,
-    MeshScope=MeshScope,
-    MeshRegion=MeshRegion,
-    If=If,
-    While=While,
-    MeshCoord=MeshCoord,
-    Mesh=Mesh,
-    Module=Module,
-    ModuleList=ModuleList,
-    OpSchema=OpSchema,
-    PrimFunction=PrimFunction,
-    Reshard=Reshard,
-    TensorView=TensorView,
-    Bitcast=Bitcast,
-    Reshape=Reshape,
-    Return=Return,
-    Sequential=Sequential,
-    ShapeOf=ShapeOf,
-    ShardLayout=ShardLayout,
-    Slice=Slice,
-    Split=Split,
-    StorageKind=StorageKind,
-    SymbolRef=SymbolRef,
-    TensorType=TensorType,
-    TupleType=TupleType,
-    TypeInferContext=TypeInferContext,
-    ValuationContext=ValuationContext,
-    TypeInferVisitor=TypeInferVisitor,
-    bind_annotation=bind_annotation,
-    TupleGetItem=TupleGetItem,
-    Unary=Unary,
-    UnaryKind=UnaryKind,
-    UnitType=UnitType,
-    Var=Var,
-    DISPLAY_NAME=DISPLAY_NAME,
-    compact_row_major=compact_row_major,
-    make_mesh=make_mesh,
-    dim_expr=dim_expr,
-    normalize_dim=normalize_dim,
-    static_dim_value=static_dim_value,
-    slice_size=slice_size,
-    simplify_dim=simplify_dim,
-    resolve_storage=resolve_storage,
-    resolve_mesh_topologies=_resolve_mesh_topologies,
+    Call=expr.Call,
+    CallableType=types.CallableType,
+    BindingSubstitutionCloner=core.BindingSubstitutionCloner,
+    Broadcast=types.Broadcast,
+    Partial=types.Partial,
+    PointerType=types.PointerType,
+    Binary=math.Binary,
+    BinaryKind=expr.BinaryKind,
+    Constant=expr.Constant,
+    DType=expr.DType,
+    dtype_members=expr.dtype_members,
+    DimAdd=expr.DimAdd,
+    DimFloorDiv=expr.DimFloorDiv,
+    DimMod=expr.DimMod,
+    DimMul=expr.DimMul,
+    DimSub=expr.DimSub,
+    DimVar=expr.DimVar,
+    Range=ir_pattern.Range,
+    Evaluate=core.Evaluate,
+    For=core.For,
+    Expr=expr.Expr,
+    Function=core.Function,
+    LoopRegion=core.LoopRegion,
+    Arange=tensor.Arange,
+    IrTuple=expr.Tuple,
+    Layout=types.Layout,
+    LayoutBase=types.LayoutBase,
+    Local=sharding.Local,
+    LetStmt=core.LetStmt,
+    MeshScope=core.MeshScope,
+    MeshRegion=core.MeshRegion,
+    If=core.If,
+    While=core.While,
+    MeshCoord=dim.MeshCoord,
+    Mesh=types.Mesh,
+    Module=core.Module,
+    ModuleList=core.ModuleList,
+    OpSchema=expr.OpSchema,
+    PrimFunction=core.PrimFunction,
+    Reshard=sharding.Reshard,
+    TensorView=memory.TensorView,
+    Bitcast=tensor.Bitcast,
+    Reshape=tensor.Reshape,
+    Return=core.Return,
+    Sequential=core.Sequential,
+    ShapeOf=core.ShapeOf,
+    ShardLayout=types.ShardLayout,
+    Slice=tensor.Slice,
+    Split=types.Split,
+    StorageKind=expr.StorageKind,
+    SymbolRef=core.SymbolRef,
+    TensorType=types.TensorType,
+    TupleType=types.TupleType,
+    TypeInferContext=typeinfer.TypeInferContext,
+    TypeInferVisitor=typeinfer.TypeInferVisitor,
+    bind_annotation=types.bind_annotation,
+    TupleGetItem=tensor.TupleGetItem,
+    Unary=math.Unary,
+    UnaryKind=expr.UnaryKind,
+    UnitType=types.UnitType,
+    Var=expr.Var,
+    DISPLAY_NAME=valuation.DISPLAY_NAME,
+    compact_row_major=types.compact_row_major,
+    make_mesh=types.Mesh.from_meshes,
+    dim_expr=dim.as_dimension,
+    normalize_dim=services.normalize_dim,
+    static_dim_value=expr.static_dim_value,
+    slice_size=tensor.slice_size,
+    simplify_dim=services.simplify_dim,
+    resolve_storage=expr.resolve_storage,
+    resolve_mesh_topologies=resolve_mesh_topologies,
 )
 
 
@@ -342,6 +269,47 @@ class PatternVisitor(Protocol[T]):
     def visit(self, pattern: AstPattern[Any]) -> T: ...
 
 
+def merge_matches(
+    owner: AstPattern[Any],
+    node: object,
+    matches: tuple[AstMatch[Any], ...],
+    *,
+    pattern_id: str,
+    branch_id: str,
+) -> AstMatch[Any]:
+    captures: dict[str, object] = {}
+    children: list[AstChild] = []
+    construct_context = None
+    selected_branch = branch_id
+    selected_pattern_id = pattern_id
+    structural_ids = {
+        "sequence",
+        "field",
+        "repeat",
+        "optional",
+        "capture",
+        "child",
+        "predicate",
+    }
+    for matched in matches:
+        captures.update(matched.captures)
+        children.extend(matched.children)
+        construct_context = matched.construct_context or construct_context
+        if matched.branch_id not in structural_ids:
+            selected_branch = matched.branch_id
+        if matched.pattern_id not in structural_ids:
+            selected_pattern_id = matched.pattern_id
+    return AstMatch(
+        owner,
+        selected_pattern_id,
+        node,
+        captures,
+        selected_branch,
+        tuple(children),
+        construct_context,
+    )
+
+
 class CombinatorPattern(AstPattern[Any]):
     """Shared base for executable AstPattern composition nodes."""
 
@@ -351,54 +319,12 @@ class CombinatorPattern(AstPattern[Any]):
     def accept(self, visitor: PatternVisitor[T]) -> T:
         return visitor.visit(self)
 
-    @staticmethod
     def construct(
-        match: AstMatch[Any], children: Mapping[str, object], context: MatchContext
+        self, match: AstMatch[Any], children: Mapping[str, object], context: MatchContext
     ) -> object:
         if children:
             return tuple(children.values())
         return match.captures.get("value")
-
-    @staticmethod
-    def _merge(
-        owner: AstPattern[Any],
-        node: object,
-        matches: tuple[AstMatch[Any], ...],
-        *,
-        pattern_id: str,
-        branch_id: str,
-    ) -> AstMatch[Any]:
-        captures: dict[str, object] = {}
-        children: list[AstChild] = []
-        construct_context = None
-        selected_branch = branch_id
-        selected_pattern_id = pattern_id
-        structural_ids = {
-            "sequence",
-            "field",
-            "repeat",
-            "optional",
-            "capture",
-            "child",
-            "predicate",
-        }
-        for matched in matches:
-            captures.update(matched.captures)
-            children.extend(matched.children)
-            construct_context = matched.construct_context or construct_context
-            if matched.branch_id not in structural_ids:
-                selected_branch = matched.branch_id
-            if matched.pattern_id not in structural_ids:
-                selected_pattern_id = matched.pattern_id
-        return AstMatch(
-            owner,
-            selected_pattern_id,
-            node,
-            captures,
-            selected_branch,
-            tuple(children),
-            construct_context,
-        )
 
 
 class ElementPattern(CombinatorPattern, Generic[T]):
@@ -432,13 +358,13 @@ class LazyPattern(CombinatorPattern):
 
     def __init__(self, factory: Callable[[], AstPattern[Any]]):
         self.factory = factory
-        self._resolved: AstPattern[Any] | None = None
+        self.cached: AstPattern[Any] | None = None
 
     @property
     def pattern(self) -> AstPattern[Any]:
-        if self._resolved is None:
-            self._resolved = self.factory()
-        return self._resolved
+        if self.cached is None:
+            self.cached = self.factory()
+        return self.cached
 
     def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         matched = self.pattern.match(node, context)
@@ -446,9 +372,10 @@ class LazyPattern(CombinatorPattern):
 
 
 class AstNodePattern(CombinatorPattern):
-    def __init__(self, node_type: type, *parts: AstPattern[Any]):
+    def __init__(self, node_type: type, *parts: AstPattern[Any], grammar_name: str | None = None):
         self.node_type = node_type
         self.parts = tuple(parts)
+        self.grammar_name = grammar_name
 
     def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         if not isinstance(node, self.node_type):
@@ -459,7 +386,7 @@ class AstNodePattern(CombinatorPattern):
             if not is_matched(matched):
                 return matched
             matches.append(matched)
-        return self._merge(
+        return merge_matches(
             self,
             node,
             tuple(matches),
@@ -520,8 +447,8 @@ class LexicalMeshReferenceRule:
     def apply(self, value, *, node, context):
         state = getattr(context.function, "state", None)
         if getattr(state, "mesh_stack", ()) and (
-            isinstance(value, Mesh)
-            or isinstance(value, ShardLayout) and value.mesh is not None
+            isinstance(value, types.Mesh)
+            or isinstance(value, types.ShardLayout) and value.mesh is not None
         ):
             raise ParseError.from_node(
                 node, context, f"layout mesh {node.id!r} is not a lexical Mesh binding"
@@ -542,7 +469,7 @@ class ReferencePattern(CombinatorPattern):
         captures: dict[str, object] = {}
         if self.resolve:
             try:
-                value = _resolve_reference(node, context)
+                value = resolve_reference(node, context)
             except ParseError:
                 return None
             if self.expected is not None and not isinstance(value, self.expected):
@@ -564,7 +491,7 @@ class SequencePattern(CombinatorPattern):
             if not is_matched(matched):
                 return matched
             matches.append(matched)
-        return self._merge(
+        return merge_matches(
             self,
             node,
             tuple(matches),
@@ -634,14 +561,14 @@ class OptionalPattern(CombinatorPattern):
         )
 
 
+def index_child(child: AstChild, index: int) -> AstChild:
+    return dataclasses.replace(child, name=child.name.format(index=index))
+
+
 class RepeatPattern(CombinatorPattern):
     def __init__(self, pattern: AstPattern[Any], *, minimum: int = 0):
         self.pattern = pattern
         self.minimum = minimum
-
-    @staticmethod
-    def _index_child(child: AstChild, index: int) -> AstChild:
-        return dataclasses.replace(child, name=child.name.format(index=index))
 
     def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         if not isinstance(node, (tuple, list)) or len(node) < self.minimum:
@@ -654,10 +581,10 @@ class RepeatPattern(CombinatorPattern):
             matches.append(
                 dataclasses.replace(
                     matched,
-                    children=tuple(self._index_child(child, index) for child in matched.children),
+                    children=tuple(index_child(child, index) for child in matched.children),
                 )
             )
-        return self._merge(
+        return merge_matches(
             self,
             node,
             tuple(matches),
@@ -705,7 +632,7 @@ class ChildPattern(CombinatorPattern):
         transform: Callable[[object], object] | None = None,
     ):
         self.name = name
-        self._pattern = pattern
+        self.declared = pattern
         self.situation = situation
         self.role = role
         self.values = values
@@ -714,10 +641,10 @@ class ChildPattern(CombinatorPattern):
 
     @property
     def pattern(self) -> AstPattern[Any]:
-        pattern = self._pattern
+        pattern = self.declared
         if callable(pattern):
             pattern = pattern()
-            self._pattern = pattern
+            self.declared = pattern
         return pattern
 
     def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
@@ -788,52 +715,52 @@ class LexicalScope:
         mesh_bindings: tuple[set[str], ...] | None = None,
     ):
         source = frames or ({},)
-        self._frames = [dict(frame) for frame in source]
-        self._mesh_bindings = [
+        self.frames = [dict(frame) for frame in source]
+        self.mesh_bindings = [
             set(names) for names in (mesh_bindings or tuple(set() for _ in source))
         ]
-        if len(self._frames) != len(self._mesh_bindings):
+        if len(self.frames) != len(self.mesh_bindings):
             raise ValueError("lexical frames and mesh bindings must have the same length")
 
     def define(self, name: str, value: object) -> None:
-        self._frames[-1][name] = value
-        self._mesh_bindings[-1].discard(name)
+        self.frames[-1][name] = value
+        self.mesh_bindings[-1].discard(name)
 
     def define_mesh(self, name: str, value: object) -> None:
-        self._frames[-1][name] = value
-        self._mesh_bindings[-1].add(name)
+        self.frames[-1][name] = value
+        self.mesh_bindings[-1].add(name)
 
     def lookup(self, name: str) -> object | None:
-        for frame in reversed(self._frames):
+        for frame in reversed(self.frames):
             if name in frame:
                 return frame[name]
         return None
 
     def lookup_mesh(self, name: str) -> object | None:
-        for frame, mesh_names in reversed(tuple(zip(self._frames, self._mesh_bindings))):
+        for frame, mesh_names in reversed(tuple(zip(self.frames, self.mesh_bindings))):
             if name in frame:
                 return frame[name] if name in mesh_names else None
         return None
 
     def fork(self) -> LexicalScope:
         return LexicalScope(
-            tuple(self._frames) + ({},),
-            tuple(self._mesh_bindings) + (set(),),
+            tuple(self.frames) + ({},),
+            tuple(self.mesh_bindings) + (set(),),
         )
 
     def push_frame(self) -> None:
-        self._frames.append({})
-        self._mesh_bindings.append(set())
+        self.frames.append({})
+        self.mesh_bindings.append(set())
 
     def pop_frame(self) -> dict[str, object]:
-        if len(self._frames) == 1:
+        if len(self.frames) == 1:
             raise RuntimeError("cannot pop the root lexical frame")
-        self._mesh_bindings.pop()
-        return self._frames.pop()
+        self.mesh_bindings.pop()
+        return self.frames.pop()
 
     def items(self):
         merged: dict[str, object] = {}
-        for frame in self._frames:
+        for frame in self.frames:
             merged.update(frame)
         return merged.items()
 
@@ -852,6 +779,22 @@ class ParserState:
     mesh_coordinates: dict[tuple[int, int], object] = field(default_factory=dict)
     opened_mesh: bool = False
     unscoped_call: ast.AST | None = None
+    body_type: object | None = None
+
+    def record_body_type(self, body_type: object | None) -> None:
+        self.body_type = body_type
+
+    def forget_body_type(self) -> None:
+        self.body_type = None
+
+    def cache_mesh_coordinate(self, key: tuple[int, int], coordinate: object) -> None:
+        self.mesh_coordinates[key] = coordinate
+
+    def open_mesh(self) -> None:
+        self.opened_mesh = True
+
+    def note_unscoped_call(self, node: ast.AST) -> None:
+        self.unscoped_call = node
 
 
 @dataclass(frozen=True)
@@ -869,7 +812,7 @@ class LoopFrame:
 
 
 @dataclass(frozen=True)
-class FuncParserContext:
+class FuncContext:
     """Function-level authored inputs known before walking a FunctionDef."""
 
     dialect: TypingLiteral["hir", "tir"]
@@ -921,7 +864,7 @@ class FuncParserContext:
 
 
 @dataclass
-class ParserTypeInferContext(TypeInferContext):
+class AuthoredInferContext(typeinfer.TypeInferContext):
     """The pending root carries the target until its Module is finalized."""
 
     parser_target: object | None = None
@@ -940,10 +883,10 @@ class ModuleFunctionValidationRule:
         self,
         function: object,
         *,
-        context: FuncParserContext,
+        context: FuncContext,
         module: ModuleBuildContext,
     ) -> object:
-        module._validate_function(function, context)
+        module.check_function(function, context)
         return function
 
 
@@ -955,10 +898,10 @@ class ModuleFunctionRegistrationRule:
         self,
         function: object,
         *,
-        context: FuncParserContext,
+        context: FuncContext,
         module: ModuleBuildContext,
     ) -> object:
-        module._commit_function(function, context)
+        module.record_function(function, context)
         return function
 
 
@@ -969,7 +912,11 @@ class ModuleFinalizationRule:
     )
 
     def apply(self, cls: type, *, module: ModuleBuildContext) -> object:
-        return module._finalize(cls)
+        return module.build_module(cls)
+
+
+def binding_error(role: FunctionRole, binding: str, owner: str | None) -> str:
+    return f"@module {owner or '<module>'!r}: duplicate {role.value} binding {binding!r}"
 
 
 @dataclass
@@ -997,12 +944,15 @@ class ModuleBuildContext:
     variant_keys: dict[int, set[object]] = field(default_factory=dict)
     converter_keys: dict[int, set[str]] = field(default_factory=dict)
     declarations: list[object] = field(default_factory=list)
-    _consumed: bool = False
+    consumed: bool = False
     FUNCTION_RULES: ClassVar[tuple[object, ...]] = (
         ModuleFunctionValidationRule(),
         ModuleFunctionRegistrationRule(),
     )
     FINALIZATION_RULES: ClassVar[tuple[object, ...]] = (ModuleFinalizationRule(),)
+
+    def name_owner(self, name: str) -> None:
+        self.owner_name = name
 
     def function_context(
         self,
@@ -1015,12 +965,12 @@ class ModuleBuildContext:
         key: object | None = None,
         mesh: object | None = None,
         output_count: int = 1,
-    ) -> FuncParserContext:
+    ) -> FuncContext:
         topology_scope = {
             getattr(topology, "name", str(index)): topology
             for index, topology in enumerate(self.topologies or ())
         }
-        return FuncParserContext(
+        return FuncContext(
             dialect=dialect,
             role=role,
             closure=closure if closure is not None else self.closure,
@@ -1033,18 +983,14 @@ class ModuleBuildContext:
             target=self.target,
             mesh=mesh,
             output_count=output_count,
-            hardware_context=_hardware_context(self.target),
+            hardware_context=target_hardware_context(self.target),
             binding_name=binding_name,
         )
 
-    @staticmethod
-    def _binding_error(role: FunctionRole, binding: str, owner: str | None) -> str:
-        return f"@module {owner or '<module>'!r}: duplicate {role.value} binding {binding!r}"
-
-    def validate_function(self, function: object, context: FuncParserContext) -> None:
+    def validate_function(self, function: object, context: FuncContext) -> None:
         self.FUNCTION_RULES[0].apply(function, context=context, module=self)
 
-    def _validate_function(self, function: object, context: FuncParserContext) -> None:
+    def check_function(self, function: object, context: FuncContext) -> None:
         role = context.role
         binding = context.binding_name or getattr(function, "name", "<anonymous>")
         if role is FunctionRole.ROOT:
@@ -1053,13 +999,13 @@ class ModuleBuildContext:
                     f"@module {self.owner_name or '<module>'!r}: a root binding may not be named '_'"
                 )
             if binding in self.bindings:
-                raise ValueError(self._binding_error(role, binding, self.owner_name))
+                raise ValueError(binding_error(role, binding, self.owner_name))
             if any(
                 getattr(root, "name", None) == getattr(function, "name", None)
                 for root in self.roots
             ):
                 raise ValueError(
-                    self._binding_error(role, getattr(function, "name", binding), self.owner_name)
+                    binding_error(role, getattr(function, "name", binding), self.owner_name)
                 )
             expected = runtime.PrimFunction if context.dialect == "tir" else runtime.Function
             if not isinstance(function, expected):
@@ -1071,12 +1017,12 @@ class ModuleBuildContext:
         expected_base = runtime.PrimFunction if context.dialect == "tir" else runtime.Function
         if base is None or not isinstance(base, expected_base):
             raise ValueError(f"{role.value} {binding!r}: base is not a matching Function")
-        if getattr(base, "_sealed", False):
+        if getattr(base, "sealed", False):
             raise RuntimeError(f"base {base.name!r}: cannot register {role.value} after seal")
         if binding == "_" and role is FunctionRole.VARIANT:
             raise ValueError(f"base {base.name!r}: a variant binding may not be named '_'")
         if binding in self.bindings and role is not FunctionRole.CONVERTER:
-            raise ValueError(self._binding_error(role, binding, self.owner_name))
+            raise ValueError(binding_error(role, binding, self.owner_name))
         if role is FunctionRole.VARIANT:
             if getattr(function, "body", None) is None:
                 raise ValueError(f"base {base.name!r}: a variant must have a real body")
@@ -1094,10 +1040,10 @@ class ModuleBuildContext:
         if key in keys:
             raise ValueError(f"base {base.name!r}: duplicate converter weight {key!r}")
 
-    def commit_function(self, function: object, context: FuncParserContext) -> None:
+    def commit_function(self, function: object, context: FuncContext) -> None:
         self.FUNCTION_RULES[1].apply(function, context=context, module=self)
 
-    def _commit_function(self, function: object, context: FuncParserContext) -> None:
+    def record_function(self, function: object, context: FuncContext) -> None:
         role = context.role
         binding = context.binding_name or getattr(function, "name", "<anonymous>")
         if role is FunctionRole.ROOT:
@@ -1125,17 +1071,17 @@ class ModuleBuildContext:
 
     @property
     def children(self):
-        return {name: value for name, value in self.module_scope.items() if isinstance(value, ModuleList)}
+        return {name: value for name, value in self.module_scope.items() if isinstance(value, core.ModuleList)}
 
-    def _finalize(self, cls: type) -> object:
-        if self._consumed:
+    def build_module(self, cls: type) -> object:
+        if self.consumed:
             raise RuntimeError(
                 f"@module {self.owner_name or cls.__name__!r}: declaration context already consumed"
             )
-        self._consumed = True
+        self.consumed = True
         consume_module_context(self)
         functions: list[object] = []
-        children: dict[str, ModuleList] = {}
+        children: dict[str, core.ModuleList] = {}
         module_bindings: dict[str, object] = {}
         methods: dict[str, object] = {}
         for name, value in vars(cls).items():
@@ -1164,7 +1110,7 @@ class ModuleBuildContext:
                 if id(value) in self.owned:
                     continue
                 functions.append(value)
-            elif getattr(value, "_tilefoundry_deferred", False):
+            elif getattr(value, "is_deferred", False):
                 continue
             elif callable(value):
                 methods[name] = value
@@ -1215,28 +1161,43 @@ class ModuleBuildContext:
             topologies=self.topologies,
             methods=methods,
         )
-        from tilefoundry.visitor_registry.verify import (  # noqa: PLC0415
-            verify_function,
-            verify_prim_function,
-        )
-
-        for function in functions:
-            if isinstance(function, runtime.Function):
-                infer_function(
-                    function,
-                    runtime.TypeInferContext(module=result, function=function),
-                )
-                verify_function(function, module=result)
-            elif isinstance(function, runtime.PrimFunction):
-                verify_prim_function(function, module_fns=result)
         return result
 
 
-_MODULE_CONTEXTS: list[ModuleBuildContext] = []
+class ModuleContexts:
+    """The module declarations whose class bodies are currently executing."""
+
+    def __init__(self) -> None:
+        self.contexts: list[ModuleBuildContext] = []
+
+    def register(self, context: ModuleBuildContext) -> None:
+        self.contexts.append(context)
+
+    def consume(self, context: ModuleBuildContext) -> None:
+        try:
+            self.contexts.remove(context)
+        except ValueError:
+            pass
+
+    def for_frame(self, frame: FrameType | None) -> ModuleBuildContext | None:
+        while frame is not None:
+            if "__qualname__" in frame.f_locals:
+                for context in reversed(self.contexts):
+                    if context.owner_frame is frame.f_back:
+                        context.name_owner(frame.f_locals["__qualname__"].rsplit(".", 1)[-1])
+                        return context
+                return None
+            if frame.f_code.co_name == "<module>":
+                return None
+            frame = frame.f_back
+        return None
+
+
+MODULE_CONTEXTS = ModuleContexts()
 
 
 def register_module_context(context: ModuleBuildContext) -> None:
-    _MODULE_CONTEXTS.append(context)
+    MODULE_CONTEXTS.register(context)
 
 
 def create_module_context(
@@ -1250,8 +1211,7 @@ def create_module_context(
     source_filename: str = "<string>",
 ) -> ModuleBuildContext:
     """Create and register a context from a module decorator expression."""
-
-    frame = owner_frame or __import__("sys")._getframe(1)
+    frame = owner_frame or sys._getframe(1)
     context = ModuleBuildContext(
         owner_frame=frame,
         owner_name=owner_name,
@@ -1266,31 +1226,18 @@ def create_module_context(
 
 
 def module_context_for_frame(frame: FrameType | None) -> ModuleBuildContext | None:
-    while frame is not None:
-        if "__qualname__" in frame.f_locals:
-            for context in reversed(_MODULE_CONTEXTS):
-                if context.owner_frame is frame.f_back:
-                    context.owner_name = frame.f_locals["__qualname__"].rsplit(".", 1)[-1]
-                    return context
-            return None
-        if frame.f_code.co_name == "<module>":
-            return None
-        frame = frame.f_back
-    return None
+    return MODULE_CONTEXTS.for_frame(frame)
 
 
 def consume_module_context(context: ModuleBuildContext) -> None:
-    try:
-        _MODULE_CONTEXTS.remove(context)
-    except ValueError:
-        pass
+    MODULE_CONTEXTS.consume(context)
 
 
 @dataclass(frozen=True)
 class MatchContext:
     """Inherited context for one recursive grammar position."""
 
-    function: FuncParserContext | None
+    function: FuncContext | None
     module: ModuleBuildContext | None
     situation: str
     role: str | None = None
@@ -1301,7 +1248,7 @@ class MatchContext:
     live_out: Mapping[ast.With, frozenset[str]] = field(default_factory=dict)
 
     @classmethod
-    def from_function(cls, function: FuncParserContext) -> MatchContext:
+    def from_function(cls, function: FuncContext) -> MatchContext:
         scope = LexicalScope()
         resolved_mesh = None
         context = cls(
@@ -1313,7 +1260,7 @@ class MatchContext:
             values=function.hardware_context,
         )
         if function.mesh is not None:
-            topologies = _resolve_mesh_topologies_at(
+            topologies = resolve_mesh_topologies_at(
                 function.mesh.topologies,
                 function.topologies,
                 ast.Name(id="mesh"),
@@ -1322,8 +1269,8 @@ class MatchContext:
             resolved_mesh = dataclasses.replace(function.mesh, topologies=topologies)
             scope.define_mesh("mesh", resolved_mesh)
         scope.define(
-            _TYPE_INFER_CONTEXT,
-            ParserTypeInferContext(
+            TYPE_INFER_CONTEXT,
+            AuthoredInferContext(
                 module=function.module,
                 current_mesh=resolved_mesh,
                 parser_target=function.target,
@@ -1340,7 +1287,7 @@ class MatchContext:
         values: Mapping[str, object] | None = None,
         lexical_bindings: Mapping[str, object] | None = None,
         isolated_scope: bool = False,
-        function: FuncParserContext | None = None,
+        function: FuncContext | None = None,
         module: ModuleBuildContext | None = None,
         live_out: Mapping[ast.With, frozenset[str]] | None = None,
     ) -> MatchContext:
@@ -1351,8 +1298,8 @@ class MatchContext:
         if switching_function:
             scope = LexicalScope()
             scope.define(
-                _TYPE_INFER_CONTEXT,
-                ParserTypeInferContext(
+                TYPE_INFER_CONTEXT,
+                AuthoredInferContext(
                     module=function.module,
                     parser_target=function.target,
                 ),
@@ -1387,13 +1334,13 @@ class MatchContext:
     def resolve_static(self, node: ast.AST, expected: type[T] | tuple[type[Any], ...]) -> T:
         if not isinstance(node, (ast.Name, ast.Attribute)):
             raise ParseError.from_node(node, self, "static references use Name or Attribute")
-        value = _resolve_reference(node, self)
+        value = resolve_reference(node, self)
         if not isinstance(value, expected):
             raise ParseError.from_node(
                 node,
                 self,
                 f"static reference resolved to {type(value).__name__}, "
-                f"expected {_expected_name(expected)}",
+                f"expected {expected_name(expected)}",
             )
         return value
 
@@ -1407,7 +1354,7 @@ class AstChild:
     role: str | None = None
     values: Mapping[str, object] = field(default_factory=dict)
     isolated_scope: bool = False
-    function_context: FuncParserContext | None = None
+    function_context: FuncContext | None = None
     module_context: ModuleBuildContext | None = None
     lexical_bindings: Mapping[str, object] = field(default_factory=dict)
 
@@ -1434,7 +1381,7 @@ class AstMatch(Generic[T]):
         return attach_authored_metadata(value, self.node, context)
 
 
-class ParseError(VerifyError):
+class ParseError(expr.VerifyError):
     """A grammar or context rule failure anchored to an authored AST node."""
 
     def __init__(
@@ -1447,7 +1394,7 @@ class ParseError(VerifyError):
         location = ""
         source_range = authored_source_range(node, context)
         if source_range is not None:
-            source_filename, line, column, _end_line, _end_column = source_range
+            source_filename, line, column, _, _ = source_range
             location = f" at {source_filename}:{line}"
             location += f":{column + 1}"
         message = detail or f"no AST pattern matched situation {context.situation!r}"
@@ -1465,10 +1412,10 @@ class ParseError(VerifyError):
         return cls(node=node, context=context, detail=detail)
 
 
-def _resolve_mesh_topologies_at(topologies, declared, node, context):
+def resolve_mesh_topologies_at(topologies, declared, node, context):
     """Resolve mesh levels and anchor declaration errors to *node*."""
     try:
-        return _resolve_mesh_topologies(topologies, declared)
+        return resolve_mesh_topologies(topologies, declared)
     except KeyError as error:
         raise ParseError.from_node(
             node,
@@ -1479,7 +1426,7 @@ def _resolve_mesh_topologies_at(topologies, declared, node, context):
         raise ParseError.from_node(node, context, str(error)) from error
 
 
-def _unclaimed_detail(node: ast.AST) -> str | None:
+def unclaimed_detail(node: ast.AST) -> str | None:
     """Describe a node no pattern would take, when its shape says enough.
 
     This is the only place where "no alternative is left" is a fact rather than
@@ -1499,12 +1446,11 @@ def _unclaimed_detail(node: ast.AST) -> str | None:
 
 def parse_node(pattern: AstPattern[T], node: ast.AST, context: MatchContext) -> T:
     """Select, recursively construct, and apply rules for one local pattern."""
-
     matched = pattern.match(node, context)
     if isinstance(matched, MatchFailure):
         raise ParseError.from_node(node, context, matched.render())
     if matched is None:
-        raise ParseError.from_node(node, context, _unclaimed_detail(node))
+        raise ParseError.from_node(node, context, unclaimed_detail(node))
     active_context = matched.construct_context or context
     children: dict[str, object] = {}
     for child in matched.children:
@@ -1538,13 +1484,13 @@ def parse_node(pattern: AstPattern[T], node: ast.AST, context: MatchContext) -> 
     return matched.construct(children, active_context)
 
 
-def _expected_name(expected: type | tuple[type, ...]) -> str:
+def expected_name(expected: type | tuple[type, ...]) -> str:
     if isinstance(expected, tuple):
         return " | ".join(item.__name__ for item in expected)
     return expected.__name__
 
 
-def _decorator_name(node: ast.AST) -> str | None:
+def decorator_name(node: ast.AST) -> str | None:
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
@@ -1552,7 +1498,7 @@ def _decorator_name(node: ast.AST) -> str | None:
     return None
 
 
-def _resolve_reference(node: ast.AST, context: MatchContext) -> object:
+def resolve_reference(node: ast.AST, context: MatchContext) -> object:
     def external_value(value):
         for rule in ReferencePattern.REFERENCE_RULES:
             value = rule.apply(value, node=node, context=context)
@@ -1593,8 +1539,8 @@ def _resolve_reference(node: ast.AST, context: MatchContext) -> object:
             return external_value(closure[node.id])
         raise ParseError.from_node(node, context, f"undefined static name {node.id!r}")
     if isinstance(node, ast.Attribute):
-        owner = _resolve_reference(node.value, context)
-        if isinstance(owner, ModuleList):
+        owner = resolve_reference(node.value, context)
+        if isinstance(owner, core.ModuleList):
             if owner.indexed:
                 raise ParseError.from_node(
                     node, context, "indexed ModuleList static function references are unsupported"
@@ -1613,20 +1559,24 @@ def _resolve_reference(node: ast.AST, context: MatchContext) -> object:
     raise ParseError.from_node(node, context, "expected static Name or Attribute")
 
 
-_BINARY_OPERATORS: Mapping[type[ast.operator], Callable[[Any, Any], Any]] = {
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.Div: operator.truediv,
-    ast.FloorDiv: operator.floordiv,
-    ast.Mod: operator.mod,
-    ast.Pow: operator.pow,
-}
-_UNARY_OPERATORS: Mapping[type[ast.unaryop], Callable[[Any], Any]] = {
-    ast.UAdd: operator.pos,
-    ast.USub: operator.neg,
-    ast.Not: operator.not_,
-}
+BINARY_OPERATORS: Mapping[type[ast.operator], Callable[[Any, Any], Any]] = MappingProxyType(
+    {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.FloorDiv: operator.floordiv,
+        ast.Mod: operator.mod,
+        ast.Pow: operator.pow,
+    }
+)
+UNARY_OPERATORS: Mapping[type[ast.unaryop], Callable[[Any], Any]] = MappingProxyType(
+    {
+        ast.UAdd: operator.pos,
+        ast.USub: operator.neg,
+        ast.Not: operator.not_,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -1636,7 +1586,7 @@ class CanonicalDTypeRule:
     def apply(self, value, *, match, context):
         if not isinstance(value, runtime.DType):
             raise ParseError.from_node(match.node, context, "dtype did not construct DType")
-        canonical = runtime.DType._members().get(value.name)
+        canonical = runtime.dtype_members().get(value.name)
         if canonical is not value:
             raise ParseError.from_node(match.node, context, f"non-canonical dtype {value.name!r}")
         return value
@@ -1734,43 +1684,65 @@ class ShapeTupleRule:
 __all__ = [
     "AstChild",
     "AstMatch",
+    "AstNodePattern",
     "AstPattern",
     "AstRule",
-    "BlockPattern",
-    "CallPattern",
-    "ConstantPattern",
-    "DTypePattern",
-    "FuncParserContext",
-    "FunctionPattern",
-    "FunctionRole",
-    "LayoutPattern",
-    "LexicalScope",
+    "AuthoredInferContext",
+    "BINARY_OPERATORS",
+    "BindPattern",
+    "BranchPattern",
+    "CanonicalDTypeRule",
+    "CapturePattern",
+    "ChildPattern",
     "ChoiceFailure",
+    "ChoicePattern",
+    "ConditionPattern",
+    "ElementPattern",
+    "FieldPattern",
+    "FuncContext",
+    "FunctionRole",
+    "LayoutPositionRule",
+    "LayoutShapeRule",
+    "LazyPattern",
+    "LexicalScope",
+    "LiteralPattern",
+    "LoopFrame",
     "MatchContext",
     "MatchFailure",
     "ModuleBuildContext",
-    "NamePattern",
+    "ModuleContexts",
+    "OptionalPattern",
     "ParseError",
     "PatternFailure",
-    "RenderVisitor",
-    "ScalarTypePattern",
-    "ShapePattern",
-    "SignaturePattern",
-    "StatementPattern",
-    "StoragePattern",
-    "TensorOptionalSlotPattern",
-    "TensorPattern",
-    "TypeAnnotationPattern",
+    "PredicatePattern",
+    "ReferencePattern",
+    "RepeatPattern",
+    "SequencePattern",
+    "ShapeDimRule",
+    "ShapeTupleRule",
+    "StorageValueRule",
+    "TYPE_INFER_CONTEXT",
+    "TensorLayoutStorageRule",
+    "TensorPositionRule",
+    "UNARY_OPERATORS",
+    "attach_authored_metadata",
+    "authored_source_range",
+    "constant",
     "consume_module_context",
     "create_module_context",
+    "infer_call",
     "module_context_for_frame",
     "parse_node",
     "register_module_context",
-    "render_grammar",
+    "resolve_mesh_topologies_at",
+    "resolve_reference",
+    "runtime",
+    "slice_size",
+    "target_hardware_context",
 ]
 
 
-def _constant(value):
+def constant(value):
     if isinstance(value, bool):
         dtype = runtime.DType.bool
     elif isinstance(value, int):
@@ -1780,19 +1752,19 @@ def _constant(value):
     else:
         raise TypeError(type(value).__name__)
     return runtime.Constant(
-        type=runtime.TensorType.scalar(dtype, storage=runtime.StorageKind.UMAT),
+        type=runtime.TensorType.from_scalar(dtype, storage=runtime.StorageKind.UMAT),
         value=value,
     )
 
 
-def _infer_call(operation, args, context):
+def infer_call(operation, args, context):
     placeholder_type = getattr(operation, "type", None)
     if placeholder_type is None and args:
         placeholder_type = args[0].type
     if placeholder_type is None:
-        placeholder_type = runtime.TensorType.scalar(runtime.DType.f32)
+        placeholder_type = runtime.TensorType.from_scalar(runtime.DType.f32)
     placeholder = runtime.Call(type=placeholder_type, target=operation, args=tuple(args))
-    infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
+    infer_context = context.lexical_scope.lookup(TYPE_INFER_CONTEXT)
     if not isinstance(infer_context, runtime.TypeInferContext):
         infer_context = runtime.TypeInferContext()
     infer_context = infer_context.with_captures(context.values.get("loop_captures", ()))
@@ -1800,7 +1772,7 @@ def _infer_call(operation, args, context):
     return dataclasses.replace(placeholder, type=inferred)
 
 
-def _slice_size(begin, end, stride, context, node):
+def slice_size(begin, end, stride, context, node):
     try:
         value = runtime.normalize_dim(
             runtime.slice_size(
@@ -1814,7 +1786,3 @@ def _slice_size(begin, end, stride, context, node):
     if isinstance(value, runtime.Constant):
         return value.value
     return value
-
-
-from .grammar_render import RenderVisitor, render_grammar
-from .pattern_nodes import *

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="gather", target=CpuTarget())
+@module(entry="gather", target=cpu.Target())
 class Gather:
     @func
     def gather(x: Tensor[(8,), "f32"]):

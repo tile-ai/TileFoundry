@@ -9,9 +9,9 @@ means is asserted where that behaviour lives.
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 _CTA = (Topology("cta", 132),)
 
 
@@ -36,7 +36,7 @@ class SameModule:
 
     @func
     def root(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-        return scale(x)  # noqa: F821
+        return scale(x)
 
 
 @module(entry="root", target=_H200, topologies=_CTA)
@@ -47,7 +47,7 @@ class CrossModule:
 
     @func
     def root(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-        return expert(x)  # noqa: F821
+        return expert(x)
 
 
 @module(entry="root", target=_H200, topologies=_CTA)
@@ -62,4 +62,4 @@ class Fused:
 
     @func
     def root(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-        return tf.add(scale(x), expert(x))  # noqa: F821
+        return tf.add(scale(x), expert(x))

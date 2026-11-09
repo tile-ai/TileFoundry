@@ -11,11 +11,14 @@ from __future__ import annotations
 
 from typing import Union
 
+from tilefoundry import services
+from tilefoundry.ir import expr
+
 from . import swizzle_layout
 from .layout import (
     ComposedLayout,
     Layout,
-    NotProjectable,
+    NotProjectableError,
     Swizzle,
     apply,
     flat_shape,
@@ -23,8 +26,24 @@ from .layout import (
     get,
     size,
 )
-from .stride import compact_col_major
-from .swizzle_layout import get_swizzle_portion
+from .stride import compact_col_major, crd2idx
+from .swizzle_layout import get_swizzle_portion, inverse, supports_composition, supports_inverse
+
+__all__ = [
+    "coalesce",
+    "complement",
+    "composition",
+    "cosize",
+    "filter",
+    "is_contiguous",
+    "is_inverse_projectable",
+    "left_inverse",
+    "logical_divide",
+    "right_inverse",
+    "slice",
+    "slice_and_offset",
+    "zipped_divide",
+]
 
 
 def slice(coord, layout):
@@ -46,29 +65,10 @@ def slice(coord, layout):
 
 def slice_and_offset(coord, layout):
     """CuTe slice_and_offset; composed offsets stay inside their mapping."""
-    from .stride import crd2idx  # noqa: PLC0415
-
     if isinstance(layout, ComposedLayout):
         sliced, offset = slice_and_offset(coord, layout.outer)
         return ComposedLayout(layout.inner, layout.offset + offset, sliced), 0
     return slice(coord, layout), crd2idx(coord, layout.shape, layout.strides)
-
-
-def domain_offset(coord, layout, shape):
-    """CuTe domain_offset: move the pointer, or a composed layout's offset."""
-    from tilefoundry.ir.isl_interop import normalize_dim  # noqa: PLC0415
-
-    from .int_tuple import compatible_profile  # noqa: PLC0415
-    from .layout import flatten, unflatten  # noqa: PLC0415
-    from .shard_layout import ShardLayout  # noqa: PLC0415
-    from .stride import crd2idx  # noqa: PLC0415
-
-    if isinstance(layout, ComposedLayout):
-        _, offset = domain_offset(coord, layout.outer, shape)
-        return ComposedLayout(layout.inner, normalize_dim(layout.offset + offset), layout.outer), 0
-    primitive = layout.layout if isinstance(layout, ShardLayout) else layout
-    grouped = unflatten(flatten(primitive), compatible_profile(primitive.shape, shape))
-    return layout, crd2idx(tuple(coord), grouped.shape, grouped.strides)
 
 
 def cosize(layout: Union[Layout, ComposedLayout]) -> int:
@@ -83,33 +83,25 @@ def cosize(layout: Union[Layout, ComposedLayout]) -> int:
     return apply(layout, size(layout) - 1) + 1
 
 
-_NO_PROFILE = object()
+NO_PROFILE = object()
 
 
-def _coalesce_flat(layout: Layout, *, major: str = "col") -> Layout:
-    """Apply the flat CuTe ``coalesce`` rule to one layout.
-
-    Dimension interop imports core/types; defer until staged type imports
-    finish. Likewise utils imports mesh, which imports layout_algebra.
-    """
-    from tilefoundry.ir.isl_interop import normalize_dim  # noqa: PLC0415
-
-    from .utils import static_dim_value  # noqa: PLC0415
-
+def coalesce_flat(layout: Layout, *, major: str = "col") -> Layout:
+    """Apply the flat CuTe ``coalesce`` rule to one layout."""
     if major not in {"col", "row"}:
         raise ValueError(f"coalesce: unknown major {major!r}")
     result_shape: list[int] = [1]
     result_stride: list[int] = [0]
     modes = tuple(zip(flat_shape(layout), flat_stride(layout)))
     for shape, stride in reversed(modes) if major == "row" else modes:
-        shape, stride = normalize_dim(shape), normalize_dim(stride)
-        if static_dim_value(shape) == 1:
+        shape, stride = services.normalize_dim(shape), services.normalize_dim(stride)
+        if expr.static_dim_value(shape) == 1:
             continue
         if result_shape[-1] == 1:
             result_shape[-1] = shape
             result_stride[-1] = stride
-        elif normalize_dim(result_shape[-1] * result_stride[-1]) == normalize_dim(stride):
-            result_shape[-1] = normalize_dim(result_shape[-1] * shape)
+        elif services.normalize_dim(result_shape[-1] * result_stride[-1]) == services.normalize_dim(stride):
+            result_shape[-1] = services.normalize_dim(result_shape[-1] * shape)
         else:
             result_shape.append(shape)
             result_stride.append(stride)
@@ -119,26 +111,26 @@ def _coalesce_flat(layout: Layout, *, major: str = "col") -> Layout:
     return Layout(shape=tuple(result_shape), strides=tuple(result_stride))
 
 
-def _profile_place(path: tuple[int, ...]) -> str:
+def profile_place(path: tuple[int, ...]) -> str:
     return "profile" + "".join(f"[{index}]" for index in path)
 
 
-def _coalesce_profile(
+def coalesce_profile(
     layout: Layout, profile, path: tuple[int, ...], *, major: str, filtered: bool = False
 ) -> Layout:
     """Apply flat coalescing at the terminals selected by one profile."""
     if not isinstance(profile, tuple):
-        return filter(layout, major=major) if filtered else _coalesce_flat(layout, major=major)
+        return filter(layout, major=major) if filtered else coalesce_flat(layout, major=major)
 
     strides = layout.strides
     if not isinstance(strides, tuple) or len(layout.shape) != len(strides):
         raise ValueError(
             f"coalesce: layout shape has {len(layout.shape)} modes at "
-            f"{_profile_place(path)}, but its strides do not"
+            f"{profile_place(path)}, but its strides do not"
         )
     if len(profile) > len(layout.shape):
         raise ValueError(
-            f"coalesce: {_profile_place(path)} has {len(profile)} modes, but the "
+            f"coalesce: {profile_place(path)} has {len(profile)} modes, but the "
             f"layout there has {len(layout.shape)}"
         )
 
@@ -156,7 +148,7 @@ def _coalesce_profile(
             strides=stride if isinstance(stride, tuple) else (stride,),
         )
         child_profile = profile[index]
-        child = _coalesce_profile(
+        child = coalesce_profile(
             child, child_profile, (*path, index), major=major, filtered=filtered
         )
         if nested or isinstance(child_profile, tuple):
@@ -169,7 +161,7 @@ def _coalesce_profile(
 
 
 def coalesce(
-    layout: Union[Layout, ComposedLayout], trg_profile=_NO_PROFILE, *, major: str = "col"
+    layout: Union[Layout, ComposedLayout], trg_profile=NO_PROFILE, *, major: str = "col"
 ):
     """CuTe ``coalesce``, optionally applied at ``trg_profile`` terminals.
 
@@ -181,32 +173,27 @@ def coalesce(
     if get_swizzle_portion(layout) is not None:
         outer = (
             coalesce(layout.outer, major=major)
-            if trg_profile is _NO_PROFILE
+            if trg_profile is NO_PROFILE
             else coalesce(layout.outer, trg_profile, major=major)
         )
         return ComposedLayout(inner=layout.inner, offset=layout.offset, outer=outer)
-    if trg_profile is _NO_PROFILE:
-        return _coalesce_flat(layout, major=major)
-    return _coalesce_profile(layout, trg_profile, (), major=major)
+    if trg_profile is NO_PROFILE:
+        return coalesce_flat(layout, major=major)
+    return coalesce_profile(layout, trg_profile, (), major=major)
 
 
-def filter(layout: Union[Layout, ComposedLayout], profile=_NO_PROFILE, *, major: str = "col"):
-    """CuTe ``filter``: drop shape-1 and stride-0 modes, then coalesce.
-
-    Defer utils: it imports mesh, which imports layout_algebra at module load.
-    """
-    from .utils import static_dim_value  # noqa: PLC0415
-
+def filter(layout: Union[Layout, ComposedLayout], profile=NO_PROFILE, *, major: str = "col"):
+    """CuTe ``filter``: drop shape-1 and stride-0 modes, then coalesce."""
     if get_swizzle_portion(layout) is not None:
         return ComposedLayout(
             inner=layout.inner, offset=layout.offset,
             outer=filter(layout.outer, profile, major=major),
         )
-    if profile is not _NO_PROFILE:
-        return _coalesce_profile(layout, profile, (), major=major, filtered=True)
+    if profile is not NO_PROFILE:
+        return coalesce_profile(layout, profile, (), major=major, filtered=True)
     modes = tuple(
         (shape, stride) for shape, stride in zip(flat_shape(layout), flat_stride(layout))
-        if static_dim_value(shape) != 1 and static_dim_value(stride) != 0
+        if expr.static_dim_value(shape) != 1 and expr.static_dim_value(stride) != 0
     )
     shape, strides = zip(*modes) if modes else ((1,), (0,))
     return coalesce(Layout(tuple(shape), tuple(strides)), major=major)
@@ -220,12 +207,8 @@ def is_contiguous(layout: Layout, *, major: str = "col") -> bool:
     Static extents use CuTe's ``size == cosize``. Symbolic extents use its
     structural equivalent: either coalescing direction leaves one mode
     stepping by one. Continuity does not depend on the order of modes.
-
-    Defer utils: it imports mesh, which imports layout_algebra at module load.
     """
-    from .utils import static_dim_value  # noqa: PLC0415
-
-    if all(static_dim_value(shape) is not None for shape in flat_shape(layout)):
+    if all(expr.static_dim_value(shape) is not None for shape in flat_shape(layout)):
         return size(layout) == cosize(layout)
     if len(flat_shape(layout)) == 1 and flat_stride(layout) == (1,):
         return True
@@ -242,7 +225,7 @@ def complement(layout: Layout, max_idx: int = 1, *, major: str = "col") -> Layou
         if stride == 0 or shape == 1:
             continue
         if current_idx > shape * stride:
-            raise NotProjectable("complement: layout modes overlap (not invertible)")
+            raise NotProjectableError("complement: layout modes overlap (not invertible)")
         result_shape.append(stride // current_idx)
         result_stride.append(current_idx)
         current_idx = shape * stride
@@ -256,7 +239,7 @@ def complement(layout: Layout, max_idx: int = 1, *, major: str = "col") -> Layou
     )
 
 
-def _make_flat(a: Layout, b: Layout) -> Layout:
+def make_flat(a: Layout, b: Layout) -> Layout:
     """Concatenate two flat layouts into one (CuTe ``make_layout`` after flatten)."""
     return Layout(shape=flat_shape(a) + flat_shape(b), strides=flat_stride(a) + flat_stride(b))
 
@@ -286,7 +269,7 @@ def is_inverse_projectable(layout: Layout) -> bool:
     return True
 
 
-def _right_inverse_layout(layout: Layout) -> Layout:
+def right_inverse_layout(layout: Layout) -> Layout:
     """CuTe ``right_inverse``: ``layout(right_inverse(layout)(i)) == i``."""
     result_shape: list[int] = []
     result_stride: list[int] = []
@@ -305,12 +288,12 @@ def _right_inverse_layout(layout: Layout) -> Layout:
     return coalesce(Layout(shape=tuple(result_shape), strides=tuple(result_stride)))
 
 
-def _left_inverse_layout(layout: Layout) -> Layout:
+def left_inverse_layout(layout: Layout) -> Layout:
     """CuTe ``left_inverse``: ``left_inverse(layout)(layout(i)) == i`` (injective)."""
-    return _right_inverse_layout(_make_flat(layout, complement(layout)))
+    return right_inverse_layout(make_flat(layout, complement(layout)))
 
 
-def _is_identity_inner(inner: object) -> bool:
+def is_identity_inner(inner: object) -> bool:
     """Return whether identity inner.
 
     An ``inner`` that is ``None`` or a unit-stride contiguous layout acts as
@@ -323,37 +306,39 @@ def _is_identity_inner(inner: object) -> bool:
     return False
 
 
-def _check_admissible(scope: ComposedLayout) -> None:
+def check_admissible(scope: ComposedLayout) -> None:
     """Check admissible.
 
     A ``ComposedLayout`` is an admissible mesh execution scope only if its
     ``inner`` is identity (v1) and its ``outer`` is a plain injective ``Layout``.
-    Anything else fails closed with ``NotProjectable`` (no colliding fallback).
+    Anything else fails closed with ``NotProjectableError`` (no colliding fallback).
     """
-    if not _is_identity_inner(scope.inner):
-        raise NotProjectable("non-identity inner is not an admissible mesh scope (v1)")
+    if not is_identity_inner(scope.inner):
+        raise NotProjectableError("non-identity inner is not an admissible mesh scope (v1)")
     if not isinstance(scope.outer, Layout):
-        raise NotProjectable("outer must be a plain Layout for a mesh scope")
+        raise NotProjectableError("outer must be a plain Layout for a mesh scope")
     if not is_inverse_projectable(scope.outer):
-        raise NotProjectable("outer layout is not inverse-projectable (injective + compact)")
+        raise NotProjectableError("outer layout is not inverse-projectable (injective + compact)")
 
 
-def _make_layout(*layouts: Layout) -> Layout:
+def single_or_tuple(values):
+    """The one entry of *values*, or *values* itself when it has several."""
+    return values[0] if len(values) == 1 else values
+
+
+def make_layout(*layouts: Layout) -> Layout:
     """CuTe ``make_layout``: collect each layout as one mode.
 
     Layout stores even scalar modes in a tuple; unwrap that representation
     when a mode has one leaf, retaining all nontrivial nesting.
     """
-    def mode(values):
-        return values[0] if len(values) == 1 else values
-
     return Layout(
-        shape=tuple(mode(layout.shape) for layout in layouts),
-        strides=tuple(mode(layout.strides) for layout in layouts),
+        shape=tuple(single_or_tuple(layout.shape) for layout in layouts),
+        strides=tuple(single_or_tuple(layout.strides) for layout in layouts),
     )
 
 
-def _compose_mode(left: Layout, shape: int, stride: int, *, major: str) -> Layout:
+def compose_mode(left: Layout, shape: int, stride: int, *, major: str) -> Layout:
     """Compose one scalar mode using CuTe's strided-domain decomposition."""
     if stride == 0:
         return Layout((shape,), (0,))
@@ -381,25 +366,25 @@ def _compose_mode(left: Layout, shape: int, stride: int, *, major: str) -> Layou
     return Layout(tuple(result_shape), tuple(result_stride))
 
 
-def _compose_layout(left: Layout, right, *, major: str) -> Layout:
+def compose_layout(left: Layout, right, *, major: str) -> Layout:
     """CuTe's None, integer, tuple-of-tiles and Layout composition overloads."""
     if right is None:
         return left
     if isinstance(right, int):
-        return _compose_mode(left, right, 1, major=major)
+        return compose_mode(left, right, 1, major=major)
     if isinstance(right, tuple):
         if len(left.shape) < len(right):
             raise AssertionError
-        return _make_layout(
-            *(_compose_layout(get(left, index), tile, major=major) for index, tile in enumerate(right)),
+        return make_layout(
+            *(compose_layout(get(left, index), tile, major=major) for index, tile in enumerate(right)),
             *(get(left, index) for index in range(len(right), len(left.shape))),
         )
     if isinstance(right, Layout):
         strides = right.strides
         if len(right.shape) == 1 and not isinstance(right.shape[0], tuple):
-            return _compose_mode(left, right.shape[0], strides[0], major=major)
-        return _make_layout(
-            *(_compose_layout(left, get(right, index), major=major) for index in range(len(right.shape)))
+            return compose_mode(left, right.shape[0], strides[0], major=major)
+        return make_layout(
+            *(compose_layout(left, get(right, index), major=major) for index in range(len(right.shape)))
         )
     raise NotImplementedError(
         f"composition: no rule for {type(left).__name__} ∘ {type(right).__name__}"
@@ -413,10 +398,10 @@ def composition(left, right, offset: int = 0, *, major: str = "col"):
     views still use their pre-grouped representation. ``offset`` belongs to
     the existing swizzle overload.
     """
-    if swizzle_layout.supports_composition(left, right):
+    if supports_composition(left, right):
         return swizzle_layout.composition(left, right, offset)
     if isinstance(left, Layout):
-        return _compose_layout(left, right, major=major)
+        return compose_layout(left, right, major=major)
     raise NotImplementedError(
         f"composition: no rule for {type(left).__name__} ∘ {type(right).__name__}"
     )
@@ -433,7 +418,7 @@ def logical_divide(layout: Layout, tile, *, major: str = "col") -> Layout:
     if isinstance(tile, tuple):
         if len(layout.shape) < len(tile):
             raise AssertionError
-        return _make_layout(
+        return make_layout(
             *(logical_divide(get(layout, index), one, major=major) for index, one in enumerate(tile)),
             *(get(layout, index) for index in range(len(tile), len(layout.shape))),
         )
@@ -445,7 +430,7 @@ def logical_divide(layout: Layout, tile, *, major: str = "col") -> Layout:
     ):
         raise TypeError("logical_divide: tile must have integer extents and strides")
     return composition(
-        layout, _make_layout(tile, complement(tile, size(layout), major=major)), major=major
+        layout, make_layout(tile, complement(tile, size(layout), major=major)), major=major
     )
 
 
@@ -456,16 +441,16 @@ def zipped_divide(layout: Layout, tile, *, major: str = "col") -> Layout:
     representation is refactored. Symbolic tiles are unsupported.
     """
     if tile is None:
-        return _make_layout(Layout((1,), (0,)), layout)
+        return make_layout(Layout((1,), (0,)), layout)
     if isinstance(tile, tuple):
         if len(layout.shape) < len(tile):
             raise AssertionError
         split = tuple(
             zipped_divide(get(layout, index), one, major=major) for index, one in enumerate(tile)
         )
-        return _make_layout(
-            _make_layout(*(get(one, 0) for one in split)),
-            _make_layout(
+        return make_layout(
+            make_layout(*(get(one, 0) for one in split)),
+            make_layout(
                 *(get(one, 1) for one in split),
                 *(get(layout, index) for index in range(len(tile), len(layout.shape))),
             ),
@@ -483,16 +468,16 @@ def left_inverse(layout: Union[Layout, ComposedLayout, Swizzle]):
     outer=None)`` (``outer=None`` ≡ identity), i.e. ``image⁻¹(t) =
     outer⁻¹(t − offset)``.
     """
-    if swizzle_layout.supports_inverse(layout):
-        return swizzle_layout.inverse(layout, left_inverse)
+    if supports_inverse(layout):
+        return inverse(layout, left_inverse)
     if isinstance(layout, ComposedLayout):
-        _check_admissible(layout)
+        check_admissible(layout)
         return ComposedLayout(
-            inner=_left_inverse_layout(layout.outer), offset=-layout.offset, outer=None
+            inner=left_inverse_layout(layout.outer), offset=-layout.offset, outer=None
         )
     if not is_inverse_projectable(layout):
-        raise NotProjectable(f"{layout} is not inverse-projectable; no left inverse")
-    return _left_inverse_layout(layout)
+        raise NotProjectableError(f"{layout} is not inverse-projectable; no left inverse")
+    return left_inverse_layout(layout)
 
 
 def right_inverse(layout: Union[Layout, ComposedLayout, Swizzle]):
@@ -501,31 +486,13 @@ def right_inverse(layout: Union[Layout, ComposedLayout, Swizzle]):
     A ``Swizzle`` is an involution -- its Y and Z bit ranges do not overlap --
     so it is its own inverse on both sides (``swizzle_layout.hpp:371``).
     """
-    if swizzle_layout.supports_inverse(layout):
-        return swizzle_layout.inverse(layout, right_inverse)
+    if supports_inverse(layout):
+        return inverse(layout, right_inverse)
     if isinstance(layout, ComposedLayout):
-        _check_admissible(layout)
+        check_admissible(layout)
         return ComposedLayout(
-            inner=_right_inverse_layout(layout.outer), offset=-layout.offset, outer=None
+            inner=right_inverse_layout(layout.outer), offset=-layout.offset, outer=None
         )
     if not is_inverse_projectable(layout):
-        raise NotProjectable(f"{layout} is not inverse-projectable; no right inverse")
-    return _right_inverse_layout(layout)
-
-
-__all__ = [
-    "composition",
-    "domain_offset",
-    "slice",
-    "slice_and_offset",
-    "cosize",
-    "coalesce",
-    "filter",
-    "is_contiguous",
-    "complement",
-    "is_inverse_projectable",
-    "right_inverse",
-    "left_inverse",
-    "logical_divide",
-    "zipped_divide",
-]
+        raise NotProjectableError(f"{layout} is not inverse-projectable; no right inverse")
+    return right_inverse_layout(layout)

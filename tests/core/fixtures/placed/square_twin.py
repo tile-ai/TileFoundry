@@ -1,11 +1,11 @@
 """A placed square, its faithful reference, and a deliberately drifted reference."""
 
+from tilefoundry import runtime
 from tilefoundry.dsl import *
-from tilefoundry.runtime import runtime_func, runtime_module
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="main", target=CpuTarget(), topologies=(Topology("cta", 168),))
+@module(entry="main", target=cpu.Target(), topologies=(Topology("cta", 168),))
 class Model:
     @func
     def main(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
@@ -22,25 +22,25 @@ class Model:
             return tf.reshard(nothing, (168 @ cta.block,), "gmem")
 
 
-@runtime_module(Model)
+@runtime.module(Model)
 class Twin:
-    @runtime_func
+    @runtime.func
     def main(self, x):
         return x * x
 
-    @runtime_func
+    @runtime.func
     def zeroed(self, x):
         return x - x
 
 
-@runtime_module(Model)
+@runtime.module(Model)
 class Drifted:
     """A deliberate negative whose main result differs from the authored Module."""
 
-    @runtime_func
+    @runtime.func
     def main(self, x):
         return x * x + 0.5
 
-    @runtime_func
+    @runtime.func
     def zeroed(self, x):
         return x - x

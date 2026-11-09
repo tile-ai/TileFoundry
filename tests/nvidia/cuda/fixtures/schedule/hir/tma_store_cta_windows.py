@@ -1,7 +1,7 @@
 """Four CTAs each load and store their own row window through tensor maps."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 ROWS = 64
 COLS = 64
@@ -10,7 +10,7 @@ CTAS = 4
 
 @module(
     entry="store",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", CTAS), Topology("thread", 32)),
 )
 class TmaStoreCtaWindows:

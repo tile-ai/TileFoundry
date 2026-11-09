@@ -15,7 +15,7 @@ Repro files are under `repro/` (TileFoundry) and `kbench/` (TileLang).
 | TF-4 | checking one leaf materialises the whole Module's weights | `repro/leaf_weights.py` | no leaf of this model can be checked |
 | TF-5 | `--inputs random` builds states the model cannot be in, and reports an out-of-range first | — | had to dump real activations |
 | TF-6 | `--input` and `--inputs real` cannot both be given | — | real weights *and* real activations |
-| TF-7 | `CudaTarget(arch=, num_sms=)` is not the actual signature | — | documentation |
+| TF-7 | `cuda.Target(arch=, num_sms=)` is not the actual signature | — | documentation |
 | **TL-1** | descriptor TMA cannot use a device-bound pointer; a constant coefficient falls out of the bulk path | `kbench/tma2d.py` | the rule is undocumented; nine address shapes were tried |
 | **TL-2** | `T.gemm`'s layout inference reaches through `T.view` to the buffer underneath | `kbench/tma2dbuf.py` | one allocation cannot be both a bulk-copy target and an operand |
 | TL-3 | a gemm benchmark whose operands do not change gets hoisted out of the loop and measures the wrong thing | `kbench/lingemm.py` vs `blkloop.py` | 6x |
@@ -171,9 +171,9 @@ right now it has to be one or the other.
 
 ### TF-7 the constructor signature in the docs is not the real one
 
-`CudaTarget(arch="sm_90a", num_sms=132)` → `CudaTarget.__init__() got an
+`cuda.Target(arch="sm_90a", num_sms=132)` → `cuda.Target.__init__() got an
 unexpected keyword argument 'num_sms'`. What is actually wanted is
-`CudaTarget("nvidia.h200_sxm")`.
+`cuda.Target("nvidia.h200_sxm")`.
 
 ---
 

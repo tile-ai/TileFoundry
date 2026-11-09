@@ -1,14 +1,14 @@
 """A placed weighted product and references for child and standalone use.
 
-Weighted has no target for use as a child. WeightedRoot supplies CpuTarget for
+Weighted has no target for use as a child. WeightedRoot supplies cpu.Target for
 standalone checks because only a root may declare one.
 """
 
 from dataclasses import replace
 
+from tilefoundry import runtime
 from tilefoundry.dsl import *
-from tilefoundry.runtime import runtime_func, runtime_module
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
 @module(entry="scaled", topologies=(Topology("cta", 168),))
@@ -24,18 +24,18 @@ class Weighted:
             return tf.reshard(weighted, (168 @ cta.block,), "gmem")
 
 
-@runtime_module(Weighted)
+@runtime.module(Weighted)
 class WeightedTwin:
-    @runtime_func
+    @runtime.func
     def scaled(self, x, w):
         return x * w
 
 
-WeightedRoot = replace(Weighted, target=CpuTarget())
+WeightedRoot = replace(Weighted, target=cpu.Target())
 
 
-@runtime_module(WeightedRoot)
+@runtime.module(WeightedRoot)
 class WeightedRootTwin:
-    @runtime_func
+    @runtime.func
     def scaled(self, x, w):
         return x * w

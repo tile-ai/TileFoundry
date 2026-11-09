@@ -7,10 +7,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def intra_wup(
     q: Tensor[(1024, 16, 128), "bf16"], k: Tensor[(1024, 16, 128), "bf16"], v: Tensor[(1024, 48, 128), "bf16"], gc: Tensor[(48, 1024), "f32"], beta: Tensor[(1024, 48), "bf16"], iota: Tensor[(64,), "i32"], scratch: Tensor[(4096,), "bf16"], scratch_1: Tensor[(8192,), "bf16"], scratch_2: Tensor[(8192,), "bf16"], out: Tensor[(1024, 15360), "bf16"]
 ):

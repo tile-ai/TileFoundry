@@ -14,15 +14,14 @@ from pathlib import Path
 import pytest
 import torch
 
-from tilefoundry.cli.source import load_authored_ir, load_namespace
-from tilefoundry.evaluator import evaluate
-from tilefoundry.evaluator.value import EvalError
+from tilefoundry import cli
+from tilefoundry.interfaces import evaluator
 
 GQA_DECODE = Path(__file__).parents[2] / "fixtures" / "placed" / "gqa_decode.py"
 
 
 def _constants(*names):
-    namespace = load_namespace(str(GQA_DECODE))[0]
+    namespace = cli.load_namespace(str(GQA_DECODE))[0]
     return tuple(namespace[name] for name in names)
 
 
@@ -32,7 +31,7 @@ def _heads():
 
 
 def _selected(name):
-    gqa_online_attend = load_authored_ir(f"{GQA_DECODE}:GqaOnline").entry_function()
+    gqa_online_attend = cli.load_authored_ir(f"{GQA_DECODE}:GqaOnline").entry_function()
     head_variant, ctx_variant = gqa_online_attend.variants
     return {"head": head_variant, "splitkv": ctx_variant, "prototype": gqa_online_attend}[name]
 
@@ -75,7 +74,7 @@ def test_selected_variant_matches_reference(selected, ctx):
     heads = _heads()
     Hq, _, D, _ = heads
     step = _inputs(heads, ctx)
-    out = evaluate(_selected(selected), *step)
+    out = evaluator.evaluate(_selected(selected), *step)
 
     assert out.shape == (1, 1, Hq, D)
     assert torch.allclose(out.float(), _ref(heads, *step), atol=2e-2, rtol=2e-2)
@@ -86,5 +85,5 @@ def test_splitkv_refuses_unaligned_ctx():
     ctx = NUM_SPLITS + 1
     assert ctx % NUM_SPLITS != 0
     step = _inputs(_heads(), ctx)
-    with pytest.raises(EvalError, match=r"op=Reshape: shape .*invalid for input of size"):
-        evaluate(_selected("splitkv"), *step)
+    with pytest.raises(evaluator.EvalError, match=r"op=Reshape: shape .*invalid for input of size"):
+        evaluator.evaluate(_selected("splitkv"), *step)

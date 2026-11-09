@@ -8,19 +8,11 @@ callers needing another error contract translate at the call site.
 from __future__ import annotations
 
 import ast
+from types import MappingProxyType
 from typing import Any, Callable, Literal
 
-from tilefoundry.ir.core import VerifyError
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.dim import (
-    DimAdd,
-    DimFloorDiv,
-    DimMod,
-    DimMul,
-    DimSub,
-    is_dim_expr,
-    simplify_dim,
-)
+from tilefoundry import services
+from tilefoundry.ir import dim, expr, types
 
 DivMode = Literal["true", "floor"]
 
@@ -29,25 +21,25 @@ ALL_NODES: tuple[type, ...] = (
     ast.Subscript, ast.Call, ast.UnaryOp, ast.BinOp,
 )
 
-_DIM_BINOPS = {
-    ast.Add: DimAdd,
-    ast.Sub: DimSub,
-    ast.Mult: DimMul,
-    ast.FloorDiv: DimFloorDiv,
-    ast.Mod: DimMod,
-}
+DIM_BINOPS = MappingProxyType({
+    ast.Add: "add",
+    ast.Sub: "sub",
+    ast.Mult: "mul",
+    ast.FloorDiv: "floordiv",
+    ast.Mod: "mod",
+})
 
 
-def _default_attr_resolver(owner: Any, attr: str) -> Any:
+def default_attr_resolver(owner: Any, attr: str) -> Any:
     try:
         return getattr(owner, attr)
     except AttributeError as exc:
-        raise VerifyError(
+        raise expr.VerifyError(
             f"unknown attribute {attr!r} on {type(owner).__name__}"
         ) from exc
 
 
-def _apply_binop(op: ast.operator, left: Any, right: Any, *, div: DivMode) -> Any:
+def apply_binop(op: ast.operator, left: Any, right: Any, *, div: DivMode) -> Any:
     match op:
         case ast.Add():
             return left + right
@@ -63,10 +55,10 @@ def _apply_binop(op: ast.operator, left: Any, right: Any, *, div: DivMode) -> An
             return left % right
         case ast.Pow():
             return left ** right
-    raise VerifyError(f"static BinOp {type(op).__name__} not supported")
+    raise expr.VerifyError(f"static BinOp {type(op).__name__} not supported")
 
 
-def _eval_index(node: ast.AST, ev: Callable[[ast.AST], Any]) -> Any:
+def eval_index(node: ast.AST, ev: Callable[[ast.AST], Any]) -> Any:
     """Lower a subscript index AST into a Python index value.
 
     ``ast.Slice`` -> ``slice``; a tuple of indices -> a tuple of lowered
@@ -79,17 +71,17 @@ def _eval_index(node: ast.AST, ev: Callable[[ast.AST], Any]) -> Any:
         step = None if node.step is None else ev(node.step)
         return slice(lo, hi, step)
     if isinstance(node, ast.Tuple):
-        return tuple(_eval_index(e, ev) for e in node.elts)
+        return tuple(eval_index(e, ev) for e in node.elts)
     return ev(node)
 
 
-def _is_runtime_scalar(value: Any) -> bool:
+def is_runtime_scalar(value: Any) -> bool:
     """Whether *value* is a runtime rank-0 integer tensor expression."""
     type_ = getattr(value, "type", None)
     return (
-        isinstance(type_, TensorType)
+        isinstance(type_, types.TensorType)
         and type_.shape == ()
-        and type_.dtype in (DType.i32, DType.i64)
+        and type_.dtype in (expr.DType.i32, expr.DType.i64)
     )
 
 
@@ -138,20 +130,20 @@ def eval_static(
                 value = closure.get(name)
                 from_closure = True
             if value is None:
-                raise VerifyError(f"undefined name {name!r}")
+                raise expr.VerifyError(f"undefined name {name!r}")
             if from_closure and on_closure_name is not None:
                 on_closure_name(value, name)
             return value
         case ast.Attribute(value=value, attr=attr) if ast.Attribute in allowed_nodes:
             owner = ev(value)
-            resolver = attr_resolver or _default_attr_resolver
+            resolver = attr_resolver or default_attr_resolver
             return resolver(owner, attr)
         case ast.Subscript(value=value, slice=slice_) if ast.Subscript in allowed_nodes:
             owner = ev(value)
-            return owner[_eval_index(slice_, ev)]
+            return owner[eval_index(slice_, ev)]
         case ast.Call(func=func, args=args, keywords=keywords) if ast.Call in allowed_nodes:
             if any(kw.arg is None for kw in keywords):
-                raise VerifyError("static call does not accept **kwargs")
+                raise expr.VerifyError("static call does not accept **kwargs")
             fn = ev(func)
             values = tuple(ev(a) for a in args)
             kwargs = {kw.arg: ev(kw.value) for kw in keywords}
@@ -162,26 +154,26 @@ def eval_static(
             left = ev(left_node)
             right = ev(right_node)
             numeric = isinstance(left, (int, float)) and isinstance(right, (int, float))
-            dim_operands = is_dim_expr(left) and is_dim_expr(right)
+            dim_operands = dim.is_dimension(left) and dim.is_dimension(right)
             runtime_operands = allow_runtime_scalar and all(
-                is_dim_expr(operand) or _is_runtime_scalar(operand)
+                dim.is_dimension(operand) or is_runtime_scalar(operand)
                 for operand in (left, right)
             )
             if not numeric and not (dim_operands or runtime_operands):
-                raise VerifyError(
+                raise expr.VerifyError(
                     f"static BinOp requires numeric or dimension operands, got "
                     f"{type(left).__name__} / {type(right).__name__}"
                 )
             if not numeric:
-                op_cls = _DIM_BINOPS.get(type(op))
-                if op_cls is None:
-                    raise VerifyError(
+                kind = DIM_BINOPS.get(type(op))
+                if kind is None:
+                    raise expr.VerifyError(
                         f"static dimension BinOp {type(op).__name__} not supported "
                         f"(use + - * // %)"
                     )
-                return simplify_dim(op_cls, (left, right))
-            return _apply_binop(op, left, right, div=div)
-    raise VerifyError(f"cannot statically evaluate AST node {type(node).__name__}")
+                return services.simplify_dim(kind, (left, right))
+            return apply_binop(op, left, right, div=div)
+    raise expr.VerifyError(f"cannot statically evaluate AST node {type(node).__name__}")
 
 
 __all__ = ["eval_static", "ALL_NODES", "DivMode"]

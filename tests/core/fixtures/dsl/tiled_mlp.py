@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 S = 1
 HIDDEN, INTERMEDIATE = 256, 768
@@ -17,7 +17,7 @@ NK_HID = HIDDEN // KT
 NK_INT = INTERMEDIATE // KT
 
 
-@module(entry="tiled_mlp", target=CpuTarget())
+@module(entry="tiled_mlp", target=cpu.Target())
 class TiledMLP:
     """Both spellings of one gated MLP, so they can be run against each other."""
 

@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 4), Topology("thread", 128),),
 )
 class CtaSubmeshThreadScope:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def gemm(x: Tensor[(4, 32), "f32"], out: Tensor[(4, 32), "f32"]):
         with Mesh((Topology("cta", 4),), layout=(2, 2), names=("d0", "d1")) as cta:
             with cta[:, :1] as scope:

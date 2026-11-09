@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="mixed", target=CpuTarget())
+@module(entry="mixed", target=cpu.Target())
 class MixedDtypeOperands:
     @func
     def mixed(x: Tensor[(8,), "bf16"]) -> Tensor[(8,), "f32"]:

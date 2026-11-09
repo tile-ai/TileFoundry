@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="rt", target=CpuTarget())
+@module(entry="rt", target=cpu.Target())
 class CastFp8e4m3:
     @func
     def rt(x: Tensor[(8,), "bf16"]) -> Tensor[(8,), "bf16"]:

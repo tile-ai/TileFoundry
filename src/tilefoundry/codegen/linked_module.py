@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from tilefoundry.codegen.linked_function import LinkedFunction
+from .linked_function import LinkedFunction
 
 
 @dataclass(frozen=True)

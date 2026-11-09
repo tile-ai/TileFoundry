@@ -42,9 +42,9 @@ from transformers.models.granitemoehybrid.configuration_granitemoehybrid import 
 
 from tilefoundry import DType, func, module
 from tilefoundry.dsl import ConstTensor, ModuleList, Tensor, tf  # noqa: F401 -- tf used by @func bodies
-from tilefoundry.evaluator import to_torch_dtype
-from tilefoundry.ir.types.mesh import Topology
-from tilefoundry.target import CudaTarget
+from tilefoundry.interfaces.evaluator import to_torch_dtype
+from tilefoundry.ir.types import Topology
+from tilefoundry_nvidia import cuda
 
 
 def published(path: Path | None = None) -> GraniteMoeHybridConfig:
@@ -596,7 +596,7 @@ def attention_mask(step, device, dtype=None):
     return row.reshape(1, 1, _CAP)
 
 
-@module(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 256)))
+@module(target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 256)))
 class Granite4_0_H_Small:
     """The layer stack in `config.layer_types` order, and the step around it --
     embedding, the walk, the closing norm, the head. Each layer is an

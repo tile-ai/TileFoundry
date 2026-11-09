@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, fields, is_dataclass
 
+__all__ = ["PythonExpr", "dataclass_to_python", "merge_imports"]
+
 
 @dataclass(frozen=True)
 class PythonExpr:
@@ -14,7 +16,7 @@ class PythonExpr:
     text: str
 
 
-def _merge_imports(*imports: tuple[str, ...]) -> tuple[str, ...]:
+def merge_imports(*imports: tuple[str, ...]) -> tuple[str, ...]:
     grouped: dict[str, set[str]] = {}
     other: set[str] = set()
     for statement in (statement for group in imports for statement in group):
@@ -32,7 +34,7 @@ def _merge_imports(*imports: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted([*merged, *other]))
 
 
-def _value_to_python(value: object) -> PythonExpr:
+def value_to_python(value: object) -> PythonExpr:
     to_python = getattr(value, "to_python", None)
     if callable(to_python):
         return to_python()
@@ -41,10 +43,10 @@ def _value_to_python(value: object) -> PythonExpr:
     if value is None or isinstance(value, (bool, int, float)):
         return PythonExpr((), repr(value))
     if isinstance(value, tuple):
-        values = tuple(_value_to_python(item) for item in value)
+        values = tuple(value_to_python(item) for item in value)
         suffix = "," if len(values) == 1 else ""
         return PythonExpr(
-            _merge_imports(*(item.imports for item in values)),
+            merge_imports(*(item.imports for item in values)),
             "(" + ", ".join(item.text for item in values) + suffix + ")",
         )
     raise TypeError(f"cannot render {type(value).__name__} as canonical Python")
@@ -61,12 +63,12 @@ def dataclass_to_python(value: object, import_module: str) -> PythonExpr:
             f"{value_type.__qualname__}"
         )
     values = tuple(
-        (field.name, _value_to_python(getattr(value, field.name)))
+        (field.name, value_to_python(getattr(value, field.name)))
         for field in fields(value)
         if field.init or field.compare
     )
     return PythonExpr(
-        _merge_imports(
+        merge_imports(
             (f"from {import_module} import {value_type.__qualname__}",),
             *(rendered.imports for _, rendered in values),
         ),
@@ -74,6 +76,3 @@ def dataclass_to_python(value: object, import_module: str) -> PythonExpr:
         + ", ".join(f"{name}={rendered.text}" for name, rendered in values)
         + ")",
     )
-
-
-__all__ = ["PythonExpr", "dataclass_to_python"]

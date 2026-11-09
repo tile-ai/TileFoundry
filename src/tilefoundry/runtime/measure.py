@@ -6,21 +6,21 @@ bound. See [runtime §1.9](docs/spec/runtime.md#19-runtimemeasurepy).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Callable, ClassVar, Mapping, Sequence
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.value import from_torch_dtype
-from tilefoundry.ir.types.shard_layout import shard_layout_of
-from tilefoundry.utils.lazy import torch
+from tilefoundry import core, utils
+from tilefoundry.interfaces import evaluator
+from tilefoundry.ir import types
 
-_NEAR_ZERO = 1e-12
+NEAR_ZERO = 1e-12
 
-_SIGNED_BITS = {
+SIGNED_BITS = MappingProxyType({
     "torch.bfloat16": "int16",
     "torch.float16": "int16",
     "torch.float32": "int32",
     "torch.float64": "int64",
-}
+})
 
 
 @dataclass(frozen=True)
@@ -39,11 +39,11 @@ class Predicate:
     guidance: ClassVar[str] = ""
 
     def measure(
-        self, candidate: torch.Tensor, reference: torch.Tensor | None
+        self, candidate: utils.torch.Tensor, reference: utils.torch.Tensor | None
     ) -> "PredicateResult":
         raise NotImplementedError
 
-    def _result(
+    def result(
         self, values: Mapping[str, float], passed: bool, note: str | None = None
     ) -> "PredicateResult":
         return PredicateResult(predicate=self, values=dict(values), passed=passed, note=note)
@@ -74,7 +74,7 @@ class AllClose(Predicate):
         slack = self.atol + self.rtol * expected.abs()
         violation = ((current - expected).abs() - slack).max().item()
         worst = max(violation, 0.0) if violation == violation else violation
-        return self._result({"max_violation": worst}, violation <= 0.0)
+        return self.result({"max_violation": worst}, violation <= 0.0)
 
 
 @dataclass(frozen=True)
@@ -90,16 +90,16 @@ class RelL2(Predicate):
         current, expected = candidate.float(), reference.float()
         distance = (current - expected).norm().item()
         reference_norm = expected.norm().item()
-        if reference_norm <= _NEAR_ZERO:
+        if reference_norm <= NEAR_ZERO:
 
 
-            return self._result(
+            return self.result(
                 {"absolute_l2": distance},
                 distance <= self.max,
                 "the reference norm is zero; this is an absolute L2 distance",
             )
         value = distance / reference_norm
-        return self._result({"rel_l2": value}, value <= self.max)
+        return self.result({"rel_l2": value}, value <= self.max)
 
 
 @dataclass(frozen=True)
@@ -115,16 +115,16 @@ class Cosine(Predicate):
         current = candidate.float().flatten()
         expected = reference.float().flatten()
         current_norm, reference_norm = current.norm().item(), expected.norm().item()
-        if current_norm <= _NEAR_ZERO and reference_norm <= _NEAR_ZERO:
-            return self._result(
+        if current_norm <= NEAR_ZERO and reference_norm <= NEAR_ZERO:
+            return self.result(
                 {"cosine": 1.0}, 1.0 >= self.min, "both sides are entirely zero"
             )
-        if current_norm <= _NEAR_ZERO or reference_norm <= _NEAR_ZERO:
-            return self._result(
+        if current_norm <= NEAR_ZERO or reference_norm <= NEAR_ZERO:
+            return self.result(
                 {"cosine": 0.0}, False, "one side is entirely zero and the other is not"
             )
-        value = (torch.dot(current, expected) / (current.norm() * expected.norm())).item()
-        return self._result({"cosine": value}, value >= self.min)
+        value = (utils.torch.dot(current, expected) / (current.norm() * expected.norm())).item()
+        return self.result({"cosine": value}, value >= self.min)
 
 
 @dataclass(frozen=True)
@@ -134,7 +134,7 @@ class Equal(Predicate):
 
     def measure(self, candidate, reference):
         mismatched = int((candidate != reference).sum().item())
-        return self._result(
+        return self.result(
             {"mismatched": float(mismatched), "elements": float(candidate.numel())},
             mismatched == 0,
         )
@@ -150,8 +150,8 @@ class Ulp(Predicate):
     guidance = "distance in units of last place"
 
     def measure(self, candidate, reference):
-        distance = (_ordered_bits(candidate) - _ordered_bits(reference)).abs().max().item()
-        return self._result({"max_ulp": float(distance)}, distance <= self.max)
+        distance = (ordered_bits(candidate) - ordered_bits(reference)).abs().max().item()
+        return self.result({"max_ulp": float(distance)}, distance <= self.max)
 
 
 @dataclass(frozen=True)
@@ -165,7 +165,7 @@ class MaxAbs(Predicate):
 
     def measure(self, candidate, reference):
         value = (candidate.float() - reference.float()).abs().max().item()
-        return self._result({"max_abs": value}, value <= self.max)
+        return self.result({"max_abs": value}, value <= self.max)
 
 
 @dataclass(frozen=True)
@@ -183,15 +183,15 @@ class MaxRel(Predicate):
         magnitude = expected.abs()
 
 
-        relative = torch.where(
+        relative = utils.torch.where(
             magnitude > 0,
-            difference / magnitude.clamp_min(_NEAR_ZERO),
-            torch.where(
-                difference == 0, torch.zeros_like(difference), torch.full_like(difference, float("inf"))
+            difference / magnitude.clamp_min(NEAR_ZERO),
+            utils.torch.where(
+                difference == 0, utils.torch.zeros_like(difference), utils.torch.full_like(difference, float("inf"))
             ),
         )
         value = relative.max().item()
-        return self._result({"max_rel": value}, value <= self.max)
+        return self.result({"max_rel": value}, value <= self.max)
 
 
 @dataclass(frozen=True)
@@ -202,38 +202,38 @@ class NanInf(Predicate):
     guidance = "no NaN and no Inf; the one predicate needing no reference"
 
     def measure(self, candidate, reference=None):
-        nans = int(torch.isnan(candidate).sum().item())
-        infinities = int(torch.isinf(candidate).sum().item())
-        return self._result(
+        nans = int(utils.torch.isnan(candidate).sum().item())
+        infinities = int(utils.torch.isinf(candidate).sum().item())
+        return self.result(
             {"nan": float(nans), "inf": float(infinities)}, nans == 0 and infinities == 0
         )
 
 
 
 
-PREDICATES: Mapping[str, type[Predicate]] = {
+PREDICATES: Mapping[str, type[Predicate]] = MappingProxyType({
     predicate.name: predicate
     for predicate in (AllClose, RelL2, Cosine, Equal, Ulp, MaxAbs, MaxRel, NanInf)
-}
+})
 
 
-def _ordered_bits(tensor: torch.Tensor) -> torch.Tensor:
+def ordered_bits(tensor: utils.torch.Tensor) -> utils.torch.Tensor:
     """A float tensor's bits as integers ordered the way the floats are.
 
     A float tensor's bits as integers ordered the way the floats are, so their
     difference is a count of representable values.
     """
     try:
-        as_integer = tensor.view(getattr(torch, _SIGNED_BITS[str(tensor.dtype)]))
+        as_integer = tensor.view(getattr(utils.torch, SIGNED_BITS[str(tensor.dtype)]))
     except KeyError:
         raise ValueError(
             f"check: ulp is defined on a float output, not on {tensor.dtype}"
         ) from None
-    bits = as_integer.to(torch.int64)
+    bits = as_integer.to(utils.torch.int64)
     sign = 1 << (tensor.element_size() * 8 - 1)
 
 
-    return torch.where(bits >= 0, bits, -(bits + sign))
+    return utils.torch.where(bits >= 0, bits, -(bits + sign))
 
 
 @dataclass(frozen=True)
@@ -262,7 +262,7 @@ class Report:
         return all(output.passed for output in self.outputs)
 
 
-def flatten_outputs(x, path: str = "output") -> list[tuple[str, torch.Tensor]]:
+def flatten_outputs(x, path: str = "output") -> list[tuple[str, utils.torch.Tensor]]:
     """Flatten a tensor or nested tuple-of-tensors into ``[(path, tensor), ...]``.
 
     Flatten a tensor or nested tuple-of-tensors into ``[(path, tensor), ...]``;
@@ -270,24 +270,24 @@ def flatten_outputs(x, path: str = "output") -> list[tuple[str, torch.Tensor]]:
     A ``ShardTensor`` a module returned holds one program's piece, so what is
     compared is that piece ([runtime §1.10](docs/spec/runtime.md#110-shardtensor)).
     """
-    if isinstance(x, ShardTensor):
-        if len(x.placements) > 1 or (x.is_global and shard_layout_of(x.type.layout) is not None):
+    if isinstance(x, core.ShardTensor):
+        if len(x.placements) > 1 or (x.is_global and types.shard_layout_of(x.type.layout) is not None):
             raise TypeError(
                 f"check: {path} is more than one program's data; take one program's "
                 "piece with local(placement) before comparing it against a reference"
             )
         return flatten_outputs(x.to_local(x.placements[0]) if x.placements else x.tensor, path)
-    if isinstance(x, torch.Tensor):
+    if isinstance(x, utils.torch.Tensor):
         return [(path, x)]
     if isinstance(x, tuple):
-        leaves: list[tuple[str, torch.Tensor]] = []
+        leaves: list[tuple[str, utils.torch.Tensor]] = []
         for i, item in enumerate(x):
             leaves.extend(flatten_outputs(item, f"{path}[{i}]"))
         return leaves
     raise TypeError(f"check: {path} must be a torch.Tensor or tuple thereof, got {type(x).__name__}")
 
 
-def _admit(path: str, tensor: torch.Tensor, predicates: Sequence[Predicate]) -> None:
+def admit(path: str, tensor: utils.torch.Tensor, predicates: Sequence[Predicate]) -> None:
     """Refuse a predicate that says nothing about an output of this dtype."""
     if tensor.dtype.is_floating_point:
         return
@@ -295,14 +295,14 @@ def _admit(path: str, tensor: torch.Tensor, predicates: Sequence[Predicate]) -> 
         if predicate.discrete:
             continue
         raise ValueError(
-            f"check: {path} is {from_torch_dtype(tensor.dtype).name}; "
+            f"check: {path} is {evaluator.from_torch_dtype(tensor.dtype).name}; "
             f"{predicate.name} is not meaningful on a discrete output. One wrong "
             f"value is a tiny numerical deviation and a completely wrong result. "
             f"Use equal."
         )
 
 
-def _expectations(
+def expectations(
     paths: Sequence[str], expect: Mapping[str, Sequence[Predicate]], has_reference: bool
 ) -> None:
     """Refuse an expectation set that does not cover exactly what was produced."""
@@ -351,9 +351,9 @@ def check(
     if not produced:
         raise ValueError("check: the candidate produced no tensor, so nothing was compared")
     paths = [path for path, _ in produced]
-    _expectations(paths, expect, reference is not None)
+    expectations(paths, expect, reference is not None)
 
-    expected: dict[str, torch.Tensor] = {}
+    expected: dict[str, utils.torch.Tensor] = {}
     if reference is not None:
         reference_leaves = flatten_outputs(reference(*inputs))
         reference_paths = [path for path, _ in reference_leaves]
@@ -374,13 +374,13 @@ def check(
     outputs = []
     for path, current in produced:
         predicates = tuple(expect[path])
-        _admit(path, current, predicates)
+        admit(path, current, predicates)
         other = expected.get(path)
         outputs.append(
             OutputCheck(
                 path=path,
                 shape=tuple(current.shape),
-                dtype=from_torch_dtype(current.dtype).name,
+                dtype=evaluator.from_torch_dtype(current.dtype).name,
                 ref_norm=None if other is None else other.float().norm().item(),
                 results=tuple(predicate.measure(current, other) for predicate in predicates),
             )

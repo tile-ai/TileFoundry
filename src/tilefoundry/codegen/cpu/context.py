@@ -3,25 +3,23 @@
 A host entry is handed runtime tensors, not pointers, so what it passes on for
 a parameter and where it reads an extent are both reached through the tensor
 object. Everything a compile carries regardless of target lives in
-:class:`tilefoundry.codegen.context.CodegenContext`.
+:class:`tilefoundry.codegen.Context`.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 
-from tilefoundry.codegen.context import EmitContext
-from tilefoundry.codegen.signature import CallableSignature, Signature, TensorSignature
-from tilefoundry.target import CpuTarget
-from tilefoundry.target.base import Target, bind
-from tilefoundry.visitor_registry.registries import codegen_registry
+from tilefoundry import target as tilefoundry_target
+from tilefoundry.codegen import context, registry, signature
+from tilefoundry.target import cpu
 
 
-@bind(CpuTarget, EmitContext)
-class CpuCodegenContext(EmitContext):
+@tilefoundry_target.bind(cpu.Target, context.EmitContext)
+class Context(context.EmitContext):
     """A compile writing the host unit: the shared context plus what a tensor is here."""
 
-    target_kind = CpuTarget
+    target_kind = cpu.Target
 
     @classmethod
     def create(cls, target, view):
@@ -34,28 +32,28 @@ class CpuCodegenContext(EmitContext):
     def __init__(
         self,
         *,
-        symbols: Mapping[int, CallableSignature] | None = None,
-        target: Target | None = None,
+        symbols: Mapping[int, signature.CallableSignature] | None = None,
+        target: tilefoundry_target.Target | None = None,
         resolved_launches: Mapping[int, object] | None = None,
         codegen_context: object | None = None,
     ) -> None:
         super().__init__(
-            codegen_registry,
+            registry.registry,
             symbols=symbols,
             target=target,
             resolved_launches=resolved_launches,
             codegen_context=codegen_context,
         )
 
-    def local_value(self, signature: Signature) -> str:
+    def local_value(self, sig: signature.Signature) -> str:
         """The buffer behind a runtime tensor, which is what a device call takes."""
-        if isinstance(signature, TensorSignature):
-            return f"{signature.name}.data_ptr()"
-        return signature.name
+        if isinstance(sig, signature.TensorSignature):
+            return f"{sig.name}.data_ptr()"
+        return sig.name
 
-    def local_extent(self, signature: TensorSignature, axis: int) -> str:
+    def local_extent(self, sig: signature.TensorSignature, axis: int) -> str:
         """An extent read off the tensor that carries it, rather than off a parameter."""
-        return f"static_cast<long long>({signature.name}.shape()[{axis}])"
+        return f"static_cast<long long>({sig.name}.shape()[{axis}])"
 
 
-__all__ = ["CpuCodegenContext"]
+__all__ = ["Context"]

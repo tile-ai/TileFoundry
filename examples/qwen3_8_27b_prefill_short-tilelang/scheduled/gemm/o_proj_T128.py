@@ -11,7 +11,7 @@ Structure: one CTA per (128 x 80) output tile, K split in 2 slices (f32 partial 
 the checkpoint's (out, in) weight, read K-major (b_major=K) through a bitcast view.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 128
 N = 5120
@@ -26,7 +26,7 @@ SPLIT = 2
 KS = K // SPLIT
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", GM * GN * SPLIT), Topology("thread", 384)))
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", GM * GN * SPLIT), Topology("thread", 384)))
 class SCHED_O_PROJ_T128:
     @func
     def gemm(a: Tensor[(M, K), "bf16"], w: Tensor[(N, K), "bf16"]) -> Tensor[(SPLIT, M, N), "f32"]:

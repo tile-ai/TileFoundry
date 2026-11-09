@@ -62,7 +62,7 @@ from pathlib import Path
 from transformers import Qwen2Config
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 def published(path: Path | None = None) -> Qwen2Config:
@@ -132,7 +132,7 @@ def _generation_rope(device):
     return phases.cos().to(config.dtype), phases.sin().to(config.dtype)
 
 
-@module(entry="decoder_layer", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
+@module(entry="decoder_layer", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
 class Qwen2_5_1_5B_DecoderLayer:
     @func
     def input_rms_norm(
@@ -274,7 +274,7 @@ class Qwen2_5_1_5B_DecoderLayer:
         return h1 + mlp_out, k_new, v_new
 
 
-@module(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
+@module(target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
 class Qwen2_5_1_5B:
     """The ordered layer stack plus the norm that closes it."""
 
@@ -372,8 +372,8 @@ class Qwen2_5_1_5B:
         """
         import torch  # noqa: PLC0415
 
-        from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415
-        from tilefoundry.ir.types import DType  # noqa: PLC0415
+        from tilefoundry.interfaces.evaluator import to_torch_dtype
+        from tilefoundry.ir.expr import DType
 
         device = _generation_device(device)
         empty = (1, 0, config.num_key_value_heads, HEAD_DIM)

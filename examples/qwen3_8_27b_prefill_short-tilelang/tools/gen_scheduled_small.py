@@ -32,7 +32,7 @@ from runtime.kernels.gemm import ba_split  # noqa: E402
 
 H, V = 5120, 248320
 PRE = '''from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 '''
 
@@ -55,7 +55,7 @@ NCH = H // 128
 EPS = 1e-6
 
 
-@module(entry="rmsnorm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", M // ROWS), Topology("thread", 32 * ROWS)))
+@module(entry="rmsnorm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", M // ROWS), Topology("thread", 32 * ROWS)))
 class SCHED_{name.upper()}:
     @func
     def rmsnorm(x: Tensor[(M, H), "bf16"], gamma: Tensor[(H,), "bf16"]) -> Tensor[(M, H), "bf16"]:
@@ -85,7 +85,7 @@ SPAN = BLOCK * PER
 TILES = M * N // SPAN
 
 
-@module(entry="reduce_sk", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", TILES), Topology("thread", BLOCK)))
+@module(entry="reduce_sk", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", TILES), Topology("thread", BLOCK)))
 class SCHED_REDUCE_SK_T{M}:
     @func
     def reduce_sk(p: Tensor[(S, M * N), "f32"], r: Tensor[(M * N,), "bf16"]) -> Tensor[(M * N,), "bf16"]:
@@ -120,7 +120,7 @@ S = {S}
 N = 96
 
 
-@module(entry="reduce_ba", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", M), Topology("thread", N)))
+@module(entry="reduce_ba", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", M), Topology("thread", N)))
 class SCHED_REDUCE_BA_T{M}:
     @func
     def reduce_ba(p: Tensor[(S, M, N), "f32"]) -> Tensor[(M, N), "bf16"]:
@@ -149,7 +149,7 @@ VEC = 8
 CHUNKS = K // (32 * VEC)
 
 
-@module(entry="lm_head", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", N // ROWS), Topology("thread", 256)))
+@module(entry="lm_head", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", N // ROWS), Topology("thread", 256)))
 class SCHED_LM_HEAD:
     @func
     def lm_head(x: Tensor[(1, K), "bf16"], w: Tensor[(N, K), "bf16"]) -> Tensor[(1, N), "bf16"]:
@@ -177,7 +177,7 @@ TH = 128
 PER = H // TH
 
 
-@module(entry="embed", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", M), Topology("thread", TH)))
+@module(entry="embed", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", M), Topology("thread", TH)))
 class SCHED_EMBED_T{M}:
     @func
     def embed(ids: Tensor[(M,), "i64"], table: Tensor[(V, H), "bf16"]) -> Tensor[(M, H), "bf16"]:

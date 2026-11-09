@@ -12,9 +12,9 @@ import pytest
 import torch
 
 import tilefoundry
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.ir.core.module import Module
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry import cli
+from tilefoundry.ir import core
+from tilefoundry_nvidia import cuda
 
 INTEGRATION = Path(__file__).parents[1] / "fixtures" / "integration"
 _TILE = 12
@@ -24,9 +24,9 @@ _DYNAMIC_CTA_LOWERING_WAIT = (
 )
 
 
-def _dynamic_cta_module(*, explicit_host: bool) -> Module:
+def _dynamic_cta_module(*, explicit_host: bool) -> core.Module:
     name = "dynamic_cta_double_host.py" if explicit_host else "dynamic_cta_double.py"
-    return load_authored_ir(f"{INTEGRATION / name}:DynamicCtaDouble")
+    return cli.load_authored_ir(f"{INTEGRATION / name}:DynamicCtaDouble")
 
 
 @pytest.mark.skip(reason=_DYNAMIC_CTA_LOWERING_WAIT)
@@ -38,7 +38,7 @@ def test_dynamic_cta_runs_two_shapes() -> None:
     recompile.
     """
     rm = tilefoundry.compile(
-        _dynamic_cta_module(explicit_host=True), target=CudaTarget("nvidia.h200_sxm")
+        _dynamic_cta_module(explicit_host=True), target=cuda.Target("nvidia.h200_sxm")
     )
     for nt in (4, 8):
         torch.manual_seed(nt)
@@ -59,4 +59,4 @@ def test_dynamic_cta_rejects_implicit_entry() -> None:
     """
     mod = _dynamic_cta_module(explicit_host=False)
     with pytest.raises(Exception, match=r"cannot derive its grid"):
-        tilefoundry.compile(mod, target=CudaTarget("nvidia.h200_sxm"))
+        tilefoundry.compile(mod, target=cuda.Target("nvidia.h200_sxm"))

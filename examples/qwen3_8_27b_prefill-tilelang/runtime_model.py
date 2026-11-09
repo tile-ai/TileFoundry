@@ -39,7 +39,7 @@ from kernels import gdn as GD
 from kernels import gemm as G
 from kernels import pack as PK
 from tilefoundry.dsl import ModuleList
-from tilefoundry.runtime import runtime_func, runtime_module
+from tilefoundry import runtime
 
 H, I, V = M.H, M.I, M.V
 HQ, HKV, D = M.HQ, M.HKV, M.D
@@ -94,9 +94,9 @@ def _base_of(view, width):
     return base
 
 
-@runtime_module(M.MLP)
+@runtime.module(M.MLP)
 class MLPTwin:
-    @runtime_func
+    @runtime.func
     def gate_up(self, hn, w_gate, w_up):
         n = _n(hn)
         w = _held(self, "w_gu", lambda: pack_gate_up(w_gate, w_up))
@@ -105,7 +105,7 @@ class MLPTwin:
         G.compile_gemm(n, 2 * I, H, "swiglu")(hn.view(n, H), w, out.view(n, I))
         return out
 
-    @runtime_func
+    @runtime.func
     def down(self, act, hidden, w_down):
         n = _n(act)
         _held(self, "w_down", lambda: w_down)
@@ -114,9 +114,9 @@ class MLPTwin:
         return out
 
 
-@runtime_module(M.GatedDeltaNet)
+@runtime.module(M.GatedDeltaNet)
 class GatedDeltaNetTwin:
-    @runtime_func
+    @runtime.func
     def in_proj(self, hn, w_qkv, w_z, w_b, w_a):
         n = _n(hn)
         w = _held(self, "w_in", lambda: pack_in_proj(w_qkv, w_z, w_b, w_a))
@@ -143,7 +143,7 @@ class GatedDeltaNetTwin:
         p[:, CONV + VAL + HV:P_USED] = a[0]
         return p
 
-    @runtime_func
+    @runtime.func
     def prep(self, qkv, b, a, conv_w, a_log, dt_bias):
         n = _n(qkv)
         p = self._packed(qkv, b, a)
@@ -158,7 +158,7 @@ class GatedDeltaNetTwin:
         E.compiled("prep", n, QS=P_W)(p, cw, a_log, dt_bias, q[0], k[0], v[0], g[0], beta[0])
         return q, k, v, g, beta
 
-    @runtime_func
+    @runtime.func
     def delta_rule(self, q, k, v, g, beta):
         n = _n(q)
         dev = q.device
@@ -171,7 +171,7 @@ class GatedDeltaNetTwin:
         GD.compiled("recur_out", n)(q[0], k[0], wu, gc, o[0])
         return o
 
-    @runtime_func
+    @runtime.func
     def gated_norm(self, core, z, gamma_gdn):
         n = _n(core)
         _held(self, "gamma_gdn", lambda: gamma_gdn)
@@ -184,7 +184,7 @@ class GatedDeltaNetTwin:
         E.compiled("gated_norm", n, ZS=P_W)(core.contiguous().view(-1, DV), p, gamma_gdn, out.view(-1, DV))
         return out
 
-    @runtime_func
+    @runtime.func
     def out_proj(self, gated, hidden, w_out):
         n = _n(gated)
         _held(self, "w_out", lambda: w_out)
@@ -193,9 +193,9 @@ class GatedDeltaNetTwin:
         return out
 
 
-@runtime_module(M.Attention)
+@runtime.module(M.Attention)
 class AttentionTwin:
-    @runtime_func
+    @runtime.func
     def qkv(self, hn, cos, sin, w_q, w_k, w_v, gamma_q, gamma_k):
         n = _n(hn)
         w = _held(self, "w_qkv", lambda: pack_qkv(w_q, w_k, w_v))
@@ -210,7 +210,7 @@ class AttentionTwin:
         v = buf[:, HQ * 2 * D + HKV * D:].view(1, n, HKV, D)
         return q, gate, k, v
 
-    @runtime_func
+    @runtime.func
     def attention(self, q, k, v, gate):
         n = _n(q)
         same = (q.untyped_storage().data_ptr() == k.untyped_storage().data_ptr()
@@ -237,7 +237,7 @@ class AttentionTwin:
             A.compiled("attention_ws", n)(buf, out.view(n, HQ * D))
         return out
 
-    @runtime_func
+    @runtime.func
     def o_proj(self, gated, hidden, w_o):
         n = _n(gated)
         _held(self, "w_o", lambda: w_o)
@@ -254,30 +254,30 @@ def _norm(self, hidden, gamma, key):
     return out
 
 
-@runtime_module(M.LinearAttentionLayer)
+@runtime.module(M.LinearAttentionLayer)
 class LinearAttentionLayerTwin:
     mixer = GatedDeltaNetTwin
     mlp = MLPTwin
 
-    @runtime_func
+    @runtime.func
     def input_norm(self, hidden, gamma_in):
         return _norm(self, hidden, gamma_in, "gamma_in")
 
-    @runtime_func
+    @runtime.func
     def post_norm(self, hidden, gamma_post):
         return _norm(self, hidden, gamma_post, "gamma_post")
 
 
-@runtime_module(M.FullAttentionLayer)
+@runtime.module(M.FullAttentionLayer)
 class FullAttentionLayerTwin:
     mixer = AttentionTwin
     mlp = MLPTwin
 
-    @runtime_func
+    @runtime.func
     def input_norm(self, hidden, gamma_in):
         return _norm(self, hidden, gamma_in, "gamma_in")
 
-    @runtime_func
+    @runtime.func
     def post_norm(self, hidden, gamma_post):
         return _norm(self, hidden, gamma_post, "gamma_post")
 
@@ -300,10 +300,10 @@ def _root_class():
         A.compiled("final", n)(hidden.view(n, H), last, gamma_final, w_head, out)
         return out
 
-    body["embed"] = runtime_func(embed)
-    body["final"] = runtime_func(final)
+    body["embed"] = runtime.func(embed)
+    body["final"] = runtime.func(final)
     body["__doc__"] = "The whole prefill: model.py's root and every layer, on tilelang kernels."
-    return runtime_module(M.Qwen3_8_27B)(type("Qwen3_8_27BTwin", (), body))
+    return runtime.module(M.Qwen3_8_27B)(type("Qwen3_8_27BTwin", (), body))
 
 
 Qwen3_8_27BTwin = _root_class()

@@ -1,4 +1,4 @@
-"""Emitter for the ``tir.Sync`` op — emits the mesh-scoped runtime barrier.
+"""Emitter for the ``tir.sync.Sync`` op — emits the mesh-scoped runtime barrier.
 
 The mesh is the whole call. Which barrier runs is ``ops::sync``'s own answer,
 read off the ``Mesh`` type's scope, size and base, so the emitted line names who
@@ -12,39 +12,43 @@ better than the ``static_assert`` that backs it up inside nvcc.
 
 from __future__ import annotations
 
-from tilefoundry.ir.tir.sync import Sync, SyncBarrier, classify
-from tilefoundry.visitor_registry.registries import Role, register_codegen
-from tilefoundry_nvidia.cuda import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
-from tilefoundry_nvidia.cuda.codegen.tir.stmts.mesh_scope import mesh_type
+from tilefoundry import codegen
+from tilefoundry.ir import tir
+from tilefoundry_nvidia.cuda import target
+from tilefoundry_nvidia.cuda.codegen import context
 
-_SYNC = "tilefoundry::ops::sync"
+from .stmts import mesh_type
+
+SYNC = "tilefoundry::ops::sync"
 
 
-def _mesh_value(mesh, ctx: CudaCodegenContext) -> str:
+def mesh_value(mesh, ctx: context.Context) -> str:
     """*mesh* as a C++ value, through the enclosing scope's alias where it fits."""
-    entry = ctx._mesh_aliases.get(id(mesh))
+    entry = ctx.mesh_aliases.get(id(mesh))
     if entry is not None:
         return f"{entry[0]}{{}}"
     inline = mesh_type(mesh)
-    for alias_name, type_str in ctx._mesh_aliases.values():
+    for alias_name, type_str in ctx.mesh_aliases.values():
         if type_str == inline:
             return f"{alias_name}{{}}"
     return f"{inline}{{}}"
 
 
-@register_codegen(CudaTarget, Role.EMIT, Sync)
-def _emit(call, ctx: CudaCodegenContext) -> None:
+@codegen.register(target.Target, codegen.Role.EMIT, tir.sync.Sync)
+def emit(call, ctx: context.Context) -> None:
     """Emit the barrier as the mesh it covers, plus whatever that tier needs."""
     mesh = call.target.mesh
-    barrier = classify(mesh)
-    value = _mesh_value(mesh, ctx)
-    if barrier is SyncBarrier.GRID:
-        ctx.needs_grid_barrier_state = True
-        ctx.emit(f"{_SYNC}({value}, tilefoundry_grid_bar_state);")
+    barrier = tir.sync.classify(mesh)
+    value = mesh_value(mesh, ctx)
+    if barrier is tir.sync.SyncBarrier.GRID:
+        ctx.require_grid_barrier_state()
+        ctx.emit(f"{SYNC}({value}, tilefoundry_grid_bar_state);")
         return
-    if barrier is SyncBarrier.BAR_SYNC:
+    if barrier is tir.sync.SyncBarrier.BAR_SYNC:
         bid = ctx.alloc_barrier_id()
-        ctx.emit(f"{_SYNC}({value}, tilefoundry::ops::bar_id<{bid}>);")
+        ctx.emit(f"{SYNC}({value}, tilefoundry::ops::bar_id<{bid}>);")
         return
-    ctx.emit(f"{_SYNC}({value});")
+    ctx.emit(f"{SYNC}({value});")
+
+
+__all__: list[str] = []

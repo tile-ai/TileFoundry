@@ -1,67 +1,82 @@
+"""Type, layout and mesh definitions.
+
+The layer above ``ir.expr``: it reads dimensions through ``ir.expr.dim`` and the
+``services`` and never imports ``ir.dim``. ``int_tuple`` and ``layout_algebra`` are
+exported as namespaces because their function names (``product``, ``filter``,
+``slice``) would collide. See [types](docs/spec/types.md) and [shard](docs/spec/shard.md).
+"""
+
 from __future__ import annotations
 
-# ruff: noqa: I001 -- curated re-export order; alphabetical sort breaks staged imports.
-
-from .dtype import BoolDType, DType, FloatDType, IntegerDType
-from .storage import StorageKind
+from . import int_tuple, layout_algebra
+from .callable_type import (
+    CallableType,
+    bind_annotation,
+    callable_type_for,
+    callable_type_for_prim_function,
+)
 from .int_tuple import IntTuple
-from .layout import ComposedLayout, Layout, LayoutBase, Swizzle
+from .layout import (
+    ComposedLayout,
+    Layout,
+    LayoutBase,
+    NotProjectableError,
+    Swizzle,
+    apply,
+    flat_shape,
+    flat_stride,
+    flatten,
+    get,
+    rank,
+    size,
+    take,
+    unflatten,
+)
+from .mesh import (
+    Mesh,
+    axis_keys,
+    check_topology,
+    flattened_levels,
+    levels,
+    separate,
+    starts,
+    topology_names,
+    within_scope,
+)
+from .placement import Placement
+from .pointer import PointerType
 from .shard_layout import (
     B,
     Broadcast,
-    V,
-    Varying,
     P,
     Partial,
     S,
     ShardAttr,
     ShardLayout,
     Split,
+    V,
+    Varying,
+    combine_attrs,
+    domain_offset,
+    local_layout,
+    local_layout_and_offset,
+    local_readback,
+    mesh_coords,
+    normalize_layout,
+    partial_reductions_by_axis,
+    physical_attr,
+    shard_layout_local_shape,
+    shard_layout_of,
+    split_target_axes,
 )
-from .mesh import Mesh, Topology, make_mesh
-from .placement import Placement
-from .pointer import PointerType
-from .tensor_type import TensorType, TupleType, Type, UnitType
-from .utils import make_shard_tensor_type, make_tensor_type
-from .callable_type import CallableType, callable_type_for
-
-
-__all__ = [
-    "B",
-    "BoolDType",
-    "Broadcast",
-    "V",
-    "Varying",
-    "CallableType",
-    "ComposedLayout",
-    "DType",
-    "FloatDType",
-    "IntTuple",
-    "IntegerDType",
-    "Layout",
-    "LayoutBase",
-    "Mesh",
-    "P",
-    "Partial",
-    "Placement",
-    "PointerType",
-    "S",
-    "ShardAttr",
-    "ShardLayout",
-    "Split",
-    "StorageKind",
-    "Swizzle",
-    "TensorType",
-    "Topology",
-    "TupleType",
-    "Type",
-    "UnitType",
-    "callable_type_for",
-    "make_mesh",
-    "make_shard_tensor_type",
-    "make_tensor_type",
-]
-
-
-def _register_dim_typeinfer() -> None:
-    from . import dim, dim_typeinfer  # noqa: PLC0415, F401
+from .stride import (
+    compact_col_major,
+    compact_major,
+    compact_row_major,
+    crd2idx,
+    idx2crd,
+    try_compact_major,
+)
+from .swizzle_layout import get_swizzle_portion
+from .tensor_type import ShapeDim, TensorType, TupleType, Type, UnitType
+from .topology import Topology

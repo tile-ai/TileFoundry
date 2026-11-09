@@ -11,59 +11,17 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from tilefoundry.ir.clause import (
-    LayoutClause,
-    MeshClause,
-    StorageClause,
-    WhereClauseMetadata,
-    clause_metadata,
-)
-from tilefoundry.ir.clause.layout import is_layout_wildcard
-from tilefoundry.ir.core import (
-    Call,
-    Constant,
-    Expr,
-    IRMetadata,
-    Op,
-    Tuple,
-    Var,
-    binding_name,
-    get_metadata,
-)
-from tilefoundry.ir.core.expr import SSAValue
-from tilefoundry.ir.core.module import Module, ModuleList
-from tilefoundry.ir.core.op_registry import lookup
-from tilefoundry.ir.core.param_def import variadic_item_annotation
-from tilefoundry.ir.core.register import get_registered_name
-from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.specialize import (
-    canonical_specialization_signature,
-    display_name,
-    origin_of,
-)
-from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.isl_interop import normalize_dim
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.types import TensorType, TupleType
-from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar, is_dim_op_call
-from tilefoundry.ir.types.shard_layout import (
-    Broadcast,
-    Partial,
-    Split,
-)
-from tilefoundry.ir.types.utils import leaves_of, static_dim_value
-from tilefoundry.ir.visitor import expr_children
-from tilefoundry.utils.python_source import PythonExpr
-from tilefoundry.visitor_registry.contexts import ValuationContext
+from tilefoundry import services, utils
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import clause, core, expr, types
+from tilefoundry.ir import utils as ir_utils
+from tilefoundry.ir.expr import op_registry
+from tilefoundry.ir.hir import tensor
 
+from .module_names import definition_names, module_definition_order, slot_binding
 from .print_context import HirPrintContext
 from .printer_base import PARTS, PythonPrinter
-from .tir_printer import _function_block as _tir_function_block
-from .tir_printer import tir_function_to_python, tir_module_to_python
+from .tir_printer import function_block, tir_function_to_python, tir_module_to_python
 
 
 class HirPrinter(PythonPrinter):
@@ -71,127 +29,146 @@ class HirPrinter(PythonPrinter):
 
     def __init__(self) -> None:
         super().__init__()
-        self._names: dict[int, str] = {}
-        self._definitions: dict[int, HirPrinter] = {}
-        self._function: HirFunction | None = None
-        self._statements: dict[int, _PrintedStatement] = {}
-        self._param_alias: dict[int, Expr] = {}
-        self._child_entries: dict[int, str] = {}
-        self._moved_window = lambda start, size, stride: None
+        self.names: dict[int, str] = {}
+        self.definitions: dict[int, HirPrinter] = {}
+        self.function: core.Function | None = None
+        self.statements: dict[int, PrintedStatement] = {}
+        self.param_alias: dict[int, expr.Expr] = {}
+        self.child_entries: dict[int, str] = {}
+        self.moved_window = lambda start, size, stride: None
 
     def print(self, value, ctx=None, indent: str = "", *, options=None) -> str:
         """A whole HIR function under *options*; any other value as ``PythonPrinter`` does."""
-        if isinstance(value, SSAValue):
+        if isinstance(value, core.SSAValue):
             text = self.print(value.expr, ctx, indent)
-            owner = self._definitions.get(id(value.expr))
-            if owner is not None and (statement := owner._statements.get(id(value.expr))) is not None:
-                if tuple(owner._names.values()).count(owner._names[id(value.expr)]) > 1:
+            owner = self.definitions.get(id(value.expr))
+            if owner is not None and (statement := owner.statements.get(id(value.expr))) is not None:
+                if tuple(owner.names.values()).count(owner.names[id(value.expr)]) > 1:
                     text += f":{statement.line}"
-            return text if len(leaves_of(value.expr.type)) == 1 else f"{text}[{value.index}]"
-        if isinstance(value, HirFunction):
+            return text if len(ir_utils.leaves_of(value.expr.type)) == 1 else f"{text}[{value.index}]"
+        if isinstance(value, core.Function):
             return self.render(value, options=options).source
-        if isinstance(value, Expr) and id(value) in self._definitions:
-            owner = self._definitions[id(value)]
+        if isinstance(value, expr.Expr) and id(value) in self.definitions:
+            owner = self.definitions[id(value)]
             text = owner.reference(value, ctx)
-            return text if owner._function is self._function else f"{owner._function.name}::{text}"
+            return text if owner.function is self.function else f"{owner.function.name}::{text}"
         return super().print(value, ctx, indent)
 
-    def render(self, fn: HirFunction, *, options=None, target=None) -> _PythonRendering:
+    def render(self, fn: core.Function, *, options=None, target=None) -> PythonRendering:
         if options is not None and options.comment_metadata_types:
-            _render_hir_function(fn, printer=self, target=target)
-        return _render_hir_function(fn, options=options, printer=self, target=target)
+            render_hir_function(fn, printer=self, target=target)
+        return render_hir_function(fn, options=options, printer=self, target=target)
 
     def bind_def(
         self,
         names: dict[int, str],
-        param_alias: dict[int, Expr],
+        param_alias: dict[int, expr.Expr],
         child_entries: dict[int, str],
         moved_window,
     ) -> None:
         """Install the value-naming environment for one function definition."""
-        self._names = names
-        self._param_alias = param_alias
-        self._child_entries = child_entries
-        self._moved_window = moved_window
+        self.names = names
+        self.param_alias = param_alias
+        self.child_entries = child_entries
+        self.moved_window = moved_window
+
+    def define(self, printer: HirPrinter, fn: core.Function, names: dict[int, str]) -> None:
+        """Record *printer* as the owner of *fn* and of every value named in *names*."""
+        self.definitions[id(fn)] = printer
+        self.definitions.update({identity: printer for identity in names})
+
+    def share(self, fn: core.Function, shared: HirPrinter) -> None:
+        """Print *fn* while reading and recording definitions through *shared*."""
+        self.function = fn
+        self.definitions = shared.definitions
+        self.statements = shared.statements
+
+    def definition_printer(self, node) -> HirPrinter:
+        """The printer that rendered the definition holding *node*."""
+        return self.definitions[id(node)]
+
+    def add_statements(self, statements: dict[int, PrintedStatement]) -> None:
+        """Record the Call statements a rendering located."""
+        self.statements.update(statements)
 
     def tuple_reference(self, elements, ctx=None) -> str:
         inner = ", ".join(
-            self.print(element.value, ctx) if isinstance(element, Constant) else self.reference(element, ctx)
+            self.print(element.value, ctx) if isinstance(element, expr.Constant) else self.reference(element, ctx)
             for element in elements
         )
         return f"({inner}{',' if len(elements) == 1 else ''})"
 
-    def reference(self, expr: Expr, ctx=None) -> str:
+    def reference(self, node: expr.Expr, ctx=None) -> str:
         """Return the binding that denotes one value in the current definition."""
-        if isinstance(expr, ModuleList):
-            return expr.key
+        if isinstance(node, core.ModuleList):
+            return node.key
         if (
-            isinstance(expr, Call)
-            and isinstance(expr.target, TupleGetItem)
-            and isinstance(expr.args[0], ModuleList)
+            isinstance(node, expr.Call)
+            and isinstance(node.target, tensor.TupleGetItem)
+            and isinstance(node.args[0], core.ModuleList)
         ):
-            return self._tuple_get_item_text(expr)
-        if isinstance(expr, Tuple):
-            return self.tuple_reference(expr.elements, ctx)
-        if id(expr) in self._param_alias:
-            return self.reference(self._param_alias[id(expr)], ctx)
-        projection = _region_projection(expr)
-        if isinstance(projection, LoopRegion):
-            return self.reference(projection.params[_projection_index(expr)], ctx)
-        if isinstance(expr, LoopRegion):
+            return self.tuple_get_item_text(node)
+        if isinstance(node, expr.Tuple):
+            return self.tuple_reference(node.elements, ctx)
+        if id(node) in self.param_alias:
+            return self.reference(self.param_alias[id(node)], ctx)
+        projection = region_projection(node)
+        if isinstance(projection, core.LoopRegion):
+            return self.reference(projection.params[projection_index(node)], ctx)
+        if isinstance(node, core.LoopRegion):
             carried = tuple(
-                self.reference(carry, ctx) for carry in expr.params[: len(expr.yield_values)]
+                self.reference(carry, ctx) for carry in node.params[: len(node.yield_values)]
             )
             return carried[0] if len(carried) == 1 else "(" + ", ".join(carried) + ")"
-        if isinstance(projection, MeshRegion):
-            return self.reference(projection.body.elements[_projection_index(expr)], ctx)
-        if isinstance(expr, MeshRegion):
-            return self.reference(expr.body, ctx)
-        return self._names.get(id(expr)) or binding_name(expr) or self.visit(expr, ctx)
+        if isinstance(projection, core.MeshRegion):
+            return self.reference(projection.body.elements[projection_index(node)], ctx)
+        if isinstance(node, core.MeshRegion):
+            return self.reference(node.body, ctx)
+        return self.names.get(id(node)) or expr.binding_name(node) or self.visit(node, ctx)
 
-    def _tuple_get_item_text(self, expr: Call, ctx=None) -> str:
-        held, index = expr.args
+    def tuple_get_item_text(self, node: expr.Call, ctx=None) -> str:
+        held, index = node.args
         return f"{self.reference(held)}[{self.visit(index, ctx)}]"
 
-    def _slice_start(self, start, size, stride) -> str:
-        moved = self._moved_window(start, size, stride)
+    def slice_start(self, start, size, stride) -> str:
+        moved = self.moved_window(start, size, stride)
         if moved is None:
-            return repr(start.value) if isinstance(start, Constant) else self.reference(start)
+            return repr(start.value) if isinstance(start, expr.Constant) else self.reference(start)
         window, offset, scale = moved
         name = self.reference(window)
         if scale is not None:
             name = f"{name} * {scale}"
-        return _moved_window_ref(name, offset)
+        return moved_window_ref(name, offset)
 
-    def visit_program_call(self, expr: Call, ctx=None) -> str:
+    def visit_program_call(self, node: expr.Call, ctx=None) -> str:
         """Render one HIR call after expression-level dispatch selected it."""
-        target = expr.target
-        args_text = ", ".join(self.reference(arg) for arg in expr.args)
-        if isinstance(target, ModuleList):
+        target = node.target
+        args_text = ", ".join(self.reference(arg) for arg in node.args)
+        if isinstance(target, core.ModuleList):
             return f"{target.key}({args_text})"
-        if isinstance(target, Call):
+        if isinstance(target, expr.Call):
             return f"{self.reference(target)}({args_text})"
-        if isinstance(target, HirFunction):
-            binding = _module_callee_binding(target, self._child_entries)
+        if isinstance(target, core.Function):
+            binding = module_callee_binding(target, self.child_entries)
             return f"{binding or target.name}({args_text})"
-        if isinstance(target, Slice):
-            starts = expr.args[1]
-            if not isinstance(starts, Tuple):
+        if isinstance(target, tensor.Slice):
+            starts = node.args[1]
+            if not isinstance(starts, expr.Tuple):
                 raise ValueError("canonical_source: Slice starts must be a Tuple")
             indexers: list[str] = []
             runtime_starts = False
             for axis, (start, size, stride) in enumerate(
                 zip(starts.elements, target.sizes, target.strides)
             ):
-                if self._moved_window(start, size, stride) is not None:
-                    indexers.append(self._slice_start(start, size, stride))
+                if self.moved_window(start, size, stride) is not None:
+                    indexers.append(self.slice_start(start, size, stride))
                     continue
-                dim = expr.args[0].type.shape[axis]
-                if isinstance(start, Constant) and start.value == 0 and size == dim and stride == 1:
+                dim = node.args[0].type.shape[axis]
+                if isinstance(start, expr.Constant) and start.value == 0 and size == dim and stride == 1:
                     indexers.append(":")
                     continue
                 if not (
-                    isinstance(start, Constant)
+                    isinstance(start, expr.Constant)
                     and isinstance(start.value, int)
                     and isinstance(size, int)
                     and isinstance(stride, int)
@@ -203,35 +180,35 @@ class HirPrinter(PythonPrinter):
                 indexers.append(f"{begin}:{stop}" if stride == 1 else f"{begin}:{stop}:{stride}")
             if runtime_starts:
                 start_refs = ", ".join(
-                    self._slice_start(start, size, stride)
+                    self.slice_start(start, size, stride)
                     for start, size, stride in zip(starts.elements, target.sizes, target.strides)
                 )
                 if len(starts.elements) == 1:
                     start_refs += ","
                 return (
-                    f"tf.slice({self.reference(expr.args[0])}, ({start_refs}), "
-                    f"sizes={_attr_tuple_str(target.sizes, self, ctx)}, "
-                    f"strides={_attr_tuple_str(target.strides, self, ctx)})"
+                    f"tf.slice({self.reference(node.args[0])}, ({start_refs}), "
+                    f"sizes={attr_tuple_str(target.sizes, self, ctx)}, "
+                    f"strides={attr_tuple_str(target.strides, self, ctx)})"
                 )
-            return f"{self.reference(expr.args[0])}[{', '.join(indexers)}]"
+            return f"{self.reference(node.args[0])}[{', '.join(indexers)}]"
 
-        registered_name = get_registered_name(target)
+        registered_name = expr.get_registered_name(target)
         dialect, *path, name = registered_name.split(".")
-        selected = lookup(dialect, tuple(path), name)
+        selected = op_registry.lookup(dialect, tuple(path), name)
         suppressed = frozenset(selected.fixed_attrs)
         attrs = self.op_attributes(
             target,
             ctx,
-            self._indent + "    ",
+            self.type_indent + "    ",
             suppressed=suppressed,
-            storage=getattr(expr.type, "storage", None),
+            storage=getattr(node.type, "storage", None),
         )
-        schema = getattr(type(target), "_op_schema", None)
+        schema = expr.schema_of(type(target))
         inputs = tuple(param for param in schema.signature if param.kind == "input") if schema else ()
         arguments = (
-            [self.tuple_reference(expr.args, ctx)]
-            if len(inputs) == 1 and variadic_item_annotation(inputs[0]) is not None
-            else [self.reference(arg) for arg in expr.args]
+            [self.tuple_reference(node.args, ctx)]
+            if len(inputs) == 1 and expr.variadic_item_annotation(inputs[0]) is not None
+            else [self.reference(arg) for arg in node.args]
         )
         return f"{registered_name}({', '.join([*arguments, *attrs])})"
 
@@ -241,12 +218,12 @@ class PythonPrintOptions:
     """Optional non-canonical annotations for inspection output."""
 
     show_types: bool = False
-    comment_metadata_types: tuple[type[IRMetadata], ...] = ()
+    comment_metadata_types: tuple[type[expr.IRMetadata], ...] = ()
     comment_opt_in: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
-class _PrintedStatement:
+class PrintedStatement:
     """The left-hand side and physical start line of an emitted value definition."""
 
     value: str
@@ -254,27 +231,27 @@ class _PrintedStatement:
 
 
 @dataclass(frozen=True)
-class _PythonRendering:
+class PythonRendering:
     """Rendered source and the Call statements produced in that same pass."""
 
     source: str
-    statements: dict[int, _PrintedStatement]
+    statements: dict[int, PrintedStatement]
 
 
-def _physical_line_count(lines: list[str]) -> int:
+def physical_line_count(lines: list[str]) -> int:
     return sum(line.count("\n") + 1 for line in lines)
 
 
-def _compact_type(ty: object, printer: PythonPrinter, ctx) -> str:
+def compact_type(ty: object, printer: PythonPrinter, ctx) -> str:
     """One physical-line, DSL-shaped type annotation for inspection output."""
-    if isinstance(ty, (TensorType, TupleType)):
+    if isinstance(ty, (types.TensorType, types.TupleType)):
         with printer.type_surface():
             rendered = printer.visit(ty, ctx)
         return " ".join(rendered.split())
     return repr(ty)
 
 
-def _comments(expr: Expr, options: PythonPrintOptions, printer: PythonPrinter, ctx) -> str:
+def metadata_comments(node: expr.Expr, options: PythonPrintOptions, printer: PythonPrinter, ctx) -> str:
     """Return same-line annotations for one printed statement.
 
     Omit the binding because the left-hand side already carries its emitted name
@@ -287,10 +264,10 @@ def _comments(expr: Expr, options: PythonPrintOptions, printer: PythonPrinter, c
     the boundary between those two languages.
     """
     comments: list[str] = []
-    if options.show_types and not isinstance(expr, (LoopRegion, MeshRegion)):
-        comments.append(_compact_type(expr.type, printer, ctx))
+    if options.show_types and not isinstance(node, (core.LoopRegion, core.MeshRegion)):
+        comments.append(compact_type(node.type, printer, ctx))
     for metadata_type in options.comment_metadata_types:
-        metadata = get_metadata(expr, metadata_type)
+        metadata = expr.get_metadata(node, metadata_type)
         if metadata is None:
             continue
         comment = printer.comment(metadata, opt_in=options.comment_opt_in)
@@ -299,14 +276,14 @@ def _comments(expr: Expr, options: PythonPrintOptions, printer: PythonPrinter, c
     return f"  # {PARTS.join(comments)}" if comments else ""
 
 
-def _moved_window_ref(name: str, offset: int) -> str:
+def moved_window_ref(name: str, offset: int) -> str:
     """A tile-window indexer, carrying the compile-time offset that moves it."""
     if offset == 0:
         return name
     return f"{name} + {offset}" if offset > 0 else f"{name} - {-offset}"
 
 
-def _attr_tuple_str(value: tuple, printer: PythonPrinter, ctx) -> str:
+def attr_tuple_str(value: tuple, printer: PythonPrinter, ctx) -> str:
     """Render an attribute's tuple value as a Python tuple literal.
 
     A shape-valued attribute -- `new_shape`, a tile's extents -- can hold a
@@ -316,19 +293,19 @@ def _attr_tuple_str(value: tuple, printer: PythonPrinter, ctx) -> str:
     the header emits binds the name, not the repr.
     """
     rendered = tuple(
-        printer.visit(entry, ctx) if _is_dim_entry(entry) else repr(entry) for entry in value
+        printer.visit(entry, ctx) if is_dim_entry(entry) else repr(entry) for entry in value
     )
     if len(rendered) == 1:
         return f"({rendered[0]},)"
     return "(" + ", ".join(rendered) + ")"
 
 
-def _is_dim_entry(entry: object) -> bool:
+def is_dim_entry(entry: object) -> bool:
     """Whether *entry* is a dimension rather than a plain attribute value."""
-    return isinstance(entry, (DimVar, Var, Constant, Call))
+    return isinstance(entry, (expr.DimVar, expr.Var, expr.Constant, expr.Call))
 
 
-def _tensor_import_names(fn: HirFunction) -> str:
+def tensor_import_names(fn: core.Function) -> str:
     """``"Tensor"`` or ``"ConstTensor, Tensor"``.
 
     ``"Tensor"`` or ``"ConstTensor, Tensor"`` — whichever the printed
@@ -339,7 +316,7 @@ def _tensor_import_names(fn: HirFunction) -> str:
     return "Tensor"
 
 
-def _sanitize_name(name: str) -> str:
+def sanitize_name(name: str) -> str:
     """Make a Python-safe identifier from a loc string."""
     safe = re.sub(r"[^a-zA-Z0-9_]", "_", name)
     if safe and safe[0].isdigit():
@@ -347,72 +324,72 @@ def _sanitize_name(name: str) -> str:
     return safe or "v"
 
 
-def _constraint_value_str(value: object) -> str:
-    if is_layout_wildcard(value):
+def constraint_value_str(value: object) -> str:
+    if clause.is_layout_wildcard(value):
         return "_"
     if isinstance(value, str) and re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", value):
         return value
     return repr(value)
 
 
-def _layout_constraint_str(constraint: LayoutClause) -> str:
+def layout_constraint_str(constraint: clause.Layout) -> str:
     split_bindings = {
         attr.axis: (topology, attr)
         for topology, attr in constraint.bindings
-        if isinstance(attr, Split)
+        if isinstance(attr, types.Split)
     }
     dims: list[str] = []
     for index, extent in enumerate(constraint.layout.shape):
         if index in split_bindings:
             topology, _ = split_bindings[index]
-            dims.append(f"{_constraint_value_str(extent)} @ {_constraint_value_str(topology)}")
+            dims.append(f"{constraint_value_str(extent)} @ {constraint_value_str(topology)}")
         else:
-            dims.append(_constraint_value_str(extent))
+            dims.append(constraint_value_str(extent))
     dims_str = "(" + ", ".join(dims) + ("," if len(dims) == 1 else "") + ")"
     bindings = [
-        (topology, attr) for topology, attr in constraint.bindings if not isinstance(attr, Split)
+        (topology, attr) for topology, attr in constraint.bindings if not isinstance(attr, types.Split)
     ]
     if not bindings:
         return dims_str
     binding_str = []
     for topology, attr in bindings:
-        if isinstance(attr, Broadcast):
-            binding_str.append(f"{_constraint_value_str(topology)} @ B()")
-        elif isinstance(attr, Partial):
-            binding_str.append(f'{_constraint_value_str(topology)} @ P("{attr.reduction}")')
-        else:  # pragma: no cover - LayoutClause validates this type
+        if isinstance(attr, types.Broadcast):
+            binding_str.append(f"{constraint_value_str(topology)} @ B()")
+        elif isinstance(attr, types.Partial):
+            binding_str.append(f'{constraint_value_str(topology)} @ P("{attr.reduction}")')
+        else:
             raise TypeError(f"unsupported layout binding {type(attr).__name__}")
     return f"{dims_str} @ {{{', '.join(binding_str)}}}"
 
 
-def _where_str(metadata: WhereClauseMetadata) -> str:
+def where_str(metadata: clause.WhereMetadata) -> str:
     layout = next(
-        (item for item in metadata.constraints if isinstance(item, LayoutClause)),
+        (item for item in metadata.constraints if isinstance(item, clause.Layout)),
         None,
     )
     fields: list[str] = []
     if layout is not None:
-        fields.append(f"layout={_layout_constraint_str(layout)}")
+        fields.append(f"layout={layout_constraint_str(layout)}")
     for item in metadata.constraints:
-        if isinstance(item, MeshClause):
+        if isinstance(item, clause.Mesh):
             fields.append(f"mesh={PythonPrinter().visit(item.mesh, HirPrintContext())}")
-        elif isinstance(item, StorageClause):
+        elif isinstance(item, clause.Storage):
             fields.append(f'storage="{item.storage.name.lower()}"')
     return "where(" + ", ".join(fields) + ")"
 
 
-def _constraint_line(expr: Expr, indent: str, name: str) -> str | None:
-    metadata = clause_metadata(expr)
+def constraint_line(node: expr.Expr, indent: str, name: str) -> str | None:
+    metadata = clause.metadata(node)
     if metadata is None:
         return None
-    return f"{indent}{name}: {_where_str(metadata)}"
+    return f"{indent}{name}: {where_str(metadata)}"
 
 
-def iter_exprs(root: Expr | None, seen: set[int] | None = None) -> Iterator[Expr]:
+def iter_exprs(root: expr.Expr | None, seen: set[int] | None = None) -> Iterator[expr.Expr]:
     """Iter exprs.
 
     Post-order traversal of *root* and its descendants via
-    ``tilefoundry.ir.visitor.expr_children`` (which, unlike the hand-rolled
+    ``tilefoundry.ir.core.visitor.expr_children`` (which, unlike the hand-rolled
     walkers this replaces, descends into ``LoopRegion``). Each node is
     yielded exactly once by object identity; *seen* lets callers share dedup
     state across repeated calls (e.g. one per function param).
@@ -425,37 +402,37 @@ def iter_exprs(root: Expr | None, seen: set[int] | None = None) -> Iterator[Expr
     if key in seen:
         return
     seen.add(key)
-    for child in expr_children(root):
+    for child in core.expr_children(root):
         yield from iter_exprs(child, seen)
     yield root
 
 
-def _region_projection(expr: Expr) -> LoopRegion | MeshRegion | None:
+def region_projection(node: expr.Expr) -> core.LoopRegion | core.MeshRegion | None:
     """Return the region projected by a constant-index ``TupleGetItem``."""
     if not (
-        isinstance(expr, Call)
-        and isinstance(expr.target, TupleGetItem)
-        and len(expr.args) == 2
-        and isinstance(expr.args[1], Constant)
-        and isinstance(expr.args[1].value, int)
+        isinstance(node, expr.Call)
+        and isinstance(node.target, tensor.TupleGetItem)
+        and len(node.args) == 2
+        and isinstance(node.args[1], expr.Constant)
+        and isinstance(node.args[1].value, int)
     ):
         return None
-    region = expr.args[0]
-    if isinstance(region, LoopRegion):
+    region = node.args[0]
+    if isinstance(region, core.LoopRegion):
         return region
-    if isinstance(region, MeshRegion) and isinstance(region.body, Tuple):
+    if isinstance(region, core.MeshRegion) and isinstance(region.body, expr.Tuple):
         return region
     return None
 
 
-def _projection_index(expr: Call) -> int:
+def projection_index(node: expr.Call) -> int:
     """The literal field selected by a region projection."""
-    index = expr.args[1]
-    assert isinstance(index, Constant) and isinstance(index.value, int)
+    index = node.args[1]
+    assert isinstance(index, expr.Constant) and isinstance(index.value, int)
     return index.value
 
 
-def _module_callee_binding(target: HirFunction, child_entries: dict[int, str]) -> str | None:
+def module_callee_binding(target: core.Function, child_entries: dict[int, str]) -> str | None:
     """The attribute a call on *target* was written through, if a child's entry.
 
     Follows the whole chain a rebuilt function records, so a target elaborated
@@ -465,16 +442,48 @@ def _module_callee_binding(target: HirFunction, child_entries: dict[int, str]) -
     """
     candidate: object = target
     seen: set[int] = set()
-    while isinstance(candidate, HirFunction) and id(candidate) not in seen:
+    while isinstance(candidate, core.Function) and id(candidate) not in seen:
         seen.add(id(candidate))
         if id(candidate) in child_entries:
             return child_entries[id(candidate)]
-        candidate = origin_of(candidate)
+        candidate = valuation.origin_of(candidate)
     return None
 
 
-def _emit_def(
-    fn: HirFunction,
+def capture_root(value, param_alias):
+    while id(value) in param_alias:
+        value = param_alias[id(value)]
+    return value
+
+
+def window_base(start, stride, param_alias):
+    """Recognize an induction window, optionally scaled and shifted by integers."""
+    if (value := expr.static_dim_value(start)) is not None:
+        return None, value, None
+    window, offset = capture_root(start, param_alias), 0
+    while isinstance(window, expr.Call) and isinstance(window.target, (expr.DimAdd, expr.DimSub)):
+        left, right = window.args
+        shift = expr.static_dim_value(services.normalize_dim(capture_root(right, param_alias)))
+        if shift is None:
+            shift = expr.static_dim_value(services.normalize_dim(capture_root(left, param_alias)))
+            if shift is None or not isinstance(window.target, expr.DimAdd):
+                break
+            left = right
+        offset += shift if isinstance(window.target, expr.DimAdd) else -shift
+        window = capture_root(left, param_alias)
+    if isinstance(window, expr.Var) and stride == 1:
+        return window, offset, None
+    if isinstance(window, expr.Call) and isinstance(window.target, expr.DimMul):
+        for value, coefficient in (window.args, window.args[::-1]):
+            root = capture_root(value, param_alias)
+            scale = expr.static_dim_value(capture_root(coefficient, param_alias))
+            if isinstance(root, expr.Var) and scale is not None and scale == stride:
+                return root, offset, scale
+    return None
+
+
+def emit_def(
+    fn: core.Function,
     def_name: str,
     ctx: HirPrintContext,
     indent: str,
@@ -482,7 +491,7 @@ def _emit_def(
     child_entries: dict[int, str] | None = None,
     *,
     line_offset: int = 0,
-    statements: dict[int, _PrintedStatement] | None = None,
+    statements: dict[int, PrintedStatement] | None = None,
 ) -> list[str]:
     """Render one function ``def`` block: signature + body (or ``pass`` for a prototype).
 
@@ -494,261 +503,228 @@ def _emit_def(
     child_entries = {} if child_entries is None else child_entries
     lines: list[str] = []
     printer = HirPrinter()
-    root_mesh = fn.body.mesh if isinstance(fn.body, MeshRegion) and not fn.specializations else None
+    root_mesh = fn.body.mesh if isinstance(fn.body, core.MeshRegion) and not fn.specializations else None
     if root_mesh is not None:
         ctx.push_mesh(root_mesh, "mesh")
 
-    _names: dict[int, str] = {}
+    names: dict[int, str] = {}
 
-    _seen: set[int] = set()
-    _order: list[Expr] = list(iter_exprs(fn.body, _seen))
+    seen: set[int] = set()
+    order: list[expr.Expr] = list(iter_exprs(fn.body, seen))
     for p in fn.params:
-        _order.extend(iter_exprs(p, _seen))
-    region_types = (LoopRegion, MeshRegion)
-    for scope in tuple(expr for expr in _order if isinstance(expr, region_types)):
+        order.extend(iter_exprs(p, seen))
+    region_types = (core.LoopRegion, core.MeshRegion)
+    for scope in tuple(node for node in order if isinstance(node, region_types)):
         for param in scope.params:
-            _order.extend(iter_exprs(param, _seen))
-    _param_alias = {
+            order.extend(iter_exprs(param, seen))
+    param_alias = {
         id(param): arg
-        for scope in tuple(expr for expr in _order if isinstance(expr, region_types))
+        for scope in tuple(node for node in order if isinstance(node, region_types))
         for param, arg in scope.captures()
     }
 
-    def _capture_root(value):
-        while id(value) in _param_alias:
-            value = _param_alias[id(value)]
-        return value
-
-    _instance_targets = {
-        id(expr.target)
-        for expr in _order
-        if isinstance(expr, Call) and isinstance(expr.target, Call)
+    instance_targets = {
+        id(node.target)
+        for node in order
+        if isinstance(node, expr.Call) and isinstance(node.target, expr.Call)
     }
-    _op_names_set: set[str] = set()
-    for expr in _order:
-        if isinstance(expr, Call):
-            target = expr.target
-            if isinstance(target, HirFunction):
-                _op_names_set.add(target.name)
-            elif isinstance(target, Op) and not is_dim_op_call(expr):
-                _op_names_set.add(get_registered_name(target).split(".")[-1])
+    op_names_set: set[str] = set()
+    for node2 in order:
+        if isinstance(node2, expr.Call):
+            target = node2.target
+            if isinstance(target, core.Function):
+                op_names_set.add(target.name)
+            elif isinstance(target, expr.Op) and not expr.is_dim_op_call(node2):
+                op_names_set.add(expr.get_registered_name(target).split(".")[-1])
 
-    _forced_names: dict[int, str] = {}
-    _tile_window_steps: dict[int, object] = {}
+    forced_names: dict[int, str] = {}
+    tile_window_steps: dict[int, object] = {}
     collapsed_slice_ids = {
-        id(expr.args[0])
-        for expr in _order
-        if isinstance(expr, Call)
-        and isinstance(expr.target, Reshape)
-        and len(expr.args) == 1
-        and isinstance(expr.args[0], Call)
-        and isinstance(expr.args[0].target, Slice)
-        and isinstance(expr.args[0].type, TensorType)
-        and isinstance(expr.type, TensorType)
-        and len(expr.type.shape) < len(expr.args[0].type.shape)
+        id(node.args[0])
+        for node in order
+        if isinstance(node, expr.Call)
+        and isinstance(node.target, tensor.Reshape)
+        and len(node.args) == 1
+        and isinstance(node.args[0], expr.Call)
+        and isinstance(node.args[0].target, tensor.Slice)
+        and isinstance(node.args[0].type, types.TensorType)
+        and isinstance(node.type, types.TensorType)
+        and len(node.type.shape) < len(node.args[0].type.shape)
     }
 
-    def _window_base(start, stride):
-        """Recognize an induction window, optionally scaled and shifted by integers."""
-        if (value := static_dim_value(start)) is not None:
-            return None, value, None
-        window, offset = _capture_root(start), 0
-        while isinstance(window, Call) and isinstance(window.target, (DimAdd, DimSub)):
-            left, right = window.args
-            shift = static_dim_value(normalize_dim(_capture_root(right)))
-            if shift is None:
-                shift = static_dim_value(normalize_dim(_capture_root(left)))
-                if shift is None or not isinstance(window.target, DimAdd):
-                    break
-                left = right
-            offset += shift if isinstance(window.target, DimAdd) else -shift
-            window = _capture_root(left)
-        if isinstance(window, Var) and stride == 1:
-            return window, offset, None
-        if isinstance(window, Call) and isinstance(window.target, DimMul):
-            for value, coefficient in (window.args, window.args[::-1]):
-                root = _capture_root(value)
-                scale = static_dim_value(_capture_root(coefficient))
-                if isinstance(root, Var) and scale is not None and scale == stride:
-                    return root, offset, scale
-        return None
-
-    _grid_internal_ids: set[int] = set()
-    _mesh_region_internal_ids: set[int] = set()
-    _nested_grid_ids: set[int] = set()
-    for expr in _order:
-        if not isinstance(expr, LoopRegion):
+    grid_internal_ids: set[int] = set()
+    mesh_region_internal_ids: set[int] = set()
+    nested_grid_ids: set[int] = set()
+    for node2 in order:
+        if not isinstance(node2, core.LoopRegion):
             continue
         if any(
-            isinstance(candidate, Call)
-            and isinstance(candidate.target, Slice)
+            isinstance(candidate, expr.Call)
+            and isinstance(candidate.target, tensor.Slice)
             and id(candidate) not in collapsed_slice_ids
             and len(candidate.args) == 2
-            and isinstance(candidate.args[1], Tuple)
+            and isinstance(candidate.args[1], expr.Tuple)
             and any(
-                (window := _window_base(start, stride)) is not None
-                and window[0] is expr.induction_var
-                and size == expr.step
+                (window := window_base(start, stride, param_alias)) is not None
+                and window[0] is node2.induction_var
+                and size == node2.step
                 for start, size, stride in zip(
                     candidate.args[1].elements,
                     candidate.target.sizes,
                     candidate.target.strides,
                 )
             )
-            for candidate in _order
+            for candidate in order
         ):
-            _tile_window_steps[id(expr.induction_var)] = expr.step
+            tile_window_steps[id(node2.induction_var)] = node2.step
         for carry, init, value in zip(
-            expr.params[: len(expr.yield_values)],
-            expr.args[: len(expr.yield_values)],
-            expr.yield_values,
+            node2.params[: len(node2.yield_values)],
+            node2.args[: len(node2.yield_values)],
+            node2.yield_values,
         ):
-            _forced_names[id(carry)] = _sanitize_name(carry.name)
-            if not isinstance(init, Var):
-                _forced_names[id(init)] = _sanitize_name(carry.name)
-        for _ in iter_exprs(expr.body, _grid_internal_ids):
+            forced_names[id(carry)] = sanitize_name(carry.name)
+            if not isinstance(init, expr.Var):
+                forced_names[id(init)] = sanitize_name(carry.name)
+        for _ in iter_exprs(node2.body, grid_internal_ids):
             pass
-        for value in expr.yield_values:
-            for _ in iter_exprs(value, _grid_internal_ids):
+        for value in node2.yield_values:
+            for _ in iter_exprs(value, grid_internal_ids):
                 pass
-        for nested in iter_exprs(expr.body, set()):
-            if isinstance(nested, LoopRegion) and nested is not expr:
-                _nested_grid_ids.add(id(nested))
-        for value in expr.yield_values:
+        for nested in iter_exprs(node2.body, set()):
+            if isinstance(nested, core.LoopRegion) and nested is not node2:
+                nested_grid_ids.add(id(nested))
+        for value in node2.yield_values:
             for nested in iter_exprs(value, set()):
-                if isinstance(nested, LoopRegion) and nested is not expr:
-                    _nested_grid_ids.add(id(nested))
+                if isinstance(nested, core.LoopRegion) and nested is not node2:
+                    nested_grid_ids.add(id(nested))
 
-    _root_grid_init_ids: set[int] = set()
-    for expr in _order:
-        if not isinstance(expr, LoopRegion) or id(expr) in _nested_grid_ids:
+    root_grid_init_ids: set[int] = set()
+    for node2 in order:
+        if not isinstance(node2, core.LoopRegion) or id(node2) in nested_grid_ids:
             continue
-        for init in expr.args:
+        for init in node2.args:
             pending = [init]
             while pending:
                 value = pending.pop()
-                if id(value) in _root_grid_init_ids:
+                if id(value) in root_grid_init_ids:
                     continue
-                _root_grid_init_ids.add(id(value))
-                pending.extend(value.args if isinstance(value, region_types) else expr_children(value))
-    _grid_internal_ids.difference_update(_root_grid_init_ids)
+                root_grid_init_ids.add(id(value))
+                pending.extend(value.args if isinstance(value, region_types) else core.expr_children(value))
+    grid_internal_ids.difference_update(root_grid_init_ids)
 
-    for expr in _order:
-        if isinstance(expr, MeshRegion):
-            for _ in iter_exprs(expr.body, _mesh_region_internal_ids):
+    for node2 in order:
+        if isinstance(node2, core.MeshRegion):
+            for _ in iter_exprs(node2.body, mesh_region_internal_ids):
                 pass
 
-    def _moved_window(start, size, stride):
+    def moved_window(start, size, stride):
         """The tile window and offset *start* moves it by, else ``None``."""
-        window = _window_base(start, stride)
-        if window is not None and _tile_window_steps.get(id(window[0])) == size:
+        window = window_base(start, stride, param_alias)
+        if window is not None and tile_window_steps.get(id(window[0])) == size:
             return window
         return None
 
-    _inlined_start_ids = {
+    inlined_start_ids = {
         id(start)
-        for expr in _order
-        if isinstance(expr, Call)
-        and isinstance(expr.target, Slice)
-        and len(expr.args) == 2
-        and isinstance(expr.args[1], Tuple)
+        for node in order
+        if isinstance(node, expr.Call)
+        and isinstance(node.target, tensor.Slice)
+        and len(node.args) == 2
+        and isinstance(node.args[1], expr.Tuple)
         for start, size, stride in zip(
-            expr.args[1].elements, expr.target.sizes, expr.target.strides
+            node.args[1].elements, node.target.sizes, node.target.strides
         )
-        if _moved_window(start, size, stride) is not None
+        if moved_window(start, size, stride) is not None
     }
-    _window_start_call_ids = {
+    window_start_call_ids = {
         id(node)
-        for expr in _order
-        if isinstance(expr, Call) and isinstance(expr.target, Slice)
-        and isinstance(expr.args[1], Tuple)
+        for node3 in order
+        if isinstance(node3, expr.Call) and isinstance(node3.target, tensor.Slice)
+        and isinstance(node3.args[1], expr.Tuple)
         for start, size, stride in zip(
-            expr.args[1].elements, expr.target.sizes, expr.target.strides
+            node3.args[1].elements, node3.target.sizes, node3.target.strides
         )
-        if _moved_window(start, size, stride) is not None
+        if moved_window(start, size, stride) is not None
         for node in iter_exprs(start, set())
-        if isinstance(node, Call)
+        if isinstance(node, expr.Call)
     }
-    _tuple_index_ids: set[int] = set()
-    for expr in _order:
-        if isinstance(expr, Call) and isinstance(expr.target, TupleGetItem):
-            for nested in iter_exprs(expr.args[1], set()):
-                if not isinstance(nested, Var):
-                    _tuple_index_ids.add(id(nested))
-    _inlined_start_ids.update(_tuple_index_ids)
+    tuple_index_ids: set[int] = set()
+    for node2 in order:
+        if isinstance(node2, expr.Call) and isinstance(node2.target, tensor.TupleGetItem):
+            for nested in iter_exprs(node2.args[1], set()):
+                if not isinstance(nested, expr.Var):
+                    tuple_index_ids.add(id(nested))
+    inlined_start_ids.update(tuple_index_ids)
 
-    def _preferred_name(expr: Expr) -> str | None:
-        key = id(expr)
-        if key in _forced_names:
-            return _forced_names[key]
-        if isinstance(expr, Var) and expr.name:
-            return _sanitize_name(expr.name)
-        if key not in _window_start_call_ids and (authored_name := binding_name(expr)):
-            return _sanitize_name(authored_name)
+    def preferred_name(node: expr.Expr) -> str | None:
+        key = id(node)
+        if key in forced_names:
+            return forced_names[key]
+        if isinstance(node, expr.Var) and node.name:
+            return sanitize_name(node.name)
+        if key not in window_start_call_ids and (authored_name := expr.binding_name(node)):
+            return sanitize_name(authored_name)
         return None
 
-    _positions = {
-        id(expr): position
-        for position, expr in enumerate(expr for expr in _order if not isinstance(expr, Var) or not expr.name)
+    positions = {
+        id(node): position
+        for position, node in enumerate(node3 for node3 in order if not isinstance(node3, expr.Var) or not node3.name)
     }
-    _reserved_names = {
-        name for expr in _order if (name := _preferred_name(expr)) is not None
+    reserved_names = {
+        name for node in order if (name := preferred_name(node)) is not None
     }
 
-    def _assign_name(expr: Expr) -> str:
+    def assign_name(node: expr.Expr) -> str:
         """Use definition positions independent of import-supplied binding names.
 
         Named Vars declare parameters; other values occupy definition positions.
         Reserve authored identifiers before generating names or suffixes.
         """
-        key = id(expr)
-        if key in _names:
-            return _names[key]
-        preferred = _preferred_name(expr)
-        name = preferred if preferred is not None else f"v{_positions[key]}"
-        if key in _forced_names and name in _names.values():
-            _names[key] = name
+        key = id(node)
+        if key in names:
+            return names[key]
+        preferred = preferred_name(node)
+        name = preferred if preferred is not None else f"v{positions[key]}"
+        if key in forced_names and name in names.values():
+            names[key] = name
             return name
 
         base = name
         n = 2
-        while name in _names.values() or (name in _reserved_names and name != preferred):
+        while name in names.values() or (name in reserved_names and name != preferred):
             name = f"{base}_{n}"
             n += 1
-        _names[key] = name
+        names[key] = name
         return name
 
-    for expr in _order:
-        if id(expr) not in _tuple_index_ids:
-            _assign_name(expr)
-    for expr in _order:
-        if isinstance(expr, LoopRegion):
-            for carry in expr.params[: len(expr.yield_values)]:
-                _assign_name(carry)
-    for expr in _order:
-        if isinstance(expr, LoopRegion):
-            _assign_name(expr.induction_var)
-    printer.bind_def(_names, _param_alias, child_entries, _moved_window)
-    shared = getattr(ctx, "value_printer", printer)
-    printer._function = fn
-    shared._definitions[id(fn)] = printer
-    shared._definitions.update({identity: printer for identity in _names})
-    printer._definitions = shared._definitions
-    printer._statements = shared._statements
+    for node2 in order:
+        if id(node2) not in tuple_index_ids:
+            assign_name(node2)
+    for node2 in order:
+        if isinstance(node2, core.LoopRegion):
+            for carry in node2.params[: len(node2.yield_values)]:
+                assign_name(carry)
+    for node2 in order:
+        if isinstance(node2, core.LoopRegion):
+            assign_name(node2.induction_var)
+    printer.bind_def(names, param_alias, child_entries, moved_window)
+    shared = getattr(ctx, "value_printer", None) or printer
+    shared.define(printer, fn, names)
+    printer.share(fn, shared)
 
     return_type = fn.return_type
     arrow = ""
-    if isinstance(return_type, TensorType):
+    if isinstance(return_type, types.TensorType):
         with printer.type_surface(indent=indent):
             arrow = " -> " + printer.visit(return_type, ctx)
-    elif not isinstance(return_type, TupleType):
+    elif not isinstance(return_type, types.TupleType):
         arrow = " -> None"
 
     lines.append(f"def {def_name}(")
     params: list[str] = []
     for param in fn.params:
-        name = _names[id(param)]
-        if isinstance(param.type, TensorType):
+        name = names[id(param)]
+        if isinstance(param.type, types.TensorType):
             with printer.type_surface(indent=indent, const=param.is_const):
                 annotation = printer.visit(param.annotation, ctx)
             params.append(f"{indent}{name}: {annotation}")
@@ -760,7 +736,7 @@ def _emit_def(
     lines.append(f"){arrow}:")
 
     for param in fn.params:
-        line = _constraint_line(param, indent, _names[id(param)])
+        line = constraint_line(param, indent, names[id(param)])
         if line is not None:
             lines.append(line)
     if fn.body is None:
@@ -771,86 +747,86 @@ def _emit_def(
 
     printed: set[int] = {id(param) for param in fn.params}
 
-    def _emit_inline_call(expr: Call, level: str) -> None:
-        name = _names[id(expr)]
+    def emit_inline_call(node: expr.Call, level: str) -> None:
+        name = names[id(node)]
         if statements is not None:
-            statements[id(expr)] = _PrintedStatement(
+            statements[id(node)] = PrintedStatement(
                 value=name,
-                line=line_offset + _physical_line_count(lines) + 1,
+                line=line_offset + physical_line_count(lines) + 1,
             )
         with printer.type_surface(indent=level):
-            rendered = printer.visit(expr, ctx)
-        lines.append(f"{level}{name} = {rendered}{_comments(expr, options, printer, ctx)}")
-        printed.add(id(expr))
+            rendered = printer.visit(node, ctx)
+        lines.append(f"{level}{name} = {rendered}{metadata_comments(node, options, printer, ctx)}")
+        printed.add(id(node))
 
-    def _emit_expr(expr: Expr, level: str) -> None:
-        key = id(expr)
+    def emit_expr(node: expr.Expr, level: str) -> None:
+        key = id(node)
         if key in printed:
             return
-        if key in _instance_targets:
-            for operand in expr_children(expr):
-                _emit_expr(operand, level)
+        if key in instance_targets:
+            for operand in core.expr_children(node):
+                emit_expr(operand, level)
             printed.add(key)
             return
-        if key in _inlined_start_ids:
+        if key in inlined_start_ids:
             printed.add(key)
             return
-        if isinstance(expr, Var):
+        if isinstance(node, expr.Var):
             printed.add(key)
             return
-        if isinstance(expr, Constant):
+        if isinstance(node, expr.Constant):
             lines.append(
-                f"{level}{_names[id(expr)]} = {printer.print(expr.value, ctx)}"
-                f"{_comments(expr, options, printer, ctx)}"
+                f"{level}{names[id(node)]} = {printer.print(node.value, ctx)}"
+                f"{metadata_comments(node, options, printer, ctx)}"
             )
             printed.add(key)
             return
-        if isinstance(expr, Tuple):
-            for element in expr.elements:
-                if not isinstance(element, Constant):
-                    _emit_expr(element, level)
+        if isinstance(node, expr.Tuple):
+            for element in node.elements:
+                if not isinstance(element, expr.Constant):
+                    emit_expr(element, level)
             printed.add(key)
             return
-        if isinstance(expr, LoopRegion):
-            _emit_loop_region(expr, level)
+        if isinstance(node, core.LoopRegion):
+            emit_loop_region(node, level)
             return
-        if isinstance(expr, MeshRegion):
-            _emit_mesh_region(expr, level)
+        if isinstance(node, core.MeshRegion):
+            emit_mesh_region(node, level)
             return
-        if isinstance(expr, Call):
-            projection = _region_projection(expr)
-            if isinstance(projection, LoopRegion):
-                _emit_loop_region(projection, level)
+        if isinstance(node, expr.Call):
+            projection = region_projection(node)
+            if isinstance(projection, core.LoopRegion):
+                emit_loop_region(projection, level)
                 printed.add(key)
                 return
-            if isinstance(projection, MeshRegion):
-                _emit_mesh_region(projection, level)
+            if isinstance(projection, core.MeshRegion):
+                emit_mesh_region(projection, level)
                 printed.add(key)
                 return
-            for arg in expr.args:
-                _emit_expr(arg, level)
-            _emit_inline_call(expr, level)
+            for arg in node.args:
+                emit_expr(arg, level)
+            emit_inline_call(node, level)
             return
         printed.add(key)
 
-    def _emit_loop_region(region: LoopRegion, level: str) -> None:
+    def emit_loop_region(region: core.LoopRegion, level: str) -> None:
         key = id(region)
         if key in printed:
             return
         for init in region.args:
-            _emit_expr(init, level)
+            emit_expr(init, level)
         for carry, init in zip(
             region.params[: len(region.yield_values)],
             region.args[: len(region.yield_values)],
             strict=True,
         ):
-            if isinstance(init, Var) and _names[id(carry)] != printer.reference(init):
-                lines.append(f"{level}{_names[id(carry)]} = {printer.reference(init)}")
+            if isinstance(init, expr.Var) and names[id(carry)] != printer.reference(init):
+                lines.append(f"{level}{names[id(carry)]} = {printer.reference(init)}")
             printed.add(id(carry))
         extent = printer.visit(region.extent, ctx)
         step = printer.visit(region.step, ctx)
         start = printer.visit(region.start, ctx)
-        if id(region.induction_var) in _tile_window_steps:
+        if id(region.induction_var) in tile_window_steps:
             loop = (
                 f"tf.tile({extent}, {step})"
                 if region.start == 0
@@ -861,104 +837,104 @@ def _emit_def(
         else:
             loop = f"range({start}, {extent}, {step})"
         lines.append(
-            f"{level}for {_names[id(region.induction_var)]} in {loop}:{_comments(region, options, printer, ctx)}"
+            f"{level}for {names[id(region.induction_var)]} in {loop}:{metadata_comments(region, options, printer, ctx)}"
         )
         if statements is not None:
             for carry in region.params[: len(region.yield_values)]:
-                statements[id(carry)] = _PrintedStatement(
-                    value=_names[id(carry)], line=line_offset + _physical_line_count(lines)
+                statements[id(carry)] = PrintedStatement(
+                    value=names[id(carry)], line=line_offset + physical_line_count(lines)
                 )
         printed.add(key)
         inner = level + "    "
-        _emit_expr(region.body, inner)
+        emit_expr(region.body, inner)
         for value in region.yield_values:
-            _emit_expr(value, inner)
+            emit_expr(value, inner)
         for carry, value in zip(region.params[: len(region.yield_values)], region.yield_values):
-            lines.append(f"{inner}{_names[id(carry)]} = {printer.reference(value)}")
+            lines.append(f"{inner}{names[id(carry)]} = {printer.reference(value)}")
 
-    def _emit_mesh_region(region: MeshRegion, level: str, *, terminal: bool = False) -> None:
+    def emit_mesh_region(region: core.MeshRegion, level: str, *, terminal: bool = False) -> None:
         key = id(region)
         if key in printed:
             return
         for arg in region.args:
-            _emit_expr(arg, level)
+            emit_expr(arg, level)
         if root_mesh is not None and region is fn.body:
             printed.add(key)
-            _emit_expr(region.body, level)
+            emit_expr(region.body, level)
             if terminal:
                 lines.append(f"{level}return {printer.reference(region.body, ctx)}")
             return
         mesh_text = printer.mesh_context(region.mesh, ctx)
         mesh_name = ctx.scope_name(region.mesh)
         lines.append(
-            f"{level}with {mesh_text} as {mesh_name}:{_comments(region, options, printer, ctx)}"
+            f"{level}with {mesh_text} as {mesh_name}:{metadata_comments(region, options, printer, ctx)}"
         )
         printed.add(key)
         inner = level + "    "
         ctx.push_mesh(region.mesh, mesh_name)
         try:
-            if terminal and isinstance(region.body, MeshRegion):
-                _emit_mesh_region(region.body, inner, terminal=True)
+            if terminal and isinstance(region.body, core.MeshRegion):
+                emit_mesh_region(region.body, inner, terminal=True)
                 return
-            _emit_expr(region.body, inner)
+            emit_expr(region.body, inner)
             if terminal:
                 lines.append(f"{inner}return {printer.reference(region.body, ctx)}")
         finally:
             ctx.pop_mesh()
 
-    for expr in _order:
+    for node2 in order:
         if (
-            isinstance(expr, (Var, ModuleList))
-            or id(expr) in _instance_targets
-            or id(expr) in _grid_internal_ids
-            or id(expr) in _mesh_region_internal_ids
+            isinstance(node2, (expr.Var, core.ModuleList))
+            or id(node2) in instance_targets
+            or id(node2) in grid_internal_ids
+            or id(node2) in mesh_region_internal_ids
         ):
             continue
-        if id(expr) in _inlined_start_ids:
-            printed.add(id(expr))
+        if id(node2) in inlined_start_ids:
+            printed.add(id(node2))
             continue
-        if isinstance(expr, LoopRegion):
-            _emit_loop_region(expr, indent)
+        if isinstance(node2, core.LoopRegion):
+            emit_loop_region(node2, indent)
             continue
-        if isinstance(expr, MeshRegion):
-            _emit_mesh_region(expr, indent, terminal=expr is fn.body)
+        if isinstance(node2, core.MeshRegion):
+            emit_mesh_region(node2, indent, terminal=node2 is fn.body)
             continue
-        if _region_projection(expr) is not None:
-            printed.add(id(expr))
+        if region_projection(node2) is not None:
+            printed.add(id(node2))
             continue
-        if isinstance(expr, Constant):
-            name = _names[id(expr)]
+        if isinstance(node2, expr.Constant):
+            name = names[id(node2)]
             lines.append(
-                f"{indent}{name} = {printer.print(expr.value, ctx)}{_comments(expr, options, printer, ctx)}"
+                f"{indent}{name} = {printer.print(node2.value, ctx)}{metadata_comments(node2, options, printer, ctx)}"
             )
-            line = _constraint_line(expr, indent, name)
+            line = constraint_line(node2, indent, name)
             if line is not None:
                 lines.append(line)
-            printed.add(id(expr))
+            printed.add(id(node2))
             continue
-        if isinstance(expr, Tuple):
+        if isinstance(node2, expr.Tuple):
             continue
-        if isinstance(expr, Call):
-            name = _names[id(expr)]
+        if isinstance(node2, expr.Call):
+            name = names[id(node2)]
             if statements is not None:
-                statements[id(expr)] = _PrintedStatement(
+                statements[id(node2)] = PrintedStatement(
                     value=name,
-                    line=line_offset + _physical_line_count(lines) + 1,
+                    line=line_offset + physical_line_count(lines) + 1,
                 )
             with printer.type_surface(indent=indent):
-                rendered = printer.visit(expr, ctx)
-            lines.append(f"{indent}{name} = {rendered}{_comments(expr, options, printer, ctx)}")
-            line = _constraint_line(expr, indent, name)
+                rendered = printer.visit(node2, ctx)
+            lines.append(f"{indent}{name} = {rendered}{metadata_comments(node2, options, printer, ctx)}")
+            line = constraint_line(node2, indent, name)
             if line is not None:
                 lines.append(line)
-            printed.add(id(expr))
+            printed.add(id(node2))
 
-    if not isinstance(fn.body, MeshRegion):
-        if isinstance(fn.body, Tuple):
+    if not isinstance(fn.body, core.MeshRegion):
+        if isinstance(fn.body, expr.Tuple):
             lines.append(f"{indent}return {printer.tuple_reference(fn.body.elements, ctx)}")
-        elif isinstance(fn.body, LoopRegion):
+        elif isinstance(fn.body, core.LoopRegion):
             values = tuple(
-                _names[id(carry)] for carry in fn.body.params[: len(fn.body.yield_values)]
+                names[id(carry)] for carry in fn.body.params[: len(fn.body.yield_values)]
             )
             result = values[0] if len(values) == 1 else "(" + ", ".join(values) + ")"
             lines.append(f"{indent}return {result}")
@@ -970,34 +946,33 @@ def _emit_def(
     return lines
 
 
-def _new_hir_context(*, target=None) -> HirPrintContext:
+def new_hir_context(*, target=None) -> HirPrintContext:
     """Create a HIR context with imports owned by the surrounding file."""
-    ctx = HirPrintContext()
-    ctx.target = target
+    ctx = HirPrintContext(target=target)
     if target is not None:
         rendered = target.to_python()
         ctx.imports.update(rendered.imports)
     return ctx
 
 
-def _variant_binding_name(variant: HirFunction) -> str:
+def variant_binding_name(variant: core.Function) -> str:
     """Return a valid source binding for a variant without display metadata."""
-    label = display_name(variant)
+    label = valuation.display_name(variant)
     if label is not None:
         return label
-    signature = canonical_specialization_signature(variant.specializations)
+    signature = valuation.canonical_specialization_signature(variant.specializations)
     return "variant_" + re.sub(r"[^0-9A-Za-z_]", "_", signature)
 
 
-def _emit_decorated_defs(
-    fn: HirFunction,
+def emit_decorated_defs(
+    fn: core.Function,
     ctx: HirPrintContext,
     indent: str,
     options: PythonPrintOptions,
     child_entries: dict[int, str] | None = None,
     *,
     line_offset: int = 0,
-    statements: dict[int, _PrintedStatement] | None = None,
+    statements: dict[int, PrintedStatement] | None = None,
 ) -> list[str]:
     """Emit decorated defs.
 
@@ -1008,7 +983,7 @@ def _emit_decorated_defs(
     """
     printer = HirPrinter()
     decorator = "@func"
-    if isinstance(fn.body, MeshRegion) and not fn.specializations:
+    if isinstance(fn.body, core.MeshRegion) and not fn.specializations:
         root_ctx = HirPrintContext()
         with printer.type_surface(indent=indent):
             mesh_text = printer.visit(fn.body.mesh, root_ctx)
@@ -1016,14 +991,14 @@ def _emit_decorated_defs(
         decorator = f"@func(mesh={mesh_text})"
     lines: list[str] = [decorator]
     lines.extend(
-        _emit_def(
+        emit_def(
             fn,
             fn.name,
             ctx,
             indent,
             options,
             child_entries,
-            line_offset=line_offset + _physical_line_count(lines),
+            line_offset=line_offset + physical_line_count(lines),
             statements=statements,
         )
     )
@@ -1034,27 +1009,27 @@ def _emit_decorated_defs(
             f"@{fn.name}.specialize({HirPrinter().render_pattern(variant.specializations[0], ctx)})"
         )
         lines.extend(
-            _emit_def(
+            emit_def(
                 variant,
-                _variant_binding_name(variant),
+                variant_binding_name(variant),
                 ctx,
                 indent,
                 options,
                 child_entries,
-                line_offset=line_offset + _physical_line_count(lines),
+                line_offset=line_offset + physical_line_count(lines),
                 statements=statements,
             )
         )
     return lines
 
 
-def _render_hir_function(
-    fn: HirFunction,
+def render_hir_function(
+    fn: core.Function,
     *,
     options: PythonPrintOptions | None = None,
     printer: HirPrinter | None = None,
     target=None,
-) -> _PythonRendering:
+) -> PythonRendering:
     """Render a HIR Function and locate every Call equation in the same pass.
 
     A normal function prints as a single ``@func``. A dispatch prototype
@@ -1063,11 +1038,9 @@ def _render_hir_function(
     emitted only where an explicit mesh-scope binding dominates its use.
     """
     indent = "    "
-    ctx = _new_hir_context()
-    ctx.target = target
-    ctx.value_printer = printer or HirPrinter()
-    statements: dict[int, _PrintedStatement] = {}
-    lines = _emit_decorated_defs(
+    ctx = HirPrintContext(target=target, value_printer=printer or HirPrinter())
+    statements: dict[int, PrintedStatement] = {}
+    lines = emit_decorated_defs(
         fn,
         ctx,
         indent,
@@ -1076,17 +1049,17 @@ def _render_hir_function(
         statements=statements,
     )
     header = ctx.header()
-    header_lines = _physical_line_count(header)
+    header_lines = physical_line_count(header)
     statements = {
-        identity: _PrintedStatement(value=item.value, line=item.line + header_lines)
+        identity: PrintedStatement(value=item.value, line=item.line + header_lines)
         for identity, item in statements.items()
     }
-    ctx.value_printer._statements.update(statements)
-    return _PythonRendering("\n".join(header + lines) + "\n", statements)
+    ctx.value_printer.add_statements(statements)
+    return PythonRendering("\n".join(header + lines) + "\n", statements)
 
 
 def hir_function_to_python(
-    fn: HirFunction,
+    fn: core.Function,
     *,
     options: PythonPrintOptions | None = None,
 ) -> str:
@@ -1095,7 +1068,7 @@ def hir_function_to_python(
 
 
 def as_script(
-    fn: HirFunction | PrimFunction | Module,
+    fn: core.Function | core.PrimFunction | core.Module,
     *,
     module: str | None = None,
     options: PythonPrintOptions | None = None,
@@ -1106,27 +1079,27 @@ def as_script(
     a named module-class wrapper with entry and mesh definitions. *options*
     controls canonical-source rendering.
     """
-    if isinstance(fn, Module):
-        if fn.functions and all(isinstance(item, PrimFunction) for item in fn.functions):
+    if isinstance(fn, core.Module):
+        if fn.functions and all(isinstance(item, core.PrimFunction) for item in fn.functions):
             return tir_module_to_python(fn, module)
-        return _module_to_python(fn, module, options=options)
-    if isinstance(fn, PrimFunction) and module is None:
+        return module_source(fn, module, options=options)
+    if isinstance(fn, core.PrimFunction) and module is None:
         return tir_function_to_python(fn)
     if module is not None:
-        if isinstance(fn, PrimFunction):
+        if isinstance(fn, core.PrimFunction):
             return tir_module_to_python(
-                Module(name=module, functions=(fn,), entry=fn.name)
+                core.Module(name=module, functions=(fn,), entry=fn.name)
             )
-        return _module_to_python(fn, module, options=options)
+        return module_source(fn, module, options=options)
     return hir_function_to_python(fn, options=options)
 
 
-def module_to_python(fn: HirFunction, module_name: str = "M") -> str:
+def module_to_python(fn: core.Function, module_name: str = "M") -> str:
     """Backward-compat alias for ``as_script(fn, module=module_name)``."""
     return as_script(fn, module=module_name)
 
 
-def _emission_order(mod: Module) -> tuple:
+def emission_order(mod: core.Module) -> tuple:
     """A Module's functions in the order the printed class body binds them.
 
     The entry goes last: a body calling a sibling names the attribute the class
@@ -1140,55 +1113,7 @@ def _emission_order(mod: Module) -> tuple:
     return ordered + (entry,) if entry is not None else ordered
 
 
-def _module_definition_order(root, *, before_children=False):
-    """Definitions once, children before the slots that reference them."""
-    seen = set()
-    ordered = []
-
-    def visit(node):
-        if id(node) in seen:
-            return
-        seen.add(id(node))
-        if before_children:
-            ordered.append(node)
-        for slot in node.children.values():
-            for child in slot.elements:
-                visit(child)
-        if not before_children:
-            ordered.append(node)
-
-    visit(root)
-    return ordered
-
-
-def _definition_names(root, root_name):
-    names = {id(root): root_name}
-    taken = {root_name}
-    for node in _module_definition_order(root, before_children=True):
-        if node is root:
-            continue
-        name = node.name
-        suffix = 2
-        while name in taken:
-            name = f"{node.name}_{suffix}"
-            suffix += 1
-        taken.add(name)
-        names[id(node)] = name
-    return names
-
-
-def _slot_binding(key, slot, names):
-    definitions = [names[id(element)] for element in slot.elements]
-    if not slot.indexed:
-        value = definitions[0]
-    elif all(element is slot.elements[0] for element in slot.elements):
-        value = f"ModuleList({definitions[0]}, {len(slot)})"
-    else:
-        value = f"ModuleList(({', '.join(definitions)},))"
-    return f"{key} = {value}"
-
-
-def _module_decorator_line(mod: Module, entry_name: str | None, ctx: HirPrintContext) -> str:
+def module_decorator_line(mod: core.Module, entry_name: str | None, ctx: HirPrintContext) -> str:
     """Render the context this Module declares as an ``@module(...)`` line.
 
     Always the called form. A bare decorator has not run while the class body
@@ -1197,7 +1122,7 @@ def _module_decorator_line(mod: Module, entry_name: str | None, ctx: HirPrintCon
     kwargs: list[str] = [] if entry_name is None else [f'entry="{entry_name}"']
     printer = HirPrinter()
     if mod.target is not None:
-        rendered: PythonExpr = mod.target.to_python()
+        rendered: utils.PythonExpr = mod.target.to_python()
         ctx.imports.update(rendered.imports)
         kwargs.append(f"target={rendered.text}")
     if mod.topologies is not None:
@@ -1207,33 +1132,30 @@ def _module_decorator_line(mod: Module, entry_name: str | None, ctx: HirPrintCon
     return f"@module({', '.join(kwargs)})"
 
 
-def _emit_module_class(
-    mod: Module,
+def emit_module_class(
+    mod: core.Module,
     module_name: str,
     ctx: HirPrintContext,
     indent: str,
     options: PythonPrintOptions,
-    definition_names,
+    names_by_id,
 ) -> list[str]:
     """One ``@module`` class block: its instance slots, then its functions.
 
     Children first, because a body calling one names the attribute it is bound
     to and a class body binds in the order it is written.
     """
-    previous_topologies = ctx.topologies
-    previous_target = ctx.target
-    ctx.target = mod.target or previous_target
-    ctx.topologies = mod.topologies if mod.topologies is not None else previous_topologies
-    lines = [_module_decorator_line(mod, mod.entry, ctx), f"class {module_name}:"]
-    ordered = _emission_order(mod)
+    previous = ctx.enter_module(mod.target, mod.topologies)
+    lines = [module_decorator_line(mod, mod.entry, ctx), f"class {module_name}:"]
+    ordered = emission_order(mod)
     child_entries = {}
-    bindings = [_slot_binding(key, slot, definition_names) for key, slot in mod.children.items()]
+    bindings = [slot_binding(key, slot, names_by_id) for key, slot in mod.children.items()]
     blocks: list[list[str]] = [bindings] if bindings else []
     for fn in ordered:
-        if isinstance(fn, HirFunction):
-            blocks.append(_emit_decorated_defs(fn, ctx, indent, options, child_entries))
-        elif isinstance(fn, PrimFunction):
-            tir_block = _tir_function_block(fn, frame=ValuationContext(mod, fn))
+        if isinstance(fn, core.Function):
+            blocks.append(emit_decorated_defs(fn, ctx, indent, options, child_entries))
+        elif isinstance(fn, core.PrimFunction):
+            tir_block = function_block(fn, frame=valuation.Context(mod, fn))
             ctx.imports.update(tir_block.imports)
             blocks.append(tir_block)
         else:
@@ -1242,44 +1164,43 @@ def _emit_module_class(
         if index:
             lines.append("")
         lines.extend(f"{indent}{ln}" if ln else ln for ln in block)
-    ctx.topologies = previous_topologies
-    ctx.target = previous_target
+    ctx.leave_module(previous)
     return lines
 
 
-def _module_to_python(
-    fn_or_module: HirFunction | Module,
+def module_source(
+    fn_or_module: core.Function | core.Module,
     module_name: str | None = None,
     *,
     options: PythonPrintOptions | None = None,
 ) -> str:
     """Render a function or a whole Module tree as ``@module`` source."""
-    if isinstance(fn_or_module, Module):
+    if isinstance(fn_or_module, core.Module):
         root = fn_or_module
         module_name = root.name if module_name is None else module_name
     else:
-        root = Module(
+        root = core.Module(
             name="M" if module_name is None else module_name,
             functions=(fn_or_module,),
             entry=fn_or_module.name,
         )
         module_name = root.name
-    functions = tuple(fn for node in _module_definition_order(root) for fn in node.functions)
+    functions = tuple(fn for node in module_definition_order(root) for fn in node.functions)
     if not functions:
         raise TypeError("Module printer requires at least one function")
     entry = root.entry_function() if root.entry is not None else None
-    if entry is not None and not isinstance(entry, (HirFunction, PrimFunction)):
+    if entry is not None and not isinstance(entry, (core.Function, core.PrimFunction)):
         raise TypeError("Module printer requires a function entry")
 
     indent4 = "    "
-    ctx = _new_hir_context(target=root.target)
-    names = _definition_names(root, module_name)
+    ctx = new_hir_context(target=root.target)
+    names = definition_names(root, module_name)
     lines = []
-    for node in _module_definition_order(root):
+    for node in module_definition_order(root):
         if lines:
             lines.append("")
         lines.extend(
-            _emit_module_class(
+            emit_module_class(
                 node, names[id(node)], ctx, indent4, options or PythonPrintOptions(), names
             )
         )
@@ -1289,8 +1210,17 @@ def _module_to_python(
         lines.extend(
             (
                 "",
-                f"del {', '.join(names[id(node)] for node in _module_definition_order(root) if node is not root)}",
+                f"del {', '.join(names[id(node)] for node in module_definition_order(root) if node is not root)}",
             )
         )
     header = ctx.header()
     return "\n".join(header + lines) + "\n"
+
+
+__all__ = [
+    "HirPrinter",
+    "PythonPrintOptions",
+    "as_script",
+    "hir_function_to_python",
+    "module_to_python",
+]

@@ -2,54 +2,43 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Op, OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import SameConstraint, utils
-from tilefoundry.ir.types import UnitType
-from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    identity_access,
-    iterating,
-    register_access_relation,
-    state_access,
-)
+from tilefoundry.interfaces import access, typeinfer
+from tilefoundry.ir import expr, pattern, types
 
 
-@register_op(dialect="T", category="async", name="copy_async_bulk")
-class CopyAsyncBulk(Op):
+@expr.register_op(dialect="T", category="async", name="copy_async_bulk")
+class CopyAsyncBulk(expr.Op):
     """Stage a tile from global to shared memory, completing on a barrier."""
 
-    capability = OpCapability("cp.async.bulk")
-    execution_mesh = utils.thread_execution_mesh()
+    capability = expr.OpCapability("cp.async.bulk")
+    execution_mesh = pattern.thread_execution_mesh()
 
-    src = ParamDef(
-        kind="input", effect=MemoryEffect.READ, pattern=utils.tensor_in(StorageKind.GMEM)
+    src = expr.ParamDef(
+        kind="input", effect=expr.MemoryEffect.READ, pattern=pattern.tensor_in(expr.StorageKind.GMEM)
     )
-    dst = ParamDef(
-        kind="input", effect=MemoryEffect.WRITE, pattern=utils.tensor_in(StorageKind.SMEM)
+    dst = expr.ParamDef(
+        kind="input", effect=expr.MemoryEffect.WRITE, pattern=pattern.tensor_in(expr.StorageKind.SMEM)
     )
-    barrier = ParamDef(
+    barrier = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.READ | MemoryEffect.WRITE,
-        pattern=utils.tensor_in(StorageKind.SMEM),
+        effect=expr.MemoryEffect.READ | expr.MemoryEffect.WRITE,
+        pattern=pattern.tensor_in(expr.StorageKind.SMEM),
     )
 
-    between = (SameConstraint("shape", "src", "dst"), SameConstraint("dtype", "src", "dst"))
+    between = (pattern.SameConstraint("shape", "src", "dst"), pattern.SameConstraint("dtype", "src", "dst"))
 
 
-@register_typeinfer(CopyAsyncBulk)
-def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
-    return UnitType()
+@typeinfer.register(CopyAsyncBulk)
+def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
+    return types.UnitType()
 
 
 __all__ = ["CopyAsyncBulk"]
 
 
-@register_access_relation(CopyAsyncBulk)
-def _bulk_access(call, ctx):
+@access.register_relation(CopyAsyncBulk)
+def bulk_access(call, ctx):
     source = ctx.type_of(call.args[0])
-    data = identity_access(len(source.shape))
-    barrier = state_access(ctx.type_of(call.args[2]), len(source.shape))
-    return iterating(source.shape, (data, data, barrier, data))
+    data = access.identity(len(source.shape))
+    barrier = access.state(ctx.type_of(call.args[2]), len(source.shape))
+    return access.iterating(source.shape, (data, data, barrier, data))

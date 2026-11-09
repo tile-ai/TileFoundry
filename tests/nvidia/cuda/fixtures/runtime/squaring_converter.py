@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="run", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="run", target=cuda.Target("nvidia.h200_sxm"))
 class _Doubled:
     @func
     def run(x: Tensor[(4,), "f32"], w: ConstTensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:

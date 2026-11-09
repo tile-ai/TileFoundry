@@ -2,16 +2,16 @@
 
 from weighted_twin import Weighted, WeightedTwin
 
+from tilefoundry import runtime
 from tilefoundry.dsl import *
-from tilefoundry.runtime import runtime_module
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(target=CpuTarget())
+@module(target=cpu.Target())
 class Nested:
     child = Weighted
 
 
-@runtime_module(Nested)
+@runtime.module(Nested)
 class NestedTwin:
     child = WeightedTwin

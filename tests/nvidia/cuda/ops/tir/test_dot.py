@@ -11,41 +11,35 @@ import pytest
 import torch
 
 import tilefoundry
-import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
-from tilefoundry.cli.source import load_authored_ir
+from tilefoundry import cli, verifier
 from tilefoundry.dsl import *
-from tilefoundry.ir.core import Var, VerifyError
-from tilefoundry.ir.tir.dot import Dot
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
-from tilefoundry.ir.types.shard_layout import Broadcast
-from tilefoundry.visitor_registry.verify import verify_prim_function
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.ir import core, expr, tir, types
+from tilefoundry_nvidia import cuda
 
 OPS = Path(__file__).parents[2] / "fixtures" / "ops"
 
 
-def _pf(*types) -> PrimFunction:
-    args = tuple(Var(type=t, name=f"a{i}") for i, t in enumerate(types))
-    return PrimFunction(
-        target=CudaTarget("nvidia.h200_sxm"),
+def _pf(*type_list) -> core.PrimFunction:
+    args = tuple(expr.Var(type=t, name=f"a{i}") for i, t in enumerate(type_list))
+    return core.PrimFunction(
+        target=cuda.Target("nvidia.h200_sxm"),
         name="fn",
         params=args,
-        body=Sequential(
+        body=core.Sequential(
             body=(
-                MeshScope(
+                core.MeshScope(
                     mesh=_MESH,
-                    binding=Var(name="thread", type=_MESH),
-                    body=Sequential(body=(Evaluate(callable=Dot(), args=args),)),
+                    binding=expr.Var(name="thread", type=_MESH),
+                    body=core.Sequential(body=(core.Evaluate(callable=tir.dot.Dot(), args=args),)),
                 ),
-                Return(),
+                core.Return(),
             )
         ),
     )
 
 
 def _ty(n, dtype=DType.from_name("f32"), storage="rmem"):
-    return make_tensor_type((n,), dtype, storage=storage)
+    return TensorType.from_shape((n,), dtype, storage=storage)
 
 
 _MESH = Mesh((Topology("thread", 32),), Layout(shape=(32,), strides=(1,)), ("t",))
@@ -53,54 +47,54 @@ _MESH = Mesh((Topology("thread", 32),), Layout(shape=(32,), strides=(1,)), ("t",
 
 def _sharded(n, storage="rmem"):
     """An operand the block-contraction check accepts, so the workspace is what is tested."""
-    return make_tensor_type(
+    return TensorType.from_shape(
         (n,),
         DType.from_name("f32"),
         storage=storage,
-        layout=ShardLayout(Layout((n,), (1,)), (Broadcast(),), _MESH),
+        layout=ShardLayout(Layout((n,), (1,)), (types.Broadcast(),), _MESH),
     )
 
 
 def test_dot_accepts_equal_runs() -> None:
-    verify_prim_function(_pf(_ty(8), _ty(8), _ty(1)))
+    verifier.verify_prim_function(_pf(_ty(8), _ty(8), _ty(1)))
 
 
 def test_dot_accepts_mixed_dtypes() -> None:
     """The fold accumulates in f32 whatever it loads, so the two may differ."""
-    verify_prim_function(_pf(_ty(8, DType.from_name("bf16")), _ty(8), _ty(1)))
+    verifier.verify_prim_function(_pf(_ty(8, DType.from_name("bf16")), _ty(8), _ty(1)))
 
 
 def test_dot_refuses_length_mismatch() -> None:
     """The fold walks one operand's length and indexes the other with it."""
-    with pytest.raises(VerifyError, match="contract over different lengths"):
-        verify_prim_function(_pf(_ty(8), _ty(4), _ty(1)))
+    with pytest.raises(expr.VerifyError, match="contract over different lengths"):
+        verifier.verify_prim_function(_pf(_ty(8), _ty(4), _ty(1)))
 
 
 def test_dot_refuses_wide_destination() -> None:
     """A contraction leaves a total, and a total is one number."""
-    with pytest.raises(VerifyError, match="must be one cell"):
-        verify_prim_function(_pf(_ty(8), _ty(8), _ty(4)))
+    with pytest.raises(expr.VerifyError, match="must be one cell"):
+        verifier.verify_prim_function(_pf(_ty(8), _ty(8), _ty(4)))
 
 
 def test_dot_refuses_gmem_workspace() -> None:
     """One warp posts its partial and every thread reads the posted ones."""
-    with pytest.raises(VerifyError, match=r"workspace: gmem does not match smem"):
-        verify_prim_function(
+    with pytest.raises(expr.VerifyError, match=r"workspace: gmem does not match smem"):
+        verifier.verify_prim_function(
             _pf(_sharded(8), _sharded(8), _sharded(1), _sharded(4, storage="gmem"))
         )
 
 
 def test_dot_refuses_unsharded_block_lhs() -> None:
     """The warps that post a partial are the ones lhs's mesh names."""
-    with pytest.raises(VerifyError, match="must carry a ShardLayout"):
-        verify_prim_function(_pf(_ty(8), _ty(8), _ty(1), _ty(4, storage="smem")))
+    with pytest.raises(expr.VerifyError, match="must carry a ShardLayout"):
+        verifier.verify_prim_function(_pf(_ty(8), _ty(8), _ty(1), _ty(4, storage="smem")))
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_dot_tiers_match_torch() -> None:
     """One compile behind two assertions, each naming the tier that failed."""
-    DotTiers = load_authored_ir(f"{OPS / 'dot_tiers.py'}:DotTiers")
-    rm = tilefoundry.compile(DotTiers, target=CudaTarget("nvidia.h200_sxm"))
+    DotTiers = cli.load_authored_ir(f"{OPS / 'dot_tiers.py'}:DotTiers")
+    rm = tilefoundry.compile(DotTiers, target=cuda.Target("nvidia.h200_sxm"))
     torch.manual_seed(0)
     warp_a = torch.randn(32, 32, dtype=torch.float32, device="cuda")
     warp_b = torch.randn(32, dtype=torch.float32, device="cuda")

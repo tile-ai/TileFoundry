@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
 
 @module(
-    entry="gemm_host", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 32),)
+    entry="gemm_host", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("thread", 32),)
 )
 class Fp8Gemm:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def gemm_device(
         a: Tensor[(16, 128), "fp8e4m3"], b: Tensor[(8, 128), "fp8e4m3"], c: Tensor[(16, 8), "f32"]
     ):
@@ -88,7 +88,7 @@ class Fp8Gemm:
             c_view = T.tensor_view(T.ptr_of(c), layout=(2, 8 @ m.lane, 4 @ m.warp, 2))
             T.copy(acc, c_view)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def gemm_host(
         a: Tensor[(16, 128), "fp8e4m3"], b: Tensor[(8, 128), "fp8e4m3"], c: Tensor[(16, 8), "f32"]
     ):

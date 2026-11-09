@@ -25,7 +25,7 @@ Differences to the kernel:
   each tile); the overlap across tiles is left to lowering.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 1024
 N = 16640
@@ -40,7 +40,7 @@ UNITS = GM * GN
 NSM = 132
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", NSM), Topology("thread", 384)))
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", NSM), Topology("thread", 384)))
 class SCHED_GDN_IN_T1024:
     @func
     def gemm(a: Tensor[(M, K), "bf16"], w: Tensor[(N, K), "bf16"]) -> Tensor[(M, N), "bf16"]:

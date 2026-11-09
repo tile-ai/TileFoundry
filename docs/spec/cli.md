@@ -1,17 +1,16 @@
 # TileFoundry Command-Line Interface
 
-This file defines the command-line contract for the two pieces of work an Agent
-does through TileFoundry: translating a published model into authored HIR, and
-turning that HIR into a high-performance runtime implementation. The commands
-answer what only this project knows — which models have been described and how,
+This file defines the command-line contract for translating a published model
+into authored HIR and turning that HIR into a runtime implementation. The
+commands answer what only this project knows: which models have been described,
 what a specification section says, whether an implementation agrees with its
-reference, and what an authored program costs. Python authoring syntax and
-grammar productions remain in the [parser specification](./parser.md); the
-authored IR itself is the [HIR specification](./hir.md).
+reference, and what an authored program costs. Authoring syntax is in the
+[parser specification](./parser.md); the authored IR is the
+[HIR specification](./hir.md).
 
-Naming no command at any command level MUST print that level's `--help` page, byte
-for byte, and MUST exit 0. What that page contains is the parser's to render;
-stating it again here would be a second copy to drift from it.
+Naming no command at any command level MUST print that level's `--help` page,
+byte for byte, and MUST exit 0. The page content is the parser's to render and
+is not restated here.
 
 A command usage error MUST print that command's usage form followed by the error
 to standard error and exit with status 2.
@@ -36,18 +35,13 @@ would declare its context, rather than analysed against a default
 ([target §6](./target.md#6-target-ownership-and-compile-resolution)).
 
 The file in `SOURCE` is any readable Python file. Nothing privileges the model
-sources this project ships: a reader who copies a shipped model directory, merges
-two of a Module's functions into one and points a verb at the copy MUST reach the
-same command surface, because coarsening a boundary is done by editing source and
-there is no other mechanism for it. The installed directory named by `models
-<name> --source` stays the reference to compare against, and it stays intact
-because an installation is not where anybody edits — no verb enforces that, and
-none should.
+sources this project ships: a copy of a shipped model directory, edited to
+coarsen a boundary, MUST reach the same command surface. The installed directory
+named by `models <name> --source` stays the reference to compare against.
 
 Reading a shipped document by a name that has none MUST be refused the same way
 at every kind: name what was asked for and what there is, in the vocabulary the
-command takes. An internal filename, or the word "installed" where a checkout is
-what is running, is neither.
+command takes (not an internal filename).
 
 A command MUST load `SOURCE` as a Python module. While loading it, the directory
 containing `SOURCE` MUST be first on the Python module search path, so a file beside
@@ -111,9 +105,7 @@ boundaries are different:
   same root and keeps its own name.
 
 A class body runs when the file does, so a class that refuses to be built refuses
-there. The selector boundary above is what makes naming one root of a file a
-question about that root: a file is where programs are kept, not a claim that all
-of them are finished.
+there.
 
 `check` reads the same `SOURCE` shape and one thing more: its selector MAY name a
 runtime twin instead of an authored Module. A twin generated from an authored
@@ -148,7 +140,7 @@ launchers and host registrations remain intact. The project can be rebuilt with
 library with `tvm_ffi.load_module`, then bind its dotted registrations with
 `tvm_ffi.get_global_func`. The caller manages this library's lifetime and MUST
 retain it while its registrations may be called; this does not involve a
-`RuntimeModule`. Authored host orchestration remains in Python.
+`runtime.Module`. Authored host orchestration remains in Python.
 
 ## Check
 
@@ -177,26 +169,20 @@ bounds the caller stated.
     instead. Orchestration is host Python reused verbatim on both sides; `check`
     compares HIR, not one Python function object against itself.
   - Every output MUST be judged by at least one predicate the caller states, and
-    there MUST be no default predicate and no default bound. A bound nobody can
-    meet is worse than none: a single `f32`→`bf16` rounding already measures
-    `rel_l2` 1.66e-3, so a default of 1e-3 would teach its reader that FAIL is
-    the normal state of a correct program.
+    there MUST be no default predicate and no default bound (a single
+    `f32`→`bf16` rounding already measures `rel_l2` 1.66e-3).
   - Naming an output that was not produced, or leaving a produced output
-    unjudged, MUST be refused. A comparison that silently skipped an output
-    reports the same PASS as one that checked it.
-  - An empty result MUST be an error, never a PASS: measuring nothing is not
-    agreement.
+    unjudged, MUST be refused.
+  - An empty result MUST be an error, never a PASS.
   - A predicate MUST be refused on an output whose dtype it says nothing about.
-    On a discrete output one wrong value is a total failure and a negligible
-    numerical deviation, so an aggregate over indices MUST be refused pointing at
+    An aggregate over a discrete (index) output MUST be refused, pointing at
     exact comparison.
   - The reference MAY be stated as files, or MAY be the evaluator running the
     authored Module the implementation stands for. With no reference at all, only
     a predicate that judges the candidate alone is admissible; every two-sided
     predicate MUST be refused, because there is nothing to compare against.
-  - Each output MUST report the norm of its reference. Near zero, a relative
-    measure divides by nothing, so the report MUST state what it measured instead
-    rather than a number with no scale to read it against.
+  - Each output MUST report the norm of its reference. Near zero, the report MUST
+    state what it measured instead of a relative number with no scale.
   - Activations MUST be stated -- random or files -- and no form MAY be the
     default. Weights MUST come from the same draw on both sides, and the report
     MUST say which form was used and what seed drew it. It MUST also say the
@@ -207,14 +193,11 @@ bounds the caller stated.
     it is honoured as stated even when the declared hardware is unavailable,
     because the caller has said where to run. The evaluator picks no
     device of its own ([evaluator §2](./evaluator.md#2-parameters-and-inputs)).
-  - A FAIL with `--inputs random` MUST state that the draw makes each activation
-    independently; a target that relies on semantic relationships between
-    activations MAY differ at ulp scale without either implementation being wrong,
-    and a file-backed `--inputs files:...` run is the re-run that decides the comparison.
+  - A FAIL with `--inputs random` MUST state that each activation is drawn
+    independently, so a target relying on relationships between activations MAY
+    differ at ulp scale; a `--inputs files:...` run decides the comparison.
   - A FAIL measured against a reference MUST state that it proves disagreement,
-    not which side is closer to truth. A reference MAY carry its own rounding, and
-    establishing accuracy needs an independent high-precision reference that
-    `check` does not run.
+    not which side is closer to truth.
   - `--json PATH` MUST write the machine-readable report to `PATH` and MUST NOT
     write any byte of that report to stdout. Without `--json`, the human report
     MUST remain on stdout. A `PATH` whose parent directory does not exist MUST
@@ -227,14 +210,11 @@ bounds the caller stated.
     to the selected Module ([Commands](#commands)).
   - A dimension the target states as a range MUST be bound by `--dim`; a run
     MUST NOT choose an extent on the caller's behalf. Several extents MAY be
-    stated for one dimension, and each MUST be run and reported. Where the extents select an implementation,
-    the report MUST name the one selected and the range it covers. Naming it is what
-    separates "it ran" from "it ran the intended program", so a run that only passed
-    is not evidence that dispatch landed where the author meant.
+    stated for one dimension, and each MUST be run and reported. Where the
+    extents select an implementation, the report MUST name the one selected and
+    the range it covers.
   - An extent no declared variant covers MUST fail, naming the ranges that are
-    covered. Choosing a neighbouring implementation instead would answer about a
-    program nobody selected, and the failure is only actionable if the reader can
-    see where the coverage stops.
+    covered; a neighbouring implementation MUST NOT be chosen instead.
   - Text and `--json` MUST carry the same facts.
 
 ## Tutorial
@@ -244,9 +224,7 @@ granularity.
 
 - constraints:
   - It MUST point at `spec` for normative and reference material and at
-    `check --help` for the predicate flags, and MUST NOT duplicate either. A
-    second copy of a contract is a copy that goes stale, and the reader cannot
-    tell which one is current.
+    `check --help` for the predicate flags, and MUST NOT duplicate either.
   - Its pages ship as data beside the specifications and MUST be read from the
     same installed lookup, so a page is available to an installed wheel and not
     only to a checkout.
@@ -262,9 +240,9 @@ granularity.
     every source file's leading docstring without importing or executing it. An
     unknown family MUST name the available families. Checkout and installed
     lookups MUST report the same shipped families and files.
-  - Its pages are `index`, `migrate`, `optimize`, and `showcase`; the first three
-    are the workflow and `showcase` is one kernel taken through six analyze-driven
-    stages, exercising the authoring surface the other pages touch in part.
+  - Its pages are `index`, `migrate`, `optimize`, `schedule`, and `showcase`; the
+    first four are the workflow and `showcase` is one kernel taken through six
+    analyze-driven stages, exercising the authoring surface the other pages touch in part.
     Causal-LM decode sources are listed through `tutorial orchestrator`. A bare
     `tutorial` MUST print the `index` page followed by its own help, which names
     the pages a reader may ask for and `orchestrator`. `index` is that overview's
@@ -277,22 +255,18 @@ granularity.
 `models` reports the models this project has described, and hands back one model's
 authored source as a reference to copy from.
 
-It reads a shipped catalog and MUST NOT import or execute a model's source. An
-installed package carries the authored sources as read-only data and nothing that
-could make them importable, so executing them is not available; and a reference
-that runs before it can be read is a reference that decides what it describes.
+It reads a shipped catalog and MUST NOT import or execute a model's source: an
+installed package carries the authored sources as read-only data, not as
+importable code.
 
 - constraints:
   - With no `NAME`, output MUST list every described model with its counts. The
-    catalog states what each model *is*, not how well it is verified: a ranking
-    carried in shipped data is a claim about tests that the shipped artifact
-    cannot check, and one that outlived the test it named is worse than none.
+    catalog states what each model *is*, not how well it is verified.
   - With a `NAME`, output MUST be that model's whole forest: every root it
     publishes, each Module's own functions with their signatures beneath it, and
-    the leaf Modules marked. A leaf is a Module with no child Modules, not
-    a function — a runtime twin is written per Module and MUST cover all of that
-    Module's functions at once, so marking functions would state the work at a
-    granularity nobody implements at.
+    the leaf Modules marked. A leaf is a Module with no child Modules, not a
+    function: a runtime twin is written per Module and MUST cover all of that
+    Module's functions at once.
   - A catalog root MUST declare a target and MUST NOT be held, directly or
     transitively, by another target-declaring Module in the same model package.
     A layer that declares its own target remains usable on its own, but MUST NOT
@@ -300,10 +274,8 @@ that runs before it can be read is a reference that decides what it describes.
   - A run of sibling Modules MAY be written once as the range it covers, and only
     when the run is adjacent, identically shaped down its whole subtree, named from
     one stem, and numbered consecutively. Such an entry MUST name every Module it
-    stands for and MUST say how many there are: it is the complete tree written as
-    ranges, not a tree with repetition left out. Distinct siblings MUST stay
-    separate. Without this a stack states its one layer forty times and the reader
-    is back to reading a dump.
+    stands for and MUST say how many there are. Distinct siblings MUST stay
+    separate.
   - The leaf-Module count and function count MUST count definitions by object
     identity, once per model. Repeated instances of one definition MUST NOT
     increase either count. The forest MUST still show every instance, including
@@ -322,9 +294,8 @@ that runs before it can be read is a reference that decides what it describes.
   - The catalog MUST merge each target's `models/catalog.json`, rejecting duplicate model
     names with an error naming both targets.
   - A `NAME` the catalog does not have MUST be refused naming the models it does.
-  - The forest and the counts MUST be generated from the models themselves rather
-    than maintained beside them, because a hand-kept inventory of trees and numbers
-    drifts silently from what it claims to describe.
+  - The forest and the counts MUST be generated from the models themselves, not
+    maintained beside them.
 
 ## Spec
 
@@ -339,18 +310,11 @@ whole; a reader who asked what a rule says is not asking for every rule.
     every section's key and title, indented by heading depth — and MUST NOT
     include the sections' bodies.
   - A section's key MUST be its own number when its heading carries one, and
-    otherwise a name derived from its title. Numbers alone would leave most of a
-    document unaddressable: a catalogue of operations numbers its container and
-    not its entries, and a section that cannot be named cannot be read.
-  - Keys MUST be unique within a document. Neither a number nor a title is unique
-    on its own — a document may restart its numbering under a later heading, and
-    may describe a field of the same name in two places — and a key naming two
-    sections would make the refusal below unreachable and answer with whichever
-    came first. A key that would repeat MUST take on the name of its enclosing
-    heading, and the one above that, until the keys differ.
-  - Headings MUST be recognised outside fenced code blocks only. A `#` line
-    inside a fence is a comment in an example, and treating it as a section would
-    both invent entries and cut the surrounding section short.
+    otherwise a name derived from its title.
+  - Keys MUST be unique within a document. A key that would repeat MUST take on
+    the name of its enclosing heading, and the one above that, until the keys
+    differ.
+  - Headings MUST be recognised outside fenced code blocks only.
   - With a `SECTION`, output MUST be that section — its heading and the lines
     down to the next heading at its level or above — followed by the keys of the
     sections beside it: the previous and the next at its level, and the ones it
@@ -362,8 +326,7 @@ whole; a reader who asked what a rule says is not asking for every rule.
   - Documents MUST be read from the source tree when one is present, and from the
     installed data directory otherwise, so the command answers the same in an
     editable checkout as in an installed environment. The source tree comes first
-    because an editable checkout is the one place the two can disagree, and there
-    the working copy is what its author means.
+    because in an editable checkout the working copy is what its author means.
 
 ## Analyze
 

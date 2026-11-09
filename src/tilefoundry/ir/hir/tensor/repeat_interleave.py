@@ -1,29 +1,16 @@
+"""HIR ``RepeatInterleave`` Op: repeat each element along an axis."""
+
 from __future__ import annotations
 
 import isl
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.layout import Layout
-from tilefoundry.ir.types.shard_layout import Partial, ShardLayout, Split
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    identity_access,
-    iterating,
-    register_access_relation,
-)
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
 
 
-@register_op(name="repeat_interleave", dialect='tf', category='tensor')
-class RepeatInterleave(Op):
+@expr.register_op(name="repeat_interleave", dialect='tf', category='tensor')
+class RepeatInterleave(expr.Op):
     """Repeat each element of ``x`` along ``axis`` ``repeats`` times, interleaved.
 
     Repeat each element of ``x`` along ``axis`` ``repeats`` times,
@@ -31,35 +18,35 @@ class RepeatInterleave(Op):
     all other dims are unchanged.
     """
 
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
-    repeats = ParamDef(kind="attribute", annotation=int)
-    axis = ParamDef(kind="attribute", annotation=int)
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    repeats = expr.ParamDef(kind="attribute", annotation=int)
+    axis = expr.ParamDef(kind="attribute", annotation=int)
 
 
-def _normalize_axis(axis: int, rank: int) -> int:
+def normalize_axis(axis: int, rank: int) -> int:
     return axis if axis >= 0 else axis + rank
 
 
-@register_typeinfer(RepeatInterleave)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(RepeatInterleave)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     x_ty = ctx.type_of(call.args[0])
     op = call.target
     shape = list(x_ty.shape)
-    ax = _normalize_axis(op.axis, len(shape))
+    ax = normalize_axis(op.axis, len(shape))
     if not (0 <= ax < len(shape)):
         ctx.error(call, f"RepeatInterleave: axis {op.axis} out of range for rank {len(shape)}")
     shape[ax] = shape[ax] * op.repeats
 
-    new_layout = Layout(tuple(shape))
-    if isinstance(x_ty.layout, ShardLayout) and any(
-        isinstance(a, (Split, Partial)) for a in x_ty.layout.attrs
+    new_layout = types.Layout(tuple(shape))
+    if isinstance(x_ty.layout, types.ShardLayout) and any(
+        isinstance(a, (types.Split, types.Partial)) for a in x_ty.layout.attrs
     ):
         ctx.error(
             call,
             "RepeatInterleave cannot express a sharded layout; reshard to a "
             "replicated layout first",
         )
-    return TensorType(
+    return types.TensorType(
         shape=tuple(shape),
         dtype=x_ty.dtype,
         layout=new_layout,
@@ -67,18 +54,18 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     )
 
 
-@register_eval(RepeatInterleave)
-def _eval_repeat_interleave(ctx):
+@evaluator.register(RepeatInterleave)
+def eval_repeat_interleave(ctx):
     def repeat_interleave(x):
-        return torch.repeat_interleave(x, ctx.op.repeats, dim=ctx.op.axis)
+        return utils.torch.repeat_interleave(x, ctx.op.repeats, dim=ctx.op.axis)
 
     x = ctx.args[0].tensor
     held = repeat_interleave(x.tensor) if x.is_global else tuple((p, repeat_interleave(t)) for p, t in x.tensor)
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
-@register_access_relation(RepeatInterleave)
-def _repeat_interleave_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(RepeatInterleave)
+def repeat_interleave_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """Several result coordinates read one source coordinate, which is read once.
 
     The pattern is many-to-one and the amount is its image. That three output
@@ -101,10 +88,20 @@ def _repeat_interleave_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     produced = 1
     for extent in out_shape:
         produced *= extent if isinstance(extent, int) else 1
-    return iterating(
+    return access.iterating(
         out_shape,
         (
-            AccessRelation(isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}")),
-            identity_access(rank),
+            access.Relation(isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}")),
+            access.identity(rank),
         ),
     )
+
+
+@cost.register(RepeatInterleave)
+def repeat_interleave_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    inputs = cost.input_types(call, ctx)
+    output = cost.output_type(call, ctx)
+    return cost.Cost({}, cost.traffic(inputs, output))
+
+
+__all__ = ["RepeatInterleave"]

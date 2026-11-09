@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import torch
 
+from tilefoundry import runtime
 from tilefoundry.dsl import *
-from tilefoundry.runtime import runtime_func, runtime_module
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 GPUS, R, C = 2, 4, 4
 COLUMNS = C // GPUS
@@ -26,7 +26,7 @@ PROJECT_SHARDS = {
 }
 
 
-@module(entry="project", target=CudaTarget("nvidia.h200_sxm"), topologies=(GPU, CTA))
+@module(entry="project", target=cuda.Target("nvidia.h200_sxm"), topologies=(GPU, CTA))
 class DecoderLayer:
     """One projection sharded by column and one replicated decode weight."""
 
@@ -49,7 +49,7 @@ class DecoderLayer:
             return tf.reshard(tf.mul(xs, ws), (R @ cta.b,), "gmem")
 
 
-@module(target=CudaTarget("nvidia.h200_sxm"), topologies=(GPU, CTA))
+@module(target=cuda.Target("nvidia.h200_sxm"), topologies=(GPU, CTA))
 class TinyTPDecoderLM:
     """The root the checkpoint is prepared from, reaching the layer as a child."""
 
@@ -63,7 +63,7 @@ class TinyTPDecoderLM:
         return projected, replicated
 
 
-@runtime_module(DecoderLayer)
+@runtime.module(DecoderLayer)
 class DecoderLayerTwin:
     """The twin is the assertion.
 
@@ -72,7 +72,7 @@ class DecoderLayerTwin:
     back out in a test that would have to rebuild the expectation.
     """
 
-    @runtime_func
+    @runtime.func
     def project(self, x, project_weight):
         """Hold the column block against the one this card's program id owes it."""
         want = PROJECT_SHARDS[torch.cuda.current_device()]
@@ -80,13 +80,13 @@ class DecoderLayerTwin:
         assert torch.equal(project_weight.cpu(), want), project_weight.cpu()
         return project_weight
 
-    @runtime_func
+    @runtime.func
     def decode(self, x, decode_weight):
         """A weight with no distribution is every card's whole tensor."""
         assert torch.equal(decode_weight.cpu(), DECODE_FULL), decode_weight.cpu()
         return x * decode_weight
 
 
-@runtime_module(TinyTPDecoderLM)
+@runtime.module(TinyTPDecoderLM)
 class TinyTPDecoderLMTwin:
     layer = DecoderLayerTwin

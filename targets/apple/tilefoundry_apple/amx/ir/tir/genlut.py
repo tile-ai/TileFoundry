@@ -1,145 +1,135 @@
-from tilefoundry.ir.core import OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.pattern import (
-    LayoutPattern,
-    OrPattern,
-    RangePattern,
-    SwitchPattern,
-    TensorPattern,
-    WildcardPattern,
-)
-from tilefoundry.ir.pattern import predicates as P
-from tilefoundry.ir.pattern.predicates import Bits, variable
-from tilefoundry.ir.types import DType, StorageKind
+"""AMX GENLUT Ops."""
+
+from tilefoundry.ir import expr, pattern
 
 from .common import (
     AmxOp,
     Bank,
     LutMode,
-    bind,
     instruction_versions,
 )
+from .semantics import register_semantics
 
-R = MemoryEffect.READ
-W = MemoryEffect.WRITE
+R = expr.MemoryEffect.READ
+W = expr.MemoryEffect.WRITE
 
 
 class Genlut(AmxOp):
     """Packed index source, typed table, and only the written destination register."""
 
     mnemonic = "GENLUT"
-    capability = OpCapability("amx_genlut")
+    capability = expr.OpCapability("amx_genlut")
     resource = "amx_engine"
     roles = ("source", "table", "dst")
     writes = ("dst",)
     register_roles = {"source": "source_bank", "table": "table_bank", "dst": "destination"}
-    mode = ParamDef(kind="attribute", annotation=LutMode, pattern=WildcardPattern("mode"))
-    bf16 = ParamDef(
+    mode = expr.ParamDef(kind="attribute", annotation=LutMode, pattern=pattern.Wildcard("mode"))
+    bf16 = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "bf16",
             predicates=(
-                (P.In(variable("bf16"), (False,)))
-                | ((variable("amx_generation") >= 2) & (variable("mode") == LutMode.F16)),
+                (pattern.In(pattern.variable("bf16"), (False,)))
+                | ((pattern.variable("amx_generation") >= 2) & (pattern.variable("mode") == LutMode.F16)),
             ),
         ),
         default=False,
     )
-    dtype = ParamDef(
+    dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern(
+        annotation=expr.DType,
+        pattern=pattern.Wildcard(
             "dtype",
             predicates=(
-                SwitchPattern(
+                pattern.Switch(
                     "mode",
                     {
-                        LutMode.F32: DType.f32,
-                        LutMode.F16: SwitchPattern("bf16", {False: DType.f16, True: DType.bf16}),
-                        LutMode.F64: DType.f64,
-                        LutMode.I32: DType.i32,
-                        LutMode.I16: DType.i16,
-                        LutMode.U32: DType.u32,
-                        LutMode.U16: DType.u16,
-                        LutMode.LOOKUP32_2: OrPattern(DType.i32, DType.u32, DType.f32),
-                        LutMode.LOOKUP16_2: OrPattern(DType.i16, DType.u16, DType.f16, DType.bf16),
-                        LutMode.LOOKUP8_2: OrPattern(DType.i8, DType.u8),
-                        LutMode.LOOKUP64_4: DType.f64,
-                        LutMode.LOOKUP32_4: OrPattern(DType.i32, DType.u32, DType.f32),
-                        LutMode.LOOKUP16_4: OrPattern(DType.i16, DType.u16, DType.f16, DType.bf16),
-                        LutMode.LOOKUP8_4: OrPattern(DType.i8, DType.u8),
-                        LutMode.LOOKUP16_5: OrPattern(DType.i16, DType.u16, DType.f16, DType.bf16),
-                        LutMode.LOOKUP8_5: OrPattern(DType.i8, DType.u8),
+                        LutMode.F32: expr.DType.f32,
+                        LutMode.F16: pattern.Switch("bf16", {False: expr.DType.f16, True: expr.DType.bf16}),
+                        LutMode.F64: expr.DType.f64,
+                        LutMode.I32: expr.DType.i32,
+                        LutMode.I16: expr.DType.i16,
+                        LutMode.U32: expr.DType.u32,
+                        LutMode.U16: expr.DType.u16,
+                        LutMode.LOOKUP32_2: pattern.Or(expr.DType.i32, expr.DType.u32, expr.DType.f32),
+                        LutMode.LOOKUP16_2: pattern.Or(expr.DType.i16, expr.DType.u16, expr.DType.f16, expr.DType.bf16),
+                        LutMode.LOOKUP8_2: pattern.Or(expr.DType.i8, expr.DType.u8),
+                        LutMode.LOOKUP64_4: expr.DType.f64,
+                        LutMode.LOOKUP32_4: pattern.Or(expr.DType.i32, expr.DType.u32, expr.DType.f32),
+                        LutMode.LOOKUP16_4: pattern.Or(expr.DType.i16, expr.DType.u16, expr.DType.f16, expr.DType.bf16),
+                        LutMode.LOOKUP8_4: pattern.Or(expr.DType.i8, expr.DType.u8),
+                        LutMode.LOOKUP16_5: pattern.Or(expr.DType.i16, expr.DType.u16, expr.DType.f16, expr.DType.bf16),
+                        LutMode.LOOKUP8_5: pattern.Or(expr.DType.i8, expr.DType.u8),
                     },
                 ),
             ),
         ),
     )
-    source_bank = ParamDef(
+    source_bank = expr.ParamDef(
         kind="attribute",
         annotation=Bank,
-        pattern=WildcardPattern("source_bank", predicates=(OrPattern(Bank.X, Bank.Y),)),
+        pattern=pattern.Wildcard("source_bank", predicates=(pattern.Or(Bank.X, Bank.Y),)),
         default=Bank.X,
     )
-    table_bank = ParamDef(
+    table_bank = expr.ParamDef(
         kind="attribute",
         annotation=Bank,
-        pattern=WildcardPattern("table_bank", predicates=(OrPattern(Bank.X, Bank.Y),)),
+        pattern=pattern.Wildcard("table_bank", predicates=(pattern.Or(Bank.X, Bank.Y),)),
         default=Bank.Y,
     )
-    destination = ParamDef(
+    destination = expr.ParamDef(
         kind="attribute",
         annotation=Bank,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "destination",
             predicates=(
-                OrPattern(Bank.X, Bank.Y, Bank.Z),
-                (variable("destination") != Bank.Z) | (variable("mode") >= LutMode.LOOKUP32_2),
+                pattern.Or(Bank.X, Bank.Y, Bank.Z),
+                (pattern.variable("destination") != Bank.Z) | (pattern.variable("mode") >= LutMode.LOOKUP32_2),
             ),
         ),
         default=Bank.X,
     )
-    source_offset = ParamDef(
+    source_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("source_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("source_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    table_register = ParamDef(
+    table_register = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("table_register", predicates=(RangePattern(lo=0, hi=7),)),
+        pattern=pattern.Wildcard("table_register", predicates=(pattern.Range(lo=0, hi=7),)),
         default=1,
     )
-    destination_register = ParamDef(
+    destination_register = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "destination_register",
             predicates=(
-                SwitchPattern(
+                pattern.Switch(
                     "destination",
                     {
-                        Bank.X: RangePattern(lo=0, hi=7),
-                        Bank.Y: RangePattern(lo=0, hi=7),
-                        Bank.Z: RangePattern(lo=0, hi=63),
+                        Bank.X: pattern.Range(lo=0, hi=7),
+                        Bank.Y: pattern.Range(lo=0, hi=7),
+                        Bank.Z: pattern.Range(lo=0, hi=63),
                     },
                 ),
-                variable("table_lanes") == 512 // Bits("dtype"),
-                SwitchPattern(
+                pattern.variable("table_lanes") == 512 // pattern.Bits("dtype"),
+                pattern.Switch(
                     "mode",
                     {
-                        m: WildcardPattern(
+                        m: pattern.Wildcard(
                             predicates=(
-                                variable("source_lanes") == 512 // Bits("dtype"),
-                                variable("destination_lanes") == 64,
+                                pattern.variable("source_lanes") == 512 // pattern.Bits("dtype"),
+                                pattern.variable("destination_lanes") == 64,
                             )
                         )
                         if int(m) <= 6
-                        else WildcardPattern(
+                        else pattern.Wildcard(
                             predicates=(
-                                variable("source_lanes")
+                                pattern.variable("source_lanes")
                                 == {
                                     7: 4,
                                     8: 8,
@@ -151,7 +141,7 @@ class Genlut(AmxOp):
                                     14: 20,
                                     15: 40,
                                 }[int(m)],
-                                variable("destination_lanes") == 512 // Bits("dtype"),
+                                pattern.variable("destination_lanes") == 512 // pattern.Bits("dtype"),
                             )
                         )
                         for m in LutMode
@@ -161,43 +151,45 @@ class Genlut(AmxOp):
         ),
         default=2,
     )
-    source = ParamDef(
+    source = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("source_lanes"),),
-            dtype=SwitchPattern(
-                "mode", {m: WildcardPattern("dtype") if int(m) <= 6 else DType.u8 for m in LutMode}
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("source_lanes"),),
+            dtype=pattern.Switch(
+                "mode", {m: pattern.Wildcard("dtype") if int(m) <= 6 else expr.DType.u8 for m in LutMode}
             ),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern((WildcardPattern("source_lanes"),), (1,)),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout((pattern.Wildcard("source_lanes"),), (1,)),
         ),
     )
-    table = ParamDef(
+    table = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("table_lanes"),),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern((WildcardPattern("table_lanes"),), (1,)),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("table_lanes"),),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout((pattern.Wildcard("table_lanes"),), (1,)),
         ),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
         effect=W,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("destination_lanes"),),
-            dtype=SwitchPattern(
-                "mode", {m: DType.u8 if int(m) <= 6 else WildcardPattern("dtype") for m in LutMode}
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("destination_lanes"),),
+            dtype=pattern.Switch(
+                "mode", {m: expr.DType.u8 if int(m) <= 6 else pattern.Wildcard("dtype") for m in LutMode}
             ),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern((WildcardPattern("destination_lanes"),), (1,)),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout((pattern.Wildcard("destination_lanes"),), (1,)),
         ),
     )
-
-    def __init__(self, **attrs):
-        bind(self, attrs)
 
 
 GenlutV1, GenlutV2 = instruction_versions(Genlut, (1, 2), name="genlut", category="arith")
+
+register_semantics((GenlutV1, GenlutV2,))
+
+
+__all__ = ["GenlutV1", "GenlutV2"]

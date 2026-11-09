@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 @module(
@@ -56,6 +56,6 @@ class TwoLoopStage:
                     )
                     T.copy(landing_2, window_2)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def main(x: Tensor[(2, 4), "bf16"], first: Tensor[(2, 4), "bf16"], second: Tensor[(2, 4), "bf16"]):
         launch(two_loops, x, first, second, grid=(1, 1, 1), block=(1, 1, 1), dynamic_smem=8)

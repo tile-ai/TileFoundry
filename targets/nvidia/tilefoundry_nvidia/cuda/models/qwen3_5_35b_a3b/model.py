@@ -19,10 +19,10 @@ from transformers.models.qwen3_5_moe.configuration_qwen3_5_moe import (
 from tilefoundry.dsl import *
 
 
-from tilefoundry.evaluator import to_torch_dtype
+from tilefoundry.interfaces.evaluator import to_torch_dtype
 
 
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 def published(path: Path | None = None) -> Qwen3_5MoeTextConfig:
@@ -118,7 +118,7 @@ _I = config.moe_intermediate_size
 _IS = config.shared_expert_intermediate_size
 
 
-@module(entry="linear_attention", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
+@module(entry="linear_attention", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
 class Qwen3_5LinearAttention:
     @func
     def conv_step(
@@ -229,7 +229,7 @@ class Qwen3_5LinearAttention:
         out = tf.matmul(tf.reshape(gated, new_shape=(1, S, _VAL)), w_out)
         return out, entry, updated
 
-@module(entry="full_attention", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
+@module(entry="full_attention", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
 class Qwen3_5FullAttention:
     @func
     def partial_rope(
@@ -345,7 +345,7 @@ class Qwen3_5FullAttention:
         )
         return tf.matmul(gated, w_o), k_rope, v
 
-@module(entry="routing", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
+@module(entry="routing", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
 class Qwen3_5Router:
     """The block's expert selection, as a Module of its own so it loads and runs
     by itself. Its output is an index, so a router that picked a different eight
@@ -366,7 +366,7 @@ class Qwen3_5Router:
         return tf.cast(top_vals / denom, dtype=_DT), indices
 
 
-@module(entry="experts", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
+@module(entry="experts", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
 class Qwen3_5MoE:
     router = Qwen3_5Router
 
@@ -586,7 +586,7 @@ def advance_state(kind, state, fresh):
     return tuple(torch.cat([old, new], dim=1) for old, new in zip(state, fresh))
 
 
-@module(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
+@module(target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
 class Qwen3_5_35B_A3B:
     """The layer stack in `config.layer_types` order, and the step around it --
     embedding, the walk, the closing norm, the head. Each layer is an independent

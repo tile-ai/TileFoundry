@@ -10,22 +10,10 @@ import pytest
 from tests.nvidia.cuda.schedule._support import (
     _finalized,
 )
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.ir.core import (
-    Call,
-    Constant,
-    Var,
-)
-from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.tir import PrimFunction
-from tilefoundry.ir.tir.stmts import Evaluate, Sequential
-from tilefoundry.ir.types import (
-    DType,
-    TensorType,
-)
-from tilefoundry.visitor_registry.verify import verify_module, verify_prim_function
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry import cli, verifier
+from tilefoundry.ir import core, expr, types
+from tilefoundry.ir.hir import tensor
+from tilefoundry_nvidia import cuda
 
 
 @pytest.mark.parametrize(
@@ -37,29 +25,29 @@ from tilefoundry_nvidia import CudaTarget
     ],
 )
 def test_verifier_rejects_malformed_tir_calls(wrong, refused):
-    param = Var("x", type=TensorType.scalar(DType.f32))
-    callee = PrimFunction("callee", (param,), Sequential(()), target=CudaTarget("nvidia.h200_sxm"))
-    args = () if wrong == "count" else (Constant(0, type=TensorType.scalar(DType.i32)),)
-    caller = PrimFunction("caller", (), Sequential((Evaluate(callee, args),)), target=callee.target)
+    param = expr.Var("x", type=types.TensorType.from_scalar(expr.DType.f32))
+    callee = core.PrimFunction("callee", (param,), core.Sequential(()), target=cuda.Target("nvidia.h200_sxm"))
+    args = () if wrong == "count" else (expr.Constant(0, type=types.TensorType.from_scalar(expr.DType.i32)),)
+    caller = core.PrimFunction("caller", (), core.Sequential((core.Evaluate(callee, args),)), target=callee.target)
     if wrong == "recursion":
-        caller.body = Sequential((Evaluate(caller, ()),))
-    with pytest.raises(VerifyError, match=refused):
-        verify_prim_function(caller, module_fns=(caller, callee))
+        caller.body = core.Sequential((core.Evaluate(caller, ()),))
+    with pytest.raises(expr.VerifyError, match=refused):
+        verifier.verify_prim_function(caller, module_fns=(caller, callee))
 
 
 def test_verifier_rejects_noninteger_slot_index():
     source = Path(__file__).parents[1] / "fixtures/schedule/hir/module_instances.py"
-    lowered = _finalized(load_authored_ir(str(source)))
+    lowered = _finalized(cli.load_authored_ir(str(source)))
     slot = lowered.children["layers"]
-    target = Call(
-        TupleGetItem(),
-        (slot, Constant(0.5, type=TensorType.scalar(DType.f32))),
+    target = expr.Call(
+        tensor.TupleGetItem(),
+        (slot, expr.Constant(0.5, type=types.TensorType.from_scalar(expr.DType.f32))),
         type=slot.type.fields[0],
     )
-    root = replace(lowered.lookup("gemm"), body=Sequential((Evaluate(target, ()),)))
+    root = replace(lowered.lookup("gemm"), body=core.Sequential((core.Evaluate(target, ()),)))
     functions = tuple(
         root if function is lowered.lookup("gemm") else function for function in lowered.functions
     )
     malformed = replace(lowered, functions=functions)
-    with pytest.raises(VerifyError, match="index must be an integer scalar"):
-        verify_module(malformed)
+    with pytest.raises(expr.VerifyError, match="index must be an integer scalar"):
+        verifier.verify_module(malformed)

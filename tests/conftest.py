@@ -1,6 +1,6 @@
 """Configure isolated dumps and devices for the test suite.
 
-Each test gets a ``ContextVar``-backed ``DumpScope`` rooted by file, test, and
+Each test gets a ``ContextVar``-backed ``Scope`` rooted by file, test, and
 xdist worker under gitignored ``test_results``; ``no_dump`` selects a null sink.
 On multi-GPU hosts, xdist workers select
 devices round-robin before tests touch CUDA, so an unindexed ``"cuda"``
@@ -18,8 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from tilefoundry.dump import DumpFlags, DumpScope, FileDumper, NullDumper
-from tilefoundry.target.base import _TARGET_CLASSES, _TARGET_PROVIDERS
+from tilefoundry import dump, target
 
 _RESULTS_ROOT = Path(__file__).resolve().parents[1] / "test_results"
 _SANITIZE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -106,7 +105,7 @@ def _spread_workers_across_devices() -> None:
     if worker is None or not worker.startswith("gw"):
         return
     try:
-        import torch  # noqa: PLC0415
+        import torch
     except ImportError:
         return
     if not torch.cuda.is_available():
@@ -122,25 +121,21 @@ _spread_workers_across_devices()
 @pytest.fixture(autouse=True)
 def _tilefoundry_dump_scope(request: pytest.FixtureRequest):
     if request.node.get_closest_marker("no_dump") is not None:
-        with DumpScope(dumper=NullDumper, flags=DumpFlags.NONE) as scope:
+        with dump.Scope(dumper=dump.NullDumper, flags=dump.Flags.NONE) as scope:
             yield scope
         return
 
     worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
     test_root = _RESULTS_ROOT / _dump_relpath(request.node.nodeid, worker_id)
-    dumper = FileDumper(test_root)
-    with DumpScope(dumper=dumper, flags=DumpFlags.ALL) as scope:
+    dumper = dump.FileDumper(test_root)
+    with dump.Scope(dumper=dumper, flags=dump.Flags.ALL) as scope:
         yield scope
 
 
 @pytest.fixture(autouse=True)
 def _restore_target_registry():
-    classes = dict(_TARGET_CLASSES)
-    providers = dict(_TARGET_PROVIDERS)
+    saved = target.catalog.snapshot()
     try:
         yield
     finally:
-        _TARGET_CLASSES.clear()
-        _TARGET_CLASSES.update(classes)
-        _TARGET_PROVIDERS.clear()
-        _TARGET_PROVIDERS.update(providers)
+        target.catalog.restore(saved)

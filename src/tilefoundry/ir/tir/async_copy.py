@@ -2,33 +2,9 @@
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.kernels import gather
-from tilefoundry.evaluator.registry import register_schedule_eval
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op, OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import (
-    DistinctConstraint,
-    OrPattern,
-    SameConstraint,
-    SameModesConstraint,
-    TensorPattern,
-    utils,
-)
-from tilefoundry.ir.pattern.pattern import WildcardPattern
-from tilefoundry.ir.pattern.predicates import WholeVectors
-from tilefoundry.ir.types import DType, Layout, UnitType
-from tilefoundry.ir.types.layout import ComposedLayout, Swizzle
-from tilefoundry.ir.types.shard_layout import Partial, ShardLayout, Split
-from tilefoundry.ir.types.storage import StorageKind as S
-from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
-from tilefoundry.visitor_registry.access_relation import (
-    gather_relations,
-    identity_relations,
-    register_access_relation,
-)
+from tilefoundry import core
+from tilefoundry.interfaces import access, evaluator, typeinfer, verify
+from tilefoundry.ir import expr, pattern, types
 
 ASYNC_WIDTHS = (4, 8, 16)
 
@@ -38,7 +14,7 @@ def is_indexed_copy(args) -> bool:
     return len(args) == 3
 
 
-class _CopyModes(SameModesConstraint):
+class CopyModes(pattern.SameModesConstraint):
     """An indexed transfer's contiguous vector must stay inside one row."""
 
     def holds(self, operands: dict) -> bool:
@@ -59,102 +35,102 @@ def indexed_width(source, destination) -> int:
     """The common row-aligned width already admitted by the vector patterns."""
     widths = tuple(
         set(
-            WholeVectors(WildcardPattern("width"), "dtype", ASYNC_WIDTHS).available_widths(
+            pattern.WholeVectors(pattern.Wildcard("width"), "dtype", ASYNC_WIDTHS).available_widths(
                 type_.layout, {"dtype": type_.dtype}
             )
         )
         for type_ in (source, destination)
     )
     shared = widths[0] & widths[1]
-    if not shared or not _CopyModes("src", "dst").holds(
+    if not shared or not CopyModes("src", "dst").holds(
         {"src": source, "dst": destination, "index": True}
     ):
         raise ValueError("indexed CopyAsync requires common aligned vectors inside a row")
     return max(shared)
 
 
-def _indexed_layout(layout) -> bool:
+def indexed_layout(layout) -> bool:
     """Every issuer must see the complete table, destination, and index."""
-    if isinstance(layout, Layout):
+    if isinstance(layout, types.Layout):
         return True
-    if isinstance(layout, ShardLayout):
-        return not any(isinstance(attr, (Split, Partial)) for attr in layout.attrs) and _indexed_layout(
-            layout.layout
+    if isinstance(layout, types.ShardLayout):
+        return not any(
+            isinstance(attr, (types.Split, types.Partial)) for attr in layout.attrs
+        ) and indexed_layout(layout.layout)
+    if isinstance(layout, types.ComposedLayout):
+        return (layout.outer is None or indexed_layout(layout.outer)) and (
+            layout.inner is None or indexed_layout(layout.inner)
         )
-    if isinstance(layout, ComposedLayout):
-        return (layout.outer is None or _indexed_layout(layout.outer)) and (
-            layout.inner is None or _indexed_layout(layout.inner)
-        )
-    return isinstance(layout, Swizzle)
+    return isinstance(layout, types.Swizzle)
 
 
-@register_op(dialect="T", category="async", name="copy_async")
-class CopyAsync(Op):
+@expr.register_op(dialect="T", category="async", name="copy_async")
+class CopyAsync(expr.Op):
     """Async gmem→smem copy (``cp.async.cg.shared.global``); non-blocking."""
 
-    capability = OpCapability("cp.async")
-    execution_mesh = utils.thread_execution_mesh()
+    capability = expr.OpCapability("cp.async")
+    execution_mesh = pattern.thread_execution_mesh()
 
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.READ,
-        pattern=utils.operand_tile(
+        effect=expr.MemoryEffect.READ,
+        pattern=pattern.operand_tile(
             0,
-            S.GMEM,
-            utils.whole_vectors(0, ASYNC_WIDTHS),
+            expr.StorageKind.GMEM,
+            pattern.whole_vectors(0, ASYNC_WIDTHS),
             execution_mesh,
         ),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.WRITE,
-        pattern=utils.operand_tile(
+        effect=expr.MemoryEffect.WRITE,
+        pattern=pattern.operand_tile(
             1,
-            S.SMEM,
-            utils.whole_vectors(1, ASYNC_WIDTHS),
+            expr.StorageKind.SMEM,
+            pattern.whole_vectors(1, ASYNC_WIDTHS),
             execution_mesh,
         ),
     )
     between = (
-        SameConstraint("dtype", "src", "dst"),
-        DistinctConstraint("storage", "src", "dst"),
-        _CopyModes("src", "dst"),
+        pattern.SameConstraint("dtype", "src", "dst"),
+        pattern.DistinctConstraint("storage", "src", "dst"),
+        CopyModes("src", "dst"),
     )
-    index = ParamDef(
+    index = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.READ,
+        effect=expr.MemoryEffect.READ,
         optional=True,
         default=None,
-        pattern=TensorPattern(shape=(None,), dtype=OrPattern(DType.i32, DType.i64)),
+        pattern=pattern.Tensor(shape=(None,), dtype=pattern.Or(expr.DType.i32, expr.DType.i64)),
     )
-    fill = ParamDef(kind="attribute", annotation=float | None, default=None)
+    fill = expr.ParamDef(kind="attribute", annotation=float | None, default=None)
 
 
-@register_typeinfer(CopyAsync)
-def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
-    return UnitType()
+@typeinfer.register(CopyAsync)
+def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
+    return types.UnitType()
 
 
-@register_access_relation(CopyAsync)
-def _copy_async_access(call, ctx):
+@access.register_relation(CopyAsync)
+def copy_async_access(call, ctx):
     if not is_indexed_copy(call.args):
-        return identity_relations(call, ctx)
+        return access.identity_relations(call, ctx)
     source = ctx.type_of(call.args[0])
     index = ctx.type_of(call.args[2])
-    source_access, index_access, out = gather_relations(source, index, 0)
+    source_access, index_access, out = access.gather_relations(source, index, 0)
     return source_access, out, index_access, out
 
 
-@register_schedule_eval(CopyAsync)
-def _eval_scheduled_copy_async(ctx):
+@evaluator.register(CopyAsync)
+def eval_scheduled_copy_async(ctx):
     if not is_indexed_copy(ctx.args):
-        return TensorValue(ShardTensor(ctx.result_type, ctx.args[0].data))
+        return evaluator.TensorValue(core.ShardTensor(ctx.result_type, ctx.args[0].data))
     source, index = ctx.args[0].data, ctx.args[2].data
-    return TensorValue(ShardTensor(ctx.result_type, gather(source, index, 0, ctx.op.fill)))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, evaluator.gather(source, index, 0, ctx.op.fill)))
 
 
-@register_verify_stmt(CopyAsync)
-def verify_copy_async(call: "Call", ctx: "VerifyContext") -> None:
+@verify.register(CopyAsync)
+def verify_copy_async(call: "Call", ctx: "verify.Context") -> None:
     """Check indexed-copy geometry and the index-dependent fill option."""
     src = ctx.type_of(call.args[0])
     dst = ctx.type_of(call.args[1])
@@ -164,12 +140,12 @@ def verify_copy_async(call: "Call", ctx: "VerifyContext") -> None:
         return
     index = ctx.type_of(call.args[2])
     for name, operand in (("src", src), ("dst", dst), ("index", index)):
-        if not _indexed_layout(operand.layout):
+        if not indexed_layout(operand.layout):
             ctx.error(
                 call,
                 f"CopyAsync indexed {name} must have a plain or pure Broadcast layout, got {operand.layout}",
             )
-    if len(index.shape) != 1 or index.dtype not in (DType.i32, DType.i64):
+    if len(index.shape) != 1 or index.dtype not in (expr.DType.i32, expr.DType.i64):
         ctx.error(call, "CopyAsync index must be rank-1 i32 or i64")
     if not src.shape or tuple(dst.shape) != (index.shape[0], *src.shape[1:]):
         ctx.error(
@@ -178,46 +154,53 @@ def verify_copy_async(call: "Call", ctx: "VerifyContext") -> None:
         )
 
 
-@register_op(dialect="T", category="async", name="cp_async_commit")
-class CpAsyncCommit(Op):
+@expr.register_op(dialect="T", category="async", name="cp_async_commit")
+class CpAsyncCommit(expr.Op):
     """Close the current in-flight ``cp.async`` group (``commit_group``)."""
 
-    execution_mesh = utils.thread_execution_mesh()
+    execution_mesh = pattern.thread_execution_mesh()
 
 
-@register_typeinfer(CpAsyncCommit)
-def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
-    return UnitType()
+@typeinfer.register(CpAsyncCommit)
+def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
+    return types.UnitType()
 
 
-@register_op(dialect="T", category="async", name="cp_async_wait")
-class CpAsyncWait(Op):
+@expr.register_op(dialect="T", category="async", name="cp_async_wait")
+class CpAsyncWait(expr.Op):
     """Wait until all but the ``n`` newest committed async groups arrive."""
 
-    execution_mesh = utils.thread_execution_mesh()
+    execution_mesh = pattern.thread_execution_mesh()
 
-    n = ParamDef(
+    n = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("wait_groups", predicates=(WildcardPattern("wait_groups") >= 0,)),
+        pattern=pattern.Wildcard("wait_groups", predicates=(pattern.Wildcard("wait_groups") >= 0,)),
         default=0,
     )
 
 
-@register_typeinfer(CpAsyncWait)
-def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
-    return UnitType()
+@typeinfer.register(CpAsyncWait)
+def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
+    return types.UnitType()
 
 
-__all__ = ["ASYNC_WIDTHS", "CopyAsync", "CpAsyncCommit", "CpAsyncWait"]
+__all__ = [
+    "ASYNC_WIDTHS",
+    "CopyAsync",
+    "CpAsyncCommit",
+    "CpAsyncWait",
+    "indexed_width",
+    "is_indexed_copy",
+]
 
 
-register_access_relation(CpAsyncCommit)(identity_relations)
-register_access_relation(CpAsyncWait)(identity_relations)
+access.register_relation(CpAsyncCommit)(access.identity_relations)
+access.register_relation(CpAsyncWait)(access.identity_relations)
 
 
-@register_verify_stmt(CpAsyncCommit)
-def _verify_cpasynccommit(call, ctx) -> None:
+@verify.register(CpAsyncCommit)
+def verify_cpasynccommit(call, ctx) -> None:
     """Admit a control effect with no input contract.
 
     See [tir §1.3](docs/spec/tir.md#13-primfunction).
@@ -225,8 +208,8 @@ def _verify_cpasynccommit(call, ctx) -> None:
     return None
 
 
-@register_verify_stmt(CpAsyncWait)
-def _verify_cpasyncwait(call, ctx) -> None:
+@verify.register(CpAsyncWait)
+def verify_cpasyncwait(call, ctx) -> None:
     """Admit a control effect with no input contract.
 
     See [tir §1.3](docs/spec/tir.md#13-primfunction).

@@ -6,7 +6,7 @@ Every CTA writes the one scratch.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 ROWS = 32
 COLS = 8
@@ -15,7 +15,7 @@ CTAS = 4
 
 @module(
     entry="kernel",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", CTAS), Topology("thread", 32)),
 )
 class TmaScratchInCallee:
@@ -40,7 +40,7 @@ class TmaScratchInCallee:
     def kernel(x: Tensor[(ROWS, COLS), "bf16"]) -> Tensor[(CTAS * ROWS, COLS), "bf16"]:
         with Mesh(("cta",), layout=(CTAS,), names=("block",)) as cta:
             out = tf.empty(Tensor[(CTAS * ROWS, COLS), "bf16"])
-            tile = round_trip(x)  # noqa: F821 -- class-body binding
+            tile = round_trip(x)
             with Mesh(("thread",), layout=(32,), names=("lane",)) as _warp:
                 stored = tf.schedule(
                     (tile, tf.empty(Tensor[(ROWS, COLS), "bf16", (ROWS, COLS)])), op=T.copy()

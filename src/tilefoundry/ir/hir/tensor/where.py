@@ -2,58 +2,37 @@
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.utils import common_placements
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._helpers import resolve_anchor_storage
-from tilefoundry.ir.hir.math.binary import _merge_layout
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.layout import Layout
-from tilefoundry.ir.types.shard_layout import Partial, Split, shard_layout_of
-from tilefoundry.ir.types.utils import reject_partials
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    broadcast_access,
-    broadcast_all,
-    identity_access,
-    iterating,
-    register_access_relation,
-    relations_of,
-    shape_from_relation,
-)
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, types
+from tilefoundry.ir import utils as ir_utils
+from tilefoundry.ir.hir import math
 
 
-@register_op(dialect='tf', category='tensor')
-class Where(Op):
+@expr.register_op(dialect='tf', category='tensor')
+class Where(expr.Op):
     """Select values from two branches under a boolean condition."""
 
-    condition = ParamDef(kind="input")
-    input = ParamDef(kind="input")
-    other = ParamDef(kind="input")
+    condition = expr.ParamDef(kind="input")
+    input = expr.ParamDef(kind="input")
+    other = expr.ParamDef(kind="input")
 
 
-@register_access_relation(Where)
-def _where_access_relation(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(Where)
+def where_access_relation(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     input_types = tuple(ctx.type_of(arg) for arg in call.args)
     shapes = tuple(type_.shape for type_ in input_types)
-    out_shape = broadcast_all(shapes)
-    return iterating(out_shape, (
-        *(broadcast_access(out_shape, shape) for shape in shapes),
-        identity_access(len(out_shape)),
+    out_shape = access.broadcast_all(shapes)
+    return access.iterating(out_shape, (
+        *(access.broadcast(out_shape, shape) for shape in shapes),
+        access.identity(len(out_shape)),
     ))
 
 
-@register_typeinfer(Where)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(Where)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     condition, input_, other = (ctx.type_of(arg) for arg in call.args)
-    if condition.dtype != DType.bool:
+    if condition.dtype != expr.DType.bool:
         ctx.error(call, f"condition must have bool dtype, got {condition.dtype}")
     if input_.dtype != other.dtype:
         ctx.error(
@@ -61,33 +40,33 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             f"data branch dtype mismatch ({input_.dtype.name} vs {other.dtype.name})",
         )
     for name, type_ in (("condition", condition), ("input", input_), ("other", other)):
-        reject_partials(name, type_.layout)
+        ir_utils.reject_partials(name, type_.layout)
 
-    storage = resolve_anchor_storage(ctx, call, input_.storage, other.storage)
+    storage = typeinfer.resolve_anchor_storage(ctx, call, input_.storage, other.storage)
     try:
-        relation = relations_of(call, ctx)
-        out_shape = shape_from_relation(
+        relation = access.relations_of(call, ctx)
+        out_shape = access.shape_from_relation(
             relation[len(call.args)],
-            broadcast_all((condition.shape, input_.shape, other.shape)),
+            access.broadcast_all((condition.shape, input_.shape, other.shape)),
         )
-        data_shard = derive_output_shard_layout(
+        data_shard = typeinfer.derive_output_shard_layout(
             (input_, other), relation[1:], out_shape, ctx=ctx, storage=storage
         )
         layout = (
             data_shard
             if data_shard is not None
-            else _merge_layout(
-                shard_layout_of(input_.layout) or input_.layout,
-                shard_layout_of(other.layout) or other.layout,
+            else math.merge_layout(
+                types.shard_layout_of(input_.layout) or input_.layout,
+                types.shard_layout_of(other.layout) or other.layout,
                 out_shape,
             )
         )
 
-        condition_shard = shard_layout_of(condition.layout)
+        condition_shard = types.shard_layout_of(condition.layout)
         if condition_shard is not None and any(
-            isinstance(attr, (Split, Partial)) for attr in condition_shard.attrs
+            isinstance(attr, (types.Split, types.Partial)) for attr in condition_shard.attrs
         ):
-            combined = derive_output_shard_layout(
+            combined = typeinfer.derive_output_shard_layout(
                 (condition, input_, other), relation, out_shape, ctx=ctx, storage=storage
             )
             if combined != layout:
@@ -97,15 +76,15 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                     "reshard the condition to their distribution",
                 )
         elif condition_shard is not None or data_shard is not None:
-            layout = derive_output_shard_layout(
+            layout = typeinfer.derive_output_shard_layout(
                 (condition, input_, other), relation, out_shape, ctx=ctx, storage=storage
             )
     except ValueError as error:
         ctx.error(call, f"Where: {error}")
 
     if layout is None:
-        layout = Layout(out_shape)
-    return TensorType(
+        layout = types.Layout(out_shape)
+    return types.TensorType(
         shape=out_shape,
         dtype=input_.dtype,
         layout=layout,
@@ -113,16 +92,22 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     )
 
 
-@register_eval(Where)
-def _eval_where(ctx):
+@evaluator.register(Where)
+def eval_where(ctx):
     xs = tuple(arg.tensor for arg in ctx.args)
-    placements = common_placements(*xs)
+    placements = evaluator.common_placements(*xs)
     held = (
-        torch.where(*(x.tensor for x in xs))
+        utils.torch.where(*(x.tensor for x in xs))
         if not placements
-        else tuple((p, torch.where(*(x.to_local(p) for x in xs))) for p in placements)
+        else tuple((p, utils.torch.where(*(x.to_local(p) for x in xs))) for p in placements)
     )
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
 __all__ = ["Where"]
+
+
+@cost.register(Where)
+def where_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    """Choosing between two values it already has is a select, not arithmetic."""
+    return cost.serviced(call, ctx, "select")

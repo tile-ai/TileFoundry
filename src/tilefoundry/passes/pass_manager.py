@@ -12,20 +12,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable
 
-from tilefoundry.dump import DumpFlags, DumpScope, dump
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.target.base import Target
-from tilefoundry.visitor_registry.contexts import TypeInferContext
-from tilefoundry.visitor_registry.typeinfer import inference_type
-from tilefoundry.visitor_registry.verify import (
-    verify_function as verify_hir_function,
-)
-from tilefoundry.visitor_registry.verify import (
-    verify_prim_function,
-)
+from tilefoundry import dispatch, dump, target, verifier
+from tilefoundry.interfaces import typeinfer, valuation
+from tilefoundry.ir import core
 
 from .pass_base import ModulePass, Pass
 
@@ -36,30 +25,30 @@ class PassPoint(Enum):
     BEFORE_CODEGEN = "before_codegen"
 
 
-_TARGET_PASSES: dict[tuple[type[Target], PassPoint], list[type[ModulePass]]] = {}
+registry = dispatch.Registry("passes")
+"""Target module passes keyed by ``(target class, pipeline point, pass class)``."""
 
 
-def register_pass(target: type[Target], point: PassPoint) -> Callable[[type[ModulePass]], type[ModulePass]]:
+def register_pass(tgt: type[target.Target], point: PassPoint) -> Callable[[type[ModulePass]], type[ModulePass]]:
     """Register a target's module pass at a fixed pipeline point."""
     def register(pass_type: type[ModulePass]) -> type[ModulePass]:
-        passes = _TARGET_PASSES.setdefault((target, point), [])
-        if any(pass_type in registered for (_, registered_point), registered in _TARGET_PASSES.items()
-               if registered_point == point):
-            raise ValueError(f"{target.name}: pass {pass_type.__name__} already registered at {point.value}")
-        passes.append(pass_type)
+        if any(key[1] is point and key[2] is pass_type for key in registry.entries):
+            raise ValueError(f"{tgt.name}: pass {pass_type.__name__} already registered at {point.value}")
+        registry.register((tgt, point, pass_type), pass_type)
         return pass_type
     return register
 
 
-def target_passes(module: Module, point: PassPoint) -> list[ModulePass]:
+def for_target(module: core.Module, point: PassPoint) -> list[ModulePass]:
     """Instantiate the module targets' passes, ordered by target name."""
     targets = set()
-    for frame in list_call_paths(module).values():
-        target = frame.function.target if isinstance(frame.function, PrimFunction) else frame.target
-        if target is not None:
-            targets.add(type(target))
-    return [pass_type() for target in sorted(targets, key=lambda target: target.name)
-            for pass_type in _TARGET_PASSES.get((target, point), ())]
+    for frame in valuation.list_call_paths(module).values():
+        tgt = frame.function.target if isinstance(frame.function, core.PrimFunction) else frame.target
+        if tgt is not None:
+            targets.add(type(tgt))
+    return [pass_type() for tgt2 in sorted(targets, key=lambda tgt3: tgt3.name)
+            for (key_target, key_point, _), pass_type in registry.entries.items()
+            if key_target is tgt2 and key_point is point]
 
 
 @dataclass
@@ -70,40 +59,40 @@ class PassManager:
         self.passes.append(p)
         return self
 
-    def run(self, module: Module) -> Module:
-        self._check_requires()
+    def run(self, module: core.Module) -> core.Module:
+        self.check_requires()
         for seq, p in enumerate(self.passes):
             prev = module
-            previous = {id(frame.function) for frame in list_call_paths(prev).values()}
-            with DumpScope(f"{seq:02d}_{p.name}"):
-                dump("before.txt", lambda: repr(prev), DumpFlags.PASS_IR)
+            previous = {id(frame.function) for frame in valuation.list_call_paths(prev).values()}
+            with dump.Scope(f"{seq:02d}_{p.name}"):
+                dump.dump("before.txt", lambda: repr(prev), dump.Flags.PASS_IR)
                 module = p.run(module)
-                self._post_pass_recheck(previous, module)
-                dump("after.txt", lambda: repr(module), DumpFlags.PASS_IR)
+                self.recheck(previous, module)
+                dump.dump("after.txt", lambda: repr(module), dump.Flags.PASS_IR)
         return module
 
-    def _post_pass_recheck(self, previous: set[int], curr: Module) -> None:
+    def recheck(self, previous: set[int], curr: core.Module) -> None:
         """Post pass recheck.
 
         Re-run typeinfer (HIR) / verify (TIR) on every function whose
         object identity is absent from the pre-pass ``previous`` set. Whole-
         function fallback per [passes §7](docs/spec/passes.md#7-implemented-passes).
         """
-        for frame in list_call_paths(curr).values():
+        for frame in valuation.list_call_paths(curr).values():
             fn = frame.function
             if id(fn) in previous:
                 continue
-            if isinstance(fn, HirFunction):
-                verify_hir_function(fn)
-                inference_type(
+            if isinstance(fn, core.Function):
+                verifier.verify_function(fn)
+                typeinfer.inference_type(
                     fn,
-                    TypeInferContext(module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies),
+                    typeinfer.TypeInferContext(module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies),
                     ranges=True,
                 )
-            elif isinstance(fn, PrimFunction):
-                verify_prim_function(fn, module_fns=curr)
+            elif isinstance(fn, core.PrimFunction):
+                verifier.verify_prim_function(fn, module_fns=curr)
 
-    def _check_requires(self) -> None:
+    def check_requires(self) -> None:
         seen: set[str] = set()
         for p in self.passes:
             for r in p.requires:
@@ -112,4 +101,4 @@ class PassManager:
             seen.add(p.name)
 
 
-__all__ = ["PassManager", "PassPoint", "register_pass", "target_passes"]
+__all__ = ["PassManager", "PassPoint", "for_target", "register_pass", "registry"]

@@ -24,7 +24,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import tilefoundry
-from tilefoundry.runtime import SafetensorsResource
+from tilefoundry import runtime
 
 CKPT_ENV = "TILEFOUNDRY_QWEN3_1_7B_CKPT"
 MODEL = "qwen3_1_7b"
@@ -133,7 +133,7 @@ def _loaded(source: Path, mount: Path):
     namespace = runpy.run_path(str(source))
     root = namespace["Qwen3_1_7B"]
     alias = runpy.run_path(str(source.with_name("hf_alias.py")))["hf_alias"](namespace["config"])
-    return root.load(SafetensorsResource(str(mount), device=DEV, alias=alias))
+    return root.load(runtime.SafetensorsResource(str(mount), device=DEV, alias=alias))
 
 
 def _hf_greedy(model, prompt_ids):

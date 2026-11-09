@@ -5,7 +5,7 @@ from .extract import load_xy_reg_indexed
 from .floating import fp_compare
 
 
-def emulate_AMX_GENLUT(state, operand):
+def emulate_amx_genlut(state, operand):
     mode = (operand >> 53) & 15
     source = state.y if operand & (1 << 10) else state.x
     tablepool = state.y if operand & (1 << 59) else state.x
@@ -63,3 +63,6 @@ def emulate_AMX_GENLUT(state, operand):
     dest = state.z if operand & (1 << 26) else state.y if operand & (1 << 25) else state.x
     doff = ((operand >> 20) & (63 if operand & (1 << 26) else 7)) * 64
     dest[doff : doff + 64] = xy
+
+
+__all__ = ["emulate_amx_genlut"]

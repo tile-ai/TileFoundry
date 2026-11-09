@@ -13,18 +13,16 @@ from pathlib import Path
 import pytest
 
 from tests.core._corpus import Case, case, check_case, special
-from tilefoundry.codegen.context import EmitContext
-from tilefoundry.codegen.context_builder import build_codegen_context, mangle
-from tilefoundry.codegen.linkable_module import LinkableModule
-from tilefoundry_nvidia import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.abi import launcher_symbol
+from tilefoundry import codegen
+from tilefoundry_nvidia import cuda
+from tilefoundry_nvidia.cuda import codegen as cuda_codegen
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 SQUARE = Path(__file__).parents[1] / "fixtures" / "tir" / "square.py"
 
 
 def _view(square, target):
-    root = build_codegen_context(square)
+    root = codegen.build_context(square)
     group = next(group for group in root.groups if group.target == target)
     return root, group, root.for_group(group)
 
@@ -32,7 +30,7 @@ def _view(square, target):
 def _device_source(square) -> str:
     _root, group, view = _view(square, _CUDA)
     return _CUDA.resolve(
-        LinkableModule, square, group.functions, _CUDA.resolve(EmitContext, view)
+        codegen.LinkableModule, square, group.functions, _CUDA.resolve(codegen.EmitContext, view)
     ).source
 
 
@@ -40,7 +38,7 @@ def _host_source(square) -> str:
     entry = square.entry_function()
     _root, group, view = _view(square, entry.target)
     return entry.target.resolve(
-        LinkableModule, square, (entry,), entry.target.resolve(EmitContext, view)
+        codegen.LinkableModule, square, (entry,), entry.target.resolve(codegen.EmitContext, view)
     ).source
 
 
@@ -54,7 +52,7 @@ class SquareDispatch(DeviceDispatchCase):
 
     def guard(self, state, problems):
         device = _device_source(state)
-        launcher = launcher_symbol(mangle(state, state.square_device))
+        launcher = cuda_codegen.launcher_symbol(codegen.mangle(state, state.square_device))
         problems.run("one kernel and one shim", self.one_kernel_one_shim, device, launcher)
         problems.run("kernel branches on the extent", self.kernel_branches_on_extent, device)
         problems.run("host makes one call", self.host_makes_one_call, _host_source(state), launcher)

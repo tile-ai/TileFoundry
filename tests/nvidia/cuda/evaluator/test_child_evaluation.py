@@ -17,7 +17,7 @@ import pytest
 import torch
 
 from tests.core._corpus import Case, case, check_case, special
-from tilefoundry.evaluator import evaluate
+from tilefoundry.interfaces import evaluator
 
 _DEV = "cpu"
 SCALED_MODULES = Path(__file__).parents[1] / "fixtures" / "shapes" / "scaled_modules.py"
@@ -58,15 +58,15 @@ class FusedScaledParent(ChildReadingCase):
         w = torch.tensor([2.0, 3.0, 4.0, 5.0])
         reading = state.load(_Weights({"scaled.w": w}))
 
-        assert torch.equal(evaluate(reading.fused, x), x * w)
+        assert torch.equal(evaluator.evaluate(reading.fused, x), x * w)
 
     def two_independent_readings(self, state):
         x = torch.ones(4)
         first = state.load(_Weights({"scaled.w": torch.full((4,), 2.0)}))
         second = state.load(_Weights({"scaled.w": torch.full((4,), 5.0)}))
 
-        assert torch.equal(evaluate(second.fused, x), torch.full((4,), 5.0))
-        assert torch.equal(evaluate(first.fused, x), torch.full((4,), 2.0))
+        assert torch.equal(evaluator.evaluate(second.fused, x), torch.full((4,), 5.0))
+        assert torch.equal(evaluator.evaluate(first.fused, x), torch.full((4,), 2.0))
 
 
 @case
@@ -80,7 +80,7 @@ class TwoBindingsOfOneChild(ChildReadingCase):
             _Weights({"left.w": torch.full((4,), 2.0), "right.w": torch.full((4,), 7.0)})
         )
 
-        assert torch.equal(evaluate(reading.both, x), torch.full((4,), 9.0))
+        assert torch.equal(evaluator.evaluate(reading.both, x), torch.full((4,), 9.0))
 
 
 @case
@@ -93,7 +93,7 @@ class LoopedChildCall(ChildReadingCase):
         w = torch.full((4,), 2.0)
         reading = state.load(_Weights({"scaled.w": w}))
 
-        assert torch.equal(evaluate(reading.looped, x), x * w * w * w)
+        assert torch.equal(evaluator.evaluate(reading.looped, x), x * w * w * w)
 
 
 @case

@@ -1,6 +1,6 @@
 """The runtime twin of `model.py`: the same decode step, as kernels.
 
-`@runtime_module` checks at decoration time that this class's function and child
+`@runtime.module` checks at decoration time that this class's function and child
 names are exactly the authored Module's, so the twin covers the whole model at
 once -- one `decode_step`, because the authored side is one `decode_step`.
 
@@ -28,7 +28,7 @@ import torch.nn.functional as F
 
 import model
 from model import Nemotron35Lightning30BA3B as SEM
-from tilefoundry.runtime import runtime_func, runtime_module
+from tilefoundry import runtime
 
 H, V, EPS = model.H, model.V, model.EPS
 MH, MD, SS, NG, MI, CONV, KER, WIN, PROJ = (model.MH, model.MD, model.SS, model.NG,
@@ -197,11 +197,11 @@ def _ops_step(w, acts, stop=None, attn_at=None):
     return (logits, *fresh)
 
 
-@runtime_module(SEM)
+@runtime.module(SEM)
 class Nemotron35Lightning30BA3BRuntime:
     """The published model's decode step, as one launch."""
 
-    @runtime_func
+    @runtime.func
     def attend_by_head(self, qg, k_cache, v_cache, k_tail, v_tail):
         """The short-context placement, on its own.
 
@@ -214,14 +214,14 @@ class Nemotron35Lightning30BA3BRuntime:
 
         return mega_kernel.run_attn("head", qg, k_cache, v_cache, k_tail, v_tail)
 
-    @runtime_func
+    @runtime.func
     def attend_by_context(self, qg, k_cache, v_cache, k_tail, v_tail):
         """The long-context placement, on its own. See `attend_by_head`."""
         import mega_kernel  # noqa: PLC0415
 
         return mega_kernel.run_attn("context", qg, k_cache, v_cache, k_tail, v_tail)
 
-    @runtime_func
+    @runtime.func
     def attend(self, qg, k_cache, v_cache, k_tail, v_tail):
         """Whichever placement the whole-block context length asks for.
 
@@ -232,7 +232,7 @@ class Nemotron35Lightning30BA3BRuntime:
 
         return mega_kernel.run_attn("dispatch", qg, k_cache, v_cache, k_tail, v_tail)
 
-    @runtime_func
+    @runtime.func
     def decode_step(self, *args):
         acts = {name: args[at] for name, at in _INDEX.items()
                 if not SEM.entry_function().params[at].is_const}
@@ -241,7 +241,7 @@ class Nemotron35Lightning30BA3BRuntime:
         acts["cur_pos"] = int(args[_INDEX["cur_pos"]][0])
         acts["token_ids"] = args[_INDEX["token_ids"]]
         if IMPL == "ops":
-            return _ops_step(self._bound, acts)
+            return _ops_step(self.bound, acts)
         return self._mega(args, acts)
 
     def _mega(self, args, acts):
@@ -254,7 +254,7 @@ class Nemotron35Lightning30BA3BRuntime:
 
         A kernel cannot take 401 pointers, so the twin holds one flat tensor per
         weight class and this reads each weight into its place and drops the
-        original. `_bound` then keeps the *view* standing for that weight, so the
+        original. `bound` then keeps the *view* standing for that weight, so the
         op-by-op path and `check`'s weight report see exactly what was declared
         while the kernel sees eighteen buffers.
         """
@@ -262,7 +262,7 @@ class Nemotron35Lightning30BA3BRuntime:
 
         device = getattr(resource, "device", "cuda")
         self._run = mega_kernel.Runner(device)
-        for name in self._ir.weights:
+        for name in self.module.weights:
             value = resource.load(name)
-            self._bound[name] = mega_kernel.pack_into(self._run.packed, name, value)
+            self.bound[name] = mega_kernel.pack_into(self._run.packed, name, value)
             del value

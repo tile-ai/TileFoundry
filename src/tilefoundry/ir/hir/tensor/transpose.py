@@ -1,36 +1,23 @@
+"""HIR ``Transpose`` Op: permute the axes of a tensor."""
+
 from __future__ import annotations
 
 import isl
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.layout import Layout
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    identity_access,
-    iterating,
-    register_access_relation,
-    relations_of,
-)
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
 
-@register_op(dialect='tf', category='tensor')
-class Transpose(Op):
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
-    perm = ParamDef(kind="attribute", annotation=tuple)
+@expr.register_op(dialect='tf', category='tensor')
+class Transpose(expr.Op):
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    perm = expr.ParamDef(kind="attribute", annotation=tuple)
 
 
-@register_access_relation(Transpose)
-def _transpose_relations(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(Transpose)
+def transpose_relations(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """Result axis k is source axis perm[k], stated in both sides' positions.
 
     A permutation walks what it reads, so the source's own axes are the
@@ -42,17 +29,17 @@ def _transpose_relations(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     rank = len(source.shape)
     writes_at = [f"d{source_axis}" for source_axis in perm]
     domain = ", ".join(f"d{index}" for index in range(rank))
-    return iterating(
+    return access.iterating(
         source.shape,
         (
-            identity_access(rank),
-            AccessRelation(isl.map(f"{{ [{domain}] -> [{', '.join(writes_at)}] }}")),
+            access.identity(rank),
+            access.Relation(isl.map(f"{{ [{domain}] -> [{', '.join(writes_at)}] }}")),
         ),
     )
 
 
-@register_typeinfer(Transpose)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(Transpose)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     """A new compact value with its source axes in another order."""
     x_ty = ctx.type_of(call.args[0])
     perm = call.target.perm
@@ -60,24 +47,33 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ctx.error(call, f"perm length {len(perm)} != rank {len(x_ty.shape)}")
     new_shape = tuple(x_ty.shape[p] for p in perm)
 
-    new_layout = derive_output_shard_layout(
+    new_layout = typeinfer.derive_output_shard_layout(
         (x_ty,),
-        relations_of(call, ctx),
+        access.relations_of(call, ctx),
         new_shape,
         fresh_strides=True,
         ctx=ctx,
         storage=x_ty.storage,
     )
     if new_layout is None:
-        new_layout = Layout(new_shape)
-    return TensorType(shape=new_shape, dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage)
+        new_layout = types.Layout(new_shape)
+    return types.TensorType(shape=new_shape, dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage)
 
 
-@register_eval(Transpose)
-def _eval_transpose(ctx):
+@evaluator.register(Transpose)
+def eval_transpose(ctx):
     def transpose(x):
-        return torch.permute(x, tuple(ctx.op.perm)).contiguous()
+        return utils.torch.permute(x, tuple(ctx.op.perm)).contiguous()
 
     x = ctx.args[0].tensor
     held = transpose(x.tensor) if x.is_global else tuple((p, transpose(t)) for p, t in x.tensor)
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
+
+
+@cost.register(Transpose)
+def transpose_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    moved = ir_utils.tensor_bytes(cost.output_type(call, ctx))
+    return cost.Cost({}, (cost.TrafficBytes(read=moved), cost.TrafficBytes(write=moved)))
+
+
+__all__ = ["Transpose"]

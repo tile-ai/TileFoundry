@@ -8,16 +8,11 @@ from tests.core.ops.ir.test_cache_update import (
     _GLOBAL_TRAFFIC,
     _WINDOW_BYTES,
 )
-from tilefoundry.analysis import ComputeCostMetadata, MemoryMetadata
-from tilefoundry.analysis.api import analyze
-from tilefoundry.analysis.check import check_program
-from tilefoundry.cli.source import load_authored_ir
+from tilefoundry import analysis, cli
 from tilefoundry.dsl import *
-from tilefoundry.ir.core import Call, get_metadata
-from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
-from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes
-from tilefoundry.visitor_registry.visitors import CostEvaluator
+from tilefoundry.interfaces import cost
+from tilefoundry.ir import core, expr
+from tilefoundry.ir.hir import tensor
 
 OPS = Path(__file__).parents[2] / "fixtures" / "ops"
 _CTA = Topology("cta", 2)
@@ -32,51 +27,51 @@ def test_cache_update_cost_per_level() -> None:
     is the footprint family's question, and raising a single crossing to cover
     them would be answering it here.
     """
-    _KVCacheAppend = load_authored_ir(f"{OPS / 'kv_cache_append.py'}:_KVCacheAppend")
+    _KVCacheAppend = cli.load_authored_ir(f"{OPS / 'kv_cache_append.py'}:_KVCacheAppend")
     entry = _KVCacheAppend.entry_function()
     update = next(
-        expr
-        for expr in collect_exprs(entry.body)
-        if isinstance(expr, Call) and isinstance(expr.target, CacheUpdate)
+        node
+        for node in core.collect_exprs(entry.body)
+        if isinstance(node, expr.Call) and isinstance(node.target, tensor.CacheUpdate)
     )
     selected_types = {id(arg): arg.type for arg in update.args}
-    program_ctx = CostContext(selected_types=selected_types, selected_output_type=update.type)
-    cta_ctx = CostContext(
+    program_ctx = cost.Context(selected_types=selected_types, selected_output_type=update.type)
+    cta_ctx = cost.Context(
         selected_types=selected_types,
         selected_output_type=update.type,
         topology_level="cta",
         topologies=(_CTA,),
     )
     assert cta_ctx.local_type_of(update.args[3]).shape == (1, 4, 4, 8)
-    assert CostEvaluator().visit_Call(update, program_ctx).traffic == _GLOBAL_TRAFFIC
-    assert CostEvaluator().visit_Call(update, cta_ctx).traffic == (
-        TrafficBytes(),
-        TrafficBytes(read=4),
-        TrafficBytes(read=4),
-        TrafficBytes(read=_WINDOW_BYTES // 2),
-        TrafficBytes(write=_WINDOW_BYTES // 2),
+    assert cost.Visitor().visit_Call(update, program_ctx).traffic == _GLOBAL_TRAFFIC
+    assert cost.Visitor().visit_Call(update, cta_ctx).traffic == (
+        cost.TrafficBytes(),
+        cost.TrafficBytes(read=4),
+        cost.TrafficBytes(read=4),
+        cost.TrafficBytes(read=_WINDOW_BYTES // 2),
+        cost.TrafficBytes(write=_WINDOW_BYTES // 2),
     )
 
-    result = analyze(
-        *check_program(_KVCacheAppend, entry, topology_level="cta"),
+    result = analysis.analyze(
+        *analysis.check_program(_KVCacheAppend, entry, topology_level="cta"),
         analysis=("compute-cost", "memory"),
         topology_level="cta",
     )
     analysed_update = next(
-        expr
-        for expr in collect_exprs(result.function.body)
-        if isinstance(expr, Call) and isinstance(expr.target, CacheUpdate)
+        node
+        for node in core.collect_exprs(result.function.body)
+        if isinstance(node, expr.Call) and isinstance(node.target, tensor.CacheUpdate)
     )
-    record = get_metadata(analysed_update, ComputeCostMetadata)
-    moved = get_metadata(analysed_update, MemoryMetadata)
+    record = expr.get_metadata(analysed_update, analysis.ComputeCostMetadata)
+    moved = expr.get_metadata(analysed_update, analysis.MemoryMetadata)
     assert result.topology_level == "cta"
     assert record is not None
     assert record.flops.kinds == ()
     row_bytes = _WINDOW_BYTES // 4
     assert moved.operands == (
-        TrafficBytes(),
-        TrafficBytes(read=4),
-        TrafficBytes(read=4),
-        TrafficBytes(read=row_bytes),
-        TrafficBytes(write=row_bytes),
+        cost.TrafficBytes(),
+        cost.TrafficBytes(read=4),
+        cost.TrafficBytes(read=4),
+        cost.TrafficBytes(read=row_bytes),
+        cost.TrafficBytes(write=row_bytes),
     )

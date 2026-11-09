@@ -4,7 +4,7 @@ The slice keeps CTAs 2 and 3 out, so the two windows come from two CTAs alone.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 ROWS = 64
 COLS = 64
@@ -12,7 +12,7 @@ COLS = 64
 
 @module(
     entry="store",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 4), Topology("thread", 32)),
 )
 class TmaStoreCtaSlice:

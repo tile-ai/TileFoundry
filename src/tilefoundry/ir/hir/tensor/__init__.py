@@ -1,8 +1,10 @@
+"""HIR tensor Ops: construction, shape, indexing, reduction and cache update."""
+
 from __future__ import annotations
 
 from .arange import Arange
 from .argmax import ArgMax
-from .bitcast import Bitcast
+from .bitcast import Bitcast, address_mapping, address_relation, eval_bitcast
 from .cache_update import CacheUpdate
 from .cast import Cast
 from .concat import Concat
@@ -18,40 +20,12 @@ from .reduce import Reduce
 from .repeat_interleave import RepeatInterleave
 from .reshape import Reshape
 from .shape_of import ShapeOf
-from .slice import Slice
+from .slice import Slice, slice_size
 from .split import Split
 from .stack import Stack
 from .topk import TopK
 from .transpose import Transpose
 from .tuple_get_item import TupleGetItem
+from .view_layout import derive_view_layout
 from .where import Where
 from .zeros import Zeros
-
-__all__ = [
-    "Arange",
-    "ArgMax",
-    "Bitcast",
-    "CacheUpdate",
-    "Cast",
-    "Concat",
-    "Empty",
-    "FullLike",
-    "IndexAdd",
-    "IndexCopy",
-    "IndexSelect",
-    "InsertSlice",
-    "Quant",
-    "Rank",
-    "Reduce",
-    "RepeatInterleave",
-    "Reshape",
-    "ShapeOf",
-    "Slice",
-    "Split",
-    "Stack",
-    "TopK",
-    "Transpose",
-    "TupleGetItem",
-    "Where",
-    "Zeros",
-]

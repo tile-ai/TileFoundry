@@ -7,39 +7,34 @@ into ``dst`` (in-place memory write). Wrapped by
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Op, OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import SameConstraint, utils
-from tilefoundry.ir.types import StorageKind, UnitType
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    identity_relations,
-    register_access_relation,
-)
+from tilefoundry.interfaces import access, typeinfer
+from tilefoundry.ir import expr, pattern, types
 
-_IN_RMEM = utils.tensor_in(StorageKind.RMEM)
+IN_RMEM = pattern.tensor_in(expr.StorageKind.RMEM)
 
 
-@register_op(dialect='T', category='nn')
-class ReLU(Op):
+@expr.register_op(dialect='T', category='nn')
+class ReLU(expr.Op):
     """Tensor-level pointwise ReLU writing into ``dst``."""
 
-    capability = OpCapability(None)
-    execution_mesh = utils.thread_execution_mesh()
+    capability = expr.OpCapability(None)
+    execution_mesh = pattern.thread_execution_mesh()
 
-    src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_IN_RMEM)
-    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=_IN_RMEM)
+    src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=IN_RMEM)
+    dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=IN_RMEM)
 
     between = (
-        SameConstraint("shape", "src", "dst"),
-        SameConstraint("dtype", "src", "dst"),
+        pattern.SameConstraint("shape", "src", "dst"),
+        pattern.SameConstraint("dtype", "src", "dst"),
     )
 
 
-@register_typeinfer(ReLU)
-def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
-    return UnitType()
+@typeinfer.register(ReLU)
+def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
+    return types.UnitType()
 
 
-register_access_relation(ReLU)(identity_relations)
+access.register_relation(ReLU)(access.identity_relations)
+
+
+__all__ = ["ReLU"]

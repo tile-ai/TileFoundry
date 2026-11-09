@@ -1,61 +1,38 @@
+"""HIR two-dimensional convolution ``Conv2D`` Op."""
+
 from __future__ import annotations
 
 import isl
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.utils import common_placements
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Expr, Op
-from tilefoundry.ir.core.expr import Call, Constant
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.isl_interop import normalize_dim
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
-from tilefoundry.ir.types.layout import Layout
-from tilefoundry.ir.types.shard_layout import (
-    Split,
-    partial_reductions_by_axis,
-    shard_layout_of,
-    split_target_axes,
-)
-from tilefoundry.ir.types.utils import check_multilinear_partials, i64_const, static_dim_value
-from tilefoundry.utils.lazy import F
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    iterating,
-    register_access_relation,
-    relations_of,
-)
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry import core, services, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import dim, expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
+from tilefoundry.ir.types import int_tuple
 
 
-@register_op(dialect='tf', category='nn')
-class Conv2D(Op):
-    input = ParamDef(kind="input", pattern=is_ranked_tensor())
-    weight = ParamDef(kind="input", pattern=is_ranked_tensor())
-    bias = ParamDef(kind="input", pattern=is_ranked_tensor())
-    stride = ParamDef(kind="attribute", annotation=tuple)
-    padding = ParamDef(kind="attribute", annotation=tuple)
-    dilation = ParamDef(kind="attribute", annotation=tuple)
-    groups = ParamDef(kind="attribute", annotation=int)
+@expr.register_op(dialect='tf', category='nn')
+class Conv2D(expr.Op):
+    input = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    weight = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    bias = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    stride = expr.ParamDef(kind="attribute", annotation=tuple)
+    padding = expr.ParamDef(kind="attribute", annotation=tuple)
+    dilation = expr.ParamDef(kind="attribute", annotation=tuple)
+    groups = expr.ParamDef(kind="attribute", annotation=int)
 
 
-def _i64(value: int) -> Constant:
-    return i64_const(value)
+def i64(value: int) -> expr.Constant:
+    return dim.i64_const(value)
 
 
-def _as_expr(v):
-    if isinstance(v, Expr):
+def as_expr(v):
+    if isinstance(v, expr.Expr):
         return v
-    return _i64(int(v))
+    return i64(int(v))
 
 
-def _out_spatial(in_dim: Expr, k: int, s: int, p: int, d: int) -> Expr:
+def out_spatial(in_dim: expr.Expr, k: int, s: int, p: int, d: int) -> expr.Expr:
     """Compute (in + 2*p - d*(k-1) - 1) // s + 1, keeping symbolic dims alive.
 
     If `in_dim` is a Constant the result is also a Constant; otherwise we
@@ -63,14 +40,14 @@ def _out_spatial(in_dim: Expr, k: int, s: int, p: int, d: int) -> Expr:
     """
     eff_k = d * (k - 1) + 1
 
-    add_pad = simplify_dim(DimAdd, (in_dim, _i64(2 * p)))
-    sub_k = simplify_dim(DimSub, (add_pad, _i64(eff_k)))
-    div_s = simplify_dim(DimFloorDiv, (sub_k, _i64(s)))
-    plus_1 = simplify_dim(DimAdd, (div_s, _i64(1)))
-    return normalize_dim(plus_1)
+    add_pad = services.simplify_dim("add", (in_dim, i64(2 * p)))
+    sub_k = services.simplify_dim("sub", (add_pad, i64(eff_k)))
+    div_s = services.simplify_dim("floordiv", (sub_k, i64(s)))
+    plus_1 = services.simplify_dim("add", (div_s, i64(1)))
+    return services.normalize_dim(plus_1)
 
 
-def _pair(call, ctx, name: str, values: tuple, *, positive: bool) -> tuple[int, int]:
+def pair(call, ctx, name: str, values: tuple, *, positive: bool) -> tuple[int, int]:
     if len(values) != 2:
         ctx.error(call, f"{name} must be length-2, got {values}")
     for value in values:
@@ -82,14 +59,14 @@ def _pair(call, ctx, name: str, values: tuple, *, positive: bool) -> tuple[int, 
     return values
 
 
-def _static_extent(call, ctx, name: str, dim) -> int:
-    value = static_dim_value(dim)
+def static_extent(call, ctx, name: str, dim_value) -> int:
+    value = expr.static_dim_value(dim_value)
     if value is None:
-        ctx.error(call, f"{name} must be static, got {dim}")
+        ctx.error(call, f"{name} must be static, got {dim_value}")
     return value
 
 
-def _validate_conv2d(call, ctx, x, weight, bias):
+def validate_conv2d(call, ctx, x, weight, bias):
     op = call.target
     if len(x.shape) != 4 or len(weight.shape) != 4:
         ctx.error(call, "expects rank-4 input and weight (NCHW / OIHW)")
@@ -100,16 +77,16 @@ def _validate_conv2d(call, ctx, x, weight, bias):
     if bias.dtype != x.dtype:
         ctx.error(call, f"bias dtype {bias.dtype} must match input dtype {x.dtype}")
 
-    stride = _pair(call, ctx, "stride", op.stride, positive=True)
-    padding = _pair(call, ctx, "padding", op.padding, positive=False)
-    dilation = _pair(call, ctx, "dilation", op.dilation, positive=True)
+    stride = pair(call, ctx, "stride", op.stride, positive=True)
+    padding = pair(call, ctx, "padding", op.padding, positive=False)
+    dilation = pair(call, ctx, "dilation", op.dilation, positive=True)
     if not isinstance(op.groups, int) or isinstance(op.groups, bool) or op.groups <= 0:
         ctx.error(call, f"groups must be positive, got {op.groups}")
 
-    in_channels = static_dim_value(x.shape[1])
-    out_channels = static_dim_value(weight.shape[0])
-    k_h = _static_extent(call, ctx, "kernel height", weight.shape[2])
-    k_w = _static_extent(call, ctx, "kernel width", weight.shape[3])
+    in_channels = expr.static_dim_value(x.shape[1])
+    out_channels = expr.static_dim_value(weight.shape[0])
+    k_h = static_extent(call, ctx, "kernel height", weight.shape[2])
+    k_w = static_extent(call, ctx, "kernel width", weight.shape[3])
     if k_h <= 0 or k_w <= 0:
         ctx.error(call, f"kernel extents must be positive, got {(k_h, k_w)}")
     if op.groups == 1:
@@ -144,11 +121,11 @@ def _validate_conv2d(call, ctx, x, weight, bias):
     return stride, padding, dilation, op.groups, k_h, k_w
 
 
-def _output_shape(x, weight, stride, padding, dilation, k_h, k_w) -> tuple:
-    height = _out_spatial(x.shape[2], k_h, stride[0], padding[0], dilation[0])
-    width = _out_spatial(x.shape[3], k_w, stride[1], padding[1], dilation[1])
-    static_height = static_dim_value(height)
-    static_width = static_dim_value(width)
+def output_shape(x, weight, stride, padding, dilation, k_h, k_w) -> tuple:
+    height = out_spatial(x.shape[2], k_h, stride[0], padding[0], dilation[0])
+    width = out_spatial(x.shape[3], k_w, stride[1], padding[1], dilation[1])
+    static_height = expr.static_dim_value(height)
+    static_width = expr.static_dim_value(width)
     return (
         x.shape[0],
         weight.shape[0],
@@ -157,7 +134,7 @@ def _output_shape(x, weight, stride, padding, dilation, k_h, k_w) -> tuple:
     )
 
 
-def _require_group_aligned_output_split(call, ctx, weight, bias, groups: int) -> None:
+def require_group_aligned_output_split(call, ctx, weight, bias, groups: int) -> None:
     """A split of the output channels must not cut across a group.
 
     A shard straddling a boundary reads two groups where its neighbour reads
@@ -168,17 +145,17 @@ def _require_group_aligned_output_split(call, ctx, weight, bias, groups: int) ->
     """
     if groups == 1:
         return
-    channels = static_dim_value(weight.shape[0])
+    channels = expr.static_dim_value(weight.shape[0])
     if channels is None:
         return
     per_group = channels // groups
     for name, type_ in (("weight", weight), ("bias", bias)):
-        layout = shard_layout_of(type_.layout)
+        layout = types.shard_layout_of(type_.layout)
         if layout is None:
             continue
-        targets = split_target_axes(layout, type_.shape)
+        targets = types.split_target_axes(layout, type_.shape)
         for mesh_axis, attr in enumerate(layout.attrs):
-            if not isinstance(attr, Split) or targets[mesh_axis] != 0:
+            if not isinstance(attr, types.Split) or targets[mesh_axis] != 0:
                 continue
             shards = layout.layout.shape[attr.axis]
             if not isinstance(shards, int) or shards <= 0:
@@ -194,26 +171,28 @@ def _require_group_aligned_output_split(call, ctx, weight, bias, groups: int) ->
                 )
 
 
-def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
+def require_exact_partial_state(call, ctx, x, weight, bias) -> None:
     named = (("input", x), ("weight", weight), ("bias", bias))
     placed = [
         (name, layout)
         for name, type_ in named
-        if (layout := shard_layout_of(type_.layout)) is not None
+        if (layout := types.shard_layout_of(type_.layout)) is not None
     ]
     mesh = placed[0][1].mesh if placed else None
 
-    check_multilinear_partials((("input", x), ("weight", weight)), ctx.target, kind=BinaryKind.MUL)
+    ir_utils.check_multilinear_partials(
+        (("input", x), ("weight", weight)), ctx.target, kind=expr.BinaryKind.MUL
+    )
     contraction_splits: dict[int, tuple[str, int]] = {}
     channel_split_axes: dict[str, set[int]] = {"input": set(), "weight": set()}
     for name, type_, axes in (
         ("input", x, {1: 4}),
         ("weight", weight, {1: 4, 2: 5, 3: 6}),
     ):
-        layout = shard_layout_of(type_.layout)
+        layout = types.shard_layout_of(type_.layout)
         if layout is None:
             continue
-        targets = split_target_axes(layout, type_.shape)
+        targets = types.split_target_axes(layout, type_.shape)
         for mesh_axis, logical_axis in enumerate(targets):
             if logical_axis not in axes:
                 continue
@@ -241,15 +220,15 @@ def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
     for type_ in (x, weight):
         required_partial_axes.update(
             axis
-            for axis, reduction in enumerate(partial_reductions_by_axis(type_.layout))
+            for axis, reduction in enumerate(types.partial_reductions_by_axis(type_.layout))
             if reduction is not None
         )
 
-    bias_reductions = partial_reductions_by_axis(bias.layout)
+    bias_reductions = types.partial_reductions_by_axis(bias.layout)
     for mesh_axis in sorted(required_partial_axes):
         reduction = bias_reductions[mesh_axis] if mesh_axis < len(bias_reductions) else None
         if reduction != "sum" or not (
-            (bias_layout := shard_layout_of(bias.layout)) is not None and bias_layout.mesh == mesh
+            (bias_layout := types.shard_layout_of(bias.layout)) is not None and bias_layout.mesh == mesh
         ):
             ctx.error(
                 call,
@@ -266,23 +245,23 @@ def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
             )
 
 
-@register_typeinfer(Conv2D)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(Conv2D)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     x = ctx.type_of(call.args[0])
     w = ctx.type_of(call.args[1])
     bias = ctx.type_of(call.args[2])
-    stride, padding, dilation, _groups, k_h, k_w = _validate_conv2d(call, ctx, x, w, bias)
-    out_shape = _output_shape(x, w, stride, padding, dilation, k_h, k_w)
+    stride, padding, dilation, group_count, k_h, k_w = validate_conv2d(call, ctx, x, w, bias)
+    out_shape = output_shape(x, w, stride, padding, dilation, k_h, k_w)
     for name, extent in zip(("height", "width"), out_shape[2:]):
-        static = static_dim_value(extent)
+        static = expr.static_dim_value(extent)
         if static is not None and static <= 0:
             ctx.error(call, f"output {name} extent must be positive, got {static}")
 
-    _require_exact_partial_state(call, ctx, x, w, bias)
-    _require_group_aligned_output_split(call, ctx, w, bias, _groups)
-    relation = relations_of(call, ctx)
+    require_exact_partial_state(call, ctx, x, w, bias)
+    require_group_aligned_output_split(call, ctx, w, bias, group_count)
+    relation = access.relations_of(call, ctx)
     try:
-        shard = derive_output_shard_layout(
+        shard = typeinfer.derive_output_shard_layout(
             (x, w, bias),
             relation,
             out_shape,
@@ -296,8 +275,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             call,
             f"cannot derive input ownership: {error}; use an explicit Reshard before Conv2D",
         )
-    layout = shard or Layout(out_shape)
-    return TensorType(
+    layout = shard or types.Layout(out_shape)
+    return types.TensorType(
         shape=out_shape,
         dtype=x.dtype,
         layout=layout,
@@ -305,10 +284,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     )
 
 
-@register_eval(Conv2D)
-def _eval_conv2d(ctx):
+@evaluator.register(Conv2D)
+def eval_conv2d(ctx):
     def conv2d(input_, weight, bias):
-        return F.conv2d(
+        return utils.F.conv2d(
             input_,
             weight,
             bias,
@@ -319,17 +298,25 @@ def _eval_conv2d(ctx):
         )
 
     xs = tuple(arg.tensor for arg in ctx.args)
-    placements = common_placements(*xs)
+    placements = evaluator.common_placements(*xs)
     held = (
         conv2d(*(x.tensor for x in xs))
         if not placements
         else tuple((p, conv2d(*(x.to_local(p) for x in xs))) for p in placements)
     )
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
-@register_access_relation(Conv2D)
-def _conv2d_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+def spatial_term(out_dim, kernel_dim, stride, pad, dilation, extent):
+    terms = [out_dim if stride == 1 else f"{stride}{out_dim}"]
+    if extent != 1:
+        terms.append(kernel_dim if dilation == 1 else f"{dilation}{kernel_dim}")
+    walked = " + ".join(terms)
+    return walked if pad == 0 else f"{walked} - {pad}"
+
+
+@access.register_relation(Conv2D)
+def conv2d_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """The receptive field, as one affine relation over the space it walks.
 
     Where a window sits moves affinely with the output coordinate, so this is a
@@ -341,34 +328,58 @@ def _conv2d_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     x = ctx.type_of(call.args[0])
     weight = ctx.type_of(call.args[1])
     op = call.target
-    k_h = static_dim_value(weight.shape[2])
-    k_w = static_dim_value(weight.shape[3])
+    k_h = expr.static_dim_value(weight.shape[2])
+    k_w = expr.static_dim_value(weight.shape[3])
     contraction = weight.shape[1]
-    result = _output_shape(x, weight, op.stride, op.padding, op.dilation, k_h, k_w)
+    result = output_shape(x, weight, op.stride, op.padding, op.dilation, k_h, k_w)
     dims = ["n", "co", "oh", "ow", "ci", "kh", "kw"]
     domain = ", ".join(dims)
 
-    def spatial(out_dim, kernel_dim, stride, pad, dilation, extent):
-        terms = [out_dim if stride == 1 else f"{stride}{out_dim}"]
-        if extent != 1:
-            terms.append(kernel_dim if dilation == 1 else f"{dilation}{kernel_dim}")
-        walked = " + ".join(terms)
-        return walked if pad == 0 else f"{walked} - {pad}"
-
-    height = spatial("oh", "kh", op.stride[0], op.padding[0], op.dilation[0], k_h)
-    width = spatial("ow", "kw", op.stride[1], op.padding[1], op.dilation[1], k_w)
+    height = spatial_term("oh", "kh", op.stride[0], op.padding[0], op.dilation[0], k_h)
+    width = spatial_term("ow", "kw", op.stride[1], op.padding[1], op.dilation[1], k_w)
     guard = " and ".join((f"0 <= {height} < {x.shape[2]}", f"0 <= {width} < {x.shape[3]}"))
     per_group_out = max(weight.shape[0] // op.groups, 1) if op.groups != 1 else 1
     channel = "ci" if op.groups == 1 else f"floor(co/{per_group_out})*{contraction}+ci"
-    reached = AccessRelation(
+    reached = access.Relation(
         isl.map(f"{{ [{domain}] -> [n, {channel}, {height}, {width}] : {guard} }}")
     )
-    return iterating(
+    return access.iterating(
         (*result, contraction, k_h, k_w),
         (
             reached,
-            AccessRelation(isl.multi_aff(f"{{ [{domain}] -> [co, ci, kh, kw] }}")),
-            AccessRelation(isl.multi_aff(f"{{ [{domain}] -> [co] }}")),
-            AccessRelation(isl.multi_aff(f"{{ [{domain}] -> [n, co, oh, ow] }}")),
+            access.Relation(isl.multi_aff(f"{{ [{domain}] -> [co, ci, kh, kw] }}")),
+            access.Relation(isl.multi_aff(f"{{ [{domain}] -> [co] }}")),
+            access.Relation(isl.multi_aff(f"{{ [{domain}] -> [n, co, oh, ow] }}")),
         ),
     )
+
+
+@cost.register(Conv2D)
+def conv2d_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    input_, weight, bias = cost.input_types(call, ctx)
+    output = cost.output_type(call, ctx)
+    if not all(
+        isinstance(type_, types.TensorType)
+        for type_ in (input_, weight, bias, output)
+    ):
+        raise ValueError("Conv2D cost requires tensor inputs and output")
+    global_weight = ctx.type_of(call.args[1])
+    logical_weight_shape = weight.shape
+    if isinstance(global_weight.layout, types.ShardLayout):
+        logical_weight_shape = [1] * len(global_weight.shape)
+        axes = int_tuple.mode_axes(int_tuple.compatible_profile(global_weight.layout.layout.shape, global_weight.shape))
+        for extent, logical_axis in zip(weight.shape, axes):
+            logical_weight_shape[logical_axis] *= extent
+    flops = (
+        2
+        * ir_utils.numel(output)
+        * logical_weight_shape[1]
+        * logical_weight_shape[2]
+        * logical_weight_shape[3]
+    )
+    return cost.Cost(
+        {input_.dtype: flops}, cost.traffic((input_, weight, bias), output)
+    )
+
+
+__all__ = ["Conv2D"]

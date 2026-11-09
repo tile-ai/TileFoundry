@@ -10,7 +10,7 @@ is a different program on every machine. They are four Modules over one builder.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _WAVE = 128
 
@@ -37,7 +37,7 @@ def _built(batch: int, heads: int, kv: int, dim: int, page: int, dtype: str):
 
     @module(
         entry="mha_decode_paged",
-        target=CudaTarget("nvidia.h200_sxm"),
+        target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", batch * heads * split),),
     )
     class MhaDecodePaged:

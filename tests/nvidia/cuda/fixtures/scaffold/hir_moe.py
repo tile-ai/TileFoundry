@@ -3,9 +3,9 @@
 import torch
 import tvm_ffi
 
+from tilefoundry import runtime
 from tilefoundry.dsl import *
-from tilefoundry.runtime.module import RuntimeModule
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 S = DimVar("S", 1, 16)
 
@@ -17,7 +17,7 @@ class Router:
         return tf.mul(x, w)
 
 
-@module(entry="model", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 32),))
+@module(entry="model", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("thread", 32),))
 class Root:
     router = Router
 
@@ -25,11 +25,11 @@ class Root:
     def model(x: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]) -> Tensor[(S, 8), "f32"]:
         pass
 
-    @model.specialize(RangePattern("S", 1, 8))
+    @model.specialize(pattern.Range("S", 1, 8))
     def small(x: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]) -> Tensor[(S, 8), "f32"]:
         return tf.mul(x, w)
 
-    @model.specialize(RangePattern("S", 9, 16))
+    @model.specialize(pattern.Range("S", 9, 16))
     def large(x: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]) -> Tensor[(S, 8), "f32"]:
         return tf.mul(x, w)
 
@@ -37,7 +37,7 @@ class Root:
         return self.router.run(x)
 
 
-class RouterRuntime(RuntimeModule):
+class RouterRuntime(runtime.Module):
     def __init__(self, library):
         super().__init__("router", entry="run")
         self.library = library
@@ -50,7 +50,7 @@ class RouterRuntime(RuntimeModule):
         return out
 
 
-class Runtime(RuntimeModule):
+class Runtime(runtime.Module):
     def __init__(self, library_path):
         self.library = tvm_ffi.load_module(str(library_path))
         self.router = RouterRuntime(self.library)

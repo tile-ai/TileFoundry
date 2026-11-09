@@ -1,14 +1,14 @@
 """Minimal: a CTA reads a window whose start is a value loaded from a tensor."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 N, W, D, C = 64, 8, 16, 4
 
 
 @module(
     entry="probe",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", C),),
 )
 class DataStart:
@@ -24,7 +24,7 @@ class DataStart:
 
 @module(
     entry="probe",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", C),),
 )
 class MeshStart:

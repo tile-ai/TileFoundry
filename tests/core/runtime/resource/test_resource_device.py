@@ -8,8 +8,7 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from tilefoundry.runtime import Preprocessed
-from tilefoundry.runtime.resource import SafetensorsResource, _resolved_device
+from tilefoundry import runtime
 
 
 def _unsharded(directory, tensors) -> str:
@@ -20,24 +19,24 @@ def _unsharded(directory, tensors) -> str:
 
 def test_safetensors_cache_hits_while_held_and_drops_after(tmp_path):
     ckpt = _unsharded(tmp_path, {"w": torch.ones(4)})
-    resource = SafetensorsResource(ckpt, device="cpu")
+    resource = runtime.SafetensorsResource(ckpt, device="cpu")
     held = resource.load("w")
     assert resource.load("w") is held
     del held
     gc.collect()
-    assert not resource._read_tensors
+    assert not resource.read_tensors
 
 
 def test_an_index_the_caller_wrote_is_left_alone() -> None:
     """A caller naming a device is naming it; nothing here second-guesses that."""
-    assert _resolved_device("cuda:3") == "cuda:3"
-    assert _resolved_device("cpu") == "cpu"
+    assert runtime.resolved_device("cuda:3") == "cuda:3"
+    assert runtime.resolved_device("cpu") == "cpu"
 
 
 def test_a_directory_with_one_shard_and_no_index_is_read(tmp_path) -> None:
     """A published checkpoint that was never sharded is read as it is."""
     ckpt = _unsharded(tmp_path, {"model.norm.weight": torch.ones(4)})
-    store = SafetensorsResource(ckpt, device="cpu", alias={"gamma": "model.norm.weight"})
+    store = runtime.SafetensorsResource(ckpt, device="cpu", alias={"gamma": "model.norm.weight"})
 
     assert torch.equal(store.load("gamma"), torch.ones(4))
     assert store.subtree("model").load("norm.weight").shape == (4,)
@@ -46,7 +45,7 @@ def test_a_directory_with_one_shard_and_no_index_is_read(tmp_path) -> None:
 def test_a_directory_with_neither_says_so(tmp_path) -> None:
     """The report names what is missing, not just the index it looked for first."""
     with pytest.raises(FileNotFoundError, match="neither"):
-        SafetensorsResource(str(tmp_path), device="cpu").load("anything")
+        runtime.SafetensorsResource(str(tmp_path), device="cpu").load("anything")
 
 
 def test_the_stored_dtype_is_what_comes_back(tmp_path) -> None:
@@ -59,8 +58,8 @@ def test_the_stored_dtype_is_what_comes_back(tmp_path) -> None:
         },
     )
 
-    assert SafetensorsResource(ckpt, device="cpu").load("w").dtype is torch.bfloat16
-    read = SafetensorsResource(ckpt, device="cpu")
+    assert runtime.SafetensorsResource(ckpt, device="cpu").load("w").dtype is torch.bfloat16
+    read = runtime.SafetensorsResource(ckpt, device="cpu")
     assert read.load("w").dtype is torch.bfloat16
     assert read.subtree("nested").load("w").dtype is torch.bfloat16
 
@@ -68,16 +67,16 @@ def test_the_stored_dtype_is_what_comes_back(tmp_path) -> None:
 def test_preprocessed_rejects_a_group_at_construction() -> None:
     """No existing M1 workflow constructs the public invalid one-to-many form."""
     with pytest.raises(TypeError, match="converter"):
-        Preprocessed(("a", "b"), lambda value: value)
+        runtime.Preprocessed(("a", "b"), lambda value: value)
 
 
 def test_preprocessed_cannot_name_a_subtree_segment() -> None:
     """M2 validates leaf preprocessing, so this public invalid segment needs coverage here."""
-    resource = SafetensorsResource(
+    resource = runtime.SafetensorsResource(
         "unused",
         device="cpu",
         alias={
-            "layer": Preprocessed("model.layers.0", lambda value: value),
+            "layer": runtime.Preprocessed("model.layers.0", lambda value: value),
         },
     )
 

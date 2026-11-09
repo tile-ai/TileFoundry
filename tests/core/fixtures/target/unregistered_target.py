@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.dsl import *
-from tilefoundry.target import Target
 
 
-class UnregisteredTarget(Target):
+class UnregisteredTarget(tilefoundry_target.Target):
     name = "tests.core.target.unregistered"
 
 

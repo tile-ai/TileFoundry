@@ -6,10 +6,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def gemm(
     a: Tensor[(128, 6144), "bf16"], w: Tensor[(5120, 6144), "bf16"], scratch: Tensor[(10240,), "f32"], out: Tensor[(2, 128, 5120), "f32"]
 ):

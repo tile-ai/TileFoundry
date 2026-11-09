@@ -4,50 +4,27 @@ Operand layouts contain relative physical element offsets. Named selectors add
 byte origins; X/Y wrap modulo512. No public operand is the whole AMX state.
 """
 
-from copy import copy
 from dataclasses import fields
 from enum import IntEnum
 from math import prod
 
 import isl
 
-from tilefoundry.ir.core import Op, OpCapability
-from tilefoundry.ir.core.param_def import ParamDef, collect_param_defs
-from tilefoundry.ir.core.register import register_op, register_type
-from tilefoundry.ir.pattern import (
-    LayoutPattern,
-    Pattern,
-    PatternMatcher,
-    SwitchPattern,
-    matched,
-)
-from tilefoundry.ir.pattern.predicates import Formula, Term, evaluate
-from tilefoundry.ir.pattern.utils import (
-    fixed_pattern_value,
-    selected_pattern,
-    thread_execution_mesh,
-)
-from tilefoundry.ir.types import DType, Layout, Mesh, StorageKind, TensorType, Topology, UnitType
-from tilefoundry.target.base import UnsupportedCapabilityError
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    identity_access,
-    iterating,
-    matmul_relations,
-)
-from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes
-from tilefoundry.visitor_registry.instruction import call_params
-
-from ...evaluator.common import parse_writemask
+from tilefoundry import target
+from tilefoundry.interfaces import access as interfaces_access
+from tilefoundry.interfaces import cost as interfaces_cost
+from tilefoundry.interfaces import schedule
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry_apple.amx import evaluator
 
 
-@register_type(dialect="T", namespace="amx")
+@expr.register_type(dialect="T", namespace="amx")
 class ProductMode(IntEnum):
     MATRIX = 0
     VECTOR = 1
 
 
-@register_type(dialect="T", namespace="amx")
+@expr.register_type(dialect="T", namespace="amx")
 class IndexMode(IntEnum):
     NONE = 0
     X2 = 1
@@ -56,21 +33,21 @@ class IndexMode(IntEnum):
     Y4 = 4
 
 
-@register_type(dialect="T", namespace="amx")
+@expr.register_type(dialect="T", namespace="amx")
 class TransferCount(IntEnum):
     ONE = 1
     TWO = 2
     FOUR = 4
 
 
-@register_type(dialect="T", namespace="amx")
+@expr.register_type(dialect="T", namespace="amx")
 class Repeat(IntEnum):
     ONE = 1
     TWO = 2
     FOUR = 4
 
 
-@register_type(dialect="T", namespace="amx")
+@expr.register_type(dialect="T", namespace="amx")
 class Shuffle(IntEnum):
     NONE = 0
     PAIRS = 1
@@ -78,7 +55,7 @@ class Shuffle(IntEnum):
     OCTETS = 3
 
 
-@register_type(dialect="T", namespace="amx")
+@expr.register_type(dialect="T", namespace="amx")
 class FPMode(IntEnum):
     F16 = 2
     F16_F32 = 3
@@ -88,7 +65,7 @@ class FPMode(IntEnum):
     BF16_F32 = 1
 
 
-@register_type(dialect="T", namespace="amx")
+@expr.register_type(dialect="T", namespace="amx")
 class IntLane(IntEnum):
     NARROW16 = 2
     WIDE16 = 3
@@ -100,7 +77,7 @@ class IntLane(IntEnum):
     I16_I8_I32 = 13
 
 
-@register_type(dialect="T", namespace="amx")
+@expr.register_type(dialect="T", namespace="amx")
 class FPALU(IntEnum):
     ADD_PRODUCT = 0
     SUB_PRODUCT = 1
@@ -112,7 +89,7 @@ class FPALU(IntEnum):
     ADD_Y = 12
 
 
-@register_type(dialect="T", namespace="amx")
+@expr.register_type(dialect="T", namespace="amx")
 class IntALU(IntEnum):
     ADD_PRODUCT = 0
     SUB_PRODUCT = 1
@@ -128,14 +105,14 @@ class IntALU(IntEnum):
     ADD_Y = 12
 
 
-@register_type(dialect="T", namespace="amx")
+@expr.register_type(dialect="T", namespace="amx")
 class Bank(IntEnum):
     X = 0
     Y = 1
     Z = 2
 
 
-@register_type(dialect="T", namespace="amx")
+@expr.register_type(dialect="T", namespace="amx")
 class ExtractMode(IntEnum):
     COPY = 0
     LEGACY = 1
@@ -143,7 +120,7 @@ class ExtractMode(IntEnum):
     FLOAT = 3
 
 
-@register_type(dialect="T", namespace="amx")
+@expr.register_type(dialect="T", namespace="amx")
 class LutMode(IntEnum):
     F32 = 0
     F16 = 1
@@ -163,30 +140,59 @@ class LutMode(IntEnum):
     LOOKUP8_5 = 15
 
 
-FLOATS = (DType.f16, DType.bf16, DType.f32, DType.f64)
+FLOATS = (expr.DType.f16, expr.DType.bf16, expr.DType.f32, expr.DType.f64)
 TYPES = (
-    DType.u8,
-    DType.i8,
-    DType.u16,
-    DType.i16,
-    DType.u32,
-    DType.i32,
-    DType.f16,
-    DType.bf16,
-    DType.f32,
-    DType.f64,
+    expr.DType.u8,
+    expr.DType.i8,
+    expr.DType.u16,
+    expr.DType.i16,
+    expr.DType.u32,
+    expr.DType.i32,
+    expr.DType.f16,
+    expr.DType.bf16,
+    expr.DType.f32,
+    expr.DType.f64,
 )
-I16 = (DType.i16, DType.u16)
-I8 = (DType.i8, DType.u8)
-I32 = (DType.i32, DType.u32)
+I16 = (expr.DType.i16, expr.DType.u16)
+I8 = (expr.DType.i8, expr.DType.u8)
+I32 = (expr.DType.i32, expr.DType.u32)
 
 
-class AmxOp(Op):
+class AmxOp(expr.Op):
     """An instruction with static reference semantics, independent of a Target value."""
 
     generation = 1
-    execution_mesh = Mesh((Topology("thread", 1),), Layout((1,), (1,)), ("worker",))
-    execution_mesh_pattern = staticmethod(thread_execution_mesh)
+    execution_mesh = types.Mesh((types.Topology("thread", 1),), types.Layout((1,), (1,)), ("worker",))
+    execution_mesh_pattern = staticmethod(pattern.thread_execution_mesh)
+
+    def __init__(self, **attrs):
+        expr.Op.__init__(self, **attrs)
+        held = {}
+        for param in expr.collect_param_defs(type(self)):
+            if param.kind != "attribute":
+                continue
+            value = getattr(self, param.name)
+            if value is None and param.optional:
+                held[param.name] = None
+                continue
+            if param.annotation is expr.DType and isinstance(value, str):
+                value = expr.DType.from_name(value)
+                setattr(self, param.name, value)
+            if (
+                isinstance(param.annotation, type)
+                and issubclass(param.annotation, IntEnum)
+                and not isinstance(value, param.annotation)
+            ):
+                raise TypeError(f"{param.name} requires {param.annotation.__name__}")
+            match = pattern.matched(param.pattern, value, held)
+            if match is None:
+                raise ValueError(
+                    f"{type(self).__name__}.{param.name}={value!r} violates {param.pattern!r}"
+                )
+            held.update(match.captures)
+            held[param.name] = value
+        self.bindings = held
+        validate(self)
 
 
 def instruction_versions(template, generations, *, name, category):
@@ -197,17 +203,17 @@ def instruction_versions(template, generations, *, name, category):
 
         def specialize(value):
             if (
-                isinstance(value, Term)
+                isinstance(value, pattern.Term)
                 and value.op == "variable"
                 and value.args == ("amx_generation",)
             ):
-                return Term("constant", (generation,))
-            if not isinstance(value, (ParamDef, Pattern, Term, tuple)):
+                return pattern.Term("constant", (generation,))
+            if not isinstance(value, (expr.ParamDef, pattern.Pattern, pattern.Term, tuple)):
                 return value
             cached = memo.get(id(value))
             if cached is not None:
                 return cached
-            if isinstance(value, SwitchPattern) and value.param == "amx_generation":
+            if isinstance(value, pattern.Switch) and value.param == "amx_generation":
                 result = specialize(dict(value.branches)[generation])
             elif isinstance(value, tuple):
                 result = tuple(specialize(item) for item in value)
@@ -219,15 +225,13 @@ def instruction_versions(template, generations, *, name, category):
                     values["predicates"] = tuple(
                         item
                         for item in values["predicates"]
-                        if not (isinstance(item, Formula) and evaluate(item, {}) is True)
+                        if not (isinstance(item, pattern.Formula) and pattern.evaluate(item, {}) is True)
                     )
-                result = copy(value)
-                for field_name, specialized in values.items():
-                    object.__setattr__(result, field_name, specialized)
-                if isinstance(result, Formula):
+                result = value.replace(**values)
+                if isinstance(result, pattern.Formula):
                     if result.op in ("and", "or"):
                         left, right = result.args
-                        left_truth, right_truth = evaluate(left, {}), evaluate(right, {})
+                        left_truth, right_truth = pattern.evaluate(left, {}), pattern.evaluate(right, {})
                         if result.op == "and":
                             if left_truth is True:
                                 result = right
@@ -238,62 +242,32 @@ def instruction_versions(template, generations, *, name, category):
                                 result = right
                             elif right_truth is False:
                                 result = left
-                    known = evaluate(result, {})
+                    known = pattern.evaluate(result, {})
                     if known is not None:
-                        result = Formula(
+                        result = pattern.Formula(
                             "eq",
                             (
-                                Term("constant", (0,)),
-                                Term("constant", (0 if known else 1,)),
+                                pattern.Term("constant", (0,)),
+                                pattern.Term("constant", (0 if known else 1,)),
                             ),
                         )
             memo[id(value)] = result
             return result
 
-        attributes = {param.name: specialize(param) for param in collect_param_defs(template)}
+        attributes = {param.name: specialize(param) for param in expr.collect_param_defs(template)}
         attributes.update(
             __module__=template.__module__,
             generation=generation,
-            capability=OpCapability(f"amx_{name}_v{version}"),
+            capability=expr.OpCapability(f"amx_{name}_v{version}"),
             hir_matches=tuple(template.__dict__.get("hir_matches", ())),
         )
         variant = type(f"{template.__name__}V{version}", (template,), attributes)
         variants.append(
-            register_op(dialect="T", namespace="amx", category=category, name=f"{name}_v{version}")(
+            expr.register_op(dialect="T", namespace="amx", category=category, name=f"{name}_v{version}")(
                 variant
             )
         )
     return tuple(variants)
-
-
-def bind(op, attrs):
-    Op.__init__(op, **attrs)
-    held = {}
-    for param in collect_param_defs(type(op)):
-        if param.kind != "attribute":
-            continue
-        value = getattr(op, param.name)
-        if value is None and param.optional:
-            held[param.name] = None
-            continue
-        if param.annotation is DType and isinstance(value, str):
-            value = DType.from_name(value)
-            setattr(op, param.name, value)
-        if (
-            isinstance(param.annotation, type)
-            and issubclass(param.annotation, IntEnum)
-            and not isinstance(value, param.annotation)
-        ):
-            raise TypeError(f"{param.name} requires {param.annotation.__name__}")
-        match = matched(param.pattern, value, held)
-        if match is None:
-            raise ValueError(
-                f"{type(op).__name__}.{param.name}={value!r} violates {param.pattern!r}"
-            )
-        held.update(match.captures)
-        held[param.name] = value
-    op.bindings = held
-    validate(op)
 
 
 def validate(op):
@@ -331,59 +305,59 @@ def validate(op):
         raise ValueError("X/Y destination register must be0..7")
 
 
-def check_types(op, types):
-    matcher = PatternMatcher(op.bindings)
-    params = call_params(op, len(types))
+def check_types(op, type_list):
+    matcher = pattern.Matcher(op.bindings)
+    params = schedule.call_params(op, len(type_list))
     if hasattr(op, "index_mode"):
         expected = (
             1
             if op.mnemonic in ("MATINT", "VECINT") and op.alu == IntALU.SHIFT
             else 3 + int(op.index_mode != IndexMode.NONE)
         )
-        if len(types) != expected:
+        if len(type_list) != expected:
             raise TypeError(f"{op.mnemonic}: this mode requires {expected} logical operands")
-    for param, t in zip(params, types):
+    for param, t in zip(params, type_list):
         if not matcher.match(param.pattern, t):
             raise TypeError(f"{op.mnemonic}.{param.name}: invalid logical fragment {t!r}")
     if matcher.solve() is not True:
         raise TypeError("AMX fragment constraints cannot be solved")
-    return UnitType()
+    return types.UnitType()
 
 
 def bound_value(value, bindings):
-    if isinstance(value, SwitchPattern):
+    if isinstance(value, pattern.Switch):
         return bound_value(dict(value.branches)[bindings[value.param]], bindings)
-    if isinstance(value, (DType, StorageKind)):
+    if isinstance(value, (expr.DType, expr.StorageKind)):
         return value
-    return fixed_pattern_value(value, bindings)
+    return pattern.fixed_value(value, bindings)
 
 
 def operand_types(op):
     out = []
-    for p in collect_param_defs(type(op)):
+    for p in expr.collect_param_defs(type(op)):
         if p.kind != "input":
             continue
-        pattern = selected_pattern(p.pattern, op.bindings)
-        if pattern is None and p.optional:
+        declared = pattern.selected(p.pattern, op.bindings)
+        if declared is None and p.optional:
             continue
-        shape = fixed_pattern_value(pattern.shape, op.bindings)
-        dtype = bound_value(pattern.dtype, op.bindings)
-        storage = bound_value(pattern.storage, op.bindings)
-        lp = selected_pattern(pattern.layout, op.bindings)
-        layout = Layout(
-            fixed_pattern_value(lp.shape, op.bindings), fixed_pattern_value(lp.strides, op.bindings)
+        shape = pattern.fixed_value(declared.shape, op.bindings)
+        dtype = bound_value(declared.dtype, op.bindings)
+        storage = bound_value(declared.storage, op.bindings)
+        lp = pattern.selected(declared.layout, op.bindings)
+        layout = types.Layout(
+            pattern.fixed_value(lp.shape, op.bindings), pattern.fixed_value(lp.strides, op.bindings)
         )
-        out.append(TensorType(shape, dtype, layout, storage))
+        out.append(types.TensorType(shape, dtype, layout, storage))
     check_types(op, tuple(out))
     return tuple(out)
 
 
 def vector_layout(lanes, step=1):
-    return LayoutPattern((lanes,), (step,))
+    return pattern.Layout((lanes,), (step,))
 
 
 def xy_matrix_layout(lanes, vertical, step=1):
-    return LayoutPattern(
+    return pattern.Layout(
         (lanes, 1) if vertical else (1, lanes), (step, 0) if vertical else (0, step)
     )
 
@@ -391,23 +365,23 @@ def xy_matrix_layout(lanes, vertical, step=1):
 def z_matrix_layout(lanes, xybytes, zbytes):
     ratio = zbytes // xybytes
     if ratio == 1:
-        return LayoutPattern((lanes, lanes), (64 // xybytes * xybytes, 1))
-    return LayoutPattern((lanes, (ratio, lanes // ratio)), (64 // xybytes, (64 // zbytes, 1)))
+        return pattern.Layout((lanes, lanes), (64 // xybytes * xybytes, 1))
+    return pattern.Layout((lanes, (ratio, lanes // ratio)), (64 // xybytes, (64 // zbytes, 1)))
 
 
-def _mode_offsets(shape, strides, index):
+def mode_offsets(shape, strides, index):
     if isinstance(shape, int):
         return index * strides
     result = 0
     for extent, stride in zip(shape, strides):
-        size = prod(_flatten(extent))
-        result += _mode_offsets(extent, stride, index % size)
+        size = prod(flatten(extent))
+        result += mode_offsets(extent, stride, index % size)
         index //= size
     return result
 
 
-def _flatten(x):
-    return tuple(v for item in x for v in _flatten(item)) if isinstance(x, tuple) else (x,)
+def flatten(x):
+    return tuple(v for item in x for v in flatten(item)) if isinstance(x, tuple) else (x,)
 
 
 def layout_offsets(t):
@@ -423,7 +397,7 @@ def layout_offsets(t):
             left //= dim
         coords.reverse()
         result.append(
-            sum(_mode_offsets(s, st, c) for s, st, c in zip(layout.shape, layout.strides, coords))
+            sum(mode_offsets(s, st, c) for s, st, c in zip(layout.shape, layout.strides, coords))
             * t.dtype.bit_width
             // 8
         )
@@ -438,14 +412,14 @@ def infer(call, ctx):
     return check_types(call.target, tuple(ctx.type_of(a) for a in call.args))
 
 
-def placements(op, types):
+def placements(op, type_list):
     """Byte starts of logical elements; arithmetic is exclusively in evaluator semantics."""
     n = op.mnemonic
     out = {}
     index = getattr(op, "index_mode", IndexMode.NONE)
     repeat = int(getattr(op, "repeat", Repeat.ONE))
     step = 64 // repeat
-    for param, t in zip(call_params(op, len(types)), types):
+    for param, t in zip(schedule.call_params(op, len(type_list)), type_list):
         role = param.name
         bank = op.register_roles[role]
         if bank == "indexed_bank":
@@ -575,8 +549,8 @@ def encode_operand(op):
             )
         return (
             out
-            | (int(width == 32 and op.y_dtype == DType.f16) << 60)
-            | (int(width == 32 and op.x_dtype == DType.f16) << 61)
+            | (int(width == 32 and op.y_dtype == expr.DType.f16) << 60)
+            | (int(width == 32 and op.x_dtype == expr.DType.f16) << 61)
         )
     if n in ("MATFP", "VECFP", "MATINT", "VECINT"):
         integer = n.endswith("INT")
@@ -661,7 +635,7 @@ def encode_operand(op):
             )
         step = 64 // int(op.repeat)
         selector = (op.z_selector & (step - 1)) | (32 if op.repeat == Repeat.FOUR else 0)
-        shift = 16 if op.dst_dtype == DType.bf16 else op.shift
+        shift = 16 if op.dst_dtype == expr.DType.bf16 else op.shift
         return (
             op.destination_offset
             | (int(op.destination == Bank.Y) << 10)
@@ -708,15 +682,15 @@ def z_vector_layout(mode, repeat):
     lanes = 512 // bits
     rows = int(repeat)
     if ratio == 1:
-        return LayoutPattern((rows, lanes), ((64 // rows) * 64 // zb, 1))
-    return LayoutPattern((rows, (ratio, lanes // ratio)), ((64 // rows) * 64 // zb, (64 // zb, 1)))
+        return pattern.Layout((rows, lanes), ((64 // rows) * 64 // zb, 1))
+    return pattern.Layout((rows, (ratio, lanes // ratio)), ((64 // rows) * 64 // zb, (64 // zb, 1)))
 
 
 def vector_input_layout(lanes, repeat, is_y):
-    return SwitchPattern(
+    return pattern.Switch(
         "broadcast_mode",
         {
-            b: LayoutPattern(
+            b: pattern.Layout(
                 (int(repeat), lanes), (0 if b in ((3, 7) if is_y else (2, 6)) else lanes, 1)
             )
             for b in range(8)
@@ -725,10 +699,10 @@ def vector_input_layout(lanes, repeat, is_y):
 
 
 def packed_input_layout(count, repeat, is_y):
-    return SwitchPattern(
+    return pattern.Switch(
         "broadcast_mode",
         {
-            b: LayoutPattern(
+            b: pattern.Layout(
                 (int(repeat), count), (0 if b in ((3, 7) if is_y else (2, 6)) else count, 1)
             )
             for b in range(8)
@@ -741,8 +715,8 @@ def int_matrix_layout(xbytes, ybytes, zbytes):
     ratio = max(1, zbytes // xbytes)
     lanes = 64 // xbytes
     if ratio == 1:
-        return LayoutPattern((64 // step, lanes), (step * 64 // zbytes, 1))
-    return LayoutPattern(
+        return pattern.Layout((64 // step, lanes), (step * 64 // zbytes, 1))
+    return pattern.Layout(
         (64 // step, (ratio, lanes // ratio)), (step * 64 // zbytes, (64 // zbytes, 1))
     )
 
@@ -752,8 +726,8 @@ def int_vector_layout(xbytes, ybytes, zbytes, repeat):
     ratio = max(1, zbytes // step)
     lanes = 64 // step
     if ratio == 1:
-        return LayoutPattern((int(repeat), lanes), ((64 // int(repeat)) * 64 // zbytes, 1))
-    return LayoutPattern(
+        return pattern.Layout((int(repeat), lanes), ((64 // int(repeat)) * 64 // zbytes, 1))
+    return pattern.Layout(
         (int(repeat), (ratio, lanes // ratio)),
         ((64 // int(repeat)) * 64 // zbytes, (64 // zbytes, 1)),
     )
@@ -774,9 +748,9 @@ def extract_source_layout(vertical, mode, src, dst, repeat, alternating=False):
     step = 64 // r
     shape = extract_source_shape(vertical, mode, src, dst, repeat)
     if mode == ExtractMode.COPY:
-        return LayoutPattern(shape, (0, 1))
+        return pattern.Layout(shape, (0, 1))
     if mode == ExtractMode.LEGACY:
-        return LayoutPattern(
+        return pattern.Layout(
             shape, (step // b, 64 // b) if vertical else (step * 64 // b, 64 // b, 1)
         )
     db = dst.bit_width // 8
@@ -785,61 +759,62 @@ def extract_source_layout(vertical, mode, src, dst, repeat, alternating=False):
     row = step // b if vertical else step * 64 // b
     stride = 2 if alternating and b == 4 and db == 2 else 1
     if ratio == 1:
-        return LayoutPattern(shape, (row, 64 if vertical else 1))
-    return LayoutPattern(
+        return pattern.Layout(shape, (row, 64 if vertical else 1))
+    return pattern.Layout(
         (r, (lanes // ratio, ratio)), (row, (64 if vertical else 1, stride * 64 // b))
+    )
+
+
+def covered_relation(t):
+    names = tuple("d" + str(i) for i in range(len(t.shape)))
+    bounds = (
+        " and ".join(f"0<={name}<{int(size)}" for name, size in zip(names, t.shape)) or "true"
+    )
+    return interfaces_access.Relation(
+        isl.map("{ [issue] -> [" + ",".join(names) + "] : issue=0 and " + bounds + " }"),
+        may_access=True,
     )
 
 
 def access(call, ctx):
     op = call.target
-    types = tuple(ctx.type_of(a) for a in call.args)
+    type_list = tuple(ctx.type_of(a) for a in call.args)
     if (
         op.mnemonic.startswith(("FMA", "FMS"))
         or op.mnemonic == "MAC16"
         or op.mnemonic in ("MATFP", "MATINT")
     ):
-        if getattr(op, "mode", ProductMode.MATRIX) == ProductMode.MATRIX and len(types) == 3:
-            _, a, b = types
-            *operands, result = matmul_relations(a.shape, b.shape, (-2, -1, -1, -2))
+        if getattr(op, "mode", ProductMode.MATRIX) == ProductMode.MATRIX and len(type_list) == 3:
+            _, a, b = type_list
+            *operands, result = interfaces_access.matmul_relations(a.shape, b.shape, (-2, -1, -1, -2))
             return (result, *operands, result)
-    if types and all(t.shape == types[0].shape for t in types):
-        return iterating(
-            types[0].shape,
+    if type_list and all(t.shape == type_list[0].shape for t in type_list):
+        return interfaces_access.iterating(
+            type_list[0].shape,
             tuple(
-                identity_access(len(t.shape)) for t in (*types, types[op.roles.index(op.writes[0])])
+                interfaces_access.identity(len(t.shape)) for t in (*type_list, type_list[op.roles.index(op.writes[0])])
             ),
         )
 
-    def covered(t):
-        names = tuple("d" + str(i) for i in range(len(t.shape)))
-        bounds = (
-            " and ".join(f"0<={name}<{int(size)}" for name, size in zip(names, t.shape)) or "true"
-        )
-        return AccessRelation(
-            isl.map("{ [issue] -> [" + ",".join(names) + "] : issue=0 and " + bounds + " }"),
-            may_access=True,
-        )
-
-    return tuple(covered(t) for t in types) + (covered(types[op.roles.index(op.writes[0])]),)
+    return tuple(covered_relation(t) for t in type_list) + (covered_relation(type_list[op.roles.index(op.writes[0])]),)
 
 
 def cost(call, ctx):
     op = call.target
     n = op.mnemonic
-    types = tuple(ctx.type_of(arg) for arg in call.args)
-    check_types(op, types)
+    type_list = tuple(ctx.type_of(arg) for arg in call.args)
+    check_types(op, type_list)
     if n.startswith(("LD", "ST")):
         count = int(op.count) * 64
-        return Cost({}, (TrafficBytes(read=count), TrafficBytes(write=count), TrafficBytes()))
+        return interfaces_cost.Cost({}, (interfaces_cost.TrafficBytes(read=count), interfaces_cost.TrafficBytes(write=count), interfaces_cost.TrafficBytes()))
     if n in ("SET", "CLR"):
-        return Cost({}, (TrafficBytes(read=1, write=1), TrafficBytes()))
+        return interfaces_cost.Cost({}, (interfaces_cost.TrafficBytes(read=1, write=1), interfaces_cost.TrafficBytes()))
     if n.startswith(("FMA", "FMS")):
         width = int(n[3:])
         size = width // 8
         lanes = 64 // size
-        xm = parse_writemask(op.x_mask, size, 7)
-        ym = parse_writemask(op.y_mask, size, 7)
+        xm = evaluator.parse_writemask(op.x_mask, size, 7)
+        ym = evaluator.parse_writemask(op.y_mask, size, 7)
         nx = sum((xm >> (i * size)) & 1 for i in range(lanes))
         ny = (
             1
@@ -849,19 +824,66 @@ def cost(call, ctx):
         active = nx * ny
         skip = int(op.skip_z) | (int(op.skip_y) << 1) | (int(op.skip_x) << 2)
         work = (2, 1, 1, 0, 1, 0, 0, 0)[skip] * active
-        zb = types[0].dtype.bit_width // 8
-        xread = 0 if op.skip_x or not active else nx * types[2].dtype.bit_width // 8
+        zb = type_list[0].dtype.bit_width // 8
+        xread = 0 if op.skip_x or not active else nx * type_list[2].dtype.bit_width // 8
         yread = (
             0
             if op.skip_y or not active
-            else (nx if op.mode == ProductMode.VECTOR else ny) * types[1].dtype.bit_width // 8
+            else (nx if op.mode == ProductMode.VECTOR else ny) * type_list[1].dtype.bit_width // 8
         )
         traffic = (
-            TrafficBytes(read=0 if op.skip_z else active * zb, write=active * zb),
-            TrafficBytes(read=yread),
-            TrafficBytes(read=xread),
-            TrafficBytes(),
+            interfaces_cost.TrafficBytes(read=0 if op.skip_z else active * zb, write=active * zb),
+            interfaces_cost.TrafficBytes(read=yread),
+            interfaces_cost.TrafficBytes(read=xread),
+            interfaces_cost.TrafficBytes(),
         )
         service = {"negate": active} if n.startswith("FMS") and skip in (1, 3, 5) else {}
-        return Cost({types[0].dtype: work}, traffic, service=service)
-    raise UnsupportedCapabilityError(f"{n}: exact logical cost is unknown")
+        return interfaces_cost.Cost({type_list[0].dtype: work}, traffic, service=service)
+    raise target.UnsupportedCapabilityError(f"{n}: exact logical cost is unknown")
+
+
+__all__ = [
+    "AmxOp",
+    "Bank",
+    "ExtractMode",
+    "FLOATS",
+    "FPALU",
+    "FPMode",
+    "I16",
+    "I32",
+    "I8",
+    "IndexMode",
+    "IntALU",
+    "IntLane",
+    "LutMode",
+    "ProductMode",
+    "Repeat",
+    "Shuffle",
+    "TYPES",
+    "TransferCount",
+    "access",
+    "bound_value",
+    "check_types",
+    "cost",
+    "covered_relation",
+    "encode",
+    "encode_operand",
+    "extract_source_layout",
+    "extract_source_shape",
+    "flatten",
+    "infer",
+    "instruction_versions",
+    "int_matrix_layout",
+    "int_vector_layout",
+    "layout_offsets",
+    "mode_offsets",
+    "operand_types",
+    "packed_input_layout",
+    "placements",
+    "validate",
+    "vector_input_layout",
+    "vector_layout",
+    "xy_matrix_layout",
+    "z_matrix_layout",
+    "z_vector_layout",
+]

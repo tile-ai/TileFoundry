@@ -39,7 +39,7 @@ Result: scheduled lowering accepts one tensor result, so q, k and v are stated a
 kernel's warp-slot order; the kernel writes the same rows into three buffers.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 T_ = {T}
 D = 256
@@ -49,7 +49,7 @@ EPS = 1e-6
 QW = 24 * 512
 
 
-@module(entry="attn_prep", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", T_), Topology("thread", 1024)))
+@module(entry="attn_prep", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", T_), Topology("thread", 1024)))
 class SCHED_ATTN_PREP_T{T}:
     @func
     def attn_prep(qkv: Tensor[(T_, 14336), "bf16"], gamma_q: Tensor[(D,), "bf16"], gamma_k: Tensor[(D,), "bf16"],
@@ -122,7 +122,7 @@ Rounding (HIR attend): f32 scores, running max and sum in f32, P bf16 for the PV
 f32 accumulation, O / l landed in bf16, gate product in f32 landed in bf16.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 T_ = {T}
 D = 256
@@ -140,7 +140,7 @@ NEG = float("-inf")
 QKV = 14336
 
 
-@module(entry="attn_core", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", NG * NB{DS_MUL}), Topology("thread", {THREADS})))
+@module(entry="attn_core", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", NG * NB{DS_MUL}), Topology("thread", {THREADS})))
 class SCHED_ATTN_CORE_T{T}:
     @func
     def attn_core(q: Tensor[(T_, NQ, D), "bf16"], k: Tensor[(T_, 4, D), "bf16"], v: Tensor[(T_, 4, D), "bf16"],

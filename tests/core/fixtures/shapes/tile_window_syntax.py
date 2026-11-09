@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="scan_copy", target=CpuTarget())
+@module(entry="scan_copy", target=cpu.Target())
 class ScanCopy:
     @func
     def scan_copy(x: Tensor[(4, 4), "f32"]):
@@ -16,7 +16,7 @@ class ScanCopy:
         return out
 
 
-@module(entry="nested_scan_copy", target=CpuTarget())
+@module(entry="nested_scan_copy", target=cpu.Target())
 class NestedScanCopy:
     @func
     def nested_scan_copy(x: Tensor[(4, 4), "f32"]):
@@ -27,7 +27,7 @@ class NestedScanCopy:
         return out
 
 
-@module(entry="sequential_scan_copy", target=CpuTarget())
+@module(entry="sequential_scan_copy", target=cpu.Target())
 class SequentialScanCopy:
     @func
     def sequential_scan_copy(x: Tensor[(4, 4), "f32"]):

@@ -8,54 +8,51 @@ initial values (e.g. ``-inf`` for an online-softmax running max).
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    identity_access,
-    iterating,
-    register_access_relation,
-    unread_access,
-)
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
 
-@register_op(name="full_like", dialect='tf', category='tensor')
-class FullLike(Op):
+@expr.register_op(name="full_like", dialect='tf', category='tensor')
+class FullLike(expr.Op):
     """Allocate a tensor shaped/typed like ``x``, filled with constant ``value``."""
 
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
-    value = ParamDef(kind="attribute", annotation=float)
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    value = expr.ParamDef(kind="attribute", annotation=float)
 
 
-@register_typeinfer(FullLike)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(FullLike)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     return ctx.type_of(call.args[0])
 
 
-@register_eval(FullLike)
-def _eval_full_like(ctx):
+@evaluator.register(FullLike)
+def eval_full_like(ctx):
     def full_like(x):
-        return torch.full_like(x, float(ctx.op.value), dtype=to_torch_dtype(ctx.result_type.dtype))
+        return utils.torch.full_like(x, float(ctx.op.value), dtype=evaluator.to_torch_dtype(ctx.result_type.dtype))
 
     x = ctx.args[0].tensor
     held = full_like(x.tensor) if x.is_global else tuple((p, full_like(t)) for p, t in x.tensor)
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
-@register_access_relation(FullLike)
-def _full_like_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(FullLike)
+def full_like_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """The template's Type is read and none of its elements; every result element is written."""
     shape = tuple(ctx.type_of(call.args[0]).shape)
     rank = len(shape)
-    return iterating(
+    return access.iterating(
         shape,
-        (unread_access(rank, rank), identity_access(rank)),
+        (access.unread(rank, rank), access.identity(rank)),
     )
+
+
+@cost.register(FullLike)
+def full_like_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    """The template gives its Type and none of its elements; one full write."""
+    output = cost.output_type(call, ctx)
+    return cost.Cost({}, (cost.TrafficBytes(), cost.TrafficBytes(write=ir_utils.tensor_bytes(output))))
+
+
+__all__ = ["FullLike"]

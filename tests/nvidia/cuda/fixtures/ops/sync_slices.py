@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 @module(entry="slice_host", target=_CUDA, topologies=(Topology("thread", 128),))
@@ -35,12 +35,12 @@ class SyncSlices:
                 T.sync(m)
                 T.copy(reg, dst)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def slice_host(
         a0: Tensor[(1, 32), "f32"],
         o0: Tensor[(1, 32), "f32"],
         a1: Tensor[(2, 32), "f32"],
         o1: Tensor[(2, 32), "f32"],
     ):
-        launch(one_warp, a0, o0, grid=(1, 1, 1), block=(128, 1, 1))  # noqa: F821
-        launch(two_warps, a1, o1, grid=(1, 1, 1), block=(128, 1, 1))  # noqa: F821
+        launch(one_warp, a0, o0, grid=(1, 1, 1), block=(128, 1, 1))
+        launch(two_warps, a1, o1, grid=(1, 1, 1), block=(128, 1, 1))

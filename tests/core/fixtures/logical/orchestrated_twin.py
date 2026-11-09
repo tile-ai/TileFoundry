@@ -1,11 +1,11 @@
 """An unplaced two-output orchestration and its runtime reference."""
 
+from tilefoundry import runtime
 from tilefoundry.dsl import *
-from tilefoundry.runtime import runtime_func, runtime_module
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="add_pair", target=CpuTarget(), topologies=(Topology("cta", 168),))
+@module(entry="add_pair", target=cpu.Target(), topologies=(Topology("cta", 168),))
 class Orchestrated:
     @func
     def add_pair(
@@ -24,13 +24,13 @@ class Orchestrated:
         return self.add_pair(x, a, b), self.affine_pair(x, scale, bias)
 
 
-@runtime_module(Orchestrated)
+@runtime.module(Orchestrated)
 class OrchestratedTwin:
-    @runtime_func
+    @runtime.func
     def add_pair(self, x, a, b):
         return x + a + b
 
-    @runtime_func
+    @runtime.func
     def affine_pair(self, x, scale, bias):
         return x * scale + bias
 

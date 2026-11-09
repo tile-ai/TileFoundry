@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _H200 = "nvidia.h200_sxm"
 _CTA = (Topology("cta", 132),)
@@ -16,10 +16,10 @@ class _Warped:
         return tf.add(x, x)
 
 
-@module(entry="fused", target=CudaTarget(_H200), topologies=_CTA)
+@module(entry="fused", target=cuda.Target(_H200), topologies=_CTA)
 class _Mismatch:
     warped = _Warped
 
     @func
     def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-        return warped(x)  # noqa: F821
+        return warped(x)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _H200 = "nvidia.h200_sxm"
 extent = DimVar("child_topology_extent", 1, 132)
@@ -17,10 +17,10 @@ class _Declared:
         return tf.add(x, x)
 
 
-@module(entry="fused", target=CudaTarget(_H200), topologies=hierarchy)
+@module(entry="fused", target=cuda.Target(_H200), topologies=hierarchy)
 class _Agreeing:
     declared = _Declared
 
     @func
     def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-        return declared(x)  # noqa: F821
+        return declared(x)

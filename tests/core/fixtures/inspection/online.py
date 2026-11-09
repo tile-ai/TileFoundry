@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="online", target=CpuTarget())
+@module(entry="online", target=cpu.Target())
 class Online:
     @func
     def online(x: Tensor[(4,), "f32"]):

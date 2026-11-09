@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 @module(
@@ -24,7 +24,7 @@ class RowRing:
 
     @prim_func(target=_CUDA)
     def row_ring_device(x: Tensor[(6, 8), "bf16"], out: Tensor[(6, 8), "bf16"]):
-        with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:  # noqa: F841
+        with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
                 ring_0 = T.tensor_view(0, dtype='bf16', storage='smem', layout=(1, 8), shape=(1, 8))
                 ring_1 = T.tensor_view(16, dtype='bf16', storage='smem', layout=(1, 8), shape=(1, 8))
@@ -48,10 +48,10 @@ class RowRing:
                         )
                         T.copy(stage, out_row)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def row_ring_host(x: Tensor[(6, 8), "bf16"], out: Tensor[(6, 8), "bf16"]):
-        launch(  # noqa: F821
-            row_ring_device,  # noqa: F821
+        launch(
+            row_ring_device,
             x,
             out,
             grid=(1, 1, 1),

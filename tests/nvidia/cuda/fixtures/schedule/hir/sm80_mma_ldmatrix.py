@@ -7,7 +7,7 @@ the staged A and B tiles retain separate shared-memory arrangements.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 16
 N = 8
@@ -18,7 +18,7 @@ STAGES = 2
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 64)),
 )
 class SM80_MMA_LDMATRIX:

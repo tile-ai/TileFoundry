@@ -16,9 +16,9 @@ from pathlib import Path
 
 import torch
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
-from tilefoundry.ir.core.param_def import MemoryEffect
+from tilefoundry import core
+from tilefoundry.interfaces import evaluator
+from tilefoundry.ir import expr
 
 ROOT = Path(__file__).resolve().parent
 OP_NAMES = (
@@ -325,7 +325,7 @@ def _prepare(op, params, types):
         if op.mnemonic == "CLR" and param.name == "token":
             raw[:] = bytes([1]) * len(raw)
         for address, value in zip(locations, raw, strict=True):
-            if not (param.effect and param.effect & MemoryEffect.READ):
+            if not (param.effect and param.effect & expr.MemoryEffect.READ):
                 continue
             key = (bank, address)
             assert 0 <= address < len(banks[bank]), (op.bindings, param.name, address)
@@ -339,11 +339,11 @@ def _prepare(op, params, types):
         bank, locations = placements[param.name]
         raw = bytearray(banks[bank][address] for address in locations)
         tensor = (
-            torch.frombuffer(raw, dtype=to_torch_dtype(type.dtype)).clone()
+            torch.frombuffer(raw, dtype=evaluator.to_torch_dtype(type.dtype)).clone()
             if raw
-            else torch.empty(0, dtype=to_torch_dtype(type.dtype))
+            else torch.empty(0, dtype=evaluator.to_torch_dtype(type.dtype))
         )
-        args.append(TensorValue(ShardTensor(type, tensor.reshape(tuple(type.shape)))))
+        args.append(evaluator.TensorValue(core.ShardTensor(type, tensor.reshape(tuple(type.shape)))))
     return machine, banks, placements, tuple(args)
 
 

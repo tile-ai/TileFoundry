@@ -6,7 +6,7 @@ times, each of them as a whole, so each warpgroup issues its WGMMAs together.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 A = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((8, 8), 16), ((512, 64), 1)))
 B = ComposedLayout(
@@ -16,7 +16,7 @@ B = ComposedLayout(
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 256)),
 )
 class WgmmaGroupLoop:
