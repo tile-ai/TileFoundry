@@ -8,14 +8,16 @@ from __future__ import annotations
 
 from typing import Callable
 
-from tilefoundry.codegen.signature import CallableSignature
-from tilefoundry.ir.types import Placement
-from tilefoundry.runtime.resource import RuntimeResource
+from tilefoundry import codegen, utils
+from tilefoundry.interfaces import evaluator
+from tilefoundry.ir import core, types
 
-__all__ = ["CompiledModule", "RuntimeModule"]
+from .resource import Resource
+
+__all__ = ["CompiledModule", "Module"]
 
 
-class RuntimeModule:
+class Module:
     """Base runtime module: explicit child registration + recursive load.
 
     Subclasses override ``forward`` (the step) and ``load`` (own weights,
@@ -28,33 +30,28 @@ class RuntimeModule:
     entry: str | None
     """Mirrors the IR ``Module`` entry."""
 
-    children: dict[str, RuntimeModule | tuple[RuntimeModule, ...]]
+    children: dict[str, Module | tuple[Module, ...]]
     """Instance slots, registered explicitly in ``__init__``."""
+
+    module: "core.Module | None" = None
+    """The authored ``Module`` this twin stands for, or ``None`` when there is
+    no such thing to name -- a compiled entry or a hand-written subclass."""
 
     def __init__(
         self, name: str, entry: str | None = None,
-        children: dict[str, RuntimeModule | tuple[RuntimeModule, ...]] | None = None,
+        children: dict[str, Module | tuple[Module, ...]] | None = None,
     ) -> None:
         self.name = name
         self.entry = entry
         self.children = {} if children is None else dict(children)
 
-    @property
-    def module(self):
-        """Module.
-
-        The authored ``Module`` this twin stands for, or ``None`` when there is
-        no such thing to name -- a compiled entry or a hand-written subclass.
-        """
-        return None
-
     def forward(self, *args):
-        raise NotImplementedError(f"RuntimeModule {self.name!r}: subclass must implement forward()")
+        raise NotImplementedError(f"runtime.Module {self.name!r}: subclass must implement forward()")
 
     def __call__(self, *args):
         return self.forward(*args)
 
-    def load(self, resource: RuntimeResource, *, placement: "Placement | None" = None) -> None:
+    def load(self, resource: Resource, *, placement: "types.Placement | None" = None) -> None:
         """Recurse ``load`` into each slot under its key and optional index.
 
         Weight
@@ -72,27 +69,27 @@ class RuntimeModule:
                 child.load(base, placement=placement)
 
 
-class CompiledModule(RuntimeModule):
-    """One compiled entry as a ``RuntimeModule``.
+class CompiledModule(Module):
+    """One compiled entry as a ``Module``.
 
-    One compiled entry as a ``RuntimeModule``: ``load`` is the inherited
+    One compiled entry as a ``Module``: ``load`` is the inherited
     no-op and ``children`` is empty (weights are ordinary entry args).
     ``forward``: ``rm(x)`` allocates the trailing ``output_count`` outputs;
     ``rm(x, out)`` writes into the ones given.
     """
 
-    def __init__(self, type: CallableSignature, fn: Callable) -> None:
+    def __init__(self, type: codegen.CallableSignature, fn: Callable) -> None:
         super().__init__(name=type.name, entry=type.name)
         self.type = type
         self.fn = fn
-        self._placement: "Placement | None" = None
+        self.placement: "types.Placement | None" = None
 
-    def load(self, resource: RuntimeResource, *, placement: "Placement | None" = None) -> None:
+    def load(self, resource: Resource, *, placement: "types.Placement | None" = None) -> None:
         """Remember which program this is; a compiled entry holds no weights."""
-        self._placement = placement
+        self.placement = placement
         super().load(resource, placement=placement)
 
-    def _program_ids(self) -> tuple:
+    def program_ids(self) -> tuple:
         """The ids the entry needs told, ahead of its own arguments.
 
         A level no register on the device answers for has to be told, so its
@@ -103,21 +100,21 @@ class CompiledModule(RuntimeModule):
         if not self.type.leading:
             return ()
         topology_levels = tuple(p.topology_level for p in self.type.leading)
-        if self._placement is None:
+        if self.placement is None:
             raise ValueError(
                 f"{self.type.name}: needs the ids of {topology_levels} and no Placement "
                 f"says which program this is; pass placement= to load()"
             )
-        return tuple(int(self._placement.ids[topology_level]) for topology_level in topology_levels)
+        return tuple(int(self.placement.ids[topology_level]) for topology_level in topology_levels)
 
     def forward(self, *args):
-        leading = self._program_ids()
+        leading = self.program_ids()
         n_in = self.type.input_count
         if len(args) == len(self.type.params):
             outs = args[n_in:]
             self.fn(*leading, *args)
         elif len(args) == n_in:
-            outs = self._alloc_outputs(args)
+            outs = self.alloc_outputs(args)
             self.fn(*leading, *args, *outs)
         else:
             raise TypeError(
@@ -126,17 +123,13 @@ class CompiledModule(RuntimeModule):
             )
         return outs[0] if len(outs) == 1 else tuple(outs)
 
-    def _alloc_outputs(self, args) -> tuple:
-        import torch  # noqa: PLC0415
-
-        from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415
-
-        device = next((a.device for a in args if isinstance(a, torch.Tensor)), None)
+    def alloc_outputs(self, args) -> tuple:
+        device = next((a.device for a in args if isinstance(a, utils.torch.Tensor)), None)
         if device is None:
             raise TypeError(
                 f"{self.type.name}: cannot infer device for auto-alloc; no torch.Tensor in inputs"
             )
         return tuple(
-            torch.empty(p.type.shape, dtype=to_torch_dtype(p.type.dtype), device=device)
+            utils.torch.empty(p.type.shape, dtype=evaluator.to_torch_dtype(p.type.dtype), device=device)
             for p in self.type.output_params
         )

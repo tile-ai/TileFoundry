@@ -4,23 +4,21 @@ from __future__ import annotations
 
 import pytest
 
+from tilefoundry import inspection
 from tilefoundry.dsl import *
-from tilefoundry.inspection import as_script
-from tilefoundry.ir.core.op_registry import _REGISTRY
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import get_registered_name, register_op
-from tilefoundry.ir.hir.specialize import display_name
-from tilefoundry.ir.pattern import is_ranked_tensor
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import expr, pattern
+from tilefoundry.ir.expr import op_registry
 
 IrDimVar = DimVar
 
 
 @pytest.fixture(autouse=True)
 def _clean_schema_registry():
-    snapshot = dict(_REGISTRY)
+    snapshot = dict(op_registry.registry.entries)
     yield
-    _REGISTRY.clear()
-    _REGISTRY.update(snapshot)
+    op_registry.registry.entries.clear()
+    op_registry.registry.entries.update(snapshot)
 
 
 def test_dialect_resolves_own_ops() -> None:
@@ -33,11 +31,11 @@ def test_dialect_resolves_own_ops() -> None:
     op.
     """
 
-    @register_op(dialect="tf", category="math", name="my_add",
+    @expr.register_op(dialect="tf", category="math", name="my_add",
                  aliases={"my_sum": {}})
     class _MyAdd:
-        a = ParamDef(kind="input", pattern=is_ranked_tensor())
-        b = ParamDef(kind="input", pattern=is_ranked_tensor())
+        a = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+        b = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
 
         def __init__(self, **kw):
             self.kw = kw
@@ -45,8 +43,8 @@ def test_dialect_resolves_own_ops() -> None:
     obj = tf.my_add(a="X", b="Y")
     assert isinstance(obj, _MyAdd)
     assert obj.kw == {"a": "X", "b": "Y"}
-    assert get_registered_name(_MyAdd) == "tf.my_add"
-    assert get_registered_name(obj) == "tf.my_sum"
+    assert expr.get_registered_name(_MyAdd) == "tf.my_add"
+    assert expr.get_registered_name(obj) == "tf.my_sum"
     assert isinstance(tf.my_sum(a="X", b="Y"), _MyAdd)
 
     assert "my_add" in dir(tf)
@@ -66,12 +64,12 @@ def sub(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
     pass
 
 
-@sub.specialize(RangePattern("S", 1, 2))
+@sub.specialize(pattern.Range("S", 1, 2))
 def narrow_s(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
     return x
 
 
-@sub.specialize(RangePattern("S", 4, 6))
+@sub.specialize(pattern.Range("S", 4, 6))
 def wide_s(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
     return x
 
@@ -82,13 +80,13 @@ def test_func_specializations_parse_to_variants() -> None:
     variants = sub.variants
     assert len(variants) == 2
     assert [v.name for v in variants] == ["sub", "sub"]
-    assert variants[0].specializations == (RangePattern("S", 1, 2),)
-    assert variants[1].specializations == (RangePattern("S", 4, 6),)
+    assert variants[0].specializations == (pattern.Range("S", 1, 2),)
+    assert variants[1].specializations == (pattern.Range("S", 4, 6),)
 
-    assert display_name(variants[0]) == "narrow_s"
-    assert display_name(variants[1]) == "wide_s"
+    assert valuation.display_name(variants[0]) == "narrow_s"
+    assert valuation.display_name(variants[1]) == "wide_s"
 
-    printed = as_script(sub)
+    printed = inspection.as_script(sub)
     assert "def wide_s(" in printed
     assert "def narrow_s(" in printed
 

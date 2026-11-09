@@ -5,8 +5,7 @@ instruction for a tensor tile. `tf.schedule` explicitly names an instruction,
 the values it reads, and the repetition of one instruction issue. An
 unscheduled HIR call may omit that spelling only when its registry has exactly
 one candidate and every required candidate attribute comes from a same-named
-HIR attribute. The schedule does not copy the instruction's operand, scope,
-capability, or access declarations into a second schema.
+HIR attribute.
 
 ## 1. Authored form
 
@@ -21,12 +20,13 @@ result = tf.schedule(
 
 `operands` is one variadic input. Its tuple syntax is flattened into the
 `ScheduleOp` call arguments; it is not an IR `Tuple` value. `op` is one
-registered TIR `Op` instance. `repeat` and `order`, when present, are tuples of
-integers.
+registered TIR `Op` instance. `repeat`, when present, is a tuple of positive
+integers; `order`, when present, is a tuple of integers. Construction rejects
+anything else.
 
-These four parameters are the complete authored contract. In particular, a
-schedule has no separate operand mapping, instruction scope, access map, or
-capability field.
+These four parameters are the complete authored contract: the schedule does not
+copy the instruction's operand, scope, capability, or access declarations into a
+second schema.
 
 `tilefoundry schedule candidates` marks an accepted candidate as `default`
 when that instruction would be selected by the omission rule above. The rule
@@ -62,14 +62,13 @@ logical Split axes when that projection is possible; if factored splits have
 no local logical box, it compares whole types instead.
 
 Each single-issue operand MUST match the corresponding instruction parameter
-pattern. `match_instruction(op_type, attributes, operand_types, mesh, *, frame,
-repeat=None, order=None)` returns a tuple of frozen `InstructionMatch(op, path)`
+pattern. `hir.schedule.match_instruction(op_type, attributes, operand_types, mesh, *, frame,
+repeat=None, order=None)` returns a tuple of frozen `hir.schedule.InstructionMatch(op, path)`
 records. Each op uses the existing constructor; its path contains every binding
-from the closed matcher in binding order. A `ScheduleRefusal` carries the
+from the closed matcher in binding order. A `schedule.RefusalError` carries the
 rejected path and failed-node reason. Type inference only validates the matches;
-inspection renders their paths. The
-operand types include every input parameter, including the destination, in
-schema order. An atom class in `attributes` leaves its parameters open; an
+inspection renders their paths. The operand types include every input
+parameter, including the destination, in schema order. An atom class in `attributes` leaves its parameters open; an
 atom instance requests that exact instruction. The execution mesh matches first,
 then the shared input scope check verifies each operand holder and storage.
 ScheduleOp skips that check in the outer type-inference visitor; every explicit
@@ -89,14 +88,14 @@ closed check supplies the refusal if no extent is accepted.
 capability checks. Explicit schedule inference uses this same matcher with
 the authored instruction attributes, frame, repeat, and order.
 
-Operand, tiling, pattern, and verifier rejections raise `ScheduleRefusal`.
+Operand, tiling, pattern, and verifier rejections raise `schedule.RefusalError`.
 Errors from implementation code, including `TypeError` and ISL errors,
 propagate to the caller.
 
 A source window is matched in the arrangement in which it lies: its
 address offset is not part of the layout, and an unstated layout uses the
 parent tensor's compact row-major strides. When an instruction reads a plain
-shared-memory arrangement through an all-`Broadcast` `ShardLayoutPattern`, the
+shared-memory arrangement through an all-`Broadcast` `pattern.ShardLayout`, the
 single-issue view is bound to one required instruction frame for matching. This
 does not assign issues to frames; issue assignment is a lowering decision.
 
@@ -104,8 +103,8 @@ An instruction without a registered access relation cannot be selected by a
 schedule.
 
 The target-neutral instruction set reported by `schedule facts` includes
-`T.binary`, `T.cast`, `T.clamp`, `T.unary`, `T.copy`, `T.relu`, and `T.reduce`.
-Their capability is `all targets`; target-specific instructions are added when
+`T.arange`, `T.binary`, `T.cast`, `T.clamp`, `T.unary`, `T.where`, `T.copy`, `T.relu`,
+and `T.reduce`. They state no target capability; target-specific instructions are added when
 the selected target admits their capabilities.
 
 ## 3. Repeat and order
@@ -191,9 +190,6 @@ target states a bandwidth, and the longest such time is the memory time. These
 levels may overlap, so their times are not summed. A level with no stated rate
 contributes no bound; it is neither treated as zero bandwidth nor rejected.
 
-The concrete mapping of issues to participants is a lowering contract rather
-than authored ScheduleOp state.
-
 Finalization MUST NOT reject a program because analysis reports capacity
 findings. It MUST retain the function-level analysis metadata on the resulting
 PrimFunction and print the same report header as `analyze` before the entire
@@ -203,8 +199,9 @@ stdout and stderr empty, and JSON output MUST contain only the `source` field.
 
 ## 6. Reference value semantics
 
-Reference evaluation dispatches on the selected TIR instruction through the
-schedule-evaluation registry. This registry describes the SSA value produced by
+Reference evaluation dispatches on the selected TIR instruction through
+`evaluator.registry`: the handler of `ScheduleOp` looks up the instruction's
+class in it. That handler describes the SSA value produced by
 `tf.schedule`; it does not execute the effect-form TIR instruction or write an
 explicit destination.
 

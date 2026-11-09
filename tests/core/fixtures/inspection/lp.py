@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="lp", target=CpuTarget())
+@module(entry="lp", target=cpu.Target())
 class Lp:
     @func
     def lp(a: Tensor[(4,), "fp8e4m3"], b: Tensor[(4,), "f8e8m0"], c: Tensor[(4,), "f4e2m1"]):

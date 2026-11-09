@@ -18,9 +18,9 @@ final   V / 32 CTAs x 256 threads. Every CTA first normalises row `last`
         sum lands in bf16 once.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 H, V, EPS = 5120, 248320, 1e-6
 KV, TV, VEC = 5, 256, 4        # a row as (5, 256, 4) over 256 threads
 RE = 4                          # embed: rows per CTA

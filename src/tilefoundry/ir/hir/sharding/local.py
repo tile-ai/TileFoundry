@@ -1,48 +1,47 @@
+"""HIR ``Local`` Op: the current device's view of a sharded tensor."""
+
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor, local_type
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import Placement, TensorType
-from tilefoundry.ir.types.shard_layout import Partial, ShardLayout, Split, shard_layout_of
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    readnone_relations,
-    register_access_relation,
-)
+from tilefoundry import core
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
 
 
-@register_op(dialect='tf', category='sharding')
-class Local(Op):
+@expr.register_op(dialect='tf', category='sharding')
+class Local(expr.Op):
     """The current device's local view of a ``ShardLayout`` tensor."""
 
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
 
 
-@register_typeinfer(Local)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(Local)
+def _(call: "Call", ctx: "TypeInferContext") -> types.TensorType:
     x_ty = ctx.type_of(call.args[0])
-    if not isinstance(x_ty.layout, ShardLayout):
+    if not isinstance(x_ty.layout, types.ShardLayout):
         ctx.error(call, "Local() input must have ShardLayout")
     try:
-        return local_type(x_ty)
+        return core.local_type(x_ty)
     except ValueError as error:
         ctx.error(call, str(error))
 
 
-@register_eval(Local)
-def _eval_local(ctx):
+@evaluator.register(Local)
+def eval_local(ctx):
     """Each placement's own part: a local view unless every placement holds the whole."""
     x = ctx.args[0].tensor
-    shard = shard_layout_of(x.type.layout)
-    if not x.is_global or not any(isinstance(attr, (Split, Partial)) for attr in shard.attrs):
-        return TensorValue(ShardTensor(ctx.result_type, x.tensor))
-    pieces = tuple((placement, x.to_local(placement)) for placement in Placement.each(shard.mesh))
-    return TensorValue(ShardTensor(ctx.result_type, pieces))
+    shard = types.shard_layout_of(x.type.layout)
+    if not x.is_global or not any(
+        isinstance(attr, (types.Split, types.Partial)) for attr in shard.attrs
+    ):
+        return evaluator.TensorValue(core.ShardTensor(ctx.result_type, x.tensor))
+    pieces = tuple((placement, x.to_local(placement)) for placement in types.Placement.from_mesh(shard.mesh))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, pieces))
 
 
-register_access_relation(Local)(readnone_relations(lambda types: local_type(types[0]).shape))
+access.register_relation(Local)(access.readnone_relations(lambda type_list: core.local_type(type_list[0]).shape))
+
+
+cost.register(Local)(cost.metadata_view)
+
+
+__all__ = ["Local"]

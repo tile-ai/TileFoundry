@@ -1,53 +1,30 @@
+"""HIR batched ``MatMul`` Op."""
+
 from __future__ import annotations
 
+import math
 from typing import Literal
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.utils import common_placements
-from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._helpers import resolve_anchor_storage
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import DType, FloatDType, StorageKind, TensorType
-from tilefoundry.ir.types.layout import Layout
-from tilefoundry.ir.types.shard_layout import (
-    ShardLayout,
-    shard_layout_of,
-    split_target_axes,
-)
-from tilefoundry.ir.types.storage import StorageOwners
-from tilefoundry.ir.types.utils import check_multilinear_partials
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    broadcast_shapes,
-    matmul_relations,
-    register_access_relation,
-    relations_of,
-    shape_from_relation,
-)
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
 
-@register_op(dialect='tf', category='nn')
-class MatMul(Op):
+@expr.register_op(dialect='tf', category='nn')
+class MatMul(expr.Op):
     """Batched matrix multiplication with explicit physical matrix-axis order."""
 
-    lhs = ParamDef(kind="input", pattern=is_ranked_tensor())
-    rhs = ParamDef(kind="input", pattern=is_ranked_tensor())
-    a_layout = ParamDef(kind="attribute", annotation=Literal["MK", "KM"], default="MK")
-    b_layout = ParamDef(kind="attribute", annotation=Literal["NK", "KN"], default="KN")
-    out_dtype = ParamDef(kind="attribute", annotation=DType, optional=True, default=None)
+    lhs = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    rhs = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    a_layout = expr.ParamDef(kind="attribute", annotation=Literal["MK", "KM"], default="MK")
+    b_layout = expr.ParamDef(kind="attribute", annotation=Literal["NK", "KN"], default="KN")
+    out_dtype = expr.ParamDef(kind="attribute", annotation=expr.DType, optional=True, default=None)
 
     def __init__(self, **attrs) -> None:
         out_dtype = attrs.get("out_dtype")
         if isinstance(out_dtype, str):
-            attrs["out_dtype"] = DType.from_name(out_dtype)
+            attrs["out_dtype"] = expr.DType.from_name(out_dtype)
         super().__init__(**attrs)
 
 
@@ -68,24 +45,24 @@ def matmul_axes(op: MatMul) -> tuple[int, int, int, int]:
     return a_m, a_k, b_n, b_k
 
 
-def _k_split_axes(t, k_tensor_axis: int) -> "frozenset[int]":
+def k_split_axes(t, k_tensor_axis: int) -> "frozenset[int]":
     """The mesh axes on which *t* splits its contraction (K) tensor axis."""
-    layout = shard_layout_of(t.layout)
+    layout = types.shard_layout_of(t.layout)
     if layout is None:
         return frozenset()
-    targets = split_target_axes(layout, t.shape)
+    targets = types.split_target_axes(layout, t.shape)
     return frozenset(p for p, ax in enumerate(targets) if ax == k_tensor_axis)
 
 
-@register_access_relation(MatMul)
-def _matmul_access_relation(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(MatMul)
+def matmul_access_relation(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """Every coordinate of each operand a contraction reaches, read once."""
     lhs = ctx.type_of(call.args[0])
     rhs = ctx.type_of(call.args[1])
-    return matmul_relations(lhs.shape, rhs.shape, matmul_axes(call.target))
+    return access.matmul_relations(lhs.shape, rhs.shape, matmul_axes(call.target))
 
 
-def _elements(shape: tuple) -> int:
+def elements(shape: tuple) -> int:
     """How many elements a shape of numbers holds."""
     counted = 1
     for extent in shape:
@@ -93,12 +70,12 @@ def _elements(shape: tuple) -> int:
     return counted
 
 
-def matmul_result_dtype(op: MatMul, lhs: TensorType) -> DType:
+def matmul_result_dtype(op: MatMul, lhs: types.TensorType) -> expr.DType:
     """The result dtype: ``out_dtype`` when stated, else the operand dtype."""
     return lhs.dtype if op.out_dtype is None else op.out_dtype
 
 
-def matmul_result_shape_and_layout(call: "Call", ctx: "TypeInferContext") -> tuple:
+def matmul_result_shape_and_layout(call: "expr.Call", ctx: "TypeInferContext") -> tuple:
     """Check the operands against each other and derive the result shape and layout.
 
     Every target's MatMul rule reads its shape and layout here; only the result
@@ -114,7 +91,7 @@ def matmul_result_shape_and_layout(call: "Call", ctx: "TypeInferContext") -> tup
         ctx.error(call, f"MatMul dtype mismatch: {lhs.dtype} vs {rhs.dtype}")
     if len(lhs.shape) < 2 or len(rhs.shape) < 2:
         ctx.error(call, "MatMul requires rank >= 2 on both operands")
-    if broadcast_shapes(lhs.shape[:-2], rhs.shape[:-2], raising=False) is None:
+    if access.broadcast_shapes(lhs.shape[:-2], rhs.shape[:-2], raising=False) is None:
         ctx.error(call, f"MatMul batch-dim mismatch {lhs.shape[:-2]} vs {rhs.shape[:-2]}")
     if lhs.shape[a_k] != rhs.shape[b_k]:
         ctx.error(
@@ -122,23 +99,25 @@ def matmul_result_shape_and_layout(call: "Call", ctx: "TypeInferContext") -> tup
             f"MatMul contraction-dim mismatch: lhs K={lhs.shape[a_k]} vs rhs K={rhs.shape[b_k]}",
         )
 
-    if _k_split_axes(lhs, a_k % len(lhs.shape)) != _k_split_axes(rhs, b_k % len(rhs.shape)):
+    if k_split_axes(lhs, a_k % len(lhs.shape)) != k_split_axes(rhs, b_k % len(rhs.shape)):
         ctx.error(
             call,
             "MatMul contraction dim K must be split on the same mesh axes for both operands",
         )
 
-    check_multilinear_partials((("lhs", lhs), ("rhs", rhs)), ctx.target, kind=BinaryKind.MUL)
+    ir_utils.check_multilinear_partials(
+        (("lhs", lhs), ("rhs", rhs)), ctx.target, kind=expr.BinaryKind.MUL
+    )
 
-    relation = relations_of(call, ctx)
+    relation = access.relations_of(call, ctx)
 
-    out_batch = broadcast_shapes(lhs.shape[:-2], rhs.shape[:-2], raising=False)
-    out_shape = shape_from_relation(
+    out_batch = access.broadcast_shapes(lhs.shape[:-2], rhs.shape[:-2], raising=False)
+    out_shape = access.shape_from_relation(
         relation[len(call.args)], (*out_batch, lhs.shape[a_m], rhs.shape[b_n], lhs.shape[a_k])
     )
     k_domain_dim = len(out_shape)
     try:
-        shard = derive_output_shard_layout(
+        shard = typeinfer.derive_output_shard_layout(
             (lhs, rhs),
             relation,
             out_shape,
@@ -150,48 +129,48 @@ def matmul_result_shape_and_layout(call: "Call", ctx: "TypeInferContext") -> tup
         ctx.error(call, str(e))
     layout = shard
     if layout is None:
-        held = shard_layout_of(lhs.layout) or lhs.layout
-        if isinstance(held, ShardLayout):
-            layout = ShardLayout.default(
+        held = types.shard_layout_of(lhs.layout) or lhs.layout
+        if isinstance(held, types.ShardLayout):
+            layout = types.ShardLayout.from_logical(
                 out_shape,
                 held.mesh,
                 held.attrs,
                 storage=lhs.storage,
                 owners=ctx.target.storage_owners
                 if ctx is not None and ctx.target is not None
-                else StorageOwners((), {}),
+                else expr.StorageOwners((), {}),
             )
         elif tuple(held.shape) == tuple(out_shape):
             layout = held
         else:
-            layout = Layout(out_shape)
+            layout = types.Layout(out_shape)
     return out_shape, layout
 
 
-@register_typeinfer(MatMul)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(MatMul)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     lhs = ctx.type_of(call.args[0])
     rhs = ctx.type_of(call.args[1])
     shape, layout = matmul_result_shape_and_layout(call, ctx)
-    on_chip = {lhs.storage, rhs.storage} & {StorageKind.SMEM, StorageKind.RMEM}
+    on_chip = {lhs.storage, rhs.storage} & {expr.StorageKind.SMEM, expr.StorageKind.RMEM}
     if on_chip and ctx.resolve_target() is None:
-        storage = StorageKind.UMAT
+        storage = expr.StorageKind.UMAT
     else:
-        storage = resolve_anchor_storage(ctx, call, lhs.storage, rhs.storage)
-    return TensorType(
+        storage = typeinfer.resolve_anchor_storage(ctx, call, lhs.storage, rhs.storage)
+    return types.TensorType(
         shape=shape, dtype=matmul_result_dtype(call.target, lhs), layout=layout, storage=storage
     )
 
 
-@register_eval(MatMul)
-def _eval_matmul(ctx):
+@evaluator.register(MatMul)
+def eval_matmul(ctx):
     """Multiply in the operand dtype, or widen to f32 and round once.
 
     The operand-dtype product serves when the result keeps that dtype and the
     operand is not an 8-bit float, which torch cannot multiply.
     """
     operand = ctx.args[0].type.dtype
-    fp8 = isinstance(operand, FloatDType) and operand.bit_width == 8
+    fp8 = isinstance(operand, expr.FloatDType) and operand.bit_width == 8
 
     def matmul(lhs, rhs):
         if ctx.op.a_layout == "KM":
@@ -199,14 +178,40 @@ def _eval_matmul(ctx):
         if ctx.op.b_layout == "NK":
             rhs = rhs.transpose(-1, -2)
         if ctx.result_type.dtype == operand and not fp8:
-            return torch.matmul(lhs, rhs)
-        return torch.matmul(lhs.float(), rhs.float()).to(to_torch_dtype(ctx.result_type.dtype))
+            return utils.torch.matmul(lhs, rhs)
+        return utils.torch.matmul(lhs.float(), rhs.float()).to(evaluator.to_torch_dtype(ctx.result_type.dtype))
 
     xs = tuple(arg.tensor for arg in ctx.args)
-    placements = common_placements(*xs)
+    placements = evaluator.common_placements(*xs)
     held = (
         matmul(*(x.tensor for x in xs))
         if not placements
         else tuple((p, matmul(*(x.to_local(p) for x in xs))) for p in placements)
     )
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
+
+
+@cost.register(MatMul)
+def matmul_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    """One multiply and one add per multiply-accumulate: 2 * batch * m * k * n."""
+    lhs, rhs = cost.input_types(call, ctx)
+    output = cost.output_type(call, ctx)
+    if not all(isinstance(type, types.TensorType) for type in (lhs, rhs, output)):
+        raise ValueError("MatMul cost requires tensor inputs and output")
+    logical_lhs = ctx.type_of(call.args[0])
+    if not isinstance(logical_lhs, types.TensorType):
+        raise ValueError("MatMul cost requires a tensor lhs")
+    _, a_k, _, _ = matmul_axes(call.target)
+    k_axis = a_k % len(logical_lhs.shape)
+    k = math.prod(
+        extent
+        for extent, logical_axis in zip(
+            lhs.shape, access.logical_axes_of(lhs, logical_lhs)
+        )
+        if logical_axis == k_axis
+    )
+    flops = 2 * ir_utils.numel(output) * k
+    return cost.Cost({lhs.dtype: flops}, cost.traffic((lhs, rhs), output))
+
+
+__all__ = ["MatMul", "matmul_result_dtype", "matmul_result_shape_and_layout"]

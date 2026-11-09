@@ -7,7 +7,7 @@ EmitGranularity = Literal["full", "skeleton"]
 
 
 @dataclass(frozen=True)
-class CodegenOptions:
+class Options:
     """Whether emitted bodies contain statements or placeholders."""
 
     emit: EmitGranularity = "full"
@@ -15,3 +15,6 @@ class CodegenOptions:
     def __post_init__(self) -> None:
         if self.emit not in ("full", "skeleton"):
             raise ValueError(f"invalid codegen emit granularity: {self.emit!r}")
+
+
+__all__ = ["EmitGranularity", "Options"]

@@ -9,6 +9,7 @@ look similar and are fine.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -106,8 +107,6 @@ def test_repository_clean(lint) -> None:
     Every tracked file, so the guard is a fact about the tree and not only
     about the commit that happens to be in flight.
     """
-    import subprocess  # noqa: PLC0415
-
     root = _SCRIPT.parent.parent
     tracked = subprocess.run(
         ["git", "ls-files", "-z"],

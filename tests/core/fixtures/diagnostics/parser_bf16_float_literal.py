@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="add_literal", target=CpuTarget())
+@module(entry="add_literal", target=cpu.Target())
 class Bf16FloatLiteral:
     @func
     def add_literal(x: Tensor[(8,), "bf16"]) -> Tensor[(8,), "bf16"]:

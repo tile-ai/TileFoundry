@@ -9,43 +9,20 @@ from __future__ import annotations
 
 import isl
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.layout import Layout
-from tilefoundry.ir.types.shard_layout import (
-    ShardLayout,
-    Split,
-    shard_layout_of,
-    split_target_axes,
-)
-from tilefoundry.ir.types.storage import StorageOwners
-from tilefoundry.ir.types.utils import reject_partials
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    identity_access,
-    iterating,
-    register_access_relation,
-    relations_of,
-)
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
 
-@register_op(dialect='tf', category='tensor')
-class ArgMax(Op):
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
-    axis = ParamDef(kind="attribute", annotation=int, default=-1)
+@expr.register_op(dialect='tf', category='tensor')
+class ArgMax(expr.Op):
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    axis = expr.ParamDef(kind="attribute", annotation=int, default=-1)
 
 
-@register_typeinfer(ArgMax)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(ArgMax)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     x_ty = ctx.type_of(call.args[0])
     if not x_ty.shape:
         ctx.error(call, "x must be at least rank-1")
@@ -56,11 +33,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if axis < 0 or axis >= rank:
         ctx.error(call, f"axis {call.target.axis} out of range for rank {rank}")
 
-    source_shard = shard_layout_of(x_ty.layout)
+    source_shard = types.shard_layout_of(x_ty.layout)
     if source_shard is not None:
-        targets = split_target_axes(source_shard, x_ty.shape)
+        targets = types.split_target_axes(source_shard, x_ty.shape)
         if any(
-            isinstance(attr, Split) and targets[mesh_axis] == axis
+            isinstance(attr, types.Split) and targets[mesh_axis] == axis
             for mesh_axis, attr in enumerate(source_shard.attrs)
         ):
             ctx.error(
@@ -68,12 +45,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 f"reduction axis {axis} must not be Split-sharded; use an "
                 "explicit Reshard before ArgMax",
             )
-    reject_partials("x", x_ty.layout)
+    ir_utils.reject_partials("x", x_ty.layout)
     out_shape = tuple(d for i, d in enumerate(x_ty.shape) if i != axis)
-    new_layout = Layout(out_shape)
+    new_layout = types.Layout(out_shape)
     if source_shard is not None:
-        relation = relations_of(call, ctx)
-        derived = derive_output_shard_layout(
+        relation = access.relations_of(call, ctx)
+        derived = typeinfer.derive_output_shard_layout(
             (x_ty,),
             relation,
             out_shape,
@@ -85,36 +62,36 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         new_layout = (
             derived
             if derived is not None
-            else ShardLayout.default(
+            else types.ShardLayout.from_logical(
                 out_shape,
                 source_shard.mesh,
                 source_shard.attrs,
                 storage=x_ty.storage,
                 owners=ctx.target.storage_owners
                 if ctx is not None and ctx.target is not None
-                else StorageOwners((), {}),
+                else expr.StorageOwners((), {}),
             )
         )
-    return TensorType(
+    return types.TensorType(
         shape=out_shape,
-        dtype=DType.i64,
+        dtype=expr.DType.i64,
         layout=new_layout,
         storage=x_ty.storage,
     )
 
 
-@register_eval(ArgMax)
-def _eval_argmax(ctx):
+@evaluator.register(ArgMax)
+def eval_argmax(ctx):
     def argmax(x):
-        return torch.argmax(x, dim=ctx.op.axis)
+        return utils.torch.argmax(x, dim=ctx.op.axis)
 
     x = ctx.args[0].tensor
     held = argmax(x.tensor) if x.is_global else tuple((p, argmax(t)) for p, t in x.tensor)
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
-@register_access_relation(ArgMax)
-def _argmax_access_relation(call: "Call", ctx: "TypeInferContext") -> tuple[AccessRelation, ...]:
+@access.register_relation(ArgMax)
+def argmax_access_relation(call: "expr.Call", ctx: "TypeInferContext") -> tuple[access.Relation, ...]:
     """A scan walks what it reads, and collapses the axis it scanned on the way out.
 
     The coordinates are the source's own, because reading every element of the
@@ -129,10 +106,17 @@ def _argmax_access_relation(call: "Call", ctx: "TypeInferContext") -> tuple[Acce
     dims = [f"d{index}" for index in range(rank)]
     walked = ", ".join(dims)
     kept = ", ".join(dim for index, dim in enumerate(dims) if index != axis)
-    return iterating(
+    return access.iterating(
         x_ty.shape,
-        (identity_access(rank), AccessRelation(isl.map(f"{{ [{walked}] -> [{kept}] }}"))),
+        (access.identity(rank), access.Relation(isl.map(f"{{ [{walked}] -> [{kept}] }}"))),
     )
 
 
 __all__ = ["ArgMax"]
+
+
+@cost.register(ArgMax)
+def argmax_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    inputs = cost.input_types(call, ctx)
+    output = cost.output_type(call, ctx)
+    return cost.Cost({}, cost.traffic(inputs, output))

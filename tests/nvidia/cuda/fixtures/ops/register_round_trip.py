@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 @module(
@@ -56,10 +56,10 @@ class RegisterRoundTrip:
 
     round_trip = _RegisterRoundTrip
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def round_trip_host(a: Tensor[(2, 5120), "bf16"], out: Tensor[(2, 5120), "bf16"]):
-        launch(  # noqa: F821
-            round_trip.round_trip,  # noqa: F821
+        launch(
+            round_trip.round_trip,
             a,
             out,
             grid=(1, 1, 1),

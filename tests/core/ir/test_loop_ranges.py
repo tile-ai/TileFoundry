@@ -18,7 +18,7 @@ import pytest
 import torch
 
 from tests.core._corpus import Case, case, check_case, special
-from tilefoundry.evaluator import evaluate
+from tilefoundry.interfaces import evaluator
 
 LOOPS = Path(__file__).parents[1] / "fixtures" / "ir" / "loop_regions.py"
 
@@ -42,7 +42,7 @@ class RangeStartStep(LoopRegionCase):
         range_start_step = state.entry_function()
         n = 7
         x = torch.arange(n, dtype=torch.float32)
-        out = evaluate(range_start_step, x)
+        out = evaluator.evaluate(range_start_step, x)
         assert torch.allclose(out.reshape(()), x[1:n:2].sum()), (n, out)
 
 
@@ -54,7 +54,7 @@ class OuterCarryInInnerLoop(LoopRegionCase):
     def guard(self, state, problems):
         nested_sum = state.entry_function()
         x = torch.randn(4, 5)
-        out = evaluate(nested_sum, x)
+        out = evaluator.evaluate(nested_sum, x)
         assert torch.allclose(out.reshape(()), x.sum(), atol=1e-4), out
 
 
@@ -67,7 +67,7 @@ class DimExpressionExtent(LoopRegionCase):
         dim_expr_half_sum = state.entry_function()
         n = 8
         x = torch.arange(n, dtype=torch.float32)
-        out = evaluate(dim_expr_half_sum, x)
+        out = evaluator.evaluate(dim_expr_half_sum, x)
         assert torch.allclose(out.reshape(()), x[: n // 2].sum()), (n, out)
 
 
@@ -80,7 +80,7 @@ class InterleavedPartialReductionEqualsFlat(LoopRegionCase):
         interleaved_two_partial_sum = state.entry_function()
         n = 6
         x = torch.randn(n)
-        out = evaluate(interleaved_two_partial_sum, x)
+        out = evaluator.evaluate(interleaved_two_partial_sum, x)
         assert torch.allclose(out.reshape(()), x.sum(), atol=1e-4), (n, out)
 
 

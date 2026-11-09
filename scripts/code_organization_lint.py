@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Check the Python source rules of docs/spec/code-organization.md §0.
 
-Rules checked here: S1, S2, S4, S5, S7, S8, S9, S11 and C3 to C7. The rule
-configuration lives in ``[tool.code_organization]`` of ``pyproject.toml``.
-Every module is parsed once; violations print as ``path:line: RULE message``.
-``--package`` keeps violations located in, or importing into, the named
-packages; ``--report`` prints counts per package and rule.
+Rules checked here: S1, S2, S4, S5, S7, S8, S9, S11, C3, C4, C5, C6, C10, C11.
+Every rule applies to every Python file of the repository. The configuration in
+``[tool.code_organization]`` is ``src`` (first-party import roots, as in ruff)
+and ``per-file-ignores`` (path glob to rule codes, ``ALL`` for every rule).
+Violations print as ``path:line: RULE message``; ``--package`` keeps those in or
+into the named packages, and ``--report`` prints counts per package and rule.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import argparse
 import ast
 import collections
 import fnmatch
+import subprocess
 import symtable
 import sys
 import tomllib
@@ -32,14 +34,16 @@ DYNAMIC_IMPORTS = frozenset({"importlib.import_module", "import_module", "__impo
 class Config:
     """The ``[tool.code_organization]`` table."""
 
-    roots: tuple[Path, ...]
-    exclude: tuple[str, ...]
-    dynamic_import_modules: frozenset[str]
-    value_bases: frozenset[str]
-    composition_root: str
-    registry_classes: frozenset[str]
-    target_base: str
-    core_node_packages: tuple[str, ...]
+    src: tuple[Path, ...]
+    ignores: tuple[tuple[str, frozenset[str]], ...]
+
+    def ignored(self, path: Path, rule: str) -> bool:
+        """Whether a per-file ignore covers *rule* in *path*."""
+        relative = path.relative_to(ROOT).as_posix()
+        return any(
+            fnmatch.fnmatch(relative, pattern) and (rule in rules or "ALL" in rules)
+            for pattern, rules in self.ignores
+        )
 
 
 @dataclass(frozen=True)
@@ -66,6 +70,7 @@ class ModuleInfo:
     exports: frozenset[str] | None
     imports: tuple[ImportEdge, ...]
     definitions: frozenset[str]
+    first_party: bool
 
     @property
     def directory(self) -> str:
@@ -103,15 +108,10 @@ def is_private(name: str) -> bool:
 def load_config(pyproject: Path) -> Config:
     """Read ``[tool.code_organization]``."""
     table = tomllib.loads(pyproject.read_text())["tool"]["code_organization"]
+    ignores = table.get("per-file-ignores", {})
     return Config(
-        roots=tuple(ROOT / root for root in table["roots"]),
-        exclude=tuple(table.get("exclude", ())),
-        dynamic_import_modules=frozenset(table.get("dynamic_import_modules", ())),
-        value_bases=frozenset(table.get("value_bases", ())),
-        composition_root=table["composition_root"],
-        registry_classes=frozenset(table.get("registry_classes", ())),
-        target_base=table["target_base"],
-        core_node_packages=tuple(table.get("core_node_packages", ())),
+        src=tuple(ROOT / root for root in table["src"]),
+        ignores=tuple((pattern, frozenset(rules)) for pattern, rules in ignores.items()),
     )
 
 
@@ -130,6 +130,16 @@ def literal_exports(tree: ast.Module) -> frozenset[str] | None:
                 return frozenset(value)
             return None
     return None
+
+
+def imported_names(tree: ast.Module) -> frozenset[str]:
+    """Names an ``__init__.py`` binds by its ``from`` imports, ``__future__`` excluded."""
+    return frozenset(
+        alias.asname or alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.module != "__future__"
+        for alias in node.names
+    )
 
 
 def top_definitions(tree: ast.Module) -> frozenset[str]:
@@ -169,21 +179,40 @@ def resolve_from(module: str, is_package: bool, node: ast.ImportFrom) -> str:
     return ".".join([*base, node.module] if node.module else base)
 
 
+def python_files() -> list[Path]:
+    """Every Python file of the repository, tracked or new, that git does not ignore."""
+    listed = subprocess.run(
+        ["git", "ls-files", "-co", "--exclude-standard", "*.py"], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.split()
+    return sorted(ROOT / name for name in listed if (ROOT / name).is_file())
+
+
+def module_name(path: Path, config: Config) -> tuple[str, bool]:
+    """The dotted module name of *path*, and whether it lies in a first-party package."""
+    for root in config.src:
+        if root in path.parents:
+            parts = path.relative_to(root).with_suffix("").parts
+            if len(parts) > 1 and (root / parts[0] / "__init__.py").is_file():
+                return ".".join(parts[:-1] if parts[-1] == "__init__" else parts), True
+    parts = path.relative_to(ROOT).with_suffix("").parts
+    return ".".join(parts[:-1] if parts[-1] == "__init__" else parts), False
+
+
 def collect(config: Config) -> dict[str, ModuleInfo]:
-    """Parse every module under the configured roots once."""
+    """Parse every Python file once and index it by module name."""
     raw = {}
-    for root in config.roots:
-        for path in sorted(root.rglob("*.py")):
-            relative = path.relative_to(ROOT).as_posix()
-            if any(fnmatch.fnmatch(relative, pattern) for pattern in config.exclude):
-                continue
-            parts = path.relative_to(root.parent).with_suffix("").parts
-            is_package = parts[-1] == "__init__"
-            name = ".".join(parts[:-1] if is_package else parts)
-            text = path.read_text()
-            raw[name] = (path, is_package, ast.parse(text, str(path)), text)
+    for path in python_files():
+        if config.ignored(path, "ALL") and not any(root in path.parents for root in config.src):
+            continue
+        text = path.read_text()
+        try:
+            tree = ast.parse(text, str(path))
+        except SyntaxError:
+            continue
+        name, first_party = module_name(path, config)
+        raw[name] = (path, path.name == "__init__.py", tree, text, first_party)
     modules = {}
-    for name, (path, is_package, tree, text) in raw.items():
+    for name, (path, is_package, tree, text, first_party) in raw.items():
         edges = []
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom):
@@ -195,8 +224,11 @@ def collect(config: Config) -> dict[str, ModuleInfo]:
                 edges.append(
                     ImportEdge(node.lineno, source, alias.name, alias.asname or alias.name, node.level, target)
                 )
+        exports = literal_exports(tree)
+        if is_package and exports is None:
+            exports = imported_names(tree)
         modules[name] = ModuleInfo(
-            name, path, is_package, tree, text, literal_exports(tree), tuple(edges), top_definitions(tree)
+            name, path, is_package, tree, text, exports, tuple(edges), top_definitions(tree), first_party
         )
     return modules
 
@@ -338,8 +370,53 @@ def owner_parameter(node: ast.AST, up: Mapping[ast.AST, ast.AST]) -> str | None:
     return None
 
 
-def check_module(info: ModuleInfo, config: Config) -> Iterator[Violation]:
-    """Single-module rules: S1 S2 S4 S5 S7 C4 C5 C6."""
+NAMESPACE_MUTATORS = frozenset({"update", "setdefault", "pop", "popitem", "clear", "__setitem__", "__delitem__"})
+COPY_CALLS = frozenset({"copy", "copy.copy"})
+
+
+def namespace_mutated(call: ast.Call) -> ast.expr | None:
+    """The object whose ``vars(x)`` / ``x.__dict__`` *call* mutates, or ``None``."""
+    func = call.func
+    if not (isinstance(func, ast.Attribute) and func.attr in NAMESPACE_MUTATORS):
+        return None
+    holder = func.value
+    if isinstance(holder, ast.Call) and call_name(holder) == "vars" and len(holder.args) == 1:
+        return holder.args[0]
+    if isinstance(holder, ast.Attribute) and holder.attr == "__dict__":
+        return holder.value
+    return None
+
+
+def owned(subject: ast.expr, node: ast.AST, up: Mapping[ast.AST, ast.AST]) -> bool:
+    """Whether *subject* is the method's own self/cls, or a copy of it made in the same method."""
+    owner = owner_parameter(node, up)
+    if owner is None or not isinstance(subject, ast.Name):
+        return False
+    if subject.id == owner:
+        return True
+    function = up.get(node)
+    while function is not None and not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        function = up.get(function)
+    return function is not None and any(
+        isinstance(statement, ast.Assign)
+        and [ast.unparse(t) for t in statement.targets] == [subject.id]
+        and isinstance(statement.value, ast.Call)
+        and call_name(statement.value) in COPY_CALLS
+        and [ast.unparse(a) for a in statement.value.args] == [owner]
+        for statement in ast.walk(function)
+    )
+
+
+def check_module(info: ModuleInfo) -> Iterator[Violation]:
+    """Single-module rules S1 S2 S4 S5 S7 C4 C5 C6, in one walk of the AST.
+
+    S5: a custom ``metaclass=``, a class deriving from ``type``, ``__del__`` and any
+    ``importlib.import_module`` / ``__import__`` call. C4: any binding, parameter,
+    attribute, import alias or file name that starts with ``_``. C5: ``check_writes``,
+    and ``setattr`` / ``object.__setattr__`` / ``vars(x)`` / ``x.__dict__`` changes on
+    anything but the method's self/cls or a ``copy.copy(self)`` made in it. C6:
+    ``global`` and ``check_container``. S1, S2, S7: ``check_function``. S4: ``check_nesting``.
+    """
     up = parents(info.tree)
 
     def hit(node: ast.AST | int, rule: str, message: str) -> Violation:
@@ -363,13 +440,16 @@ def check_module(info: ModuleInfo, config: Config) -> Iterator[Violation]:
                     yield hit(node, "S5", f"class {node.name!r} defines a metaclass")
         elif isinstance(node, ast.Call):
             name = call_name(node)
-            if name in DYNAMIC_IMPORTS and info.name not in config.dynamic_import_modules:
-                yield hit(node, "S5", f"dynamic import {name}() outside the configured plugin loading points")
+            if name in DYNAMIC_IMPORTS:
+                yield hit(node, "S5", f"dynamic import {name}(); only a plugin loading point may import by name")
             if name in {"setattr", "delattr", "object.__setattr__", "object.__delattr__"} and node.args:
                 owner = owner_parameter(node, up)
                 subject = node.args[0]
                 if not (isinstance(subject, ast.Name) and owner is not None and subject.id == owner):
                     yield hit(node, "C5", f"{name}() on an object other than the method's own self/cls")
+            subject = namespace_mutated(node)
+            if subject is not None and not owned(subject, node, up):
+                yield hit(node, "C5", f"{ast.unparse(node.func)}() changes the attributes of an object other than the method's own self/cls")
         elif isinstance(node, ast.Global):
             yield hit(node, "C6", f"global statement for {', '.join(node.names)}")
         elif isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Delete)):
@@ -391,7 +471,12 @@ def check_module(info: ModuleInfo, config: Config) -> Iterator[Violation]:
 
 
 def check_function(node: ast.FunctionDef | ast.AsyncFunctionDef, up, hit) -> Iterator[Violation]:
-    """S1 S2 S5 S7 and C4 on one function definition."""
+    """S1 S2 S5 S7 and C4 on one function definition.
+
+    How: S1 flags ``@staticmethod``; S2 flags a ``@classmethod`` not named
+    ``from_*`` or ``create``; S5 flags a method ``__del__``; C4 flags a name
+    starting with ``_``; S7 is delegated to ``check_property``.
+    """
     decorators = [decorator_name(d) for d in node.decorator_list]
     in_class = isinstance(up.get(node), ast.ClassDef)
     if is_private(node.name):
@@ -404,11 +489,26 @@ def check_function(node: ast.FunctionDef | ast.AsyncFunctionDef, up, hit) -> Ite
     if in_class and node.name == "__del__":
         yield hit(node, "S5", "__del__ finalizer")
     if in_class:
-        yield from check_property(node, decorators, hit)
+        yield from check_property(node, decorators, up, hit)
 
 
-def check_property(node, decorators: list[str], hit) -> Iterator[Violation]:
-    """S7: a property or setter that only forwards one field."""
+def check_property(node, decorators: list[str], up, hit) -> Iterator[Violation]:
+    """S7 — a property does more than return or assign one field.
+
+    How: a ``@property`` whose only statement is ``return self.<field>`` (a
+    ``ClassVar`` is exempt), or a ``.setter`` whose only statement is
+    ``self.<field> = <argument>``, is reported.
+    """
+    owner_class = up.get(node)
+    class_variables = set()
+    if isinstance(owner_class, ast.ClassDef):
+        class_variables = {
+            s.target.id
+            for s in owner_class.body
+            if isinstance(s, ast.AnnAssign)
+            and isinstance(s.target, ast.Name)
+            and "ClassVar" in ast.unparse(s.annotation)
+        }
     body = node.body[1:] if ast.get_docstring(node) is not None else node.body
     if len(body) != 1:
         return
@@ -416,7 +516,12 @@ def check_property(node, decorators: list[str], hit) -> Iterator[Violation]:
     owner = first_parameter(node)
     if "property" in decorators and isinstance(statement, ast.Return):
         value = statement.value
-        if isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name) and value.value.id == owner:
+        if (
+            isinstance(value, ast.Attribute)
+            and isinstance(value.value, ast.Name)
+            and value.value.id == owner
+            and value.attr not in class_variables
+        ):
             yield hit(node, "S7", f"property {node.name!r} only returns self.{value.attr}; use a field")
     if any(d.endswith(".setter") for d in decorators) and isinstance(statement, ast.Assign):
         arguments = node.args.args
@@ -443,7 +548,12 @@ def written_object(target: ast.expr) -> ast.expr | None:
 
 
 def check_writes(node, up, hit) -> Iterator[Violation]:
-    """C5: attribute writes go only through the method's own self/cls."""
+    """C5 — an attribute, or an element of one, is written only through the method's own self/cls.
+
+    How: for every assignment, augmented assignment, annotated assignment and
+    ``del``, the object left of the written attribute (subscripts stripped) must
+    be the first parameter of the enclosing method, seen through closures.
+    """
     if isinstance(node, ast.Assign):
         targets = node.targets
     elif isinstance(node, ast.Delete):
@@ -468,7 +578,13 @@ def check_writes(node, up, hit) -> Iterator[Violation]:
 
 
 def check_container(statement: ast.stmt, hit) -> Iterator[Violation]:
-    """C6: module-level containers are immutable."""
+    """C6 — a module-level value is not a mutable container.
+
+    How: a module-level assignment (``__all__`` exempt) whose value is a list,
+    dict or set display or comprehension, or a call of ``list``, ``dict``,
+    ``set``, ``defaultdict``, ``OrderedDict``, ``deque``, ``Counter`` or
+    ``bytearray``, is reported.
+    """
     if isinstance(statement, ast.Assign):
         targets, value = statement.targets, statement.value
     elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
@@ -486,7 +602,12 @@ def check_container(statement: ast.stmt, hit) -> Iterator[Violation]:
 
 
 def check_nesting(info: ModuleInfo, up, hit) -> Iterator[Violation]:
-    """S4: a nested function or class must be a closure."""
+    """S4 — a nested function or class is a closure.
+
+    How: ``symtable`` gives the free variables of each nested scope; a function
+    or class defined inside a function that reads none of the enclosing
+    functions' parameters or locals (the method's self/cls excluded) is reported.
+    """
     try:
         table = symtable.symtable(info.text, str(info.path), "exec")
     except SyntaxError:
@@ -552,177 +673,174 @@ def free_names(scope: symtable.SymbolTable) -> set[str]:
     return names
 
 
-def check_imports(modules: Mapping[str, ModuleInfo], internal: tuple[str, ...]) -> Iterator[Violation]:
-    """C3: exports and imports of docs/spec/code-organization.md §0.4."""
+def facades(modules: Mapping[str, ModuleInfo], internal: tuple[str, ...]) -> frozenset[str]:
+    """Packages whose ``__init__`` re-exports names from beyond its own directory.
+
+    Such a package is a user entry point (``tilefoundry``, ``tilefoundry.dsl``);
+    its own C3 and C11 findings carry a per-file ignore, and C11 lets any module
+    import names from it.
+    """
+    found = set()
     for info in modules.values():
-        if info.exports is None:
+        if info.is_package and info.first_party:
+            for node in info.tree.body:
+                if isinstance(node, ast.ImportFrom) and node.module != "__future__":
+                    source = resolve_from(info.name, True, node) if node.level else (node.module or "")
+                    if source.split(".")[0] in internal and any(
+                        import_problem(info.directory, True, node, source, alias.name, modules, frozenset())
+                        for alias in node.names
+                    ):
+                        found.add(info.name)
+    return frozenset(found)
+
+
+def check_exports(info: ModuleInfo) -> Iterator[Violation]:
+    """C3 — a module states its exports; an ``__init__.py`` only re-exports what it imports.
+
+    How: a module other than ``__init__.py`` assigns a literal list or tuple of
+    strings to ``__all__``. An ``__init__.py`` holds only its docstring and ``from``
+    imports, so it writes no ``__all__``; a user entry point that needs one for
+    ``import *`` carries a per-file ignore.
+    """
+    if not info.is_package:
+        if literal_exports(info.tree) is None:
             yield Violation(info.path, 1, "C3", "module has no literal __all__", info.name)
-        if info.is_package:
-            yield from check_init(info)
-        namespaces = {}
-        for node in ast.walk(info.tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name.split(".")[0] in internal:
-                        yield Violation(info.path, node.lineno, "C3", f"'import {alias.name}'; use 'from ... import ...'", info.name, alias.name)
-            elif isinstance(node, ast.ImportFrom):
-                source = resolve_from(info.name, info.is_package, node)
-                if source.split(".")[0] not in internal:
-                    continue
-                for alias in node.names:
-                    message = import_problem(info, node, source, alias.name, modules)
-                    target = f"{source}.{alias.name}" if f"{source}.{alias.name}" in modules else source
-                    if message:
-                        yield Violation(info.path, node.lineno, "C3", message, info.name, target)
-                    elif target != source and modules[target].is_package:
-                        namespaces[alias.asname or alias.name] = target
-        for node in ast.walk(info.tree):
-            if (
-                isinstance(node, ast.Attribute)
-                and isinstance(node.value, ast.Name)
-                and node.value.id in namespaces
-            ):
-                package = modules[namespaces[node.value.id]]
-                if package.exports is not None and node.attr not in package.exports:
-                    yield Violation(
-                        info.path, node.lineno, "C3",
-                        f"{node.value.id}.{node.attr} is not in {package.name}.__all__", info.name, package.name,
-                    )
-
-
-def import_problem(info: ModuleInfo, node: ast.ImportFrom, source: str, name: str, modules) -> str | None:
-    """Why ``from source import name`` breaks C3, or ``None``."""
-    if name == "*":
-        return f"star import from {source}"
-    directory = info.directory
-    submodule = f"{source}.{name}"
-    if source not in modules:
-        return None
-    if source == directory or within(directory, source):
-        if source == directory and info.is_package and node.level == 1 and submodule in modules:
-            return None
-        return f"imports its own or an ancestor package {source}"
-    if parent_of(source) == directory:
-        if node.level != 1:
-            return f"same-directory import from {source} must be 'from .{source.rpartition('.')[2]} import'"
-        exports = modules[source].exports
-        if submodule in modules:
-            if not modules[submodule].is_package:
-                return f"imports module {submodule} of another directory; import from its package"
-            if exports is not None and name not in exports:
-                return f"{name} is not in {source}.__all__"
-            return None
-        if exports is not None and name not in exports:
-            return f"{name} is not in {source}.__all__"
-        return None
-    if node.level != 0:
-        return f"relative import from another directory ({source}); use an absolute import from the package"
-    if not modules[source].is_package:
-        return f"imports module {source} of another directory; import from its package"
-    if submodule in modules and not modules[submodule].is_package:
-        return f"imports module {submodule} of another directory; import from its package"
-    exports = modules[source].exports
-    if exports is not None and name not in exports:
-        return f"{name} is not in {source}.__all__"
-    return None
-
-
-def check_init(info: ModuleInfo) -> Iterator[Violation]:
-    """C3: an ``__init__.py`` only re-exports."""
+        return
     for index, statement in enumerate(info.tree.body):
         if index == 0 and isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant):
             continue
-        if isinstance(statement, ast.ImportFrom) and (statement.module == "__future__" or statement.level == 1):
+        if isinstance(statement, ast.ImportFrom):
             continue
-        if isinstance(statement, ast.Assign) and [ast.unparse(t) for t in statement.targets] == ["__all__"]:
-            continue
-        yield Violation(info.path, statement.lineno, "C3", "__init__.py holds a statement other than re-exports and __all__", info.name)
+        yield Violation(info.path, statement.lineno, "C3", "__init__.py holds a statement other than its docstring and re-exports", info.name)
 
 
-def registration_calls(info: ModuleInfo) -> Iterator[tuple[ast.Call, ast.expr]]:
-    """Calls to ``register`` / ``register_*`` with their key argument."""
+def check_import_forms(info: ModuleInfo, modules, internal, entry_points) -> Iterator[Violation]:
+    """C11 import forms and C10 namespace rebinding, for one file.
+
+    C11: no ``import a.b`` of a first-party module; each ``from source import name``
+    passes ``import_problem``; each ``namespace.member`` read names a member of that
+    module's ``__all__`` (dunders and modules with a module-level ``__getattr__``
+    exempt). C10: no parameter, local, loop, ``with``/``except`` target, function or
+    class definition, or module-level assignment takes an imported namespace's name.
+    """
+    namespaces = {}
     for node in ast.walk(info.tree):
-        if not isinstance(node, ast.Call):
-            continue
-        name = call_name(node).rpartition(".")[2]
-        if name != "register" and not name.startswith("register_"):
-            continue
-        if node.args:
-            yield node, node.args[0]
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if "." in alias.name and alias.name.split(".")[0] in internal:
+                    yield Violation(info.path, node.lineno, "C11", f"'import {alias.name}'; use 'from ... import ...'", info.name, alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            source = resolve_from(info.name, info.is_package, node) if node.level else (node.module or "")
+            if source.split(".")[0] not in internal:
+                continue
+            for alias in node.names:
+                message = import_problem(info.directory, info.is_package, node, source, alias.name, modules, entry_points)
+                child = f"{source}.{alias.name}"
+                target = child if child in modules else source
+                if message:
+                    yield Violation(info.path, node.lineno, "C11", message, info.name, target)
+                    continue
+                if child in modules:
+                    namespaces[alias.asname or alias.name] = child
+    up = parents(info.tree)
+    for node in ast.walk(info.tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in namespaces
+            and isinstance(node.ctx, ast.Load)
+        ):
+            package = modules[namespaces[node.value.id]]
+            dunder = node.attr.startswith("__") and node.attr.endswith("__")
+            dynamic = "__getattr__" in package.definitions or any(e.alias == "__getattr__" for e in package.imports)
+            if package.exports is not None and node.attr not in package.exports and not dunder and not dynamic:
+                yield Violation(info.path, node.lineno, "C11", f"{node.value.id}.{node.attr} is not in {package.name}.__all__", info.name, package.name)
+        rebound = rebinding(node, up)
+        if rebound in namespaces:
+            yield Violation(info.path, getattr(node, "lineno", 1), "C10", f"{rebound!r} rebinds the namespace imported from {namespaces[rebound]}", info.name)
 
 
-def check_registrations(modules, resolver: Resolver, classes: Classes, config: Config) -> Iterator[Violation]:
-    """C7: the composition root checks every Registry; a key's owner holds its registration."""
-    registry_classes = {resolver.canonical(name) for name in config.registry_classes}
-    target_base = resolver.canonical(config.target_base)
-    declared = {}
-    for info in modules.values():
-        for statement in info.tree.body:
-            if isinstance(statement, (ast.Assign, ast.AnnAssign)) and isinstance(statement.value, ast.Call):
-                if resolver.qualified(info.name, statement.value.func) in registry_classes:
-                    targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
-                    for target in targets:
-                        if isinstance(target, ast.Name):
-                            declared[f"{info.name}.{target.id}"] = (info, statement.lineno)
-    checked = set()
-    root = modules.get(config.composition_root)
-    if root is not None:
-        for node in ast.walk(root.tree):
-            if isinstance(node, ast.Call) and call_name(node).rpartition(".")[2] == "check_registries":
-                for argument in node.args:
-                    if isinstance(argument, ast.Dict):
-                        checked |= {resolver.qualified(root.name, key) for key in argument.keys if key is not None}
-    for name, (info, line) in declared.items():
-        if name not in checked and within(info.name, config.composition_root.split(".")[0]):
-            yield Violation(info.path, line, "C7", f"registry {name} is not checked by check_registries in {config.composition_root}", info.name)
-    for info in modules.values():
-        for call, key in registration_calls(info):
-            owner = registration_owner(info, call, key, resolver, classes, target_base, config)
-            if owner is not None:
-                yield Violation(info.path, call.lineno, "C7", owner, info.name)
-
-
-def registration_owner(info, call, key, resolver, classes, target_base, config) -> str | None:
-    """Why a registration is not written where its key's owner lives, or ``None``."""
-    elements = list(key.elts) if isinstance(key, ast.Tuple) else [key]
-    elements += [k.value for k in call.keywords if k.arg == "target"]
-    resolved = [resolver.qualified(info.name, element) for element in elements]
-    keys = [name for name in resolved if name in classes.nodes]
-    if not keys:
-        return None
-    for name in keys:
-        if target_base in classes.ancestors(name):
-            package = name.split(".")[0]
-            if not within(info.name, package):
-                return f"registration keyed by Target {name} belongs in package {package}"
-            return None
-    name = keys[0]
-    module = parent_of(name)
-    if any(within(module, package) for package in config.core_node_packages):
-        callee = resolver.expression(info.name, call.func)
-        registry_package = parent_of(callee[0]) if callee and callee[1] else (callee[0] if callee else "")
-        if callee and not within(info.name, registry_package):
-            return f"registration for core node {name} belongs in the registry's package {registry_package}"
-        return None
-    if module != info.name:
-        return f"registration for {name} belongs in its defining module {module}"
+def rebinding(node: ast.AST, up) -> str | None:
+    """The name *node* binds in a module or function scope, outside an import, if any."""
+    if isinstance(node, ast.arg):
+        return node.arg
+    if isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)):
+        return node.name
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return None if isinstance(up.get(node), ast.ClassDef) else node.name
+    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+        scope = up.get(node)
+        while scope is not None and not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef, ast.Module)):
+            scope = up.get(scope)
+        return None if isinstance(scope, ast.ClassDef) else node.id
     return None
 
 
-def check_values(resolver: Resolver, classes: Classes, config: Config) -> Iterator[Violation]:
-    """S8: subclasses of configured value bases are frozen dataclasses."""
-    bases = {resolver.canonical(name) for name in config.value_bases}
+def import_problem(directory: str, is_package: bool, node: ast.ImportFrom, source: str, name: str, modules, entry_points) -> str | None:
+    """Why ``from source import name`` breaks C11, or ``None``."""
+    if source in entry_points:
+        return None
+    if name == "*":
+        return f"star import from {source}"
+    if source not in modules:
+        return None
+    child = modules.get(f"{source}.{name}")
+    exports = modules[source].exports
+    namespace = child is not None and (child.is_package or name in (exports or ()))
+    leaf = source.rpartition(".")[2]
+    if source == directory:
+        if node.level == 1 and child is not None:
+            return None
+        return f"imports its own package {source}"
+    if within(directory, source):
+        if namespace:
+            return None
+        return f"imports {name} from its ancestor package {source}; import only subpackages or exported modules of an ancestor"
+    if parent_of(source) == directory:
+        if node.level != 1:
+            return f"same-directory import from {source} must be 'from .{leaf} import'"
+        if child is not None and not namespace:
+            return f"imports module {child.name} of another directory; export it from {source} first"
+        if child is None and exports is not None and name not in exports:
+            return f"{name} is not in {source}.__all__"
+        return None
+    if node.level != 0:
+        return f"relative import from another directory ({source}); use an absolute import"
+    if child is None:
+        return f"imports {name} from another directory; write 'from {parent_of(source)} import {leaf}' and use {leaf}.{name}"
+    if not namespace:
+        return f"imports module {child.name} of another directory; export it from {source} first"
+    return None
+
+
+def frozen_dataclass(node: ast.ClassDef) -> bool:
+    """Whether *node* is decorated ``@dataclass(frozen=True)``."""
+    return any(
+        isinstance(d, ast.Call)
+        and decorator_name(d).rpartition(".")[2] == "dataclass"
+        and any(k.arg == "frozen" and isinstance(k.value, ast.Constant) and k.value.value is True for k in d.keywords)
+        for d in node.decorator_list
+    )
+
+
+def check_values(classes: Classes) -> Iterator[Violation]:
+    """S8 — a value class is a frozen dataclass whose ``__post_init__`` writes its own fields.
+
+    A class with a frozen-dataclass ancestor that declares fields of its own (non-
+    ``ClassVar`` annotations) must be ``@dataclass(frozen=True)``, or those are not
+    fields. In a frozen dataclass's ``__post_init__``, each ``object.__setattr__(self,
+    "<name>", ...)`` names an annotated field of the class or of an ancestor.
+    """
+    frozen = {key for key, (_, node) in classes.nodes.items() if frozen_dataclass(node)}
     for key, (info, node) in classes.nodes.items():
-        if not (bases & classes.ancestors(key)):
-            continue
-        frozen = any(
-            isinstance(d, ast.Call)
-            and decorator_name(d).rpartition(".")[2] == "dataclass"
-            and any(k.arg == "frozen" and isinstance(k.value, ast.Constant) and k.value.value is True for k in d.keywords)
-            for d in node.decorator_list
+        own_fields = any(
+            isinstance(s, ast.AnnAssign) and isinstance(s.target, ast.Name) and "ClassVar" not in ast.unparse(s.annotation)
+            for s in node.body
         )
-        if not frozen:
+        if own_fields and not frozen_dataclass(node) and frozen & classes.ancestors(key):
             yield Violation(info.path, node.lineno, "S8", f"value class {node.name} is not @dataclass(frozen=True)", info.name)
+        if key not in frozen:
+            continue
         fields = classes.fields(key)
         for statement in node.body:
             if isinstance(statement, ast.FunctionDef) and statement.name == "__post_init__":
@@ -733,22 +851,26 @@ def check_values(resolver: Resolver, classes: Classes, config: Config) -> Iterat
                             yield Violation(info.path, call.lineno, "S8", f"__post_init__ of {node.name} writes {ast.unparse(field)}, not one of its fields", info.name)
 
 
-def check_constructors(modules) -> Iterator[Violation]:
-    """S9: ``make_*`` returns a class defined in another module."""
-    for info in modules.values():
-        local_classes = {n.name for n in info.tree.body if isinstance(n, ast.ClassDef)}
-        for node in info.tree.body:
-            if not isinstance(node, ast.FunctionDef) or not node.name.startswith("make_"):
-                continue
-            if node.returns is None:
-                yield Violation(info.path, node.lineno, "S9", f"{node.name} has no return annotation", info.name)
-                continue
-            returns = node.returns
-            if isinstance(returns, ast.Constant) and isinstance(returns.value, str):
-                returns = ast.parse(returns.value, mode="eval").body
-            named = {n.id for n in ast.walk(returns) if isinstance(n, ast.Name)}
-            if named & local_classes:
-                yield Violation(info.path, node.lineno, "S9", f"{node.name} returns a class of its own module; write a @classmethod from_*", info.name)
+def check_constructors(info: ModuleInfo) -> Iterator[Violation]:
+    """S9 — a ``make_*`` function returns a class defined in another module.
+
+    How: a module-level ``make_*`` function needs a return annotation, and the
+    annotation may not name a class defined in the same module (that is a
+    ``@classmethod from_*``).
+    """
+    local_classes = {n.name for n in info.tree.body if isinstance(n, ast.ClassDef)}
+    for node in info.tree.body:
+        if not isinstance(node, ast.FunctionDef) or not node.name.startswith("make_"):
+            continue
+        if node.returns is None:
+            yield Violation(info.path, node.lineno, "S9", f"{node.name} has no return annotation", info.name)
+            continue
+        returns = node.returns
+        if isinstance(returns, ast.Constant) and isinstance(returns.value, str):
+            returns = ast.parse(returns.value, mode="eval").body
+        named = {n.id for n in ast.walk(returns) if isinstance(n, ast.Name)}
+        if named & local_classes:
+            yield Violation(info.path, node.lineno, "S9", f"{node.name} returns a class of its own module; write a @classmethod from_*", info.name)
 
 
 def words(name: str) -> list[str]:
@@ -777,34 +899,44 @@ def stutters(name: str, package: str) -> bool:
     return any(have[i : i + len(want)] == want for i in range(len(have) - len(want) + 1))
 
 
-def check_names(modules) -> Iterator[Violation]:
-    """S11: names do not repeat their package's name."""
-    for info in modules.values():
-        package = info.directory.rpartition(".")[2]
-        if not info.is_package and stutters(info.path.stem, package):
-            yield Violation(info.path, 1, "S11", f"file {info.path.name} repeats its package name {package!r}", info.name)
-        for node in info.tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                exported = info.exports is None or node.name in info.exports
-                if exported and not is_private(node.name) and stutters(node.name, package):
-                    yield Violation(info.path, node.lineno, "S11", f"{node.name} repeats its package name {package!r}", info.name)
+def check_names(info: ModuleInfo, modules) -> Iterator[Violation]:
+    """S11 — a public name or package export does not repeat its package's name.
+
+    ``words`` splits a CapWords or snake_case name into lower-case words; ``stutters``
+    reports a name whose words contain the package name's words in order, unless the
+    name is exactly the package name (``target.Target``). File names are not checked.
+    """
+    package = info.directory.rpartition(".")[2]
+    for node in info.tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            exported = info.exports is None or node.name in info.exports
+            if exported and not is_private(node.name) and stutters(node.name, package):
+                yield Violation(info.path, node.lineno, "S11", f"{node.name} repeats its package name {package!r}", info.name)
+    if info.is_package and info.exports:
+        own = info.name.rpartition(".")[2]
+        for name in sorted(info.exports):
+            if stutters(name, own) and f"{info.name}.{name}" not in modules:
+                yield Violation(info.path, 1, "S11", f"{info.name} exports {name}, which repeats the package name {own!r}", info.name)
 
 
 def run(config: Config) -> list[Violation]:
-    """All violations of the configured tree."""
+    """All violations of the repository, after the per-file ignores."""
     modules = collect(config)
-    internal = tuple(sorted({root.name for root in config.roots}))
+    internal = tuple(sorted({info.name.split(".")[0] for info in modules.values() if info.first_party}))
     resolver = Resolver(modules, internal)
     classes = Classes(modules, resolver)
-    found = []
+    entry_points = facades(modules, internal)
+    found = list(check_values(classes))
     for info in modules.values():
-        found.extend(check_module(info, config))
-    found.extend(check_imports(modules, internal))
-    found.extend(check_registrations(modules, resolver, classes, config))
-    found.extend(check_values(resolver, classes, config))
-    found.extend(check_constructors(modules))
-    found.extend(check_names(modules))
-    return sorted(set(found), key=lambda v: (str(v.path), v.line, v.rule, v.message))
+        if config.ignored(info.path, "ALL"):
+            continue
+        found.extend(check_module(info))
+        found.extend(check_exports(info))
+        found.extend(check_import_forms(info, modules, internal, entry_points))
+        found.extend(check_constructors(info))
+        found.extend(check_names(info, modules))
+    kept = {v for v in found if not config.ignored(v.path, v.rule)}
+    return sorted(kept, key=lambda v: (str(v.path), v.line, v.rule, v.message))
 
 
 def report(violations: Sequence[Violation]) -> str:

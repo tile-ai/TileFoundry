@@ -10,74 +10,65 @@ rotation because it is linear in q and k, ``max`` does not.
 from __future__ import annotations
 
 from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
-from tilefoundry.ir.hir.nn.rope import RoPE
-from tilefoundry.ir.types import (
-    DType,
-    Layout,
-    Mesh,
-    Topology,
-    TupleType,
-    make_shard_tensor_type,
-    make_tensor_type,
-)
-from tilefoundry.ir.types.shard_layout import Partial
+from tilefoundry.ir import expr, types, utils
+from tilefoundry.ir.hir import nn
 
-_BF = DType.bf16
-_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
+_BF = expr.DType.bf16
+_M = types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",))
 
 
 def _rope_inputs(q_shape, k_shape, *, q=None, k=None, cos=None, sin=None, pos=None):
     """The (q, k, cos, sin, pos) input types for a RoPE call."""
     return (
-        q if q is not None else make_tensor_type(q_shape, _BF),
-        k if k is not None else make_tensor_type(k_shape, _BF),
-        cos if cos is not None else make_tensor_type((4096, q_shape[-1]), _BF),
-        sin if sin is not None else make_tensor_type((4096, q_shape[-1]), _BF),
-        pos if pos is not None else make_tensor_type((1,), DType.i32),
+        q if q is not None else types.TensorType.from_shape(q_shape, _BF),
+        k if k is not None else types.TensorType.from_shape(k_shape, _BF),
+        cos if cos is not None else types.TensorType.from_shape((4096, q_shape[-1]), _BF),
+        sin if sin is not None else types.TensorType.from_shape((4096, q_shape[-1]), _BF),
+        pos if pos is not None else types.TensorType.from_shape((1,), expr.DType.i32),
     )
 
 
 CASES = (
     OpCase(
         "odd_head_dim",
-        RoPE(),
+        nn.RoPE(),
         _rope_inputs((1, 32, 127), (1, 4, 127)),
         error=ExpectedError(match="head_dim 127 must be even"),
     ),
     OpCase(
         "mismatched_head_dims",
-        RoPE(),
+        nn.RoPE(),
         _rope_inputs((1, 32, 128), (1, 4, 64)),
         error=ExpectedError(match="!= k head_dim"),
     ),
     OpCase(
         "mismatched_ranks",
-        RoPE(),
+        nn.RoPE(),
         _rope_inputs((1, 32, 128), (32, 128)),
         error=ExpectedError(match="q rank 3 != k rank 2"),
     ),
     OpCase(
         "partial_sum_q_passes",
-        RoPE(),
+        nn.RoPE(),
         _rope_inputs(
             (1, 32, 128),
             (1, 4, 128),
-            q=make_shard_tensor_type((1, 32, 128), mesh=_M, attrs=(Partial("sum"),), dtype=_BF),
+            q=utils.make_shard_tensor_type((1, 32, 128), mesh=_M, attrs=(types.Partial("sum"),), dtype=_BF),
         ),
-        type=TupleType(
+        type=types.TupleType(
             fields=(
-                make_shard_tensor_type((1, 32, 128), mesh=_M, attrs=(Partial("sum"),), dtype=_BF),
-                make_tensor_type((1, 4, 128), _BF),
+                utils.make_shard_tensor_type((1, 32, 128), mesh=_M, attrs=(types.Partial("sum"),), dtype=_BF),
+                types.TensorType.from_shape((1, 4, 128), _BF),
             )
         ),
     ),
     OpCase(
         "partial_max_q_errors",
-        RoPE(),
+        nn.RoPE(),
         _rope_inputs(
             (1, 32, 128),
             (1, 4, 128),
-            q=make_shard_tensor_type((1, 32, 128), mesh=_M, attrs=(Partial("max"),), dtype=_BF),
+            q=utils.make_shard_tensor_type((1, 32, 128), mesh=_M, attrs=(types.Partial("max"),), dtype=_BF),
         ),
         error=ExpectedError(match="RoPE"),
     ),

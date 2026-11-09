@@ -7,7 +7,7 @@ only two binaries select instructions; the other sites still need candidates.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 H = 4
 BT = 64
@@ -19,7 +19,7 @@ T_LEN = NC * BT
 
 @module(
     entry="chunk_rmsnorm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 132), Topology("thread", 128)),
 )
 class ChunkRmsNorm:

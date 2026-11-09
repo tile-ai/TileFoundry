@@ -1,10 +1,34 @@
+"""Layouts: shape and strides of an arrangement, the swizzle functor, and their application."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
 
-from .int_tuple import flatten as _flat
+from tilefoundry import services
+from tilefoundry.ir import expr
+
+from . import int_tuple
 from .int_tuple import product
+from .stride import compact_row_major
+
+__all__ = [
+    "ComposedLayout",
+    "Layout",
+    "LayoutBase",
+    "NotProjectableError",
+    "Swizzle",
+    "apply",
+    "flat_shape",
+    "flat_stride",
+    "flatten",
+    "get",
+    "normalize_strides",
+    "rank",
+    "size",
+    "take",
+    "unflatten",
+]
 
 
 class LayoutBase:
@@ -12,10 +36,11 @@ class LayoutBase:
 
     @property
     def domain_rank(self) -> int:
+        """How many modes the domain shape has once flattened."""
         return len(flatten(self.shape))
 
 
-class NotProjectable(ValueError):
+class NotProjectableError(ValueError):
     """A layout cannot serve as a mesh execution scope (not inverse-projectable)."""
 
 
@@ -27,33 +52,30 @@ class Layout(LayoutBase):
     strides: Optional[tuple["ShapeDim", ...]] = None
 
     def __post_init__(self):
+        """Fill in compact row-major strides when none are stated."""
         if self.strides is not None:
             return
-        from .stride import compact_row_major  # noqa: PLC0415
-
-        def canonical(mode):
-            if isinstance(mode, tuple):
-                return tuple(canonical(child) for child in mode)
-            if isinstance(mode, int):
-                return mode
-            from .dim import Constant  # noqa: PLC0415
-
-            return (
-                mode.value if isinstance(mode, Constant) and isinstance(mode.value, int) else mode
-            )
-
-        def multiply(a, b):
-            if isinstance(a, int) and isinstance(b, int):
-                return a * b
-            from .dim import DimMul, simplify_dim  # noqa: PLC0415
-
-            return simplify_dim(DimMul, (a, b))
-
-        shape = canonical(tuple(self.shape))
+        shape = canonical_mode(tuple(self.shape))
         object.__setattr__(self, "shape", shape)
         object.__setattr__(
-            self, "strides", _normalize_strides(shape, compact_row_major(shape, mul=multiply))
+            self, "strides", normalize_strides(shape, compact_row_major(shape, mul=dim_multiply))
         )
+
+
+def canonical_mode(mode):
+    """*mode* with every integer ``Constant`` replaced by its plain integer."""
+    if isinstance(mode, tuple):
+        return tuple(canonical_mode(child) for child in mode)
+    if isinstance(mode, int):
+        return mode
+    return mode.value if isinstance(mode, expr.Constant) and isinstance(mode.value, int) else mode
+
+
+def dim_multiply(a, b):
+    """The product of two extents: an integer when both are, else a dimension expression."""
+    if isinstance(a, int) and isinstance(b, int):
+        return a * b
+    return services.simplify_dim("mul", (a, b))
 
 
 @dataclass(frozen=True)
@@ -76,6 +98,7 @@ class Swizzle:
     shift: int
 
     def __post_init__(self) -> None:
+        """Refuse a swizzle that is not a ``Swizzle<B,M,S>``."""
         for name in ("bits", "base", "shift"):
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool):
@@ -115,27 +138,27 @@ class Swizzle:
         moved = selected >> self.shift if self.shift >= 0 else selected << -self.shift
         return offset ^ moved
 
-
-def make_swizzle(active_y: int, active_z: int) -> Swizzle:
-    """CuTe ``make_swizzle<Y,Z>()``: build the swizzle XORing *Y* onto *Z*."""
-    bits_y, bits_z = active_y.bit_count(), active_z.bit_count()
-    if bits_y != bits_z:
-        raise NotImplementedError(
-            f"composition: the Y mask {active_y:#x} holds {bits_y} bits and the Z "
-            f"mask {active_z:#x} holds {bits_z}; only an equal-width pair is a "
-            f"Swizzle"
-        )
-    if bits_y == 0:
-        return Swizzle(0, 0, 0)
-    trailing_y = (active_y & -active_y).bit_length() - 1
-    trailing_z = (active_z & -active_z).bit_length() - 1
-    swizzle = Swizzle(bits_y, min(trailing_y, trailing_z), trailing_y - trailing_z)
-    if swizzle.swizzle_code != (active_y | active_z):
-        raise NotImplementedError(
-            f"composition: the mask pair ({active_y:#x}, {active_z:#x}) is not a "
-            f"Swizzle<B,M,S>; its bits are not two contiguous equal-width runs"
-        )
-    return swizzle
+    @classmethod
+    def from_active(cls, active_y: int, active_z: int) -> Swizzle:
+        """CuTe ``make_swizzle<Y,Z>()``: build the swizzle XORing *Y* onto *Z*."""
+        bits_y, bits_z = active_y.bit_count(), active_z.bit_count()
+        if bits_y != bits_z:
+            raise NotImplementedError(
+                f"composition: the Y mask {active_y:#x} holds {bits_y} bits and the Z "
+                f"mask {active_z:#x} holds {bits_z}; only an equal-width pair is a "
+                f"Swizzle"
+            )
+        if bits_y == 0:
+            return cls(0, 0, 0)
+        trailing_y = (active_y & -active_y).bit_length() - 1
+        trailing_z = (active_z & -active_z).bit_length() - 1
+        swizzle = cls(bits_y, min(trailing_y, trailing_z), trailing_y - trailing_z)
+        if swizzle.swizzle_code != (active_y | active_z):
+            raise NotImplementedError(
+                f"composition: the mask pair ({active_y:#x}, {active_z:#x}) is not a "
+                f"Swizzle<B,M,S>; its bits are not two contiguous equal-width runs"
+            )
+        return swizzle
 
 
 @dataclass(frozen=True)
@@ -157,6 +180,7 @@ class ComposedLayout(LayoutBase):
 
     @property
     def shape(self) -> tuple:
+        """The domain shape: the outer layout's, else the inner one's."""
         domain = self.outer if self.outer is not None else self.inner
         if domain is None or isinstance(domain, Swizzle):
             return ()
@@ -165,12 +189,12 @@ class ComposedLayout(LayoutBase):
 
 def flat_shape(layout: Layout) -> tuple[int, ...]:
     """Return CuTe ``flatten(layout.shape())`` as a flat tuple."""
-    return _flat(layout.shape)
+    return int_tuple.flatten(layout.shape)
 
 
 def flat_stride(layout: Layout) -> tuple[int, ...]:
     """Flatten a concrete layout's strides."""
-    return _flat(layout.strides)
+    return int_tuple.flatten(layout.strides)
 
 
 def apply(layout: Layout | ComposedLayout, coord: int) -> int:
@@ -181,7 +205,7 @@ def apply(layout: Layout | ComposedLayout, coord: int) -> int:
     ``Swizzle`` is exactly a mapping on that index.
     """
     if isinstance(layout, ComposedLayout):
-        return _apply_any(layout, coord)
+        return apply_any(layout, coord)
     shape = flat_shape(layout)
     stride = flat_stride(layout)
     idx = 0
@@ -192,7 +216,7 @@ def apply(layout: Layout | ComposedLayout, coord: int) -> int:
     return idx
 
 
-def _apply_any(layout, x: int) -> int:
+def apply_any(layout, x: int) -> int:
     """Apply a ``Layout`` / ``ComposedLayout`` (``None`` ≡ identity) to ``x``."""
     if layout is None:
         return x
@@ -201,11 +225,12 @@ def _apply_any(layout, x: int) -> int:
     if isinstance(layout, Layout):
         return apply(layout, x)
     if isinstance(layout, ComposedLayout):
-        return _apply_any(layout.inner, layout.offset + _apply_any(layout.outer, x))
-    raise NotProjectable(f"cannot apply layout of type {type(layout).__name__}")
+        return apply_any(layout.inner, layout.offset + apply_any(layout.outer, x))
+    raise NotProjectableError(f"cannot apply layout of type {type(layout).__name__}")
 
 
 def size(layout: Layout) -> int:
+    """The number of positions in the layout's domain."""
     return product(layout.shape)
 
 
@@ -217,24 +242,22 @@ def flatten(layout):
     comes back.
     """
     if not isinstance(layout, LayoutBase):
-        return _flat(layout)
+        return int_tuple.flatten(layout)
     if isinstance(layout, ComposedLayout):
         return flatten(layout.outer) if layout.outer is not None else Layout((), ())
     strides = layout.strides
     return Layout(
-        shape=_flat(layout.shape),
-        strides=_flat(strides),
+        shape=int_tuple.flatten(layout.shape),
+        strides=int_tuple.flatten(strides),
     )
 
 
 def unflatten(layout: LayoutBase, profile) -> "Layout":
     """CuTe ``unflatten``: a flat arrangement nested to *profile*'s shape."""
-    from .int_tuple import unflatten as unflatten_tuple  # noqa: PLC0415 - cycle guard
-
     strides = layout.strides
     return Layout(
-        shape=unflatten_tuple(tuple(layout.shape), profile),
-        strides=unflatten_tuple(tuple(strides), profile),
+        shape=int_tuple.unflatten(tuple(layout.shape), profile),
+        strides=int_tuple.unflatten(tuple(strides), profile),
     )
 
 
@@ -262,55 +285,13 @@ def take(layout: LayoutBase, begin: int, end: int) -> "Layout":
     )
 
 
-__all__ = [
-    "LayoutBase",
-    "NotProjectable",
-    "apply",
-    "flatten",
-    "size",
-    "unflatten",
-    "Layout",
-    "Swizzle",
-    "ComposedLayout",
-    "flat_shape",
-    "flat_stride",
-    "get",
-    "make_swizzle",
-    "rank",
-    "normalize_layout",
-    "take",
-]
-
-
-def _normalize_strides(shape, strides):
+def normalize_strides(shape, strides):
+    """*strides* with a zero step wherever the matching extent is one."""
     if isinstance(shape, tuple):
         return tuple(
-            _normalize_strides(one, step) for one, step in zip(shape, strides, strict=True)
+            normalize_strides(one, step) for one, step in zip(shape, strides, strict=True)
         )
-    from .dim import Constant  # noqa: PLC0415
-
-    extent = shape.value if isinstance(shape, Constant) else shape
+    extent = shape.value if isinstance(shape, expr.Constant) else shape
     return (
         0 if isinstance(extent, int) and not isinstance(extent, bool) and extent == 1 else strides
     )
-
-
-def normalize_layout(layout: LayoutBase) -> LayoutBase:
-    """Normalize unit leaves without changing modes, placement or addresses."""
-    from dataclasses import replace  # noqa: PLC0415
-
-    if isinstance(layout, Layout):
-        return replace(layout, strides=_normalize_strides(layout.shape, layout.strides))
-    if isinstance(layout, ComposedLayout):
-        return replace(
-            layout,
-            outer=normalize_layout(layout.outer) if layout.outer is not None else None,
-            inner=normalize_layout(layout.inner)
-            if isinstance(layout.inner, LayoutBase)
-            else layout.inner,
-        )
-    from .shard_layout import ShardLayout  # noqa: PLC0415
-
-    if isinstance(layout, ShardLayout):
-        return replace(layout, layout=normalize_layout(layout.layout))
-    raise TypeError(f"not a tensor layout: {type(layout).__name__}")

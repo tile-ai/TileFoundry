@@ -5,14 +5,13 @@ from __future__ import annotations
 import torch
 
 from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
-from tilefoundry.ir.hir.math.clamp import Clamp
-from tilefoundry.ir.types import Layout, Mesh, Topology, make_shard_tensor_type
-from tilefoundry.ir.types.shard_layout import Partial
+from tilefoundry.ir import types, utils
+from tilefoundry.ir.hir import math
 
-_OP = Clamp(min_val=-1.0, max_val=1.0)
-_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
-_PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
-_PMAX = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("max"),))
+_OP = math.Clamp(min_val=-1.0, max_val=1.0)
+_M = types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",))
+_PSUM = utils.make_shard_tensor_type((16, 8), mesh=_M, attrs=(types.Partial("sum"),))
+_PMAX = utils.make_shard_tensor_type((16, 8), mesh=_M, attrs=(types.Partial("max"),))
 
 
 def _make_clamp_scalar_bounds_match_torch_reference() -> OpCase:

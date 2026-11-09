@@ -1,41 +1,40 @@
+"""HIR pointwise ``ReLU`` Op."""
+
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.utils import reject_partials
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    identity_relations,
-    register_access_relation,
-)
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
-_COMMUTES_WITH = frozenset({"max", "min"})
+COMMUTES_WITH = frozenset({"max", "min"})
 
 
-@register_op(dialect='tf', category='nn')
-class ReLU(Op):
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
+@expr.register_op(dialect='tf', category='nn')
+class ReLU(expr.Op):
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
 
 
-@register_typeinfer(ReLU)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(ReLU)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     x_ty = ctx.type_of(call.args[0])
-    reject_partials("x", x_ty.layout, commutes_with=_COMMUTES_WITH)
+    ir_utils.reject_partials("x", x_ty.layout, commutes_with=COMMUTES_WITH)
     return x_ty
 
 
-@register_eval(ReLU)
-def _eval_relu(ctx):
+@evaluator.register(ReLU)
+def eval_relu(ctx):
     x = ctx.args[0].tensor
-    held = torch.relu(x.tensor) if x.is_global else tuple((p, torch.relu(t)) for p, t in x.tensor)
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    held = utils.torch.relu(x.tensor) if x.is_global else tuple((p, utils.torch.relu(t)) for p, t in x.tensor)
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
-register_access_relation(ReLU)(identity_relations)
+access.register_relation(ReLU)(access.identity_relations)
+
+
+@cost.register(ReLU)
+def relu_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    return cost.elementwise(call, ctx)
+
+
+__all__ = ["ReLU"]

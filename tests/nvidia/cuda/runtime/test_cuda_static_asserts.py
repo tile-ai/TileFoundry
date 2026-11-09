@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _ROOT = Path(__file__).resolve().parents[4]
 _SOURCE = Path(__file__).resolve().parent / "cuda" / "static_asserts.cu"
@@ -95,7 +95,7 @@ def _source_line(error: str) -> int | None:
     return int(line) if Path(of or file).name == _SOURCE.name else None
 
 
-@pytest.mark.parametrize("arch", ["sm_90a", CudaTarget("nvidia.rtx_6000_ada").arch])
+@pytest.mark.parametrize("arch", ["sm_90a", cuda.Target("nvidia.rtx_6000_ada").arch])
 def test_static_asserts_baseline(arch: str) -> None:
     """The positive control, so that failing everywhere cannot read as passing.
 

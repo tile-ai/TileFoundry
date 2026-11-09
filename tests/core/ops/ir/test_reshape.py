@@ -21,25 +21,14 @@ from tests.core.ops.ir.op_case import (
     op_case_test,
     split_local_extents,
 )
-from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.types import (
-    Layout,
-    Mesh,
-    ShardLayout,
-    Topology,
-    make_shard_tensor_type,
-    make_tensor_type,
-)
-from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split, shard_layout_local_shape
-from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir import expr, types, utils
+from tilefoundry.ir.hir import sharding, tensor
 
-_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
+_M = types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",))
 
 
 def _reshape(new_shape):
-    return Reshape(new_shape=new_shape)
+    return tensor.Reshape(new_shape=new_shape)
 
 
 def _split_mesh_axes(ty) -> set:
@@ -49,7 +38,7 @@ def _split_mesh_axes(ty) -> set:
     public "did the sharding survive" signal, independent of which layout
     position a `Split` happens to reference internally.
     """
-    return {i for i, a in enumerate(ty.layout.attrs) if isinstance(a, Split)}
+    return {i for i, a in enumerate(ty.layout.attrs) if isinstance(a, types.Split)}
 
 
 def _partial_reductions(ty) -> dict:
@@ -58,7 +47,7 @@ def _partial_reductions(ty) -> dict:
     Mesh axes carrying a `Partial` in *ty*'s output layout, keyed by mesh
     axis and valued by reduction op.
     """
-    return {i: a.reduction for i, a in enumerate(ty.layout.attrs) if isinstance(a, Partial)}
+    return {i: a.reduction for i, a in enumerate(ty.layout.attrs) if isinstance(a, types.Partial)}
 
 
 @pytest.mark.parametrize(
@@ -72,21 +61,21 @@ def _partial_reductions(ty) -> dict:
 def test_view_reshape_derives_c_order(
     shape, strides, new_shape, expected
 ):
-    source = make_tensor_type(shape, layout=Layout(shape=shape, strides=strides))
+    source = types.TensorType.from_shape(shape, layout=types.Layout(shape=shape, strides=strides))
     ty = infer_call(_reshape(new_shape), source)
-    assert ty.layout == Layout(shape=new_shape, strides=expected)
-    assert infer_call(_reshape(new_shape), make_tensor_type(shape)).layout == Layout(
+    assert ty.layout == types.Layout(shape=new_shape, strides=expected)
+    assert infer_call(_reshape(new_shape), types.TensorType.from_shape(shape)).layout == types.Layout(
         shape=new_shape, strides=expected
     )
 
 
 def test_noncontiguous_reshape_uses_default_strides():
-    source = make_tensor_type((8, 16), layout=Layout(shape=(8, 16), strides=(1, 8)))
-    assert infer_call(_reshape((128,)), source).layout == Layout(shape=(128,), strides=(1,))
+    source = types.TensorType.from_shape((8, 16), layout=types.Layout(shape=(8, 16), strides=(1, 8)))
+    assert infer_call(_reshape((128,)), source).layout == types.Layout(shape=(128,), strides=(1,))
 
 
 def _make_unmaterialized_sharding_is_not_dropped_by_scalar_reshape():
-    source = make_shard_tensor_type((4, 8), storage=StorageKind.UMAT, mesh=_M, attrs=(Split(0),))
+    source = utils.make_shard_tensor_type((4, 8), storage=expr.StorageKind.UMAT, mesh=_M, attrs=(types.Split(0),))
     return OpCase(
         "umat_sharding_scalar_reshape", _reshape(()), (source,), error=ExpectedError(match="align")
     )
@@ -94,7 +83,7 @@ def _make_unmaterialized_sharding_is_not_dropped_by_scalar_reshape():
 
 def test_reshape_merge_keeps_split():
     """Merge: layout (16, 8) -> (128,); the Split-bound mesh axis survives."""
-    ty = infer_call(_reshape((128,)), make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),)))
+    ty = infer_call(_reshape((128,)), utils.make_shard_tensor_type((16, 8), mesh=_M, attrs=(types.Split(0),)))
     assert tuple(ty.shape) == (128,)
     assert _split_mesh_axes(ty) == {0}
 
@@ -108,10 +97,10 @@ def test_split_remaps_partial_carries():
     """
     ty = infer_call(
         _reshape((1, 32, 128)),
-        make_shard_tensor_type(
+        utils.make_shard_tensor_type(
             (32, 128),
-            mesh=Mesh((Topology("gpu", 4),), Layout((2, 2), (2, 1)), ("a", "b")),
-            attrs=(Split(0), Partial("sum")),
+            mesh=types.Mesh((types.Topology("gpu", 4),), types.Layout((2, 2), (2, 1)), ("a", "b")),
+            attrs=(types.Split(0), types.Partial("sum")),
         ),
     )
     assert tuple(ty.shape) == (1, 32, 128)
@@ -126,7 +115,7 @@ def test_reshape_split_divides_shard():
     outer sub-factor (4) is exactly the mesh extent, so the Split-bound mesh
     axis survives with local extent 1 ([shard §7.1.1](docs/spec/shard.md#711-layoutshape)).
     """
-    ty = infer_call(_reshape((4, 32)), make_shard_tensor_type((16, 8), mesh=_M, attrs=(Split(0),)))
+    ty = infer_call(_reshape((4, 32)), utils.make_shard_tensor_type((16, 8), mesh=_M, attrs=(types.Split(0),)))
     assert tuple(ty.shape) == (4, 32)
     assert _split_mesh_axes(ty) == {0}
     assert split_local_extents(ty) == [1]
@@ -143,21 +132,21 @@ def test_reshape_reshard_keeps_split_unaliased():
     layout dims, making a lost local extent observable as physical aliasing.
     """
     reshaped = infer_call(
-        _reshape((32, 128)), make_shard_tensor_type((4096,), mesh=_M, attrs=(Split(0),))
+        _reshape((32, 128)), utils.make_shard_tensor_type((4096,), mesh=_M, attrs=(types.Split(0),))
     )
     assert _split_mesh_axes(reshaped) == {0}
     assert split_local_extents(reshaped) == [1]
     sl = reshaped.layout
     resharded = infer_call(
-        Reshard(
-            layout=ShardLayout(
-                layout=Layout(shape=sl.layout.shape, strides=None), attrs=sl.attrs, mesh=sl.mesh
+        sharding.Reshard(
+            layout=types.ShardLayout(
+                layout=types.Layout(shape=sl.layout.shape, strides=None), attrs=sl.attrs, mesh=sl.mesh
             ),
-            storage=StorageKind.RMEM,
+            storage=expr.StorageKind.RMEM,
         ),
         reshaped,
     )
-    local = shard_layout_local_shape(resharded.layout)
+    local = types.shard_layout_local_shape(resharded.layout)
     strides = resharded.layout.layout.strides
     aliased = [
         i for i, (extent, stride) in enumerate(zip(local, strides)) if stride == 0 and extent > 1
@@ -168,34 +157,34 @@ def test_reshape_reshard_keeps_split_unaliased():
 
 
 def test_broadcast_reshape_reshard_commute():
-    source = make_tensor_type(
-        (1, 32, 128), layout=Layout(shape=(1, 32, 128), strides=(4096, 128, 1))
+    source = types.TensorType.from_shape(
+        (1, 32, 128), layout=types.Layout(shape=(1, 32, 128), strides=(4096, 128, 1))
     )
-    packed_layout = ShardLayout(
-        layout=Layout(shape=(1, 32, 128), strides=None), attrs=(Broadcast(),), mesh=_M
+    packed_layout = types.ShardLayout(
+        layout=types.Layout(shape=(1, 32, 128), strides=None), attrs=(types.Broadcast(),), mesh=_M
     )
-    reshaped_layout = ShardLayout(
-        layout=Layout(shape=(32, 128), strides=None), attrs=(Broadcast(),), mesh=_M
+    reshaped_layout = types.ShardLayout(
+        layout=types.Layout(shape=(32, 128), strides=None), attrs=(types.Broadcast(),), mesh=_M
     )
     resharded_then_reshaped = infer_call(
         _reshape((32, 128)),
-        infer_call(Reshard(layout=packed_layout, storage=StorageKind.SMEM), source),
+        infer_call(sharding.Reshard(layout=packed_layout, storage=expr.StorageKind.SMEM), source),
     )
     reshaped_then_resharded = infer_call(
-        Reshard(layout=reshaped_layout, storage=StorageKind.SMEM),
+        sharding.Reshard(layout=reshaped_layout, storage=expr.StorageKind.SMEM),
         infer_call(_reshape((32, 128)), source),
     )
     assert resharded_then_reshaped == reshaped_then_resharded
 
 
-_S = DimVar(name="seq_len", lo=1, hi=4095)
+_S = expr.DimVar(name="seq_len", lo=1, hi=4095)
 
 
 def _make_reshape_evaluate_dynamic_axis_inferred():
     torch.manual_seed(0)
     x = torch.randn(1, 6, 8)
     return OpCase(
-        "dynamic_axis_inferred", Reshape(new_shape=(1, _S, 2, 4)), (x,), value=x.reshape(1, 6, 2, 4)
+        "dynamic_axis_inferred", tensor.Reshape(new_shape=(1, _S, 2, 4)), (x,), value=x.reshape(1, 6, 2, 4)
     )
 
 
@@ -204,10 +193,10 @@ CASES = (
         "straddle_fails_closed",
         _reshape((3, 8)),
         (
-            make_shard_tensor_type(
+            utils.make_shard_tensor_type(
                 (6, 4),
-                mesh=Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("g",)),
-                attrs=(Split(0),),
+                mesh=types.Mesh((types.Topology("gpu", 2),), types.Layout((2,), (1,)), ("g",)),
+                attrs=(types.Split(0),),
             ),
         ),
         error=ExpectedError(match="align"),

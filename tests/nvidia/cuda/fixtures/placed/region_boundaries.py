@@ -1,12 +1,12 @@
 """Every legal region-boundary shape in one program, priced and round-tripped."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="run",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 2), Topology("thread", 4)),
 )
 class RegionBoundaries:

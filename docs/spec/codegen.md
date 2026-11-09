@@ -1,19 +1,18 @@
 # TileFoundry Spec — Codegen
 
-Codegen turns verified, lowered `tir.PrimFunction`s into a loadable artifact.
-It owns the whole producer side of the build: emitting per-target source,
-assembling each target's translation unit, and linking those units into one
-host-callable shared library. Loading that artifact and exposing it as a
-`RuntimeModule` is owned by [runtime](./runtime.md).
+Codegen turns verified, lowered `core.PrimFunction`s into a loadable artifact:
+it emits per-target source, assembles each target's translation unit, and links
+the units into one host-callable shared library. Loading that artifact as a
+`runtime.Module` is owned by [runtime](./runtime.md).
 
 ```mermaid
 flowchart LR
-    TIR["verified <b>tir.PrimFunction</b>s"]
+    TIR["verified <b>core.PrimFunction</b>s"]
     Emit["Target-resolved <b>LinkableModule</b>"]
     LM["<b>LinkableModule</b><br/>(per target)"]
     Link["<b>link</b>"]
     Linked["<b>LinkedModule</b><br/>artifact + metadata"]
-    RM["<b>RuntimeModule</b><br/>(see runtime)"]
+    RM["<b>runtime.Module</b><br/>(see runtime)"]
 
     TIR --> Emit --> LM --> Link --> Linked
     Linked -. runtime load .-> RM
@@ -25,22 +24,19 @@ flowchart LR
   enter codegen only with `emit="skeleton"`; HIR Ops are not emitted as bodies.
   Full emission encountering HIR reports its path and requires skeleton mode
   or prior lowering.
-- `CodegenOptions.emit` is `"full"` (default) or `"skeleton"` and lives in the
-  compile-wide `CodegenContext`. Emitters read it through
+- `codegen.Options.emit` is `"full"` (default) or `"skeleton"` and lives in the
+  compile-wide `codegen.Context`. Emitters read it through
   `ctx.codegen_context.options`; a missing compile context is an error.
   Skeleton emission retains callable signatures and replaces body statements
   with editable placeholders; target packages own their wrapper conventions.
-- Program emission and linking are owned by [§4.3](#43-linkedmodule);
-  runtime compilation entry points and loading are owned by
-  [runtime §1.6](./runtime.md#16-compilepy).
 - A module's functions are grouped by equal Target values in source order. Each
   group is emitted by the exact Target's resolved implementation into one
   `LinkableModule`.
 - The link step compiles every `LinkableModule` with its own toolchain and
-  links them into one `LinkedModule` — a host-callable shared library plus the
-  host-visible metadata the loader needs.
+  links them into one `LinkedModule` ([§4.3](#43-linkedmodule)).
 - Codegen does not run passes, does not load or launch device code, and does
-  not own the user-facing entry points (`compile` / `build` / `jit`).
+  not own the user-facing entry points (`compile` / `build` / `jit`), which are
+  owned by [runtime §1.6](./runtime.md#16-compiler).
 - **Host / device boundary.** A host unit invokes device code through its
   exported C ABI and MUST NOT depend on device-only types. The target-owned
   launcher reports refused launches to the host; no exception crosses that ABI.
@@ -65,7 +61,7 @@ class LinkableModule:
     emits: ClassVar[frozenset[EmitGranularity]] = frozenset({"full"})
 
     @classmethod
-    def create(cls, target: Target, owner: Module, functions, ctx) -> LinkableModule: ...
+    def create(cls, target: Target, owner: core.Module, functions, ctx) -> LinkableModule: ...
 ```
 
 - constraints:
@@ -79,7 +75,7 @@ class LinkableModule:
     naming the Target and requested granularity when unsupported. The CPU
     factory supports `"full"` and `"skeleton"`; device factories declare their
     supported granularities.
-  - CPU MUST bind `EmitContext` to `CpuCodegenContext` and `LinkableModule` to
+  - CPU MUST bind `EmitContext` to `cpu.Context` and `LinkableModule` to
     `HostLinkableModule`. Device packages bind their own implementations.
     Bindings select classes, never strings.
   - A factory writes each function twice: once as the declaration a caller sees,
@@ -87,27 +83,23 @@ class LinkableModule:
   - A second unequal device Target group MUST fail before any factory emits;
     multiple device architectures in one linked artifact are unsupported.
   - EmitContext and Linkable/Linked products MAY be subclassed through bindings.
-    The compile-wide `CodegenContext` and `LinkableFunction` have no resolution
+    The compile-wide `codegen.Context` and `LinkableFunction` have no resolution
     hook in this interface.
 
 ### 2.2 Per-Op handler registry
 
 ```python
-def handler(call: Call, ctx: CodegenContext) -> None: ...
+def handler(call: Call, ctx: EmitContext) -> None: ...
 ```
 
-- constraints:
-  - a handler is registered inside a concrete generator against its own target
-    ([visitor-registry §6](./visitor-registry.md#6-instance-3--codegen));
-    dispatch (matching `Evaluate` and selecting the handler) is owned by
-    visitor-registry.
-
-Dispatch is owned by [visitor-registry §6](./visitor-registry.md#6-instance-3--codegen). A handler
-receives the `Call` (the wrapped Op inside `Evaluate`) plus a `CodegenContext`,
+A handler is registered inside a concrete generator against its own target;
+dispatch is owned by
+[visitor-registry §6](./visitor-registry.md#6-instance-3--codegen). A handler
+receives the `Call` (the wrapped Op inside `Evaluate`) plus an `EmitContext`,
 and MUST emit through `ctx.emit(...)`; raw `print` / direct file writes are
 prohibited.
 
-### 2.3 `CodegenContext`
+### 2.3 `EmitContext`
 
 ```python
 class EmitContext:
@@ -138,7 +130,7 @@ class EmitContext:
     def local_extent(self, signature, axis: int) -> str: ...
 
 
-class CpuCodegenContext(EmitContext):
+class Context(EmitContext):  # codegen.cpu.Context
     """A compile writing the host unit: the shared context plus what a tensor is here."""
 ```
 
@@ -175,11 +167,9 @@ class CpuCodegenContext(EmitContext):
 
 ### 2.4 Effect Op dispatch
 
-Effect Ops such as `Copy` and `Fill` appear in Stmt
-position as `Evaluate(op, args)` rather than as Stmt subclasses. The
-walker matches `Evaluate` and dispatches on `type(callable)` through
-the handler registry. Handlers stay small; the runtime function they
-call carries the semantic load.
+Effect Ops such as `Copy` and `Fill` appear in Stmt position as
+`Evaluate(op, args)`. The walker dispatches on `type(callable)` through the
+handler registry.
 
 ## 3. Runtime-owned op dispatch
 
@@ -192,8 +182,6 @@ it MUST NOT select a target's runtime implementation tier.
 ### 4.1 `LinkableFunction`
 
 Defined in `codegen/linkable_function.py`.
-
-One lowered function's pre-link source, in both of its positions.
 
 ```python
 class LinkableFunction:
@@ -219,8 +207,6 @@ class LinkableFunction:
 
 Defined in `codegen/linkable_module.py`.
 
-One target's pre-link translation unit.
-
 ```python
 class LinkableModule:
     """One target's pre-link translation unit, assembled from its functions.
@@ -237,6 +223,7 @@ class LinkableModule:
     preamble: str
     functions: tuple[LinkableFunction, ...] = field(default_factory=tuple)
 
+    @property
     def source(self) -> str: ...
 ```
 
@@ -244,12 +231,13 @@ class LinkableModule:
   - `target` MUST be the generator/linker backend label, never an external
     Target registration name.
   - `language` MUST be the source-language extension; host units use `cpp`.
+  - `functions` MUST list the module's constituent `LinkableFunction`s, in
+    emission order.
   - `LinkableModule` MAY be subclassed to override `link(project)`. The default
     implementation MUST add its source to the shared project as
     `<target>_<index>.<language>`. `HostLinkableModule.link` MUST name its output
     `host.cpp`. Backend subclasses
     MUST own their language, compiler options, and runtime include paths.
-  - MUST list the module's constituent `LinkableFunction`s, in emission order.
   - `preamble` MUST carry what the unit states outside any function: includes,
     macros, unit-level template specializations, and device state emitted only
     where a function used it. It is a field because it is settled only once
@@ -298,20 +286,19 @@ class LinkedModule:
 - constraints:
   - `LinkedFunction.name` MUST be the dotted registration name;
     `signature` MUST retain the host C++ calling convention and its C++ name
-    ([§4.4](#44-signatures)). `link_function` creates this pair from a resolved `FunctionSymbol`.
+    ([§4.4](#44-signatures)). `LinkedFunction.create` builds this pair from a resolved `FunctionSymbol`.
   - `LinkedModule.functions` MUST list all CPU hosts on the Module's call paths,
     with the `Module.entry` host first when present; the loader binds the first
     ([runtime §1.4](./runtime.md#14-runtimeloaderpy)).
   - MUST carry the assembled host + device source — the diagnostic source the
-    runtime exposes as `RuntimeModule.source` ([runtime](./runtime.md)).
+    runtime exposes as `runtime.Module.source` ([runtime](./runtime.md)).
 
-`codegen/link_function.py` retains the per-function export helper;
 `codegen/link_module.py` exposes the whole-program and translation-unit entries:
 
 ```python
 def link_program(
-    mod: Module, *, workdir: str | Path,
-    options: CodegenOptions = CodegenOptions(),
+    mod: core.Module, *, workdir: str | Path,
+    options: Options = Options(),
 ) -> LinkedModule: ...
 
 
@@ -319,9 +306,6 @@ def link_modules(
     modules: tuple[LinkableModule, ...], *, workdir: str | Path,
     lib_name: str, functions: tuple[LinkedFunction, ...], host: Target, host_cxx: str = "g++",
 ) -> LinkedModule: ...
-
-
-def link_function(symbol: FunctionSymbol) -> LinkedFunction: ...
 
 
 class CMakeProject:
@@ -336,35 +320,28 @@ class CMakeProject:
 - constraints:
   - `link_program` MUST emit one `LinkableModule` per device context group and
     combine all selected CPU entries into one host group and one `host.cpp`.
-    Every group MUST use the same emission callback shape.
   - `link_modules` MUST create one `CMakeProject`, invoke each module's
     `link(project)`, then call `host.resolve(LinkedModule, project, functions)`.
-    The default `LinkedModule.create` MUST call `project.build(functions)`.
-    It MUST NOT select a
-    backend's toolchain by Target type. `link_function` retains per-export
-    metadata construction as the default `LinkedFunction.create`, reached through
-    the entry Target's `resolve(LinkedFunction, symbol)`.
+    The default `LinkedModule.create` MUST call `project.build(functions)`; it
+    MUST NOT select a backend's toolchain by Target type. Per-export metadata
+    comes from the entry Target's `resolve(LinkedFunction, symbol)`.
   - `CMakeProject` MUST write unique source names, collect enabled languages and
     include directories, and append target-owned CMake commands. Its `sources`
     mapping MUST preserve source insertion order. Reusing a source name MUST
     fail rather than overwrite the previous unit.
   - Core MUST assemble one CMake project and run one configure/build sequence.
     Compiler launcher settings such as ccache MUST remain effective. Backend
-    `LinkableModule` subclasses own compiler flags and include directories;
-    the resolution path MUST use class implementations, not callback fields.
+    `LinkableModule` subclasses own compiler flags and include directories.
   - Each target MUST directly include its packaged runtime header. Runtime
     include directories MUST be located through `importlib.resources`.
 
 `link_program` emits and links all CPU hosts on the Module's call paths without
 loading, placing the `Module.entry` host first when present, with launcher
 declarations deduplicated. Sources are written directly in `workdir`; the
-library is `workdir/build/lib<root Module name>.so`. The link step compiles each
-source unit with its own toolchain and links the units into one library.
-`LinkedModule` is consumed by the runtime loader ([runtime](./runtime.md));
-the concrete compiler commands are an implementation detail and not part of
-the contract. `build()` chooses a fresh
-work directory ([runtime §1.6](./runtime.md#16-compilepy)); the scaffold command
-chooses its output directory ([cli](./cli.md#scaffold)).
+library is `workdir/build/lib<root Module name>.so`. The concrete compiler
+commands are not part of the contract. `build()` chooses a fresh work directory
+([runtime §1.6](./runtime.md#16-compiler)); the scaffold command chooses its
+output directory ([cli](./cli.md#scaffold)).
 
 ### 4.4 Signatures
 
@@ -433,9 +410,8 @@ class CallableSignature(Signature):
     is no separate dynamic-dim sentinel. `dynamic_axes` are the axes it carries
     as a `DimVar`, and only those extents travel with the pointer.
   - a program id, a program-meta block and a launch argument have no IR
-    counterpart on purpose: those parameters do not exist in the IR at all,
-    which is what makes them hidden. Each is its own class, so whoever writes
-    one out dispatches on the type instead of reading the name.
+    counterpart: they are hidden parameters. Each is its own class, so whoever
+    writes one out dispatches on the type instead of reading the name.
   - one compiled function has three C++ conventions — the host entry, the
     launcher and the device kernel — and they differ only in `leading` and
     `trailing`. They MUST be three `CallableSignature` values; the class MUST
@@ -456,10 +432,9 @@ class CallableSignature(Signature):
   - `export_name(root, fn)` MUST join this same path with dots. For each HIR
     call path it equals `<root name>.<call path>`.
   - function paths reuse the IR definition traversal
-    ([core-ir §1](./core-ir.md#1-module)). This
-    traversal emits each definition once using its first DFS call path,
-    including index segments. These naming functions live in
-    `codegen/context_builder.py`, which produces FunctionSymbol
+    ([core-ir §1](./core-ir.md#1-module)): each definition is visited once at
+    its first DFS call path, including index segments. These naming functions
+    live in `codegen/context_builder.py`, which produces `FunctionSymbol`
     identities. Target conventions receive the resolved symbol and target;
     they MAY append target-owned suffixes but MUST NOT reconstruct paths.
     CPU functions use the mangled root.
@@ -483,16 +458,26 @@ class CallableSignature(Signature):
 
 ```python
 def program_id_params(
-    module: Module, target: Target
+    module: core.Module, target: Target
 ) -> tuple[ProgramIdSignature, ...]:
     """The ids a call into *module* has to carry for *target* to run it."""
     ...
 
 
-def symbol_table(module: Module, target: Target) -> Mapping[int, CallableSignature]:
-    """What every function in the tree is called by, before anything is emitted."""
-    ...
+class FunctionSymbolTable:
+    """Separate IR and generated-name namespaces shared by every emitter."""
+
+    by_function: Mapping[int, FunctionSymbol]
+
+    @property
+    def callables(self) -> Mapping[int, CallableSignature]:
+        """What every function in the tree is called by, before anything is emitted."""
+        ...
 ```
+
+`build_context(module, options)` in `codegen/context_builder.py` builds the table once
+per compile and holds it as `codegen.Context.symbols`. A `FunctionSymbol` pairs one
+function with its `symbol`, `export_name`, `owner`, `target` and `callable`.
 
 - constraints:
   - `program_id_params` is the one place that asks which levels supply their
@@ -500,15 +485,19 @@ def symbol_table(module: Module, target: Target) -> Mapping[int, CallableSignatu
     ([target §1](./target.md#1-target)), intersected with the levels
     the module's program names. A level stated that way has no register the
     device can read, so its id arrives with the call.
-  - `symbol_table` states one `CallableSignature` per function in the tree,
-    keyed by `id(fn)`, so a call site holds its callee and never asks which
-    module the callee lives in. Only device prototypes enter the Launch-target
-    symbol map. Variant identities carry symbol metadata for HIR device bodies;
-    their prototype selects them inside the kernel ([§5](#5-specialization-dispatch)).
+  - `FunctionSymbolTable.by_function` states one `FunctionSymbol` per function
+    in the tree, CPU and device, variants included, and `callables` its
+    `CallableSignature`, both keyed by `id(fn)`, so a call site holds its
+    callee and never asks which module the callee lives in. A symbol's
+    `callable` comes from `called_as` with the Target's callee convention.
+    A prototype's variants are selected inside its kernel
+    ([§5](#5-specialization-dispatch)).
   - a row is what a caller must write and nothing about what an emitter
-    produced. A device function appears as its launcher, because that is
-    the only convention a caller can reach; the kernel's own convention is not
-    in the table.
+    produced. The `symbols` an emitter reads through `EmitContext`
+    (`Context.for_group`) hold, for each function a Launch names whose caller or
+    callee is in the group, the launcher convention (`trailing=LAUNCH_ABI`) in place of the callee one; the
+    kernel's own convention is not in the table. Each Launch statement's
+    launcher signature is also kept in `Context.launch_callables`.
 
 ## 5. Specialization dispatch
 

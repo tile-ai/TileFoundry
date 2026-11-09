@@ -111,13 +111,13 @@ def _torch_fixed(
 def _bound(node):
     """A twin's loaded weights.
 
-    `_Twin` keeps them in `_bound` and exposes them only by filling a kernel's
+    A twin keeps them in `bound` and exposes them only by filling a kernel's
     `ConstTensor` parameters at call time (runtime §1.1). This file calls a
     kernel the authored Module does not declare, so it has to reach them
     directly; there is no public face for "the weights of this node" because
     under the contract nobody needs one.
     """
-    return node._bound
+    return node.bound
 
 
 class GraphedStep:

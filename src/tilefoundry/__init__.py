@@ -7,40 +7,30 @@ authoritative on physical layout.
 
 from __future__ import annotations
 
-from importlib.metadata import version as _distribution_version
+from importlib.metadata import version
 
-# ruff: noqa: I001 -- curated re-export order; alphabetical sort breaks staged imports.
-
-__version__ = _distribution_version("tilefoundry")
-
-
-from tilefoundry.ir.core import (
-    DispatchRegistry,
+from . import bootstrap
+from .compiler import Options as CompilerOptions
+from .compiler import build, compile, jit, normalize_to_module
+from .core import ShardTensor
+from .inspection.viewer import view
+from .ir import pattern
+from .ir.core import Stmt
+from .ir.expr import (
     Call,
     Constant,
+    DimVar,
+    DType,
     Expr,
     Op,
     ParameterInfo,
-    TypeInferContext,
     Var,
     VerifyError,
-    cost_evaluator_registry,
-    register_cost_evaluator,
-    register_typeinfer,
-    register_verify_stmt,
-    typeinfer_registry,
-    verify_stmt_registry,
 )
-
-
-from tilefoundry.ir.pattern import RangePattern, Pattern
-from tilefoundry.ir.types import DType, TensorType, TupleType, Type
-from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types import (
+from .ir.hir.tensor import TupleGetItem
+from .ir.types import (
     B,
     Broadcast,
-    V,
-    Varying,
     ComposedLayout,
     IntTuple,
     Layout,
@@ -53,48 +43,20 @@ from tilefoundry.ir.types import (
     ShardLayout,
     Split,
     Swizzle,
+    TensorType,
     Topology,
+    TupleType,
+    Type,
+    V,
+    Varying,
 )
+from .parser import func, intrinsic, module, prim_func
 
-
-from tilefoundry.ir.tir.stmt import Stmt
-from tilefoundry.core import ShardTensor
-
-
-from tilefoundry.ir.types import _register_dim_typeinfer
-
-
-from tilefoundry.ir import hir as _hir  # noqa: F401
-from tilefoundry.ir import tir as _tir  # noqa: F401
-
-
-from tilefoundry.visitor_registry import op_cost as _op_cost  # noqa: F401
-
-
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-
-
-from tilefoundry.script import func, intrinsic, prim_func
-from tilefoundry.module import module
-
-
-from tilefoundry.compile import build, compile, jit, normalize_to_module, CompilerOptions
-from tilefoundry.inspection.viewer import Viewer as _Viewer
-
-
-_register_dim_typeinfer()
-
-
-def view(root, *, port: int = 0, open_browser: bool = True) -> int:
-    """Start the interactive HIR viewer for *root* (Function or Module).
-
-    Thin wrapper around ``tilefoundry.inspection.viewer.Viewer(root).serve``.
-    """
-    return _Viewer(root).serve(port=port, open_browser=open_browser)
-
+__version__ = version("tilefoundry")
 
 __all__ = [
     "__version__",
+    "bootstrap",
     "ShardTensor",
     "Expr",
     "Var",
@@ -104,21 +66,12 @@ __all__ = [
     "TupleGetItem",
     "Op",
     "ParameterInfo",
-    "DispatchRegistry",
-    "typeinfer_registry",
-    "verify_stmt_registry",
-    "cost_evaluator_registry",
-    "register_typeinfer",
-    "register_verify_stmt",
-    "register_cost_evaluator",
-    "TypeInferContext",
     "VerifyError",
     "DType",
     "TensorType",
     "TupleType",
     "Type",
-    "Pattern",
-    "RangePattern",
+    "pattern",
     "DimVar",
     "IntTuple",
     "LayoutBase",
@@ -148,7 +101,3 @@ __all__ = [
     "CompilerOptions",
     "view",
 ]
-
-from tilefoundry.target.base import load_targets  # noqa: E402
-
-load_targets()

@@ -8,21 +8,10 @@ the shape the asking analysis declared.
 
 from __future__ import annotations
 
-from tilefoundry.analysis.facts import (
-    ExplicitMemoryLevelFacts,
-    ImplicitMemoryLevelFacts,
-    MemoryHierarchyFacts,
-    MemoryLevelRelation,
-    MemoryRelationKind,
-    PerformanceServiceFacts,
-    ThroughputFacts,
-)
-from tilefoundry.target.base import UnsupportedCapabilityError
-
-from .target import CudaTarget
+from tilefoundry import target
 
 
-def memory_hierarchy(target: CudaTarget, query: object = None) -> MemoryHierarchyFacts:
+def memory_hierarchy(tgt: "Target", query: object = None) -> target.MemoryHierarchyFacts:
     """The CUDA memory levels and how they are related.
 
     L1 has no capacity of its own: it and the shared-memory carveout divide one
@@ -30,23 +19,23 @@ def memory_hierarchy(target: CudaTarget, query: object = None) -> MemoryHierarch
     shared memory it asked for. That is stated as a capacity-sharing edge rather
     than as a number here, because only the program completes it.
     """
-    architecture = target.architecture
-    device = target.device
-    return MemoryHierarchyFacts(
+    architecture = tgt.architecture
+    device = tgt.device
+    return target.MemoryHierarchyFacts(
         explicit_levels=(
-            ExplicitMemoryLevelFacts(
+            target.ExplicitMemoryLevelFacts(
                 name="gmem",
                 capacity_bytes=device.hbm_capacity_bytes,
                 scope="device",
                 owner=device.gmem_owner,
             ),
-            ExplicitMemoryLevelFacts(
+            target.ExplicitMemoryLevelFacts(
                 name="smem",
                 capacity_bytes=architecture.shared_memory_per_cta_bytes,
                 scope="cta",
                 owner=architecture.smem_owner,
             ),
-            ExplicitMemoryLevelFacts(
+            target.ExplicitMemoryLevelFacts(
                 name="rmem",
                 capacity_bytes=architecture.registers_per_sm_32bit * 4,
                 scope="sm",
@@ -55,7 +44,7 @@ def memory_hierarchy(target: CudaTarget, query: object = None) -> MemoryHierarch
         )
         + (
             (
-                ExplicitMemoryLevelFacts(
+                target.ExplicitMemoryLevelFacts(
                     name="tmem",
                     capacity_bytes=architecture.tensor_memory_per_cta_bytes,
                     scope="cta",
@@ -66,16 +55,16 @@ def memory_hierarchy(target: CudaTarget, query: object = None) -> MemoryHierarch
             else ()
         ),
         implicit_levels=(
-            ImplicitMemoryLevelFacts(name="l1", capacity_bytes=None, scope="sm"),
-            ImplicitMemoryLevelFacts(
+            target.ImplicitMemoryLevelFacts(name="l1", capacity_bytes=None, scope="sm"),
+            target.ImplicitMemoryLevelFacts(
                 name="l2", capacity_bytes=device.l2_capacity_bytes, scope="device"
             ),
         ),
         relations=(
-            MemoryLevelRelation(kind=MemoryRelationKind.CACHES, near="l1", far="l2"),
-            MemoryLevelRelation(kind=MemoryRelationKind.CACHES, near="l2", far="gmem"),
-            MemoryLevelRelation(
-                kind=MemoryRelationKind.SHARES_CAPACITY_WITH,
+            target.MemoryLevelRelation(kind=target.MemoryRelationKind.CACHES, near="l1", far="l2"),
+            target.MemoryLevelRelation(kind=target.MemoryRelationKind.CACHES, near="l2", far="gmem"),
+            target.MemoryLevelRelation(
+                kind=target.MemoryRelationKind.SHARES_CAPACITY_WITH,
                 near="l1",
                 far="smem",
                 shared_capacity_bytes=architecture.unified_l1_shared_per_sm_bytes,
@@ -84,45 +73,45 @@ def memory_hierarchy(target: CudaTarget, query: object = None) -> MemoryHierarch
     )
 
 
-def _cards(target: CudaTarget) -> int:
+def card_count(tgt: "Target") -> int:
     """How many cards the deployment runs on; one when nobody said."""
-    return 1 if target.device_count is None else target.device_count
+    return 1 if tgt.device_count is None else tgt.device_count
 
 
-def parallel_units(target: CudaTarget, unit: str) -> int:
+def parallel_units(tgt: "Target", unit: str) -> int:
     """How many of *unit* the deployment runs at once.
 
     Both the divisor a per-unit rate is the deployment peak over, and the
     answer to how many instances of a level run together -- the same number,
     asked once. A target that never said how many cards is one card.
     """
-    cards = _cards(target)
+    cards = card_count(tgt)
     try:
         return {
             "gpu": cards,
-            "cta": cards * target.device.sm_count,
-            "thread": (cards * target.device.sm_count * target.architecture.max_threads_per_cta),
+            "cta": cards * tgt.device.sm_count,
+            "thread": (cards * tgt.device.sm_count * tgt.architecture.max_threads_per_cta),
         }[unit]
     except KeyError:
-        raise UnsupportedCapabilityError(
+        raise target.UnsupportedCapabilityError(
             f"cuda: no per-unit rate for topology level {unit!r}; the levels this "
             "target divides its peaks among are ('gpu', 'cta', 'thread')"
         ) from None
 
 
-def _asked(target: CudaTarget, query: object) -> tuple[str, int, int | None]:
+def asked(tgt: "Target", query: object) -> tuple[str, int, int | None]:
     """A query's level, running units and bytes in flight; only ``cta`` counts fewer."""
     unit, active, inflight = (*query, None)[:3] if isinstance(query, tuple) else (query, None, None)
     unit = "cta" if unit is None else str(unit)
-    share = parallel_units(target, unit)
+    share = parallel_units(tgt, unit)
     if active is None or unit != "cta":
         return unit, share, None
     return unit, min(active, share), inflight
 
 
 def rates(
-    target: CudaTarget, unit: str, active: int, inflight: int | None = None
-) -> PerformanceServiceFacts:
+    tgt: "Target", unit: str, active: int, inflight: int | None = None
+) -> target.PerformanceServiceFacts:
     """What *active* units of *unit* get through together, by kind of work.
 
     The one source of every CUDA rate: the roofline reads it whole and the
@@ -132,10 +121,10 @@ def rates(
     *inflight* bytes in flight moves no more than *inflight* over the device's
     global-memory latency; a device stating no latency has no such cap.
     """
-    architecture = target.architecture
-    device = target.device
-    cards = _cards(target)
-    share = parallel_units(target, unit)
+    architecture = tgt.architecture
+    device = tgt.device
+    cards = card_count(tgt)
+    share = parallel_units(tgt, unit)
     gmem = device.hbm_bandwidth_bytes_per_second * cards
     if unit == "cta" and inflight and device.gmem_latency_ns is not None:
         gmem = min(gmem, inflight * active * 1_000_000_000 // device.gmem_latency_ns)
@@ -153,7 +142,7 @@ def rates(
             // share
         )
         bandwidth.append(("smem", smem))
-    return PerformanceServiceFacts(
+    return target.PerformanceServiceFacts(
         unit_flops=tuple(
             (dtype, peak * cards * active // share)
             for dtype, peak in sorted(
@@ -169,24 +158,24 @@ def rates(
     )
 
 
-def throughput(target: CudaTarget, query: object = None) -> ThroughputFacts:
+def throughput(tgt: "Target", query: object = None) -> target.ThroughputFacts:
     """The rates a roofline divides the whole program's work by: `rates`, whole.
 
     Asked about no level, the whole deployment; the bound reads global traffic.
     """
-    whole = rates(target, *_asked(target, query))
-    return ThroughputFacts(
+    whole = rates(tgt, *asked(tgt, query))
+    return target.ThroughputFacts(
         peak_flops_per_second=whole.unit_flops,
         memory_bandwidth_bytes_per_second=whole.bandwidth("gmem"),
         bandwidth_level="gmem",
     )
 
 
-def performance_service(target: CudaTarget, query: object = None) -> PerformanceServiceFacts:
+def performance_service(tgt: "Target", query: object = None) -> target.PerformanceServiceFacts:
     """What one unit of the level asked about gets through: `rates` among its active units."""
-    unit, active, inflight = _asked(target, query)
-    whole = rates(target, unit, active, inflight)
-    return PerformanceServiceFacts(
+    unit, active, inflight = asked(tgt, query)
+    whole = rates(tgt, unit, active, inflight)
+    return target.PerformanceServiceFacts(
         unit_flops=tuple((dtype, rate // active) for dtype, rate in whole.unit_flops),
         unit_ops=tuple((kind, rate // active) for kind, rate in whole.unit_ops),
         unit_bandwidth=tuple((level, rate // active) for level, rate in whole.unit_bandwidth),
@@ -196,6 +185,7 @@ def performance_service(target: CudaTarget, query: object = None) -> Performance
 
 __all__ = [
     "memory_hierarchy",
+    "parallel_units",
     "performance_service",
     "rates",
     "throughput",

@@ -1,8 +1,8 @@
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-TARGET = CudaTarget("nvidia.h200_sxm", device_count=2)
+TARGET = cuda.Target("nvidia.h200_sxm", device_count=2)
 
 
 @module(entry="main", target=TARGET)
@@ -11,6 +11,6 @@ class Root:
     def run(x: Tensor[(8,), "f32"]):
         pass
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def main(x: Tensor[(8,), "f32"]):
         launch(run, x, grid=(1, 1, 1), block=(1, 1, 1))

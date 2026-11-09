@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 HEADS = 16
 WORKERS = 8
@@ -26,7 +26,7 @@ SCALE = 1.0 / math.sqrt(HEAD_DIM)
 
 @module(
     entry="flash_split_k_decode",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", HEADS * WORKERS),),
 )
 class FlashSplitKDecode:

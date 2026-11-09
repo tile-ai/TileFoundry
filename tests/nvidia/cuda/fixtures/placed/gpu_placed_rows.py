@@ -10,15 +10,14 @@ lowering.
 
 from __future__ import annotations
 
-import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
 GPUS, CTAS, THREADS = 2, 4, 16
 ROWS, COLS = GPUS * CTAS * THREADS, 4
 ROWS_PER_CARD = ROWS // GPUS
-_CUDA = CudaTarget("nvidia.h200_sxm", device_count=GPUS)
+_CUDA = cuda.Target("nvidia.h200_sxm", device_count=GPUS)
 
 
 _TOPOLOGIES = (Topology("gpu", GPUS), Topology("cta", CTAS), Topology("thread", THREADS))
@@ -49,8 +48,8 @@ class GpuPlacedRows:
             written = T.tensor_view(T.ptr_of(out), layout=rows)
             T.copy(source, written)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def copy_rows_host(a: Tensor[(ROWS, COLS), "f32"], out: Tensor[(ROWS, COLS), "f32"]):
-        launch(  # noqa: F821
+        launch(
             copy_rows_device, a, out, grid=(CTAS, 1, 1), block=(THREADS, 1, 1)
         )

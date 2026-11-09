@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="composed", target=CpuTarget())
+@module(entry="composed", target=cpu.Target())
 class _Demo:
     @func
     def leaf(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
@@ -18,23 +18,23 @@ class _Demo:
         return tf.add(y, y)
 
 
-@module(entry="only", target=CpuTarget())
+@module(entry="only", target=cpu.Target())
 class _WithMethod:
     @func
     def only(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
         return tf.rms_norm(x, g)
 
-    def describe(self):  # noqa: ANN001 — orchestration method, bound on the Module
+    def describe(self):
         return f"{self.name}/{self.entry}"
 
 
-@module(target=CpuTarget())
+@module(target=cpu.Target())
 class _MethodsOnly:
     def walk(self, x):
         return x
 
 
-@module(target=CpuTarget())
+@module(target=cpu.Target())
 class _NoStep:
     @func
     def helper(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:

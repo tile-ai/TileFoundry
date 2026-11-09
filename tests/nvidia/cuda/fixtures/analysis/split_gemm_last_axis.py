@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _SPLIT_GRID = 128
 _SPLIT_HIDDEN = 2048
 _SPLIT_OUT = 12288
 _SPLIT_BLOCK = 128
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 
 
 @module(entry="last_axis", target=_H200, topologies=(Topology("cta", _SPLIT_GRID),))

@@ -72,43 +72,45 @@ class TensorType:
     layout: LayoutBase | None
     storage: StorageKind
 
-    def scalar(
+    @classmethod
+    def from_scalar(
+        cls,
         dtype: DType,
         layout: LayoutBase | None = None,
         storage: StorageKind = StorageKind.UMAT,
     ) -> "TensorType": ...
 
-    def umat_scalar(dtype: DType = DType.i64) -> "TensorType": ...
+    @classmethod
+    def from_umat_scalar(cls, dtype: DType = DType.i64) -> "TensorType": ...
 
-    def umat_tensor(shape: tuple, dtype: DType = DType.i64) -> "TensorType": ...
+    @classmethod
+    def from_umat_tensor(cls, shape: tuple, dtype: DType = DType.i64) -> "TensorType": ...
 ```
 
 - constraints:
   - A *scalar* is `TensorType(shape=(), ...)` — a rank-0 tensor. There
     is no separate `Scalar` type.
   - After type inference, each tensor value MUST carry a concrete `LayoutBase`
-    from [shard §2](./shard.md#2-layout-hierarchy), with no omitted Layout strides.
-    Parameter annotations retain the authored constraint, including a completely omitted layout. Authored layouts receive concrete
-    strides at construction; standalone inference gives an omitted layout a
-    separate default value type.
-    Function calls continue to compare arguments against the annotation.
+    from [shard §2](./shard.md#2-layout-hierarchy), with no omitted strides.
+    Parameter annotations keep the authored constraint, including a completely
+    omitted layout; function calls compare arguments against the annotation, and
+    a declared `layout=None` imposes no layout constraint (a signature rule, not
+    a physical layout). Authored layouts receive concrete strides at
+    construction (`Layout(shape)`: [shard §9](./shard.md#9-layout-construction-and-algebra));
+    standalone inference gives an omitted layout a separate default value type.
     Verification reports an incomplete value type with its source location.
-    Concrete layout readers MUST consume the stored layout directly: defaults
-    are materialized by producers or standalone annotation binding, never by
-    consumers. `Layout(shape)` supplies compact row-major strides, symbolic
-    products, and stride zero on statically unit leaves.
-    In signature compatibility, a declared `layout=None` instead imposes no
-    layout constraint. This is a signature rule, not a physical layout.
+    Layout readers MUST consume the stored layout directly: defaults are
+    materialized by producers or standalone annotation binding, never by
+    consumers.
   - `storage` is a `StorageKind` (`gmem` / `smem` / `rmem` / `host` / `tmem` /
     `umat`). A concrete level (`gmem` / `smem` / `rmem` / `host` /
     `tmem`) is the value's **abstract result residency** — where the result tensor
     logically lives — not the transient register/ALU staging any individual step
     happens to use. `umat` marks an **unmaterialized** (placement-polymorphic)
-    value: one present in the abstract IR that has not yet been committed to a
-    concrete residency. A source value literal carries `storage=umat`. An
-    unmaterialized value MUST be resolved to a concrete residency (or otherwise
-    materialized) before codegen consumes it. Shape elements use `umat`, not a
-    second no-memory storage marker.
+    value not yet committed to a concrete residency. A source value literal
+    carries `storage=umat`, as do shape elements. An unmaterialized value MUST be
+    resolved to a concrete residency (or otherwise materialized) before codegen
+    consumes it ([§10](#10-unmaterialized-values)).
   - For plain `Layout` / `ComposedLayout`, `layout.shape` MUST have the same rank
     and logical extents as `shape`; the layout describes the value whose type
     carries it. Consumers use this common contract rather than inspecting a
@@ -118,18 +120,20 @@ class TensorType:
     layout shape and need not match `shape` axis-by-axis. `Reshard`
     preserves the logical shape; logical-shape rewrites go through
     `hir.tensor.Reshape`.
-  - `Layout` / `ComposedLayout` MUST describe an injective mapping
-    ([shard §2](./shard.md#2-layout-hierarchy)). Padding-style non-injective layouts are
-    not supported.
+  - `Layout` / `ComposedLayout` MUST be injective ([shard §2](./shard.md#2-layout-hierarchy)).
   - A rank-0 tensor is well-formed. A rank-0 tensor with `storage=umat` is the
     unmaterialized shape-element form; a rank-0 tensor with a concrete memory
     `StorageKind` is an ordinary scalar holding one element.
 
-Enforcement is owned by [tir §1.3](./tir.md#13-primfunction) / [hir §1.3](./hir.md#13-op);
-dispatch is described in
-[visitor-registry](./visitor-registry.md).
+Enforcement is owned by [tir §1.3](./tir.md#13-primfunction) / [hir §1.3](./hir.md#13-op),
+dispatched per [visitor-registry](./visitor-registry.md).
 
 ### 2.1 Recursive local projection
+
+`local_type_of` lives in `ir/utils/local.py` and is exported as
+`utils.local_type_of`; the size helpers of [§2.2](#22-logical-size) live in
+`ir/utils/sizes.py` (`tensor_types` in `ir/utils/leaves.py`) and are exported
+by `ir.utils` the same way.
 
 ```python
 def local_type_of(
@@ -207,20 +211,20 @@ def topology_extent(type: Type, name: str) -> int | None: ...
 - constraints:
   - Both MUST sum over the tensor leaves of a `TupleType` and MUST report `0`
     for a type with no tensor leaf.
-  - Both MUST reject a symbolic or negative extent rather than skip it: a size
-    that silently drops a dimension reads as a smaller tensor rather than as an
-    unknown one. Both MUST report `0` for a concrete zero extent.
-  - `tensor_bytes` MUST round a sub-byte dtype up to whole bytes per leaf,
-    because a leaf is addressed on its own.
-  - These MUST be the logical size the type states, so they MUST be the same
-    number for every backend and MUST NOT live in a target package.
+  - Both MUST reject a symbolic or negative extent (`ValueError`) rather than
+    skip it, and MUST report `0` for a concrete zero extent.
+  - `tensor_bytes` MUST round a sub-byte dtype up to whole bytes per leaf.
+  - They state the logical size, the same for every backend, and MUST NOT live
+    in a target package.
   - `tensor_types` MUST return those same tensor leaves in tuple field order.
   - `bytes_by_storage` MUST group their logical bytes by storage name. A `UMAT`
     leaf contributes nothing unless the caller supplies the level where it is
     materialized.
   - `topology_extent` MUST return the one positive static layout size stated for
-    `name`, `None` when no leaf states it, and reject a multi-topology layout or
-    conflicting extents rather than choose one.
+    `name` by leaves whose mesh has `name` as its single topology; leaves with
+    no `ShardLayout`, a multi-topology mesh or another topology name state
+    nothing. It returns `None` when no leaf states it, and MUST raise
+    `ValueError` for a non-positive or symbolic size or for conflicting extents.
 
 ### `StorageKind` and `resolve_storage`
 
@@ -248,7 +252,7 @@ def resolve_storage(value: "str | StorageKind | None") -> "StorageKind | None":
 ```
 
 - constraints:
-  - `StorageKind` is defined and owned by `ir/types/storage.py`.
+  - `StorageKind` is defined and owned by `ir/expr/storage.py`.
   - The member values and `str` spellings are `HOST=1` / `host`,
     `GMEM=2` / `gmem`, `SMEM=3` / `smem`, `RMEM=4` / `rmem`,
     `TMEM=5` / `tmem`, and `UMAT=6` / `umat`.
@@ -351,13 +355,13 @@ The canonical descriptors are:
 `shape` elements are values of the `ShapeDim` family:
 
 - a plain Python `int` for fully static dims;
-- a `DimVar(name, lo, hi)` value type (`core_ir.dim.DimVar`) for
+- a `DimVar(name, lo, hi)` value type (`expr.DimVar`) for
   bounded dynamic dims; and
-- a `core_ir.dim.*` `Expr` (e.g. `DimAdd` / `DimMul`) for derived
+- a `Call` of an `expr.Dim*` Op (e.g. `DimAdd` / `DimMul`) for derived
   dim expressions, returning a rank-0 integer `Expr` of dtype
   `i64` and `storage=umat`. This rank-0 unmaterialized scalar type
-  (`shape=()`, `layout=Layout((), ())`, `storage=umat`) has exactly one
-  constructor, `TensorType.umat_scalar(dtype)`.
+  (`shape=()`, `layout=Layout(())`, `storage=umat`) has exactly one
+  constructor, `TensorType.from_umat_scalar(dtype)`.
 
 ```python
 ShapeDim = int | DimVar | Expr
@@ -379,7 +383,7 @@ class DimVar(Op):
     Attributes:
         name: attribute; Non-empty symbolic name.
         lo: attribute; Inclusive lower bound.
-        hi: attribute; Exclusive upper bound.
+        hi: attribute; Inclusive upper bound.
     """
 
     name: str
@@ -471,20 +475,20 @@ class DimMax(Op):
     b: Expr
 
 
-def simplify_dim(op_cls: type[Op], args: tuple) -> Expr:
-    """Build or constant-fold a dimension operation.
+def simplify_dim(kind: str, args: tuple) -> Expr:
+    """Build a dimension operation; the service of ``tilefoundry.services``.
 
     Args:
-        op_cls: Dimension operation class to construct.
+        kind: One of "add", "sub", "mul", "floordiv", "mod", "min" and "max".
         args: Operation operands.
 
     Returns:
-        A folded constant or the canonical call.
+        The canonical call, or NotImplemented when an operand is not a dimension.
     """
     ...
 
 
-def is_dim_expr(value) -> bool:
+def is_dimension(value) -> bool:
     """Return whether a value is a valid dimension expression.
 
     Args:
@@ -496,7 +500,7 @@ def is_dim_expr(value) -> bool:
     ...
 
 
-def dim_min(a, b) -> Expr:
+def minimum(a, b) -> Expr:
     """Build a symbolic minimum.
 
     Args:
@@ -509,7 +513,7 @@ def dim_min(a, b) -> Expr:
     ...
 
 
-def dim_max(a, b) -> Expr:
+def maximum(a, b) -> Expr:
     """Build a symbolic maximum.
 
     Args:
@@ -536,10 +540,9 @@ def ceildiv(a, b) -> Expr:
 ```
 
 - constraints:
-  - Rank-0 shape-element tensors MUST use `storage=umat` and carry no committed
-    residency.
-  - Construction sites MUST use `TensorType.umat_scalar(dtype)` instead of
-    restating its field tuple, so structural type equality holds across layers.
+  - Construction sites MUST use `TensorType.from_umat_scalar(dtype)` for rank-0
+    shape-element tensors (`storage=umat`), so structural type equality holds
+    across layers.
   - `DimVar` MUST use a non-empty `name` and plain integer `lo` and `hi` bounds
     satisfying `lo <= hi`. Its envelope is closed, `[lo, hi]`; `[k, k]` is
     the fixed symbolic dimension `k`.
@@ -562,20 +565,24 @@ def ceildiv(a, b) -> Expr:
     distinct same-named values. Normalization MUST NOT apply `DimVar` envelope
     bounds. Expressions outside the affine subset or not decodable as one
     `ShapeDim` MUST remain unchanged.
-  - `is_dim_expr` MUST accept non-boolean integers, `DimVar`, integer-valued
+  - `is_dimension` MUST accept non-boolean integers, `DimVar`, integer-valued
     `Constant`, and recursively valid calls to the seven dimension arithmetic
     operations, and MUST reject other values.
   - `has_symbolic_dims(value)` MUST report whether a `DimVar` is reachable, not
     whether dimension arithmetic contains a runtime `Expr`. A dimension call
     recursively checks its operands; non-dimension expressions do not become
     symbolic merely by participating in that arithmetic.
-  - `ceildiv(a, b)` MUST compose the existing add, subtract, and floor-divide
-    operations; it does not introduce a distinct Op.
-  - `ir.types.dim` MUST own dimension IR definitions, construction, and
-    structural predicates without depending on isl. Conversion between
-    dimension and shape IR values and isl, affine normalization, shape-domain
-    construction, and conservative value-range queries belong to
-    `ir.isl_interop` ([§11](#11-isl-interoperability)).
+  - `ceildiv(a, b)` composes add, subtract and floor-divide; it is not a distinct Op.
+  - `is_dimension`, `minimum`, `maximum` and `ceildiv` live in
+    `ir/dim/simplify.py` and `has_symbolic_dims` in `ir/dim/substitute.py`;
+    `ir.dim` exports them.
+  - `ir.expr.dim` MUST own the dimension IR definitions and their structural
+    predicates without depending on isl or on a type. Construction belongs to
+    `ir.dim.simplify`, reached by the lower layers through the `simplify_dim`
+    service. Conversion between dimension and shape IR values and isl, affine
+    normalization, shape-domain construction, and conservative value-range
+    queries belong to `ir.dim.isl_interop` ([§11](#11-isl-interoperability)),
+    reached through the `normalize_dim` and `dim_range` services.
 
 ---
 
@@ -589,7 +596,7 @@ class TupleType:
         fields: attribute; Field types in result order.
     """
 
-    fields: tuple[TensorType | "TupleType", ...]
+    fields: tuple[TensorType | "TupleType" | CallableType, ...]
 ```
 
 - constraints:
@@ -635,41 +642,41 @@ class CallableType:
 
 - constraints:
   - `CallableType` is the type of any Expr that represents a callable
-    value. Today the only producer is [hir §1.1](./hir.md#11-function) `Function`.
+    value. The producers are [hir §1.1](./hir.md#11-function) `core.Function` and
+    `core.PrimFunction` (through `callable_type_for_prim_function`).
   - `parameters` is a tuple of parameter **types**; parameter names
     are not part of the type. Names live on `Function.params`
     (`Var.name`) at the IR level.
-  - The C++ counterpart in
-    [codegen §4.4](./codegen.md#44-signatures) is a separate construct —
-    `CallableSignature` in `tilefoundry.codegen.signature` — whose
-    `TensorSignature` records are `(name, type: TensorType)`: dtype / shape /
-    storage / layout are reached through `type` rather than restated. The
-    two live in different layers and are disambiguated by import path; do
-    not conflate them.
+  - `CallableSignature` in `tilefoundry.codegen.signature`
+    ([codegen §4.4](./codegen.md#44-signatures)) is a separate construct, not a
+    `CallableType`; its `TensorSignature` records are `(name, type: TensorType)`.
 
 ---
 
 ## 8. Tensor type convenience constructors
 
 ```python
-def make_tensor_type(
-    shape: tuple,
-    dtype: DType = DType.f32,
-    storage: str | StorageKind = "gmem",
-    layout: object = None,
-) -> TensorType:
-    """Build a plain tensor type.
+class TensorType:
+    @classmethod
+    def from_shape(
+        cls,
+        shape: tuple,
+        dtype: DType = DType.f32,
+        storage: str | StorageKind = "gmem",
+        layout: object = None,
+    ) -> TensorType:
+        """Build a plain tensor type.
 
-    Args:
-        shape: Logical tensor shape.
-        dtype: Element dtype.
-        storage: Abstract tensor residency.
-        layout: Optional unsharded layout.
+        Args:
+            shape: Logical tensor shape.
+            dtype: Element dtype.
+            storage: Abstract tensor residency.
+            layout: Optional unsharded layout.
 
-    Returns:
-        The tensor type.
-    """
-    ...
+        Returns:
+            The tensor type.
+        """
+        ...
 
 
 def make_shard_tensor_type(
@@ -695,11 +702,12 @@ def make_shard_tensor_type(
 ```
 
 - constraints:
-  - `make_tensor_type` MUST preserve `shape` as a tuple and pass the remaining
+  - `TensorType.from_shape` MUST preserve `shape` as a tuple and pass the remaining
     fields to `TensorType`.
-  - `make_shard_tensor_type` MUST return a plain tensor type when `mesh` is
-    `None` or `attrs` is empty; otherwise it MUST build the layout through
-    `ShardLayout.default`.
+  - `make_shard_tensor_type` (in `ir/utils/local.py`, exported as
+    `utils.make_shard_tensor_type`) MUST return a plain tensor type (layout
+    `Layout(shape)`) when `mesh` is `None` or `attrs` is empty; otherwise it
+    MUST build the layout through `ShardLayout.from_logical`.
 
 ## 9. Callable type projection
 
@@ -738,29 +746,27 @@ def callable_type_for_prim_function(fn) -> CallableType:
 
 ## 10. Unmaterialized values
 
-`UMAT` states that a value's residency is not decided. It is not a claim that
-the value is known at compile time, and not a claim that it will never live in
-memory: it is the absence of a residency decision. A shape element read from a
-symbolic dimension is unmaterialized and unknown; a literal `2` is
-unmaterialized and known. Neither occupies memory until something places it.
+`UMAT` states that a value's residency is not decided: not a claim that the value
+is known at compile time, nor that it never lives in memory. A shape element
+read from a symbolic dimension is unmaterialized and unknown; a literal `2` is
+unmaterialized and known.
 
 Two canonical forms, and no third spelling of either:
 
 ```python
-TensorType.umat_scalar(dtype)          # rank-0: a shape element, a dim result
-TensorType.umat_tensor(shape, dtype)   # ranked: a shape vector
+TensorType.from_umat_scalar(dtype)     # rank-0: a shape element, a dim result
+TensorType.from_umat_tensor(shape, dtype) # ranked: a shape vector
 ```
 
 - constraints:
   - `TensorType.storage` MUST be a `StorageKind`. There is no unset residency;
     an undecided one is `UMAT`.
-  - A value whose residency no one has decided MUST carry `UMAT`, whether or
-    not its value is known at compile time.
-  - Shape elements and `dim.*` results MUST use `umat_scalar`; shape-vector
-    construction sites MUST use `umat_tensor`. A statically indexed rank-0
-    result from a shape vector MUST use `umat_scalar`; other ranked `Slice`
+  - A value whose residency is undecided MUST carry `UMAT`.
+  - Shape elements and `dim.*` results MUST use `from_umat_scalar`; shape-vector
+    construction sites MUST use `from_umat_tensor`. A statically indexed rank-0
+    result from a shape vector MUST use `from_umat_scalar`; other ranked `Slice`
     views retain their derived layouts and are not required to be structurally
-    equal to `umat_tensor`.
+    equal to `from_umat_tensor`.
   - An operand carrying `UMAT` MUST NOT be charged to a memory level by the
     residency of its own type alone; what charges it is where it is consumed
     ([analysis §1.2.1](./analysis.md#121-compute-cost)).
@@ -769,16 +775,15 @@ TensorType.umat_tensor(shape, dtype)   # ranked: a shape vector
 
 ## 11. ISL interoperability
 
-`ir.isl_interop` is where IR values become isl objects and come back. Every
-analysis service that reasons about coordinates goes through it. Within one
-conversion or normalization context -- one `IslParamValues` dictionary, or one
-Op's relations lined up by `iterating` -- one value is represented by one isl
-parameter; two independent dictionaries may name the same value differently,
-and a parameter's name says nothing about what it is. The values a parameter
-stands for travel in that dictionary, from isl parameter name to IR value.
+`ir.dim.isl_interop` converts IR values to isl objects and back; every analysis
+service that reasons about coordinates goes through it. Within one conversion or
+normalization context (one `IslParamValues` dictionary, or one Op's relations
+lined up by `iterating`) one value is one isl parameter; independent
+dictionaries may name the same value differently. The dictionary maps isl
+parameter name to IR value.
 
 - constraints:
-  - Every IR-to-isl conversion in `ir.isl_interop` MUST be named
+  - Every IR-to-isl conversion in `ir.dim.isl_interop` MUST be named
     `XX_to_isl_YY`, where `YY` is the isl type it returns, and MUST take the one
     parameter dictionary `IslParamValues` (isl parameter name to IR value). Every
     isl-to-IR conversion MUST be named `isl_to_XX` and read the same dictionary.
@@ -790,14 +795,14 @@ stands for travel in that dictionary, from isl parameter name to IR value.
     distinct values sharing a `DimVar` name are two parameters. A parameter's
     stated range MUST be a constraint on the returned isl object, not a second
     record.
-  - `dim_to_isl_pw_aff(dim, values, *, coords)` MUST return one dimension
+  - `dimension_to_isl_pw_aff(dim, values, *, coords)` MUST return one dimension
     expression as an `isl.pw_aff`. `coords` maps the identity of a value that is
     a coordinate of the space, such as an induction variable, to that dimension's
     name; those values are dimensions of the result, not parameters. A
     `DimFloorDiv` or `DimMod` divisor MUST have one value, read the way a
     constant `DimMul` operand is read, a product of constants included; a
     divisor with more than one value raises `NotImplementedError`.
-    `isl_to_dim` MUST decode an isl affine expression using `values`.
+    `isl_to_dimension` MUST decode an isl affine expression using `values`.
     `shape_to_isl_set(shape, values)` MUST return one shape's coordinate set over
     dimensions `d0` to `d{rank-1}`; every `Call` extent, dimension arithmetic
     such as `P // 4` included, is one opaque parameter for the whole extent. A

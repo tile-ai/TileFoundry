@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 EVALUATOR_N = DimVar("N_eval", 1, 7)
 RESOURCE_N = DimVar("n_resource", 1, 8)
@@ -35,23 +35,23 @@ class BroadcastScaledChild:
         return tf.mul(x, w)
 
 
-@module(entry="fused", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="fused", target=cuda.Target("nvidia.h200_sxm"))
 class FusedScaledParent:
     scaled = ScaledChild
 
     @func
     def fused(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return scaled(x)  # noqa: F821 -- class-body binding
+        return scaled(x)
 
 
-@module(entry="both", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="both", target=cuda.Target("nvidia.h200_sxm"))
 class PairedScaledParent:
     left = ScaledChild
     right = ScaledChild
 
     @func
     def both(w: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return tf.add(left(w), right(w))  # noqa: F821 -- class-body bindings
+        return tf.add(left(w), right(w))
 
 
 @module(entry="run")
@@ -60,24 +60,24 @@ class NestedScaledMiddle:
 
     @func
     def run(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return scaled(x)  # noqa: F821 -- class-body binding
+        return scaled(x)
 
 
-@module(entry="run", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="run", target=cuda.Target("nvidia.h200_sxm"))
 class NestedScaledRoot:
     middle = NestedScaledMiddle
 
     @func
     def run(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return middle(x)  # noqa: F821 -- class-body binding
+        return middle(x)
 
 
-@module(entry="run", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="run", target=cuda.Target("nvidia.h200_sxm"))
 class StackedScaledParent:
     layers = ModuleList(ScaledChild, 3)
 
     @func
     def run(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
         for i in range(3):
-            x = layers[i](x)  # noqa: F821 -- class-body binding
+            x = layers[i](x)
         return x

@@ -11,18 +11,17 @@ import pytest
 import torch
 
 import tilefoundry
-import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry import cli
+from tilefoundry_nvidia import cuda
 
 OPS = Path(__file__).parents[2] / "fixtures" / "ops"
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_copy_crossings_round_trip_exactly() -> None:
     """One compile behind five assertions, each naming the pair that failed."""
-    CopyStorage = load_authored_ir(f"{OPS / 'copy_storage.py'}:CopyStorage")
+    CopyStorage = cli.load_authored_ir(f"{OPS / 'copy_storage.py'}:CopyStorage")
     rm = tilefoundry.compile(CopyStorage, target=_CUDA)
     torch.manual_seed(0)
     a_smem = torch.randn(128, 4, dtype=torch.float32, device="cuda")
@@ -88,7 +87,7 @@ def test_plain_window_round_trips_fragments() -> None:
     of bounds -- the tutorial's ``Invalid __local__ read of size 2``). The
     plain side is the slice the shard side's layout hands this instance.
     """
-    RegisterRoundTrip = load_authored_ir(f"{OPS / 'register_round_trip.py'}:RegisterRoundTrip")
+    RegisterRoundTrip = cli.load_authored_ir(f"{OPS / 'register_round_trip.py'}:RegisterRoundTrip")
     rm = tilefoundry.compile(RegisterRoundTrip, target=_CUDA)
     torch.manual_seed(0)
     a = torch.randn(2, 5120, dtype=torch.bfloat16, device="cuda")
@@ -114,7 +113,7 @@ def test_plain_window_enters_row_major() -> None:
     hides it -- write and read share the permutation -- so this test copies
     in once and compares against the input.
     """
-    OneWay = load_authored_ir(f"{OPS / 'one_way_column_pairs.py'}:OneWay")
+    OneWay = cli.load_authored_ir(f"{OPS / 'one_way_column_pairs.py'}:OneWay")
     rm = tilefoundry.compile(OneWay, target=_CUDA)
     a = torch.arange(4 * 64, dtype=torch.float32, device="cuda").view(4, 64)
     out = torch.zeros_like(a)

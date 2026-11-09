@@ -73,3 +73,20 @@ def parse_writemask(val, g, maskbits):
 
 def bit_select(hi, lo, mask):
     return (hi & ~mask) | (lo & mask)
+
+
+__all__ = [
+    "BF16_NAN",
+    "BF16_ONE",
+    "FMA_VECTOR_PRODUCT",
+    "FMA_WIDEN_16_32",
+    "U64",
+    "bit_select",
+    "load_int",
+    "load_xy_reg",
+    "parse_writemask",
+    "read_sint",
+    "read_uint",
+    "write_uint",
+    "xy_shuffle",
+]

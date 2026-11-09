@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.ir.core.kinds import ReduceKind
-from tilefoundry.ir.types.shard_layout import Broadcast
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.ir import expr, types
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 @module(topologies=(Topology("thread", 128),))
@@ -27,7 +26,7 @@ class _Plain:
                 plain_dst,
                 axes=(1,),
                 keepdim=False,
-                kind=ReduceKind.MEAN,
+                kind=expr.ReduceKind.MEAN,
             )
 
 
@@ -40,14 +39,14 @@ class _Warp:
                 T.ptr_of(a_warp), layout=ShardLayout(Layout((32, 4), (4, 1)), (Split(0),), mw)
             )
             warp_dst = T.tensor_view(
-                T.ptr_of(out_warp), layout=ShardLayout(Layout((1,), (1,)), (Broadcast(),), mw)
+                T.ptr_of(out_warp), layout=ShardLayout(Layout((1,), (1,)), (types.Broadcast(),), mw)
             )
             T.reduce(
                 warp_src,
                 warp_dst,
                 axes=(1,),
                 keepdim=False,
-                kind=ReduceKind.ABS_MAX,
+                kind=expr.ReduceKind.ABS_MAX,
             )
 
 
@@ -64,7 +63,7 @@ class _Cta:
             )
             cta_dst = T.tensor_view(
                 T.ptr_of(out_cta),
-                layout=ShardLayout(Layout((1,), (1,)), (Broadcast(), Broadcast()), mc),
+                layout=ShardLayout(Layout((1,), (1,)), (types.Broadcast(), types.Broadcast()), mc),
             )
             cta_ws = T.alloc_tensor(Tensor[(4,), "f32", None, "smem"])
             T.reduce(
@@ -73,7 +72,7 @@ class _Cta:
                 cta_ws,
                 axes=(2,),
                 keepdim=False,
-                kind=ReduceKind.MEAN,
+                kind=expr.ReduceKind.MEAN,
             )
 
 
@@ -90,7 +89,7 @@ class _Cross:
             )
             cross_dst = T.tensor_view(
                 T.ptr_of(out_cross),
-                layout=ShardLayout(Layout((1, 32), (32, 1)), (Broadcast(), Split(1)), mx),
+                layout=ShardLayout(Layout((1, 32), (32, 1)), (types.Broadcast(), Split(1)), mx),
             )
             cross_ws = T.alloc_tensor(Tensor[(128,), "f32", None, "smem"])
             T.reduce(
@@ -99,7 +98,7 @@ class _Cross:
                 cross_ws,
                 axes=(0,),
                 keepdim=True,
-                kind=ReduceKind.ABS_MAX,
+                kind=expr.ReduceKind.ABS_MAX,
             )
 
 
@@ -110,7 +109,7 @@ class ReduceTiers:
     cta = _Cta
     cross = _Cross
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def reduce_tiers_host(
         a_plain: Tensor[(128, 8), "f32"],
         out_plain: Tensor[(128,), "f32"],

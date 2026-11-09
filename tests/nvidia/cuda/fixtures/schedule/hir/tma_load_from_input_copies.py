@@ -6,7 +6,7 @@ then loads through a tensor map are rows the other CTAs are still copying.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 ROWS = 64
 COLS = 64
@@ -16,7 +16,7 @@ TAIL = CTAS * ROWS
 
 @module(
     entry="update",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", CTAS), Topology("thread", 32)),
 )
 class TmaLoadFromInputCopies:

@@ -10,9 +10,10 @@ ordered pool bound by class order, not a name→hex map.
 from __future__ import annotations
 
 import colorsys
+from types import MappingProxyType
 
 
-def _hsv_hex(h: float, s: float, v: float) -> str:
+def hsv_hex(h: float, s: float, v: float) -> str:
     r, g, b = colorsys.hsv_to_rgb(h, s, v)
     return "#{:02x}{:02x}{:02x}".format(round(r * 255), round(g * 255), round(b * 255))
 
@@ -26,22 +27,22 @@ HAIR = "#c8d2c6"
 
 
 
-DIMVAR_COLOR: str = _hsv_hex(0.77, 0.47, 0.43)
+DIMVAR_COLOR: str = hsv_hex(0.77, 0.47, 0.43)
 
 
 
 
-_DEPTH_HUES: tuple[float, ...] = (0.30, 0.555, 0.785, 0.125)
-DEPTH_FILLS: tuple[str, ...] = tuple(_hsv_hex(h, 0.05, 0.95) for h in _DEPTH_HUES)
-DEPTH_BORDERS: tuple[str, ...] = tuple(_hsv_hex(h, 0.18, 0.82) for h in _DEPTH_HUES)
+DEPTH_HUES: tuple[float, ...] = (0.30, 0.555, 0.785, 0.125)
+DEPTH_FILLS: tuple[str, ...] = tuple(hsv_hex(h, 0.05, 0.95) for h in DEPTH_HUES)
+DEPTH_BORDERS: tuple[str, ...] = tuple(hsv_hex(h, 0.18, 0.82) for h in DEPTH_HUES)
 
 
 
 
 
 STORAGE_CLASSES: tuple[str, ...] = ("gmem", "smem", "rmem")
-_STORAGE_ALIASES: dict[str, str] = {"global": "gmem", "shared": "smem", "register": "rmem"}
-_STORAGE_HSV: tuple[tuple[float, float, float], ...] = (
+STORAGE_ALIASES = MappingProxyType({"global": "gmem", "shared": "smem", "register": "rmem"})
+STORAGE_HSV: tuple[tuple[float, float, float], ...] = (
     (0.45, 0.66, 0.44),
     (0.39, 0.61, 0.31),
     (0.11, 0.95, 0.60),
@@ -49,17 +50,17 @@ _STORAGE_HSV: tuple[tuple[float, float, float], ...] = (
     (0.83, 0.45, 0.50),
     (0.20, 0.60, 0.45),
 )
-STORAGE_POOL: tuple[str, ...] = tuple(_hsv_hex(*hsv) for hsv in _STORAGE_HSV)
+STORAGE_POOL: tuple[str, ...] = tuple(hsv_hex(*hsv) for hsv in STORAGE_HSV)
 
 
-EXPRKIND_COLORS: dict[str, str] = {
+EXPRKIND_COLORS = MappingProxyType({
     "Function": "#2f6f63",
     "Call": "#3a5a6a",
     "Op": "#3a5a6a",
     "Var": "#a89a4e",
     "Constant": "#b27d2e",
     "Tuple": "#5a6f86",
-}
+})
 
 
 def depth_fill(depth: int) -> str:
@@ -92,7 +93,7 @@ def storage_color(name: str) -> str:
     spare slots so it is never left colourless and never collides with a
     known class's colour.
     """
-    canon = _STORAGE_ALIASES.get(name, name)
+    canon = STORAGE_ALIASES.get(name, name)
     if canon in STORAGE_CLASSES:
         return STORAGE_POOL[STORAGE_CLASSES.index(canon)]
     spare = len(STORAGE_POOL) - len(STORAGE_CLASSES)
@@ -119,7 +120,7 @@ def palette_pools() -> dict:
 
 
         "storage_classes": list(STORAGE_CLASSES),
-        "storage_aliases": dict(_STORAGE_ALIASES),
+        "storage_aliases": dict(STORAGE_ALIASES),
         "storage_pool": list(STORAGE_POOL),
         "exprkind": dict(EXPRKIND_COLORS),
     }

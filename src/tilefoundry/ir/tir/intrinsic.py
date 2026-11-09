@@ -8,14 +8,28 @@ from __future__ import annotations
 import inspect
 from dataclasses import make_dataclass
 
-from tilefoundry.ir.core import Expr, VerifyError
-from tilefoundry.ir.tir.stmt import Stmt
-from tilefoundry.visitor_registry import register_verify_stmt
-
-_intrinsic_dispatch: dict[str, type[Stmt]] = {}
+from tilefoundry.interfaces import verify
+from tilefoundry.ir import core, expr
 
 
-def _snake_to_camel(name: str) -> str:
+class IntrinsicTable:
+    """The Stmt class generated for each ``@intrinsic`` function, by function name."""
+
+    def __init__(self) -> None:
+        """Start with no intrinsic."""
+        self.classes: dict[str, type[core.Stmt]] = {}
+
+    def add(self, name: str, stmt_cls: type[core.Stmt]) -> None:
+        """Record *stmt_cls* under *name*, refusing a name that is already taken."""
+        if name in self.classes:
+            raise RuntimeError(f"@intrinsic: name {name!r} already registered")
+        self.classes[name] = stmt_cls
+
+
+intrinsic_dispatch = IntrinsicTable()
+
+
+def snake_to_camel(name: str) -> str:
     return "".join(part.capitalize() for part in name.split("_"))
 
 
@@ -32,7 +46,7 @@ def intrinsic(fn):
             )
 
         ann = p.annotation
-        if ann is not Expr and ann != "Expr":
+        if ann is not expr.Expr and ann != "Expr":
             raise TypeError(
                 f"@intrinsic {fn.__name__}: parameter {p.name!r} must be annotated Expr, got {ann!r}"
             )
@@ -41,26 +55,23 @@ def intrinsic(fn):
     if ret_ann is not inspect.Signature.empty and ret_ann is not None and ret_ann != "None":
         raise TypeError(f"@intrinsic {fn.__name__}: return annotation must be None")
 
-    camel = _snake_to_camel(fn.__name__)
-    fields = [(n, Expr) for n in param_names]
-    stmt_cls = make_dataclass(camel, fields, bases=(Stmt,))
-    stmt_cls.__module__ = fn.__module__
+    camel = snake_to_camel(fn.__name__)
+    fields = [(n, expr.Expr) for n in param_names]
+    stmt_cls = make_dataclass(camel, fields, bases=(core.Stmt,), module=fn.__module__)
 
-    def _verify(stmt, ctx):
+    def verify_intrinsic(stmt, ctx):
         bound = {n: getattr(stmt, n) for n in param_names}
         try:
             fn(**bound)
-        except VerifyError:
+        except expr.VerifyError:
             raise
         except Exception as exc:
             ctx.error(stmt, str(exc) or type(exc).__name__)
 
-    register_verify_stmt(stmt_cls)(_verify)
+    verify.register(stmt_cls)(verify_intrinsic)
 
-    if fn.__name__ in _intrinsic_dispatch:
-        raise RuntimeError(f"@intrinsic: name {fn.__name__!r} already registered")
-    _intrinsic_dispatch[fn.__name__] = stmt_cls
+    intrinsic_dispatch.add(fn.__name__, stmt_cls)
     return stmt_cls
 
 
-__all__ = ["intrinsic", "_intrinsic_dispatch"]
+__all__ = ["IntrinsicTable", "intrinsic", "intrinsic_dispatch"]

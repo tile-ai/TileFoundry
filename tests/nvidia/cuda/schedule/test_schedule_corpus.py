@@ -20,80 +20,25 @@ from tests.nvidia.cuda.schedule._support import (
     _region_key,
     _RetainedStatements,
 )
-from tilefoundry.analysis import AnalysisError, AnalysisResult
-from tilefoundry.analysis.api import analyze
-from tilefoundry.analysis.check import check_program
-from tilefoundry.analysis.liveness import LivenessMetadata, result_copies
-from tilefoundry.analysis.metadata import (
-    ComputeCostMetadata,
-    MemoryMetadata,
-    PerformanceMetadata,
-    PerformanceSummaryMetadata,
-    RegionMemoryMetadata,
-    RooflineMetadata,
-)
-from tilefoundry.codegen.emitter import CppEmitter
-from tilefoundry.evaluator import evaluate
-from tilefoundry.inspection import as_script
-from tilefoundry.inspection.analysis_report import render_analysis
-from tilefoundry.ir.core import (
-    Call,
-    Constant,
-    Tuple,
-    Var,
-    get_metadata,
-    get_registered_name,
-)
-from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.core.expr import SSAValue
-from tilefoundry.ir.core.module import Module, ModuleList
-from tilefoundry.ir.core.op_registry import lookup
-from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.schedule import ScheduleOp
-from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
-from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.hir.tensor.transpose import Transpose
-from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.tir import CpAsyncCommit, CpAsyncWait, PrimFunction
-from tilefoundry.ir.tir.async_copy import CopyAsync
-from tilefoundry.ir.tir.launch import Launch
-from tilefoundry.ir.tir.memory import Copy, PtrOf, TensorView
-from tilefoundry.ir.tir.sync import Sync
-from tilefoundry.ir.types import (
-    ComposedLayout,
-    ShardLayout,
-    StorageKind,
-    Swizzle,
-    TensorType,
-    TupleType,
-)
-from tilefoundry.ir.types.dim import DimAdd, DimMul
-from tilefoundry.ir.types.int_tuple import compatible_profile
-from tilefoundry.ir.types.layout import apply, flatten, unflatten
-from tilefoundry.ir.types.stride import crd2idx
-from tilefoundry.ir.types.utils import static_dim_value
-from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
-from tilefoundry.passes.transforms.convert_hir_to_tir import LoweringError
+from tilefoundry import analysis, codegen, inspection, verifier
+from tilefoundry.interfaces import access, evaluator, valuation
+from tilefoundry.ir import core, dim, expr, hir, tir, types
+from tilefoundry.ir.expr import op_registry
+from tilefoundry.ir.hir import tensor
+from tilefoundry.ir.tir import memory
+from tilefoundry.ir.types import int_tuple
+from tilefoundry.passes import transforms
 from tilefoundry.schedule import candidates, finalize
-from tilefoundry.target import CpuTarget
-from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.verify import verify_module
-from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
-from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import (
-    CopyAsyncTensor,
-    CopyAsyncTensorTx,
-)
-from tilefoundry_nvidia.cuda.ir.tir.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
-from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
-from tilefoundry_nvidia.cuda.ir.tir.nn.wgmma import Wgmma
+from tilefoundry.target import cpu
+from tilefoundry_nvidia.cuda import codegen as cuda_codegen
+from tilefoundry_nvidia.cuda.ir.tir import memory as tir_memory
+from tilefoundry_nvidia.cuda.ir.tir import nn
 
 ANALYSES = (
-    ("compute-cost", ComputeCostMetadata),
-    ("memory", MemoryMetadata),
-    ("roofline", RooflineMetadata),
-    ("performance", PerformanceSummaryMetadata),
+    ("compute-cost", analysis.ComputeCostMetadata),
+    ("memory", analysis.MemoryMetadata),
+    ("roofline", analysis.RooflineMetadata),
+    ("performance", analysis.PerformanceSummaryMetadata),
 )
 
 _TENSOR_CLOCK_HZ = 1_830_000_000
@@ -125,69 +70,69 @@ class ScheduleCase(Case):
 
 @dataclass(frozen=True)
 class Scheduled:
-    result: AnalysisResult | None
-    module: Module | None
-    lowered: Module | None
+    result: analysis.Result | None
+    module: core.Module | None
+    lowered: core.Module | None
     candidates: dict | None
 
 
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 
 
-def _analysis_metadata(case, result, analysis, metadata_type):
+def _analysis_metadata(case, result, analysis_value, metadata_type):
     assert metadata_type in result.metadata_types
 
-    if analysis == "memory":
-        for expr in collect_exprs(result.function.body):
-            if not isinstance(expr, Call):
+    if analysis_value == "memory":
+        for node in core.collect_exprs(result.function.body):
+            if not isinstance(node, expr.Call):
                 continue
-            record = get_metadata(expr, MemoryMetadata)
-            if aliased_operand(expr) is not None:
+            record = expr.get_metadata(node, analysis.MemoryMetadata)
+            if access.aliased_operand(node) is not None:
                 assert record.buffer_bytes is None
                 assert not record.offsets
-            elif isinstance(expr.target, Transpose) and expr.type.storage is not StorageKind.RMEM:
-                assert record.buffer_bytes == prod(expr.type.shape) * expr.type.dtype.bit_width // 8
+            elif isinstance(node.target, tensor.Transpose) and node.type.storage is not expr.StorageKind.RMEM:
+                assert record.buffer_bytes == prod(node.type.shape) * node.type.dtype.bit_width // 8
                 assert record.offsets
-            if isinstance(expr.target, ScheduleOp) and isinstance(
-                expr.target.op, (Copy, CopyAsync, CopyAsyncTensor)
+            if isinstance(node.target, hir.schedule.ScheduleOp) and isinstance(
+                node.target.op, (memory.Copy, tir.async_copy.CopyAsync, tir_memory.CopyAsyncTensor)
             ):
-                tile = prod(expr.type.shape) * expr.type.dtype.bit_width // 8
+                tile = prod(node.type.shape) * node.type.dtype.bit_width // 8
                 assert record.operands[1].write == tile, "a copy writes its whole tile"
-            if isinstance(expr.target, ScheduleOp) and isinstance(expr.target.op, TiledMma):
-                for operand, moved in zip(expr.args, record.operands, strict=False):
-                    if operand.type.storage is StorageKind.SMEM:
+            if isinstance(node.target, hir.schedule.ScheduleOp) and isinstance(node.target.op, nn.TiledMma):
+                for operand, moved in zip(node.args, record.operands, strict=False):
+                    if operand.type.storage is expr.StorageKind.SMEM:
                         tile = prod(operand.type.shape) * operand.type.dtype.bit_width // 8
                         assert moved.read == tile, "an mma reads its whole shared tile"
 
-    if analysis == "compute-cost":
+    if analysis_value == "compute-cost":
         schedules = (
-            expr
-            for expr in collect_exprs(result.function.body)
-            if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)
+            node2
+            for node2 in core.collect_exprs(result.function.body)
+            if isinstance(node2, expr.Call) and isinstance(node2.target, hir.schedule.ScheduleOp)
         )
         assert all(
-            not get_metadata(expr, ComputeCostMetadata).other_ops.kinds for expr in schedules
+            not expr.get_metadata(node2, analysis.ComputeCostMetadata).other_ops.kinds for node2 in schedules
         )
 
-    if analysis == "memory":
-        placement = get_metadata(result.function, RegionMemoryMetadata)
+    if analysis_value == "memory":
+        placement = expr.get_metadata(result.function, analysis.RegionMemoryMetadata)
         assert placement is not None
-        liveness = get_metadata(result.function, LivenessMetadata)
-        local = {id(expr) for expr in collect_exprs(result.function.body)}
+        liveness = expr.get_metadata(result.function, analysis.LivenessMetadata)
+        local = {id(node2) for node2 in core.collect_exprs(result.function.body)}
         region_windows = tuple(window for window in liveness.regions if id(window.region) in local)
         regions = tuple(window.region for window in region_windows)
         region_records = tuple(
             record
             for region in regions
-            if (record := get_metadata(region, RegionMemoryMetadata)) is not None
+            if (record := expr.get_metadata(region, analysis.RegionMemoryMetadata)) is not None
         )
         if case.child_regions:
             region_records += tuple(
                 record
                 for function in result.functions[1:]
-                for region in collect_exprs(function.body)
-                if isinstance(region, MeshRegion)
-                and (record := get_metadata(region, RegionMemoryMetadata)) is not None
+                for region in core.collect_exprs(function.body)
+                if isinstance(region, core.MeshRegion)
+                and (record := expr.get_metadata(region, analysis.RegionMemoryMetadata)) is not None
             )
         _region_records(region_records, placement)
         region_rmem_peaks = tuple(
@@ -199,7 +144,7 @@ def _analysis_metadata(case, result, analysis, metadata_type):
         observed_rmem = {}
         for window in region_windows:
             key = _region_key(window.region, occurrences)
-            record = get_metadata(window.region, RegionMemoryMetadata)
+            record = expr.get_metadata(window.region, analysis.RegionMemoryMetadata)
             peak = record.peak_for("rmem") if record is not None else None
             if peak is not None:
                 observed_rmem[key] = peak.peak_bytes
@@ -215,16 +160,16 @@ def _analysis_metadata(case, result, analysis, metadata_type):
         intervals = {item.value: item for item in liveness.intervals}
         loop_bounds = tuple(
             (
-                intervals[SSAValue(loop.induction_var)].defined_at,
+                intervals[core.SSAValue(loop.induction_var)].defined_at,
                 max(
                     use.at
                     for use in liveness.uses
                     if any(use.value.expr is yielded for yielded in loop.yield_values)
-                    and use.at < intervals[SSAValue(loop)].defined_at
+                    and use.at < intervals[core.SSAValue(loop)].defined_at
                 ),
             )
-            for loop in collect_exprs(result.function.body)
-            if isinstance(loop, LoopRegion)
+            for loop in core.collect_exprs(result.function.body)
+            if isinstance(loop, core.LoopRegion)
         )
 
         outside_uses = 0
@@ -238,7 +183,7 @@ def _analysis_metadata(case, result, analysis, metadata_type):
             assert outside_uses
 
         for interval in liveness.intervals:
-            if result_copies(interval.value) == 1:
+            if analysis.result_copies(interval.value) == 1:
                 continue
             assert (interval.defined_at, interval.last_used_at) in loop_bounds
 
@@ -260,30 +205,30 @@ def _region_records(records, placement):
 
 def _structural_layouts(program):
     structural = [
-        expr
-        for expr in collect_exprs(program.entry_function().body)
-        if isinstance(expr, Call) and isinstance(expr.target, (Reshape, Slice, Transpose))
+        node
+        for node in core.collect_exprs(program.entry_function().body)
+        if isinstance(node, expr.Call) and isinstance(node.target, (tensor.Reshape, tensor.Slice, tensor.Transpose))
     ]
-    missing = [type(expr.target).__name__ for expr in structural if expr.type.layout is None]
+    missing = [type(node.target).__name__ for node in structural if node.type.layout is None]
     assert not missing, (
         f"{len(missing)} of {len(structural)} structural calls omit layout: {missing}"
     )
 
 
 def _memory_report(case, program, report):
-    memory = report["functions"][0]["function_records"]["memory"]
-    peaks = {item["memory_level"]: item["peak_bytes"] for item in memory["peaks"]}
+    mem = report["functions"][0]["function_records"]["memory"]
+    peaks = {item["memory_level"]: item["peak_bytes"] for item in mem["peaks"]}
     has_smem = any(
-        isinstance(expr.type, TensorType) and expr.type.storage is StorageKind.SMEM
+        isinstance(node.type, types.TensorType) and node.type.storage is expr.StorageKind.SMEM
         for function in program.functions
-        for expr in collect_exprs(function.body)
+        for node in core.collect_exprs(function.body)
     )
     if has_smem:
         assert peaks["smem"] == case.smem_peak
     else:
         assert "smem" not in peaks
         assert case.smem_peak == 0
-    assert memory["solver_status"] == "feasible"
+    assert mem["solver_status"] == "feasible"
     for row in report["functions"][0]["calls"]:
         allocation = row["memory"]
         if "operands" not in allocation:
@@ -303,7 +248,7 @@ def _memory_report(case, program, report):
 
 
 def _tir_checks(lowered, source):
-    functions = tuple(frame.function for frame in list_call_paths(lowered).values())
+    functions = tuple(frame.function for frame in valuation.list_call_paths(lowered).values())
     found = []
     for function in functions:
         _assert_live_smem_views_do_not_overlap(function, source)
@@ -312,7 +257,7 @@ def _tir_checks(lowered, source):
     lhs = [
         captures
         for op, name, captures in found
-        if isinstance(getattr(op, "atom", None), Wgmma) and name == "lhs"
+        if isinstance(getattr(op, "atom", None), nn.Wgmma) and name == "lhs"
     ]
     assert all("a_major" in captures for captures in lhs)
     assert all("a_swizzle" in captures for captures in lhs if captures["form"].name == "SS")
@@ -323,8 +268,8 @@ def _hir_candidates(report):
     ops = []
     for row in report["lines"]:
         dialect, *path, name = row["op"].split(".")
-        schema = lookup(dialect, tuple(path), name)
-        ops.append(get_registered_name(schema.alias_of or schema.op_class))
+        schema = op_registry.lookup(dialect, tuple(path), name)
+        ops.append(expr.get_registered_name(schema.alias_of or schema.op_class))
     assert "tf.matmul" not in ops
     assert all(
         any(fit.get("default", False) for fit in row["candidates"])
@@ -359,16 +304,16 @@ def _candidates(case, checked):
 
 def _sync(case, checked):
     if case.sync_refusal is None:
-        return analyze(*checked, analysis=("memory", "sync"))
-    with pytest.raises(AnalysisError) as refused:
-        analyze(*checked, analysis=("sync",))
+        return analysis.analyze(*checked, analysis=("memory", "sync"))
+    with pytest.raises(analysis.Error) as refused:
+        analysis.analyze(*checked, analysis=("sync",))
     assert case.sync_refusal in str(refused.value)
     return None
 
 
 def _finalize(case, result):
     if case.finalize_refusal:
-        with pytest.raises(LoweringError) as refused:
+        with pytest.raises(transforms.LoweringError) as refused:
             finalize(result)
         assert case.finalize_refusal in str(refused.value)
         return None
@@ -378,18 +323,18 @@ def _finalize(case, result):
 def _host_launch(case, lowered, function):
     return_type = function.return_type
     def launchable(ty):
-        if isinstance(ty, TupleType):
+        if isinstance(ty, types.TupleType):
             return all(launchable(field) for field in ty.fields)
-        return not isinstance(ty, TensorType) or ty.storage in (StorageKind.GMEM, StorageKind.UMAT)
+        return not isinstance(ty, types.TensorType) or ty.storage in (expr.StorageKind.GMEM, expr.StorageKind.UMAT)
 
     launches = []
     for fn in lowered.functions:
-        if isinstance(fn, PrimFunction) and isinstance(fn.target, CpuTarget):
+        if isinstance(fn, core.PrimFunction) and isinstance(fn.target, cpu.Target):
             statements = _RetainedStatements()
             statements.visit(fn.body)
             launches.extend(
                 stmt for stmt in statements.statements
-                if isinstance(stmt.callable, Launch)
+                if isinstance(stmt.callable, tir.launch.Launch)
                 and not stmt.args[0].nested
                 and stmt.args[0].name == function.name
             )
@@ -399,7 +344,7 @@ def _host_launch(case, lowered, function):
         if case.mbarriers:
             expected = -(-case.smem_peak // 8) * 8 + 8 * case.mbarriers
         assert launches[0].callable.dynamic_smem == expected
-        assert isinstance(lowered.entry_function().target, CpuTarget)
+        assert isinstance(lowered.entry_function().target, cpu.Target)
     else:
         assert not launches
         assert lowered.entry == function.name
@@ -408,15 +353,15 @@ def _host_launch(case, lowered, function):
 def _hir(case, problems):
     module = problems.run("load", case.load)
     checked = problems.run(
-        "check", lambda m: check_program(m, m.entry_function(), dims=case.dims), module
+        "check", lambda m: analysis.check_program(m, m.entry_function(), dims=case.dims), module
     )
     problems.run("structural layouts", _structural_layouts, module)
-    result = problems.run("analyze", lambda pair: analyze(*pair, analysis=FAMILIES), checked)
+    result = problems.run("analyze", lambda pair: analysis.analyze(*pair, analysis=FAMILIES), checked)
     for family, metadata_type in ANALYSES:
         problems.run(family, _analysis_metadata, case, result, family, metadata_type)
-    report = problems.run("memory report", lambda r: render_analysis(r).data, result)
+    report = problems.run("memory report", lambda r: inspection.render_analysis(r).data, result)
     problems.run("memory allocations", _memory_report, case, module, report)
-    printed = problems.run("print HIR", as_script, module)
+    printed = problems.run("print HIR", inspection.as_script, module)
     problems.run("reload HIR", lambda text: reload(text, module.name), printed)
     candidates_report = problems.run("candidates", _candidates, case, checked)
     if case.candidates_refusal is None:
@@ -426,7 +371,7 @@ def _hir(case, problems):
     if case.sync_refusal is None:
         lowered = problems.run("finalize", _finalize, case, synced)
     if case.sync_refusal is None and case.finalize_refusal is None:
-        printed = problems.run("print TIR", as_script, lowered)
+        printed = problems.run("print TIR", inspection.as_script, lowered)
         lowered = problems.run("reload TIR", lambda text: reload(text, lowered.name), printed)
         problems.run("TIR operands", _tir_checks, lowered, case.path)
         problems.run("host launch", _host_launch, case, lowered, result.function)
@@ -438,35 +383,35 @@ def _plain(case, problems):
     if case.refusal is not None:
 
         def refused():
-            with pytest.raises(VerifyError, match=case.refusal):
+            with pytest.raises(expr.VerifyError, match=case.refusal):
                 case.load()
 
         problems.run("load refusal", refused)
         return
     module = problems.run("load", case.load)
     checked = problems.run(
-        "check", lambda m: check_program(m, m.entry_function(), dims=case.dims), module
+        "check", lambda m: analysis.check_program(m, m.entry_function(), dims=case.dims), module
     )
     result = problems.run(
-        "analyze", lambda pair: analyze(*pair, analysis=("memory", "performance")), checked
+        "analyze", lambda pair: analysis.analyze(*pair, analysis=("memory", "performance")), checked
     )
     problems.expect("analysis records", lambda r: bool(r.metadata_types), result)
     report = problems.run("candidates", _candidates, case, checked)
     problems.run("plain sites", check_plain_report, report, str(case.path), case.sites)
-    printed = problems.run("print plain", as_script, module)
+    printed = problems.run("print plain", inspection.as_script, module)
     problems.run("reload plain", lambda text: reload(text, module.name), printed)
 
 
 def _dim(case, problems):
     module = problems.run("load", case.load)
-    printed = problems.run("print", as_script, module)
+    printed = problems.run("print", inspection.as_script, module)
     problems.run("reload", lambda text: reload(text, module.name), printed)
 
 
 def _tir(case, problems):
     program = problems.run("load", case.load)
-    problems.run("verify", verify_module, program)
-    printed = problems.run("print", as_script, program)
+    problems.run("verify", verifier.verify_module, program)
+    printed = problems.run("print", inspection.as_script, program)
     problems.expect("canonical text", lambda text: text == case.path.read_text(), printed)
 
 
@@ -478,21 +423,21 @@ class WgmmaPrice(ScheduleCase):
     def guard(self, state, problems):
         n, bound_by, result = self.wgmma_n, self.bound_by, state.result
         schedule = next(
-            expr
-            for expr in collect_exprs(result.function.body)
-            if isinstance(expr, Call)
-            and isinstance(expr.target, ScheduleOp)
-            and getattr(getattr(expr.target.op, "atom", None), "bindings", {}).get("n") == n
+            node
+            for node in core.collect_exprs(result.function.body)
+            if isinstance(node, expr.Call)
+            and isinstance(node.target, hir.schedule.ScheduleOp)
+            and getattr(getattr(node.target.op, "atom", None), "bindings", {}).get("n") == n
         )
-        spread = get_metadata(schedule, ComputeCostMetadata).flops.of("bf16")
+        spread = expr.get_metadata(schedule, analysis.ComputeCostMetadata).flops.of("bf16")
         issues = prod(schedule.target.repeat or (1,))
         flops_per_issue = spread.logical // issues
-        timeline = get_metadata(schedule, PerformanceMetadata).timeline
+        timeline = expr.get_metadata(schedule, analysis.PerformanceMetadata).timeline
         duration_ns = timeline.end_ns - timeline.start_ns
         shared_bytes = sum(
             prod(operand.type.shape) * operand.type.dtype.bit_width // 8
             for operand in schedule.args
-            if operand.type.storage is StorageKind.SMEM
+            if operand.type.storage is expr.StorageKind.SMEM
         )
         tensor_ns = -(-(n * issues * 1_000_000_000) // (2 * _TENSOR_CLOCK_HZ))
         shared_ns = -(
@@ -508,27 +453,27 @@ class WgmmaPrice(ScheduleCase):
 class PhysicalSlots(ScheduleCase):
     def guard(self, state, problems):
         result, lowered = state.result, state.lowered
-        peak = get_metadata(result.function, RegionMemoryMetadata).peak_for("smem").peak_bytes
+        peak = expr.get_metadata(result.function, analysis.RegionMemoryMetadata).peak_for("smem").peak_bytes
         function = lowered.lookup(state.result.function.name)
         visitor = _RetainedStatements()
         visitor.visit(function.body)
         slots = []
         for value in visitor.bindings.values():
-            fields = value.elements if isinstance(value, Tuple) else (value,)
+            fields = value.elements if isinstance(value, expr.Tuple) else (value,)
             for slot in fields:
                 if (
-                    isinstance(slot, Call)
-                    and isinstance(slot.target, TensorView)
-                    and slot.target.storage is StorageKind.SMEM
-                    and isinstance(slot.args[0], Constant)
+                    isinstance(slot, expr.Call)
+                    and isinstance(slot.target, memory.TensorView)
+                    and slot.target.storage is expr.StorageKind.SMEM
+                    and isinstance(slot.args[0], expr.Constant)
                 ):
                     held = slot.type
                     offset = slot.args[0].value
                     assert offset % 16 == 0
                     slots.append(
                         {
-                            offset + (apply(held.layout, index) * held.dtype.bit_width + bit) // 8
-                            for index in range(prod(flatten(held.layout).shape))
+                            offset + (types.apply(held.layout, index) * held.dtype.bit_width + bit) // 8
+                            for index in range(prod(types.flatten(held.layout).shape))
                             for bit in range(held.dtype.bit_width)
                         }
                     )
@@ -546,7 +491,7 @@ class BulkReduceIntoInput(ScheduleCase):
     def guard(self, state, problems):
         lowered = state.lowered
 
-        class Scope(StmtVisitor[None]):
+        class Scope(core.StmtVisitor[None]):
             def __init__(self):
                 self.scopes = []
                 self.found = 0
@@ -557,11 +502,11 @@ class BulkReduceIntoInput(ScheduleCase):
                 self.scopes.pop()
 
             def visit_Evaluate(self, stmt, ctx=None):
-                if isinstance(stmt.callable, CopyReduceAsyncTensor):
+                if isinstance(stmt.callable, tir_memory.CopyReduceAsyncTensor):
                     assert tuple(topology.name for topology in self.scopes[-1].topologies) == (
                         "thread",
                     )
-                    assert prod(flatten(self.scopes[-1].layout).shape) == 32
+                    assert prod(types.flatten(self.scopes[-1].layout).shape) == 32
                     self.found += 1
 
         visitor = Scope()
@@ -577,15 +522,15 @@ class CapturedInsertUpdate(ScheduleCase):
 
     def guard(self, state, problems):
         result = state.result
-        liveness = get_metadata(result.function, LivenessMetadata)
-        local = {id(expr) for expr in collect_exprs(result.function.body)}
+        liveness = expr.get_metadata(result.function, analysis.LivenessMetadata)
+        local = {id(node) for node in core.collect_exprs(result.function.body)}
         occurrences = {}
         observed_smem = {}
         for window in liveness.regions:
             if id(window.region) not in local:
                 continue
             key = _region_key(window.region, occurrences)
-            record = get_metadata(window.region, RegionMemoryMetadata)
+            record = expr.get_metadata(window.region, analysis.RegionMemoryMetadata)
             peak = record.peak_for("smem") if record is not None else None
             if peak is not None:
                 observed_smem[key] = peak.peak_bytes
@@ -624,7 +569,7 @@ class Fp8BlockScaledGemm(ScheduleCase):
         a_scale = torch.rand(m, k // block, generator=generator) + 0.5
         b_scale = torch.rand(k // block, n // block, generator=generator) + 0.5
 
-        scheduled = evaluate(module.entry_function(), a, b, a_scale, b_scale)
+        scheduled = evaluator.evaluate(module.entry_function(), a, b, a_scale, b_scale)
 
         reference = sum(
             (a[:, kb * block : (kb + 1) * block].float() @ b[kb * block : (kb + 1) * block].float())
@@ -668,21 +613,21 @@ class GemmTmaStore(ScheduleCase):
 
     def guard(self, state, problems):
         result = state.result
-        liveness = get_metadata(result.function, LivenessMetadata)
-        local = {id(expr) for expr in collect_exprs(result.function.body)}
+        liveness = expr.get_metadata(result.function, analysis.LivenessMetadata)
+        local = {id(node) for node in core.collect_exprs(result.function.body)}
         records = tuple(
             record
             for window in liveness.regions
             if id(window.region) in local
-            and (record := get_metadata(window.region, RegionMemoryMetadata)) is not None
+            and (record := expr.get_metadata(window.region, analysis.RegionMemoryMetadata)) is not None
         )
         assert len(records) == 7
         schedule = next(
-            expr
-            for expr in collect_exprs(result.function.body)
-            if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)
+            node
+            for node in core.collect_exprs(result.function.body)
+            if isinstance(node, expr.Call) and isinstance(node.target, hir.schedule.ScheduleOp)
         )
-        timeline = get_metadata(schedule, PerformanceMetadata).timeline
+        timeline = expr.get_metadata(schedule, analysis.PerformanceMetadata).timeline
         assert timeline.end_ns - timeline.start_ns == 118
 
 
@@ -707,9 +652,9 @@ class TmaPeakOverCapacity(ScheduleCase):
 
     def guard(self, state, problems):
         module = state.module
-        checked = check_program(module, module.entry_function())
-        result = analyze(*checked, analysis=("memory", "sync"))
-        records = render_analysis(result).data["functions"][0]["function_records"]
+        checked = analysis.check_program(module, module.entry_function())
+        result = analysis.analyze(*checked, analysis=("memory", "sync"))
+        records = inspection.render_analysis(result).data["functions"][0]["function_records"]
         assert records["memory"]["errors"] == [
             "smem placement peak 228.00KiB exceeds capacity 227.00KiB"
         ]
@@ -725,9 +670,9 @@ class TmaWordsOverCapacity(ScheduleCase):
 
     def guard(self, state, problems):
         module = state.module
-        checked = check_program(module, module.entry_function())
-        result = analyze(*checked, analysis=("memory", "sync"))
-        records = render_analysis(result).data["functions"][0]["function_records"]
+        checked = analysis.check_program(module, module.entry_function())
+        result = analysis.analyze(*checked, analysis=("memory", "sync"))
+        records = inspection.render_analysis(result).data["functions"][0]["function_records"]
         assert records["sync"]["errors"] == [
             "the mbarrier words end smem at 227.01KiB, above capacity 227.00KiB"
         ]
@@ -743,7 +688,7 @@ class LoopOutputs(ScheduleCase):
     def guard(self, state, problems):
         lowered = state.lowered
         assert lowered.lookup(state.result.function.name).output_count == 3
-        assert reload(as_script(lowered), lowered.name).lookup(state.result.function.name).output_count == 3
+        assert reload(inspection.as_script(lowered), lowered.name).lookup(state.result.function.name).output_count == 3
 
 
 @case
@@ -764,21 +709,21 @@ class ModuleInstances(ScheduleCase):
         problems.run("retained shapes", self.retained_shapes, state.lowered)
 
     def module_instances(self, result):
-        for analysis, metadata_type in ANALYSES:
-            record_type = PerformanceMetadata if analysis == "performance" else metadata_type
+        for analysis_value, metadata_type in ANALYSES:
+            record_type = analysis.PerformanceMetadata if analysis_value == "performance" else metadata_type
             for function in result.functions[1:]:
                 schedules = [
-                    expr
-                    for expr in collect_exprs(function.body)
-                    if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)
+                    node
+                    for node in core.collect_exprs(function.body)
+                    if isinstance(node, expr.Call) and isinstance(node.target, hir.schedule.ScheduleOp)
                 ]
-                assert any(get_metadata(expr, record_type) is not None for expr in schedules)
+                assert any(expr.get_metadata(node, record_type) is not None for node in schedules)
 
     def retained_shapes(self, lowered):
-        verify_module(lowered)
-        frames = list_call_paths(lowered)
+        verifier.verify_module(lowered)
+        frames = valuation.list_call_paths(lowered)
         assert len(frames) == 4
-        assert all(isinstance(frame.function, PrimFunction) for frame in frames.values())
+        assert all(isinstance(frame.function, core.PrimFunction) for frame in frames.values())
         layers, mm = lowered.children["layers"], lowered.children["mm"]
         assert len(layers.elements) == 3
         assert all(element is mm.elements[0] for element in layers.elements)
@@ -788,23 +733,23 @@ class ModuleInstances(ScheduleCase):
         assert len(visitor.calls) == 5
         assert (
             sum(
-                isinstance(call.callable, ModuleList) and call.callable.key == mm.key
+                isinstance(call.callable, core.ModuleList) and call.callable.key == mm.key
                 for call in visitor.calls
             )
             == 2
         )
-        indexed = [call for call in visitor.calls if isinstance(call.callable, Call)]
+        indexed = [call for call in visitor.calls if isinstance(call.callable, expr.Call)]
         assert len(indexed) == 2
         assert all(call.callable.args[0].key == layers.key for call in indexed)
-        assert any(isinstance(call.callable.args[1], Var) for call in indexed)
+        assert any(isinstance(call.callable.args[1], expr.Var) for call in indexed)
         assert any(
-            isinstance(call.callable.args[1], Constant) and call.callable.args[1].value == 0
+            isinstance(call.callable.args[1], expr.Constant) and call.callable.args[1].value == 0
             for call in indexed
         )
         for call in visitor.calls:
-            assert len(call.args) == (3 if isinstance(call.callable, PrimFunction) else 2)
+            assert len(call.args) == (3 if isinstance(call.callable, core.PrimFunction) else 2)
             with pytest.raises(RuntimeError, match="no codegen handler for Op"):
-                CppEmitter(context=CudaCodegenContext(target=lowered.target)).visit_Evaluate(call)
+                codegen.CppEmitter(context=cuda_codegen.Context(target=lowered.target)).visit_Evaluate(call)
 
 
 @case
@@ -830,21 +775,21 @@ class ViewVisitMemo(ScheduleCase):
 
     def guard(self, state, problems):
         lowered = state.lowered
-        verify_module(lowered)
+        verifier.verify_module(lowered)
         function = lowered.lookup(state.result.function.name)
         visitor = _RetainedStatements()
         visitor.visit(function.body)
         views = [
             value
             for value in visitor.bindings.values()
-            if isinstance(value, Call) and isinstance(value.target, TensorView)
+            if isinstance(value, expr.Call) and isinstance(value.target, memory.TensorView)
         ]
         assert [view.type.shape for view in views] == [(1,), (), (16, 8), (1, 8)]
         identity = views[2]
-        assert isinstance(identity.args[0].target, PtrOf)
+        assert isinstance(identity.args[0].target, memory.PtrOf)
         assert identity.args[0].args[0] is function.params[0]
         assert len(visitor.statements) == 1
-        assert isinstance(visitor.statements[0].callable, Copy)
+        assert isinstance(visitor.statements[0].callable, memory.Copy)
         assert visitor.statements[0].args[1] is function.params[-1]
 
 
@@ -930,32 +875,32 @@ class WgmmaN16WithinWarpgroupShare(ScheduleCase):
         result, lowered = state.result, state.lowered
         schedule = next(
             value
-            for value in collect_exprs(result.function.body)
-            if isinstance(value, Call)
-            and isinstance(value.target, ScheduleOp)
-            and isinstance(value.target.op, TiledMma)
+            for value in core.collect_exprs(result.function.body)
+            if isinstance(value, expr.Call)
+            and isinstance(value.target, hir.schedule.ScheduleOp)
+            and isinstance(value.target.op, nn.TiledMma)
         )
         original_c, _, original_b = (arg.type for arg in schedule.args)
         visitor = _RetainedStatements()
         function = lowered.lookup(state.result.function.name)
         visitor.visit(function.body)
-        issues = [stmt for stmt in visitor.statements if isinstance(stmt.callable, TiledMma)]
+        issues = [stmt for stmt in visitor.statements if isinstance(stmt.callable, nn.TiledMma)]
         assert len(issues) == 36
         readers, pointers = {}, {}
 
         def dimension(value, group):
-            if (literal := static_dim_value(value)) is not None:
+            if (literal := expr.static_dim_value(value)) is not None:
                 return literal
-            if isinstance(value, Var):
+            if isinstance(value, expr.Var):
                 return dimension(visitor.bindings[id(value)], group)
-            assert isinstance(value, Call)
-            if isinstance(value.target, MeshCoord):
-                assert value.target.mesh.names[static_dim_value(value.args[0])] == "group"
+            assert isinstance(value, expr.Call)
+            if isinstance(value.target, dim.MeshCoord):
+                assert value.target.mesh.names[expr.static_dim_value(value.args[0])] == "group"
                 return group
             a, b = (dimension(arg, group) for arg in value.args)
-            if isinstance(value.target, DimAdd):
+            if isinstance(value.target, expr.DimAdd):
                 return a + b
-            assert isinstance(value.target, DimMul)
+            assert isinstance(value.target, expr.DimMul)
             return a * b
 
         def address(type_, coordinates, group):
@@ -964,17 +909,17 @@ class WgmmaN16WithinWarpgroupShare(ScheduleCase):
                 eb = type_.dtype.bit_width // 8
 
                 def reader(layout):
-                    if isinstance(layout, ShardLayout):
+                    if isinstance(layout, types.ShardLayout):
                         return reader(layout.layout)
-                    if isinstance(layout, ComposedLayout):
+                    if isinstance(layout, types.ComposedLayout):
                         outer = reader(layout.outer)
                         offset = dimension(layout.offset, group) * eb
-                        if isinstance(layout.inner, Swizzle):
+                        if isinstance(layout.inner, types.Swizzle):
                             return lambda linear: layout.inner(outer(linear) + offset)
                         return lambda linear: outer(linear) + offset
-                    flat = flatten(layout)
-                    grouped = unflatten(flat, compatible_profile(flat.shape, type_.shape))
-                    return lambda linear: crd2idx(linear, grouped.shape, grouped.strides) * eb
+                    flat = types.flatten(layout)
+                    grouped = types.unflatten(flat, int_tuple.compatible_profile(flat.shape, type_.shape))
+                    return lambda linear: types.crd2idx(linear, grouped.shape, grouped.strides) * eb
 
                 readers[key] = reader(type_.layout)
             linear = sum(
@@ -986,30 +931,30 @@ class WgmmaN16WithinWarpgroupShare(ScheduleCase):
         def pointer(value, group):
             key = id(value), group
             if key not in pointers:
-                if isinstance(value, Var):
+                if isinstance(value, expr.Var):
                     result = pointer(visitor.bindings[id(value)], group)
-                elif isinstance(value, Constant):
+                elif isinstance(value, expr.Constant):
                     result = value.value
-                elif isinstance(value, Call) and isinstance(value.target, (TensorView, PtrOf)):
+                elif isinstance(value, expr.Call) and isinstance(value.target, (memory.TensorView, memory.PtrOf)):
                     result = pointer(value.args[0], group)
-                elif isinstance(value, Call) and isinstance(value.target, Slice):
+                elif isinstance(value, expr.Call) and isinstance(value.target, tensor.Slice):
                     base = value.args[0]
                     layout = base.type.layout
-                    layout = layout.layout if isinstance(layout, ShardLayout) else layout
+                    layout = layout.layout if isinstance(layout, types.ShardLayout) else layout
                     result = pointer(base, group)
-                    if not isinstance(layout, ComposedLayout):
+                    if not isinstance(layout, types.ComposedLayout):
                         starts = tuple(dimension(start, group) for start in value.args[1].elements)
                         result += address(base.type, starts, group)
                 else:
-                    assert isinstance(value, Call) and type(value.target).__name__ == "AllocTensor"
+                    assert isinstance(value, expr.Call) and type(value.target).__name__ == "AllocTensor"
                     result = 0
                 pointers[key] = result
             return pointers[key]
 
         def pointer_root(value):
-            if isinstance(value, Var):
+            if isinstance(value, expr.Var):
                 return pointer_root(visitor.bindings[id(value)])
-            if isinstance(value, Call) and isinstance(value.target, (TensorView, PtrOf, Slice)):
+            if isinstance(value, expr.Call) and isinstance(value.target, (memory.TensorView, memory.PtrOf, tensor.Slice)):
                 return pointer_root(value.args[0])
             return value
 
@@ -1018,12 +963,12 @@ class WgmmaN16WithinWarpgroupShare(ScheduleCase):
         copied_k = next(
             stmt.args[1]
             for stmt in visitor.statements
-            if isinstance(stmt.callable, CopyAsyncTensorTx) and stmt.args[0] is function.params[1]
+            if isinstance(stmt.callable, tir_memory.CopyAsyncTensorTx) and stmt.args[0] is function.params[1]
         )
-        assert isinstance(b_root, Constant)
+        assert isinstance(b_root, expr.Constant)
         assert b_root.value == pointer_root(copied_k).value
         assert c_root.type.shape == original_c.shape
-        assert c_root.type.storage is StorageKind.RMEM
+        assert c_root.type.storage is expr.StorageKind.RMEM
         for ordinal, issue in enumerate(issues):
             step, k = divmod(ordinal, 12)
             c, _, b = issue.args
@@ -1101,8 +1046,8 @@ class WgmmaTma3Stage(ScheduleCase):
 
     def guard(self, state, problems):
         result = state.result
-        assert RegionMemoryMetadata in result.metadata_types
-        lifetimes = get_metadata(result.function, RegionMemoryMetadata).lifetimes
+        assert analysis.RegionMemoryMetadata in result.metadata_types
+        lifetimes = expr.get_metadata(result.function, analysis.RegionMemoryMetadata).lifetimes
         smem = sorted(item.bytes for item in lifetimes if item.memory_level == "smem")
         rmem = sorted(item.bytes for item in lifetimes if item.memory_level == "rmem")
         assert smem == sorted((512 * 3, 4096 * 3))
@@ -1133,10 +1078,10 @@ class Sm89E4m3Gemm(ScheduleCase):
         (loop,) = function.loops
         body = _RetainedStatements()
         body.visit(loop.body)
-        kinds = (Sync, CopyAsync, CpAsyncCommit, CpAsyncWait, Copy, TiledMma)
+        kinds = (tir.sync.Sync, tir.async_copy.CopyAsync, tir.async_copy.CpAsyncCommit, tir.async_copy.CpAsyncWait, memory.Copy, nn.TiledMma)
         assert [type(op) for op in body.operations if isinstance(op, kinds)] == [
-            Sync, CopyAsync, CpAsyncCommit, CpAsyncWait, Sync, Copy,
-            Sync, CopyAsync, CpAsyncCommit, CpAsyncWait, Sync, Copy, TiledMma,
+            tir.sync.Sync, tir.async_copy.CopyAsync, tir.async_copy.CpAsyncCommit, tir.async_copy.CpAsyncWait, tir.sync.Sync, memory.Copy,
+            tir.sync.Sync, tir.async_copy.CopyAsync, tir.async_copy.CpAsyncCommit, tir.async_copy.CpAsyncWait, tir.sync.Sync, memory.Copy, nn.TiledMma,
         ]
         tilefoundry.compile(state.lowered)
 
@@ -1158,7 +1103,7 @@ class ZeroTripInsertSlice(ScheduleCase):
         visitor.visit(lowered.lookup(state.result.function.name).body)
         assert len(visitor.loops) == 1
         loop = visitor.loops[0]
-        assert tuple(static_dim_value(value) for value in (loop.start, loop.stop, loop.step)) == (
+        assert tuple(expr.static_dim_value(value) for value in (loop.start, loop.stop, loop.step)) == (
             0,
             0,
             1,

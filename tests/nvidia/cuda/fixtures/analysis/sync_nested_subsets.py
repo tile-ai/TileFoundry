@@ -4,10 +4,10 @@ Only the 64 thread mesh holds both, so the barrier between them runs there; the
 writer's loop needs its own barrier over its half alone.
 """
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1), Topology("thread", 64)))
 class NestedSubsets:
     @func

@@ -6,24 +6,14 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from tilefoundry.analysis import analyze
-from tilefoundry.cli.source import checked_program
-from tilefoundry.cli.target import target_by_identity
-from tilefoundry.codegen.options import CodegenOptions
-from tilefoundry.inspection import as_script
-from tilefoundry.passes.transforms import ConvertHIRToTIR
-from tilefoundry.schedule import (
-    candidates,
-    finalize,
-    listing,
-    one,
-    render,
-    render_all,
-    render_candidates,
-)
+from tilefoundry import analysis, inspection, passes, schedule
+from tilefoundry.passes import transforms
+
+from .source import checked_program
+from .target import target_by_identity
 
 
-def _write(out: str, text: str) -> None:
+def write(out: str, text: str) -> None:
     destination = Path(out)
     temporary = destination.with_name(f".{destination.name}.tmp")
     temporary.write_text(f"{text.rstrip()}\n", encoding="utf-8")
@@ -35,12 +25,12 @@ def run_finalize(
 ) -> int:
     """Finalize ``source`` and write the sole requested representation."""
     program = checked_program(source, dims, command="schedule finalize")
-    lowering = program.module.resolve_target().resolve(ConvertHIRToTIR, CodegenOptions())
-    analyzed = analyze(program.module, program.entry, analysis=lowering.analyses)
-    module = finalize(analyzed)
-    rendered = as_script(module)
+    lowering = program.module.resolve_target().resolve(transforms.ConvertHIRToTIR, passes.Options())
+    analyzed = analysis.analyze(program.module, program.entry, analysis=lowering.analyses)
+    module = schedule.finalize(analyzed)
+    rendered = inspection.as_script(module)
     text = json.dumps({"source": rendered}, indent=2) if as_json else rendered
-    _write(out, text)
+    write(out, text)
     return 0
 
 
@@ -55,10 +45,10 @@ def run_facts(
     selected = target_by_identity(target)
     format = "json" if as_json else "text"
     text = (
-        render_all(listing(selected), selected, format=format)
-        if op is None else render(one(selected, op), selected, format=format)
+        schedule.render_all(schedule.listing(selected), selected, format=format)
+        if op is None else schedule.render(schedule.one(selected, op), selected, format=format)
     )
-    _write(out, text)
+    write(out, text)
     return 0
 
 
@@ -71,9 +61,9 @@ def run_candidates(
 ) -> int:
     """Write instruction candidates for the unscheduled sites in ``source``."""
     program = checked_program(source, dims, command="schedule candidates")
-    report = candidates(program.module, program.entry, source=source)
-    text = json.dumps(report, indent=2) if as_json else render_candidates(report)
-    _write(out, text)
+    report = schedule.candidates(program.module, program.entry, source=source)
+    text = json.dumps(report, indent=2) if as_json else schedule.render_candidates(report)
+    write(out, text)
     return 0
 
 

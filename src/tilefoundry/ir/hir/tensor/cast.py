@@ -1,53 +1,50 @@
+"""HIR ``Cast`` Op: convert a tensor to another dtype."""
+
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard_layout import shard_layout_of
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    identity_relations,
-    register_access_relation,
-    relations_of,
-)
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry import core
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
 
 
-@register_op(dialect='tf', category='tensor')
-class Cast(Op):
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
-    dtype = ParamDef(kind="attribute", annotation=DType)
+@expr.register_op(dialect='tf', category='tensor')
+class Cast(expr.Op):
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    dtype = expr.ParamDef(kind="attribute", annotation=expr.DType)
 
 
-register_access_relation(Cast)(identity_relations)
+access.register_relation(Cast)(access.identity_relations)
 
 
-@register_typeinfer(Cast)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(Cast)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     x_ty = ctx.type_of(call.args[0])
     new_layout = x_ty.layout
-    if shard_layout_of(x_ty.layout) is not None:
-        relation = relations_of(call, ctx)
-        derived = derive_output_shard_layout(
+    if types.shard_layout_of(x_ty.layout) is not None:
+        relation = access.relations_of(call, ctx)
+        derived = typeinfer.derive_output_shard_layout(
             (x_ty,), relation, x_ty.shape, ctx=ctx, storage=x_ty.storage
         )
         if derived is not None:
             new_layout = derived
-    return TensorType(
+    return types.TensorType(
         shape=x_ty.shape, dtype=call.target.dtype, layout=new_layout, storage=x_ty.storage
     )
 
 
-@register_eval(Cast)
-def _eval_cast(ctx):
+@evaluator.register(Cast)
+def eval_cast(ctx):
     def cast(x):
-        return x.to(to_torch_dtype(ctx.op.dtype))
+        return x.to(evaluator.to_torch_dtype(ctx.op.dtype))
 
     x = ctx.args[0].tensor
     held = cast(x.tensor) if x.is_global else tuple((p, cast(t)) for p, t in x.tensor)
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
+
+
+@cost.register(Cast)
+def cast_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    return cost.elementwise(call, ctx)
+
+
+__all__ = ["Cast"]

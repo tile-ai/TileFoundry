@@ -14,20 +14,15 @@ from tests.nvidia.cuda.analysis.sync_cases import (
     _attached,
     _planned,
 )
-from tilefoundry.analysis import AnalysisError
-from tilefoundry.ir.core import Call
-from tilefoundry.ir.hir.schedule import ScheduleOp
-from tilefoundry.ir.tir.stmts import Evaluate, Sequential
-from tilefoundry.ir.visitor import StmtVisitor
+from tilefoundry import analysis
+from tilefoundry.ir import core, expr, hir
 from tilefoundry.schedule import finalize
-from tilefoundry_nvidia.cuda.analysis.completion import Group
-from tilefoundry_nvidia.cuda.analysis.sync import StepKind
-from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
-from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import WgmmaCommitGroup, WgmmaWaitGroup
+from tilefoundry_nvidia.cuda import analysis as cuda_analysis
+from tilefoundry_nvidia.cuda.ir.tir import nn, sync
 
-_PUBLISHED = ((StepKind.PROXY_FENCE, None), (StepKind.BARRIER, None))
-_WAITED = ((StepKind.COMMIT, Group.WGMMA), (StepKind.WAIT, Group.WGMMA))
-_FENCE = ((StepKind.FENCE, Group.WGMMA),)
+_PUBLISHED = ((cuda_analysis.StepKind.PROXY_FENCE, None), (cuda_analysis.StepKind.BARRIER, None))
+_WAITED = ((cuda_analysis.StepKind.COMMIT, cuda_analysis.Group.WGMMA), (cuda_analysis.StepKind.WAIT, cuda_analysis.Group.WGMMA))
+_FENCE = ((cuda_analysis.StepKind.FENCE, cuda_analysis.Group.WGMMA),)
 
 
 def _steps(attached):
@@ -35,7 +30,7 @@ def _steps(attached):
     return [
         (
             type(owner.target.op).__name__
-            if isinstance(getattr(owner, "target", None), ScheduleOp)
+            if isinstance(getattr(owner, "target", None), hir.schedule.ScheduleOp)
             else None,
             tag,
             tuple((step.kind, step.group) for step in steps),
@@ -58,7 +53,7 @@ class WgmmaRetainedCall(SyncCase):
             (None, None, _WAITED),
         ]
         owner, _tagged = attached[1]
-        assert isinstance(owner, Call), "the waits sit before a call, not before a region"
+        assert isinstance(owner, expr.Call), "the waits sit before a call, not before a region"
 
 
 @case
@@ -74,30 +69,30 @@ class WgmmaPartialWarpgroups(SyncCase):
         result = _analyzed(state)
         attached = _attached(result.function)
         assert _steps(attached) == [
-            (None, None, ((StepKind.BARRIER, None),)),
+            (None, None, ((cuda_analysis.StepKind.BARRIER, None),)),
             ("TiledMma", None, _FENCE),
             ("TiledMma", "after", _WAITED),
             (
                 None,
                 None,
-                ((StepKind.COMMIT, Group.CP_ASYNC), (StepKind.WAIT, Group.CP_ASYNC)) + _PUBLISHED,
+                ((cuda_analysis.StepKind.COMMIT, cuda_analysis.Group.CP_ASYNC), (cuda_analysis.StepKind.WAIT, cuda_analysis.Group.CP_ASYNC)) + _PUBLISHED,
             ),
         ]
 
         issuing = []
 
-        class IssuingScopes(StmtVisitor):
+        class IssuingScopes(core.StmtVisitor):
             def visit_MeshScope(self, stmt):
-                if isinstance(stmt.body, Sequential):
-                    kinds = [type(s.callable) for s in stmt.body.body if isinstance(s, Evaluate)]
-                    if TiledMma in kinds:
+                if isinstance(stmt.body, core.Sequential):
+                    kinds = [type(s.callable) for s in stmt.body.body if isinstance(s, core.Evaluate)]
+                    if nn.TiledMma in kinds:
                         issuing.append(kinds)
                 self.generic_visit(stmt)
 
         IssuingScopes().visit(finalize(result).lookup(result.function.name).body)
         (kinds,) = issuing
-        last = max(index for index, kind in enumerate(kinds) if kind is TiledMma)
-        assert kinds[last + 1 : last + 3] == [WgmmaCommitGroup, WgmmaWaitGroup]
+        last = max(index for index, kind in enumerate(kinds) if kind is nn.TiledMma)
+        assert kinds[last + 1 : last + 3] == [sync.WgmmaCommitGroup, sync.WgmmaWaitGroup]
 
 
 @case
@@ -107,7 +102,7 @@ class WgmmaDivergentLoop(SyncCase):
     path: Path = FIXTURES / "analysis/sync_wgmma_divergent.py"
 
     def guard(self, state, problems):
-        with pytest.raises(AnalysisError, match="collective step is needed inside loop '_j'"):
+        with pytest.raises(analysis.Error, match="collective step is needed inside loop '_j'"):
             _planned(state)
 
 

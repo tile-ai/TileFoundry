@@ -9,67 +9,35 @@ from pathlib import Path
 
 import torch
 
-from tilefoundry.analysis.api import analyze
-from tilefoundry.analysis.check import check_program
-from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.core import (
-    Call,
-    Constant,
-    Op,
-    Tuple,
-    Var,
-)
-from tilefoundry.ir.core.module import Module, ModuleList
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.schedule import ScheduleOp
-from tilefoundry.ir.hir.tensor.empty import Empty
-from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.pattern import (
-    is_ranked_tensor,
-    thread_execution_mesh,
-)
-from tilefoundry.ir.tir import PrimFunction
-from tilefoundry.ir.tir.async_copy import CopyAsync
-from tilefoundry.ir.tir.memory import PtrOf, TensorView
-from tilefoundry.ir.tir.stmts import Evaluate, For, If, LetStmt, MeshScope, Sequential, While
-from tilefoundry.ir.types import (
-    DType,
-    Layout,
-    StorageKind,
-    TensorType,
-)
-from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.layout_algebra import cosize
-from tilefoundry.ir.types.mesh import levels, make_mesh, starts
-from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
+from tilefoundry import analysis
+from tilefoundry.interfaces import evaluator, schedule, verify
+from tilefoundry.ir import core, expr, hir, pattern, tir, types
+from tilefoundry.ir.hir import tensor
+from tilefoundry.ir.tir import memory
+from tilefoundry.ir.types import layout_algebra
 from tilefoundry.schedule import finalize
-from tilefoundry.visitor_registry.contexts import VerifyContext
-from tilefoundry.visitor_registry.instruction import check_call
 
 
-def _region_key(region: MeshRegion, occurrences: dict[str, int]) -> str:
+def _region_key(region: core.MeshRegion, occurrences: dict[str, int]) -> str:
     """Name one region by its selected topology run and lexical occurrence."""
     mesh = region.mesh
     assert len(mesh.topologies) == 1
     topology = getattr(mesh.topologies[0], "name", mesh.topologies[0])
-    offset = starts(mesh)[0]
-    size = prod(flatten(levels(mesh)[0].shape))
+    offset = types.starts(mesh)[0]
+    size = prod(types.flatten(types.levels(mesh)[0].shape))
     selection = f"{topology}@{offset}:{size}"
     occurrence = occurrences.get(selection, 0)
     occurrences[selection] = occurrence + 1
     return f"{selection}#{occurrence}"
 
 
-class _OperandMatchVisitor(StmtVisitor[None]):
+class _OperandMatchVisitor(core.StmtVisitor[None]):
     """Exercise operand declarations directly, independently of the report renderer."""
 
     def __init__(self) -> None:
         self.matches: list[tuple[object, str, dict]] = []
 
-    def visit_MeshScope(self, stmt: MeshScope) -> None:
+    def visit_MeshScope(self, stmt: core.MeshScope) -> None:
         previous = getattr(self, "meshes", ())
         self.meshes = (*previous, stmt.mesh)
         try:
@@ -77,32 +45,32 @@ class _OperandMatchVisitor(StmtVisitor[None]):
         finally:
             self.meshes = previous
 
-    def visit_Evaluate(self, stmt: Evaluate) -> None:
+    def visit_Evaluate(self, stmt: core.Evaluate) -> None:
         op = stmt.callable
-        if getattr(type(op), "_op_schema", None) is None:
+        if expr.schema_of(type(op)) is None:
             return
         meshes = getattr(self, "meshes", ())
-        mesh = make_mesh(*meshes) if meshes else None
-        bindings, projection = check_call(
+        mesh = types.Mesh.from_meshes(*meshes) if meshes else None
+        bindings, projection = schedule.check_call(
             op,
             stmt.args,
             mesh,
-            frame=VerifyContext(current_mesh=mesh, mesh_scope=meshes),
+            frame=verify.Context(current_mesh=mesh, mesh_scope=meshes),
         )
-        for param, pattern in zip(projection.params, projection.patterns, strict=True):
-            if pattern is not None:
+        for param, declared in zip(projection.params, projection.patterns, strict=True):
+            if declared is not None:
                 self.matches.append((op, param.name, dict(bindings)))
 
 
-def _direct_operand_matches(function: PrimFunction) -> list[tuple[object, str, dict]]:
+def _direct_operand_matches(function: core.PrimFunction) -> list[tuple[object, str, dict]]:
     visitor = _OperandMatchVisitor()
     visitor.visit(function.body)
     return visitor.matches
 
 
-def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path) -> None:
+def _assert_live_smem_views_do_not_overlap(function: core.PrimFunction, source: Path) -> None:
     """Check literal views in lowered TIR, including uses across loop backedges."""
-    views: list[tuple[Var, int, int]] = []
+    views: list[tuple[expr.Var, int, int]] = []
     defined: dict[int, int] = {}
     last: dict[int, int] = {}
     aliases: dict[int, set[int]] = {}
@@ -110,8 +78,8 @@ def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path)
 
     def use(expressions) -> None:
         for expression in expressions:
-            for value in collect_exprs(expression):
-                if isinstance(value, Var):
+            for value in core.collect_exprs(expression):
+                if isinstance(value, expr.Var):
                     for key in aliases.get(id(value), {id(value)}):
                         if key in defined:
                             last[key] = clock
@@ -121,32 +89,32 @@ def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path)
         if statement is None:
             return
         clock += 1
-        if isinstance(statement, Sequential):
+        if isinstance(statement, core.Sequential):
             for child in statement.body:
                 walk(child)
-        elif isinstance(statement, LetStmt):
+        elif isinstance(statement, core.LetStmt):
             use((statement.value,))
             defined[id(statement.var)] = last[id(statement.var)] = clock
             aliases[id(statement.var)] = {
                 key
-                for value in collect_exprs(statement.value)
-                if isinstance(value, Var)
+                for value in core.collect_exprs(statement.value)
+                if isinstance(value, expr.Var)
                 for key in aliases.get(id(value), {id(value)})
             } or {id(statement.var)}
             fields = (
                 statement.value.elements
-                if isinstance(statement.value, Tuple)
+                if isinstance(statement.value, expr.Tuple)
                 else (statement.value,)
             )
             for field in fields:
                 if (
-                    isinstance(field, Call)
-                    and isinstance(field.target, TensorView)
-                    and field.target.storage is StorageKind.SMEM
-                    and isinstance(field.args[0], Constant)
+                    isinstance(field, expr.Call)
+                    and isinstance(field.target, memory.TensorView)
+                    and field.target.storage is expr.StorageKind.SMEM
+                    and isinstance(field.args[0], expr.Constant)
                 ):
                     span = (
-                        cosize(field.type.layout)
+                        layout_algebra.cosize(field.type.layout)
                         if field.type.layout is not None
                         else prod(field.type.shape)
                     )
@@ -157,10 +125,10 @@ def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path)
                             span * field.type.dtype.bit_width // 8,
                         )
                     )
-        elif isinstance(statement, (For, While)):
+        elif isinstance(statement, (core.For, core.While)):
             use(
                 (statement.start, statement.stop, statement.step)
-                if isinstance(statement, For)
+                if isinstance(statement, core.For)
                 else (statement.cond,)
             )
             entered = clock
@@ -168,13 +136,13 @@ def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path)
             for key, used in last.items():
                 if defined[key] < entered < used:
                     last[key] = clock
-        elif isinstance(statement, If):
+        elif isinstance(statement, core.If):
             use((statement.cond,))
             walk(statement.then_body)
             walk(statement.else_body)
-        elif isinstance(statement, MeshScope):
+        elif isinstance(statement, core.MeshScope):
             walk(statement.body)
-        elif isinstance(statement, Evaluate):
+        elif isinstance(statement, core.Evaluate):
             use(statement.args)
 
     walk(function.body)
@@ -189,7 +157,7 @@ def _assert_live_smem_views_do_not_overlap(function: PrimFunction, source: Path)
         )
 
 
-class _RetainedStatements(StmtVisitor[None]):
+class _RetainedStatements(core.StmtVisitor[None]):
     def __init__(self):
         self.calls = []
         self.loops = []
@@ -201,9 +169,9 @@ class _RetainedStatements(StmtVisitor[None]):
         self.bindings[id(stmt.var)] = stmt.value
 
     def storage(self, value):
-        if isinstance(value, Var) and id(value) in self.bindings:
+        if isinstance(value, expr.Var) and id(value) in self.bindings:
             return self.storage(self.bindings[id(value)])
-        if isinstance(value, Call) and isinstance(value.target, (TensorView, PtrOf, Slice)):
+        if isinstance(value, expr.Call) and isinstance(value.target, (memory.TensorView, memory.PtrOf, tensor.Slice)):
             return self.storage(value.args[0])
         return value
 
@@ -214,33 +182,33 @@ class _RetainedStatements(StmtVisitor[None]):
     def visit_Evaluate(self, stmt, ctx=None):
         self.operations.append(stmt.callable)
         self.statements.append(stmt)
-        if isinstance(stmt.callable, (PrimFunction, ModuleList, Call)):
+        if isinstance(stmt.callable, (core.PrimFunction, core.ModuleList, expr.Call)):
             self.calls.append(stmt)
 
 
 def _finalized(module):
     authored = module.entry_function()
-    result = analyze(*check_program(module, authored), analysis=("memory", "sync"))
+    result = analysis.analyze(*analysis.check_program(module, authored), analysis=("memory", "sync"))
     return finalize(result)
 
 
 def _copy_schedule_call(
-    *, repeat=None, order=None, storage: StorageKind = StorageKind.GMEM
-) -> Call:
-    layout = Layout((4,), (1,))
-    type_ = TensorType((4,), DType.bf16, layout, storage)
-    return Call(
-        target=ScheduleOp(
-            op=CopyAsync(),
+    *, repeat=None, order=None, storage: expr.StorageKind = expr.StorageKind.GMEM
+) -> expr.Call:
+    layout = types.Layout((4,), (1,))
+    type_ = types.TensorType((4,), expr.DType.bf16, layout, storage)
+    return expr.Call(
+        target=hir.schedule.ScheduleOp(
+            op=tir.async_copy.CopyAsync(),
             repeat=repeat,
             order=order,
         ),
         args=(
-            Var(name="src", type=type_),
-            Call(
-                Empty(type=replace(type_, storage=StorageKind.SMEM)),
+            expr.Var(name="src", type=type_),
+            expr.Call(
+                tensor.Empty(type=replace(type_, storage=expr.StorageKind.SMEM)),
                 (),
-                type=replace(type_, storage=StorageKind.SMEM),
+                type=replace(type_, storage=expr.StorageKind.SMEM),
             ),
         ),
         type=type_,
@@ -248,33 +216,33 @@ def _copy_schedule_call(
 
 
 def _evaluate_call(
-    op: Op,
-    typed_inputs: tuple[tuple[TensorType, torch.Tensor], ...],
-    result_type: TensorType,
+    op: expr.Op,
+    typed_inputs: tuple[tuple[types.TensorType, torch.Tensor], ...],
+    result_type: types.TensorType,
 ) -> torch.Tensor:
     params = tuple(
-        Var(name=f"arg{index}", type=type_) for index, (type_, _data) in enumerate(typed_inputs)
+        expr.Var(name=f"arg{index}", type=type_) for index, (type_, _data) in enumerate(typed_inputs)
     )
-    call = Call(target=op, args=params, type=result_type)
-    function = Function.build(
+    call = expr.Call(target=op, args=params, type=result_type)
+    function = core.Function.from_parts(
         name="schedule_value",
         params=params,
         body=call,
         return_type=result_type,
     )
-    return evaluate(function, *(data for _type, data in typed_inputs))
+    return evaluator.evaluate(function, *(data for _type, data in typed_inputs))
 
 
-@register_op(dialect="T", category="schedule", name="unstated_instruction")
-class _UnstatedInstruction(Op):
-    execution_mesh = thread_execution_mesh()
+@expr.register_op(dialect="T", category="schedule", name="unstated_instruction")
+class _UnstatedInstruction(expr.Op):
+    execution_mesh = pattern.thread_execution_mesh()
 
-    value = ParamDef(
+    value = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.READ | MemoryEffect.WRITE,
-        pattern=is_ranked_tensor(),
+        effect=expr.MemoryEffect.READ | expr.MemoryEffect.WRITE,
+        pattern=pattern.is_ranked_tensor(),
     )
 
 
 def entry_function(program):
-    return program.entry_function() if isinstance(program, Module) else program
+    return program.entry_function() if isinstance(program, core.Module) else program

@@ -120,7 +120,7 @@ entry; it is not an extra runtime metadata field.
 
 An MMA instruction is a target-owned `MmaAtom` declaration. The declaration
 class states its authored parameters, required physical execution mesh, target
-capability, and the `TensorPattern` read for each `A`, `B`, and `C` role. An
+capability, and the `pattern.Tensor` read for each `A`, `B`, and `C` role. An
 instance binds the parameters for one call; it does not carry a second copy of
 concrete fragment layouts that could drift from those patterns.
 
@@ -129,15 +129,15 @@ class MmaAtom(Printable):
     namespace: str
     execution_mesh: Mesh
     capability: str
-    A: TensorPattern | SwitchPattern
-    B: TensorPattern | SwitchPattern
-    C: TensorPattern | SwitchPattern
+    A: pattern.Tensor | pattern.Switch
+    B: pattern.Tensor | pattern.Switch
+    C: pattern.Tensor | pattern.Switch
     parameters: tuple[ParamDef, ...]
     bindings: dict[str, object]
     mesh: Mesh | None
 
-    def role(self, role: str) -> TensorPattern: ...
-    def execution_mesh_pattern(self) -> MeshPattern: ...
+    def role(self, role: str) -> pattern.Tensor: ...
+    def execution_mesh_pattern(self) -> pattern.Mesh: ...
     def print(self, printer: PrinterBase, ctx=None) -> str: ...
 
 def variants(
@@ -167,9 +167,10 @@ def variants(
     declared dtype; `values` supplies the others, which stay unbound without it
     or when it answers `None`, while an empty answer admits no binding. A
     parameter with a default is varied only when `vary_defaulted` is true. No
-    parameters give one empty binding. `schedule candidates` calls it with
-    `vary_defaulted=False` and binds `int` parameters to `1..` the site's
-    largest extent; CUDA `MatMul` typing calls it with `vary_defaulted=True`
+    parameters give one empty binding. `schedule candidates` calls it
+    with `vary_defaulted=True` over the non-`int` parameters and binds each
+    `int` parameter to the values in `1..` the site's largest extent that its
+    patterns admit; CUDA `MatMul` typing calls it with `vary_defaulted=True`
     and leaves `int` parameters unbound.
   - Role-pattern modes MUST follow the logical row-major correspondence in
     [semantic-analysis §3.1](../../../../../../docs/spec/semantic-analysis.md#31-logical-shape-to-layout-domain):
@@ -215,7 +216,7 @@ refused. `Form` and `Major` live beside `Wgmma` under `T.cuda.sm90`.
 ### Calling convention
 
 Load, compute, and store are separate effect statements under an enclosing
-`MeshScope` ([§1.2](../../../../../../docs/spec/tir.md#12-structural-stmts-tirstmts)). `T.tiled_mma` has exactly
+`MeshScope` ([§1.2](../../../../../../docs/spec/tir.md#12-structural-stmts-ircore)). `T.tiled_mma` has exactly
 three input operands plus one required compile-time `atom` attribute:
 
 ```python
@@ -230,7 +231,7 @@ T.tiled_mma(acc, lhs, rhs, atom=T.cuda.sm80.Mma())
   operands MUST use the atom's declared dtypes and fragment arrangements.
 - `TiledMma` generates its execution-mesh declaration from the atom's lane
   shape and strides, preceded by zero or more group modes captured by
-  `StarPattern`. The whole matched layout MUST be forward and injective,
+  `pattern.Star`. The whole matched layout MUST be forward and injective,
   and its offset MUST be aligned to the atom's participant count. Operand
   meshes retain the atom's exact lane axes.
 - The active physical mesh MUST satisfy `atom.execution_mesh_pattern()`. If the atom
@@ -253,7 +254,7 @@ from the fence; an A read from registers does not chain.
 ## Async copy lowering
 
 Shared `CopyAsync`, `CpAsyncCommit`, and `CpAsyncWait` are defined in
-[core TIR](../../../../../../docs/spec/tir.md#async-copy-ops-tirasync).
+[core TIR](../../../../../../docs/spec/tir.md#async-copy-ops-tirasync_copy).
 `CopyAsync` requires the `cp.async` capability and lowers to
 `tilefoundry::ops::copy_async(src, dst)`. An indexed valid row uses `cp.async`;
 an invalid row with zero fill uses its zero-fill source-size form, while

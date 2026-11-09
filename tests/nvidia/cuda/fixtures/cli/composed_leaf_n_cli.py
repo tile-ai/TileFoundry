@@ -1,5 +1,5 @@
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 N = DimVar("n_cli", 1, 8)
 
@@ -11,7 +11,7 @@ class Leaf:
         return tf.mul(x, w)
 
 
-@module(entry="root", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="root", target=cuda.Target("nvidia.h200_sxm"))
 class Composed:
     leaf = Leaf
 

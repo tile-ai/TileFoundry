@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _N = DimVar("arange_n", 1, 16)
 
 
-@module(entry="_symbolic_arange", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="_symbolic_arange", target=cuda.Target("nvidia.h200_sxm"))
 class SymbolicArange:
     @func
     def _symbolic_arange(x: Tensor[(_N,), "f32"]):

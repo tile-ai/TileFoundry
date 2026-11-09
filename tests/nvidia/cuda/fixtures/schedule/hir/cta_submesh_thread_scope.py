@@ -1,9 +1,9 @@
 """A thread scope inside a CTA submesh retains the same thread positions."""
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", 4), Topology("thread", 128)))
 class CtaSubmeshThreadScope:
     @func

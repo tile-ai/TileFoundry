@@ -11,12 +11,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.target import Target
-from tilefoundry.target.facts import TopologyFacts
-from tilefoundry.visitor_registry.registries import Role, codegen_registry, spelled
+from tilefoundry import dispatch
+from tilefoundry import target as tilefoundry_target
+from tilefoundry.ir import core, expr, types
+
+from .registry import Role, registry
 
 
 @dataclass(frozen=True)
@@ -33,7 +32,7 @@ class TensorSignature(Signature):
     """
 
     name: str
-    type: TensorType
+    type: types.TensorType
 
     @property
     def dynamic_axes(self) -> tuple[int, ...]:
@@ -42,7 +41,7 @@ class TensorSignature(Signature):
         A static extent is a compile-time constant on both sides of the call,
         so only these axes cost the convention anything.
         """
-        return tuple(axis for axis, dim in enumerate(self.type.shape) if isinstance(dim, DimVar))
+        return tuple(axis for axis, dim in enumerate(self.type.shape) if isinstance(dim, expr.DimVar))
 
     def extent_name(self, axis: int) -> str:
         """What a declaration calls this tensor's extent along *axis*.
@@ -139,13 +138,13 @@ Dynamic shared memory remains because its per-Launch value crosses the launcher 
 def tensor_signature_of(var) -> TensorSignature:
     """The C++ side of one declared parameter ``Var``."""
     ty = var.type
-    assert isinstance(ty, TensorType), (
+    assert isinstance(ty, types.TensorType), (
         f"param {var.name!r} must be TensorType, got {type(ty).__name__}"
     )
     return TensorSignature(name=var.name, type=ty)
 
 
-def program_id_params(module: Module, target: Target) -> tuple[ProgramIdSignature, ...]:
+def program_id_params(module: core.Module, target: tilefoundry_target.Target) -> tuple[ProgramIdSignature, ...]:
     """One id per level of *module*'s program whose ids *target* states.
 
     A level the target states has no register the device can read, so its id
@@ -154,7 +153,7 @@ def program_id_params(module: Module, target: Target) -> tuple[ProgramIdSignatur
     """
     stated = {
         topology_level.name
-        for topology_level in target.get_facts(TopologyFacts).topologies
+        for topology_level in target.get_facts(tilefoundry_target.TopologyFacts).topologies
         if topology_level.from_target
     }
     return tuple(
@@ -172,7 +171,7 @@ def called_as(
     symbol: str,
     program_ids: tuple[ProgramIdSignature, ...] = (),
     *,
-    target: Target,
+    target: tilefoundry_target.Target,
     params=None,
 ) -> CallableSignature:
     """How *fn* is called, as *fn*'s own target states it.
@@ -183,10 +182,10 @@ def called_as(
     declares no output parameters; *params* are the arguments its Launch binds.
     """
     key = (type(target), Role.CALLEE, type(fn))
-    convention = codegen_registry.lookup(key)
+    convention = registry.get(key, None)
     if convention is None:
         raise RuntimeError(
-            f"codegen: nothing registered for {spelled(key)}, so nothing states "
+            f"codegen: nothing registered for {dispatch.spelled(key)}, so nothing states "
             f"how {fn.name!r} is called"
         )
     if params is None:

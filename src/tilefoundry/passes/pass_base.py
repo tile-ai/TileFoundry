@@ -7,9 +7,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import replace
 
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.tir.prim_function import PrimFunction
+from tilefoundry.ir import core
 
 
 class Pass(ABC):
@@ -25,7 +23,7 @@ class Pass(ABC):
     requires: tuple[str, ...] = ()
 
     @abstractmethod
-    def run(self, module: Module) -> Module:
+    def run(self, module: core.Module) -> core.Module:
         ...
 
 
@@ -41,14 +39,14 @@ class FunctionPass(Pass):
     """
 
     @abstractmethod
-    def run_function(self, fn: HirFunction, module: Module) -> HirFunction:
+    def run_function(self, fn: core.Function, module: core.Module) -> core.Function:
         ...
 
-    def run(self, module: Module) -> Module:
+    def run(self, module: core.Module) -> core.Module:
         new_fns = []
         changed = False
         for fn in module.functions:
-            if isinstance(fn, HirFunction):
+            if isinstance(fn, core.Function):
                 nf = self.run_function(fn, module)
                 new_fns.append(nf)
                 if nf is not fn:
@@ -68,14 +66,14 @@ class PrimFuncPass(Pass):
     """
 
     @abstractmethod
-    def run_prim_func(self, fn: PrimFunction, module: Module) -> PrimFunction:
+    def run_prim_func(self, fn: core.PrimFunction, module: core.Module) -> core.PrimFunction:
         ...
 
-    def run(self, module: Module) -> Module:
+    def run(self, module: core.Module) -> core.Module:
         new_fns = []
         changed = False
         for fn in module.functions:
-            if isinstance(fn, PrimFunction):
+            if isinstance(fn, core.PrimFunction):
                 nf = self.run_prim_func(fn, module)
                 new_fns.append(nf)
                 if nf is not fn:

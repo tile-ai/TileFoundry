@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from tilefoundry.codegen.signature import CallableSignature
+from .signature import CallableSignature
 
 
 @dataclass(frozen=True)
@@ -14,10 +14,8 @@ class LinkedFunction:
 
     @classmethod
     def create(cls, target, symbol) -> "LinkedFunction":
-        """Create default export metadata from a resolved function symbol."""
-        from tilefoundry.codegen.link_function import link_function  # noqa: PLC0415
-
-        return link_function(symbol)
+        """Keep the export name and host signature of a resolved symbol as distinct identities."""
+        return cls(name=symbol.export_name, signature=symbol.callable)
 
 
 __all__ = ["LinkedFunction"]

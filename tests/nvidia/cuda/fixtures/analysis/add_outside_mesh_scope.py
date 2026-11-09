@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
-_TARGET = CudaTarget("nvidia.h200_sxm")
+_TARGET = cuda.Target("nvidia.h200_sxm")
 _TOPOLOGIES = (Topology("cta", 2), Topology("thread", 4))
 
 

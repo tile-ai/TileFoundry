@@ -39,36 +39,32 @@ flowchart TB
     Mesh -. mesh .-> ShardLayout
 ```
 
-`TensorType.layout` ([types §2](./types.md#2-tensortype)) carries
-any `LayoutBase`. Pure-layout invariants and shard-binding
-invariants live with the construct they constrain. Enforcement is
-dispatched by [visitor-registry](./visitor-registry.md); concrete
-checks live in [tir §1.3](./tir.md#13-primfunction) (TIR side) and
-[hir §1.3](./hir.md#13-op) (HIR side).
+`TensorType.layout` ([types §2](./types.md#2-tensortype)) carries any
+`LayoutBase`. Invariants live with the construct they constrain; enforcement is
+dispatched by [visitor-registry](./visitor-registry.md), with concrete checks in
+[tir §1.3](./tir.md#13-primfunction) and [hir §1.3](./hir.md#13-op).
 
 ---
 
 ## 1. `IntTuple`
 
-The primitive building block, taken from pycute's `shape` / `stride`
-convention. It is not just a flat tuple — nested tuples are allowed:
+The primitive building block, from pycute's `shape` / `stride` convention;
+nested tuples are allowed:
 
 ```python
 IntTuple = ShapeDim | tuple[IntTuple, ...]    # entry: a static or symbolic extent, or a nested `IntTuple`
 ```
 
 - constraints:
-  - admits both a unique flat `int`-tuple view and a unique nested-structure view;
+  - admits a unique flat `int`-tuple view and a unique nested-structure view;
     the `shape` / `strides` of `Layout` and `ShardLayout` are `IntTuple`.
 
-A `shape` / `stride` entry is not restricted to a static `int`: it may be a
-symbolic / dynamic dim (a `DimVar` or dim `Expr` — a `ShapeDim`). `None` is not
-a shape extent. The complete `Layout.strides` field may be `None` in an
-annotation or before parser default materialization; typed values carry concrete
-strides. Consumers that need a concrete integer —
+An entry may be a symbolic / dynamic dim (a `DimVar` or dim `Expr` — a
+`ShapeDim`); `None` is not a shape extent. The complete `Layout.strides` field
+may be `None` in an annotation or before parser default materialization; typed
+values carry concrete strides. Consumers that need a concrete integer —
 `Mesh.__getitem__` and `T.sync` participation ([tir §1.5](./tir.md#15-sync)) —
-require static `int` entries and **fail closed** on a symbolic / dynamic one
-rather than guessing.
+require static `int` entries and **fail closed** on a symbolic / dynamic one.
 
 Dimension substitution traverses a tensor's logical shape and layout together.
 For a `ShardLayout` it also traverses the bound `Mesh`: the Mesh layout and each
@@ -80,8 +76,7 @@ or dimension expression before asking `size` or `product` for a position count.
 
 ## 2. `Layout` hierarchy
 
-`TensorType.layout` is not a free-form slot; it accepts only objects in
-the `Layout` hierarchy:
+`TensorType.layout` accepts only objects in the `Layout` hierarchy:
 
 ```python
 class LayoutBase:
@@ -100,10 +95,6 @@ class ShardLayout(LayoutBase):
     """Bind a layout domain to a device mesh."""
 ```
 
-- constraints:
-  - `TensorType.layout` accepts only objects in this hierarchy; the common contract
-    below applies to every legal layout object.
-
 Common contract — every legal layout object MUST satisfy:
 
 - a stable domain shape exposed as `shape`,
@@ -115,8 +106,7 @@ Common contract — every legal layout object MUST satisfy:
   element. Extending to non-injective cases (padding / broadcast
   layouts) requires a separate RFC.
 
-An object that does not satisfy these conditions cannot enter
-`TensorType.layout`.
+An object that does not satisfy these conditions cannot enter `TensorType.layout`.
 
 ---
 
@@ -137,10 +127,6 @@ class Layout(LayoutBase):
     strides: IntTuple | None = None
 ```
 
-- constraints:
-  - the pure primitive layout; it has no `offset` field. Field meanings and
-    semantics below.
-
 Field meanings:
 
 - `shape` — the layout-domain shape (flat or nested). When a `Layout`
@@ -149,8 +135,8 @@ Field meanings:
   dividing. The per-thread local layout shape is derived from
   `layout.shape` ÷ mesh extents per `Split` (see [§7](#7-shardlayout)).
 - `strides` — the step rule from layout domain to physical index. When
-  not explicitly given, it defaults to `prefix_product(shape)` in the
-  pycute style. When a `Layout` sits inside `ShardLayout.layout`,
+  not explicitly given, it defaults to compact row-major strides of `shape`
+  ([§9](#9-layout-construction-and-algebra)). When a `Layout` sits inside `ShardLayout.layout`,
   `strides[k]` is the **storage-physical** step on the engine attached
   to that `ShardTensor` (see [§7](#7-shardlayout)).
 
@@ -160,8 +146,8 @@ Semantics:
 idx = crd2idx(coord, shape, strides)
 ```
 
-The primitive `Layout` has **no** `offset` field. `offset` belongs to
-`ComposedLayout` and MUST NOT leak down into the primitive.
+The primitive `Layout` has **no** `offset` field; `offset` belongs to
+`ComposedLayout` and MUST NOT leak into the primitive.
 
 ---
 
@@ -206,11 +192,9 @@ Field meanings:
 - `inner` — applied **last** (the output-side layout); `None` applies
   the identity mapping
 
-A `ComposedLayout` normally inherits its domain shape and axis numbering
-from `outer`. When `outer=None`, the identity mapping contributes no explicit
-domain, so the composition inherits them from `inner`. Therefore, when an
-outer `ShardLayout` binds a `ComposedLayout`, a `Split(k)` attr still
-references the composition's stable `shape` / `domain_rank` contract.
+A `ComposedLayout` inherits its domain shape and axis numbering from `outer`
+(from `inner` when `outer=None`). When a `ShardLayout` binds a `ComposedLayout`,
+a `Split(k)` attr references that stable `shape` / `domain_rank`.
 
 ### 4.1 `Swizzle`
 
@@ -233,13 +217,13 @@ class Swizzle:
 
     def __call__(self, offset: int) -> int: ...
 
+    @classmethod
+    def from_active(cls, active_y: int, active_z: int) -> Swizzle:
+        """Build the representable CuTe swizzle that maps Y bits onto Z bits."""
+
 
 def get_swizzle_portion(layout: Layout | ComposedLayout) -> Swizzle | None:
     """Return the final swizzle of a composed layout, when present."""
-
-
-def make_swizzle(active_y: int, active_z: int) -> Swizzle:
-    """Build the representable CuTe swizzle that maps Y bits onto Z bits."""
 ```
 
 **Terms.** The *Y bits* are the ones read out of the index
@@ -252,13 +236,12 @@ the ones they are XORed onto
     the Y and Z ranges from overlapping.
   - `swizzle(offset) == offset ^ shiftr(offset & yyy_msk, shift)`, the CuTe
     formula unchanged.
-  - Because the two ranges do not overlap, a `Swizzle` is an involution:
-    `swizzle(swizzle(offset)) == offset`, so it is its own left and right
-    inverse. `bits == 0` is the identity.
+  - A `Swizzle` is an involution (`swizzle(swizzle(offset)) == offset`), so it
+    is its own left and right inverse. `bits == 0` is the identity.
   - Swizzle-specialized `composition`, `left_inverse`, and `right_inverse`
     MUST follow the corresponding CuTe `swizzle_layout.hpp` overloads.
     `get_swizzle_portion` returns `None` for a layout with no final swizzle;
-    `make_swizzle` MUST reject mask pairs that are not equal-width contiguous
+    `Swizzle.from_active` MUST reject mask pairs that are not equal-width contiguous
     runs rather than inventing a representation.
   - A `Swizzle` is a mapping on an index, not a layout. It is not a
     `LayoutBase`, it states no `shape`, and it MUST NOT be a
@@ -269,11 +252,10 @@ the ones they are XORed onto
     backing allocation is unchanged by it.
   - A `Swizzle` states where an element lives, never which element a logical
     coordinate names. `shape`, `domain_rank`, the axis numbering a `Split`
-    references, and the access relation an op states over a value are all read
-    off `outer` and MUST be the same as the unswizzled layout's. This is why an
-    op that only relabels the domain -- `Transpose`, `Reshape`, `Slice` --
-    carries the same `Swizzle` through: a window's start is a constant shift of
-    the index, which `offset` already states.
+    references, and the access relation of an op are read off `outer` and MUST
+    equal the unswizzled layout's. Hence `Transpose`, `Reshape` and `Slice`,
+    which only relabel the domain, carry the same `Swizzle` through (a window's
+    start is a constant shift stated by `offset`).
   - A swizzled `ComposedLayout` MUST NOT serve as a `Mesh` execution scope:
     [§9](#9-layout-construction-and-algebra) admits an identity
     `inner` only.
@@ -327,10 +309,10 @@ def within_scope(mesh: Mesh, current: Mesh) -> bool:
 
 - constraints:
   - Scope comparison MUST reduce each level's arrangement with
-    `filter(arrangement, major="row")`, retaining the level's start. Filtering
+    `layout_algebra.filter(arrangement, major="row")`, retaining the level's start. Filtering
     removes shape-one and stride-zero modes and coalesces adjacent modes after
     affine dimension normalization. For continuous selections,
-    `covered_by_scope` MUST compare starts and normalized sizes, independent
+    `utils.covered_by_scope` MUST compare starts and normalized sizes, independent
     of mode order. Otherwise it MUST conservatively compare the filtered
     arrangements and starts for equality.
   - `within_scope` MUST require both filtered selections to be continuous and
@@ -339,8 +321,8 @@ def within_scope(mesh: Mesh, current: Mesh) -> bool:
     coalescing direction to leave one mode with stride one. Symbolic interval bounds MUST use the
     conservative dimension range of their difference; an unproved bound
     MUST return False.
-  - a compile-time constant that does not enter the IR graph; describes the device
-    domain, not a tensor layout object. A slice never becomes an IR/SSA value.
+  - a compile-time constant that does not enter the IR graph; it describes the
+    device domain, not a tensor layout. A slice never becomes an IR/SSA value.
 
 Field meanings:
 
@@ -357,25 +339,28 @@ cover every selected position once, with one fixed physical stride per axis.
 Composition preserves topology and offset; slicing the resulting composed mesh is rejected.
 
 Every mesh MUST state one arrangement per level it names, each in that level's
-own numbering, as one nested `Layout` whose mode `i` is level `i` -- a mesh
-naming one level included. `Mesh` normalizes what was written into that form at
-construction: one arrangement over all the levels' axes is cut at the level
+own numbering, as one nested `Layout` whose mode `i` is level `i` (a one-level
+mesh included). `Mesh` normalizes what was written into that form at
+construction: one arrangement over all levels' axes is cut at the level
 boundaries, each level taking axes left to right until their extents multiply to
-its own size and its steps divided by what the levels under it hold. An axis of
-extent one adds no positions and joins the level being filled. A boundary no
-prefix of axes lands on MUST be refused.
+its own size, with steps divided by what the levels under it hold. An axis of
+extent one adds no positions and joins the level being filled. An axis that
+straddles a boundary MUST be refused rather than divided; every axis MUST
+belong to one level, and a stride the division does not divide exactly MUST be
+refused. A one-level mesh takes every axis into its single mode, needing no
+division and no declared extent.
 
 Because the layout is a nested `Layout`, the layout operations read it: `get(mesh.layout, i)`
 is level `i`'s own arrangement, `flatten(mesh.layout)` is every level's axes end
-to end, and `repeat_like` against `mesh.layout.shape` states per axis whatever is
-stated per level. `device_layout(mesh)` is those axes as the device numbers its
+to end, and `int_tuple.repeat_like` against `mesh.layout.shape` states per axis whatever is
+stated per level. `utils.device_layout(mesh)` is those axes as the device numbers its
 positions, each stepping by what its level states times what the levels under it
 hold, and a slice's `ComposedLayout.offset` is where the whole mesh starts in
 that numbering.
 
 Mesh composition uses the following rules:
 
-- `make_mesh(*meshes)` MUST append a mesh whose level names are disjoint from
+- `Mesh.from_meshes(*meshes)` MUST append a mesh whose level names are disjoint from
   those in force, MUST replace them entirely when the inner mesh names every
   one, and MUST replace the trailing levels when the inner mesh names a suffix
   of them, keeping the levels above and their names unchanged. Level names
@@ -392,14 +377,14 @@ Mesh composition uses the following rules:
   continuous position set. Continuity and containment MUST hold throughout the
   declared dimension envelopes. A replacement or enclosing selection with holes
   MUST be rejected rather than approximated as an interval.
-- `make_mesh(*meshes)` invokes `check_topology` on its result. For each named
+- `Mesh.from_meshes(*meshes)` invokes `check_topology` on its result. For each named
   level with a concrete declared extent, its position count MUST NOT exceed
   that extent; symbolic extents are deferred until dimensions are bound. A
   level stating a run is already bounded by `Mesh.__getitem__` and is not
   checked again.
 - `separate(mesh)` is the inverse construction: it returns one single-level
   `Mesh` per topology, with that level's arrangement, slice start, and share of
-  the axis names. It is imported from `tilefoundry.ir.types.mesh`.
+  the axis names. It is exported as `types.separate`.
 
 HIR `MeshRegion` applies this composition only at its body boundary. Its `args`
 are evaluated in the enclosing scope and are not recomposed merely because the
@@ -417,24 +402,13 @@ value is consumed by a region.
     parser resolves the non-empty tuple of declared topology names to the
     `Topology` tuple before it constructs the record. A bare string and the
     `topology=` keyword are not Mesh author forms.
-  - `states_consistent_positions(mesh)` is true when the product of topology
+  - `utils.states_consistent_positions(mesh)` is true when the product of topology
     sizes equals `size(mesh.layout)`. Mesh-scope verification asserts this
     predicate; Mesh construction and slicing do not, so a derived slice
     remains a record of its parent scope.
-  - A Mesh naming several levels segments its layout axes between them, left to
-    right in the order it names them: a level takes axes until their extents
-    multiply to exactly its own `Topology.size`. An axis that straddles a
-    boundary MUST be refused rather than divided, because a level boundary
-    cannot assign the positions of an axis it runs through. Every axis MUST
-    belong to one level.
-  - The layout of the positions one level has is the axes up to and including
-    that level's segment, with their strides divided by the product of the sizes
-    of the levels below it; a stride that division does not divide exactly MUST
-    be refused. A Mesh naming one level takes every axis into its single mode,
-    which needs no division and therefore no declared extent. A Mesh naming
-    several may be sliced: the key addresses all level axes in order, every
-    level retains its own arrangement, and the slice offset is the sum of each
-    selected start times that axis's step in device numbering.
+  - A Mesh naming several levels may be sliced: the key addresses all level
+    axes in order, every level retains its own arrangement, and the slice offset
+    is the sum of each selected start times that axis's step in device numbering.
   - Nested single-level Mesh scopes compose to exactly that shape: the axes join
     outermost first and each outer stride is scaled by the positions below it.
     A value distributed at two levels at once may therefore be written either
@@ -462,7 +436,7 @@ value is consumed by a region.
 The placed-layout constructor has one additional guard: a single layout may
 split a named level only once. If two distinct meshes used by one placed layout
 name the same topology level, parsing MUST reject that layout at its source
-node. This is a layout-construction rule, independent of `make_mesh()`'s
+node. This is a layout-construction rule, independent of `Mesh.from_meshes()`'s
 scope-composition rules.
 
 ### 5.1 `Placement`
@@ -481,32 +455,26 @@ class Placement:
     def from_env(cls, topology_level: str = "gpu") -> "Placement": ...
 
     @classmethod
-    def each(cls, mesh: Mesh) -> tuple["Placement", ...]: ...
+    def from_mesh(cls, mesh: Mesh) -> tuple["Placement", ...]: ...
 ```
 
 - constraints:
-  - a `Placement` MUST be data, not a callable. Which program a loaded module
-    speaks for is settled when it is loaded, so an answer computed at each
-    call would let one module change identity while holding weights narrowed
-    for the old one, and a weight cache keyed on it would then be describing a
-    property of the process rather than of the data.
-  - `ids` is keyed by level name, so `program_ids(topologies)` answers one id
-    per ordered `Topology` by lookup. A level the mapping does not name is
-    unfixed, which is what makes the answer's length the caller's business
-    rather than the caller's arithmetic.
-  - `Placement.each(mesh)` lists every placement of a mesh: each level's ids
+  - a `Placement` MUST be data, not a callable: which program a loaded module
+    speaks for is settled at load time, so a per-call answer would let a module
+    change identity while holding weights narrowed for the old one.
+  - `ids` is keyed by level name; `program_ids(topologies)` answers one id per
+    ordered `Topology` by lookup. A level the mapping does not name is unfixed.
+  - `Placement.from_mesh(mesh)` lists every placement of a mesh: each level's ids
     are the values of that level's arrangement. Its coordinates are
     `mesh_coords` of those ids ([§7.6](#76-local_layout)).
   - an unfixed level MUST be left undivided rather than read as `0`: the device
-    chooses its own `cta` and `thread`, and a host that guessed would hand one
-    thread's data back as the whole card's.
+    chooses its own `cta` and `thread`.
   - a `Placement` is host-side execution context. It MUST NOT appear in a
     `TensorType`, a checkpoint, a `CallableSignature`, a kernel parameter, or
     a `forward` argument.
   - one loaded module speaks for one program. A host serving several MUST build
-    one module per program, each told which it is; the current device is
-    thread-local and is set once per thread, so a module MUST NOT read it to
-    decide who it is.
+    one module per program, each told which it is; a module MUST NOT read the
+    current device (thread-local) to decide who it is.
 
 ---
 
@@ -579,10 +547,6 @@ def B() -> Broadcast:
     """
     ...
 ```
-
-- constraints:
-  - each entry of `ShardLayout.attrs` describes one mesh axis by its tuple
-    position; per-attr semantics and surface sugar below.
 
 Each entry of `ShardLayout.attrs` describes one **mesh axis** (by its
 position in the tuple); the attr says what that mesh axis does. `Split`
@@ -725,9 +689,7 @@ class ShardLayout(LayoutBase):
     mesh: Mesh
 ```
 
-- constraints:
-  - the distributed binding layer; binds an underlying layout's domain axes to mesh
-    axes without a new layout-algebra primitive. Sub-field contracts in [§7.1](#71-layout)–[§7.5](#75-example).
+Sub-field contracts are in [§7.1](#71-layout)–[§7.5](#75-example).
 
 The distribution-changing transformation (redistribute / sharding) is
 itself an IR op (`hir.sharding.Reshard`, see [hir §1.3](./hir.md#13-op)).
@@ -758,7 +720,7 @@ Let `sl: ShardLayout`, `T: TensorType`, and `G = sl.layout.shape`.
 - `Split(k)` indexes into `G`; it MUST NOT refer to `T.shape` axes or
   mesh axes.
 - For every mesh axis `a` with `sl.attrs[a] = Split(k)`,
-  `G[k] == sl.mesh.layout.shape[a]` MUST hold. Equivalently, `local_shape(sl)[k] == 1`
+  `G[k] == sl.mesh.layout.shape[a]` MUST hold. Equivalently, `shard_layout_local_shape(sl)[k] == 1`
   on every `Split`-bound layout dim. Surface sugar `N @ m.a` with
   `N > mesh_extent(a)` is canonicalized at parse time into a
   factorised form (`(mesh_extent(a) @ m.a, N // mesh_extent(a))`); the
@@ -770,9 +732,9 @@ Let `sl: ShardLayout`, `T: TensorType`, and `G = sl.layout.shape`.
   undecidable divisions MUST be rejected. Thus `NC * 128` split over `(NC, 64)`
   becomes `(NC, 64, 2)`, with the residual `2` unbound. Symbolic factored shapes
   use symbolic products in their concrete default strides until specialization.
-- `local_shape(sl)[k] = G[k] / sl.mesh.layout.shape[a] = 1` iff some mesh axis
+- `shard_layout_local_shape(sl)[k] = G[k] / sl.mesh.layout.shape[a] = 1` iff some mesh axis
   `a` has `sl.attrs[a] = Split(k)`.
-- `local_shape(sl)[k] = G[k]` otherwise.
+- `shard_layout_local_shape(sl)[k] = G[k]` otherwise.
 - The canonical regroup rule ([§8](#8-layout-propagation)) defines how `T.shape` aligns with
   `G`.
 
@@ -784,14 +746,9 @@ relevant mesh axis.
 
 - A typed value MUST have a concrete `S`. An annotation MAY omit its layout entirely;
   authored layouts always construct concrete strides.
-  Placement sugar without strides MUST use `ShardLayout.from_modes` under the
-  target's storage owner rule. A Split at the owner level or a coarser level
-  has stride zero and drops its mesh factor when compact strides for the
-  remaining modes are computed; its local residual remains. A Split inside
-  the owner keeps its row-major stride. The owner comes from the target's
-  memory hierarchy (`umat` uses the rmem owner); a target with no memory
-  hierarchy uses shared strides. Source storage and source stride spelling do
-  not choose the default.
+  Placement sugar without strides takes owner strides from
+  `ShardLayout.from_modes` ([§9](#9-layout-construction-and-algebra)); source
+  storage and source stride spelling do not choose the default.
 - `S == ()` is a concrete rank-0 layout (`shape == ()`).
 - When `S` is a concrete tuple, `S[k]` is the element step along
   layout dim `k` on the physical storage held by
@@ -913,13 +870,9 @@ def local_layout_and_offset(shard, tensor_shape, coord) -> tuple[Layout, int]: .
     own layout and its hardware: [§7.1.1](#711-layoutshape) factors a split
     axis, so the layout's rank is not the tensor's, and a `Placement` may leave
     `cta` / `thread` for the device to divide.
-  - both halves MUST answer under the same two names. Naming the host's
-    answer a window rather than a layout and an offset stated one stopped-short
-    arithmetic as though it were a second algorithm: both sides compute
-    `coord x local_extent x inner`, and only the host's last multiplication by
-    a stride was missing. Two implementations of "which part is mine" that can
-    disagree is what a per-call shape assertion used to be guarding against;
-    one rule stated once is what removes the need.
+  - host and device MUST answer under the same two names (`local_layout`,
+    `local_layout_and_offset`): both compute `coord x local_extent x inner`, so
+    "which part is mine" is one rule, not two implementations that can disagree.
 
 ---
 
@@ -945,14 +898,10 @@ copy that displacement to a materialized consumer.
 
 ## 9. Layout construction and algebra
 
-Making the steps of a compact arrangement and reading an index back into the
-coordinate that reaches it are not operations on layouts, so they are filed
-apart from the algebra, as CuTe files `stride.hpp` apart from `layout.hpp`.
-
 `Layout(shape)` is the tensor default constructor. It keeps the authored mode
 profile, uses compact row-major strides (including symbolic products), and
 normalizes each statically known extent-1 leaf to stride zero. Rank zero gives
-`Layout((), ())`. `normalize_layout` applies only that leaf rule to an existing
+`Layout(())`. `normalize_layout` applies only that leaf rule to an existing
 tensor layout, preserving every other stride, mode, offset, swizzle and mesh.
 The parser uses it for explicit tensor layouts; mesh layouts and algebra
 intermediates retain their own coordinate conventions.
@@ -965,7 +914,7 @@ def normalize_layout(layout: LayoutBase) -> LayoutBase: ...
 ```
 
 ```python
-class NotProjectable(ValueError):
+class NotProjectableError(ValueError):
     """Report that a layout cannot serve as a mesh execution scope."""
 
 
@@ -974,11 +923,12 @@ def apply(layout: Layout | ComposedLayout, coord: int) -> int:
     ...
 
 
-def prefix_product(shape: tuple[int, ...]) -> tuple[int, ...]:
-    """Return exclusive prefix-product strides.
+def compact_col_major(shape: tuple, *, mul=None) -> tuple:
+    """Return column-major compact strides (mode zero fastest).
 
     Args:
-        shape: Static flat shape.
+        shape: Flat or nested shape.
+        mul: Optional multiplication operation for symbolic entries.
 
     Returns:
         Column-major natural strides.
@@ -986,7 +936,7 @@ def prefix_product(shape: tuple[int, ...]) -> tuple[int, ...]:
     ...
 
 
-def c_order_strides(shape: tuple, *, mul=None) -> tuple:
+def compact_row_major(shape: tuple, *, mul=None) -> tuple:
     """Return row-major contiguous strides.
 
     Args:
@@ -999,11 +949,12 @@ def c_order_strides(shape: tuple, *, mul=None) -> tuple:
     ...
 
 
-def try_c_order_strides(shape: tuple) -> tuple[int, ...] | None:
-    """Return static C-order strides when possible.
+def try_compact_major(shape: tuple, *, major: str = "row") -> tuple | None:
+    """Return static compact strides when possible.
 
     Args:
-        shape: Candidate flat shape.
+        shape: Candidate shape.
+        major: "row" (last mode fastest) or "col" (mode zero fastest).
 
     Returns:
         Static strides, or None for a symbolic or dynamic shape.
@@ -1020,7 +971,7 @@ class StorageOwners:
 
 class ShardLayout:
     @classmethod
-    def default(cls, shape, mesh, attrs, *, storage, owners) -> ShardLayout:
+    def from_logical(cls, shape, mesh, attrs, *, storage, owners) -> ShardLayout:
         """Factor logical axes by their mesh splits, then call from_modes."""
         ...
 
@@ -1118,16 +1069,19 @@ def right_inverse(layout: Layout | ComposedLayout):
 ```
 
 - constraints:
-  - Default strides come from `Layout(shape)`: compact row-major, symbolic
-    products retained, and statically unit leaves zero. A Split whose topology is private under
-    `target.storage_owners` gets stride zero. When compacting the remaining modes, it
-    drops only its mesh factor and keeps its local residual (extent one for a
-    fully factored Split), so one instance has no holes. The target supplies the
-    storage owner and the coarse-to-fine topology order. The owner topology
-    and every coarser topology are private; the owner `target` is shared. Absent
-    memory facts mean an empty owner table. Explicit tensor layouts normalize only unit leaves; mesh layouts
-    and layout-algebra intermediates are not normalized by this tensor rule.
-  - `ShardLayout.default` MUST factor each logical axis split by one or more
+  - `compact_col_major`, `compact_row_major` and `try_compact_major` live in
+    `ir/types/stride.py`; `apply`, `coalesce`, `composition`, `complement`,
+    `logical_divide`, `zipped_divide`, `filter`, `is_contiguous` and the inverse
+    functions live in `ir/types/layout_algebra.py`, reached as
+    `types.layout_algebra.<name>` (only `apply` is also exported by `types`).
+  - Default strides come from `Layout(shape)` (above). A Split whose topology is
+    private under `target.storage_owners` gets stride zero; compacting the
+    remaining modes drops only its mesh factor and keeps its local residual
+    (extent one for a fully factored Split), so one instance has no holes. The
+    target supplies the storage owner and the coarse-to-fine topology order; the
+    owner topology and every coarser one are private, the owner `target` is
+    shared. Absent memory facts mean an empty owner table.
+  - `ShardLayout.from_logical` MUST factor each logical axis split by one or more
     mesh axes in mesh-axis order, remap each `Split` to its factor, and append
     a non-unit residual factor. Symbolic multi-axis splits MUST use successive
     exact integer or structural product quotients as specified in
@@ -1136,7 +1090,7 @@ def right_inverse(layout: Layout | ComposedLayout):
     `ShardLayout.from_modes` MUST keep its input mode tree and positional attrs;
     the owner stride algorithm exists only in this constructor. Authored mode trees,
     raw IR producers and printer default comparison use it. Logical placement
-    sugar uses `default`. For an explicit `ShardLayout(Layout(shape), attrs, mesh)`
+    sugar uses `from_logical`. For an explicit `ShardLayout(Layout(shape), attrs, mesh)`
     (also with an explicit `None` stride), the parser recognizes the omitted
     inner strides before construction and calls `from_modes` with the enclosing
     tensor or operation storage. `Target.storage_owners`
@@ -1147,7 +1101,7 @@ def right_inverse(layout: Layout | ComposedLayout):
     factor MUST yield its other factor as the local extent; other symbolic split
     relations MUST be rejected as undecidable. An unconsumed symbolic extent MAY pass through
     only when `require_static=False`; strict mode MUST reject it.
-  - `try_c_order_strides` MUST return `None` unless every shape entry is a
+  - `try_compact_major` MUST return `None` unless every shape entry is a
     non-boolean integer.
   - `coalesce(layout)` MUST flatten and merge contiguous modes under CuTe's
     mode-zero-fast convention. With `trg_profile`, it MUST apply that rule at
@@ -1164,7 +1118,7 @@ def right_inverse(layout: Layout | ComposedLayout):
     after coalescing in either direction for symbolic extents.
   - Inverting a composed mesh layout MUST accept only an identity inner mapping
     and an inverse-projectable primitive outer layout; other layouts MUST raise
-    `NotProjectable` rather than guess an inverse.
+    `NotProjectableError` rather than guess an inverse.
   - General `composition` MUST support a `Layout` on the left and a `Layout`,
     integer tile, tuple of per-mode tiles, or identity `None` on the right,
     preserving unmatched trailing modes in a tuple dispatch. The existing
@@ -1174,7 +1128,7 @@ def right_inverse(layout: Layout | ComposedLayout):
     Tiles MUST have integer extents and strides. `None` denotes an unsplit mode.
     All three operations and `complement` MUST interpret traversal order via
     `major="col"` or `major="row"`, without changing their per-mode tile dispatch.
-    Overlapping modes in `complement` MUST remain rejected as `NotProjectable`.
+    Overlapping modes in `complement` MUST remain rejected as `NotProjectableError`.
   - Instruction projection MUST leave a whole operand axis unchanged, retaining
     symbolic extents without division or a static-extent requirement. A cut axis
     MUST use `zipped_divide` with a tiler built from its own mode structure and

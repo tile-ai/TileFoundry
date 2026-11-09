@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.types import DType
-from tilefoundry.target.base import Device
+from tilefoundry import target
+from tilefoundry.ir import expr
 
 
 @dataclass(frozen=True)
-class AppleM2Pro(Device):
+class AppleM2Pro(target.Device):
     """One Apple M2 Pro package: its cores, caches, memory, and unit rates."""
 
     name: str
@@ -33,16 +33,16 @@ class AppleM2Pro(Device):
     unified_memory_bandwidth_bytes_per_second: int
 
 
-    _unit_flops: tuple[tuple[str, tuple[tuple[DType, int], ...]], ...]
+    unit_flops: tuple[tuple[str, tuple[tuple[expr.DType, int], ...]], ...]
     performance_amx_f16: int | None
     performance_host_lane_events: int | None
 
     @property
-    def unit_flops_per_second(self) -> dict[str, dict[DType, int]]:
+    def unit_flops_per_second(self) -> dict[str, dict[expr.DType, int]]:
         """Return the measured compute-throughput map of every execution unit."""
-        return {unit: dict(entries) for unit, entries in self._unit_flops}
+        return {unit: dict(entries) for unit, entries in self.unit_flops}
 
-    def throughput_for(self, unit: str, dtype: DType) -> int:
+    def throughput_for(self, unit: str, dtype: expr.DType) -> int:
         """Return measured throughput of execution ``unit`` for a ``dtype``."""
         try:
             return self.unit_flops_per_second[unit][dtype]

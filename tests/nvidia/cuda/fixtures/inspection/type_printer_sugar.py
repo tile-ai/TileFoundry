@@ -11,9 +11,9 @@ one binds its mesh for layout sugar, while the other keeps it in a signature.
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 _TOPOLOGIES = (Topology("cta", 4), Topology("thread", 8))
 
 
@@ -80,7 +80,7 @@ class TypePrinterSugar:
     @func(mesh=Mesh((Topology("cta", 4),), layout=(4,), names=("tile",)))
     def named_and_out_of_scope(
         x: Tensor[(8, 16), "f32"],
-        held: Tensor[(8, 16), "f32", (8 @ mesh.tile, 16), "rmem"],  # noqa: F821
+        held: Tensor[(8, 16), "f32", (8 @ mesh.tile, 16), "rmem"],
         frag: Tensor[(16,), "f32", ShardLayout(layout=Layout((2, 4, 2), (8, 2, 1)), attrs=(S(0), S(1)), mesh=Mesh((Topology("thread", 8),), layout=(2, 4), names=("warp", "lane"))), "rmem"],
     ):
         """The two placements sugar cannot state.
@@ -91,6 +91,6 @@ class TypePrinterSugar:
         lexical with body and explicitly names a thread mesh. Complete
         constructors preserve those meshes where no lexical alias is available.
         """
-        mine = tf.reshard(x, (8 @ mesh.tile, 16), "rmem")  # noqa: F821
+        mine = tf.reshard(x, (8 @ mesh.tile, 16), "rmem")
         escaped = tf.reshard(x, ShardLayout(layout=Layout((2, 4, 16), None), attrs=(S(0), B()), mesh=Mesh((Topology("thread", 8),), layout=(2, 4), names=("warp", "lane"))), "rmem")
         return tf.reshard(mine, (8, 16), "gmem"), held, frag, escaped

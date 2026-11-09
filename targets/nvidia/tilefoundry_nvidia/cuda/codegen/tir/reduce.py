@@ -2,21 +2,23 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.tir.reduce import Reduce, ReduceKind
-from tilefoundry.visitor_registry.registries import Role, register_codegen
-from tilefoundry_nvidia.cuda import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
+from types import MappingProxyType
 
-REDUCE_TAG = {
-    ReduceKind.MEAN: "tilefoundry::ops::mean_op",
-    ReduceKind.SUM: "tilefoundry::primitive::add_op",
-    ReduceKind.ABS_MAX: "tilefoundry::ops::absmax_op",
-    ReduceKind.MAX: "tilefoundry::primitive::max_op",
-    ReduceKind.MIN: "tilefoundry::primitive::min_op",
-}
+from tilefoundry import codegen
+from tilefoundry.ir import expr, tir
+from tilefoundry_nvidia.cuda import target
+from tilefoundry_nvidia.cuda.codegen import context
+
+REDUCE_TAG = MappingProxyType({
+    expr.ReduceKind.MEAN: "tilefoundry::ops::mean_op",
+    expr.ReduceKind.SUM: "tilefoundry::primitive::add_op",
+    expr.ReduceKind.ABS_MAX: "tilefoundry::ops::absmax_op",
+    expr.ReduceKind.MAX: "tilefoundry::primitive::max_op",
+    expr.ReduceKind.MIN: "tilefoundry::primitive::min_op",
+})
 
 
-def _axes_pack_typename(axes: tuple) -> str:
+def axes_pack_typename(axes: tuple) -> str:
     """Axes pack typename.
 
     Render the HIR ``axes`` tuple as a ``cute::tuple<cute::Int<i>...>``
@@ -28,13 +30,13 @@ def _axes_pack_typename(axes: tuple) -> str:
     return f"cute::tuple<{args}>"
 
 
-@register_codegen(CudaTarget, Role.EMIT, Reduce)
-def _emit(call, ctx: CudaCodegenContext) -> None:
+@codegen.register(target.Target, codegen.Role.EMIT, tir.reduce.Reduce)
+def emit(call, ctx: context.Context) -> None:
     src, dst = call.args[0], call.args[1]
     src_n = ctx.name_for(src)
     dst_n = ctx.name_for(dst)
     op_tag = REDUCE_TAG[call.target.kind]
-    axes_t = _axes_pack_typename(call.target.axes)
+    axes_t = axes_pack_typename(call.target.axes)
 
 
 
@@ -50,3 +52,6 @@ def _emit(call, ctx: CudaCodegenContext) -> None:
             f"tilefoundry::ops::reduce<{op_tag}, {axes_t}>"
             f"({src_n}, {dst_n});"
         )
+
+
+__all__ = ["REDUCE_TAG"]

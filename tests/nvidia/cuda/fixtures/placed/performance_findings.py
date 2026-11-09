@@ -10,9 +10,9 @@ for two of these and each pair differs in exactly one respect.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 
 CTAS = 132
 N = CTAS * 128

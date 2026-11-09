@@ -9,11 +9,11 @@ from gguf import GGUFReader, GGMLQuantizationType
 def explicit_weights(root):
     """Keep model weights on the root and pass them through shared definitions."""
     from dataclasses import replace
-    from tilefoundry.ir.core import Call, Var
+    from tilefoundry.ir.expr import Call, Var
     from tilefoundry.ir.core.module import ModuleList
-    from tilefoundry.ir.hir.function import Function
-    from tilefoundry.ir.visitor import BindingSubstitutionCloner, collect_exprs
-    from tilefoundry.visitor_registry.contexts import ValuationContext
+    from tilefoundry.ir.core.function import Function
+    from tilefoundry.ir.core.visitor import BindingSubstitutionCloner, collect_exprs
+    from tilefoundry.interfaces import valuation
 
     cache = {}
 
@@ -39,7 +39,7 @@ def explicit_weights(root):
         needs, functions = {}, {}
 
         def callee(call):
-            frame = ValuationContext(module=mod)._callee_context(call)
+            frame = valuation.Context(module=mod).callee_context(call)
             if frame is None:
                 return None
             if isinstance(call.target, Function):
@@ -66,7 +66,7 @@ def explicit_weights(root):
                         needed(target)
                         if not prefix
                         else lift(
-                            ValuationContext(module=mod, function=fn)._callee_context(call).module
+                            valuation.Context(module=mod, function=fn).callee_context(call).module
                         )[2][id(target)]
                     )
                     names.extend(prefix + name for name in target_needs)
@@ -97,7 +97,7 @@ def explicit_weights(root):
                         return replace(call, args=args)
                     target, prefix = item
                     if prefix:
-                        child = ValuationContext(module=mod, function=fn)._callee_context(call).module
+                        child = valuation.Context(module=mod, function=fn).callee_context(call).module
                         child_needs = lift(child)[2][id(target)]
                         target = self.visit(call.target, ctx)
                     else:
@@ -114,7 +114,7 @@ def explicit_weights(root):
                         args=(*args, *(weights[prefix + name] for name in child_needs)),
                     )
 
-            result = Function.build(
+            result = Function.from_parts(
                 name=fn.name,
                 params=(*inputs, *weights.values()),
                 body=Rewrite().visit(fn.body, bindings),
@@ -145,7 +145,7 @@ def explicit_weights(root):
         raw = tuple(
             Var(prefix + p.name, type=p.type, is_const=True) for p in converter.params
         )
-        converted = Function.build(
+        converted = Function.from_parts(
             name=prefix + converter.name,
             params=raw,
             body=BindingSubstitutionCloner().visit(
@@ -154,7 +154,7 @@ def explicit_weights(root):
             return_type=converter.return_type,
         )
         converters.append((name, converted))
-    entry = Function.build(
+    entry = Function.from_parts(
         name=entry.name,
         params=params,
         body=BindingSubstitutionCloner().visit(

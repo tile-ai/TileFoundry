@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="stage", target=CpuTarget())
+@module(entry="stage", target=cpu.Target())
 class TileWindowBound:
     @func
     def stage(x: Tensor[(1, 256, 64), "f32"]):

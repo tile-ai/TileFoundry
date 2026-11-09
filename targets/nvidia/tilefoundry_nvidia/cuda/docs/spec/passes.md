@@ -26,7 +26,7 @@ class CudaLowering(Lowering):
 ```
 
 - constraints:
-  - CUDA binds the pass with `@bind(CudaTarget, ConvertHIRToTIR)`; finalization
+  - CUDA binds the pass with `@bind(cuda.Target, ConvertHIRToTIR)`; finalization
     and compile obtain it through `Target.resolve`.
   - Every function the pass lowers MUST carry `SyncPlanMetadata`
     ([analysis §1](./analysis.md#1-sync));
@@ -99,7 +99,7 @@ def insert_default_host_entry(module: Module) -> Module:
 - constraints:
   - The pass is the scheduled form of the transform and states no rule of its
     own. CUDA binds it to the core `InsertHostEntryPass` with
-    `@bind(CudaTarget, InsertHostEntryPass)`; finalization, compile and scaffold
+    `@bind(cuda.Target, InsertHostEntryPass)`; finalization, compile and scaffold
     obtain it through `Target.resolve`.
   - A CPU entry MUST pass through unchanged.
   - When the root Module entry receives a host entry, the pass sets `Module.entry`

@@ -11,42 +11,31 @@ from tests.nvidia.cuda.schedule._support import (
     _OperandMatchVisitor,
     entry_function,
 )
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.inspection import PatternPrinter
-from tilefoundry.ir.core import (
-    Var,
-)
-from tilefoundry.ir.pattern import (
-    PatternMatcher,
-)
-from tilefoundry.ir.tir.stmts import Evaluate
-from tilefoundry.ir.types import (
-    StorageKind,
-)
-from tilefoundry.ir.visitor import StmtVisitor
-from tilefoundry.visitor_registry.instruction import ScheduleRefusal
-from tilefoundry_nvidia.cuda.ir.tir.nn.wgmma import Wgmma
+from tilefoundry import cli, inspection
+from tilefoundry.interfaces import schedule
+from tilefoundry.ir import core, expr, pattern
+from tilefoundry_nvidia.cuda.ir.tir import nn
 
 
 def test_operand_refusal_names_failed_pattern() -> None:
     function = entry_function(
-        load_authored_ir(
+        cli.load_authored_ir(
             str(Path(__file__).parents[1] / "fixtures" / "schedule" / "tir" / "wgmma_a_k_major.py")
         )
     )
     rejected = None
 
-    class RejectOne(StmtVisitor[None]):
-        def visit_Evaluate(self, stmt: Evaluate) -> None:
+    class RejectOne(core.StmtVisitor[None]):
+        def visit_Evaluate(self, stmt: core.Evaluate) -> None:
             nonlocal rejected
-            if rejected is not None or not isinstance(getattr(stmt.callable, "atom", None), Wgmma):
+            if rejected is not None or not isinstance(getattr(stmt.callable, "atom", None), nn.Wgmma):
                 return
             op = stmt.callable
-            lhs = next(param for param in type(op)._op_schema.signature if param.name == "lhs")
-            pattern = lhs.pattern.read_on(op)
-            matcher = PatternMatcher(dict(op.atom.bindings))
-            assert not matcher.match(pattern, replace(stmt.args[1].type, storage=StorageKind.GMEM))
-            rejected = PatternPrinter().refusal(matcher.refusal)
+            lhs = next(param for param in expr.schema_of(type(op)).signature if param.name == "lhs")
+            declared = lhs.pattern.read_on(op)
+            matcher = pattern.Matcher(dict(op.atom.bindings))
+            assert not matcher.match(declared, replace(stmt.args[1].type, storage=expr.StorageKind.GMEM))
+            rejected = inspection.PatternPrinter().refusal(matcher.refusal)
 
     RejectOne().visit(function.body)
     assert rejected is not None
@@ -61,7 +50,7 @@ def test_wgmma_stride_refusal_names_position(
     row_scale, leading, position
 ) -> None:
     function = entry_function(
-        load_authored_ir(
+        cli.load_authored_ir(
             str(Path(__file__).parents[1] / "fixtures" / "schedule" / "tir" / "wgmma_a_k_major.py")
         )
     )
@@ -69,8 +58,8 @@ def test_wgmma_stride_refusal_names_position(
     class RejectOne(_OperandMatchVisitor):
         rejected = False
 
-        def visit_Evaluate(self, stmt: Evaluate) -> None:
-            if self.rejected or not isinstance(getattr(stmt.callable, "atom", None), Wgmma):
+        def visit_Evaluate(self, stmt: core.Evaluate) -> None:
+            if self.rejected or not isinstance(getattr(stmt.callable, "atom", None), nn.Wgmma):
                 return
             lhs = stmt.args[1].type
             shard = lhs.layout
@@ -78,8 +67,8 @@ def test_wgmma_stride_refusal_names_position(
             row, column = outer.strides
             column = (column[0] if leading is None else leading, column[1])
             bad = replace(outer, strides=((row[0], row[1] * row_scale), column))
-            operand = Var("bad_lhs", type=replace(lhs, layout=replace(shard, layout=bad)))
-            with pytest.raises(ScheduleRefusal, match=rf"lhs:.*{position}"):
+            operand = expr.Var("bad_lhs", type=replace(lhs, layout=replace(shard, layout=bad)))
+            with pytest.raises(schedule.RefusalError, match=rf"lhs:.*{position}"):
                 super().visit_Evaluate(replace(stmt, args=(stmt.args[0], operand, stmt.args[2])))
             self.rejected = True
 

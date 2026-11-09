@@ -12,59 +12,24 @@ import enum
 import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, ClassVar, Literal, get_args, get_origin
 
-from tilefoundry.ir.clause import (
-    ClauseProvenance,
-    LayoutClause,
-    MeshClause,
-    SourceLocation,
-    StorageClause,
-    WhereClauseMetadata,
-)
-from tilefoundry.ir.clause.layout import _LAYOUT_WILDCARD
-from tilefoundry.ir.core import (
-    BindingMetadata,
-    Op,
-    RangeMetadata,
-    attach_metadata,
-    get_metadata,
-)
-from tilefoundry.ir.core.param_def import variadic_item_annotation
-from tilefoundry.ir.hir.nn.matmul import MatMul
-from tilefoundry.ir.pattern import _mangle_variant_name
-from tilefoundry.ir.tir.launch import launch_call
-from tilefoundry.ir.tir.symbol_ref import symbol_ref
-from tilefoundry.ir.types import (
-    Broadcast,
-    ComposedLayout,
-    Layout,
-    Mesh,
-    Partial,
-    Split,
-    Swizzle,
-    TensorType,
-    Varying,
-)
-from tilefoundry.ir.types.dim import DimVar, ceildiv
-from tilefoundry.ir.types.layout import flatten, normalize_layout
-from tilefoundry.ir.types.layout import size as layout_size
-from tilefoundry.ir.types.layout_algebra import composition
-from tilefoundry.ir.types.mesh import axis_keys, levels, starts
-from tilefoundry.ir.types.storage import StorageOwners
-from tilefoundry.ir.types.stride import compact_row_major, crd2idx, idx2crd
-from tilefoundry.ir.types.substitute import canonicalize_dims
-from tilefoundry.ir.types.utils import types_compatible
+from tilefoundry.ir import clause, dim, expr, pattern, tir, types, utils
+from tilefoundry.ir.core import symbol_ref
+from tilefoundry.ir.hir import nn
+from tilefoundry.ir.types import layout_algebra
 
 from .ast_pattern import (
-    _BINARY_OPERATORS,
-    _TYPE_INFER_CONTEXT,
-    _UNARY_OPERATORS,
+    BINARY_OPERATORS,
+    TYPE_INFER_CONTEXT,
+    UNARY_OPERATORS,
     AstChild,
     AstMatch,
     AstNodePattern,
     AstPattern,
     AstRule,
+    AuthoredInferContext,
     BindPattern,
     BranchPattern,
     CanonicalDTypeRule,
@@ -74,7 +39,7 @@ from .ast_pattern import (
     ConditionPattern,
     ElementPattern,
     FieldPattern,
-    FuncParserContext,
+    FuncContext,
     FunctionRole,
     LayoutPositionRule,
     LayoutShapeRule,
@@ -85,7 +50,6 @@ from .ast_pattern import (
     MatchFailure,
     OptionalPattern,
     ParseError,
-    ParserTypeInferContext,
     PatternFailure,
     PredicatePattern,
     ReferencePattern,
@@ -96,15 +60,15 @@ from .ast_pattern import (
     StorageValueRule,
     TensorLayoutStorageRule,
     TensorPositionRule,
-    _constant,
-    _infer_call,
-    _resolve_mesh_topologies_at,
-    _resolve_reference,
-    _slice_size,
     attach_authored_metadata,
     authored_source_range,
+    constant,
+    infer_call,
     parse_node,
+    resolve_mesh_topologies_at,
+    resolve_reference,
     runtime,
+    slice_size,
 )
 
 
@@ -165,7 +129,7 @@ class DimExprPattern(ElementPattern):
                         ),
                         CapturePattern(
                             "operator",
-                            lambda node, context: _BINARY_OPERATORS[type(node.op)],
+                            lambda node, context: BINARY_OPERATORS[type(node.op)],
                         ),
                     ),
                     pattern_id="dim.binary",
@@ -206,24 +170,23 @@ class DimExprPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         if match.branch_id == "dim_literal":
             return match.captures["value"]
         if match.branch_id == "dim_name":
-            return _resolve_reference(match.node, context)
+            return resolve_reference(match.node, context)
         if match.branch_id == "dim_reference":
-            return _resolve_reference(match.node, context)
+            return resolve_reference(match.node, context)
         if match.branch_id == "dim_binary":
             try:
                 left, right = children["left"], children["right"]
                 if isinstance(left, runtime.Expr) or isinstance(right, runtime.Expr):
                     dimension_op = {
-                        ast.Add: runtime.DimAdd,
-                        ast.Sub: runtime.DimSub,
-                        ast.Mult: runtime.DimMul,
-                        ast.FloorDiv: runtime.DimFloorDiv,
-                        ast.Mod: runtime.DimMod,
+                        ast.Add: "add",
+                        ast.Sub: "sub",
+                        ast.Mult: "mul",
+                        ast.FloorDiv: "floordiv",
+                        ast.Mod: "mod",
                     }.get(type(match.node.op))
                     if dimension_op is not None:
                         return runtime.simplify_dim(dimension_op, (left, right))
@@ -231,7 +194,7 @@ class DimExprPattern(ElementPattern):
             except (TypeError, ValueError, ZeroDivisionError) as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
         if match.branch_id == "dim_call":
-            callee = _resolve_reference(match.node.func, context)
+            callee = resolve_reference(match.node.func, context)
             args = tuple(value for name, value in children.items() if name.startswith("arg_"))
             if not callable(callee):
                 raise ParseError.from_node(
@@ -283,10 +246,9 @@ class ShapePattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         if match.branch_id == "shape_reference":
-            return _resolve_reference(match.node, context)
+            return resolve_reference(match.node, context)
         return tuple(children.values())
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (ShapeTupleRule(),)
@@ -312,17 +274,16 @@ class DTypePattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         if match.branch_id == "dtype_literal":
             try:
                 return runtime.DType.from_name(match.node.value)
             except ValueError as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
         elif match.branch_id == "dtype_reference":
-            if isinstance(match.node, ast.Name) and match.node.id in runtime.DType._members():
+            if isinstance(match.node, ast.Name) and match.node.id in runtime.dtype_members():
                 return runtime.DType.from_name(match.node.id)
-            value = _resolve_reference(match.node, context)
+            value = resolve_reference(match.node, context)
             if isinstance(value, str):
                 try:
                     return runtime.DType.from_name(value)
@@ -364,11 +325,10 @@ class PlainLayoutPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         shape = tuple(children.values())
         if context.situation == "mesh_layout":
-            return runtime.Layout(shape, compact_row_major(shape))
+            return runtime.Layout(shape, types.compact_row_major(shape))
         return runtime.Layout(shape)
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
@@ -382,9 +342,11 @@ class MeshAxisBindingRule:
     STATEMENT: ClassVar[str] = "A placement axis resolves to a lexical Mesh binding."
 
     def apply(self, value, *, match, context):
-        mesh, binding, _axis_name = value
+        mesh, binding, _ = value
         if not isinstance(mesh, runtime.Mesh):
-            raise ParseError.from_node(match.node, context, f"{binding!r} is not a lexical Mesh binding")
+            raise ParseError.from_node(
+                match.node, context, f"{binding!r} is not a lexical Mesh binding"
+            )
         return value
 
 
@@ -393,9 +355,11 @@ class BareMeshAxisRule:
     STATEMENT: ClassVar[str] = "A bare Mesh placement names a one-axis mesh."
 
     def apply(self, value, *, match, context):
-        mesh, _binding, axis_name = value
-        if axis_name is None and len(flatten(mesh.layout).shape) != 1:
-            raise ParseError.from_node(match.node, context, "bare Mesh placement requires a one-axis mesh")
+        mesh, _, axis_name = value
+        if axis_name is None and len(types.flatten(mesh.layout).shape) != 1:
+            raise ParseError.from_node(
+                match.node, context, "bare Mesh placement requires a one-axis mesh"
+            )
         return value
 
 
@@ -431,8 +395,7 @@ class MeshAxisPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         node = match.node
         binding = node.id if isinstance(node, ast.Name) else node.value.id
         axis_name = None if isinstance(node, ast.Name) else node.attr
@@ -443,7 +406,7 @@ class MeshAxisPattern(ElementPattern):
     )
 
 
-def _meshes_outermost_first(meshes, context):
+def meshes_outermost_first(meshes, context):
     """Order placement meshes according to the module's topology declaration."""
     declared = tuple(context.function.topologies) if context.function is not None else ()
     order = {name: index for index, name in enumerate(declared)}
@@ -470,9 +433,9 @@ class PlacedLayout:
     layout: object
 
 
-def _layout_dims() -> AstPattern[Any]:
+def layout_dims() -> AstPattern[Any]:
     """``(extent, extent @ axis, ...)`` — the layout's own divided dimensions."""
-    pattern = AstNodePattern(
+    built = AstNodePattern(
         ast.Tuple,
         FieldPattern(
             "elts",
@@ -499,19 +462,21 @@ def _layout_dims() -> AstPattern[Any]:
                 )
             ),
         ),
+        grammar_name="layout_dims",
     )
-    pattern.grammar_name = "layout_dims"
-    return pattern
+    return built
 
 
-def _layout_strides() -> AstPattern[Any]:
+def layout_strides() -> AstPattern[Any]:
     """``(stride, ...)`` — how the divided positions are addressed."""
-    pattern = AstNodePattern(ast.Tuple, FieldPattern("elts", RepeatPattern(DimExprPattern())))
-    pattern.grammar_name = "layout_strides"
-    return pattern
+    return AstNodePattern(
+        ast.Tuple,
+        FieldPattern("elts", RepeatPattern(DimExprPattern())),
+        grammar_name="layout_strides",
+    )
 
 
-def _state_call(name: str, *args) -> AstPattern[Any]:
+def state_call(name: str, *args) -> AstPattern[Any]:
     return AstNodePattern(
         ast.Call,
         FieldPattern("func", AstNodePattern(ast.Name, FieldPattern("id", LiteralPattern(name)))),
@@ -520,30 +485,38 @@ def _state_call(name: str, *args) -> AstPattern[Any]:
     )
 
 
-def _value_states() -> AstPattern[Any]:
+def value_states() -> AstPattern[Any]:
     """One Broadcast call, or axis-bound Partial/Varying calls."""
-    pattern = ChoicePattern(
-        AstNodePattern(ast.Set, FieldPattern("elts", SequencePattern(_state_call("B")))),
+    return ChoicePattern(
+        AstNodePattern(ast.Set, FieldPattern("elts", SequencePattern(state_call("B")))),
         AstNodePattern(
             ast.Set,
-            FieldPattern("elts", RepeatPattern(
-                AstNodePattern(
-                    ast.BinOp,
-                    FieldPattern("op", AstNodePattern(ast.MatMult)),
-                    FieldPattern("left", MeshAxisPattern()),
-                    FieldPattern("right", ChoicePattern(
-                        _state_call("P", AstNodePattern(
-                            ast.Constant, FieldPattern("value", LiteralPattern(value_type=str)),
-                        )),
-                        _state_call("V"),
-                    )),
+            FieldPattern(
+                "elts",
+                RepeatPattern(
+                    AstNodePattern(
+                        ast.BinOp,
+                        FieldPattern("op", AstNodePattern(ast.MatMult)),
+                        FieldPattern("left", MeshAxisPattern()),
+                        FieldPattern(
+                            "right",
+                            ChoicePattern(
+                                state_call(
+                                    "P",
+                                    AstNodePattern(
+                                        ast.Constant,
+                                        FieldPattern("value", LiteralPattern(value_type=str)),
+                                    ),
+                                ),
+                                state_call("V"),
+                            ),
+                        ),
+                    ),
+                    minimum=1,
                 ),
-                minimum=1,
-            )),
+            ),
         ),
     )
-    pattern.grammar_name = "value_states"
-    return pattern
 
 
 @dataclass(frozen=True)
@@ -560,8 +533,10 @@ class ValueStatesFormRule:
             if isinstance(item, ast.Call) and isinstance(item.func, ast.Name):
                 if item.func.id == "B" and not item.args and not item.keywords:
                     return value
-        if isinstance(node, ast.Set) and node.elts and all(
-            _value_state_parts(item) is not None for item in node.elts
+        if (
+            isinstance(node, ast.Set)
+            and node.elts
+            and all(value_state_parts(item) is not None for item in node.elts)
         ):
             return value
         raise ParseError.from_node(
@@ -571,7 +546,7 @@ class ValueStatesFormRule:
 
 class ValueStatesPattern(ElementPattern):
     element_name = "value_states"
-    syntax = LazyPattern(_value_states)
+    syntax = LazyPattern(value_states)
     BIND_RULES = (ValueStatesFormRule(),)
     RULES = ()
 
@@ -581,7 +556,7 @@ class ValueStatesPattern(ElementPattern):
         return super().match(node, context)
 
 
-def _layout_sugar_parts(node: object):
+def layout_sugar_parts(node: object):
     """Read a dimension tuple, optionally paired with an explicit stride tuple."""
     if not isinstance(node, ast.Tuple):
         return None
@@ -590,7 +565,7 @@ def _layout_sugar_parts(node: object):
     return node, None
 
 
-def _value_state_parts(node: ast.AST):
+def value_state_parts(node: ast.AST):
     """Read ``axis @ P("reduction")`` or ``axis @ V()`` as axis node and state."""
     if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.MatMult):
         return None
@@ -608,18 +583,18 @@ def _value_state_parts(node: ast.AST):
 
 
 @dataclass(frozen=True)
-class _PlacementCandidate:
+class PlacementCandidate:
     shape: tuple
     strides: tuple | None
     splits: tuple[tuple[object, int, int], ...]
     states: tuple[tuple[object, int, str, str | None], ...]
     states_written: bool = False
-    mesh: Mesh | None = None
+    mesh: types.Mesh | None = None
     attrs: tuple[object, ...] = ()
-    composed: ComposedLayout | None = None
+    composed: types.ComposedLayout | None = None
 
 
-def _placement_meshes(value: _PlacementCandidate, context: MatchContext, match):
+def placement_meshes(value: PlacementCandidate, context: MatchContext, match):
     referenced_ids = {id(entry[0]) for entry in (*value.splits, *value.states)}
     if not referenced_ids:
         return ()
@@ -650,7 +625,7 @@ class PlacementMeshResolutionRule:
     STATEMENT: ClassVar[str] = "A placement's mesh must be a lexical mesh binding."
 
     def apply(self, value, *, match, context):
-        _placement_meshes(value, context, match)
+        placement_meshes(value, context, match)
         return value
 
 
@@ -659,7 +634,7 @@ class PlacementLevelRule:
     STATEMENT: ClassVar[str] = "A placement's meshes cannot name the same topology level."
 
     def apply(self, value, *, match, context):
-        meshes = _placement_meshes(value, context, match)
+        meshes = placement_meshes(value, context, match)
         levels = [topology.name for mesh in meshes for topology in mesh.topologies]
         if len(levels) != len(set(levels)):
             duplicates = sorted(name for name in set(levels) if levels.count(name) > 1)
@@ -685,10 +660,10 @@ class MeshAxisBoundOnceRule:
         return value
 
 
-def _placement_scope(context):
+def placement_scope(context):
     if context.function is None or context.situation == "mesh_layout":
         return None
-    return _parser_infer_context(context).current_mesh
+    return authored_infer_context(context).current_mesh
 
 
 @dataclass(frozen=True)
@@ -702,25 +677,27 @@ class PlacementScopeRule:
     def apply(self, value, *, match, context):
         if not value.splits and not value.states and not value.states_written:
             return value
-        mesh = _placement_scope(context)
+        mesh = placement_scope(context)
         if mesh is None:
             raise ParseError.from_node(
                 match.node, context, "placement requires a current mesh scope"
             )
-        keys = axis_keys(mesh)
+        keys = types.axis_keys(mesh)
         attrs = [runtime.Broadcast() for _ in keys]
         for source, source_axis, *state in (*value.splits, *value.states):
-            key = axis_keys(source)[source_axis]
+            key = types.axis_keys(source)[source_axis]
             targets = [axis for axis, held in enumerate(keys) if held == key]
             if len(targets) != 1:
                 raise ParseError.from_node(
-                    match.node, context, "placement axis does not map uniquely to the current mesh scope"
+                    match.node,
+                    context,
+                    "placement axis does not map uniquely to the current mesh scope",
                 )
             if len(state) == 1:
                 attr = runtime.Split(state[0])
             else:
                 kind, reduction = state
-                attr = Varying() if kind == "V" else runtime.Partial(reduction)
+                attr = types.Varying() if kind == "V" else runtime.Partial(reduction)
             attrs[targets[0]] = attr
         return dataclasses.replace(value, mesh=mesh, attrs=tuple(attrs))
 
@@ -756,12 +733,12 @@ class PlacementConstructionRule:
         try:
             storage = context.values.get("layout_storage", runtime.StorageKind.GMEM)
             target = None if context.function is None else context.function.target
-            layout = runtime.ShardLayout.default(
+            layout = runtime.ShardLayout.from_logical(
                 value.shape,
                 value.mesh,
                 value.attrs,
                 storage=storage,
-                owners=target.storage_owners if target else StorageOwners((), {}),
+                owners=target.storage_owners if target else expr.StorageOwners((), {}),
             )
         except (TypeError, ValueError) as error:
             raise ParseError.from_node(match.node, context, str(error)) from error
@@ -786,13 +763,98 @@ class PlacementAnswerRule:
         return value
 
 
-def _placement_operand_syntax():
+def placement_operand_syntax():
     return ChoicePattern(
         AstNodePattern(
             ast.Tuple,
-            FieldPattern("elts", SequencePattern(_layout_dims(), _layout_strides())),
+            FieldPattern("elts", SequencePattern(layout_dims(), layout_strides())),
         ),
-        _layout_dims(),
+        layout_dims(),
+    )
+
+
+def placement_parts(node: ast.AST) -> tuple[ast.AST, tuple[ast.AST, ...]] | None:
+    if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.MatMult):
+        return None
+    left = placement_parts(node.left)
+    if left is None:
+        extent = node.left
+        axes: tuple[ast.AST, ...] = ()
+    else:
+        extent, axes = left
+    right_axes = tuple(node.right.elts) if isinstance(node.right, ast.Tuple) else (node.right,)
+    return extent, (*axes, *right_axes)
+
+
+def enter_placed_layout(
+    node: object,
+    context: MatchContext,
+    matched: AstMatch[Any],
+    *,
+    allow_plain: bool = False,
+) -> AstMatch[Any] | None:
+    parts = layout_sugar_parts(node)
+    if parts is None:
+        return None
+    dims_node, strides_node = parts
+    children: list[AstChild] = []
+    bindings: list[tuple[str, int]] = []
+    found_placement = False
+    for tensor_axis, item in enumerate(dims_node.elts):
+        placement = placement_parts(item)
+        extent_node = item
+        axis_nodes: tuple[ast.AST, ...] = ()
+        if placement is not None:
+            found_placement = True
+            extent_node, axis_nodes = placement
+        extent_context = context.child(situation="layout_extent", role="layout_extent")
+        if DimExprPattern().match(extent_node, extent_context) is None:
+            return None
+        children.append(
+            AstChild(
+                f"extent_{tensor_axis}",
+                DimExprPattern(),
+                extent_node,
+                "layout_extent",
+                "layout_extent",
+            )
+        )
+        for mesh_axis, axis_node in enumerate(axis_nodes):
+            axis_context = context.child(situation="mesh_axis", role="mesh_axis")
+            if MeshAxisPattern().match(axis_node, axis_context) is None:
+                return None
+            child_name = f"binding_{tensor_axis}_{mesh_axis}"
+            bindings.append((child_name, tensor_axis))
+            children.append(
+                AstChild(child_name, MeshAxisPattern(), axis_node, "mesh_axis", "mesh_axis")
+            )
+    if strides_node is not None:
+        for index, item in enumerate(strides_node.elts):
+            stride_context = context.child(situation="layout_strides", role="layout_strides")
+            if DimExprPattern().match(item, stride_context) is None:
+                return None
+            children.append(
+                AstChild(
+                    f"stride_{index}",
+                    DimExprPattern(),
+                    item,
+                    "layout_strides",
+                    "layout_strides",
+                )
+            )
+    if not allow_plain and not found_placement and strides_node is None:
+        return None
+    return dataclasses.replace(
+        matched,
+        pattern_id="tensor.layout.placed",
+        branch_id="placed_layout",
+        captures={
+            **matched.captures,
+            "rank": len(dims_node.elts),
+            "stride_rank": None if strides_node is None else len(strides_node.elts),
+            "bindings": tuple(bindings),
+        },
+        children=tuple(children),
     )
 
 
@@ -802,94 +864,12 @@ class PlacedLayoutPattern(ElementPattern):
     element_name = "placed_layout"
     syntax = LazyPattern(
         lambda: BindPattern(
-            _placement_operand_syntax(),
-            PlacedLayoutPattern.enter,
+            placement_operand_syntax(),
+            enter_placed_layout,
         )
     )
 
-    @staticmethod
-    def _placement_parts(node: ast.AST) -> tuple[ast.AST, tuple[ast.AST, ...]] | None:
-        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.MatMult):
-            return None
-        left = PlacedLayoutPattern._placement_parts(node.left)
-        if left is None:
-            extent = node.left
-            axes: tuple[ast.AST, ...] = ()
-        else:
-            extent, axes = left
-        right_axes = tuple(node.right.elts) if isinstance(node.right, ast.Tuple) else (node.right,)
-        return extent, (*axes, *right_axes)
-
-    @staticmethod
-    def enter(
-        node: object, context: MatchContext, matched: AstMatch[Any], *, allow_plain: bool = False,
-    ) -> AstMatch[Any] | None:
-        parts = _layout_sugar_parts(node)
-        if parts is None:
-            return None
-        dims_node, strides_node = parts
-        children: list[AstChild] = []
-        bindings: list[tuple[str, int]] = []
-        found_placement = False
-        for tensor_axis, item in enumerate(dims_node.elts):
-            placement = PlacedLayoutPattern._placement_parts(item)
-            extent_node = item
-            axis_nodes: tuple[ast.AST, ...] = ()
-            if placement is not None:
-                found_placement = True
-                extent_node, axis_nodes = placement
-            extent_context = context.child(situation="layout_extent", role="layout_extent")
-            if DimExprPattern().match(extent_node, extent_context) is None:
-                return None
-            children.append(
-                AstChild(
-                    f"extent_{tensor_axis}",
-                    DimExprPattern(),
-                    extent_node,
-                    "layout_extent",
-                    "layout_extent",
-                )
-            )
-            for mesh_axis, axis_node in enumerate(axis_nodes):
-                axis_context = context.child(situation="mesh_axis", role="mesh_axis")
-                if MeshAxisPattern().match(axis_node, axis_context) is None:
-                    return None
-                child_name = f"binding_{tensor_axis}_{mesh_axis}"
-                bindings.append((child_name, tensor_axis))
-                children.append(
-                    AstChild(child_name, MeshAxisPattern(), axis_node, "mesh_axis", "mesh_axis")
-                )
-        if strides_node is not None:
-            for index, item in enumerate(strides_node.elts):
-                stride_context = context.child(situation="layout_strides", role="layout_strides")
-                if DimExprPattern().match(item, stride_context) is None:
-                    return None
-                children.append(
-                    AstChild(
-                        f"stride_{index}",
-                        DimExprPattern(),
-                        item,
-                        "layout_strides",
-                        "layout_strides",
-                    )
-                )
-        if not allow_plain and not found_placement and strides_node is None:
-            return None
-        return dataclasses.replace(
-            matched,
-            pattern_id="tensor.layout.placed",
-            branch_id="placed_layout",
-            captures={
-                **matched.captures,
-                "rank": len(dims_node.elts),
-                "stride_rank": None if strides_node is None else len(strides_node.elts),
-                "bindings": tuple(bindings),
-            },
-            children=tuple(children),
-        )
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         rank = match.captures["rank"]
         shape = tuple(children[f"extent_{axis}"] for axis in range(rank))
         stride_rank = match.captures.get("stride_rank")
@@ -902,7 +882,7 @@ class PlacedLayoutPattern(ElementPattern):
             (*children[child_name], tensor_axis)
             for child_name, tensor_axis in match.captures["bindings"]
         )
-        return _PlacementCandidate(shape, strides, splits, ())
+        return PlacementCandidate(shape, strides, splits, ())
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         LayoutStrideRankRule(),
@@ -915,19 +895,21 @@ class PlacedLayoutPattern(ElementPattern):
     )
 
 
+def bind_placement_operand(node, context, matched):
+    return enter_placed_layout(node, context, matched, allow_plain=True)
+
+
 class PlacementOperandPattern(PlacedLayoutPattern):
     """Parse placement dimensions before the enclosing state rules construct them."""
 
     element_name = "placement_operand"
-    syntax = LazyPattern(lambda: BindPattern(
-        _placement_operand_syntax(), PlacementOperandPattern._bind,
-    ))
+    syntax = LazyPattern(
+        lambda: BindPattern(
+            placement_operand_syntax(),
+            bind_placement_operand,
+        )
+    )
     RULES = ()
-
-    @staticmethod
-    def _bind(node, context, matched):
-        return PlacedLayoutPattern.enter(node, context, matched, allow_plain=True)
-
 
 @dataclass(frozen=True)
 class StatedLayoutOperandRule:
@@ -938,56 +920,80 @@ class StatedLayoutOperandRule:
 
     def apply(self, value, *, match, context):
         operand, states = value
-        if isinstance(operand, _PlacementCandidate):
+        if isinstance(operand, PlacementCandidate):
             return dataclasses.replace(operand, states=states, states_written=True)
-        if isinstance(operand, ComposedLayout):
-            return _PlacementCandidate(
-                operand.shape, None, (), states, True, composed=operand,
+        if isinstance(operand, types.ComposedLayout):
+            return PlacementCandidate(
+                operand.shape,
+                None,
+                (),
+                states,
+                True,
+                composed=operand,
             )
-        if not isinstance(operand, Layout):
+        if not isinstance(operand, types.Layout):
             raise ParseError.from_node(
                 match.node, context, "layout states require a Layout or placement operand"
             )
-        return _PlacementCandidate(
-            operand.shape, operand.strides, (), states, True,
+        return PlacementCandidate(
+            operand.shape,
+            operand.strides,
+            (),
+            states,
+            True,
         )
+
+
+def bind_stated_layout(node, context, matched):
+    children = list(matched.children)
+    states = []
+    for index, item in enumerate(node.right.elts):
+        state = value_state_parts(item)
+        if state is None:
+            continue
+        axis, kind, reduction = state
+        name = f"state_{index}"
+        children.append(AstChild(name, MeshAxisPattern(), axis, "mesh_axis", "mesh_axis"))
+        states.append((name, kind, reduction))
+    return dataclasses.replace(
+        matched,
+        children=tuple(children),
+        captures={
+            **matched.captures,
+            "states": tuple(states),
+        },
+    )
 
 
 class StatedLayoutPattern(ElementPattern):
     element_name = "stated_layout"
-    syntax = LazyPattern(lambda: BindPattern(
-        AstNodePattern(
-            ast.BinOp,
-            FieldPattern("op", AstNodePattern(ast.MatMult)),
-            FieldPattern("left", ChildPattern("operand", ChoicePattern(
-                ComposedLayoutSugarPattern(), PlacementOperandPattern(), StaticValuePattern(),
-            ), "layout", "layout")),
-            FieldPattern("right", ValueStatesPattern()),
-        ),
-        StatedLayoutPattern._bind,
-    ))
+    syntax = LazyPattern(
+        lambda: BindPattern(
+            AstNodePattern(
+                ast.BinOp,
+                FieldPattern("op", AstNodePattern(ast.MatMult)),
+                FieldPattern(
+                    "left",
+                    ChildPattern(
+                        "operand",
+                        ChoicePattern(
+                            ComposedLayoutSugarPattern(),
+                            PlacementOperandPattern(),
+                            StaticValuePattern(),
+                        ),
+                        "layout",
+                        "layout",
+                    ),
+                ),
+                FieldPattern("right", ValueStatesPattern()),
+            ),
+            bind_stated_layout,
+        )
+    )
 
-    @staticmethod
-    def _bind(node, context, matched):
-        children = list(matched.children)
-        states = []
-        for index, item in enumerate(node.right.elts):
-            state = _value_state_parts(item)
-            if state is None:
-                continue
-            axis, kind, reduction = state
-            name = f"state_{index}"
-            children.append(AstChild(name, MeshAxisPattern(), axis, "mesh_axis", "mesh_axis"))
-            states.append((name, kind, reduction))
-        return dataclasses.replace(matched, children=tuple(children), captures={
-            **matched.captures, "states": tuple(states),
-        })
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         states = tuple(
-            (*children[name], kind, reduction)
-            for name, kind, reduction in match.captures["states"]
+            (*children[name], kind, reduction) for name, kind, reduction in match.captures["states"]
         )
         return children["operand"], states
 
@@ -1025,7 +1031,7 @@ class ComposedLayoutOuterRule:
         outer = value["outer"]
         if isinstance(outer, PlacedLayout):
             outer = outer.layout
-        if not isinstance(outer, Layout):
+        if not isinstance(outer, types.Layout):
             raise ParseError.from_node(
                 match.node, context, "composed layout outer must be a Layout without mesh placement"
             )
@@ -1038,7 +1044,7 @@ class ComposedLayoutInnerRule:
 
     def apply(self, value, *, match, context):
         inner = value.get("inner")
-        if "inner" in value and not isinstance(inner, (Swizzle, runtime.LayoutBase)):
+        if "inner" in value and not isinstance(inner, (types.Swizzle, runtime.LayoutBase)):
             raise ParseError.from_node(
                 match.node, context,
                 f"composed layout inner must be a Swizzle or a layout, got {type(inner).__name__}",
@@ -1054,7 +1060,37 @@ class ComposedLayoutConstructionRule:
         inner, offset = value.get("inner"), value.get("offset", 0)
         if inner is None and offset == 0:
             return value["outer"]
-        return ComposedLayout(inner, offset, value["outer"])
+        return types.ComposedLayout(inner, offset, value["outer"])
+
+
+def composed_outer_syntax():
+    return ChildPattern(
+        "outer",
+        ChoicePattern(PlacedLayoutPattern(), PlainLayoutPattern(), StaticValuePattern()),
+        "mesh_layout",
+        "layout",
+    )
+
+
+def composed_offset_syntax():
+    return AstNodePattern(
+        ast.BinOp,
+        FieldPattern("left", composed_outer_syntax()),
+        FieldPattern("op", AstNodePattern(ast.Add)),
+        FieldPattern("right", ChildPattern("offset", DimExprPattern(), "layout_offset")),
+    )
+
+
+def bind_composed_layout_sugar(node, context, matched):
+    for rule in ComposedLayoutSugarPattern.BIND_RULES:
+        matched = rule.apply(matched, node=node, context=context)
+        if isinstance(matched, MatchFailure):
+            return matched
+    return dataclasses.replace(
+        matched,
+        branch_id="composed_layout",
+        pattern_id="tensor.layout.composed",
+    )
 
 
 class ComposedLayoutSugarPattern(ElementPattern):
@@ -1064,49 +1100,27 @@ class ComposedLayoutSugarPattern(ElementPattern):
     syntax = LazyPattern(
         lambda: BindPattern(
             ChoicePattern(
-                ComposedLayoutSugarPattern._offset_syntax(),
+                composed_offset_syntax(),
                 AstNodePattern(
                     ast.BinOp,
-                    FieldPattern("left", ChoicePattern(
-                        ComposedLayoutSugarPattern._offset_syntax(),
-                        ComposedLayoutSugarPattern._outer_syntax(),
-                    )),
+                    FieldPattern(
+                        "left",
+                        ChoicePattern(
+                            composed_offset_syntax(),
+                            composed_outer_syntax(),
+                        ),
+                    ),
                     FieldPattern("op", AstNodePattern(ast.BitOr)),
-                    FieldPattern("right", ChildPattern("inner", StaticValuePattern(), "static_layout")),
+                    FieldPattern(
+                        "right", ChildPattern("inner", StaticValuePattern(), "static_layout")
+                    ),
                 ),
             ),
-            ComposedLayoutSugarPattern._bind,
+            bind_composed_layout_sugar,
         )
     )
 
-    @staticmethod
-    def _outer_syntax():
-        return ChildPattern(
-            "outer", ChoicePattern(PlacedLayoutPattern(), PlainLayoutPattern(), StaticValuePattern()),
-            "mesh_layout", "layout",
-        )
-
-    @staticmethod
-    def _offset_syntax():
-        return AstNodePattern(
-            ast.BinOp,
-            FieldPattern("left", ComposedLayoutSugarPattern._outer_syntax()),
-            FieldPattern("op", AstNodePattern(ast.Add)),
-            FieldPattern("right", ChildPattern("offset", DimExprPattern(), "layout_offset")),
-        )
-
-    @staticmethod
-    def _bind(node, context, matched):
-        for rule in ComposedLayoutSugarPattern.BIND_RULES:
-            matched = rule.apply(matched, node=node, context=context)
-            if isinstance(matched, MatchFailure):
-                return matched
-        return dataclasses.replace(
-            matched, branch_id="composed_layout", pattern_id="tensor.layout.composed",
-        )
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         return dict(children)
 
     BIND_RULES = (ComposedLayoutOffsetRule(),)
@@ -1153,8 +1167,7 @@ class LayoutPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         if match.branch_id == "none":
             return None
         elif match.branch_id == "layout_reference":
@@ -1189,8 +1202,7 @@ class StoragePattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         if isinstance(match.node, ast.Name) and match.node.id in {
             str(k) for k in runtime.StorageKind
         }:
@@ -1198,13 +1210,37 @@ class StoragePattern(ElementPattern):
         elif isinstance(match.node, ast.Constant):
             raw = match.node.value
         else:
-            raw = _resolve_reference(match.node, context)
+            raw = resolve_reference(match.node, context)
         try:
             return runtime.resolve_storage(raw)
         except (TypeError, ValueError) as error:
             raise ParseError.from_node(match.node, context, str(error)) from error
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (StorageValueRule(),)
+
+
+def slot_kind(node: object, context: MatchContext) -> str | None:
+    if isinstance(node, ast.Constant):
+        if node.value is None:
+            return "layout"
+        if isinstance(node.value, str):
+            return "storage"
+    if isinstance(node, (ast.Tuple, ast.Call, ast.BinOp)):
+        return "layout"
+    if isinstance(node, (ast.Name, ast.Attribute)):
+        try:
+            value = resolve_reference(node, context)
+        except ParseError:
+            if isinstance(node, ast.Name) and node.id in {
+                str(item) for item in runtime.StorageKind
+            }:
+                return "storage"
+            raise
+        if isinstance(value, runtime.StorageKind):
+            return "storage"
+        if isinstance(value, runtime.LayoutBase):
+            return "layout"
+    return None
 
 
 class TensorOptionalSlotPattern(ElementPattern):
@@ -1224,34 +1260,10 @@ class TensorOptionalSlotPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def _slot_kind(node: object, context: MatchContext) -> str | None:
-        if isinstance(node, ast.Constant):
-            if node.value is None:
-                return "layout"
-            if isinstance(node.value, str):
-                return "storage"
-        if isinstance(node, (ast.Tuple, ast.Call, ast.BinOp)):
-            return "layout"
-        if isinstance(node, (ast.Name, ast.Attribute)):
-            try:
-                value = _resolve_reference(node, context)
-            except ParseError:
-                if isinstance(node, ast.Name) and node.id in {
-                    str(item) for item in runtime.StorageKind
-                }:
-                    return "storage"
-                raise
-            if isinstance(value, runtime.StorageKind):
-                return "storage"
-            if isinstance(value, runtime.LayoutBase):
-                return "layout"
-        return None
-
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
-def _states_a_layout_slot(elts: object, context: "MatchContext") -> bool:
+def states_a_layout_slot(elts: object, context: "MatchContext") -> bool:
     """Whether an annotation's third slot states a layout rather than a storage.
 
     Read before the sequence is matched, because a child is not parsed until the
@@ -1262,7 +1274,7 @@ def _states_a_layout_slot(elts: object, context: "MatchContext") -> bool:
     if not isinstance(elts, (tuple, list)) or len(elts) < 3:
         return False
     try:
-        return TensorOptionalSlotPattern._slot_kind(elts[2], context) == "layout"
+        return slot_kind(elts[2], context) == "layout"
     except ParseError:
         return False
 
@@ -1280,6 +1292,14 @@ class TensorShapeLayoutPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
+def tensor_head(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
 class TensorPattern(ElementPattern):
     element_name = "tensor"
     syntax = LazyPattern(
@@ -1293,13 +1313,11 @@ class TensorPattern(ElementPattern):
                         ast.expr,
                         PredicatePattern(
                             "tensor-head",
-                            lambda node, context: (
-                                TensorPattern._head(node) in {"Tensor", "ConstTensor"}
-                            ),
+                            lambda node, context: tensor_head(node) in {"Tensor", "ConstTensor"},
                         ),
                         CapturePattern(
                             "head",
-                            lambda node, context: TensorPattern._head(node),
+                            lambda node, context: tensor_head(node),
                         ),
                     ),
                 ),
@@ -1327,7 +1345,7 @@ class TensorPattern(ElementPattern):
                                 ),
                                 ConditionPattern(
                                     "third slot states a layout",
-                                    _states_a_layout_slot,
+                                    states_a_layout_slot,
                                     SequencePattern(
                                         ChildPattern(
                                             "shape",
@@ -1404,8 +1422,7 @@ class TensorPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def child_values(match, child, children, context):
+    def child_values(self, match, child, children, context):
         storage = next((c for c in match.children if c.name == "storage"), None)
         return {
             "layout_storage": runtime.StorageKind.GMEM
@@ -1417,8 +1434,7 @@ class TensorPattern(ElementPattern):
             )
         }
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         """One layout, from one slot.
 
         A shape slot's placement sugar states a layout, and so does a layout
@@ -1440,7 +1456,7 @@ class TensorPattern(ElementPattern):
         type_ = runtime.TensorType(
             shape=shape,
             dtype=children["dtype"],
-            layout=normalize_layout(layout) if layout is not None else None,
+            layout=types.normalize_layout(layout) if layout is not None else None,
             storage=storage,
         )
         if layout is None and context.values.get("position") not in {
@@ -1456,15 +1472,6 @@ class TensorPattern(ElementPattern):
         TensorLayoutStorageRule(),
         TensorPositionRule(),
     )
-
-    @staticmethod
-    def _head(node: ast.expr) -> str | None:
-        if isinstance(node, ast.Name):
-            return node.id
-        if isinstance(node, ast.Attribute):
-            return node.attr
-        return None
-
 
 class ScalarTypePattern(ElementPattern):
     element_name = "scalar_type"
@@ -1487,12 +1494,11 @@ class ScalarTypePattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         value = (
             children["value"]
             if match.branch_id == "type_call"
-            else _resolve_reference(match.node, context)
+            else resolve_reference(match.node, context)
         )
         if not isinstance(
             value,
@@ -1569,8 +1575,7 @@ class TupleTypePattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         fields = tuple(
             children[f"field_{index}"] for index in range(match.captures.get("field_count", 1))
         )
@@ -1598,7 +1603,7 @@ class TypeAnnotationPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
-def _constraint_value(node: ast.AST):
+def constraint_value(node: ast.AST):
     if isinstance(node, ast.Constant):
         return node.value
     if isinstance(node, ast.Name):
@@ -1610,15 +1615,15 @@ def _constraint_value(node: ast.AST):
     )
 
 
-def _parse_partial_constraint(node: ast.AST):
+def parse_partial_constraint(node: ast.AST):
     if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
         raise ValueError('Partial binding must use P("reduction")')
     if node.func.id != "P" or len(node.args) != 1 or node.keywords:
         raise ValueError('Partial binding must use P("reduction")')
-    value = _constraint_value(node.args[0])
+    value = constraint_value(node.args[0])
     if not isinstance(value, str) or not value:
         raise ValueError("partial reduction must be a non-empty string")
-    return Partial(value)
+    return types.Partial(value)
 
 
 @dataclass(frozen=True)
@@ -1635,7 +1640,7 @@ class WhereTopologyStatesRule:
         for item in node.elts:
             if not isinstance(item, ast.BinOp) or not isinstance(item.op, ast.MatMult):
                 raise ValueError("layout bindings must use `topology @ B()` or `P()`")
-            topology = _constraint_value(item.left)
+            topology = constraint_value(item.left)
             if not isinstance(topology, str) or not topology:
                 raise ValueError("layout binding topology must be symbolic")
             if (
@@ -1645,27 +1650,27 @@ class WhereTopologyStatesRule:
                 and not item.right.args
                 and not item.right.keywords
             ):
-                attribute = Broadcast()
+                attribute = types.Broadcast()
             else:
-                attribute = _parse_partial_constraint(item.right)
+                attribute = parse_partial_constraint(item.right)
             bindings.append((topology, attribute))
         return bindings
 
 
-def _parse_constraint_bindings(node: ast.AST, context: MatchContext):
+def parse_constraint_bindings(node: ast.AST, context: MatchContext):
     value = None
     for rule in WhereAnnotationPattern.BIND_RULES:
         value = rule.apply(value, node=node, context=context)
     return value
 
 
-def _where_static(node: ast.AST, context: MatchContext):
+def where_static(node: ast.AST, context: MatchContext):
     if isinstance(node, ast.Constant):
         return node.value
-    return _resolve_reference(node, context)
+    return resolve_reference(node, context)
 
 
-def _parse_layout_constraint(node: ast.AST, context: MatchContext):
+def parse_layout_constraint(node: ast.AST, context: MatchContext):
     states_node = None
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
         states_node = node.right
@@ -1677,8 +1682,8 @@ def _parse_layout_constraint(node: ast.AST, context: MatchContext):
         raise ValueError("layout constraint cannot be empty")
 
     def resolve_extent(item: ast.AST):
-        value = _where_static(item, context)
-        if isinstance(value, bool) or not isinstance(value, (int, DimVar)):
+        value = where_static(item, context)
+        if isinstance(value, bool) or not isinstance(value, (int, expr.DimVar)):
             raise ValueError("layout dimensions must use `_`, an integer, or a symbolic extent")
         return value
 
@@ -1686,24 +1691,24 @@ def _parse_layout_constraint(node: ast.AST, context: MatchContext):
     bindings = []
     for index, item in enumerate(dims_node.elts):
         if isinstance(item, ast.Name) and item.id == "_":
-            shape.append(_LAYOUT_WILDCARD)
+            shape.append(clause.LAYOUT_WILDCARD)
             continue
         if isinstance(item, ast.Name) and item.id == "D":
             raise ValueError("layout broadcast must use `layout @ {topology @ B()}`")
         if isinstance(item, ast.BinOp) and isinstance(item.op, ast.MatMult):
             extent = resolve_extent(item.left)
-            topology = _constraint_value(item.right)
+            topology = constraint_value(item.right)
             if not isinstance(topology, str) or not topology:
                 raise ValueError("layout topology binding must be symbolic")
             shape.append(extent)
-            bindings.append((topology, Split(index)))
+            bindings.append((topology, types.Split(index)))
             continue
         shape.append(resolve_extent(item))
     if states_node is not None:
-        bindings.extend(_parse_constraint_bindings(states_node, context))
+        bindings.extend(parse_constraint_bindings(states_node, context))
     if len({topology for topology, _ in bindings}) != len(bindings):
         raise ValueError("layout constraint cannot bind one topology more than once")
-    return LayoutClause(layout=Layout(shape=tuple(shape)), bindings=tuple(bindings))
+    return clause.Layout(layout=types.Layout(shape=tuple(shape)), bindings=tuple(bindings))
 
 
 class WhereAnnotationPattern(ElementPattern):
@@ -1724,11 +1729,14 @@ class WhereAnnotationPattern(ElementPattern):
         pattern_id="annotation.where",
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         node = match.node
         source_range = authored_source_range(node, context)
-        location = SourceLocation(*source_range) if source_range is not None else SourceLocation()
+        location = (
+            clause.SourceLocation(*source_range)
+            if source_range is not None
+            else clause.SourceLocation()
+        )
         if node.args:
             raise ParseError.from_node(node, context, "where(...) accepts keyword arguments only")
         if not node.keywords:
@@ -1745,25 +1753,25 @@ class WhereAnnotationPattern(ElementPattern):
                 if keyword.arg == "layout":
                     constraints.append(
                         dataclasses.replace(
-                            _parse_layout_constraint(keyword.value, context),
+                            parse_layout_constraint(keyword.value, context),
                             source_loc=location,
-                            provenance=ClauseProvenance.AUTHOR,
+                            provenance=clause.Provenance.AUTHOR,
                         )
                     )
                 elif keyword.arg == "mesh":
                     constraints.append(
-                        MeshClause(
-                            mesh=_where_static(keyword.value, context),
+                        clause.Mesh(
+                            mesh=where_static(keyword.value, context),
                             source_loc=location,
-                            provenance=ClauseProvenance.AUTHOR,
+                            provenance=clause.Provenance.AUTHOR,
                         )
                     )
                 elif keyword.arg == "storage":
                     constraints.append(
-                        StorageClause(
-                            storage=_where_static(keyword.value, context),
+                        clause.Storage(
+                            storage=where_static(keyword.value, context),
                             source_loc=location,
-                            provenance=ClauseProvenance.AUTHOR,
+                            provenance=clause.Provenance.AUTHOR,
                         )
                     )
                 else:
@@ -1773,7 +1781,7 @@ class WhereAnnotationPattern(ElementPattern):
                     )
         except (TypeError, ValueError) as error:
             raise ParseError.from_node(node, context, str(error)) from error
-        return WhereClauseMetadata(constraints=tuple(constraints), source_loc=location)
+        return clause.WhereMetadata(constraints=tuple(constraints), source_loc=location)
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
@@ -1794,11 +1802,53 @@ class ReturnTypePattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         return children["type"]
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
+def enter_signature(
+    node: object, context: MatchContext, matched: AstMatch[Any]
+) -> AstMatch[Any] | None:
+    assert isinstance(node, ast.arguments)
+    if context.function is None:
+        return None
+    names = tuple(argument.arg for argument in node.args)
+    constness = tuple(
+        isinstance(argument.annotation, ast.Subscript)
+        and tensor_head(argument.annotation.value) == "ConstTensor"
+        for argument in node.args
+    )
+    children: list[AstChild] = []
+    for index, argument in enumerate(node.args):
+        assert argument.annotation is not None
+        if context.function.dialect == "hir":
+            position = "hir_input"
+        else:
+            first_output = max(0, len(node.args) - context.function.output_count)
+            position = "tir_output" if index >= first_output else "tir_input"
+        children.append(
+            AstChild(
+                f"parameter_{index}",
+                TypeAnnotationPattern(),
+                argument.annotation,
+                "type_annotation",
+                "parameter",
+                values={"position": position},
+            )
+        )
+    return dataclasses.replace(
+        matched,
+        pattern_id="function.signature",
+        branch_id="signature",
+        captures={
+            **matched.captures,
+            "names": names,
+            "constness": constness,
+        },
+        children=tuple(children),
+    )
 
 
 class SignaturePattern(ElementPattern):
@@ -1834,53 +1884,11 @@ class SignaturePattern(ElementPattern):
                 FieldPattern("kwarg", LiteralPattern(None)),
                 FieldPattern("defaults", SequencePattern()),
             ),
-            SignaturePattern.enter,
+            enter_signature,
         )
     )
 
-    @staticmethod
-    def enter(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
-        assert isinstance(node, ast.arguments)
-        if context.function is None:
-            return None
-        names = tuple(argument.arg for argument in node.args)
-        constness = tuple(
-            isinstance(argument.annotation, ast.Subscript)
-            and TensorPattern._head(argument.annotation.value) == "ConstTensor"
-            for argument in node.args
-        )
-        children: list[AstChild] = []
-        for index, argument in enumerate(node.args):
-            assert argument.annotation is not None
-            if context.function.dialect == "hir":
-                position = "hir_input"
-            else:
-                first_output = max(0, len(node.args) - context.function.output_count)
-                position = "tir_output" if index >= first_output else "tir_input"
-            children.append(
-                AstChild(
-                    f"parameter_{index}",
-                    TypeAnnotationPattern(),
-                    argument.annotation,
-                    "type_annotation",
-                    "parameter",
-                    values={"position": position},
-                )
-            )
-        return dataclasses.replace(
-            matched,
-            pattern_id="function.signature",
-            branch_id="signature",
-            captures={
-                **matched.captures,
-                "names": names,
-                "constness": constness,
-            },
-            children=tuple(children),
-        )
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         names = match.captures["names"]
         constness = match.captures["constness"]
         params = tuple(
@@ -1915,8 +1923,7 @@ class StaticLiteralPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         return match.captures["value"]
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
@@ -1960,15 +1967,14 @@ class StaticReferencePattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         if match.branch_id == "static_name":
-            return _resolve_reference(match.node, context)
+            return resolve_reference(match.node, context)
         elif match.branch_id == "static_attribute":
             owner = children["owner"]
             attribute = match.captures["attribute"]
             if isinstance(owner, runtime.ModuleList):
-                return _resolve_reference(match.node, context)
+                return resolve_reference(match.node, context)
             try:
                 return getattr(owner, attribute)
             except AttributeError as error:
@@ -1982,43 +1988,78 @@ class StaticReferencePattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
+def static_branch(node_type: type, constructor: type, pattern_id: str) -> AstPattern[Any]:
+    return BranchPattern(
+        "static_sequence",
+        AstNodePattern(
+            node_type,
+            CapturePattern("constructor", lambda node, context: constructor),
+            FieldPattern(
+                "elts",
+                RepeatPattern(
+                    ChildPattern(
+                        "item_{index}",
+                        StaticValuePattern(),
+                        "static_item",
+                        "static_item",
+                    )
+                ),
+            ),
+        ),
+        pattern_id=pattern_id,
+    )
+
+
 class StaticSequencePattern(ElementPattern):
     element_name = "sequence"
     syntax = LazyPattern(
         lambda: ChoicePattern(
-            StaticSequencePattern._branch(ast.Tuple, tuple, "static.tuple"),
-            StaticSequencePattern._branch(ast.List, list, "static.list"),
-            StaticSequencePattern._branch(ast.Set, set, "static.set"),
+            static_branch(ast.Tuple, tuple, "static.tuple"),
+            static_branch(ast.List, list, "static.list"),
+            static_branch(ast.Set, set, "static.set"),
         )
     )
 
-    @staticmethod
-    def _branch(node_type: type, constructor: type, pattern_id: str) -> AstPattern[Any]:
-        return BranchPattern(
-            "static_sequence",
-            AstNodePattern(
-                node_type,
-                CapturePattern("constructor", lambda node, context: constructor),
-                FieldPattern(
-                    "elts",
-                    RepeatPattern(
-                        ChildPattern(
-                            "item_{index}",
-                            StaticValuePattern(),
-                            "static_item",
-                            "static_item",
-                        )
-                    ),
-                ),
-            ),
-            pattern_id=pattern_id,
-        )
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         return match.captures["constructor"](children.values())
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
+def enter_static_dict(
+    node: object, context: MatchContext, matched: AstMatch[Any]
+) -> AstMatch[Any] | MatchFailure | None:
+    assert isinstance(node, ast.Dict)
+    if any(key is None for key in node.keys):
+        return PatternFailure("static_dict", node, "`**` unpacking is not a static dictionary form")
+    children: list[AstChild] = []
+    for index, (key, value) in enumerate(zip(node.keys, node.values)):
+        assert key is not None
+        children.extend(
+            (
+                AstChild(
+                    f"key_{index}",
+                    StaticValuePattern(),
+                    key,
+                    "static_key",
+                    "static_key",
+                ),
+                AstChild(
+                    f"value_{index}",
+                    StaticValuePattern(),
+                    value,
+                    "static_value",
+                    "static_value",
+                ),
+            )
+        )
+    return dataclasses.replace(
+        matched,
+        pattern_id="static.dict",
+        branch_id="static_dict",
+        captures={**matched.captures, "length": len(node.keys)},
+        children=tuple(children),
+    )
 
 
 class StaticDictPattern(ElementPattern):
@@ -2030,50 +2071,11 @@ class StaticDictPattern(ElementPattern):
                 FieldPattern("keys", RepeatPattern(StaticValuePattern())),
                 FieldPattern("values", RepeatPattern(StaticValuePattern())),
             ),
-            StaticDictPattern.enter,
+            enter_static_dict,
         )
     )
 
-    @staticmethod
-    def enter(
-        node: object, context: MatchContext, matched: AstMatch[Any]
-    ) -> AstMatch[Any] | MatchFailure | None:
-        assert isinstance(node, ast.Dict)
-        if any(key is None for key in node.keys):
-            return PatternFailure(
-                "static_dict", node, "`**` unpacking is not a static dictionary form"
-            )
-        children: list[AstChild] = []
-        for index, (key, value) in enumerate(zip(node.keys, node.values)):
-            assert key is not None
-            children.extend(
-                (
-                    AstChild(
-                        f"key_{index}",
-                        StaticValuePattern(),
-                        key,
-                        "static_key",
-                        "static_key",
-                    ),
-                    AstChild(
-                        f"value_{index}",
-                        StaticValuePattern(),
-                        value,
-                        "static_value",
-                        "static_value",
-                    ),
-                )
-            )
-        return dataclasses.replace(
-            matched,
-            pattern_id="static.dict",
-            branch_id="static_dict",
-            captures={**matched.captures, "length": len(node.keys)},
-            children=tuple(children),
-        )
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         return {
             children[f"key_{index}"]: children[f"value_{index}"]
             for index in range(match.captures["length"])
@@ -2101,7 +2103,7 @@ class StaticBinaryPattern(ElementPattern):
                         AstNodePattern(ast.Pow),
                     ),
                 ),
-                CapturePattern("operator", lambda node, context: _BINARY_OPERATORS[type(node.op)]),
+                CapturePattern("operator", lambda node, context: BINARY_OPERATORS[type(node.op)]),
                 FieldPattern(
                     "left",
                     ChildPattern("left", StaticValuePattern(), "static_operand"),
@@ -2115,8 +2117,7 @@ class StaticBinaryPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         try:
             return match.captures["operator"](children["left"], children["right"])
         except (TypeError, ValueError, ZeroDivisionError) as error:
@@ -2140,7 +2141,7 @@ class StaticUnaryPattern(ElementPattern):
                         AstNodePattern(ast.Not),
                     ),
                 ),
-                CapturePattern("operator", lambda node, context: _UNARY_OPERATORS[type(node.op)]),
+                CapturePattern("operator", lambda node, context: UNARY_OPERATORS[type(node.op)]),
                 FieldPattern(
                     "operand",
                     ChildPattern("operand", StaticValuePattern(), "static_operand"),
@@ -2150,8 +2151,7 @@ class StaticUnaryPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         try:
             return match.captures["operator"](children["operand"])
         except (TypeError, ValueError) as error:
@@ -2198,11 +2198,21 @@ class StaticCallConstructionRule:
                     arguments["mesh"],
                     arguments["attrs"],
                     storage=context.values.get("layout_storage", runtime.StorageKind.GMEM),
-                    owners=target.storage_owners if target else StorageOwners((), {}),
+                    owners=target.storage_owners if target else expr.StorageOwners((), {}),
                 )
             return callee(*args, **kwargs)
         except (TypeError, ValueError) as error:
             raise ParseError.from_node(match.node, context, str(error)) from error
+
+
+def is_ceildiv(node, context):
+    try:
+        return (
+            isinstance(node, (ast.Name, ast.Attribute))
+            and resolve_reference(node, context) is dim.ceildiv
+        )
+    except ParseError:
+        return False
 
 
 class CeildivExpressionPattern(ElementPattern):
@@ -2210,29 +2220,106 @@ class CeildivExpressionPattern(ElementPattern):
     syntax = LazyPattern(
         lambda: AstNodePattern(
             ast.Call,
-            FieldPattern("func", PredicatePattern(
-                "ceildiv", CeildivExpressionPattern.is_ceildiv,
-            )),
-            FieldPattern("args", SequencePattern(
-                ChildPattern("left", IndexEndpointPattern(), "slice_endpoint"),
-                ChildPattern("right", IndexEndpointPattern(), "slice_endpoint"),
-            )),
+            FieldPattern(
+                "func",
+                PredicatePattern(
+                    "ceildiv",
+                    is_ceildiv,
+                ),
+            ),
+            FieldPattern(
+                "args",
+                SequencePattern(
+                    ChildPattern("left", IndexEndpointPattern(), "slice_endpoint"),
+                    ChildPattern("right", IndexEndpointPattern(), "slice_endpoint"),
+                ),
+            ),
             FieldPattern("keywords", SequencePattern()),
         )
     )
 
-    @staticmethod
-    def is_ceildiv(node, context):
-        try:
-            return isinstance(node, (ast.Name, ast.Attribute)) and _resolve_reference(node, context) is ceildiv
-        except ParseError:
-            return False
-
-    @staticmethod
-    def construct(match, children, context):
-        return ceildiv(children["left"], children["right"])
+    def construct(self, match, children, context):
+        return dim.ceildiv(children["left"], children["right"])
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
+def enter_static_call(
+    node: object, context: MatchContext, matched: AstMatch[Any]
+) -> AstMatch[Any] | MatchFailure | None:
+    assert isinstance(node, ast.Call)
+    keyword_names = [keyword.arg for keyword in node.keywords]
+    if len(set(keyword_names)) != len(keyword_names):
+        repeated = sorted(
+            {name for name in keyword_names if name and keyword_names.count(name) > 1}
+        )
+        return PatternFailure(
+            "static_call", node, f"keyword given more than once: {', '.join(repeated)}"
+        )
+    shard_layout = (
+        isinstance(node.func, (ast.Name, ast.Attribute))
+        and resolve_reference(node.func, context) is runtime.ShardLayout
+    )
+    default_shard_modes = False
+
+    def argument_node(argument, is_layout):
+        nonlocal default_shard_modes
+        if not (shard_layout and is_layout and isinstance(argument, ast.Call)):
+            return argument
+        if resolve_reference(argument.func, context) is not runtime.Layout:
+            return argument
+        try:
+            arguments = (
+                inspect.signature(runtime.Layout)
+                .bind(
+                    *argument.args,
+                    **{keyword.arg: keyword.value for keyword in argument.keywords},
+                )
+                .arguments
+            )
+        except TypeError as error:
+            raise ParseError.from_node(argument, context, str(error)) from error
+        strides = arguments.get("strides")
+        if strides is None or isinstance(strides, ast.Constant) and strides.value is None:
+            default_shard_modes = True
+            return arguments["shape"]
+        return argument
+
+    children = [AstChild("callee", StaticValuePattern(), node.func, "static_callee")]
+    children.extend(
+        AstChild(
+            f"arg_{index}",
+            StaticValuePattern(),
+            argument_node(argument, index == 0),
+            "static_argument",
+            values={"shard_layout_mesh": shard_layout and index == 2},
+        )
+        for index, argument in enumerate(node.args)
+    )
+    children.extend(
+        AstChild(
+            f"kw_{keyword.arg}",
+            StaticValuePattern(),
+            argument_node(keyword.value, keyword.arg == "layout"),
+            "static_argument",
+            keyword.arg,
+            values={"shard_layout_mesh": shard_layout and keyword.arg == "mesh"},
+        )
+        for keyword in node.keywords
+        if keyword.arg is not None
+    )
+    return dataclasses.replace(
+        matched,
+        pattern_id="static.call",
+        branch_id="static_call",
+        captures={
+            **matched.captures,
+            "arg_count": len(node.args),
+            "keywords": tuple(keyword_names),
+            "default_shard_modes": default_shard_modes,
+        },
+        children=tuple(children),
+    )
 
 
 class StaticCallPattern(ElementPattern):
@@ -2260,90 +2347,11 @@ class StaticCallPattern(ElementPattern):
                     ),
                 ),
             ),
-            StaticCallPattern.enter,
+            enter_static_call,
         )
     )
 
-    @staticmethod
-    def enter(
-        node: object, context: MatchContext, matched: AstMatch[Any]
-    ) -> AstMatch[Any] | MatchFailure | None:
-        assert isinstance(node, ast.Call)
-        keyword_names = [keyword.arg for keyword in node.keywords]
-        if len(set(keyword_names)) != len(keyword_names):
-            repeated = sorted(
-                {name for name in keyword_names if name and keyword_names.count(name) > 1}
-            )
-            return PatternFailure(
-                "static_call", node, f"keyword given more than once: {', '.join(repeated)}"
-            )
-        shard_layout = (
-            isinstance(node.func, (ast.Name, ast.Attribute))
-            and _resolve_reference(node.func, context) is runtime.ShardLayout
-        )
-        default_shard_modes = False
-
-        def argument_node(argument, is_layout):
-            nonlocal default_shard_modes
-            if not (shard_layout and is_layout and isinstance(argument, ast.Call)):
-                return argument
-            if _resolve_reference(argument.func, context) is not runtime.Layout:
-                return argument
-            try:
-                arguments = (
-                    inspect.signature(runtime.Layout)
-                    .bind(
-                        *argument.args,
-                        **{keyword.arg: keyword.value for keyword in argument.keywords},
-                    )
-                    .arguments
-                )
-            except TypeError as error:
-                raise ParseError.from_node(argument, context, str(error)) from error
-            strides = arguments.get("strides")
-            if strides is None or isinstance(strides, ast.Constant) and strides.value is None:
-                default_shard_modes = True
-                return arguments["shape"]
-            return argument
-
-        children = [AstChild("callee", StaticValuePattern(), node.func, "static_callee")]
-        children.extend(
-            AstChild(
-                f"arg_{index}",
-                StaticValuePattern(),
-                argument_node(argument, index == 0),
-                "static_argument",
-                values={"shard_layout_mesh": shard_layout and index == 2},
-            )
-            for index, argument in enumerate(node.args)
-        )
-        children.extend(
-            AstChild(
-                f"kw_{keyword.arg}",
-                StaticValuePattern(),
-                argument_node(keyword.value, keyword.arg == "layout"),
-                "static_argument",
-                keyword.arg,
-                values={"shard_layout_mesh": shard_layout and keyword.arg == "mesh"},
-            )
-            for keyword in node.keywords
-            if keyword.arg is not None
-        )
-        return dataclasses.replace(
-            matched,
-            pattern_id="static.call",
-            branch_id="static_call",
-            captures={
-                **matched.captures,
-                "arg_count": len(node.args),
-                "keywords": tuple(keyword_names),
-                "default_shard_modes": default_shard_modes,
-            },
-            children=tuple(children),
-        )
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         return children
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
@@ -2381,8 +2389,7 @@ class StaticSlicePattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         return slice(children.get("lower"), children.get("upper"), children.get("step"))
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
@@ -2408,8 +2415,7 @@ class StaticSubscriptPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         try:
             return children["owner"][children["key"]]
         except (IndexError, KeyError, TypeError, ValueError) as error:
@@ -2450,13 +2456,12 @@ class NamePattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         name = match.captures["name"]
         value = context.lexical_scope.lookup(name)
         if value is None:
             try:
-                value = _resolve_reference(match.node, context)
+                value = resolve_reference(match.node, context)
             except ParseError:
                 pass
         if isinstance(value, slice):
@@ -2464,7 +2469,7 @@ class NamePattern(ElementPattern):
         if isinstance(value, runtime.Expr):
             return value
         if isinstance(value, (bool, int, float)):
-            return _constant(value)
+            return constant(value)
         raise ParseError.from_node(match.node, context, f"name {name!r} is not an Expr")
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
@@ -2507,9 +2512,8 @@ class ConstantPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
-        return _constant(match.captures["value"])
+    def construct(self, match, children, context):
+        return constant(match.captures["value"])
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
@@ -2537,8 +2541,7 @@ class TupleExpressionPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         elements = tuple(children.values())
         return runtime.IrTuple(
             type=runtime.TupleType(fields=tuple(item.type for item in elements)),
@@ -2565,7 +2568,7 @@ class AuthoredCallScopeRule:
     STATEMENT: ClassVar[str] = "An authored HIR call must run inside a mesh if its function opens one."
 
     def apply(self, value, *, match, context):
-        _note_authored_call(match.node, context)
+        note_authored_call(match.node, context)
         return value
 
 
@@ -2576,7 +2579,7 @@ class CallTypeInferenceRule:
     def apply(self, value, *, match, context):
         if not isinstance(value, runtime.Call):
             return value
-        infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
+        infer_context = context.lexical_scope.lookup(TYPE_INFER_CONTEXT)
         if not isinstance(infer_context, runtime.TypeInferContext):
             infer_context = runtime.TypeInferContext()
         if isinstance(value.target, runtime.SymbolRef) or (
@@ -2584,7 +2587,7 @@ class CallTypeInferenceRule:
         ):
             return value
         computed = runtime.TypeInferVisitor().visit(value, infer_context)
-        value.type = computed
+        value.retype(computed)
         return value
 
 
@@ -2597,6 +2600,92 @@ class VariadicInputs:
         if not all(isinstance(value, runtime.Expr) for value in items):
             raise TypeError("variadic inputs must contain Expr values")
         object.__setattr__(self, "items", items)
+
+
+def enter_variadic_sequence(
+    node: object, context: MatchContext, matched: AstMatch[Any]
+) -> AstMatch[Any]:
+    assert isinstance(node, (ast.List, ast.Tuple))
+    if any(isinstance(element, ast.Starred) for element in node.elts):
+        raise ParseError.from_node(
+            node,
+            context,
+            "variadic input sequences do not support starred expansion",
+        )
+    return matched
+
+
+def enter_variadic_comprehension(
+    node: object, context: MatchContext, matched: AstMatch[Any]
+) -> AstMatch[Any]:
+    assert isinstance(node, ast.ListComp)
+    if len(node.generators) != 1:
+        raise ParseError.from_node(
+            node,
+            context,
+            "variadic list comprehension supports exactly one generator",
+        )
+    generator = node.generators[0]
+    if not isinstance(generator.target, ast.Name):
+        raise ParseError.from_node(
+            generator.target,
+            context,
+            "variadic list comprehension requires a simple Name target",
+        )
+    if generator.ifs or generator.is_async:
+        raise ParseError.from_node(
+            generator,
+            context,
+            "variadic list comprehension does not support filters or async generators",
+        )
+    iterator = generator.iter
+    if not (
+        isinstance(iterator, ast.Call)
+        and isinstance(iterator.func, ast.Name)
+        and iterator.func.id == "range"
+        and not iterator.keywords
+        and 1 <= len(iterator.args) <= 3
+    ):
+        raise ParseError.from_node(
+            iterator,
+            context,
+            "variadic list comprehension requires range with 1 to 3 static integer arguments",
+        )
+    values = []
+    for argument in iterator.args:
+        try:
+            value = parse_node(StaticValuePattern(), argument, context)
+        except ParseError as error:
+            raise ParseError.from_node(
+                argument,
+                context,
+                "variadic list comprehension range arguments must be static integers",
+            ) from error
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ParseError.from_node(
+                argument,
+                context,
+                "variadic list comprehension range arguments must be static integers",
+            )
+        values.append(value)
+    children = tuple(
+        AstChild(
+            f"input_{index}",
+            ExpressionPattern(),
+            node.elt,
+            "variadic_input",
+            "input",
+            lexical_bindings={generator.target.id: value},
+            isolated_scope=True,
+        )
+        for index, value in enumerate(range(*values))
+    )
+    return dataclasses.replace(
+        matched,
+        pattern_id="call.variadic.list_comp",
+        branch_id="list_comp",
+        children=children,
+    )
 
 
 class VariadicInputsPattern(ElementPattern):
@@ -2620,7 +2709,7 @@ class VariadicInputsPattern(ElementPattern):
                             ),
                         ),
                     ),
-                    VariadicInputsPattern.enter_sequence,
+                    enter_variadic_sequence,
                 ),
                 pattern_id="call.variadic.list",
             ),
@@ -2641,13 +2730,13 @@ class VariadicInputsPattern(ElementPattern):
                             ),
                         ),
                     ),
-                    VariadicInputsPattern.enter_sequence,
+                    enter_variadic_sequence,
                 ),
                 pattern_id="call.variadic.tuple",
             ),
             BindPattern(
                 AstNodePattern(ast.ListComp),
-                VariadicInputsPattern.enter_comprehension,
+                enter_variadic_comprehension,
             ),
             BranchPattern(
                 "generator_expression",
@@ -2662,94 +2751,7 @@ class VariadicInputsPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def enter_sequence(
-        node: object, context: MatchContext, matched: AstMatch[Any]
-    ) -> AstMatch[Any]:
-        assert isinstance(node, (ast.List, ast.Tuple))
-        if any(isinstance(element, ast.Starred) for element in node.elts):
-            raise ParseError.from_node(
-                node,
-                context,
-                "variadic input sequences do not support starred expansion",
-            )
-        return matched
-
-    @staticmethod
-    def enter_comprehension(
-        node: object, context: MatchContext, matched: AstMatch[Any]
-    ) -> AstMatch[Any]:
-        assert isinstance(node, ast.ListComp)
-        if len(node.generators) != 1:
-            raise ParseError.from_node(
-                node,
-                context,
-                "variadic list comprehension supports exactly one generator",
-            )
-        generator = node.generators[0]
-        if not isinstance(generator.target, ast.Name):
-            raise ParseError.from_node(
-                generator.target,
-                context,
-                "variadic list comprehension requires a simple Name target",
-            )
-        if generator.ifs or generator.is_async:
-            raise ParseError.from_node(
-                generator,
-                context,
-                "variadic list comprehension does not support filters or async generators",
-            )
-        iterator = generator.iter
-        if not (
-            isinstance(iterator, ast.Call)
-            and isinstance(iterator.func, ast.Name)
-            and iterator.func.id == "range"
-            and not iterator.keywords
-            and 1 <= len(iterator.args) <= 3
-        ):
-            raise ParseError.from_node(
-                iterator,
-                context,
-                "variadic list comprehension requires range with 1 to 3 static integer arguments",
-            )
-        values = []
-        for argument in iterator.args:
-            try:
-                value = parse_node(StaticValuePattern(), argument, context)
-            except ParseError as error:
-                raise ParseError.from_node(
-                    argument,
-                    context,
-                    "variadic list comprehension range arguments must be static integers",
-                ) from error
-            if not isinstance(value, int) or isinstance(value, bool):
-                raise ParseError.from_node(
-                    argument,
-                    context,
-                    "variadic list comprehension range arguments must be static integers",
-                )
-            values.append(value)
-        children = tuple(
-            AstChild(
-                f"input_{index}",
-                ExpressionPattern(),
-                node.elt,
-                "variadic_input",
-                "input",
-                lexical_bindings={generator.target.id: value},
-                isolated_scope=True,
-            )
-            for index, value in enumerate(range(*values))
-        )
-        return dataclasses.replace(
-            matched,
-            pattern_id="call.variadic.list_comp",
-            branch_id="list_comp",
-            children=children,
-        )
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         return VariadicInputs(tuple(children.values()))
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
@@ -2766,7 +2768,7 @@ class CallVariadicInputFormRule:
         if not isinstance(schema, runtime.OpSchema):
             return value
         inputs = tuple(param for param in schema.signature if param.kind == "input")
-        if len(inputs) != 1 or variadic_item_annotation(inputs[0]) is None:
+        if len(inputs) != 1 or expr.variadic_item_annotation(inputs[0]) is None:
             return value
         argument = match.node.args[0]
         if isinstance(argument, ast.GeneratorExp):
@@ -2836,6 +2838,46 @@ class OpValueConstructionRule:
             raise ParseError.from_node(match.node, context, str(error)) from error
 
 
+def bind_op_value(node, context, matched):
+    try:
+        callee = resolve_reference(node.func, context)
+    except ParseError:
+        return None
+    schema = callee if isinstance(callee, runtime.OpSchema) else expr.schema_of(callee)
+    if not isinstance(schema, runtime.OpSchema):
+        return None
+    matched = dataclasses.replace(
+        matched, captures={**matched.captures, "schema": schema, "bound_keywords": set()}
+    )
+    matched = OpValuePattern.BIND_RULES[0].apply(matched, node=node, context=context)
+    if isinstance(matched, MatchFailure):
+        return matched
+    attrs = {param.name: param for param in schema.signature if param.kind == "attribute"}
+    children = []
+    for keyword in node.keywords:
+        for rule in OpValuePattern.BIND_RULES[1:]:
+            matched = rule.apply(matched, node=keyword, context=context)
+            if isinstance(matched, MatchFailure):
+                return matched
+        param = attrs[keyword.arg]
+        children.append(
+            AstChild(
+                keyword.arg,
+                pattern_for_param(param, keyword.value),
+                keyword.value,
+                "call_attribute",
+                param.name,
+            )
+        )
+    return dataclasses.replace(
+        matched,
+        pattern_id="call.op_value",
+        branch_id="op_value",
+        captures={**matched.captures, "schema": schema},
+        children=tuple(children),
+    )
+
+
 class OpValuePattern(ElementPattern):
     """Construct an op attribute with its own schema's attribute grammar."""
 
@@ -2846,13 +2888,20 @@ class OpValuePattern(ElementPattern):
                 ast.Call,
                 FieldPattern("func", ReferencePattern()),
                 FieldPattern("args", RepeatPattern(AstNodePattern(ast.expr))),
-                FieldPattern("keywords", RepeatPattern(AstNodePattern(
-                    ast.keyword,
-                    FieldPattern("arg", CapturePattern("keyword_name", lambda value, context: value)),
-                    FieldPattern("value", AstNodePattern(ast.expr)),
-                ))),
+                FieldPattern(
+                    "keywords",
+                    RepeatPattern(
+                        AstNodePattern(
+                            ast.keyword,
+                            FieldPattern(
+                                "arg", CapturePattern("keyword_name", lambda value, context: value)
+                            ),
+                            FieldPattern("value", AstNodePattern(ast.expr)),
+                        )
+                    ),
+                ),
             ),
-            OpValuePattern._bind,
+            bind_op_value,
         )
     )
 
@@ -2860,50 +2909,7 @@ class OpValuePattern(ElementPattern):
         matched = super().match(node, context)
         return StaticValuePattern().match(node, context) if matched is None else matched
 
-    @staticmethod
-    def _bind(node, context, matched):
-        try:
-            callee = _resolve_reference(node.func, context)
-        except ParseError:
-            return None
-        schema = (
-            callee if isinstance(callee, runtime.OpSchema) else getattr(callee, "_op_schema", None)
-        )
-        if not isinstance(schema, runtime.OpSchema):
-            return None
-        matched = dataclasses.replace(
-            matched, captures={**matched.captures, "schema": schema, "bound_keywords": set()}
-        )
-        matched = OpValuePattern.BIND_RULES[0].apply(matched, node=node, context=context)
-        if isinstance(matched, MatchFailure):
-            return matched
-        attrs = {param.name: param for param in schema.signature if param.kind == "attribute"}
-        children = []
-        for keyword in node.keywords:
-            for rule in OpValuePattern.BIND_RULES[1:]:
-                matched = rule.apply(matched, node=keyword, context=context)
-                if isinstance(matched, MatchFailure):
-                    return matched
-            param = attrs[keyword.arg]
-            children.append(
-                AstChild(
-                    keyword.arg,
-                    CallPattern._pattern_for_param(param, keyword.value),
-                    keyword.value,
-                    "call_attribute",
-                    param.name,
-                )
-            )
-        return dataclasses.replace(
-            matched,
-            pattern_id="call.op_value",
-            branch_id="op_value",
-            captures={**matched.captures, "schema": schema},
-            children=tuple(children),
-        )
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         return children
 
     BIND_RULES = (
@@ -2912,13 +2918,252 @@ class OpValuePattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (OpValueConstructionRule(),)
 
 
+def pattern_for_param(param: object, node: ast.AST) -> AstPattern[Any]:
+    annotation = param.annotation
+    if expr.variadic_item_annotation(param) is not None:
+        kind = "variadic"
+    elif annotation is runtime.TensorType and isinstance(node, ast.Subscript):
+        kind = "tensor"
+    elif annotation is runtime.DType:
+        kind = "dtype"
+    elif annotation is runtime.StorageKind or param.name == "storage":
+        kind = "storage"
+    elif annotation in (runtime.Layout, runtime.ShardLayout, runtime.LayoutBase):
+        kind = "layout"
+    elif annotation is expr.Op and isinstance(node, ast.Call):
+        kind = "op"
+    else:
+        kind = "static"
+    return CallPattern.PARAM_PATTERNS[kind]()
+
+
+def schema_children(
+    node: ast.Call, schema: object, context: MatchContext
+) -> tuple[AstChild, ...] | MatchFailure | None:
+    """Bind a call's arguments to one op schema's inputs and attributes.
+
+    A ``Tuple[T]`` input consumes exactly one explicit sequence and flattens
+    its elements into ``Call.args``. Attributes remain keyword-only, so the
+    sequence boundary cannot be confused with an attribute position.
+
+    An input declared ``optional`` may be left off the end of the call. A
+    resource operand such as ``reduce``'s or ``dot``'s workspace is present
+    only in the form that needs one, so counting it as required would make
+    the other form unauthorable.
+    """
+    params = tuple(schema.signature)
+    inputs = [param for param in params if param.kind == "input"]
+    attrs = [param for param in params if param.kind == "attribute"]
+    variadic = len(inputs) == 1 and expr.variadic_item_annotation(inputs[0]) is not None
+    positional = list(node.args)
+    children: list[AstChild] = []
+    bound_attrs: set[str] = set()
+    if variadic:
+        if len(positional) != 1:
+            raise ParseError.from_node(
+                node,
+                context,
+                "variadic operations require exactly one list, tuple, or "
+                "supported list-comprehension input sequence",
+            )
+        children.append(
+            AstChild(
+                "variadic_inputs",
+                pattern_for_param(inputs[0], positional[0]),
+                positional[0],
+                "variadic_inputs",
+                "inputs",
+            )
+        )
+        positional = []
+    for index, argument in enumerate(positional):
+        if index < len(inputs):
+            name = inputs[index].name
+            children.append(
+                AstChild(
+                    f"input_{index}",
+                    ExpressionPattern(),
+                    argument,
+                    "call_argument",
+                    name,
+                )
+            )
+            continue
+        attr_index = index - len(inputs)
+        if attr_index >= len(attrs):
+            return PatternFailure(
+                "op_call",
+                node,
+                f"{schema.name} takes at most {len(inputs) + len(attrs)} positional "
+                f"arguments, got {len(node.args)}",
+            )
+        param = attrs[attr_index]
+        bound_attrs.add(param.name)
+        children.append(
+            AstChild(
+                f"attr_{param.name}",
+                pattern_for_param(param, argument),
+                argument,
+                "call_attribute",
+                "allocation" if param.annotation is runtime.TensorType else param.name,
+            )
+        )
+    for keyword in node.keywords:
+        if keyword.arg is None:
+            return PatternFailure("op_call", node, "`**` unpacking is not an authored call form")
+        if keyword.arg in bound_attrs:
+            return PatternFailure(
+                "op_call",
+                node,
+                f"attribute {keyword.arg!r} is already bound by a positional argument",
+            )
+        param = next((item for item in attrs if item.name == keyword.arg), None)
+        if param is None:
+            known = ", ".join(item.name for item in attrs) or "none"
+            return PatternFailure(
+                "op_call",
+                node,
+                f"{schema.name} has no attribute {keyword.arg!r}; its attributes are: {known}",
+            )
+        bound_attrs.add(param.name)
+        children.append(
+            AstChild(
+                f"attr_{param.name}",
+                pattern_for_param(param, keyword.value),
+                keyword.value,
+                "call_attribute",
+                "allocation" if param.annotation is runtime.TensorType else param.name,
+            )
+        )
+    required = [param for param in inputs if not param.optional]
+    if not variadic and len(positional) < len(required):
+        return PatternFailure(
+            "op_call",
+            node,
+            f"{schema.name} takes {len(required)} inputs, got {len(positional)}",
+        )
+    return tuple(children)
+
+
+def enter_call(
+    node: object, context: MatchContext, matched: AstMatch[Any]
+) -> AstMatch[Any] | MatchFailure | None:
+    assert isinstance(node, ast.Call)
+    instance_target = None
+    target_child = ()
+    if isinstance(node.func, ast.Attribute):
+        reference = (
+            node.func.value.value if isinstance(node.func.value, ast.Subscript) else node.func.value
+        )
+        try:
+            owner = resolve_reference(reference, context)
+        except ParseError:
+            owner = None
+        if isinstance(owner, runtime.ModuleList) and context.function.dialect != "tir":
+            return PatternFailure(
+                "op_call", node.func, "only calling an instance entry is supported"
+            )
+    if isinstance(node.func, ast.Subscript):
+        try:
+            slot = resolve_reference(node.func.value, context)
+        except ParseError:
+            return None
+        if not isinstance(slot, runtime.ModuleList):
+            return None
+        instance_target = slot
+        target_child = (
+            AstChild("target", ExpressionPattern(), node.func, "call_target", "target"),
+        )
+        callee = slot
+    else:
+        try:
+            callee = resolve_reference(node.func, context)
+        except ParseError:
+            return None
+        if isinstance(callee, runtime.Module):
+            return PatternFailure(
+                "op_call",
+                node.func,
+                "instance calls must use a slot name in the @module class body",
+            )
+        if isinstance(callee, runtime.ModuleList):
+            instance_target = callee
+    if (
+        isinstance(callee, runtime.PrimFunction)
+        and context.function.dialect == "tir"
+        and isinstance(node.func, ast.Attribute)
+    ):
+        if node.keywords:
+            return PatternFailure(
+                "symbol_call", node, "a symbol call takes positional arguments only"
+            )
+        return dataclasses.replace(
+            matched,
+            pattern_id="call.symbol",
+            branch_id="symbol_call",
+            captures={**matched.captures, "callee": callee, "module_entry": False},
+            children=tuple(
+                AstChild(f"arg_{index}", ExpressionPattern(), argument, "call_argument", "argument")
+                for index, argument in enumerate(node.args)
+            ),
+        )
+    if instance_target is not None:
+        binding = node.func.value if isinstance(node.func, ast.Subscript) else node.func
+        module = context.function.module
+        if (
+            module is None
+            or not isinstance(binding, ast.Name)
+            or module.module_scope.lookup(binding.id) is not instance_target
+        ):
+            return PatternFailure(
+                "op_call",
+                node.func,
+                "instance calls must use a slot name in the @module class body",
+            )
+    if instance_target is not None or isinstance(callee, (runtime.Function, runtime.PrimFunction)):
+        if node.keywords:
+            return PatternFailure(
+                "op_call", node, "a function call takes positional arguments only"
+            )
+        return dataclasses.replace(
+            matched,
+            pattern_id="call.function",
+            branch_id="function_call",
+            captures={**matched.captures, "callee": callee, "instance_target": instance_target},
+            children=(
+                *target_child,
+                *(
+                    AstChild(
+                        f"arg_{index}", ExpressionPattern(), argument, "call_argument", "argument"
+                    )
+                    for index, argument in enumerate(node.args)
+                ),
+            ),
+        )
+    schema = callee if isinstance(callee, runtime.OpSchema) else expr.schema_of(callee)
+    if not isinstance(schema, runtime.OpSchema):
+        return None
+    children = schema_children(node, schema, context)
+    if children is None or isinstance(children, MatchFailure):
+        return children
+    return dataclasses.replace(
+        matched,
+        pattern_id="call.operation",
+        branch_id="operation_call",
+        captures={**matched.captures, "schema": schema},
+        children=children,
+    )
+
+
 class CallPattern(ElementPattern):
     element_name = "op_call"
     syntax = LazyPattern(
         lambda: BindPattern(
             AstNodePattern(
                 ast.Call,
-                FieldPattern("func", ChoicePattern(ReferencePattern(), AstNodePattern(ast.Subscript))),
+                FieldPattern(
+                    "func", ChoicePattern(ReferencePattern(), AstNodePattern(ast.Subscript))
+                ),
                 FieldPattern("args", RepeatPattern(AstNodePattern(ast.expr))),
                 FieldPattern(
                     "keywords",
@@ -2937,7 +3182,7 @@ class CallPattern(ElementPattern):
                     ),
                 ),
             ),
-            CallPattern.enter,
+            enter_call,
         )
     )
 
@@ -2952,236 +3197,7 @@ class CallPattern(ElementPattern):
     }
     ATTRIBUTE_PATTERNS = tuple(PARAM_PATTERNS.values())
 
-    @staticmethod
-    def _pattern_for_param(param: object, node: ast.AST) -> AstPattern[Any]:
-        annotation = param.annotation
-        if variadic_item_annotation(param) is not None:
-            kind = "variadic"
-        elif annotation is runtime.TensorType and isinstance(node, ast.Subscript):
-            kind = "tensor"
-        elif annotation is runtime.DType:
-            kind = "dtype"
-        elif annotation is runtime.StorageKind or param.name == "storage":
-            kind = "storage"
-        elif annotation in (runtime.Layout, runtime.ShardLayout, runtime.LayoutBase):
-            kind = "layout"
-        elif annotation is Op and isinstance(node, ast.Call):
-            kind = "op"
-        else:
-            kind = "static"
-        return CallPattern.PARAM_PATTERNS[kind]()
-
-    @staticmethod
-    def _schema_children(
-        node: ast.Call, schema: object, context: MatchContext
-    ) -> tuple[AstChild, ...] | MatchFailure | None:
-        """Bind a call's arguments to one op schema's inputs and attributes.
-
-        A ``Tuple[T]`` input consumes exactly one explicit sequence and flattens
-        its elements into ``Call.args``. Attributes remain keyword-only, so the
-        sequence boundary cannot be confused with an attribute position.
-
-        An input declared ``optional`` may be left off the end of the call. A
-        resource operand such as ``reduce``'s or ``dot``'s workspace is present
-        only in the form that needs one, so counting it as required would make
-        the other form unauthorable.
-        """
-        params = tuple(schema.signature)
-        inputs = [param for param in params if param.kind == "input"]
-        attrs = [param for param in params if param.kind == "attribute"]
-        variadic = len(inputs) == 1 and variadic_item_annotation(inputs[0]) is not None
-        positional = list(node.args)
-        children: list[AstChild] = []
-        bound_attrs: set[str] = set()
-        if variadic:
-            if len(positional) != 1:
-                raise ParseError.from_node(
-                    node,
-                    context,
-                    "variadic operations require exactly one list, tuple, or "
-                    "supported list-comprehension input sequence",
-                )
-            children.append(
-                AstChild(
-                    "variadic_inputs",
-                    CallPattern._pattern_for_param(inputs[0], positional[0]),
-                    positional[0],
-                    "variadic_inputs",
-                    "inputs",
-                )
-            )
-            positional = []
-        for index, argument in enumerate(positional):
-            if index < len(inputs):
-                name = inputs[index].name
-                children.append(
-                    AstChild(
-                        f"input_{index}",
-                        ExpressionPattern(),
-                        argument,
-                        "call_argument",
-                        name,
-                    )
-                )
-                continue
-            attr_index = index - len(inputs)
-            if attr_index >= len(attrs):
-                return PatternFailure(
-                    "op_call",
-                    node,
-                    f"{schema.name} takes at most {len(inputs) + len(attrs)} positional "
-                    f"arguments, got {len(node.args)}",
-                )
-            param = attrs[attr_index]
-            bound_attrs.add(param.name)
-            children.append(
-                AstChild(
-                    f"attr_{param.name}",
-                    CallPattern._pattern_for_param(param, argument),
-                    argument,
-                    "call_attribute",
-                    "allocation" if param.annotation is runtime.TensorType else param.name,
-                )
-            )
-        for keyword in node.keywords:
-            if keyword.arg is None:
-                return PatternFailure(
-                    "op_call", node, "`**` unpacking is not an authored call form"
-                )
-            if keyword.arg in bound_attrs:
-                return PatternFailure(
-                    "op_call",
-                    node,
-                    f"attribute {keyword.arg!r} is already bound by a positional argument",
-                )
-            param = next((item for item in attrs if item.name == keyword.arg), None)
-            if param is None:
-                known = ", ".join(item.name for item in attrs) or "none"
-                return PatternFailure(
-                    "op_call",
-                    node,
-                    f"{schema.name} has no attribute {keyword.arg!r}; its attributes are: {known}",
-                )
-            bound_attrs.add(param.name)
-            children.append(
-                AstChild(
-                    f"attr_{param.name}",
-                    CallPattern._pattern_for_param(param, keyword.value),
-                    keyword.value,
-                    "call_attribute",
-                    "allocation" if param.annotation is runtime.TensorType else param.name,
-                )
-            )
-        required = [param for param in inputs if not param.optional]
-        if not variadic and len(positional) < len(required):
-            return PatternFailure(
-                "op_call",
-                node,
-                f"{schema.name} takes {len(required)} inputs, got {len(positional)}",
-            )
-        return tuple(children)
-
-    @staticmethod
-    def enter(
-        node: object, context: MatchContext, matched: AstMatch[Any]
-    ) -> AstMatch[Any] | MatchFailure | None:
-        assert isinstance(node, ast.Call)
-        instance_target = None
-        target_child = ()
-        if isinstance(node.func, ast.Attribute):
-            reference = (
-                node.func.value.value
-                if isinstance(node.func.value, ast.Subscript)
-                else node.func.value
-            )
-            try:
-                owner = _resolve_reference(reference, context)
-            except ParseError:
-                owner = None
-            if isinstance(owner, runtime.ModuleList) and context.function.dialect != "tir":
-                return PatternFailure("op_call", node.func, "only calling an instance entry is supported")
-        if isinstance(node.func, ast.Subscript):
-            try:
-                slot = _resolve_reference(node.func.value, context)
-            except ParseError:
-                return None
-            if not isinstance(slot, runtime.ModuleList):
-                return None
-            instance_target = slot
-            target_child = (AstChild("target", ExpressionPattern(), node.func, "call_target", "target"),)
-            callee = slot
-        else:
-            try:
-                callee = _resolve_reference(node.func, context)
-            except ParseError:
-                return None
-            if isinstance(callee, runtime.Module):
-                return PatternFailure(
-                    "op_call", node.func,
-                    "instance calls must use a slot name in the @module class body",
-                )
-            if isinstance(callee, runtime.ModuleList):
-                instance_target = callee
-        if (
-            isinstance(callee, runtime.PrimFunction)
-            and context.function.dialect == "tir"
-            and isinstance(node.func, ast.Attribute)
-        ):
-            if node.keywords:
-                return PatternFailure("symbol_call", node, "a symbol call takes positional arguments only")
-            return dataclasses.replace(
-                matched, pattern_id="call.symbol", branch_id="symbol_call",
-                captures={**matched.captures, "callee": callee, "module_entry": False},
-                children=tuple(
-                    AstChild(f"arg_{index}", ExpressionPattern(), argument, "call_argument", "argument")
-                    for index, argument in enumerate(node.args)
-                ),
-            )
-        if instance_target is not None:
-            binding = node.func.value if isinstance(node.func, ast.Subscript) else node.func
-            module = context.function.module
-            if (
-                module is None
-                or not isinstance(binding, ast.Name)
-                or module.module_scope.lookup(binding.id) is not instance_target
-            ):
-                return PatternFailure(
-                    "op_call", node.func,
-                    "instance calls must use a slot name in the @module class body",
-                )
-        if instance_target is not None or isinstance(callee, (runtime.Function, runtime.PrimFunction)):
-            if node.keywords:
-                return PatternFailure("op_call", node, "a function call takes positional arguments only")
-            return dataclasses.replace(
-                matched,
-                pattern_id="call.function",
-                branch_id="function_call",
-                captures={**matched.captures, "callee": callee, "instance_target": instance_target},
-                children=(*target_child, *(
-                    AstChild(
-                        f"arg_{index}", ExpressionPattern(), argument, "call_argument", "argument"
-                    )
-                    for index, argument in enumerate(node.args)
-                )),
-            )
-        schema = (
-            callee if isinstance(callee, runtime.OpSchema) else getattr(callee, "_op_schema", None)
-        )
-        if not isinstance(schema, runtime.OpSchema):
-            return None
-        children = CallPattern._schema_children(node, schema, context)
-        if children is None or isinstance(children, MatchFailure):
-            return children
-        return dataclasses.replace(
-            matched,
-            pattern_id="call.operation",
-            branch_id="operation_call",
-            captures={**matched.captures, "schema": schema},
-            children=children,
-        )
-
-    @staticmethod
-    def child_values(match, child, children, context):
+    def child_values(self, match, child, children, context):
         if match.branch_id != "operation_call" or child.role != "layout":
             return {}
         storage = next((c for c in match.children if c.name == "attr_storage"), None)
@@ -3199,8 +3215,7 @@ class CallPattern(ElementPattern):
             or (source.type.storage if source is not None else runtime.StorageKind.GMEM)
         }
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         if match.branch_id == "operation_call":
             schema = match.captures["schema"]
             variadic_inputs = children.get("variadic_inputs")
@@ -3220,7 +3235,7 @@ class CallPattern(ElementPattern):
             if schema.op_class in {runtime.Reshard, runtime.TensorView, runtime.Bitcast}:
                 for name, value in tuple(attrs.items()):
                     if isinstance(value, runtime.LayoutBase):
-                        attrs[name] = normalize_layout(value)
+                        attrs[name] = types.normalize_layout(value)
             for name, value in tuple(attrs.items()):
                 parameter = next((item for item in schema.signature if item.name == name), None)
                 annotation = None if parameter is None else parameter.annotation
@@ -3245,23 +3260,33 @@ class CallPattern(ElementPattern):
             except (TypeError, ValueError) as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
             return runtime.Call(
-                type=runtime.TensorType.scalar(runtime.DType.f32),
+                type=runtime.TensorType.from_scalar(runtime.DType.f32),
                 target=operation,
                 args=inputs,
             )
         elif match.branch_id == "symbol_call":
             callee = match.captures["callee"]
-            symbol = _callee_symbol(match.node.func, callee, module_entry=match.captures["module_entry"])
+            symbol = callee_symbol(
+                match.node.func, callee, module_entry=match.captures["module_entry"]
+            )
             reference = symbol_ref(callee, symbol)
-            return runtime.Call(type=reference.type.return_type, target=reference, args=tuple(children.values()))
+            return runtime.Call(
+                type=reference.type.return_type, target=reference, args=tuple(children.values())
+            )
         elif match.branch_id == "function_call":
             callee = match.captures["callee"]
             target = children.get("target", callee)
-            return_type = runtime.UnitType() if (
-                context.function.dialect == "tir" or match.captures.get("instance_target") is not None
-            ) else callee.return_type
+            return_type = (
+                runtime.UnitType()
+                if (
+                    context.function.dialect == "tir"
+                    or match.captures.get("instance_target") is not None
+                )
+                else callee.return_type
+            )
             return runtime.Call(
-                type=return_type, target=target,
+                type=return_type,
+                target=target,
                 args=tuple(value for name, value in children.items() if name.startswith("arg_")),
             )
         raise RuntimeError(f"no constructor branch for {match.branch_id!r}")
@@ -3274,35 +3299,37 @@ class CallPattern(ElementPattern):
     )
 
 
-_EXPR_BINARY_KINDS: Mapping[type[ast.AST], str] = {
-    ast.Add: "ADD",
-    ast.Sub: "SUB",
-    ast.Mult: "MUL",
-    ast.Div: "DIV",
-    ast.FloorDiv: "FLOOR_DIV",
-    ast.Mod: "MOD",
-    ast.Eq: "EQ",
-    ast.NotEq: "NE",
-    ast.Lt: "LT",
-    ast.LtE: "LE",
-    ast.Gt: "GT",
-    ast.GtE: "GE",
-    ast.And: "AND",
-    ast.Or: "OR",
-}
+EXPR_BINARY_KINDS: Mapping[type[ast.AST], str] = MappingProxyType(
+    {
+        ast.Add: "ADD",
+        ast.Sub: "SUB",
+        ast.Mult: "MUL",
+        ast.Div: "DIV",
+        ast.FloorDiv: "FLOOR_DIV",
+        ast.Mod: "MOD",
+        ast.Eq: "EQ",
+        ast.NotEq: "NE",
+        ast.Lt: "LT",
+        ast.LtE: "LE",
+        ast.Gt: "GT",
+        ast.GtE: "GE",
+        ast.And: "AND",
+        ast.Or: "OR",
+    }
+)
 
 
-def _expression_operator_pattern(operator_type: type[ast.AST]) -> ChoicePattern:
+def expression_operator_pattern(operator_type: type[ast.AST]) -> ChoicePattern:
     return ChoicePattern(
         *(
             AstNodePattern(node_type)
-            for node_type in _EXPR_BINARY_KINDS
+            for node_type in EXPR_BINARY_KINDS
             if issubclass(node_type, operator_type)
         )
     )
 
 
-_CALL_RESULT_RULES: tuple[AstRule[Any], ...] = (
+CALL_RESULT_RULES: tuple[AstRule[Any], ...] = (
     CallBindingRule(),
     AuthoredCallScopeRule(),
     CallTypeInferenceRule(),
@@ -3330,20 +3357,19 @@ class MatMulExpressionPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         args = (children["left"], children["right"])
         placeholder_type = next(
             (arg.type for arg in args if getattr(arg, "type", None) is not None),
-            runtime.TensorType.scalar(runtime.DType.f32),
+            runtime.TensorType.from_scalar(runtime.DType.f32),
         )
         return runtime.Call(
             type=placeholder_type,
-            target=MatMul(),
+            target=nn.MatMul(),
             args=args,
         )
 
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = _CALL_RESULT_RULES
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = CALL_RESULT_RULES
 
 
 class BinaryExpressionPattern(ElementPattern):
@@ -3356,11 +3382,11 @@ class BinaryExpressionPattern(ElementPattern):
                     ast.BinOp,
                     FieldPattern(
                         "op",
-                        _expression_operator_pattern(ast.operator),
+                        expression_operator_pattern(ast.operator),
                     ),
                     CapturePattern(
                         "kind",
-                        lambda node, context: _EXPR_BINARY_KINDS[type(node.op)],
+                        lambda node, context: EXPR_BINARY_KINDS[type(node.op)],
                     ),
                     FieldPattern(
                         "left",
@@ -3379,11 +3405,11 @@ class BinaryExpressionPattern(ElementPattern):
                     ast.Compare,
                     FieldPattern(
                         "ops",
-                        SequencePattern(_expression_operator_pattern(ast.cmpop)),
+                        SequencePattern(expression_operator_pattern(ast.cmpop)),
                     ),
                     CapturePattern(
                         "kind",
-                        lambda node, context: _EXPR_BINARY_KINDS[type(node.ops[0])],
+                        lambda node, context: EXPR_BINARY_KINDS[type(node.ops[0])],
                     ),
                     FieldPattern(
                         "left",
@@ -3402,11 +3428,11 @@ class BinaryExpressionPattern(ElementPattern):
                     ast.BoolOp,
                     FieldPattern(
                         "op",
-                        _expression_operator_pattern(ast.boolop),
+                        expression_operator_pattern(ast.boolop),
                     ),
                     CapturePattern(
                         "kind",
-                        lambda node, context: _EXPR_BINARY_KINDS[type(node.op)],
+                        lambda node, context: EXPR_BINARY_KINDS[type(node.op)],
                     ),
                     FieldPattern(
                         "values",
@@ -3421,12 +3447,11 @@ class BinaryExpressionPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         args = (children["left"], children["right"])
         placeholder_type = next(
             (arg.type for arg in args if getattr(arg, "type", None) is not None),
-            runtime.TensorType.scalar(runtime.DType.f32),
+            runtime.TensorType.from_scalar(runtime.DType.f32),
         )
         return runtime.Call(
             type=placeholder_type,
@@ -3468,8 +3493,7 @@ class UnaryExpressionPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         operand = children["operand"]
         target = runtime.Unary(kind=runtime.UnaryKind[match.captures["kind"]])
         return runtime.Call(
@@ -3501,16 +3525,16 @@ class SliceEndpointBinaryPattern(ElementPattern):
                         ),
                     ),
                 ),
-                CapturePattern("operator", lambda node, context: _BINARY_OPERATORS[type(node.op)]),
+                CapturePattern("operator", lambda node, context: BINARY_OPERATORS[type(node.op)]),
                 CapturePattern(
                     "dimension_operator",
                     lambda node, context: {
-                        ast.Add: runtime.DimAdd,
-                        ast.Sub: runtime.DimSub,
-                        ast.Mult: runtime.DimMul,
+                        ast.Add: "add",
+                        ast.Sub: "sub",
+                        ast.Mult: "mul",
                         ast.Div: None,
-                        ast.FloorDiv: runtime.DimFloorDiv,
-                        ast.Mod: runtime.DimMod,
+                        ast.FloorDiv: "floordiv",
+                        ast.Mod: "mod",
                     }[type(node.op)],
                 ),
                 FieldPattern(
@@ -3526,8 +3550,7 @@ class SliceEndpointBinaryPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         left = children["left"]
         right = children["right"]
         op = type(match.node.op)
@@ -3540,17 +3563,13 @@ class SliceEndpointBinaryPattern(ElementPattern):
                 )
             try:
                 if op is ast.Mult:
-                    start = runtime.simplify_dim(runtime.DimMul, (left.start, right))
-                    stop = runtime.simplify_dim(runtime.DimMul, (left.stop, right))
-                    step = runtime.simplify_dim(runtime.DimMul, (left.step, right))
+                    start = runtime.simplify_dim("mul", (left.start, right))
+                    stop = runtime.simplify_dim("mul", (left.stop, right))
+                    step = runtime.simplify_dim("mul", (left.step, right))
                 else:
-                    offset = (
-                        right
-                        if op is ast.Add
-                        else runtime.simplify_dim(runtime.DimMul, (-1, right))
-                    )
-                    start = runtime.simplify_dim(runtime.DimAdd, (left.start, offset))
-                    stop = runtime.simplify_dim(runtime.DimAdd, (left.stop, offset))
+                    offset = right if op is ast.Add else runtime.simplify_dim("mul", (-1, right))
+                    start = runtime.simplify_dim("add", (left.start, offset))
+                    stop = runtime.simplify_dim("add", (left.stop, offset))
                     step = left.step
             except (TypeError, ValueError, ZeroDivisionError) as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
@@ -3642,8 +3661,7 @@ class IndexSlicePattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         return slice(children.get("lower"), children.get("upper"), children.get("step"))
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (TileWindowSliceBoundRule(),)
@@ -3708,8 +3726,7 @@ class SubscriptIndexPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         if match.branch_id == "identity":
             return children["value"]
         elif match.branch_id == "tuple_children":
@@ -3736,15 +3753,14 @@ class SubscriptExpressionPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
-        _note_authored_call(match.node, context)
+    def construct(self, match, children, context):
+        note_authored_call(match.node, context)
         value = children["value"]
         index = children["index"]
         if isinstance(value, runtime.ModuleList):
             if isinstance(index, (int, float)):
-                index = _constant(index)
-            return _infer_call(runtime.TupleGetItem(), (value, index), context)
+                index = constant(index)
+            return infer_call(runtime.TupleGetItem(), (value, index), context)
         if isinstance(value.type, runtime.TupleType):
             if isinstance(index, bool) or not isinstance(index, (int, runtime.Expr)):
                 raise ParseError.from_node(
@@ -3752,8 +3768,8 @@ class SubscriptExpressionPattern(ElementPattern):
                 )
             if isinstance(index, int):
                 normalized = index + len(value.type.fields) if index < 0 else index
-                index = _constant(normalized)
-            return _infer_call(runtime.TupleGetItem(), (value, index), context)
+                index = constant(normalized)
+            return infer_call(runtime.TupleGetItem(), (value, index), context)
         if not isinstance(value.type, runtime.TensorType):
             raise ParseError.from_node(
                 match.node, context, "subscript requires TensorType or TupleType"
@@ -3775,7 +3791,7 @@ class SubscriptExpressionPattern(ElementPattern):
                 end = extent if component.stop is None else component.stop
                 stride = 1 if component.step is None else component.step
                 starts.append(runtime.dim_expr(begin))
-                sizes.append(_slice_size(begin, end, stride, context, match.node))
+                sizes.append(slice_size(begin, end, stride, context, match.node))
                 strides.append(stride)
                 continue
             if isinstance(component, bool):
@@ -3789,7 +3805,7 @@ class SubscriptExpressionPattern(ElementPattern):
             type=runtime.TupleType(fields=tuple(start.type for start in starts)),
             elements=tuple(starts),
         )
-        sliced = _infer_call(
+        sliced = infer_call(
             runtime.Slice(sizes=tuple(sizes), strides=tuple(strides)),
             (value, starts_expr),
             context,
@@ -3799,9 +3815,42 @@ class SubscriptExpressionPattern(ElementPattern):
         new_shape = tuple(
             extent for axis, extent in enumerate(sliced.type.shape) if axis not in collapsed
         )
-        return _infer_call(runtime.Reshape(new_shape=new_shape), (sliced,), context)
+        return infer_call(runtime.Reshape(new_shape=new_shape), (sliced,), context)
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
+def enter_mesh_coordinate(
+    node: object, context: MatchContext, matched: AstMatch[Any]
+) -> AstMatch[Any] | MatchFailure | None:
+    assert isinstance(node, ast.Attribute)
+    assert isinstance(node.value, ast.Name)
+    if context.function is None:
+        return None
+    mesh = context.lexical_scope.lookup(node.value.id)
+    if not isinstance(mesh, runtime.Mesh):
+        return None
+    axis = next(
+        (index for index, name in enumerate(mesh.names) if name == node.attr),
+        None,
+    )
+    if axis is None and node.attr in {"x", "y", "z"}:
+        candidate = ("x", "y", "z").index(node.attr)
+        if candidate < len(types.flatten(mesh.layout).shape):
+            axis = candidate
+    if axis is None:
+        named = ", ".join(mesh.names)
+        return PatternFailure(
+            "mesh_coordinate",
+            node,
+            f"mesh {node.value.id!r} has no axis {node.attr!r}; its axes are: {named}",
+        )
+    return dataclasses.replace(
+        matched,
+        pattern_id="expression.mesh_coordinate",
+        branch_id="mesh_coordinate",
+        captures={**matched.captures, "mesh": mesh, "axis": axis},
+    )
 
 
 class MeshCoordinatePattern(ElementPattern):
@@ -3813,51 +3862,17 @@ class MeshCoordinatePattern(ElementPattern):
                 FieldPattern("value", AstNodePattern(ast.Name)),
                 FieldPattern("attr", LiteralPattern(value_type=str)),
             ),
-            MeshCoordinatePattern.enter,
+            enter_mesh_coordinate,
         )
     )
 
-    @staticmethod
-    def enter(
-        node: object, context: MatchContext, matched: AstMatch[Any]
-    ) -> AstMatch[Any] | MatchFailure | None:
-        assert isinstance(node, ast.Attribute)
-        assert isinstance(node.value, ast.Name)
-        if context.function is None:
-            return None
-        mesh = context.lexical_scope.lookup(node.value.id)
-        if not isinstance(mesh, runtime.Mesh):
-            return None
-        axis = next(
-            (index for index, name in enumerate(mesh.names) if name == node.attr),
-            None,
-        )
-        if axis is None and node.attr in {"x", "y", "z"}:
-            candidate = ("x", "y", "z").index(node.attr)
-            if candidate < len(flatten(mesh.layout).shape):
-                axis = candidate
-        if axis is None:
-            named = ", ".join(mesh.names)
-            return PatternFailure(
-                "mesh_coordinate",
-                node,
-                f"mesh {node.value.id!r} has no axis {node.attr!r}; its axes are: {named}",
-            )
-        return dataclasses.replace(
-            matched,
-            pattern_id="expression.mesh_coordinate",
-            branch_id="mesh_coordinate",
-            captures={**matched.captures, "mesh": mesh, "axis": axis},
-        )
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         if context.function is None:
             raise ParseError.from_node(match.node, context, "mesh coordinate lacks context")
-        _note_authored_call(match.node, context)
+        note_authored_call(match.node, context)
         mesh = match.captures["mesh"]
         axis = match.captures["axis"]
-        extent = flatten(mesh.layout).shape[axis]
+        extent = types.flatten(mesh.layout).shape[axis]
         if isinstance(extent, bool) or not isinstance(extent, int):
             raise ParseError.from_node(
                 match.node, context, "mesh coordinate requires a concrete axis extent"
@@ -3866,10 +3881,10 @@ class MeshCoordinatePattern(ElementPattern):
         cached = context.function.state.mesh_coordinates.get(cache_key)
         if cached is not None:
             return cached
-        index = _constant(axis)
-        coordinate = _infer_call(runtime.MeshCoord(mesh=mesh), (index,), context)
-        attach_metadata(coordinate, RangeMetadata(0, extent))
-        context.function.state.mesh_coordinates[cache_key] = coordinate
+        index = constant(axis)
+        coordinate = infer_call(runtime.MeshCoord(mesh=mesh), (index,), context)
+        coordinate.attach_metadata(expr.RangeMetadata(0, extent))
+        context.function.state.cache_mesh_coordinate(cache_key, coordinate)
         return coordinate
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
@@ -3899,29 +3914,28 @@ class ExpressionPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
-        value = _resolve_reference(match.node, context)
+    def construct(self, match, children, context):
+        value = resolve_reference(match.node, context)
         if isinstance(value, runtime.Expr):
             return value
         if isinstance(value, (bool, int, float)):
-            return _constant(value)
+            return constant(value)
         raise ParseError.from_node(match.node, context, "attribute did not resolve to Expr")
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
 @dataclass(frozen=True)
-class _MeshSelection:
-    selection: Mesh
-    layout: Layout
+class MeshSelection:
+    selection: types.Mesh
+    layout: types.Layout
     names: tuple[str, ...]
-    outer: Layout | None = None
+    outer: types.Layout | None = None
 
 
-def _finish_mesh_context(mesh, match, context):
+def finish_mesh_context(mesh, match, context):
     binding = context.values.get("mesh_binding")
-    _enter_mesh_scope(context, mesh, match)
+    enter_mesh_scope(context, mesh, match)
     if isinstance(binding, str):
         context.lexical_scope.define_mesh(binding, mesh)
     context.function.state.mesh_stack.append(mesh)
@@ -3933,8 +3947,10 @@ class SelectionLevelRule:
     STATEMENT: ClassVar[str] = "A mesh selection names exactly one topology level."
 
     def apply(self, value, *, match, context):
-        if isinstance(value, _MeshSelection) and len(value.selection.topologies) != 1:
-            raise ParseError.from_node(match.node, context, "a mesh selection selects one topology level")
+        if isinstance(value, MeshSelection) and len(value.selection.topologies) != 1:
+            raise ParseError.from_node(
+                match.node, context, "a mesh selection selects one topology level"
+            )
         return value
 
 
@@ -3946,13 +3962,15 @@ class SelectionSizeRule:
     )
 
     def apply(self, value, *, match, context):
-        if not isinstance(value, _MeshSelection):
+        if not isinstance(value, MeshSelection):
             return value
-        source = flatten(levels(value.selection)[0])
+        source = types.flatten(types.levels(value.selection)[0])
         layout = value.layout
         message = None
-        if layout_size(layout) != layout_size(source):
-            message = "mesh selection layout must hold the same number of positions as its selection"
+        if types.size(layout) != types.size(source):
+            message = (
+                "mesh selection layout must hold the same number of positions as its selection"
+            )
         elif not all(isinstance(one, int) and one > 0 for one in (*source.shape, *layout.shape)):
             message = "a mesh selection requires positive static extents"
         elif value.names and len(value.names) != len(layout.shape):
@@ -3971,15 +3989,15 @@ class SelectionCoverRule:
     STATEMENT: ClassVar[str] = "A mesh selection layout covers each selection-local index exactly once."
 
     def apply(self, value, *, match, context):
-        if not isinstance(value, _MeshSelection):
+        if not isinstance(value, MeshSelection):
             return value
         layout = value.layout
-        order = compact_row_major(layout.shape)
+        order = types.compact_row_major(layout.shape)
         indices = {
-            crd2idx(idx2crd(index, layout.shape, order), layout.shape, layout.strides)
-            for index in range(layout_size(layout))
+            types.crd2idx(types.idx2crd(index, layout.shape, order), layout.shape, layout.strides)
+            for index in range(types.size(layout))
         }
-        if indices != set(range(layout_size(layout))):
+        if indices != set(range(types.size(layout))):
             raise ParseError.from_node(
                 match.node, context, "mesh selection layout must cover each selected position once"
             )
@@ -3993,18 +4011,22 @@ class SelectionStrideRule:
     STATEMENT: ClassVar[str] = "Each new mesh selection axis maps to one fixed physical stride."
 
     def apply(self, value, *, match, context):
-        if not isinstance(value, _MeshSelection):
+        if not isinstance(value, MeshSelection):
             return value
-        source = flatten(levels(value.selection)[0])
+        source = types.flatten(types.levels(value.selection)[0])
         try:
-            outer = composition(source, value.layout, major="row")
+            outer = layout_algebra.composition(source, value.layout, major="row")
         except (AssertionError, ValueError, TypeError) as error:
             raise ParseError.from_node(
-                match.node, context, "a mesh selection axis does not map to one stride of the selection"
+                match.node,
+                context,
+                "a mesh selection axis does not map to one stride of the selection",
             ) from error
         if outer.shape != value.layout.shape:
             raise ParseError.from_node(
-                match.node, context, "a mesh selection axis does not map to one stride of the selection"
+                match.node,
+                context,
+                "a mesh selection axis does not map to one stride of the selection",
             )
         return dataclasses.replace(value, outer=outer)
 
@@ -4017,17 +4039,17 @@ class SelectionConstructionRule:
     )
 
     def apply(self, value, *, match, context):
-        if not isinstance(value, _MeshSelection):
+        if not isinstance(value, MeshSelection):
             return value
         assert value.outer is not None
         mesh = runtime.Mesh(
             value.selection.topologies,
             value.outer
-            if starts(value.selection)[0] == 0
-            else ComposedLayout(None, starts(value.selection)[0], value.outer),
+            if types.starts(value.selection)[0] == 0
+            else types.ComposedLayout(None, types.starts(value.selection)[0], value.outer),
             value.names,
         )
-        return _finish_mesh_context(mesh, match, context)
+        return finish_mesh_context(mesh, match, context)
 
 
 @dataclass(frozen=True)
@@ -4060,6 +4082,86 @@ class SelectionLayoutFormRule:
                 "mesh", node, "a mesh selection layout is a shape tuple or (shape, strides) tuple"
             )
         return tuple(node.elts)
+
+
+def enter_mesh_context(
+    node: object, context: MatchContext, matched: AstMatch[Any]
+) -> AstMatch[Any] | MatchFailure | None:
+    assert isinstance(node, ast.Call)
+    if not node.args:
+        return None
+    selecting = not isinstance(node.args[0], ast.Tuple)
+    if selecting:
+        checked = MeshContextPattern.BIND_RULES[0].apply(
+            matched, node=node.args[0], context=context
+        )
+        if isinstance(checked, MatchFailure):
+            return checked
+    positional = list(node.args[1:])
+    keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+    layout_node = keywords.get("layout")
+    names_node = keywords.get("names")
+    if positional:
+        if layout_node is not None:
+            return PatternFailure(
+                "mesh", node, "`layout` is already bound by a positional argument"
+            )
+        layout_node = positional.pop(0)
+    if positional:
+        if names_node is not None:
+            return PatternFailure("mesh", node, "`names` is already bound by a positional argument")
+        names_node = positional.pop(0)
+    if positional:
+        return PatternFailure(
+            "mesh",
+            node,
+            f"a mesh takes topologies, layout, and names; got "
+            f"{len(node.args)} positional arguments",
+        )
+    if layout_node is None:
+        return PatternFailure("mesh", node, "a mesh requires a `layout`")
+    shape_node, strides_node = layout_node, None
+    if selecting:
+        checked = MeshContextPattern.BIND_RULES[1].apply(matched, node=layout_node, context=context)
+        if isinstance(checked, MatchFailure):
+            return checked
+        shape_node, strides_node = checked
+    children = [
+        AstChild(
+            "selection" if selecting else "topology_names",
+            StaticValuePattern(),
+            node.args[0],
+            "mesh_topologies",
+            "topologies",
+        ),
+        AstChild(
+            "shape" if selecting else "layout",
+            ShapePattern() if selecting else LayoutPattern(),
+            shape_node if selecting else layout_node,
+            "mesh_shape" if selecting else "mesh_layout",
+            "shape" if selecting else "layout",
+        ),
+    ]
+    if strides_node is not None:
+        children.append(
+            AstChild("strides", ShapePattern(), strides_node, "mesh_strides", "strides")
+        )
+    if names_node is not None:
+        children.append(
+            AstChild(
+                "names",
+                StaticValuePattern(),
+                names_node,
+                "mesh_names",
+                "names",
+            )
+        )
+    return dataclasses.replace(
+        matched,
+        pattern_id="mesh.context",
+        branch_id="mesh_selection" if selecting else "mesh_context",
+        children=tuple(children),
+    )
 
 
 class MeshContextPattern(ElementPattern):
@@ -4099,7 +4201,7 @@ class MeshContextPattern(ElementPattern):
                         ),
                     ),
                 ),
-                MeshContextPattern.enter,
+                enter_mesh_context,
             ),
             BranchPattern(
                 "mesh_reference",
@@ -4123,98 +4225,17 @@ class MeshContextPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def enter(
-        node: object, context: MatchContext, matched: AstMatch[Any]
-    ) -> AstMatch[Any] | MatchFailure | None:
-        assert isinstance(node, ast.Call)
-        if not node.args:
-            return None
-        selecting = not isinstance(node.args[0], ast.Tuple)
-        if selecting:
-            checked = MeshContextPattern.BIND_RULES[0].apply(matched, node=node.args[0], context=context)
-            if isinstance(checked, MatchFailure):
-                return checked
-        positional = list(node.args[1:])
-        keywords = {keyword.arg: keyword.value for keyword in node.keywords}
-        layout_node = keywords.get("layout")
-        names_node = keywords.get("names")
-        if positional:
-            if layout_node is not None:
-                return PatternFailure(
-                    "mesh", node, "`layout` is already bound by a positional argument"
-                )
-            layout_node = positional.pop(0)
-        if positional:
-            if names_node is not None:
-                return PatternFailure(
-                    "mesh", node, "`names` is already bound by a positional argument"
-                )
-            names_node = positional.pop(0)
-        if positional:
-            return PatternFailure(
-                "mesh",
-                node,
-                f"a mesh takes topologies, layout, and names; got "
-                f"{len(node.args)} positional arguments",
-            )
-        if layout_node is None:
-            return PatternFailure("mesh", node, "a mesh requires a `layout`")
-        shape_node, strides_node = layout_node, None
-        if selecting:
-            checked = MeshContextPattern.BIND_RULES[1].apply(
-                matched, node=layout_node, context=context
-            )
-            if isinstance(checked, MatchFailure):
-                return checked
-            shape_node, strides_node = checked
-        children = [
-            AstChild(
-                "selection" if selecting else "topology_names",
-                StaticValuePattern(),
-                node.args[0],
-                "mesh_topologies",
-                "topologies",
-            ),
-            AstChild(
-                "shape" if selecting else "layout",
-                ShapePattern() if selecting else LayoutPattern(),
-                shape_node if selecting else layout_node,
-                "mesh_shape" if selecting else "mesh_layout",
-                "shape" if selecting else "layout",
-            ),
-        ]
-        if strides_node is not None:
-            children.append(
-                AstChild("strides", ShapePattern(), strides_node, "mesh_strides", "strides")
-            )
-        if names_node is not None:
-            children.append(
-                AstChild(
-                    "names",
-                    StaticValuePattern(),
-                    names_node,
-                    "mesh_names",
-                    "names",
-                )
-            )
-        return dataclasses.replace(
-            matched,
-            pattern_id="mesh.context",
-            branch_id="mesh_selection" if selecting else "mesh_context",
-            children=tuple(children),
-        )
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         if context.function is None:
             raise ParseError.from_node(match.node, context, "Mesh requires function context")
         if match.branch_id == "mesh_selection":
             shape, strides = children["shape"], children.get("strides")
-            layout = flatten(
-                runtime.Layout(shape, compact_row_major(shape) if strides is None else strides)
+            layout = types.flatten(
+                runtime.Layout(
+                    shape, types.compact_row_major(shape) if strides is None else strides
+                )
             )
-            return _MeshSelection(children["selection"], layout, children.get("names", ()))
+            return MeshSelection(children["selection"], layout, children.get("names", ()))
         elif match.branch_id == "mesh_context":
             topology_names = children["topology_names"]
             if not isinstance(topology_names, tuple):
@@ -4225,7 +4246,7 @@ class MeshContextPattern(ElementPattern):
                 )
             names = children.get("names", ())
             if any(isinstance(topology, str) for topology in topology_names):
-                topology_names = _resolve_mesh_topologies_at(
+                topology_names = resolve_mesh_topologies_at(
                     topology_names, context.function.topologies, match.node, context
                 )
             layout = children["layout"]
@@ -4245,7 +4266,7 @@ class MeshContextPattern(ElementPattern):
                 raise ParseError.from_node(match.node, context, "with context is not Mesh")
         else:
             raise RuntimeError(f"no constructor branch for {match.branch_id!r}")
-        return _finish_mesh_context(mesh, match, context)
+        return finish_mesh_context(mesh, match, context)
 
     BIND_RULES = (SelectionBindingRule(), SelectionLayoutFormRule())
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
@@ -4254,14 +4275,14 @@ class MeshContextPattern(ElementPattern):
     )
 
 
-def _parser_infer_context(context):
+def authored_infer_context(context):
     """The one inference context every node of this function is built against."""
-    found = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
-    assert isinstance(found, ParserTypeInferContext)
+    found = context.lexical_scope.lookup(TYPE_INFER_CONTEXT)
+    assert isinstance(found, AuthoredInferContext)
     return found
 
 
-def _reject_unscoped_call(node, context):
+def reject_unscoped_call(node, context):
     raise ParseError.from_node(
         node,
         context,
@@ -4270,23 +4291,23 @@ def _reject_unscoped_call(node, context):
     )
 
 
-def _note_authored_call(node, context):
+def note_authored_call(node, context):
     """Record authored Calls in their execution scope.
 
     See [parser §2.2](docs/spec/parser.md#22-rules).
     """
     if context.function is None or context.function.dialect != "hir":
         return
-    if _parser_infer_context(context).current_mesh is not None:
+    if authored_infer_context(context).current_mesh is not None:
         return
     state = context.function.state
     if state.opened_mesh:
-        _reject_unscoped_call(node, context)
+        reject_unscoped_call(node, context)
     if state.unscoped_call is None:
-        state.unscoped_call = node
+        state.note_unscoped_call(node)
 
 
-def _directly_bound_names(statements):
+def directly_bound_names(statements):
     """Return names assigned directly by a block's statements."""
     names: set[str] = set()
     for statement in statements:
@@ -4307,7 +4328,7 @@ def _directly_bound_names(statements):
     return frozenset(names)
 
 
-def _loaded_names(statements):
+def loaded_names(statements):
     """Return names read in a sequence of following statements."""
     return frozenset(
         name.id
@@ -4317,7 +4338,7 @@ def _loaded_names(statements):
     )
 
 
-def _read_before_bound(statements):
+def read_before_bound(statements):
     """Return names a block reads before it binds them, in statement order.
 
     A name a block reads on its way to binding it came from outside the block:
@@ -4326,14 +4347,12 @@ def _read_before_bound(statements):
     bound: set[str] = set()
     live: set[str] = set()
     for statement in statements:
-        live.update(_loaded_names((statement,)) - bound)
-        bound.update(_directly_bound_names((statement,)))
+        live.update(loaded_names((statement,)) - bound)
+        bound.update(directly_bound_names((statement,)))
     return frozenset(live)
 
 
-def live_out(
-    statements, after: frozenset[str] = frozenset()
-) -> dict[ast.With, frozenset[str]]:
+def live_out(statements, after: frozenset[str] = frozenset()) -> dict[ast.With, frozenset[str]]:
     """Each with's conservative live-out: names read by following statements."""
     found: dict[ast.With, frozenset[str]] = {}
     for statement in reversed(statements):
@@ -4346,11 +4365,11 @@ def live_out(
         elif isinstance(statement, ast.If):
             found.update(live_out(statement.body, after))
             found.update(live_out(statement.orelse, after))
-        after |= _loaded_names((statement,))
+        after |= loaded_names((statement,))
     return found
 
 
-def _enter_mesh_scope(context, mesh, match):
+def enter_mesh_scope(context, mesh, match):
     """Record the scope a `with` opens, before its body is built.
 
     Inference runs as each node is constructed, so the region node is not there
@@ -4358,24 +4377,24 @@ def _enter_mesh_scope(context, mesh, match):
     on the way in and puts it back on the way out. The names already bound go
     with it, so on the way out the new ones can be told from the old.
     """
-    infer = _parser_infer_context(context)
+    infer = authored_infer_context(context)
     if context.function.dialect == "hir":
         state = context.function.state
         if state.unscoped_call is not None:
-            _reject_unscoped_call(state.unscoped_call, context)
-        state.opened_mesh = True
+            reject_unscoped_call(state.unscoped_call, context)
+        state.open_mesh()
     try:
         entered_mesh = runtime.make_mesh(infer.current_mesh, mesh) if infer.current_mesh else mesh
     except ValueError as error:
         raise ParseError.from_node(match.node, context, str(error)) from error
     context.lexical_scope.push_frame()
     context.lexical_scope.define(
-        _TYPE_INFER_CONTEXT,
+        TYPE_INFER_CONTEXT,
         dataclasses.replace(infer, current_mesh=entered_mesh),
     )
 
 
-def _scoped_region(mesh, body, params=(), args=()):
+def scoped_region(mesh, body, params=(), args=()):
     """Build a type-transparent HIR mesh region."""
     return runtime.MeshRegion(
         mesh=mesh,
@@ -4386,11 +4405,11 @@ def _scoped_region(mesh, body, params=(), args=()):
     )
 
 
-def _region_captures(node, context, excluded=frozenset()):
+def region_captures(node, context, excluded=frozenset()):
     """Capture outer expression bindings for one region boundary."""
 
     def free_names(statements, outer_bound=frozenset()):
-        local = _directly_bound_names(statements) - _read_before_bound(statements)
+        local = directly_bound_names(statements) - read_before_bound(statements)
         visible = outer_bound | local
         found = set()
 
@@ -4411,8 +4430,7 @@ def _region_captures(node, context, excluded=frozenset()):
                     if isinstance(item.optional_vars, ast.Name):
                         nested_bound.add(item.optional_vars.id)
                 nested_bound.update(
-                    _directly_bound_names(statement.body)
-                    - _read_before_bound(statement.body)
+                    directly_bound_names(statement.body) - read_before_bound(statement.body)
                 )
                 for child in statement.body:
                     visit(child, frozenset(nested_bound))
@@ -4446,7 +4464,7 @@ def _region_captures(node, context, excluded=frozenset()):
     for name in sorted(free):
         value = context.lexical_scope.lookup(name)
         if isinstance(value, (bool, int, float)):
-            value = _constant(value)
+            value = constant(value)
         if isinstance(value, slice):
             value = value.start
         if not isinstance(value, runtime.Expr):
@@ -4456,29 +4474,27 @@ def _region_captures(node, context, excluded=frozenset()):
     return tuple(params), tuple(args)
 
 
-def _region_capture_bindings(params, context):
+def region_capture_bindings(params, context):
     """Rebuild captured tile windows around the region's new induction parameter."""
     bindings = {}
     for param in params:
         value = context.lexical_scope.lookup(param.name)
         if isinstance(value, slice):
-            width = runtime.normalize_dim(
-                runtime.simplify_dim(runtime.DimSub, (value.stop, value.start))
-            )
-            stop = runtime.simplify_dim(runtime.DimAdd, (param, width))
+            width = runtime.normalize_dim(runtime.simplify_dim("sub", (value.stop, value.start)))
+            stop = runtime.simplify_dim("add", (param, width))
             bindings[param.name] = slice(param, stop, value.step)
         else:
             bindings[param.name] = param
     return bindings
 
 
-def _bind_region_results(context, region, names, node):
+def bind_region_results(context, region, names, node):
     """Bind one region directly or project each result from its tuple."""
     if len(names) == 1:
         context.lexical_scope.define(names[0], region)
         return
     for index, name in enumerate(names):
-        projection = _infer_call(runtime.TupleGetItem(), (region, _constant(index)), context)
+        projection = infer_call(runtime.TupleGetItem(), (region, constant(index)), context)
         attach_authored_metadata(
             projection,
             node,
@@ -4487,7 +4503,7 @@ def _bind_region_results(context, region, names, node):
         context.lexical_scope.define(name, projection)
 
 
-def _rebind_through_region(context, mesh, names, frame, node, params=(), args=()):
+def rebind_through_region(context, mesh, names, frame, node, params=(), args=()):
     """Point escaped names at a region result, whether or not it has a body value.
 
     A region's computed values are named, and those names are how code after it
@@ -4498,14 +4514,58 @@ def _rebind_through_region(context, mesh, names, frame, node, params=(), args=()
     """
     values = [(name, frame[name]) for name in names]
     if len(values) == 1:
-        scoped = _scoped_region(mesh, values[0][1], params, args)
-        _bind_region_results(context, scoped, [values[0][0]], node)
+        scoped = scoped_region(mesh, values[0][1], params, args)
+        bind_region_results(context, scoped, [values[0][0]], node)
         return values[0][0]
-    tuple_type = runtime.TupleType(fields=tuple(value.type for _name, value in values))
-    tuple_body = runtime.IrTuple(type=tuple_type, elements=tuple(value for _name, value in values))
-    scoped = _scoped_region(mesh, tuple_body, params, args)
-    _bind_region_results(context, scoped, [name for name, _value in values], node)
+    tuple_type = runtime.TupleType(fields=tuple(value.type for _, value in values))
+    tuple_body = runtime.IrTuple(type=tuple_type, elements=tuple(value for _, value in values))
+    scoped = scoped_region(mesh, tuple_body, params, args)
+    bind_region_results(context, scoped, [name for name, _ in values], node)
     return values[0][0]
+
+
+def enter_with(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
+    assert isinstance(node, ast.With)
+    item = node.items[0]
+    assert isinstance(item.optional_vars, ast.Name)
+    binding = item.optional_vars.id
+    params, args = region_captures(node, context)
+    return dataclasses.replace(
+        matched,
+        pattern_id="statement.with_mesh",
+        branch_id="with_mesh",
+        captures={
+            **matched.captures,
+            "binding": binding,
+            "region_params": params,
+            "region_args": args,
+        },
+        children=(
+            AstChild(
+                "mesh",
+                MeshContextPattern(),
+                item.context_expr,
+                "mesh_context",
+                "mesh",
+                values={"mesh_binding": binding},
+            ),
+            AstChild(
+                "body",
+                BlockPattern(),
+                body_as_ast_module(node.body),
+                "block",
+                "with_body",
+                lexical_bindings=(
+                    region_capture_bindings(params, context)
+                    if context.function.dialect == "hir"
+                    else None
+                ),
+                values={
+                    "loop_captures": (*context.values.get("loop_captures", ()), *zip(params, args))
+                },
+            ),
+        ),
+    )
 
 
 class WithPattern(ElementPattern):
@@ -4539,62 +4599,15 @@ class WithPattern(ElementPattern):
                         BlockPattern(),
                         "block",
                         "with_body",
-                        transform=_body_as_ast_module,
+                        transform=body_as_ast_module,
                     ),
                 ),
             ),
-            WithPattern.enter,
+            enter_with,
         )
     )
 
-    @staticmethod
-    def enter(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
-        assert isinstance(node, ast.With)
-        item = node.items[0]
-        assert isinstance(item.optional_vars, ast.Name)
-        binding = item.optional_vars.id
-        params, args = _region_captures(node, context)
-        return dataclasses.replace(
-            matched,
-            pattern_id="statement.with_mesh",
-            branch_id="with_mesh",
-            captures={
-                **matched.captures,
-                "binding": binding,
-                "region_params": params,
-                "region_args": args,
-            },
-            children=(
-                AstChild(
-                    "mesh",
-                    MeshContextPattern(),
-                    item.context_expr,
-                    "mesh_context",
-                    "mesh",
-                    values={"mesh_binding": binding},
-                ),
-                AstChild(
-                    "body",
-                    BlockPattern(),
-                    _body_as_ast_module(node.body),
-                    "block",
-                    "with_body",
-                    lexical_bindings=(
-                        _region_capture_bindings(params, context)
-                        if context.function.dialect == "hir"
-                        else None
-                    ),
-                    values={
-                        "loop_captures": (
-                            *context.values.get("loop_captures", ()), *zip(params, args)
-                        )
-                    },
-                ),
-            ),
-        )
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         if context.function is None:
             raise ParseError.from_node(match.node, context, "`with` requires function context")
         mesh = children["mesh"]
@@ -4620,16 +4633,18 @@ class WithPattern(ElementPattern):
             args = match.captures.get("region_args", ())
             rebound = None
             if escaping:
-                rebound = _rebind_through_region(
+                rebound = rebind_through_region(
                     context, mesh, escaping, frame, match.node, params, args
                 )
             if body is not None and (
                 rebound is None or isinstance(match.node.body[-1], ast.Return)
             ):
-                return _scoped_region(mesh, body, params, args)
+                return scoped_region(mesh, body, params, args)
             return None if rebound is None else context.lexical_scope.lookup(rebound)
         binding = runtime.Var(
-            type=runtime.TensorType.scalar(runtime.DType.i64, storage=runtime.StorageKind.RMEM),
+            type=runtime.TensorType.from_scalar(
+                runtime.DType.i64, storage=runtime.StorageKind.RMEM
+            ),
             name=match.captures["binding"],
         )
         return runtime.MeshScope(mesh=mesh, binding=binding, body=children["body"])
@@ -4637,7 +4652,7 @@ class WithPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
-def _callee_symbol(node, callee, *, module_entry=False):
+def callee_symbol(node, callee, *, module_entry=False):
     """Retain authored child slots while using the resolved function's name."""
     parts = []
     while isinstance(node, ast.Attribute):
@@ -4652,64 +4667,61 @@ def _callee_symbol(node, callee, *, module_entry=False):
     return ".".join((*slots, callee.name))
 
 
+def enter_launch(node: object, context: MatchContext, matched: AstMatch[Any]):
+    assert isinstance(node, ast.Call)
+    if not isinstance(node.func, ast.Name) or node.func.id != "launch":
+        return None
+    if not node.args:
+        return PatternFailure("launch", node, "launch(...) requires a callee")
+    keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+    if any(name is None for name in keywords):
+        return PatternFailure("launch", node, "`**` unpacking is not an authored launch form")
+    missing = [name for name in ("grid", "block") if name not in keywords]
+    if missing:
+        return PatternFailure("launch", node, f"launch(...) requires {' and '.join(missing)}")
+    unknown = set(keywords) - {
+        "grid",
+        "block",
+        "cluster",
+        "dynamic_smem",
+        "stream",
+        "attrs",
+    }
+    if unknown:
+        return PatternFailure(
+            "launch",
+            node,
+            f"launch(...) has no option {sorted(unknown)!r}; it takes grid, block, "
+            f"cluster, dynamic_smem, stream, attrs",
+        )
+    children = [
+        AstChild("callee", StaticValuePattern(), node.args[0], "launch_callee"),
+        *(
+            AstChild(f"arg_{index}", ExpressionPattern(), argument, "launch_argument")
+            for index, argument in enumerate(node.args[1:])
+        ),
+        AstChild("grid", StaticValuePattern(), keywords["grid"], "launch_extent"),
+        AstChild("block", StaticValuePattern(), keywords["block"], "launch_extent"),
+    ]
+    for name in ("cluster", "dynamic_smem", "stream", "attrs"):
+        if name in keywords:
+            children.append(AstChild(name, StaticValuePattern(), keywords[name], "launch_option"))
+    return dataclasses.replace(
+        matched,
+        pattern_id="statement.launch",
+        branch_id="launch",
+        captures={"arg_count": len(node.args) - 1},
+        children=tuple(children),
+    )
+
+
 class LaunchPattern(ElementPattern):
     """TIR host launch statement lowered from the authored ``launch`` call."""
 
     element_name = "launch"
-    syntax = LazyPattern(lambda: BindPattern(AstNodePattern(ast.Call), LaunchPattern.enter))
+    syntax = LazyPattern(lambda: BindPattern(AstNodePattern(ast.Call), enter_launch))
 
-    @staticmethod
-    def enter(node: object, context: MatchContext, matched: AstMatch[Any]):
-        assert isinstance(node, ast.Call)
-        if not isinstance(node.func, ast.Name) or node.func.id != "launch":
-            return None
-        if not node.args:
-            return PatternFailure("launch", node, "launch(...) requires a callee")
-        keywords = {keyword.arg: keyword.value for keyword in node.keywords}
-        if any(name is None for name in keywords):
-            return PatternFailure("launch", node, "`**` unpacking is not an authored launch form")
-        missing = [name for name in ("grid", "block") if name not in keywords]
-        if missing:
-            return PatternFailure("launch", node, f"launch(...) requires {' and '.join(missing)}")
-        unknown = set(keywords) - {
-            "grid",
-            "block",
-            "cluster",
-            "dynamic_smem",
-            "stream",
-            "attrs",
-        }
-        if unknown:
-            return PatternFailure(
-                "launch",
-                node,
-                f"launch(...) has no option {sorted(unknown)!r}; it takes grid, block, "
-                f"cluster, dynamic_smem, stream, attrs",
-            )
-        children = [
-            AstChild("callee", StaticValuePattern(), node.args[0], "launch_callee"),
-            *(
-                AstChild(f"arg_{index}", ExpressionPattern(), argument, "launch_argument")
-                for index, argument in enumerate(node.args[1:])
-            ),
-            AstChild("grid", StaticValuePattern(), keywords["grid"], "launch_extent"),
-            AstChild("block", StaticValuePattern(), keywords["block"], "launch_extent"),
-        ]
-        for name in ("cluster", "dynamic_smem", "stream", "attrs"):
-            if name in keywords:
-                children.append(
-                    AstChild(name, StaticValuePattern(), keywords[name], "launch_option")
-                )
-        return dataclasses.replace(
-            matched,
-            pattern_id="statement.launch",
-            branch_id="launch",
-            captures={"arg_count": len(node.args) - 1},
-            children=tuple(children),
-        )
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         callee = children["callee"]
         module_entry = isinstance(callee, runtime.Module)
         if module_entry:
@@ -4719,16 +4731,44 @@ class LaunchPattern(ElementPattern):
             for name in ("cluster", "dynamic_smem", "stream", "attrs")
             if name in children
         }
-        return launch_call(
+        return tir.launch.launch_call(
             callee,
             tuple(children[f"arg_{index}"] for index in range(match.captures["arg_count"])),
             children["grid"],
             children["block"],
-            symbol=_callee_symbol(match.node.args[0], callee, module_entry=module_entry),
+            symbol=callee_symbol(match.node.args[0], callee, module_entry=module_entry),
             **options,
         )
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
+def carry_statement_names(node: object, context: MatchContext) -> tuple[str, ...]:
+    """Names a statement binds that the loop carries rather than the loop itself.
+
+    An assignment states its own; a `with` states what its body binds,
+    because a region delimits who runs the work and not who owns the value.
+    Every other statement binds nothing the loop carries.
+    """
+    if not isinstance(node, ast.With):
+        return ()
+    found: list[str] = []
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Assign):
+            continue
+        target = child.targets[0]
+        targets = target.elts if isinstance(target, ast.Tuple) else (target,)
+        found.extend(
+            item.id for item in targets if isinstance(item, ast.Name) and item.id not in found
+        )
+    return tuple(found)
+
+
+def carry_target_names(node: object, context: MatchContext) -> tuple[str, ...]:
+    assert isinstance(node, ast.Assign)
+    target = node.targets[0]
+    targets = target.elts if isinstance(target, ast.Tuple) else (target,)
+    return tuple(item.id for item in targets if isinstance(item, ast.Name))
 
 
 class LoopCarryStatementPattern(ElementPattern):
@@ -4743,7 +4783,7 @@ class LoopCarryStatementPattern(ElementPattern):
                         "targets",
                         SequencePattern(AstNodePattern(ast.expr)),
                     ),
-                    CapturePattern("names", LoopCarryStatementPattern._target_names),
+                    CapturePattern("names", carry_target_names),
                 ),
                 pattern_id="loop.carry_statement",
             ),
@@ -4758,7 +4798,7 @@ class LoopCarryStatementPattern(ElementPattern):
                             "nested",
                             LoopCarryPattern(),
                             "loop_carry",
-                            transform=_body_as_ast_module,
+                            transform=body_as_ast_module,
                         ),
                     ),
                 ),
@@ -4768,43 +4808,14 @@ class LoopCarryStatementPattern(ElementPattern):
                 "loop_carry_statement",
                 AstNodePattern(
                     ast.stmt,
-                    CapturePattern("names", LoopCarryStatementPattern._statement_names),
+                    CapturePattern("names", carry_statement_names),
                 ),
                 pattern_id="loop.carry_statement",
             ),
         )
     )
 
-    @staticmethod
-    def _statement_names(node: object, context: MatchContext) -> tuple[str, ...]:
-        """Names a statement binds that the loop carries rather than the loop itself.
-
-        An assignment states its own; a `with` states what its body binds,
-        because a region delimits who runs the work and not who owns the value.
-        Every other statement binds nothing the loop carries.
-        """
-        if not isinstance(node, ast.With):
-            return ()
-        found: list[str] = []
-        for child in ast.walk(node):
-            if not isinstance(child, ast.Assign):
-                continue
-            target = child.targets[0]
-            targets = target.elts if isinstance(target, ast.Tuple) else (target,)
-            found.extend(
-                item.id for item in targets if isinstance(item, ast.Name) and item.id not in found
-            )
-        return tuple(found)
-
-    @staticmethod
-    def _target_names(node: object, context: MatchContext) -> tuple[str, ...]:
-        assert isinstance(node, ast.Assign)
-        target = node.targets[0]
-        targets = target.elts if isinstance(target, ast.Tuple) else (target,)
-        return tuple(item.id for item in targets if isinstance(item, ast.Name))
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         return (*match.captures["names"], *children.get("nested", ()))
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
@@ -4832,8 +4843,7 @@ class LoopCarryPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         names: list[str] = []
         for statement_names in children.values():
             for name in statement_names:
@@ -4844,7 +4854,7 @@ class LoopCarryPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
-def _tile_iterator_callee():
+def tile_iterator_callee():
     return AstNodePattern(
         ast.Attribute,
         FieldPattern("value", AstNodePattern(ast.Name, FieldPattern("id", LiteralPattern("tf")))),
@@ -4857,19 +4867,19 @@ class TileIteratorQualificationRule:
     STATEMENT: ClassVar[str] = "A tiled loop uses tf.tile rather than a bare tile call."
 
     def apply(self, value, *, node, context):
-        if _loop_iterator_kind(node) == "bare_tile":
+        if loop_iterator_kind(node) == "bare_tile":
             return PatternFailure(
                 "loop_header", node.func, "tile loops are written tf.tile(extent, step)"
             )
         return value
 
 
-def _loop_iterator_kind(call: ast.Call) -> str | None:
+def loop_iterator_kind(call: ast.Call) -> str | None:
     """Recognize the iterator surface shared by syntax and diagnostics."""
     callee = call.func
     if isinstance(callee, ast.Name) and callee.id in {"tile", "range"}:
         return "bare_tile" if callee.id == "tile" else "range"
-    if _tile_iterator_callee().match(callee, None) is not None:
+    if tile_iterator_callee().match(callee, None) is not None:
         return "tile"
     return None
 
@@ -4882,7 +4892,7 @@ class LoopIteratorPattern(ElementPattern):
                 "tile",
                 AstNodePattern(
                     ast.Call,
-                    FieldPattern("func", _tile_iterator_callee()),
+                    FieldPattern("func", tile_iterator_callee()),
                     FieldPattern("keywords", SequencePattern()),
                     FieldPattern(
                         "args",
@@ -4902,7 +4912,10 @@ class LoopIteratorPattern(ElementPattern):
                 "range",
                 AstNodePattern(
                     ast.Call,
-                    FieldPattern("func", AstNodePattern(ast.Name, FieldPattern("id", LiteralPattern("range")))),
+                    FieldPattern(
+                        "func",
+                        AstNodePattern(ast.Name, FieldPattern("id", LiteralPattern("range"))),
+                    ),
                     FieldPattern("keywords", SequencePattern()),
                     FieldPattern(
                         "args",
@@ -4922,32 +4935,106 @@ class LoopIteratorPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
-        return _loop_iterator_kind(match.node)
+    def construct(self, match, children, context):
+        return loop_iterator_kind(match.node)
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
-def _reads_program_value(node: ast.AST, context: MatchContext) -> bool:
+def reads_program_value(node: ast.AST, context: MatchContext) -> bool:
     """Whether a bound reads a mesh coordinate or an expression in lexical scope."""
     return any(
         isinstance(context.lexical_scope.lookup(name.id), (runtime.Mesh, runtime.Expr))
-        for name in ast.walk(node) if isinstance(name, ast.Name)
+        for name in ast.walk(node)
+        if isinstance(name, ast.Name)
     )
 
 
-def _iterator_arity_failure(kind: str, count: int, node: ast.Call) -> PatternFailure | None:
+def iterator_arity_failure(kind: str, count: int, node: ast.Call) -> PatternFailure | None:
     """Describe an invalid tile/range arity, if this call has one."""
     if count in ({2, 3} if kind == "tile" else {1, 2, 3}):
         return None
     if kind == "tile" and count == 1:
         detail = "tf.tile(extent) is not supported; use range(extent)"
     elif kind == "tile":
-        detail = f"tf.tile() takes 2 or 3 arguments, (stop, step) or (start, stop, step), got {count}"
+        detail = (
+            f"tf.tile() takes 2 or 3 arguments, (stop, step) or (start, stop, step), got {count}"
+        )
     else:
         detail = f"range() takes 1 to 3 arguments, got {count}"
     return PatternFailure("loop_header", node, detail)
+
+
+def bound_loop_pattern(node: ast.AST, context: MatchContext) -> AstPattern[Any]:
+    if context.function is not None and context.function.dialect == "tir":
+        return ChoicePattern(ExpressionPattern(), StaticValuePattern())
+    if reads_program_value(node, context):
+        return ExpressionPattern()
+    return StaticValuePattern()
+
+
+def enter_loop_header(
+    node: object, context: MatchContext, matched: AstMatch[Any]
+) -> AstMatch[Any] | MatchFailure | None:
+    assert isinstance(node, ast.For)
+    assert isinstance(node.target, ast.Name)
+    assert isinstance(node.iter, ast.Call)
+    kind = loop_iterator_kind(node.iter)
+    count = len(node.iter.args)
+    if node.iter.keywords:
+        return PatternFailure(
+            "loop_header",
+            node.iter,
+            "tf.tile()/range() does not accept keyword args (positional-only at the IR level)",
+        )
+    if failure := iterator_arity_failure(kind, count, node.iter):
+        return failure
+    if kind == "tile" and count == 2:
+        fields = ("extent", "step")
+        defaults = {"start": 0}
+    elif kind == "tile":
+        fields = ("start", "extent", "step")
+        defaults = {}
+    elif count == 1:
+        fields = ("extent",)
+        defaults = {"start": 0, "step": 1}
+    elif count == 2:
+        fields = ("start", "extent")
+        defaults = {"step": 1}
+    else:
+        fields = ("start", "extent", "step")
+        defaults = {}
+    children = [
+        AstChild(
+            "carry",
+            LoopCarryPattern(),
+            body_as_ast_module(node.body),
+            "loop_carry",
+        )
+    ]
+    children.extend(
+        AstChild(
+            field_name,
+            bound_loop_pattern(argument, context),
+            argument,
+            "loop_bound",
+            field_name,
+        )
+        for field_name, argument in zip(fields, node.iter.args)
+    )
+    return dataclasses.replace(
+        matched,
+        pattern_id=f"loop.header.{kind}",
+        branch_id="loop_header",
+        captures={
+            **matched.captures,
+            "kind": kind,
+            "target": node.target.id,
+            "fields": fields,
+            "defaults": defaults,
+        },
+        children=tuple(children),
+    )
 
 
 class LoopHeaderPattern(ElementPattern):
@@ -4964,21 +5051,13 @@ class LoopHeaderPattern(ElementPattern):
                         "carry",
                         LoopCarryPattern(),
                         "loop_carry",
-                        transform=_body_as_ast_module,
+                        transform=body_as_ast_module,
                     ),
                 ),
             ),
-            LoopHeaderPattern.enter,
+            enter_loop_header,
         )
     )
-
-    @staticmethod
-    def _bound_pattern(node: ast.AST, context: MatchContext) -> AstPattern[Any]:
-        if context.function is not None and context.function.dialect == "tir":
-            return ChoicePattern(ExpressionPattern(), StaticValuePattern())
-        if _reads_program_value(node, context):
-            return ExpressionPattern()
-        return StaticValuePattern()
 
     def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         """Name the invalid iterator before the shape-exact syntax rejects it.
@@ -4988,7 +5067,7 @@ class LoopHeaderPattern(ElementPattern):
         the pattern did not match, so the specific reason is stated here first.
         """
         if isinstance(node, ast.For) and isinstance(node.iter, ast.Call):
-            kind = _loop_iterator_kind(node.iter)
+            kind = loop_iterator_kind(node.iter)
             count = len(node.iter.args)
             for rule in LoopHeaderPattern.BIND_RULES:
                 checked = rule.apply(None, node=node.iter, context=context)
@@ -5006,84 +5085,20 @@ class LoopHeaderPattern(ElementPattern):
                     node.iter,
                     "tf.tile()/range() does not accept keyword args (positional-only at the IR level)",
                 )
-            if failure := _iterator_arity_failure(kind, count, node.iter):
+            if failure := iterator_arity_failure(kind, count, node.iter):
                 return failure
         return super().match(node, context)
 
-    @staticmethod
-    def enter(
-        node: object, context: MatchContext, matched: AstMatch[Any]
-    ) -> AstMatch[Any] | MatchFailure | None:
-        assert isinstance(node, ast.For)
-        assert isinstance(node.target, ast.Name)
-        assert isinstance(node.iter, ast.Call)
-        kind = _loop_iterator_kind(node.iter)
-        count = len(node.iter.args)
-        if node.iter.keywords:
-            return PatternFailure(
-                "loop_header",
-                node.iter,
-                "tf.tile()/range() does not accept keyword args (positional-only at the IR level)",
-            )
-        if failure := _iterator_arity_failure(kind, count, node.iter):
-            return failure
-        if kind == "tile" and count == 2:
-            fields = ("extent", "step")
-            defaults = {"start": 0}
-        elif kind == "tile":
-            fields = ("start", "extent", "step")
-            defaults = {}
-        elif count == 1:
-            fields = ("extent",)
-            defaults = {"start": 0, "step": 1}
-        elif count == 2:
-            fields = ("start", "extent")
-            defaults = {"step": 1}
-        else:
-            fields = ("start", "extent", "step")
-            defaults = {}
-        children = [
-            AstChild(
-                "carry",
-                LoopCarryPattern(),
-                _body_as_ast_module(node.body),
-                "loop_carry",
-            )
-        ]
-        children.extend(
-            AstChild(
-                field_name,
-                LoopHeaderPattern._bound_pattern(argument, context),
-                argument,
-                "loop_bound",
-                field_name,
-            )
-            for field_name, argument in zip(fields, node.iter.args)
-        )
-        return dataclasses.replace(
-            matched,
-            pattern_id=f"loop.header.{kind}",
-            branch_id="loop_header",
-            captures={
-                **matched.captures,
-                "kind": kind,
-                "target": node.target.id,
-                "fields": fields,
-                "defaults": defaults,
-            },
-            children=tuple(children),
-        )
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         if context.function is not None and context.function.dialect == "tir":
             iv = runtime.Var(
-                type=runtime.TensorType.scalar(runtime.DType.i64), name=match.captures["target"]
+                type=runtime.TensorType.from_scalar(runtime.DType.i64),
+                name=match.captures["target"],
             )
             values = dict(match.captures["defaults"])
             values.update({name: value for name, value in children.items() if name != "carry"})
             bounds = [values[name] for name in ("start", "extent", "step")]
-            bounds = [_constant(v) if isinstance(v, (bool, int, float)) else v for v in bounds]
+            bounds = [constant(v) if isinstance(v, (bool, int, float)) else v for v in bounds]
             bounds = [
                 bound
                 if runtime.static_dim_value(bound) is not None
@@ -5092,9 +5107,9 @@ class LoopHeaderPattern(ElementPattern):
             ]
             context.lexical_scope.push_frame()
             context.lexical_scope.define(match.captures["target"], iv)
-            inference = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
+            inference = context.lexical_scope.lookup(TYPE_INFER_CONTEXT)
             context.lexical_scope.define(
-                _TYPE_INFER_CONTEXT,
+                TYPE_INFER_CONTEXT,
                 dataclasses.replace(inference, loops=(*inference.loops, (iv, *bounds))),
             )
             return (iv, *bounds)
@@ -5109,7 +5124,7 @@ class LoopHeaderPattern(ElementPattern):
         except (TypeError, ValueError) as error:
             raise ParseError.from_node(match.node, context, str(error)) from error
         induction_var = runtime.Var(
-            type=runtime.TensorType.scalar(runtime.DType.i64),
+            type=runtime.TensorType.from_scalar(runtime.DType.i64),
             name=match.captures["target"],
         )
         carry_names = tuple(
@@ -5121,22 +5136,22 @@ class LoopHeaderPattern(ElementPattern):
         phi_vars = tuple(
             runtime.Var(type=value.type, name=name) for name, value in zip(carry_names, carry_inits)
         )
-        params, args = _region_captures(
+        params, args = region_captures(
             match.node, context, frozenset((match.captures["target"], *carry_names))
         )
-        bindings = _region_capture_bindings(params, context)
+        bindings = region_capture_bindings(params, context)
         context.lexical_scope.push_frame()
         for name, value in bindings.items():
             context.lexical_scope.define(name, value)
         if match.captures["kind"] == "tile":
-            stop = runtime.simplify_dim(runtime.DimAdd, (induction_var, runtime.dim_expr(step)))
+            stop = runtime.simplify_dim("add", (induction_var, runtime.dim_expr(step)))
             binding = slice(induction_var, stop, 1)
         else:
             binding = induction_var
         context.lexical_scope.define(match.captures["target"], binding)
-        inference = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
+        inference = context.lexical_scope.lookup(TYPE_INFER_CONTEXT)
         context.lexical_scope.define(
-            _TYPE_INFER_CONTEXT,
+            TYPE_INFER_CONTEXT,
             dataclasses.replace(
                 inference.with_captures(zip(params, args)),
                 loops=(*inference.loops, (induction_var, start, extent, step)),
@@ -5193,8 +5208,7 @@ class LoopBodyPattern(ElementPattern):
         ),
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         """The loop body's value: the last statement that has one.
 
         A `with` that only rebinds the names escaping it has no value of its
@@ -5243,7 +5257,7 @@ class ForPattern(ElementPattern):
                             ),
                         ),
                         "loop_body",
-                        transform=_body_as_ast_module,
+                        transform=body_as_ast_module,
                     ),
                 ),
             ),
@@ -5251,8 +5265,7 @@ class ForPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         frame = children["header"]
         body = children["body"]
         if context.function is not None and context.function.dialect == "tir":
@@ -5280,7 +5293,7 @@ class ForPattern(ElementPattern):
             extent=frame.extent,
             step=frame.step,
         )
-        _bind_region_results(context, grid, frame.carry_names, match.node)
+        bind_region_results(context, grid, frame.carry_names, match.node)
         return grid
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
@@ -5310,12 +5323,12 @@ class IfPattern(ElementPattern):
                 CapturePattern("cond_node", lambda node, context: node.test),
                 FieldPattern(
                     "body",
-                    ChildPattern("then", BlockPattern(), "block", transform=_body_as_ast_module),
+                    ChildPattern("then", BlockPattern(), "block", transform=body_as_ast_module),
                 ),
                 FieldPattern(
                     "orelse",
                     OptionalPattern(
-                        ChildPattern("else", BlockPattern(), "block", transform=_body_as_ast_module)
+                        ChildPattern("else", BlockPattern(), "block", transform=body_as_ast_module)
                     ),
                 ),
             ),
@@ -5323,10 +5336,9 @@ class IfPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         return runtime.If(
-            _tir_scalar_expr(match.captures["cond_node"], context),
+            tir_scalar_expr(match.captures["cond_node"], context),
             children["then"],
             children.get("else", runtime.Sequential(body=())),
         )
@@ -5344,36 +5356,35 @@ class WhilePattern(ElementPattern):
                 CapturePattern("cond_node", lambda node, context: node.test),
                 FieldPattern(
                     "body",
-                    ChildPattern("body", BlockPattern(), "block", transform=_body_as_ast_module),
+                    ChildPattern("body", BlockPattern(), "block", transform=body_as_ast_module),
                 ),
             ),
             pattern_id="statement.while",
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         return runtime.While(
-            _tir_scalar_expr(match.captures["cond_node"], context), children["body"]
+            tir_scalar_expr(match.captures["cond_node"], context), children["body"]
         )
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (TirOnlyStatementRule(),)
 
 
-def _tir_scalar_expr(node: ast.expr, context):
+def tir_scalar_expr(node: ast.expr, context):
     if isinstance(node, ast.Name):
         value = context.lexical_scope.lookup(node.id)
         if isinstance(value, runtime.Expr):
             return value
     if isinstance(node, ast.Constant) and isinstance(node.value, (bool, int)):
-        return _constant(node.value)
+        return constant(node.value)
     if isinstance(node, ast.Compare) and len(node.ops) == 1 and len(node.comparators) == 1:
-        kind = _EXPR_BINARY_KINDS.get(type(node.ops[0]))
+        kind = EXPR_BINARY_KINDS.get(type(node.ops[0]))
         if kind is not None:
-            lhs = _tir_scalar_expr(node.left, context)
-            rhs = _tir_scalar_expr(node.comparators[0], context)
+            lhs = tir_scalar_expr(node.left, context)
+            rhs = tir_scalar_expr(node.comparators[0], context)
             return runtime.Call(
-                type=runtime.TensorType.scalar(runtime.DType.bool),
+                type=runtime.TensorType.from_scalar(runtime.DType.bool),
                 target=runtime.Binary(kind=runtime.BinaryKind[kind]),
                 args=(lhs, rhs),
             )
@@ -5425,8 +5436,7 @@ class TupleAssignmentPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         value = children["value"]
         names = match.captures["names"]
         target_nodes = match.captures["target_nodes"]
@@ -5438,16 +5448,12 @@ class TupleAssignmentPattern(ElementPattern):
             raise ParseError.from_node(
                 match.node, context, "tuple assignment arity does not match TupleType"
             )
-        schema = (
-            getattr(type(value.target), "_op_schema", None)
-            if isinstance(value, runtime.Call)
-            else None
-        )
+        schema = expr.schema_of(type(value.target)) if isinstance(value, runtime.Call) else None
         parent_name = getattr(schema, "name", None) or ", ".join(names)
-        attach_metadata(value, BindingMetadata(parent_name))
+        value.attach_metadata(expr.BindingMetadata(parent_name))
         for index, (name, target_node) in enumerate(zip(names, target_nodes)):
             assert isinstance(target_node, ast.Name)
-            projection = _infer_call(runtime.TupleGetItem(), (value, _constant(index)), context)
+            projection = infer_call(runtime.TupleGetItem(), (value, constant(index)), context)
             attach_authored_metadata(
                 projection,
                 target_node,
@@ -5459,7 +5465,7 @@ class TupleAssignmentPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
-def _resolved_mesh(value, match, context):
+def resolved_mesh(value, match, context):
     """Name the levels a Mesh written in a function body says it divides.
 
     A Mesh is a value wherever it is written, so one bound in the body has to
@@ -5470,7 +5476,7 @@ def _resolved_mesh(value, match, context):
         return value
     if not any(isinstance(topology, str) for topology in value.topologies):
         return value
-    topologies = _resolve_mesh_topologies_at(
+    topologies = resolve_mesh_topologies_at(
         value.topologies,
         context.function.topologies,
         match.node,
@@ -5591,43 +5597,47 @@ class StatementPattern(ElementPattern):
         )
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         if match.branch_id == "assignment":
             value = children.get("value")
             annotation = children.get("annotation")
             if value is None:
                 raise ParseError.from_node(match.node, context, "assignment requires a value")
-            value = _resolved_mesh(value, match, context)
+            value = resolved_mesh(value, match, context)
             if context.function.dialect == "tir" and not isinstance(value, runtime.Expr):
                 context.lexical_scope.define(match.captures["name"], value)
                 return None
-            if isinstance(annotation, WhereClauseMetadata):
-                if context.function.dialect != "hir" or not isinstance(value.type, TensorType):
+            if isinstance(annotation, clause.WhereMetadata):
+                if context.function.dialect != "hir" or not isinstance(
+                    value.type, types.TensorType
+                ):
                     raise ParseError.from_node(
                         match.node,
                         context,
                         "where annotation requires a tensor-valued HIR Expr",
                     )
-                previous = get_metadata(value, WhereClauseMetadata)
+                previous = expr.get_metadata(value, clause.WhereMetadata)
                 if previous is not None:
-                    binding = get_metadata(value, BindingMetadata)
+                    binding = expr.get_metadata(value, expr.BindingMetadata)
                     label = binding.name if binding is not None else "<unnamed>"
                     raise ParseError.from_node(
                         match.node,
                         context,
                         f"duplicate where annotation for Expr {label!r}",
                     )
-                attach_metadata(value, BindingMetadata(match.captures["name"]))
-                value.metadata = (*value.metadata, annotation)
+                value.attach_metadata(expr.BindingMetadata(match.captures["name"]))
+                value.attach_metadata(annotation)
             elif annotation is not None and value.type != annotation:
                 raise ParseError.from_node(
                     match.node, context, "annotated assignment type mismatch"
                 )
             name = match.captures["name"]
             if context.function.dialect == "hir":
-                if isinstance(value, runtime.Call) and get_metadata(value, BindingMetadata) is None:
-                    attach_metadata(value, BindingMetadata(name))
+                if (
+                    isinstance(value, runtime.Call)
+                    and expr.get_metadata(value, expr.BindingMetadata) is None
+                ):
+                    value.attach_metadata(expr.BindingMetadata(name))
                 context.lexical_scope.define(name, value)
                 return value
             variable = runtime.Var(type=value.type, name=name)
@@ -5698,8 +5708,7 @@ class BlockPattern(ElementPattern):
         ),
     )
 
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         values = list(children.values())
         if context.function.dialect == "hir":
             if match.captures["pass_only"]:
@@ -5753,9 +5762,6 @@ class FunctionDialectRule:
         return value
 
 
-_AUTHORED_BODY_TYPE = "_tilefoundry_authored_body_type"
-
-
 @dataclass(frozen=True)
 class FunctionReturnCompatibilityRule:
     STATEMENT: ClassVar[str] = (
@@ -5770,7 +5776,7 @@ class FunctionReturnCompatibilityRule:
         if context.function.dialect != "hir":
             return value
         declared = value.return_annotation
-        body_type = getattr(value, _AUTHORED_BODY_TYPE, None)
+        body_type = context.function.state.body_type
         try:
             if body_type is None:
                 if context.function.role is FunctionRole.ROOT and declared is None:
@@ -5780,7 +5786,7 @@ class FunctionReturnCompatibilityRule:
                         "HIR pass prototype requires a return annotation",
                     )
                 return value
-            if declared is not None and not types_compatible(declared, body_type):
+            if declared is not None and not utils.types_compatible(declared, body_type):
                 raise ParseError.from_node(
                     match.node,
                     context,
@@ -5793,7 +5799,7 @@ class FunctionReturnCompatibilityRule:
                     raise ParseError.from_node(
                         match.node, context, "variant lacks a HIR dispatch prototype"
                     )
-                if not types_compatible(base.return_annotation, body_type):
+                if not utils.types_compatible(base.return_annotation, body_type):
                     raise ParseError.from_node(
                         match.node,
                         context,
@@ -5802,7 +5808,33 @@ class FunctionReturnCompatibilityRule:
                     )
             return value
         finally:
-            delattr(value, _AUTHORED_BODY_TYPE)
+            context.function.state.forget_body_type()
+
+
+def validate_standalone(
+    function: object,
+    function_context: FuncContext,
+    node: ast.AST,
+    match_context: MatchContext,
+) -> None:
+    if function_context.role is FunctionRole.ROOT:
+        return
+    base = function_context.base
+    expected_base = runtime.Function if function_context.dialect == "hir" else runtime.PrimFunction
+    if not isinstance(base, expected_base):
+        raise ParseError.from_node(node, match_context, "standalone role lacks a matching base")
+    if getattr(base, "sealed", False):
+        raise ParseError.from_node(node, match_context, f"base {base.name!r} is sealed")
+    if getattr(function, "body", None) is None:
+        raise ParseError.from_node(
+            node,
+            match_context,
+            f"{function_context.role.value} must have a real body",
+        )
+    if function_context.role is FunctionRole.CONVERTER and not isinstance(
+        function_context.key, str
+    ):
+        raise ParseError.from_node(node, match_context, "converter key must be a weight name")
 
 
 @dataclass(frozen=True)
@@ -5811,42 +5843,26 @@ class FunctionRoleValidationRule:
         "A root, variant, or converter must satisfy its role before registration."
     )
 
-    @staticmethod
-    def _validate_standalone(
-        function: object,
-        function_context: FuncParserContext,
-        node: ast.AST,
-        match_context: MatchContext,
-    ) -> None:
-        if function_context.role is FunctionRole.ROOT:
-            return
-        base = function_context.base
-        expected_base = (
-            runtime.Function if function_context.dialect == "hir" else runtime.PrimFunction
-        )
-        if not isinstance(base, expected_base):
-            raise ParseError.from_node(node, match_context, "standalone role lacks a matching base")
-        if getattr(base, "_sealed", False):
-            raise ParseError.from_node(node, match_context, f"base {base.name!r} is sealed")
-        if getattr(function, "body", None) is None:
-            raise ParseError.from_node(
-                node,
-                match_context,
-                f"{function_context.role.value} must have a real body",
-            )
-        if function_context.role is FunctionRole.CONVERTER and not isinstance(
-            function_context.key, str
-        ):
-            raise ParseError.from_node(node, match_context, "converter key must be a weight name")
-
     def apply(self, value, *, match, context):
         if context.function is None:
             raise ParseError.from_node(match.node, context, "function lacks parser context")
         if context.function.module is not None:
             context.function.module.validate_function(value, context.function)
         else:
-            self._validate_standalone(value, context.function, match.node, context)
+            validate_standalone(value, context.function, match.node, context)
         return value
+
+
+def commit_standalone(
+    function: object,
+    function_context: FuncContext,
+) -> None:
+    if function_context.role is FunctionRole.VARIANT:
+        assert function_context.base is not None
+        function_context.base.add_variant(function)
+    elif function_context.role is FunctionRole.CONVERTER:
+        assert function_context.base is not None
+        function_context.base.add_converter(function_context.key, function)
 
 
 @dataclass(frozen=True)
@@ -5855,26 +5871,35 @@ class FunctionRegistrationRule:
         "A validated function must be registered exactly once in its owning scope."
     )
 
-    @staticmethod
-    def _commit_standalone(
-        function: object,
-        function_context: FuncParserContext,
-    ) -> None:
-        if function_context.role is FunctionRole.VARIANT:
-            assert function_context.base is not None
-            function_context.base.add_variant(function)
-        elif function_context.role is FunctionRole.CONVERTER:
-            assert function_context.base is not None
-            function_context.base.add_converter(function_context.key, function)
-
     def apply(self, value, *, match, context):
         if context.function is None:
             raise ParseError.from_node(match.node, context, "function lacks parser context")
         if context.function.module is not None:
             context.function.module.commit_function(value, context.function)
         else:
-            self._commit_standalone(value, context.function)
+            commit_standalone(value, context.function)
         return value
+
+
+def enter_function(
+    node: object, context: MatchContext, matched: AstMatch[Any]
+) -> AstMatch[Any] | None:
+    assert isinstance(node, ast.FunctionDef)
+    function_context = context.function
+    if function_context is None:
+        return None
+    active_context = context.child(
+        situation="function",
+        role=function_context.function_kind,
+        function=function_context,
+        live_out=live_out(node.body),
+    )
+    return dataclasses.replace(
+        matched,
+        pattern_id="function",
+        branch_id="function",
+        construct_context=active_context,
+    )
 
 
 class FunctionPattern(ElementPattern):
@@ -5906,35 +5931,15 @@ class FunctionPattern(ElementPattern):
                         BlockPattern(),
                         "block",
                         "body",
-                        transform=lambda body: _body_as_ast_module(body, strip_docstring=True),
+                        transform=lambda body: body_as_ast_module(body, strip_docstring=True),
                     ),
                 ),
             ),
-            FunctionPattern.enter,
+            enter_function,
         )
     )
 
-    @staticmethod
-    def enter(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
-        assert isinstance(node, ast.FunctionDef)
-        function_context = context.function
-        if function_context is None:
-            return None
-        active_context = context.child(
-            situation="function",
-            role=function_context.function_kind,
-            function=function_context,
-            live_out=live_out(node.body),
-        )
-        return dataclasses.replace(
-            matched,
-            pattern_id="function",
-            branch_id="function",
-            construct_context=active_context,
-        )
-
-    @staticmethod
-    def construct(match, children, context):
+    def construct(self, match, children, context):
         if context.function is None:
             raise ParseError.from_node(match.node, context, "function lacks context")
         params = children["signature"]
@@ -5944,7 +5949,7 @@ class FunctionPattern(ElementPattern):
         converter = context.function.converter
         if context.function.dialect == "hir":
             if body is not None and context.function.mesh is not None:
-                outer_mesh = _parser_infer_context(context).current_mesh
+                outer_mesh = authored_infer_context(context).current_mesh
                 if not isinstance(outer_mesh, runtime.Mesh):
                     raise ParseError.from_node(
                         match.node, context, "function mesh could not be resolved"
@@ -5956,9 +5961,9 @@ class FunctionPattern(ElementPattern):
                     body,
                     {id(old): new for old, new in zip(params, region_params, strict=True)},
                 )
-                body = _scoped_region(outer_mesh, body, params=region_params, args=params)
+                body = scoped_region(outer_mesh, body, params=region_params, args=params)
             declared_return = (
-                None if declared_return is None else canonicalize_dims(declared_return)
+                None if declared_return is None else dim.canonicalize_dims(declared_return)
             )
             if body is None:
                 return_type = declared_return or runtime.UnitType()
@@ -5973,7 +5978,9 @@ class FunctionPattern(ElementPattern):
                 or context.function.base_name
                 or match.captures["name"]
             )
-            function = runtime.Function.build(
+            if context.function.role is FunctionRole.CONVERTER:
+                function_name = f"{function_name}.converter[{converter}]"
+            function = runtime.Function.from_parts(
                 name=function_name,
                 params=params,
                 body=body,
@@ -5981,19 +5988,9 @@ class FunctionPattern(ElementPattern):
                 return_annotation=declared_return,
                 specializations=specializations,
             )
-            setattr(function, _AUTHORED_BODY_TYPE, None if body is None else body.type)
+            context.function.state.record_body_type(None if body is None else body.type)
             if context.function.role is FunctionRole.VARIANT:
-                setattr(function, runtime.DISPLAY_NAME, match.captures["name"])
-                if getattr(context.function, "dialect", None) == "tir" and specializations:
-                    pat = specializations[0]
-                    if isinstance(pat, runtime.RangePattern):
-                        function.name = _mangle_variant_name(function_name, (pat,))
-                    else:
-                        function.name = function_name
-                else:
-                    function.name = function_name
-            elif context.function.role is FunctionRole.CONVERTER:
-                function.name = f"{function_name}.converter[{converter}]"
+                function = dataclasses.replace(function, display_name=match.captures["name"])
             binding = context.function.binding_name or match.captures["name"]
             define = getattr(context.function.module_scope, "define", None)
             if callable(define):
@@ -6004,17 +6001,18 @@ class FunctionPattern(ElementPattern):
         kwargs = {}
         if context.function.target is not None:
             kwargs["target"] = context.function.target
+        function_name = match.captures["name"]
+        if specializations and isinstance(specializations[0], runtime.Range):
+            function_name = pattern.mangle_variant_name(function_name, (specializations[0],))
         function = runtime.PrimFunction(
-            name=match.captures["name"],
+            name=function_name,
             params=params,
             body=body,
             output_count=context.function.output_count,
             **kwargs,
             specializations=specializations,
+            display_name=match.captures["name"],
         )
-        if specializations and isinstance(specializations[0], runtime.RangePattern):
-            function.name = _mangle_variant_name(function.name, (specializations[0],))
-        function._display_name = match.captures["name"]
         define = getattr(context.function.module_scope, "define", None)
         if callable(define):
             define(context.function.binding_name or match.captures["name"], function)
@@ -6029,7 +6027,7 @@ class FunctionPattern(ElementPattern):
     )
 
 
-def _body_as_ast_module(body: object, *, strip_docstring: bool = False) -> ast.Module:
+def body_as_ast_module(body: object, *, strip_docstring: bool = False) -> ast.Module:
     """Wrap a statement list as an AST Module with explicit docstring policy."""
     assert isinstance(body, list)
     if (

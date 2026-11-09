@@ -57,7 +57,7 @@ from pathlib import Path
 from transformers import Qwen3Config
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 def published(path: Path | None = None) -> Qwen3Config:
@@ -117,7 +117,7 @@ def _generation_rope(device):
     return phases.cos().to(config.dtype), phases.sin().to(config.dtype)
 
 
-@module(entry="decoder_layer", target=CudaTarget("nvidia.h200_sxm"), topologies=_TOPOLOGIES)
+@module(entry="decoder_layer", target=cuda.Target("nvidia.h200_sxm"), topologies=_TOPOLOGIES)
 class Qwen3_1_7B_DecoderLayer:
     @func
     def input_rms_norm(
@@ -310,7 +310,7 @@ class Qwen3_1_7B_DecoderLayer:
         return h1 + mlp_out, k_new, v_new
 
 
-@module(target=CudaTarget("nvidia.h200_sxm"), topologies=_TOPOLOGIES)
+@module(target=cuda.Target("nvidia.h200_sxm"), topologies=_TOPOLOGIES)
 class Qwen3_1_7B:
     """The ordered layer stack plus the norm that closes it."""
 
@@ -400,8 +400,8 @@ class Qwen3_1_7B:
         """
         import torch  # noqa: PLC0415
 
-        from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415
-        from tilefoundry.ir.types import DType  # noqa: PLC0415
+        from tilefoundry.interfaces.evaluator import to_torch_dtype
+        from tilefoundry.ir.expr import DType
 
         device = _generation_device(device)
         empty = (1, 0, config.num_key_value_heads, config.head_dim)

@@ -1,8 +1,8 @@
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 N = 132 * 128
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 
 
 @module(entry="nope", target=_H200, topologies=(Topology("cta", 132),))

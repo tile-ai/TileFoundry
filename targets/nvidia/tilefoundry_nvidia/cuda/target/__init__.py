@@ -1,7 +1,7 @@
 """CUDA target facts."""
 
-from .architecture import CudaArchitecture
-from .device import CudaDevice
-from .target import CudaTarget
-
-__all__ = ["CudaArchitecture", "CudaDevice", "CudaTarget"]
+from . import spec
+from .architecture import Architecture
+from .device import Device
+from .spec import SM90_ID
+from .target import Target

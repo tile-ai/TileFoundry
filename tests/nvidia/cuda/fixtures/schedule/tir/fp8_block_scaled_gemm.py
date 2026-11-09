@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 384),),
 )
 class Fp8BlockScaledGemm:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def gemm(
         a: Tensor[(128, 512), "fp8e4m3"], b: Tensor[(512, 128), "fp8e4m3", ((512, 128), (1, 512))], a_scale: Tensor[(128, 4), "f32"], b_scale: Tensor[(4, 1), "f32"], out: Tensor[(128, 128), "bf16"]
     ):

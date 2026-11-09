@@ -3,9 +3,10 @@
 from dataclasses import dataclass, field
 from typing import ClassVar
 
-from tilefoundry.codegen.linkable_function import LinkableFunction
-from tilefoundry.codegen.options import EmitGranularity
-from tilefoundry.target.base import UnsupportedCapabilityError, target_summary
+from tilefoundry import target
+
+from .linkable_function import LinkableFunction
+from .options import EmitGranularity
 
 
 @dataclass(frozen=True)
@@ -25,9 +26,9 @@ class LinkableModule:
     emits: ClassVar[frozenset[EmitGranularity]] = frozenset({"full"})
 
     @classmethod
-    def create(cls, target, owner, functions, ctx) -> "LinkableModule":
+    def create(cls, tgt, owner, functions, ctx) -> "LinkableModule":
         """Refuse emission when the Target has no bound module implementation."""
-        raise UnsupportedCapabilityError(f"{target_summary(target)}: no code generator")
+        raise target.UnsupportedCapabilityError(f"{target.summary(tgt)}: no code generator")
 
     @property
     def source(self) -> str:

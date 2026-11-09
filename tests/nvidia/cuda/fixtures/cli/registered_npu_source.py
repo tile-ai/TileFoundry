@@ -1,10 +1,10 @@
 import json
 
+from tilefoundry import target
 from tilefoundry.dsl import *
-from tilefoundry.target import registered_targets
 
 _extent = json.loads('{"extent": 1}')["extent"]
-_target = registered_targets()["vendor.npu"]()
+_target = target.registered()["vendor.npu"]()
 
 
 @module(entry="model", target=_target, topologies=(Topology("core", _extent),))

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from tests.core.target._instructions import instruction_declarations
-from tilefoundry.target.hardware import DocumentFormatError, EvidenceFormatError, parse_document
+from tilefoundry.target import hardware
 
 
 def test_instruction_capabilities_and_execution_resources_are_separate_axes() -> None:
@@ -53,21 +53,21 @@ def _document(old: str, new: str) -> str:
         pytest.param(
             'kind = "device"',
             'kind = "accelerator"',
-            DocumentFormatError,
+            hardware.DocumentFormatError,
             "kind must be one of",
             id="unknown-kind",
         ),
         pytest.param(
             "value = 4",
             'value = 4\nstatus = "unavailable"',
-            EvidenceFormatError,
+            hardware.EvidenceFormatError,
             "either 'value' or 'status'",
             id="value-and-status",
         ),
         pytest.param(
             'architectures = ["test.arch"]',
             'architectures = "test.arch"',
-            DocumentFormatError,
+            hardware.DocumentFormatError,
             "must be a list of non-empty ID strings",
             id="compatibility-bare-string",
         ),
@@ -82,4 +82,4 @@ def test_a_malformed_document_names_exactly_what_is_wrong(
     collapsing them into a generic parse failure.
     """
     with pytest.raises(error, match=message):
-        parse_document(_document(old, new), origin_label="test")
+        hardware.parse_document(_document(old, new), origin_label="test")

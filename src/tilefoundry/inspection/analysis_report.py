@@ -5,24 +5,12 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from tilefoundry.analysis.api import AnalysisResult
-from tilefoundry.analysis.metadata import (
-    ComputeCostMetadata,
-    PerformanceSummaryMetadata,
-    RegionMemoryMetadata,
-    ReuseWindow,
-    RooflineMetadata,
-)
-from tilefoundry.analysis.report import _type_text as _type_text
-from tilefoundry.analysis.report import (
-    render_json,
-    report_data,
-)
-from tilefoundry.analysis.report import (
-    selected_types as _selected_types,
-)
-from tilefoundry.inspection.python_printer import HirPrinter, PythonPrintOptions
-from tilefoundry.inspection.values import (
+from tilefoundry import analysis, services
+from tilefoundry.ir import core, expr
+
+from .analysis_data import render_json, report_data, selected_types
+from .python_printer import HirPrinter, PythonPrintOptions
+from .values import (
     AdvisorySummary,
     ErrorSummary,
     PerformanceSummaryView,
@@ -30,8 +18,6 @@ from tilefoundry.inspection.values import (
     ReportIdentity,
     ReportSelection,
 )
-from tilefoundry.ir.core import IRMetadata, get_metadata
-from tilefoundry.ir.hir.function import Function
 
 
 @dataclass(frozen=True)
@@ -40,18 +26,13 @@ class AnalysisRendering:
 
     data: dict[str, object]
     annotated: str
-    summary: tuple[IRMetadata, ...] = ()
+    summary: tuple[expr.IRMetadata, ...] = ()
     printer: HirPrinter | None = None
 
 
-def selected_types(result: AnalysisResult) -> tuple[type[IRMetadata], ...]:
-    """Return record types requested analyses own and actually wrote."""
-    return _selected_types(result.module, result.analyses, result.metadata_types)
-
-
-def render_analysis(result: AnalysisResult, *, operands: bool = False) -> AnalysisRendering:
+def render_analysis(result: analysis.Result, *, operands: bool = False) -> AnalysisRendering:
     """Render one result once for both annotated source and report data."""
-    selected_types_ = selected_types(result)
+    selected_types_ = selected_types(result.module, result.analyses, result.metadata_types)
     labels, sources = {}, {}
     printer = HirPrinter()
     for function in reversed(result.functions):
@@ -73,27 +54,27 @@ def render_analysis(result: AnalysisResult, *, operands: bool = False) -> Analys
     )
     selected = frozenset(selected_types_)
     summaries = tuple(
-        _summary(function, {**data, **row}, row["function_records"], selected)
+        summary_records(function, {**data, **row}, row["function_records"], selected)
         for function, row in zip(result.functions, data["functions"], strict=True)
     )
     return AnalysisRendering(
         data=data,
-        annotated="\n".join((render_summary(summary, printer=printer._definitions[id(result.functions[index])]) + "\n\n" if index else "") + source
+        annotated="\n".join((render_summary(summary, printer=printer.definition_printer(result.functions[index])) + "\n\n" if index else "") + source
                             for index, (summary, source) in enumerate(zip(summaries, (sources[id(fn)] for fn in result.functions), strict=True))),
         summary=summaries[0],
-        printer=printer._definitions[id(result.function)],
+        printer=printer.definition_printer(result.function),
     )
 
 
-def _summary(
-    function: Function,
+def summary_records(
+    function: core.Function,
     data: dict[str, object],
     function_records: dict[str, object],
-    selected: frozenset[type[IRMetadata]],
-) -> tuple[IRMetadata, ...]:
+    selected: frozenset[type[expr.IRMetadata]],
+) -> tuple[expr.IRMetadata, ...]:
     """One record per summary line: identity, selection, then findings."""
     module_name, _, function_name = data["function"].rpartition(".")
-    views: list[IRMetadata] = [
+    views: list[expr.IRMetadata] = [
         ReportIdentity(
             target=data["target"],
             module=module_name,
@@ -103,17 +84,17 @@ def _summary(
         ReportSelection(requested=tuple(data["requested"]), executed=tuple(data["executed"])),
     ]
     if "totals" in data and "compute-cost" in data["executed"]:
-        views.append(get_metadata(function, ComputeCostMetadata) or ComputeCostMetadata())
+        views.append(expr.get_metadata(function, analysis.ComputeCostMetadata) or analysis.ComputeCostMetadata())
     if "memory" in function_records:
-        memory = get_metadata(function, RegionMemoryMetadata)
+        memory = expr.get_metadata(function, analysis.RegionMemoryMetadata)
         assert memory is not None
         views.append(memory)
-        if RegionMemoryMetadata in selected:
+        if analysis.RegionMemoryMetadata in selected:
             views.extend(memory_summary(memory)[1:])
     if "roofline" in function_records:
-        views.append(get_metadata(function, RooflineMetadata))
+        views.append(expr.get_metadata(function, analysis.RooflineMetadata))
     if "performance" in function_records:
-        summary = get_metadata(function, PerformanceSummaryMetadata)
+        summary = expr.get_metadata(function, analysis.PerformanceSummaryMetadata)
         views.append(
             PerformanceSummaryView(
                 root=f"{module_name}::{function_name}",
@@ -124,9 +105,24 @@ def _summary(
     return tuple(views)
 
 
-def report(result: AnalysisResult) -> dict[str, object]:
+def report(result: analysis.Result) -> dict[str, object]:
     """Build one report from one composed analysis result."""
     return render_analysis(result).data
+
+
+def result_json(result: analysis.Result) -> str:
+    """Render the report data of one result as JSON, without annotated source."""
+    return render_json(
+        report_data(
+            module=result.module,
+            function=result.function,
+            analyses=result.analyses,
+            topology_level=result.topology_level,
+            executed=result.executed,
+            metadata_types=result.metadata_types,
+            functions=result.functions,
+        )
+    )
 
 
 def render_text(rendering: AnalysisRendering) -> str:
@@ -134,7 +130,7 @@ def render_text(rendering: AnalysisRendering) -> str:
     return render_summary(rendering.summary, printer=rendering.printer)
 
 
-def memory_summary(memory: RegionMemoryMetadata) -> tuple[IRMetadata, ...]:
+def memory_summary(memory: analysis.RegionMemoryMetadata) -> tuple[expr.IRMetadata, ...]:
     """Expand the same memory record into summary and diagnostic rows."""
     return (
         memory,
@@ -144,15 +140,17 @@ def memory_summary(memory: RegionMemoryMetadata) -> tuple[IRMetadata, ...]:
     )
 
 
-def render_summary(records: Iterable[IRMetadata], *, printer, opt_in: frozenset[str] = frozenset()) -> str:
+def render_summary(records: Iterable[expr.IRMetadata], *, printer, opt_in: frozenset[str] = frozenset()) -> str:
     """Print report rows with the shared metadata comment renderers."""
-    nested = (ReuseWindow, ErrorSummary, AdvisorySummary)
+    nested = (analysis.ReuseWindow, ErrorSummary, AdvisorySummary)
     return "\n".join(
         f"# {'  ' if isinstance(view, nested) else ''}{comment}"
         for view in records
         if (comment := printer.comment(view, opt_in=opt_in)) is not None
     )
 
+
+services.registry.register(services.report_json, result_json)
 
 __all__ = [
     "AnalysisRendering",
@@ -162,5 +160,4 @@ __all__ = [
     "render_summary",
     "render_text",
     "report",
-    "selected_types",
 ]

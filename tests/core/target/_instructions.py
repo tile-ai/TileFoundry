@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import OpCapability
-from tilefoundry.ir.core.op_registry import iter_schemas
+from tilefoundry.ir import expr
 
 
 def instruction_declarations():
     instructions = []
-    for schema in iter_schemas():
+    for schema in expr.iter_schemas():
         if schema.op_class is None:
             continue
         stated = vars(schema.op_class).get("capability")
-        capabilities = (stated,) if isinstance(stated, OpCapability) else stated or ()
+        capabilities = (stated,) if isinstance(stated, expr.OpCapability) else stated or ()
         instructions.extend(
             (schema.op_class, capability)
             for capability in capabilities
@@ -31,7 +30,7 @@ def check_architecture_capabilities(target_type, module_prefix: str) -> None:
     capabilities = {capability.name for _op_type, capability in instructions}
     architecture_capabilities = {
         capability
-        for target in target_type.available()
+        for target in target_type.from_installed()
         for capability in target.architecture.capabilities
     }
     assert capabilities <= architecture_capabilities

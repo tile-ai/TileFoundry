@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="rejected", target=CpuTarget())
+@module(entry="rejected", target=cpu.Target())
 class ComprehensionTwoGenerators:
     @func
     def rejected(x: Tensor[(1, 4), "f32"]) -> Tensor[(2, 4), "f32"]:

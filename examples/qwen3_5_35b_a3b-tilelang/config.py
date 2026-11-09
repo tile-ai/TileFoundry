@@ -53,7 +53,7 @@ class Qwen3_5Config:
     dt: str
     #: The dtype of the weights a matmul contracts over. Separate from `dt`
     #: because a declared type is now checked against the tensor that arrives
-    #: (`RuntimeModule.load` -> `_validate_declared`), and the two differ: the
+    #: (`runtime.Module.load` -> `_validate_declared`), and the two differ: the
     #: checkpoint stores those weights bf16 and 35 G parameters at f32 is 140 GB,
     #: while activations and accumulators stay `dt`. The nine weights listed in
     #: `weights.F32_WEIGHTS` -- gammas, `a_log`, `dt_bias`, `conv_w` -- keep `dt`:

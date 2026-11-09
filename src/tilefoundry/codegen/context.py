@@ -11,21 +11,20 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
-from tilefoundry.codegen.signature import CallableSignature, Signature, TensorSignature
-from tilefoundry.ir.tir.stmts import Evaluate
-from tilefoundry.target.base import Target, target_summary
-from tilefoundry.visitor_registry.registries import (
-    DispatchRegistry,
-    Role,
-    codegen_registry,
-    spelled,
-)
+from tilefoundry import dispatch
+from tilefoundry import target as tilefoundry_target
+from tilefoundry.ir import core, tir
+
+from .context_builder import Context
+from .emitter import CppEmitter
+from .registry import Role, registry
+from .signature import CallableSignature, Signature, TensorSignature
 
 
 class EmitContext:
     """One compile, from the first function read to the last line written."""
 
-    target_kind: type[Target]
+    target_kind: type[tilefoundry_target.Target]
     """Whose handlers answer here; each target's subclass states its own."""
 
     exported: bool
@@ -37,12 +36,13 @@ class EmitContext:
 
     def __init__(
         self,
-        registry: DispatchRegistry,
+        registry: dispatch.Registry,
         *,
         symbols: Mapping[int, CallableSignature] | None = None,
-        target: Target | None = None,
+        target: tilefoundry_target.Target | None = None,
         resolved_launches: Mapping[int, object] | None = None,
-        codegen_context: "CodegenContext | None" = None,
+        codegen_context: Context | None = None,
+        target_kind: type[tilefoundry_target.Target] | None = None,
     ) -> None:
         self.registry = registry
         self.codegen_context = codegen_context
@@ -50,21 +50,22 @@ class EmitContext:
         self.target = target
         self.resolved_launches = {} if resolved_launches is None else resolved_launches
         self.exported = False
-        self._lines: list[str] = []
-        self._indent = 0
-        self._var_names: dict[int, str] = {}
-        self._counter = 0
-        self._kernel_param_ids: set[int] = set()
+        if target_kind is not None:
+            self.target_kind = target_kind
+        self.lines: list[str] = []
+        self.depth = 0
+        self.var_names: dict[int, str] = {}
+        self.counter = 0
+        self.kernel_param_ids: set[int] = set()
 
     @classmethod
     def create(cls, target, view) -> EmitContext:
         """Create generic emission state from the compile-wide group view."""
-        context = cls(
-            codegen_registry, symbols=view.symbols, target=target,
+        return cls(
+            registry, symbols=view.symbols, target=target,
             resolved_launches=view.resolved_launches, codegen_context=view.codegen,
+            target_kind=type(target),
         )
-        context.target_kind = type(target)
-        return context
 
     def callee_of(self, launch):
         """The callee root context resolved for one Launch statement."""
@@ -86,36 +87,40 @@ class EmitContext:
     def register_kernel_param(self, var) -> None:
         """Bind a declared parameter to its own name, which no counter suffixes."""
         key = id(var)
-        self._var_names[key] = var.name
-        self._kernel_param_ids.add(key)
+        self.var_names[key] = var.name
+        self.kernel_param_ids.add(key)
 
     def is_kernel_param(self, var) -> bool:
-        return id(var) in self._kernel_param_ids
+        return id(var) in self.kernel_param_ids
 
     def emit(self, line: str) -> None:
-        self._lines.append("  " * self._indent + line)
+        self.lines.append("  " * self.depth + line)
 
     def blank(self) -> None:
-        self._lines.append("")
+        self.lines.append("")
 
     def indent(self) -> None:
-        self._indent += 1
+        self.depth += 1
 
     def dedent(self) -> None:
-        self._indent -= 1
+        self.depth -= 1
+
+    def next_id(self) -> int:
+        """The next number of the counter that suffixes every invented name."""
+        self.counter += 1
+        return self.counter
 
     def name_for(self, var) -> str:
         """The C++ name of *var*, invented once and kept for the rest of the compile."""
         key = id(var)
-        if key in self._var_names:
-            return self._var_names[key]
-        self._counter += 1
-        name = f"{var.name}_{self._counter}"
-        self._var_names[key] = name
+        if key in self.var_names:
+            return self.var_names[key]
+        name = f"{var.name}_{self.next_id()}"
+        self.var_names[key] = name
         return name
 
     def source(self) -> str:
-        return "\n".join(self._lines) + "\n"
+        return "\n".join(self.lines) + "\n"
 
     def capture(self, fn) -> str:
         """Run ``fn(ctx)`` against a fresh line buffer and return what it wrote.
@@ -124,46 +129,33 @@ class EmitContext:
         isolated, which is how a sub-sequence becomes a string a template can
         splice in.
         """
-        saved_lines = self._lines
-        self._lines = []
+        saved_lines = self.lines
+        self.lines = []
         try:
             fn(self)
-            return "\n".join(self._lines)
+            return "\n".join(self.lines)
         finally:
-            self._lines = saved_lines
+            self.lines = saved_lines
 
     def emit_node(self, node) -> None:
         """Write *node* through the target Visitor or function orchestrator."""
-        from tilefoundry.ir.tir.abort import Abort  # noqa: PLC0415
-        from tilefoundry.ir.tir.stmts import (  # noqa: PLC0415
-            For,
-            If,
-            LetStmt,
-            MeshScope,
-            Return,
-            Sequential,
-            While,
-        )
-
         if isinstance(
-            node, (Abort, Evaluate, For, If, LetStmt, MeshScope, Return, Sequential, While)
+            node, (tir.abort.Abort, core.Evaluate, core.For, core.If, core.LetStmt, core.MeshScope, core.Return, core.Sequential, core.While)
         ):
-            from tilefoundry.codegen.emitter import CppEmitter  # noqa: PLC0415
-
             CppEmitter(context=self).visit(node)
             return
         self.handler_for(type(node))(node, self)
 
     def stmt_handler(self, node_type: type) -> Callable | None:
         """Return the optional target-specific statement writer."""
-        return self.registry.lookup((self.target_kind, Role.EMIT, node_type))
+        return self.registry.get((self.target_kind, Role.EMIT, node_type), None)
 
     def handler_for(self, node_type: type) -> Callable:
         """The handler that writes *node_type* here, for a caller that dispatches itself."""
         handler = self.stmt_handler(node_type)
         if handler is None:
             raise RuntimeError(
-                f"no codegen handler for {node_type.__name__} on {target_summary(self.target)}"
+                f"no codegen handler for {node_type.__name__} on {tilefoundry_target.summary(self.target)}"
             )
         return handler
 
@@ -172,9 +164,10 @@ class EmitContext:
         signature: Signature,
         *,
         exported: bool = False,
+        by: type | None = None,
     ) -> tuple[str, ...]:
-        """The C++ parameters this target declares for one logical signature."""
-        handler = self._handler((self.target_kind, Role.CALLEE, type(signature)))
+        """The C++ parameters the target *by* (default: this context's) declares for a signature."""
+        handler = self.lookup((by or self.target_kind, Role.CALLEE, type(signature)))
         outer, self.exported = self.exported, exported
         try:
             return handler(signature, self)
@@ -186,12 +179,13 @@ class EmitContext:
         signature: CallableSignature,
         *,
         exported: bool = False,
+        by: type | None = None,
     ) -> str:
         """The whole parameter list of one call, in call order."""
         return ", ".join(
             token
             for param in signature.all_params
-            for token in self.declare(param, exported=exported)
+            for token in self.declare(param, exported=exported, by=by)
         )
 
     def local_value(self, signature: Signature) -> str:
@@ -212,10 +206,10 @@ class EmitContext:
         """
         return signature.extent_name(axis)
 
-    def _handler(self, key) -> Callable:
-        handler = self.registry.lookup(key)
+    def lookup(self, key) -> Callable:
+        handler = self.registry.get(key, None)
         if handler is None:
-            raise RuntimeError(f"{self.registry.name}: nothing registered for {spelled(key)}")
+            raise RuntimeError(f"{self.registry.name}: nothing registered for {dispatch.spelled(key)}")
         return handler
 
 

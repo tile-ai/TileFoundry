@@ -6,15 +6,15 @@ and a nested row loop carries two shared tiles. No instruction is selected.
 
 from tilefoundry import func, module
 from tilefoundry.dsl import Mesh, ReduceKind, Tensor, Topology, tf
-from tilefoundry.ir.types import Layout
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.ir import types
+from tilefoundry_nvidia import cuda
 
 NEG_INF = float("-inf")
 
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 256)),
 )
 class SparseDecode:
@@ -30,8 +30,8 @@ class SparseDecode:
             query = tf.reshape(q[0:1, t : t + 1, h0 : h0 + 64, :], (64, 64))
             table = tf.reshape(kv, (256, 64))
             rows = tf.index_select(table, idx, fill_value=0)
-            qs = tf.zeros(Tensor[(64, 64), "bf16", Layout((64, 64), (64, 1)), "smem"])
-            ks = tf.zeros(Tensor[(64, 64), "bf16", Layout((64, 64), (64, 1)), "smem"])
+            qs = tf.zeros(Tensor[(64, 64), "bf16", types.Layout((64, 64), (64, 1)), "smem"])
+            ks = tf.zeros(Tensor[(64, 64), "bf16", types.Layout((64, 64), (64, 1)), "smem"])
             with cta[:] as _rows:
                 for r in range(64):
                     qr = tf.reshard(query[r : r + 1, :], (1, 64), "smem")
@@ -39,7 +39,7 @@ class SparseDecode:
                     with cta[:] as _row:
                         qs = tf.insert_slice(qs, qr, (r, 0))
                         ks = tf.insert_slice(ks, kr, (r, 0))
-            kt = tf.bitcast(ks, Layout((64, 64), (1, 64)))
+            kt = tf.bitcast(ks, types.Layout((64, 64), (1, 64)))
             s = tf.matmul(qs, kt, out_dtype="f32")
             ii = tf.reshard(idx, (64,), "rmem") + 0
             live = tf.binary(ii >= 0, ii < 256, kind="and")
@@ -49,6 +49,6 @@ class SparseDecode:
             p = tf.exp(s - peak)
             denom = tf.reduce(p, axes=(1,), keepdim=True, kind=ReduceKind.SUM)
             p = tf.cast(p / denom, "bf16")
-            v = tf.reshard(ks, Layout(((8, 8), (8, 8)), ((64, 512), (1, 8))), "smem")
+            v = tf.reshard(ks, types.Layout(((8, 8), (8, 8)), ((64, 512), (1, 8))), "smem")
             result = tf.cast(tf.matmul(p, v, out_dtype="f32"), "bf16")
         return result

@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 SEQ = DimVar("seq", 1, 4096)
 CTX = DimVar("ctx", 1, 4096)
@@ -23,7 +23,7 @@ SCALE = 1.0 / math.sqrt(HEAD_DIM)
 
 @module(
     entry="attend",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", HEADS),),
 )
 class PrefillDecodeAttention:
@@ -35,7 +35,7 @@ class PrefillDecodeAttention:
     ) -> Tensor[(1, SEQ, HEADS, HEAD_DIM), "bf16"]:
         pass
 
-    @attend.specialize(RangePattern("seq", 1, 1))
+    @attend.specialize(pattern.Range("seq", 1, 1))
     def decode(
         q: Tensor[(1, SEQ, HEADS, HEAD_DIM), "bf16"],
         k_cache: Tensor[(1, CTX, HEADS, HEAD_DIM), "bf16"],
@@ -117,7 +117,7 @@ class PrefillDecodeAttention:
                 "gmem",
             )
 
-    @attend.specialize(RangePattern("seq", 2, 4096))
+    @attend.specialize(pattern.Range("seq", 2, 4096))
     def prefill(
         q: Tensor[(1, SEQ, HEADS, HEAD_DIM), "bf16"],
         k_cache: Tensor[(1, CTX, HEADS, HEAD_DIM), "bf16"],

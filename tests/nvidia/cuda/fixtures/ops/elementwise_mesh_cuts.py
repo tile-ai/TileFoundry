@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from tests.core.fixtures.tir.layouts import bcast
 from tilefoundry.dsl import *
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.ir import expr
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 _CTAS, _THREADS = 4, 8
 _ROWS = _CTAS * _THREADS
@@ -49,12 +49,12 @@ class ColumnBroadcast:
             dst_scalar = T.alloc_tensor(Tensor[(4, 8), "f32", bcast((4, 8), (8, 1), m), "rmem"])
             T.copy(a_view, lhs)
             T.copy(r_view, col)
-            T.binary(lhs, col, dst, kind=BinaryKind.MUL)
+            T.binary(lhs, col, dst, kind=expr.BinaryKind.MUL)
             T.copy(dst, out_view)
-            T.binary(col, lhs, dst_sub, kind=BinaryKind.SUB)
+            T.binary(col, lhs, dst_sub, kind=expr.BinaryKind.SUB)
             T.copy(dst_sub, out_sub_view)
             T.fill(scalar, 0.5)
-            T.binary(lhs, scalar, dst_scalar, kind=BinaryKind.ADD)
+            T.binary(lhs, scalar, dst_scalar, kind=expr.BinaryKind.ADD)
             T.copy(dst_scalar, out_scalar_view)
 
 
@@ -74,7 +74,7 @@ class TwoLevels:
             written = T.tensor_view(T.ptr_of(out), layout=row)
             held = T.alloc_tensor(Tensor[(_ROWS,), "f32", row, "rmem"])
             T.copy(source, held)
-            T.binary(held, held, held, kind=BinaryKind.MUL)
+            T.binary(held, held, held, kind=expr.BinaryKind.MUL)
             T.copy(held, written)
 
 
@@ -94,7 +94,7 @@ class TwoAxes:
             written = T.tensor_view(T.ptr_of(out), layout=row)
             held = T.alloc_tensor(Tensor[(_ROWS,), "f32", row, "rmem"])
             T.copy(source, held)
-            T.binary(held, held, held, kind=BinaryKind.MUL)
+            T.binary(held, held, held, kind=expr.BinaryKind.MUL)
             T.copy(held, written)
 
 
@@ -106,7 +106,7 @@ class Elementwise:
     two_levels = TwoLevels
     two_axes = TwoAxes
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def elementwise_host(
         a: Tensor[(32,), "f32"],
         r: Tensor[(4,), "f32"],
@@ -118,7 +118,7 @@ class Elementwise:
         axis_a: Tensor[(_ROWS,), "f32"],
         axis_out: Tensor[(_ROWS,), "f32"],
     ):
-        launch(  # noqa: F821
+        launch(
             bcast_tier.col_bcast_device,
             a,
             r,
@@ -126,17 +126,17 @@ class Elementwise:
             out_sub,
             out_scalar,
             grid=(1, 1, 1),
-            block=(32, 1, 1),  # noqa: F821
+            block=(32, 1, 1),
         )
-        launch(  # noqa: F821
-            two_levels.two_levels_device,  # noqa: F821
+        launch(
+            two_levels.two_levels_device,
             level_a,
             level_out,
             grid=(_CTAS, 1, 1),
             block=(_THREADS, 1, 1),
         )
-        launch(  # noqa: F821
-            two_axes.two_axes_device,  # noqa: F821
+        launch(
+            two_axes.two_axes_device,
             axis_a,
             axis_out,
             grid=(1, 1, 1),

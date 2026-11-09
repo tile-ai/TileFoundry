@@ -1,12 +1,12 @@
 """A captured dynamic view that selects one of two shared-memory leaves."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="choose",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1),),
 )
 class DynamicSelection:

@@ -1,8 +1,8 @@
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="f", target=CpuTarget())
+@module(entry="f", target=cpu.Target())
 class TopkLargestSorted:
     @func
     def f(x: Tensor[(4, 256), "f32"]):

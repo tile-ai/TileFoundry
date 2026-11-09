@@ -24,13 +24,13 @@ from __future__ import annotations
 
 from tilefoundry import func, module
 from tilefoundry.dsl import DimVar, DimVarRangePat, Mesh, Tensor, tf
-from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target import CudaTarget
+from tilefoundry.ir.types import Topology
+from tilefoundry_nvidia import cuda
 
 D, W, BOUND = 64, 4, 128
 N_MAX = 1023
 N = DimVar("n", 1, N_MAX + 1)
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 _CTA = Topology("cta", W)
 
 

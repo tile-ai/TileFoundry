@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="f", target=CpuTarget(), topologies=(Topology("cta", 128),))
+@module(entry="f", target=cpu.Target(), topologies=(Topology("cta", 128),))
 class F:
     @func
     def f(a: Tensor[(1, 1536), "f32"]) -> Tensor[(1, 1536), "f32"]:

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from tests.nvidia.cuda.fixtures.shapes.scaled_modules import ScaledChild
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="looped", target=CudaTarget("nvidia.h200_sxm"))
+@module(entry="looped", target=cuda.Target("nvidia.h200_sxm"))
 class _Looped:
     scaled = ScaledChild
 
@@ -15,5 +15,5 @@ class _Looped:
     def looped(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
         acc = x
         for _ in range(3):
-            acc = scaled(acc)  # noqa: F821
+            acc = scaled(acc)
         return acc

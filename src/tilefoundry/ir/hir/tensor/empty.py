@@ -2,30 +2,17 @@
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.dim import resolve_dim
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.types import TensorType
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    identity_access,
-    iterating,
-    register_access_relation,
-)
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, types
 
 
-@register_op(dialect='tf', category='tensor')
-class Empty(Op):
+@expr.register_op(dialect='tf', category='tensor')
+class Empty(expr.Op):
     """Declare tensor storage with undefined contents and the given complete type."""
 
-    type = ParamDef(kind="attribute", annotation=TensorType)
-    buffers = ParamDef(kind="attribute", annotation=int, default=1)
+    type = expr.ParamDef(kind="attribute", annotation=types.TensorType)
+    buffers = expr.ParamDef(kind="attribute", annotation=int, default=1)
 
     def __init__(self, **attrs) -> None:
         super().__init__(**attrs)
@@ -33,20 +20,29 @@ class Empty(Op):
             raise ValueError("empty buffers must be a positive integer")
 
 
-@register_typeinfer(Empty)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(Empty)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     return call.target.type
 
 
-@register_eval(Empty)
-def _eval_empty(ctx):
+@evaluator.register(Empty)
+def eval_empty(ctx):
 
-    shape = tuple(resolve_dim(d, ctx.dim_bindings) for d in ctx.op.type.shape)
-    data = torch.zeros(shape, dtype=to_torch_dtype(ctx.op.type.dtype), device=ctx.device)
-    return TensorValue(ShardTensor(ctx.result_type, data))
+    shape = tuple(evaluator.resolve_dim(d, ctx.dim_bindings) for d in ctx.op.type.shape)
+    data = utils.torch.zeros(shape, dtype=evaluator.to_torch_dtype(ctx.op.type.dtype), device=ctx.device)
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, data))
 
 
-@register_access_relation(Empty)
-def _empty_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(Empty)
+def empty_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """Declare the result boundary without initializing its contents."""
-    return iterating(call.target.type.shape, (identity_access(len(call.target.type.shape)),))
+    return access.iterating(call.target.type.shape, (access.identity(len(call.target.type.shape)),))
+
+
+@cost.register(Empty)
+def empty_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    """Storage declarations perform no arithmetic or memory traffic."""
+    return cost.Cost({}, cost.idle(call))
+
+
+__all__ = ["Empty"]

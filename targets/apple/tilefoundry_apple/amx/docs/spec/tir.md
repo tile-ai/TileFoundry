@@ -178,7 +178,7 @@ class FloatingProduct(Op):
 
 ## 5. Mac16
 
-`Mac16` has the FMA control attributes except `out_dtype`, and operand order
+`Mac16` has the FMA control attributes except `out_dtype`, plus `shift`, and operand order
 `(acc: RW, lhs: R, rhs: R)` with Z/Y/X bank roles.
 
 - constraints:
@@ -190,6 +190,7 @@ class FloatingProduct(Op):
     `[1,32]`. Equal-width accumulator layout is `(64,1)` in MATRIX mode;
     widened layout is `Layout((32,(2,16)),(32,(16,1)))`.
   - Offset, row, mask and skip domains match [tir §4](./tir.md#4-fma163264-and-fms163264).
+  - `shift` is an `int` attribute in `[0,31]`, default 0.
 - semantics:
   - Multiply integer inputs and add into the declared accumulator lanes,
     preserving the instruction's finite-width integer result. MATRIX is an

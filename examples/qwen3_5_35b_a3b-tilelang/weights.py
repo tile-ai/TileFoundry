@@ -38,7 +38,7 @@ import torch  # noqa: E402
 
 import model as sem  # noqa: E402
 from config import CKPT, REAL  # noqa: E402
-from tilefoundry.evaluator import evaluate  # noqa: E402
+from tilefoundry.interfaces.evaluator import evaluate
 from tilefoundry.runtime import SafetensorsResource  # noqa: E402
 
 #: Weights that stay f32 whatever the matmuls run at. Small, and read by
@@ -50,10 +50,10 @@ F32_WEIGHTS = frozenset({
 
 
 class HFResource:
-    """A `RuntimeResource` over the raw checkpoint that answers canonical names.
+    """A `runtime.Resource` over the raw checkpoint that answers canonical names.
 
     Implements the protocol of runtime §1.8 -- `load` / `load_group` / `subtree`
-    -- so both a `Module` and its `RuntimeModule` twin can be loaded from it.
+    -- so both a `Module` and its `runtime.Module` twin can be loaded from it.
     """
 
     #: (raw resource, name, tensor) of the last raw read, shared across subtree

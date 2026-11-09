@@ -14,31 +14,22 @@ import pytest
 import torch
 
 from tests.core.ops.ir.op_case import Cost, ExpectedError, OpCase, check_op_case, op_case_test
-from tilefoundry.ir.core.kinds import UnaryKind
-from tilefoundry.ir.hir.math.unary import Unary
-from tilefoundry.ir.types import (
-    DType,
-    Layout,
-    Mesh,
-    Topology,
-    make_shard_tensor_type,
-    make_tensor_type,
-)
-from tilefoundry.ir.types.shard_layout import Partial
-from tilefoundry.visitor_registry.contexts import TrafficBytes
+from tilefoundry.interfaces import cost
+from tilefoundry.ir import expr, types, utils
+from tilefoundry.ir.hir import math
 
-_NEG = Unary(kind=UnaryKind.NEG)
-_EXP = Unary(kind=UnaryKind.EXP)
-_ABS = Unary(kind=UnaryKind.ABS)
-_RSQRT = Unary(kind=UnaryKind.RSQRT)
-_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
-_PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
-_PMAX = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("max"),))
+_NEG = math.Unary(kind=expr.UnaryKind.NEG)
+_EXP = math.Unary(kind=expr.UnaryKind.EXP)
+_ABS = math.Unary(kind=expr.UnaryKind.ABS)
+_RSQRT = math.Unary(kind=expr.UnaryKind.RSQRT)
+_M = types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",))
+_PSUM = utils.make_shard_tensor_type((16, 8), mesh=_M, attrs=(types.Partial("sum"),))
+_PMAX = utils.make_shard_tensor_type((16, 8), mesh=_M, attrs=(types.Partial("max"),))
 ORACLES = [
     pytest.param("abs", _ABS, lambda: torch.randn(4), torch.abs, id="abs_f32"),
     pytest.param(
         "round_ties_to_even",
-        Unary(kind=UnaryKind.ROUND),
+        math.Unary(kind=expr.UnaryKind.ROUND),
         lambda: torch.tensor([-2.5, -1.5, -0.5, 0.5, 1.5, 2.5]),
         torch.round,
         id="round_ties_to_even",
@@ -56,22 +47,22 @@ def _make_a_unary_evaluates_to_its_oracle(name, op, drawn, oracle):
     return OpCase(name, op, (x,), value=oracle(x))
 
 
-_SPECIAL = (UnaryKind.RSQRT, UnaryKind.EXP, UnaryKind.LOG, UnaryKind.EXP2, UnaryKind.LOG2)
-_REAL = make_tensor_type((8,), DType.f32)
-_WHOLE = make_tensor_type((8,), DType.i32)
-_TRUTHY = make_tensor_type((8,), DType.bool)
+_SPECIAL = (expr.UnaryKind.RSQRT, expr.UnaryKind.EXP, expr.UnaryKind.LOG, expr.UnaryKind.EXP2, expr.UnaryKind.LOG2)
+_REAL = types.TensorType.from_shape((8,), expr.DType.f32)
+_WHOLE = types.TensorType.from_shape((8,), expr.DType.i32)
+_TRUTHY = types.TensorType.from_shape((8,), expr.DType.bool)
 COST_CASES = [
     OpCase(
         "exp_is_special_function_work",
-        Unary(kind=UnaryKind.EXP),
+        math.Unary(kind=expr.UnaryKind.EXP),
         (_REAL,),
-        cost=Cost(ops={"special": 8}, traffic=(TrafficBytes(read=32), TrafficBytes(write=32))),
+        cost=Cost(ops={"special": 8}, traffic=(cost.TrafficBytes(read=32), cost.TrafficBytes(write=32))),
     ),
     OpCase(
         "neg_over_reals_is_floating_point_work",
         _NEG,
         (_REAL,),
-        cost=Cost(flops={DType.f32: 8}, traffic=(TrafficBytes(read=32), TrafficBytes(write=32))),
+        cost=Cost(flops={expr.DType.f32: 8}, traffic=(cost.TrafficBytes(read=32), cost.TrafficBytes(write=32))),
     ),
 ]
 
@@ -86,7 +77,7 @@ def test_unary_charges_by_unit(case):
     arithmetic at all, and negating a whole number is not floating point.
     """
     check_op_case(case)
-    assert DType.bool not in case.cost.flops
+    assert expr.DType.bool not in case.cost.flops
 
 
 CASES = (
@@ -97,8 +88,8 @@ CASES = (
     OpCase(
         "low_precision_passthrough_fp8e4m3",
         _NEG,
-        (make_tensor_type((4, 8), DType.fp8e4m3),),
-        type=make_tensor_type((4, 8), DType.fp8e4m3),
+        (types.TensorType.from_shape((4, 8), expr.DType.fp8e4m3),),
+        type=types.TensorType.from_shape((4, 8), expr.DType.fp8e4m3),
     ),
     OpCase("neg_partial_sum_passes", _NEG, (_PSUM,), type=_PSUM),
     OpCase("neg_partial_max_errors", _NEG, (_PMAX,), error=ExpectedError(match="carries Partial")),

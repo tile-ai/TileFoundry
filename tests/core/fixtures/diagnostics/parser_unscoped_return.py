@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="run", target=CpuTarget(), topologies=(Topology("cta", 1),))
+@module(entry="run", target=cpu.Target(), topologies=(Topology("cta", 1),))
 class UnscopedReturn:
     @func
     def run(x: Tensor[(4,), "f32"]):

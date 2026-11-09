@@ -1,45 +1,25 @@
+"""HIR ``Split`` Op: cut a tensor into several outputs along an axis."""
+
 from __future__ import annotations
 
 import isl
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue, TupleValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import Broadcast, Partial, ShardLayout, TensorType, TupleType
-from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
-from tilefoundry.ir.types.layout import Layout, flatten
-from tilefoundry.ir.types.shard_layout import Split as ShardSplit
-from tilefoundry.ir.types.shard_layout import Split as SplitAttr
-from tilefoundry.ir.types.shard_layout import (
-    shard_layout_of,
-    split_target_axes,
-)
-from tilefoundry.ir.types.storage import StorageOwners
-from tilefoundry.ir.types.utils import static_dim_value
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    identity_access,
-    iterating,
-    register_access_relation,
-)
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir.types import int_tuple
 
 
-@register_op(dialect='tf', category='tensor')
-class Split(Op):
+@expr.register_op(dialect='tf', category='tensor')
+class Split(expr.Op):
     """Multi-output op. `Call.type` is `TupleType` ([types §5](docs/spec/types.md#5-tupletype))."""
 
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
-    axis = ParamDef(kind="attribute", annotation=int)
-    num_splits = ParamDef(kind="attribute", annotation=int)
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    axis = expr.ParamDef(kind="attribute", annotation=int)
+    num_splits = expr.ParamDef(kind="attribute", annotation=int)
 
 
-def _reject_redistribution(ctx, call: "Call", x_ty, axis: int, parts: int) -> None:
+def reject_redistribution(ctx, call: "Call", x_ty, axis: int, parts: int) -> None:
     """Refuse dividing an axis the layout already hands out in slices.
 
     Each participant would hold one whole part, and saying which one means
@@ -47,14 +27,14 @@ def _reject_redistribution(ctx, call: "Call", x_ty, axis: int, parts: int) -> No
     offsets, so the redistribution is refused at the contract the author wrote
     against rather than surfacing later as an analysis that cannot answer.
     """
-    layout = shard_layout_of(x_ty.layout)
+    layout = types.shard_layout_of(x_ty.layout)
     if layout is None:
         return
-    targets = split_target_axes(layout, x_ty.shape)
-    mesh = flatten(layout.mesh.layout).shape if layout.mesh is not None else ()
+    targets = types.split_target_axes(layout, x_ty.shape)
+    mesh = types.flatten(layout.mesh.layout).shape if layout.mesh is not None else ()
     for mesh_axis, attr in enumerate(layout.attrs):
         divides = mesh_axis < len(mesh) and mesh[mesh_axis] > 1
-        if isinstance(attr, ShardSplit) and divides and targets[mesh_axis] == axis:
+        if isinstance(attr, types.Split) and divides and targets[mesh_axis] == axis:
             ctx.error(
                 call,
                 f"Split: axis {axis} is divided into {parts} parts and is "
@@ -64,8 +44,8 @@ def _reject_redistribution(ctx, call: "Call", x_ty, axis: int, parts: int) -> No
             )
 
 
-@register_typeinfer(Split)
-def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
+@typeinfer.register(Split)
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
     x_ty = ctx.type_of(call.args[0])
     raw_axis = call.target.axis
     rank = len(x_ty.shape)
@@ -75,9 +55,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     n = call.target.num_splits
     if n <= 0:
         ctx.error(call, f"num_splits must be positive, got {n}")
-    _reject_redistribution(ctx, call, x_ty, axis, n)
+    reject_redistribution(ctx, call, x_ty, axis, n)
     orig = x_ty.shape[axis]
-    v = static_dim_value(orig)
+    v = expr.static_dim_value(orig)
     if v is not None:
         if v % n != 0:
             ctx.error(call, f"axis {axis} extent {v} not divisible by {n}")
@@ -87,35 +67,35 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     part_shape = list(x_ty.shape)
     part_shape[axis] = part_len
     part_shape = tuple(part_shape)
-    if isinstance(x_ty.layout, ShardLayout):
-        layout_to_tensor = mode_axes(compatible_profile(x_ty.layout.layout.shape, x_ty.shape))
+    if isinstance(x_ty.layout, types.ShardLayout):
+        layout_to_tensor = int_tuple.mode_axes(int_tuple.compatible_profile(x_ty.layout.layout.shape, x_ty.shape))
         attrs = tuple(
-            SplitAttr(layout_to_tensor[attr.axis])
-            if isinstance(attr, SplitAttr)
-            else Partial(attr.reduction)
-            if isinstance(attr, Partial)
-            else Broadcast()
+            types.Split(layout_to_tensor[attr.axis])
+            if isinstance(attr, types.Split)
+            else types.Partial(attr.reduction)
+            if isinstance(attr, types.Partial)
+            else types.Broadcast()
             for attr in x_ty.layout.attrs
         )
-        part_layout = ShardLayout.default(
+        part_layout = types.ShardLayout.from_logical(
             part_shape,
             x_ty.layout.mesh,
             attrs,
             storage=x_ty.storage,
             owners=ctx.target.storage_owners
             if ctx is not None and ctx.target is not None
-            else StorageOwners((), {}),
+            else expr.StorageOwners((), {}),
         )
     else:
-        part_layout = Layout(part_shape)
-    part_ty = TensorType(
+        part_layout = types.Layout(part_shape)
+    part_ty = types.TensorType(
         shape=part_shape, dtype=x_ty.dtype, layout=part_layout, storage=x_ty.storage
     )
-    return TupleType(fields=tuple(part_ty for _ in range(n)))
+    return types.TupleType(fields=tuple(part_ty for _ in range(n)))
 
 
-@register_eval(Split)
-def _eval_split(ctx):
+@evaluator.register(Split)
+def eval_split(ctx):
     fields = ctx.result_type.fields
 
     def split(source):
@@ -124,7 +104,7 @@ def _eval_split(ctx):
         extent = source.shape[axis]
         if extent % n:
             raise ValueError(f"Split: runtime axis {axis} extent {extent} is not divisible by {n}")
-        return torch.chunk(source, n, dim=axis)
+        return utils.torch.chunk(source, n, dim=axis)
 
     x = ctx.args[0].tensor
     if x.is_global:
@@ -132,13 +112,13 @@ def _eval_split(ctx):
     else:
         each = [(p, split(t)) for p, t in x.tensor]
         held = tuple(tuple((p, out[i]) for p, out in each) for i in range(len(fields)))
-    return TupleValue(
-        tuple(TensorValue(ShardTensor(field, data)) for field, data in zip(fields, held, strict=True))
+    return evaluator.TupleValue(
+        tuple(evaluator.TensorValue(core.ShardTensor(field, data)) for field, data in zip(fields, held, strict=True))
     )
 
 
-@register_access_relation(Split)
-def _split_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(Split)
+def split_access(call: "Call", ctx) -> tuple[access.Relation, ...]:
     """One space, the source's, with each part written on its own run of it.
 
     Every element of the source becomes an element of exactly one part, so the
@@ -166,7 +146,7 @@ def _split_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
         if begin:
             writes[axis] = f"d{axis} - {begin}"
         written.append(
-            AccessRelation(
+            access.Relation(
                 isl.map(
                     f"{{ [{domain}] -> [{', '.join(writes)}] : "
                     f"{begin} <= d{axis} < {begin + chunk} }}"
@@ -174,4 +154,10 @@ def _split_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
             )
         )
 
-    return iterating(source.shape, (identity_access(rank), *written))
+    return access.iterating(source.shape, (access.identity(rank), *written))
+
+
+cost.register(Split)(cost.structure)
+
+
+__all__ = ["Split"]

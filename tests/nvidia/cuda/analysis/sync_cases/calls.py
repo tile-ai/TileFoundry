@@ -8,7 +8,7 @@ import pytest
 
 from tests.core._corpus import case
 from tests.nvidia.cuda.analysis.sync_cases import FIXTURES, SyncCase, _planned
-from tilefoundry.analysis import AnalysisError
+from tilefoundry import analysis
 
 NESTED_CALLS = FIXTURES / "analysis/sync_nested_calls.py"
 
@@ -51,5 +51,5 @@ class TwiceNestedCalls(SyncCase):
     name: str | None = "Twice"
 
     def guard(self, state, problems):
-        with pytest.raises(AnalysisError, match="a scope that no thread mesh binds"):
+        with pytest.raises(analysis.Error, match="a scope that no thread mesh binds"):
             _planned(state)

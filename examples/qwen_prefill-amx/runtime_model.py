@@ -1,12 +1,12 @@
 """Python adapter for the original supplied C++/AMX prefill runtime."""
 
 import torch
-from tilefoundry.runtime import RuntimeModule
+from tilefoundry import runtime
 from kernels import ops
 from scheduled import make_scheduled
 
 
-class QwenPrefill(RuntimeModule):
+class QwenPrefill(runtime.Module):
     """Execute one model through its original native prefill driver.
 
     The scheduled HIR remains available as ``module`` for inspection. Execution

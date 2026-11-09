@@ -6,10 +6,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def intra_g(
     g: Tensor[(1024, 48), "f32"], iota: Tensor[(64,), "i32"], out: Tensor[(48, 1024, 1), "f32"]
 ):

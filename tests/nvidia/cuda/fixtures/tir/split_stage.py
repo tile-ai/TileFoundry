@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="split_stage_host",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("thread", 128),),
 )
 class SplitStage:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def split_stage_device(a: Tensor[(2, 128, 4), "f32"], b: Tensor[(2, 128, 4), "f32"]):
         with Mesh((Topology("thread", 128),), layout=(128,), names=("t",)) as m:
             a_view = T.tensor_view(T.ptr_of(a), layout=(2, 128 @ m.t, 4))
@@ -24,7 +24,7 @@ class SplitStage:
             T.sync(m)
             T.copy(shared_view, b_view)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def split_stage_host(a: Tensor[(2, 128, 4), "f32"], b: Tensor[(2, 128, 4), "f32"]):
         launch(split_stage_device, a, b, grid=(
         1,

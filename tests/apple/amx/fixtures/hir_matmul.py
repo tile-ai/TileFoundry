@@ -4,10 +4,10 @@ Candidates describe instructions requiring a later explicit zero/accumulate sche
 K=2 and multiple N fragments exercise repetition rather than a single outer product.
 """
 from tilefoundry.dsl import *
-from tilefoundry_apple import AmxTarget
+from tilefoundry_apple import amx
 
 
-@module(entry="hir_matmul", target=AmxTarget(), topologies=(Topology("thread", 12),))
+@module(entry="hir_matmul", target=amx.Target(), topologies=(Topology("thread", 12),))
 class Program:
     @func
     def hir_matmul(

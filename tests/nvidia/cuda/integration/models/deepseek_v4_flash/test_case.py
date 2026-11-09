@@ -12,7 +12,7 @@ import pytest
 
 from tests.nvidia.cuda.models.deepseek_v4_flash.case import ANALYZED_AT, CASE
 from tilefoundry.analysis.check import check_program
-from tilefoundry.ir.types.substitute import DimSubstitutionError
+from tilefoundry.ir.dim import SubstitutionError
 from tilefoundry_nvidia.cuda.models.deepseek_v4_flash.model import REAL
 
 
@@ -47,6 +47,6 @@ def test_the_context_lengths_the_case_names_are_ones_the_model_has():
     )
 
     with pytest.raises(
-        DimSubstitutionError, match=r"declared over \[0, 127\] and cannot take 1024"
+        SubstitutionError, match=r"declared over \[0, 127\] and cannot take 1024"
     ):
         check_program(module, function, dims={"ctx_len": 1024})

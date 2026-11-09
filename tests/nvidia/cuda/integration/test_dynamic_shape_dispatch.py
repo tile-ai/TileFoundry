@@ -14,16 +14,16 @@ import pytest
 import torch
 
 import tilefoundry
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry import cli
+from tilefoundry_nvidia import cuda
 
 INTEGRATION = Path(__file__).parents[1] / "fixtures" / "integration"
 
 
 def _build_runtime_module():
-    """Compile the dispatch prototype to a fully-loaded RuntimeModule."""
-    Dispatch = load_authored_ir(f"{INTEGRATION / 'shape_range_dispatch.py'}:Dispatch")
-    return tilefoundry.compile(Dispatch, target=CudaTarget("nvidia.h200_sxm"))
+    """Compile the dispatch prototype to a fully-loaded runtime.Module."""
+    Dispatch = cli.load_authored_ir(f"{INTEGRATION / 'shape_range_dispatch.py'}:Dispatch")
+    return tilefoundry.compile(Dispatch, target=cuda.Target("nvidia.h200_sxm"))
 
 
 _HIR_LOWERING_ELSEWHERE = (

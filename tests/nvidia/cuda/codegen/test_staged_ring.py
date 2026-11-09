@@ -18,12 +18,11 @@ import pytest
 import torch
 
 import tilefoundry
-import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry import cli
+from tilefoundry_nvidia import cuda
 
 CODEGEN = Path(__file__).parents[1] / "fixtures" / "codegen"
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
@@ -34,7 +33,7 @@ def test_counter_ring_copies_tile() -> None:
     stage bases spelled so the subscript cannot compile -- either fails
     emission here outright or lands the tile nowhere near ``out``.
     """
-    CounterRing = load_authored_ir(f"{CODEGEN / 'counter_ring.py'}:CounterRing")
+    CounterRing = cli.load_authored_ir(f"{CODEGEN / 'counter_ring.py'}:CounterRing")
     rm = tilefoundry.compile(CounterRing, target=_CUDA)
     x = torch.arange(8, dtype=torch.bfloat16, device="cuda").view(1, 8)
     out = torch.full((1, 8), -1.0, dtype=torch.bfloat16, device="cuda")
@@ -55,7 +54,7 @@ def test_row_ring_copies_rows() -> None:
     whose bases come out of the slice path, so a row landed anywhere but its
     slot's stage breaks the row-for-row equality.
     """
-    RowRing = load_authored_ir(f"{CODEGEN / 'row_ring.py'}:RowRing")
+    RowRing = cli.load_authored_ir(f"{CODEGEN / 'row_ring.py'}:RowRing")
     rm = tilefoundry.compile(RowRing, target=_CUDA)
     x = torch.arange(48, dtype=torch.bfloat16, device="cuda").view(6, 8)
     out = torch.full((6, 8), -1.0, dtype=torch.bfloat16, device="cuda")

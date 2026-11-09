@@ -6,10 +6,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def conv_v(
     qkv: Tensor[(1, 1024, 10240), "bf16", ((1, 1024, 10240), (17039360, 16640, 1))], conv_w: ConstTensor[(10240, 1, 4), "bf16"], out: Tensor[(128, 8, 48, 16, 8), "bf16"]
 ):

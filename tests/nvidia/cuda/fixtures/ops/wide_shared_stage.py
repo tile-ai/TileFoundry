@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 def _rows(mesh) -> ShardLayout:
@@ -33,6 +33,6 @@ class WideSharedStage:
             T.sync(thread)
             T.copy(stage, target)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def main(x: Tensor[(128, 160), "f32"], out: Tensor[(128, 160), "f32"]):
         launch(wide_stage, x, out, grid=(1, 1, 1), block=(128, 1, 1), dynamic_smem=81920)

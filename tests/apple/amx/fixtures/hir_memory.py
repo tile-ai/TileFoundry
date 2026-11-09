@@ -4,10 +4,10 @@ A cast keeps its logical shape. It must not silently discard the extra Z
 lanes consumed by EXTRX/EXTRY conversion modes.
 """
 from tilefoundry.dsl import *
-from tilefoundry_apple import AmxTarget
+from tilefoundry_apple import amx
 
 
-@module(entry="hir_memory", target=AmxTarget(), topologies=(Topology("thread", 12),))
+@module(entry="hir_memory", target=amx.Target(), topologies=(Topology("thread", 12),))
 class Program:
     @func
     def hir_memory(

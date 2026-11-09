@@ -6,9 +6,9 @@ wrapper twice in a row.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
-TARGET = CudaTarget("nvidia.rtx_6000_ada")
+TARGET = cuda.Target("nvidia.rtx_6000_ada")
 TOPOLOGIES = (Topology("cta", 1), Topology("thread", 32))
 
 
@@ -52,7 +52,7 @@ def _wrapper(Leaf):
         @func
         def run(x: Tensor[(32,), "f32"]) -> Tensor[(32,), "f32"]:
             with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
-                return inner[0](x)  # noqa: F821 -- class-body binding
+                return inner[0](x)
 
     return Wrapper
 
@@ -67,8 +67,8 @@ def _twice(Leaf):
         @func
         def gemm(x: Tensor[(32,), "f32"]) -> Tensor[(32,), "f32"]:
             with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
-                first = layers[0](x)  # noqa: F821 -- class-body binding
-                return layers[1](first)  # noqa: F821 -- class-body binding
+                first = layers[0](x)
+                return layers[1](first)
 
     return Twice
 
@@ -83,7 +83,7 @@ def _root(Leaf):
         @func
         def gemm(x: Tensor[(32,), "f32"]) -> Tensor[(32,), "f32"]:
             with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
-                return layers[0](x)  # noqa: F821 -- class-body binding
+                return layers[0](x)
 
     return Root
 

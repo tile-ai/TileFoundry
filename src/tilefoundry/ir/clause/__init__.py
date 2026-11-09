@@ -1,24 +1,8 @@
 """Typed, stage-neutral where-clause values."""
 
-from .base import (
-    ClauseProvenance,
-    SourceLocation,
-    WhereClause,
-    WhereClauseMetadata,
-    clause_metadata,
-)
-from .layout import LayoutClause, is_layout_wildcard
-from .mesh import MeshClause
-from .storage import StorageClause
+from __future__ import annotations
 
-__all__ = [
-    "ClauseProvenance",
-    "LayoutClause",
-    "is_layout_wildcard",
-    "MeshClause",
-    "WhereClause",
-    "WhereClauseMetadata",
-    "SourceLocation",
-    "StorageClause",
-    "clause_metadata",
-]
+from .base import Provenance, SourceLocation, Where, WhereMetadata, metadata
+from .layout import LAYOUT_WILDCARD, Layout, is_layout_wildcard
+from .mesh import Mesh
+from .storage import Storage

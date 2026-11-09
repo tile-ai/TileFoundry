@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 HEAD_DIM = 128
 NUM_Q_HEADS = 32
@@ -45,7 +45,7 @@ _G = GQA_GROUP
 _SCALE = 1.0 / math.sqrt(HEAD_DIM)
 
 
-@module(entry="gqa_online_attend", target=CpuTarget(), topologies=(Topology("cta", NUM_CTA),))
+@module(entry="gqa_online_attend", target=cpu.Target(), topologies=(Topology("cta", NUM_CTA),))
 class GqaOnline:
     """The two decode strategies and the shared context-split kernels, in one execution domain.
 
@@ -66,7 +66,7 @@ class GqaOnline:
         pass
 
     @gqa_online_attend.specialize(
-        RangePattern("ctx_len", 0, SMALL_CONTEXT_T),
+        pattern.Range("ctx_len", 0, SMALL_CONTEXT_T),
         mesh=Mesh(("cta",), layout=(NUM_CTA,), names=("cta",)),
     )
     def head_on_cta(
@@ -132,7 +132,7 @@ class GqaOnline:
         v_cache: Tensor[(1, C, _HKV, _D), "bf16"],
     ):
 
-        with Mesh(("cta",), layout=(NUM_CTA,)) as cta:  # noqa: F841
+        with Mesh(("cta",), layout=(NUM_CTA,)) as cta:
             k_f = tf.transpose(
                 tf.cast(
                     tf.repeat_interleave(
@@ -182,7 +182,7 @@ class GqaOnline:
         v_new: Tensor[(1, S, _HKV, _D), "bf16"],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
-        with Mesh(("cta",), layout=(NUM_CTA,)) as cta:  # noqa: F841
+        with Mesh(("cta",), layout=(NUM_CTA,)) as cta:
             m = tf.reduce(m_p, axes=(-2,), keepdim=True, kind="max")
             alpha = tf.exp(m_p - m)
             l = tf.reduce(alpha * l_p, axes=(-2,), keepdim=True, kind="sum")
@@ -201,7 +201,7 @@ class GqaOnline:
             return tf.cast((o * corr + corr_n * v_n) / (l_blk * corr + corr_n), dtype="bf16")
 
     @gqa_online_attend.specialize(
-        RangePattern("ctx_len", SMALL_CONTEXT_T + 1, MAX_CTX),
+        pattern.Range("ctx_len", SMALL_CONTEXT_T + 1, MAX_CTX),
         mesh=Mesh(("cta",), layout=(NUM_CTA,), names=("cta",)),
     )
     def ctx_split_kv(

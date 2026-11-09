@@ -20,7 +20,7 @@ from tests.nvidia.cuda.models.kimi_linear_48b_a3b.reference import (
     KDA_PROJ,
     SHORT_CONV_KERNEL_SIZE,
 )
-from tilefoundry.evaluator import evaluate
+from tilefoundry.interfaces.evaluator import evaluate
 from tilefoundry_nvidia.cuda.models.kimi_linear_48b_a3b.model import KimiLinear48BA3B
 
 DEV = "cpu"

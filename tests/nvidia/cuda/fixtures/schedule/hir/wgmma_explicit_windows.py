@@ -10,7 +10,7 @@ weight, so its windows have K at stride one and the atom states ``b_major=K``.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 128
 N = 64
@@ -23,7 +23,7 @@ STAGES = 2
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 256)),
 )
 class WGMMA_EXPLICIT_WINDOWS:

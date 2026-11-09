@@ -7,8 +7,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.runtime.resource import DrawnResource, _resolved_device
+from tilefoundry import cli, runtime
 
 
 def cpu_gen() -> torch.Generator:
@@ -17,16 +16,16 @@ def cpu_gen() -> torch.Generator:
 
 def test_drawn_resource_never_redraws():
     leaf_weights = Path(__file__).parents[2] / "fixtures/placed/leaf_weights.py"
-    Small = load_authored_ir(f"{leaf_weights}:Small")
-    resource = DrawnResource(Small, cpu_gen(), "cpu")
+    Small = cli.load_authored_ir(f"{leaf_weights}:Small")
+    resource = runtime.DrawnResource(Small, cpu_gen(), "cpu")
     assert resource.load("w") is resource.load("w")
 
 
 def test_bare_cuda_resolves_current_device() -> None:
     if not torch.cuda.is_available():
-        assert _resolved_device("cuda") == "cuda"
+        assert runtime.resolved_device("cuda") == "cuda"
         return
-    assert _resolved_device("cuda") == f"cuda:{torch.cuda.current_device()}"
+    assert runtime.resolved_device("cuda") == f"cuda:{torch.cuda.current_device()}"
 
 
 def test_resolved_device_tracks_set_device() -> None:
@@ -41,6 +40,6 @@ def test_resolved_device_tracks_set_device() -> None:
     try:
         for index in (0, 1):
             torch.cuda.set_device(index)
-            assert _resolved_device("cuda") == f"cuda:{index}"
+            assert runtime.resolved_device("cuda") == f"cuda:{index}"
     finally:
         torch.cuda.set_device(original)

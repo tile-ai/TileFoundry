@@ -12,8 +12,8 @@ from tilefoundry_nvidia.cuda.models.deepseek_v4_flash.model import (
     KV_QUANT_BLOCK,
     DSV4Config,
 )
-from tilefoundry.ir.core.module import Module, ModuleList
-from tilefoundry.runtime import RuntimeModule, runtime_func, runtime_module
+from tilefoundry.ir.core import Module, ModuleList
+from tilefoundry import runtime
 
 _BF16 = torch.bfloat16
 _F32 = torch.float32
@@ -129,9 +129,9 @@ def _build_attention_rt(config: DSV4Config, sem: Module) -> type:
     wo_a_out = config.wo_a_out
     q_proj = config.q_proj
 
-    @runtime_module(sem)
+    @runtime.module(sem)
     class DeepseekV4AttentionRT:
-        @runtime_func
+        @runtime.func
         def mla_kv_update(self, hidden, gamma_kv, w_kv, cos_pos, sin_pos):
             kv = torch.matmul(hidden, w_kv)
             kv_n = _rms_norm(kv, gamma_kv)
@@ -157,7 +157,7 @@ def _build_attention_rt(config: DSV4Config, sem: Module) -> type:
             kv_rope_out = torch.stack((kv_o0, kv_o1), dim=-1).reshape(1, 1, 1, rope_dim)
             return torch.cat((kv_nope_q, kv_rope_out), dim=-1)
 
-        @runtime_func
+        @runtime.func
         def mla_attend(
             self, hidden, gamma_q_lora, w_q_a, w_q_b, ones_head_dim, cos_pos, sin_pos,
             kv_cache, kv_new, attn_sink, scale, w_o_a, w_o_b,
@@ -219,17 +219,17 @@ def _build_moe_rt(config: DSV4Config, sem: Module) -> type:
     blk_dim = config.blocks(dim)
     blk_inter = config.blocks(moe_inter)
 
-    @runtime_module(sem)
+    @runtime.module(sem)
     class DeepseekV4MoERT:
-        @runtime_func
+        @runtime.func
         def shared_fp8_dequant_w1(self, weight, scale):
             return _block_dequant(weight, scale, quant_block, (moe_inter, dim))
 
-        @runtime_func
+        @runtime.func
         def shared_fp8_dequant_w2(self, weight, scale):
             return _block_dequant(weight, scale, quant_block, (dim, moe_inter))
 
-        @runtime_func
+        @runtime.func
         def moe_experts_core(
             self, x, gweights, eids, w1_weight, w1_scale, w3_weight, w3_scale, w2_weight, w2_scale,
         ):
@@ -258,7 +258,7 @@ def _build_moe_rt(config: DSV4Config, sem: Module) -> type:
             weighted = expert_output * gweights.reshape(1, n_act, 1)
             return weighted.to(_BF16)
 
-        @runtime_func
+        @runtime.func
         def moe_hash_gather(
             self, x, gate_weight, tid2eid, token_ids,
             w1_weight, w1_scale, w3_weight, w3_scale, w2_weight, w2_scale,
@@ -274,7 +274,7 @@ def _build_moe_rt(config: DSV4Config, sem: Module) -> type:
             gweights = (gweights / weight_sum) * route_scale
             return self.moe_experts_core(x, gweights, eids)
 
-        @runtime_func
+        @runtime.func
         def shared_expert(
             self, x, shared_w1_weight, shared_w1_scale, shared_w3_weight, shared_w3_scale,
             shared_w2_weight, shared_w2_scale,
@@ -291,11 +291,11 @@ def _build_moe_rt(config: DSV4Config, sem: Module) -> type:
             output = torch.matmul(hidden, w2.t()).to(_BF16)
             return output.reshape(1, 1, dim)
 
-        @runtime_func
+        @runtime.func
         def combine_expert_outputs(self, routed, shared):
             return routed + shared
 
-        @runtime_func
+        @runtime.func
         def deepseek_v4_flash_moe_hash(
             self, hidden, gate_weight, tid2eid, token_ids,
             w1_weight, w1_scale, w3_weight, w3_scale, w2_weight, w2_scale,
@@ -315,17 +315,17 @@ def _build_moe_rt(config: DSV4Config, sem: Module) -> type:
 
 
 def _build_decoder_layer_rt(sem: Module, attention_cls: type, moe_cls: type) -> type:
-    @runtime_module(sem)
+    @runtime.module(sem)
     class DeepseekV4DecoderLayerRT:
-        @runtime_func
+        @runtime.func
         def pre_attn_rms_norm(self, x, pre_attn_norm_weight):
             return _rms_norm(x, pre_attn_norm_weight)
 
-        @runtime_func
+        @runtime.func
         def pre_moe_rms_norm(self, x, pre_moe_norm_weight):
             return _rms_norm(x, pre_moe_norm_weight)
 
-        @runtime_func
+        @runtime.func
         def residual_add(self, a, b):
             return _residual_add_cuda(a, b)
 
@@ -342,16 +342,16 @@ def _build_root_funcs(config: DSV4Config) -> dict[str, object]:
     dim = config.dim
     vocab = config.vocab
 
-    @runtime_func
+    @runtime.func
     def embed(self, table, token_ids):
         idx = token_ids.reshape(-1).long()
         return torch.index_select(table, 0, idx).reshape(1, 1, dim)
 
-    @runtime_func
+    @runtime.func
     def final_rms_norm(self, hidden, final_norm_weight):
         return _rms_norm(hidden, final_norm_weight)
 
-    @runtime_func
+    @runtime.func
     def lm_head(self, hidden, lm_head_weight):
         logits = torch.matmul(hidden.reshape(1, dim), lm_head_weight)
         return logits.reshape(1, 1, vocab)
@@ -359,7 +359,7 @@ def _build_root_funcs(config: DSV4Config) -> dict[str, object]:
     return {"embed": embed, "final_rms_norm": final_rms_norm, "lm_head": lm_head}
 
 
-def build_runtime_causal_lm(config: DSV4Config, ir: Module) -> RuntimeModule:
+def build_runtime_causal_lm(config: DSV4Config, ir: Module) -> runtime.Module:
     """The runtime twin of the causal-LM tree at *config*; `ir` is that semantic
     root (its children/entry/functions drive the twin)."""
     if "layers" not in ir.children:
@@ -375,7 +375,7 @@ def build_runtime_causal_lm(config: DSV4Config, ir: Module) -> RuntimeModule:
     namespace: dict[str, object] = dict(_build_root_funcs(config))
     namespace["layers"] = ModuleList(decoder_layer_cls, len(ir.children["layers"]))
 
-    root_cls = runtime_module(ir)(type("DeepseekV4FlashRT", (), namespace))
+    root_cls = runtime.module(ir)(type("DeepseekV4FlashRT", (), namespace))
     return root_cls(ir=ir)
 
 

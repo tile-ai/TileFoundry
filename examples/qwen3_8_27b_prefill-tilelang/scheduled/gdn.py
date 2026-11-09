@@ -34,9 +34,9 @@ barrier recur_out needs, since it reads every chunk.
              (q S_c) + P v_new, staged and stored by TMA.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 HK, HV, D, CH, BV = 16, 48, 128, 64, 64
 NV = D // BV
 VPK = HV // HK

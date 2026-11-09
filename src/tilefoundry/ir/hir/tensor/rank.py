@@ -1,39 +1,37 @@
+"""HIR ``Rank`` Op: the rank of a tensor as a scalar."""
+
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    readnone_relations,
-    register_access_relation,
-)
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
 
 
-@register_op(dialect='tf', category='tensor')
-class Rank(Op):
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
+@expr.register_op(dialect='tf', category='tensor')
+class Rank(expr.Op):
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
 
 
-@register_typeinfer(Rank)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    return TensorType.umat_scalar()
+@typeinfer.register(Rank)
+def _(call: "Call", ctx: "TypeInferContext") -> types.TensorType:
+    return types.TensorType.from_umat_scalar()
 
 
-@register_eval(Rank)
-def _eval_rank(ctx):
-    def rank(x):
-        return torch.tensor(x.ndim, dtype=torch.int64)
+def rank_tensor(x):
+    return utils.torch.tensor(x.ndim, dtype=utils.torch.int64)
 
+
+@evaluator.register(Rank)
+def eval_rank(ctx):
     x = ctx.args[0].tensor
-    held = rank(x.tensor) if x.is_global else tuple((p, rank(t)) for p, t in x.tensor)
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    held = rank_tensor(x.tensor) if x.is_global else tuple((p, rank_tensor(t)) for p, t in x.tensor)
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
-register_access_relation(Rank)(readnone_relations(lambda types: ()))
+access.register_relation(Rank)(access.readnone_relations(lambda type_list: ()))
+
+
+cost.register(Rank)(cost.metadata_view)
+
+
+__all__ = ["Rank"]

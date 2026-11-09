@@ -1,14 +1,14 @@
 import json
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _extent = json.loads('{"extent": 1}')["extent"]
 
 
 @module(
     entry="model",
-    target=CudaTarget("vendor.v100_sxm2_32gb"),
+    target=cuda.Target("vendor.v100_sxm2_32gb"),
     topologies=(Topology("cta", _extent),),
 )
 class Model:

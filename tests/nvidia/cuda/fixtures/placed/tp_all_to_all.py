@@ -8,7 +8,7 @@ the result is a new buffer, and the move is communication.
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 GPUS, CTAS, R, C = 2, 4, 8, 8
 GPU, CTA = Topology("gpu", GPUS), Topology("cta", CTAS)
@@ -20,7 +20,7 @@ SENT_BYTES = HELD_BYTES - HELD_BYTES // GPUS
 
 @module(
     entry="transpose_shard",
-    target=CudaTarget("nvidia.h200_sxm", device_count=GPUS),
+    target=cuda.Target("nvidia.h200_sxm", device_count=GPUS),
     topologies=(GPU, CTA),
 )
 class TransposeShard:

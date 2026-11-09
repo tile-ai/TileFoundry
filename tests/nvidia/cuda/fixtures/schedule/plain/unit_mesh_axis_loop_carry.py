@@ -1,14 +1,14 @@
 """Keep a split on an extent-one mesh axis through a loop carry."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 B = 1
 N = 128
 D = 64
 
 
-@module(entry="acc", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
+@module(entry="acc", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
 class UnitAxisCarry:
     @func
     def acc(x: Tensor[(B, N, D), "f32"]):

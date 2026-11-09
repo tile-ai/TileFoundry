@@ -11,77 +11,73 @@ import pytest
 import torch
 
 import tilefoundry
-import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
-from tilefoundry.cli.source import load_authored_ir
+from tilefoundry import cli, verifier
 from tilefoundry.dsl import *
-from tilefoundry.ir.core import Var, VerifyError
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
-from tilefoundry.visitor_registry.verify import verify_prim_function
-from tilefoundry_nvidia import CudaTarget
-from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_bulk import CopyAsyncBulk
+from tilefoundry.ir import core, expr
+from tilefoundry_nvidia import cuda
+from tilefoundry_nvidia.cuda.ir.tir import memory
 
 OPS = Path(__file__).parents[2] / "fixtures" / "ops"
-_BAR = make_tensor_type((1,), DType.from_name("i64"), storage="smem")
+_BAR = TensorType.from_shape((1,), DType.from_name("i64"), storage="smem")
 
 
-def _pf(src, dst, bar=_BAR) -> PrimFunction:
-    args = tuple(Var(type=t, name=n) for t, n in ((src, "src"), (dst, "dst"), (bar, "bar")))
+def _pf(src, dst, bar=_BAR) -> core.PrimFunction:
+    args = tuple(expr.Var(type=t, name=n) for t, n in ((src, "src"), (dst, "dst"), (bar, "bar")))
     mesh = Mesh((Topology("thread", 32),), Layout((32,), (1,)))
-    return PrimFunction(
-        target=CudaTarget("nvidia.h200_sxm"),
+    return core.PrimFunction(
+        target=cuda.Target("nvidia.h200_sxm"),
         name="fn",
         params=args,
-        body=Sequential(
+        body=core.Sequential(
             body=(
-                MeshScope(
+                core.MeshScope(
                     mesh=mesh,
-                    binding=Var(name="thread", type=mesh),
-                    body=Sequential(body=(Evaluate(callable=CopyAsyncBulk(), args=args),)),
+                    binding=expr.Var(name="thread", type=mesh),
+                    body=core.Sequential(body=(core.Evaluate(callable=memory.CopyAsyncBulk(), args=args),)),
                 ),
-                Return(),
+                core.Return(),
             )
         ),
     )
 
 
 def _ty(n, dtype=DType.from_name("f32"), storage="gmem"):
-    return make_tensor_type((n,), dtype, storage=storage)
+    return TensorType.from_shape((n,), dtype, storage=storage)
 
 
 def test_tma_accepts_gmem_to_smem() -> None:
     """The shape this op is built for: a gmem run into a shared tile."""
-    verify_prim_function(_pf(_ty(8), _ty(8, storage="smem")))
+    verifier.verify_prim_function(_pf(_ty(8), _ty(8, storage="smem")))
 
 
 def test_tma_refuses_wrong_direction() -> None:
     """Only gmem into smem is this instruction."""
-    with pytest.raises(VerifyError, match="src: smem does not match gmem"):
-        verify_prim_function(_pf(_ty(8, storage="smem"), _ty(8, storage="smem")))
-    with pytest.raises(VerifyError, match="dst: gmem does not match smem"):
-        verify_prim_function(_pf(_ty(8), _ty(8, storage="gmem")))
+    with pytest.raises(expr.VerifyError, match="src: smem does not match gmem"):
+        verifier.verify_prim_function(_pf(_ty(8, storage="smem"), _ty(8, storage="smem")))
+    with pytest.raises(expr.VerifyError, match="dst: gmem does not match smem"):
+        verifier.verify_prim_function(_pf(_ty(8), _ty(8, storage="gmem")))
 
 
 def test_tma_refuses_gmem_barrier() -> None:
-    with pytest.raises(VerifyError, match="barrier: gmem does not match smem"):
-        verify_prim_function(
+    with pytest.raises(expr.VerifyError, match="barrier: gmem does not match smem"):
+        verifier.verify_prim_function(
             _pf(
                 _ty(8),
                 _ty(8, storage="smem"),
-                make_tensor_type((1,), DType.from_name("i64"), storage="gmem"),
+                TensorType.from_shape((1,), DType.from_name("i64"), storage="gmem"),
             )
         )
 
 
 def test_tma_refuses_dtype_change() -> None:
     """A staging copy moves bytes; it does not convert them."""
-    with pytest.raises(VerifyError, match="reads src.dtype = dst.dtype"):
-        verify_prim_function(_pf(_ty(8), _ty(8, DType.from_name("bf16"), storage="smem")))
+    with pytest.raises(expr.VerifyError, match="reads src.dtype = dst.dtype"):
+        verifier.verify_prim_function(_pf(_ty(8), _ty(8, DType.from_name("bf16"), storage="smem")))
 
 
 def test_tma_refuses_shape_change() -> None:
-    with pytest.raises(VerifyError, match="reads src.shape = dst.shape"):
-        verify_prim_function(_pf(_ty(8), _ty(4, storage="smem")))
+    with pytest.raises(expr.VerifyError, match="reads src.shape = dst.shape"):
+        verifier.verify_prim_function(_pf(_ty(8), _ty(4, storage="smem")))
 
 
 @pytest.mark.parametrize(
@@ -93,14 +89,14 @@ def test_tma_admits_off_grain_transfer(n, dtype) -> None:
 
     See [runtime §2.6](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/runtime.md#26-cudaops).
     """
-    verify_prim_function(_pf(_ty(n, dtype), _ty(n, dtype, storage="smem")))
+    verifier.verify_prim_function(_pf(_ty(n, dtype), _ty(n, dtype, storage="smem")))
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_tma_tiers_stage_input_unchanged() -> None:
     """One compile behind two assertions, each naming the tier that failed."""
-    TmaTiers = load_authored_ir(f"{OPS / 'tma_tiers.py'}:TmaTiers")
-    rm = tilefoundry.compile(TmaTiers, target=CudaTarget("nvidia.h200_sxm"))
+    TmaTiers = cli.load_authored_ir(f"{OPS / 'tma_tiers.py'}:TmaTiers")
+    rm = tilefoundry.compile(TmaTiers, target=cuda.Target("nvidia.h200_sxm"))
     torch.manual_seed(0)
     bulk_a = torch.randn(256, dtype=torch.float32, device="cuda")
     bulk_b = torch.zeros(256, dtype=torch.float32, device="cuda")

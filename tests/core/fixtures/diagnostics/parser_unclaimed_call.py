@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="refused", target=CpuTarget())
+@module(entry="refused", target=cpu.Target())
 class UnclaimedCall:
     @func
     def refused(a: Tensor[(2, 4), "bf16"]) -> Tensor[(2, 4), "bf16"]:
-        return no_such_helper(a)  # noqa: F821
+        return no_such_helper(a)

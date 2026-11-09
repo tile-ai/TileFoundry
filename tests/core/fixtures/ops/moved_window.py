@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 _HALF, _COLS, _STEP = 4, 4, 2
 
 
-@module(entry="moved_copy", target=CpuTarget(), topologies=(Topology("thread", 1),))
+@module(entry="moved_copy", target=cpu.Target(), topologies=(Topology("thread", 1),))
 class _MovedWindow:
     @func
     def moved_copy(gu: Tensor[(2 * _HALF, _COLS), "f32"]):

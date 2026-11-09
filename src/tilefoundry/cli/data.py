@@ -11,11 +11,13 @@ from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, distribution, entry_points
 from importlib.resources import files as resource_files
 from pathlib import Path
+from sysconfig import get_path
+from types import MappingProxyType
 from typing import Any
 
-from tilefoundry.target import load_targets
+from tilefoundry import target
 
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
 @dataclass(frozen=True)
@@ -26,13 +28,13 @@ class Kind:
     installed: str
 
 
-_KINDS = {
+KINDS = MappingProxyType({
     "spec": Kind(source=("docs", "spec"), installed="spec"),
     "tutorial": Kind(source=("docs", "tutorial"), installed="tutorial"),
-}
+})
 
 
-def _distribution_directory(known: Kind) -> Path | None:
+def distribution_directory(known: Kind) -> Path | None:
     """Find *known* through the installed distribution's data-file records."""
     try:
         installed = distribution("tilefoundry")
@@ -63,17 +65,15 @@ def directory(kind: str) -> Path:
     """
     if kind == "orchestrator":
         return Path(resource_files("tilefoundry") / "orchestrator")
-    known = _KINDS[kind]
-    source = _REPOSITORY_ROOT.joinpath(*known.source)
+    known = KINDS[kind]
+    source = REPOSITORY_ROOT.joinpath(*known.source)
     if source.is_dir():
         return source
-
-    from sysconfig import get_path  # noqa: PLC0415
 
     installed = Path(get_path("data")) / "share" / "tilefoundry" / known.installed
     if installed.is_dir():
         return installed
-    installed = _distribution_directory(known)
+    installed = distribution_directory(known)
     if installed is not None:
         return installed
     raise FileNotFoundError(f"installed TileFoundry {kind} directory was not found")
@@ -112,7 +112,7 @@ def files(kind: str, name: str) -> tuple[Path, ...]:
 
 def model_catalog() -> dict[str, tuple[dict[str, Any], Path]]:
     """Index the models shipped by loaded targets, rejecting ambiguous names."""
-    loaded = load_targets()
+    loaded = target.load()
     models = {}
     owners = {}
     for ep in sorted(entry_points(group="tilefoundry.targets"), key=lambda ep: ep.name):

@@ -11,20 +11,20 @@ from tests.core.target._hardware import (
     check_hardware_defaults,
 )
 from tests.core.target._instructions import instruction_declarations
-from tilefoundry_apple.amx.target import AmxTarget
-from tilefoundry_apple.amx.target import spec as amx_spec
+from tilefoundry_apple.amx import target
+from tilefoundry_apple.amx.target import spec
 
 
 @pytest.mark.parametrize(
     ("construct", "message"),
     bare_projection_cases(
-        lambda architecture: AmxTarget(architecture=architecture),
-        AmxTarget,
+        lambda architecture: target.Target(architecture=architecture),
+        target.Target,
         "amx",
         (
-            "AmxTarget.architecture must be an installed ID string, a document path, or "
-            "an AppleAmx; got _BareArchitecture",
-            "AmxTarget.device must be an installed ID string, a document path, or an "
+            "amx.Target.architecture must be an installed ID string, a document path, or "
+            "an Architecture; got _BareArchitecture",
+            "amx.Target.device must be an installed ID string, a document path, or an "
             "AppleM2Pro; got _BareDevice",
         ),
     ),
@@ -34,7 +34,7 @@ def test_document_backends_reject_bare_projection_value_markers(construct, messa
 
 
 def test_no_installed_number_is_repeated_as_a_python_default() -> None:
-    check_hardware_defaults(AmxTarget.hardware, (amx_spec.APPLE_AMX_ID, amx_spec.APPLE_M2_PRO_ID))
+    check_hardware_defaults(target.Target.hardware, (spec.APPLE_AMX_ID, spec.APPLE_M2_PRO_ID))
 
 
 def test_architecture_bandwidth_evidence_distinguishes_known_from_unavailable() -> None:
@@ -42,7 +42,7 @@ def test_architecture_bandwidth_evidence_distinguishes_known_from_unavailable() 
         "apple.amx": {"register.owner": "thread"},
         "apple.m2_pro": {"memory.unified.owner": "target"},
     }
-    check_document_evidence(AmxTarget.hardware, owners)
+    check_document_evidence(target.Target.hardware, owners)
 
 
 def test_instruction_capabilities_and_execution_resources_are_separate_axes() -> None:
@@ -53,8 +53,8 @@ def test_instruction_capabilities_and_execution_resources_are_separate_axes() ->
     }
     documented = {
         capability
-        for document in AmxTarget.hardware.documents().values()
+        for document in target.Target.hardware.documents().values()
         if document.kind == "architecture"
-        for capability in amx_spec.build_apple_amx(document).capabilities
+        for capability in spec.build_apple_amx(document).capabilities
     }
     assert declared == documented

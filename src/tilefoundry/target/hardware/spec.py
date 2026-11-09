@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-from tilefoundry.target.hardware.envelope import (
-    HardwareDocument,
+from .envelope import (
+    Document,
     UnknownDocumentError,
 )
 
 
-def hardware_documents(target: object) -> tuple[HardwareDocument, HardwareDocument]:
+def documents(target: object) -> tuple[Document, Document]:
     """The architecture and device documents *target* was composed from.
 
     A target holding a resource that was supplied directly rather than
     selected from the installed namespace has no document to report, and says
     so rather than guessing which installed resource it resembles.
     """
-    architecture_document = getattr(target, "_architecture_document", None)
-    device_document = getattr(target, "_device_document", None)
+    architecture_document = getattr(target, "architecture_document", None)
+    device_document = getattr(target, "device_document", None)
     if architecture_document is None or device_document is None:
         architecture = getattr(getattr(target, "architecture", None), "name", "unknown")
         device = getattr(getattr(target, "device", None), "name", "unknown")
@@ -29,10 +29,10 @@ def hardware_documents(target: object) -> tuple[HardwareDocument, HardwareDocume
 
 
 def format_capabilities(
-    documents: tuple[HardwareDocument, HardwareDocument],
+    pair: tuple[Document, Document],
 ) -> str:
     """Format the stable, intentionally compact capabilities report."""
-    architecture, device = documents
+    architecture, device = pair
     lines = [
         f"architecture: {architecture.id}",
         f"  digest: {architecture.digest}",
@@ -55,4 +55,4 @@ def format_capabilities(
     return "\n".join(lines)
 
 
-__all__ = ["format_capabilities", "hardware_documents"]
+__all__ = ["documents", "format_capabilities"]

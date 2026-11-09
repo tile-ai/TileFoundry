@@ -9,11 +9,11 @@ def test_target_list_prints_reconstructing_values(tf) -> None:
     check_target_list(
         tf,
         (
-            ("CpuTarget()", "cpu"),
-            ('CudaTarget("nvidia.b200_sxm")', "nvidia.b200_sxm"),
-            ('CudaTarget("nvidia.h200_sxm")', "nvidia.h200_sxm"),
+            ("cpu.Target()", "cpu"),
+            ('cuda.Target("nvidia.b200_sxm")', "nvidia.b200_sxm"),
+            ('cuda.Target("nvidia.h200_sxm")', "nvidia.h200_sxm"),
         ),
-        ("from tilefoundry.target import CpuTarget", "from tilefoundry_nvidia import CudaTarget"),
+        ("from tilefoundry.target import cpu", "from tilefoundry_nvidia import cuda"),
     )
 
 def test_target_show_prints_retained_documents(tf) -> None:

@@ -42,7 +42,7 @@ def vecint_alu(x, y, z, alumode, shift):
     return val
 
 
-def emulate_AMX_VECINT(state, operand):
+def emulate_amx_vecint(state, operand):
     if (operand >> 54) & 7:
         return
     zr, zs, xs, ys, ximask = operand >> 20, 64, 64, 64, -1
@@ -149,3 +149,6 @@ def emulate_AMX_VECINT(state, operand):
             off = bit_select(row, i // step, zm) * 64 + (i & -zn)
             zv = load_int(state.z, off, zn, 64 - zb)
             write_uint(state.z, off, zn, vecint_alu(xv, yv, zv, mode, shift) & omask)
+
+
+__all__ = ["emulate_amx_vecint", "vecint_alu", "vecint_alu_mode4"]

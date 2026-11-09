@@ -1,7 +1,7 @@
 """Print a loop footprint reading a previous launch at mesh-coordinate offsets."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 N = 4
 R = 32
@@ -9,7 +9,7 @@ R = 32
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", N), Topology("thread", R)),
 )
 class FootprintMeshCoord:

@@ -5,19 +5,8 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Op, OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import WildcardPattern, is_scalar_tensor, utils
-from tilefoundry.ir.types import DType, Layout, TensorType, UnitType
-from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    identity_access,
-    iterating,
-    register_access_relation,
-    state_access,
-)
+from tilefoundry.interfaces import access, typeinfer
+from tilefoundry.ir import expr, pattern, types
 
 __all__ = [
     "MBARRIER_BYTES",
@@ -28,102 +17,104 @@ __all__ = [
     "mbarrier_words",
 ]
 
-MBARRIER_DTYPE = DType.i64
+MBARRIER_DTYPE = expr.DType.i64
 MBARRIER_BYTES = MBARRIER_DTYPE.bit_width // 8
 
 
-def mbarrier_words(count: int) -> TensorType:
+def mbarrier_words(count: int) -> types.TensorType:
     """The shared memory type of *count* mbarrier objects, one 64-bit word each."""
-    return TensorType((count,), MBARRIER_DTYPE, Layout((count,), (1,)), StorageKind.SMEM)
+    return types.TensorType(
+        (count,), MBARRIER_DTYPE, types.Layout((count,), (1,)), expr.StorageKind.SMEM
+    )
 
 
-@register_op(dialect="T", category="sync", name="mbarrier_init")
-class MBarrierInit(Op):
+@expr.register_op(dialect="T", category="sync", name="mbarrier_init")
+class MBarrierInit(expr.Op):
     """Arm ``barrier`` so ``arrive_count`` arrivals complete a phase."""
 
-    execution_mesh = utils.thread_execution_mesh()
+    execution_mesh = pattern.thread_execution_mesh()
 
-    barrier = ParamDef(
-        kind="input", effect=MemoryEffect.WRITE, pattern=utils.tensor_in(StorageKind.SMEM)
+    barrier = expr.ParamDef(
+        kind="input", effect=expr.MemoryEffect.WRITE, pattern=pattern.tensor_in(expr.StorageKind.SMEM)
     )
-    arrive_count = ParamDef(
+    arrive_count = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("arrive_count", predicates=(WildcardPattern("arrive_count") > 0,)),
+        pattern=pattern.Wildcard("arrive_count", predicates=(pattern.Wildcard("arrive_count") > 0,)),
     )
 
 
-@register_typeinfer(MBarrierInit)
-def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
-    return UnitType()
+@typeinfer.register(MBarrierInit)
+def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
+    return types.UnitType()
 
 
-@register_op(dialect="T", category="sync", name="mbarrier_arrive_expect_tx")
-class MBarrierArriveExpectTx(Op):
+@expr.register_op(dialect="T", category="sync", name="mbarrier_arrive_expect_tx")
+class MBarrierArriveExpectTx(expr.Op):
     """Arrive on ``barrier`` and declare ``tx_bytes`` of asynchronous data."""
 
-    capability = OpCapability("mbarrier.expect_tx")
-    execution_mesh = utils.thread_execution_mesh()
+    capability = expr.OpCapability("mbarrier.expect_tx")
+    execution_mesh = pattern.thread_execution_mesh()
 
-    barrier = ParamDef(
+    barrier = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.READ | MemoryEffect.WRITE,
-        pattern=utils.tensor_in(StorageKind.SMEM),
+        effect=expr.MemoryEffect.READ | expr.MemoryEffect.WRITE,
+        pattern=pattern.tensor_in(expr.StorageKind.SMEM),
     )
-    tx_bytes = ParamDef(
+    tx_bytes = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("tx_bytes", predicates=(WildcardPattern("tx_bytes") > 0,)),
+        pattern=pattern.Wildcard("tx_bytes", predicates=(pattern.Wildcard("tx_bytes") > 0,)),
     )
 
 
-@register_typeinfer(MBarrierArriveExpectTx)
-def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
-    return UnitType()
+@typeinfer.register(MBarrierArriveExpectTx)
+def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
+    return types.UnitType()
 
 
-@register_op(dialect="T", category="sync", name="mbarrier_wait_parity")
-class MBarrierWaitParity(Op):
+@expr.register_op(dialect="T", category="sync", name="mbarrier_wait_parity")
+class MBarrierWaitParity(expr.Op):
     """Block until ``barrier``'s phase parity reaches ``phase``."""
 
-    capability = OpCapability("mbarrier.try_wait")
-    execution_mesh = utils.thread_execution_mesh()
+    capability = expr.OpCapability("mbarrier.try_wait")
+    execution_mesh = pattern.thread_execution_mesh()
 
-    barrier = ParamDef(
-        kind="input", effect=MemoryEffect.READ, pattern=utils.tensor_in(StorageKind.SMEM)
+    barrier = expr.ParamDef(
+        kind="input", effect=expr.MemoryEffect.READ, pattern=pattern.tensor_in(expr.StorageKind.SMEM)
     )
-    phase = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=is_scalar_tensor())
+    phase = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=pattern.is_scalar_tensor())
 
 
-@register_typeinfer(MBarrierWaitParity)
-def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
-    return UnitType()
+@typeinfer.register(MBarrierWaitParity)
+def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
+    return types.UnitType()
 
 
-@register_op(dialect="T", category="sync", name="mbarrier_invalidate")
-class MBarrierInvalidate(Op):
+@expr.register_op(dialect="T", category="sync", name="mbarrier_invalidate")
+class MBarrierInvalidate(expr.Op):
     """Release ``barrier``'s shared-memory word for other use."""
 
-    execution_mesh = utils.thread_execution_mesh()
+    execution_mesh = pattern.thread_execution_mesh()
 
-    barrier = ParamDef(
-        kind="input", effect=MemoryEffect.WRITE, pattern=utils.tensor_in(StorageKind.SMEM)
+    barrier = expr.ParamDef(
+        kind="input", effect=expr.MemoryEffect.WRITE, pattern=pattern.tensor_in(expr.StorageKind.SMEM)
     )
 
 
-@register_typeinfer(MBarrierInvalidate)
-def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
-    return UnitType()
+@typeinfer.register(MBarrierInvalidate)
+def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
+    return types.UnitType()
 
 
-def _barrier_access(call, ctx):
-    inputs = [state_access(ctx.type_of(call.args[0]))]
+def barrier_access(call, ctx):
+    inputs = [access.state(ctx.type_of(call.args[0]))]
     if len(call.args) > 1:
-        inputs.append(identity_access(0))
-    return iterating((), (*inputs, identity_access(0)))
+        inputs.append(access.identity(0))
+    return access.iterating((), (*inputs, access.identity(0)))
 
 
-register_access_relation(MBarrierInit)(_barrier_access)
-register_access_relation(MBarrierArriveExpectTx)(_barrier_access)
-register_access_relation(MBarrierWaitParity)(_barrier_access)
-register_access_relation(MBarrierInvalidate)(_barrier_access)
+access.register_relation(MBarrierInit)(barrier_access)
+access.register_relation(MBarrierArriveExpectTx)(barrier_access)
+access.register_relation(MBarrierWaitParity)(barrier_access)
+access.register_relation(MBarrierInvalidate)(barrier_access)

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="scale", target=CpuTarget())
+@module(entry="scale", target=cpu.Target())
 class _Weighted:
     @func
     def scale(x: Tensor[(2,), "f32"], w: ConstTensor[(2,), "f32"]):
@@ -20,7 +20,7 @@ class _Leaf:
         return x * w
 
 
-@module(entry="twice", target=CpuTarget())
+@module(entry="twice", target=cpu.Target())
 class _Owner:
     leaf = _Leaf
 

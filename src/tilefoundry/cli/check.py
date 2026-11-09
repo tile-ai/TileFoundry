@@ -10,36 +10,20 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
-from tilefoundry.cli.source import load_namespace, parse_dims
-from tilefoundry.evaluator import evaluate
-from tilefoundry.evaluator.value import from_torch_dtype
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.specialize import (
-    canonical_specialization_signature,
-    display_name,
-    instantiate,
-    origin_of,
-    residual_dims,
-)
-from tilefoundry.runtime import PREDICATES, RuntimeModule
-from tilefoundry.runtime.measure import Predicate, check, flatten_outputs
-from tilefoundry.runtime.resource import (
-    DictResource,
-    DrawnResource,
-    RuntimeResource,
-    SafetensorsResource,
-    draw_tensor,
-)
-from tilefoundry.target import default_target
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry.contexts import ValuationContext
+from tilefoundry import runtime, utils
+from tilefoundry.interfaces import evaluator, valuation
+from tilefoundry.ir import core
+from tilefoundry.target import cpu
+
+from .source import load_namespace, parse_dims
+
+numpy = utils.LazyModule("numpy")
 
 SEED = 0
 
 
 BOUNDS: tuple[str, ...] = tuple(
-    dict.fromkeys(bound for predicate in PREDICATES.values() for bound in predicate.bounds)
+    dict.fromkeys(bound for predicate in runtime.PREDICATES.values() for bound in predicate.bounds)
 )
 
 
@@ -48,17 +32,19 @@ class Ordered(argparse.Action):
 
     argparse collects repeated options into one flat list per option, which
     loses which `--fn` a bound belongs to and which `--out` a `--fn` is under.
+    Every option of one parser appends to the one list its `stated` argument
+    names, which the parser also hands back as the `comparison` default.
     """
 
+    def __init__(self, *args, stated: list, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.stated = stated
+
     def __call__(self, parser, namespace, values, option_string=None):
-        stated = getattr(namespace, "comparison", None)
-        if stated is None:
-            stated = []
-            setattr(namespace, "comparison", stated)
-        stated.append((self.dest, values))
+        self.stated.append((self.dest, values))
 
 
-def _json_target(value: str) -> str:
+def json_target(value: str) -> str:
     """A ``--json`` PATH whose parent directory exists, checked at parse time."""
     if not Path(value).expanduser().resolve().parent.is_dir():
         raise argparse.ArgumentTypeError(
@@ -69,6 +55,8 @@ def _json_target(value: str) -> str:
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     """Declare `check`'s own arguments, bounds included, off the registry."""
+    stated: list[tuple[str, Any]] = []
+    parser.set_defaults(comparison=stated)
     parser.add_argument(
         "source", metavar="SOURCE", help="FILE.py:Selector — a Module, a leaf, or a twin"
     )
@@ -87,7 +75,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--out",
-        action=Ordered,
+        action=Ordered, stated=stated,
         metavar="OUTPUT",
         help=(
             "which output the following --fn apply to: `output` when the function "
@@ -96,10 +84,10 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
-        "--fn", action=Ordered, metavar="F", choices=sorted(PREDICATES), help="a comparison to make"
+        "--fn", action=Ordered, stated=stated, metavar="F", choices=sorted(runtime.PREDICATES), help="a comparison to make"
     )
     for bound in BOUNDS:
-        parser.add_argument(f"--{bound}", action=Ordered, type=float, help=argparse.SUPPRESS)
+        parser.add_argument(f"--{bound}", action=Ordered, stated=stated, type=float, help=argparse.SUPPRESS)
     parser.add_argument(
         "--dim",
         action="append",
@@ -117,7 +105,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--json",
         metavar="PATH",
-        type=_json_target,
+        type=json_target,
         help="write the machine-readable report to PATH",
     )
 
@@ -129,9 +117,9 @@ def guidance() -> str:
         "a default bound that cannot be met trains you to ignore FAIL.",
         "",
     ]
-    width = max(len(name) for name in PREDICATES)
-    for name in sorted(PREDICATES):
-        predicate = PREDICATES[name]
+    width = max(len(name) for name in runtime.PREDICATES)
+    for name in sorted(runtime.PREDICATES):
+        predicate = runtime.PREDICATES[name]
         bounds = " ".join(f"--{bound} X" for bound in predicate.bounds)
         lines.append(f"  --fn {name:<{width}} {bounds:<18} {predicate.guidance}")
     lines += [
@@ -146,7 +134,7 @@ def guidance() -> str:
     return "\n".join(lines)
 
 
-def expectations(stated: Sequence[tuple[str, Any]] | None) -> dict[str, tuple[Predicate, ...]]:
+def expectations(stated: Sequence[tuple[str, Any]] | None) -> dict[str, tuple[runtime.Predicate, ...]]:
     """The `--out` / `--fn` / bound sequence as the predicates each output states."""
     if not stated:
         raise ValueError(
@@ -173,15 +161,15 @@ def expectations(stated: Sequence[tuple[str, Any]] | None) -> dict[str, tuple[Pr
         if predicate is None:
             raise ValueError(f"--{flag} came before any --fn; name the function it bounds first")
         name, bounds = predicate
-        if flag not in PREDICATES[name].bounds:
+        if flag not in runtime.PREDICATES[name].bounds:
             raise ValueError(
-                f"--fn {name} takes {list(PREDICATES[name].bounds) or 'no bounds'}, not --{flag}"
+                f"--fn {name} takes {list(runtime.PREDICATES[name].bounds) or 'no bounds'}, not --{flag}"
             )
         if flag in bounds:
             raise ValueError(f"--{flag} was given twice for one --fn {name}")
         bounds[flag] = value
 
-    built: dict[str, tuple[Predicate, ...]] = {}
+    built: dict[str, tuple[runtime.Predicate, ...]] = {}
     for path, predicates in grouped.items():
         if not predicates:
             raise ValueError(
@@ -190,17 +178,17 @@ def expectations(stated: Sequence[tuple[str, Any]] | None) -> dict[str, tuple[Pr
             )
         made = []
         for name, bounds in predicates:
-            missing = [bound for bound in PREDICATES[name].bounds if bound not in bounds]
+            missing = [bound for bound in runtime.PREDICATES[name].bounds if bound not in bounds]
             if missing:
                 raise ValueError(
                     f"--fn {name} needs {['--' + bound for bound in missing]}; a bound has no default"
                 )
-            made.append(PREDICATES[name](**bounds))
+            made.append(runtime.PREDICATES[name](**bounds))
         built[path] = tuple(made)
     return built
 
 
-def _combinations(dims: dict[str, tuple[int, ...]]) -> list[dict[str, int]]:
+def dim_combinations(dims: dict[str, tuple[int, ...]]) -> list[dict[str, int]]:
     """Each combination of stated dimension values, in declaration order."""
     combinations: list[dict[str, int]] = [{}]
     for name, values in dims.items():
@@ -210,25 +198,25 @@ def _combinations(dims: dict[str, tuple[int, ...]]) -> list[dict[str, int]]:
 
 @dataclass(frozen=True)
 class Selection:
-    module: Module
-    twin: RuntimeModule | None
+    module: core.Module
+    twin: runtime.Module | None
     children: tuple[str, ...]
-    root: Module
+    root: core.Module
     source: str
 
 
 @dataclass(frozen=True)
 class CheckRequest:
-    module: Module
-    twin: RuntimeModule | None
+    module: core.Module
+    twin: runtime.Module | None
     inputs: tuple[Any, ...]
-    weights: RuntimeResource
+    weights: runtime.Resource
     expected: tuple[Any, ...] | None
     device: str
-    expectations: dict[str, tuple[Predicate, ...]]
+    expectations: dict[str, tuple[runtime.Predicate, ...]]
 
 
-def _refuse_orchestration(module: Module, method: str) -> None:
+def refuse_orchestration(module: core.Module, method: str) -> None:
     functions = ", ".join(fn.name for fn in module.functions) or "none"
     raise ValueError(
         f"check targets HIR functions, not orchestration method "
@@ -236,14 +224,14 @@ def _refuse_orchestration(module: Module, method: str) -> None:
     )
 
 
-def _module_selection(root: Module, path: Sequence[str]) -> tuple[Module, tuple[str, ...]]:
+def module_selection(root: core.Module, path: Sequence[str]) -> tuple[core.Module, tuple[str, ...]]:
     if len(path) > 1:
         raise ValueError("use Module.function; child module paths are unsupported")
     if not path:
         return root, ()
     name = path[0]
     if name in root.methods:
-        _refuse_orchestration(root, name)
+        refuse_orchestration(root, name)
     root.lookup(name)
     return replace(root, entry=name), ()
 
@@ -254,52 +242,52 @@ def select(source: str) -> Selection:
     segments = selector.split(".") if selector else []
     if segments:
         root = namespace.get(segments[0])
-        if isinstance(root, type) and issubclass(root, RuntimeModule):
-            twin, _top, module, children = _walk_twin(root, segments)
-            return Selection(module, twin, children, _top, source)
-        if not isinstance(root, Module):
+        if isinstance(root, type) and issubclass(root, runtime.Module):
+            twin, top, module, children = walk_twin(root, segments)
+            return Selection(module, twin, children, top, source)
+        if not isinstance(root, core.Module):
             raise TypeError(f"selector {segments[0]!r} is not a Module or runtime twin")
-        chosen, children = _module_selection(root, segments[1:])
+        chosen, children = module_selection(root, segments[1:])
         return Selection(chosen, None, children, root, source)
 
-    modules = tuple(value for value in namespace.values() if isinstance(value, Module))
+    modules = tuple(value for value in namespace.values() if isinstance(value, core.Module))
     twins = tuple(
         value for value in namespace.values()
-        if isinstance(value, type) and issubclass(value, RuntimeModule) and value is not RuntimeModule
+        if isinstance(value, type) and issubclass(value, runtime.Module) and value is not runtime.Module
     )
     if len(modules) == 1:
         return Selection(modules[0], None, (), modules[0], source)
     if len(twins) == 1:
-        twin, top, module, children = _walk_twin(twins[0], (twins[0].__name__,))
+        twin, top, module, children = walk_twin(twins[0], (twins[0].__name__,))
         return Selection(module, twin, children, top, source)
     raise ValueError("source must identify exactly one Module or runtime twin")
 
 
 def read_inputs(paths: Sequence[str], device: str) -> tuple[Any, ...]:
-    return tuple(_read(path, device) for path in paths)
+    return tuple(read_file(path, device) for path in paths)
 
 
-def draw_inputs(module: Module, seed: int, device: str):
+def draw_inputs(module: core.Module, seed: int, device: str):
     function = module.entry_function()
-    residual_dims(function, ValuationContext(module, function))
-    generator = torch.Generator(device=device).manual_seed(seed)
-    return _random_activations(function, generator, device)
+    valuation.residual_dims(function, valuation.Context(module, function))
+    generator = utils.torch.Generator(device=device).manual_seed(seed)
+    return random_activations(function, generator, device)
 
 
 def build_resource(
-    spec: str | None, module: Module, device: str, generator=None
-) -> RuntimeResource:
+    spec: str | None, module: core.Module, device: str, generator=None
+) -> runtime.Resource:
     if spec is None:
-        return DictResource({})
+        return runtime.DictResource({})
     if spec == "random":
-        generator = generator or torch.Generator(device=device).manual_seed(SEED)
-        return DrawnResource(module, generator, device)
+        generator = generator or utils.torch.Generator(device=device).manual_seed(SEED)
+        return runtime.DrawnResource(module, generator, device)
     if spec.startswith("ckpt:"):
-        return SafetensorsResource(spec[5:], device=device)
+        return runtime.SafetensorsResource(spec[5:], device=device)
     raise ValueError("--weights takes random or ckpt:DIR")
 
 
-def _scope(resource: RuntimeResource, children: Sequence[str]) -> RuntimeResource:
+def scope(resource: runtime.Resource, children: Sequence[str]) -> runtime.Resource:
     for child in children:
         resource = resource.subtree(child)
     return resource
@@ -308,10 +296,10 @@ def _scope(resource: RuntimeResource, children: Sequence[str]) -> RuntimeResourc
 def check_concrete(request: CheckRequest):
     loaded = request.module.load(request.weights)
     def reference_run(*args):
-        return evaluate(loaded, *args)
+        return evaluator.evaluate(loaded, *args)
     if request.expected is not None:
         expected = request.expected[0] if len(request.expected) == 1 else request.expected
-        def expected_run(*_args):
+        def expected_run(*_):
             return expected
         reference = expected_run
     else:
@@ -321,16 +309,16 @@ def check_concrete(request: CheckRequest):
     else:
         request.twin.load(request.weights)
         candidate = getattr(request.twin, request.module.entry_function().name)
-    return check(candidate, reference, request.inputs, expect=request.expectations)
+    return runtime.check(candidate, reference, request.inputs, expect=request.expectations)
 
 
-def _walk_twin(
+def walk_twin(
     root: type, segments: Sequence[str]
-) -> tuple[RuntimeModule, Module, Module, tuple[str, ...]]:
+) -> tuple[runtime.Module, core.Module, core.Module, tuple[str, ...]]:
     """Resolve a runtime twin and a dotted path into it."""
     top = root()
-    authored = _authored(top)
-    chosen, children = _module_selection(authored, segments[1:])
+    authored = authored_module(top)
+    chosen, children = module_selection(authored, segments[1:])
     node = top
     position = 0
     while position < len(children):
@@ -342,11 +330,11 @@ def _walk_twin(
         else:
             node = child
     if len(children) == len(segments) - 1 and chosen.methods.get("forward") is not None:
-        _refuse_orchestration(chosen, "forward")
+        refuse_orchestration(chosen, "forward")
     return type(node)(ir=chosen), authored, chosen, children
 
 
-def _authored(node: RuntimeModule) -> Module:
+def authored_module(node: runtime.Module) -> core.Module:
     """The authored Module a runtime twin stands for."""
     module = node.module
     if module is None:
@@ -354,7 +342,7 @@ def _authored(node: RuntimeModule) -> Module:
             f"runtime module {node.name!r} names no authored Module, so there is "
             "nothing to check it against"
         )
-    if not isinstance(module, Module):
+    if not isinstance(module, core.Module):
         raise ValueError(
             f"runtime module {node.name!r}: module must be Module or None, got "
             f"{type(module).__name__}"
@@ -362,41 +350,39 @@ def _authored(node: RuntimeModule) -> Module:
     return module
 
 
-def _device(module: Module) -> str:
+def declared_device(module: core.Module) -> str:
     """Choose the execution device declared by a Module, when one is present."""
     try:
         target = module.resolve_target()
     except Exception:
-        return default_target().torch_device_type()
+        return cpu.Target().torch_device_type()
     device = target.torch_device_type()
-    if device != "cpu" and not getattr(torch, device).is_available():
+    if device != "cpu" and not getattr(utils.torch, device).is_available():
         raise ValueError(
             f"{module.name!r} declares {target.name}, and this machine has no {device.upper()} device"
         )
     return device
 
 
-def _random_activations(function: Function, generator, device: str) -> tuple[torch.Tensor, ...]:
+def random_activations(function: core.Function, generator, device: str) -> tuple[utils.torch.Tensor, ...]:
     """Draw the non-constant parameters of a concrete function."""
     return tuple(
-        draw_tensor(param.type, generator, device)
+        runtime.draw_tensor(param.type, generator, device)
         for param in function.params
         if not param.is_const
     )
 
 
-def _read(path: str, device: str):
+def read_file(path: str, device: str):
     """Load one tensor tree from a file and move each leaf to *device*."""
     found = Path(path).expanduser()
     if found.suffix == ".npy":
-        import numpy  # noqa: PLC0415 -- only this path needs it
-
-        loaded = torch.from_numpy(numpy.load(found))
+        loaded = utils.torch.from_numpy(numpy.load(found))
     else:
-        loaded = torch.load(found, map_location=device, weights_only=True)
+        loaded = utils.torch.load(found, map_location=device, weights_only=True)
 
     def visit(value, position: str):
-        if isinstance(value, torch.Tensor):
+        if isinstance(value, utils.torch.Tensor):
             return value.to(device)
         if isinstance(value, (list, tuple)):
             return tuple(visit(item, f"{position}[{index}]") for index, item in enumerate(value))
@@ -408,11 +394,11 @@ def _read(path: str, device: str):
     return visit(loaded, path)
 
 
-def _input_files(paths: Sequence[str], activations: Sequence[Any]) -> list[dict[str, Any]]:
+def input_files(paths: Sequence[str], activations: Sequence[Any]) -> list[dict[str, Any]]:
     """Describe the tensor count and structure supplied by each file."""
     files = []
     for path, activation in zip(paths, activations, strict=True):
-        leaves = flatten_outputs(activation)
+        leaves = runtime.flatten_outputs(activation)
         files.append(
             {
                 "path": path,
@@ -420,7 +406,7 @@ def _input_files(paths: Sequence[str], activations: Sequence[Any]) -> list[dict[
                 "structure": [
                     {
                         "path": position,
-                        "dtype": from_torch_dtype(tensor.dtype).name,
+                        "dtype": evaluator.from_torch_dtype(tensor.dtype).name,
                         "shape": list(tensor.shape),
                     }
                     for position, tensor in leaves
@@ -430,29 +416,29 @@ def _input_files(paths: Sequence[str], activations: Sequence[Any]) -> list[dict[
     return files
 
 
-def _variant(function: Function) -> dict[str, Any] | None:
+def variant_dict(function: core.Function) -> dict[str, Any] | None:
     """Describe the implementation `instantiate` selected for *function*."""
-    chosen = origin_of(function)
+    chosen = valuation.origin_of(function)
     if chosen is None or not chosen.specializations:
         return None
     ranges = [
         {"dim": pattern.dim_var, "lo": pattern.lo, "hi": pattern.hi}
         for pattern in chosen.specializations
     ]
-    label = display_name(chosen)
+    label = valuation.display_name(chosen)
     return {
         **({} if label is None else {"display_name": label}),
-        "signature": canonical_specialization_signature(chosen.specializations),
+        "signature": valuation.canonical_specialization_signature(chosen.specializations),
         "ranges": ranges,
     }
 
 
-def _shown_dtypes(dtypes: Sequence[str]) -> str:
+def shown_dtypes(dtypes: Sequence[str]) -> str:
     """Dtypes as one readable field, including an honest empty declaration."""
     return ", ".join(dtypes) if dtypes else "none"
 
 
-def _shown_structure(structure) -> str:
+def shown_structure(structure) -> str:
     """Render one flattened input tree compactly."""
     shown = [
         f"{item['dtype']}[{', '.join(str(extent) for extent in item['shape'])}]"
@@ -461,19 +447,19 @@ def _shown_structure(structure) -> str:
     return shown[0] if len(shown) == 1 else "(" + ", ".join(shown) + ")"
 
 
-def _shown_files(files: Sequence[dict[str, Any]]) -> str:
+def shown_files(files: Sequence[dict[str, Any]]) -> str:
     """Render every input file's count and tensor shape tree."""
     if not files:
         return ""
     descriptions = [
         f"{Path(file['path']).name}: {file['tensor_count']} tensor(s) "
-        f"{_shown_structure(file['structure'])}"
+        f"{shown_structure(file['structure'])}"
         for file in files
     ]
     return "; files " + "; ".join(descriptions)
 
 
-def _output_dict(output) -> dict[str, Any]:
+def output_dict(output) -> dict[str, Any]:
     """Make a Report output JSON-safe while retaining every measured fact."""
     results = []
     for measured in output.results:
@@ -495,7 +481,7 @@ def _output_dict(output) -> dict[str, Any]:
     }
 
 
-def _failure_warnings(runs: Sequence[dict[str, Any]], input_kind: str | None) -> list[str]:
+def failure_warnings(runs: Sequence[dict[str, Any]], input_kind: str | None) -> list[str]:
     """The limits that qualify a failed command-level comparison."""
     if all(run["passed"] for run in runs):
         return []
@@ -517,7 +503,7 @@ def _failure_warnings(runs: Sequence[dict[str, Any]], input_kind: str | None) ->
     return warnings
 
 
-def _render(source: str, runs: Sequence[dict[str, Any]], warnings: Sequence[str]) -> str:
+def render(source: str, runs: Sequence[dict[str, Any]], warnings: Sequence[str]) -> str:
     lines = [source]
     for run in runs:
         if run.get("dims"):
@@ -526,9 +512,9 @@ def _render(source: str, runs: Sequence[dict[str, Any]], warnings: Sequence[str]
         activations = run["inputs"]["activations"]
         lines.append(
             f"  inputs:    {activations['source']}; activations actual "
-            f"{_shown_dtypes(activations['actual_dtypes'])} (declared "
-            f"{_shown_dtypes(activations['declared_dtypes'])})"
-            f"{_shown_files(activations.get('files', []))}"
+            f"{shown_dtypes(activations['actual_dtypes'])} (declared "
+            f"{shown_dtypes(activations['declared_dtypes'])})"
+            f"{shown_files(activations.get('files', []))}"
         )
         if run.get("variant") is not None:
             variant = run["variant"]
@@ -540,19 +526,19 @@ def _render(source: str, runs: Sequence[dict[str, Any]], warnings: Sequence[str]
             lines.append(f"  variant:   {shown if label is None else f'{label}  {shown}'}  ({ranges})")
         lines.append("")
         for output in run["outputs"]:
-            output = output if isinstance(output, dict) else _output_dict(output)
+            output = output if isinstance(output, dict) else output_dict(output)
             shape = ",".join(str(extent) for extent in output["shape"])
             norm = "" if output.get("ref_norm") is None else f"   ref_norm {output['ref_norm']:.6g}"
             lines.append(f"  {output['path']}   {output['dtype']}[{shape}]{norm}")
             for result in output["fns"]:
                 bounds = " ".join(
                     f"{bound}={result[bound]:g}"
-                    for bound in PREDICATES[result["fn"]].bounds
+                    for bound in runtime.PREDICATES[result["fn"]].bounds
                 )
                 values = " ".join(
                     f"{key} {value:g}"
                     for key, value in result.items()
-                    if key not in {"fn", "passed", "note", *PREDICATES[result["fn"]].bounds}
+                    if key not in {"fn", "passed", "note", *runtime.PREDICATES[result["fn"]].bounds}
                 )
                 stated = f"{result['fn']}({bounds})" if bounds else result["fn"]
                 lines.append(f"    {stated:<34} {values:<26} {'PASS' if result['passed'] else 'FAIL'}")
@@ -575,23 +561,23 @@ def run_check(arguments: argparse.Namespace) -> int:
     stated = parse_dims(arguments.dim) or {}
     if arguments.inputs is None:
         raise ValueError("no inputs stated")
-    device = arguments.device or _device(selection.module)
+    device = arguments.device or declared_device(selection.module)
     runs = []
-    for dims in _combinations(stated):
+    for dims in dim_combinations(stated):
         module, fn = selection.module, selection.module.entry_function()
         if dims:
-            module, fn = instantiate(module, fn, dims)
+            module, fn = valuation.instantiate(module, fn, dims)
         selected_variant = None
         if arguments.inputs == "random":
-            selected_variant = _variant(fn)
+            selected_variant = variant_dict(fn)
             inputs = draw_inputs(module, SEED, device)
         elif arguments.inputs.startswith("files:"):
             inputs = read_inputs(arguments.inputs[6:].split(","), device)
         else:
             raise ValueError("--inputs takes random or files:A.pt,B.pt")
-        generator = torch.Generator(device=device).manual_seed(SEED)
+        generator = utils.torch.Generator(device=device).manual_seed(SEED)
         resource = build_resource(arguments.weights, selection.root, device, generator)
-        resource = _scope(resource, selection.children)
+        resource = scope(resource, selection.children)
         expected = None
         if arguments.expected:
             expected_values = read_inputs(arguments.expected, device)
@@ -625,7 +611,7 @@ def run_check(arguments: argparse.Namespace) -> int:
         runs.append(
             {
                 "passed": report.passed,
-                "outputs": [_output_dict(output) for output in report.outputs],
+                "outputs": [output_dict(output) for output in report.outputs],
                 "dims": dims,
                 "reference": reference,
                 "variant": selected_variant,
@@ -635,18 +621,18 @@ def run_check(arguments: argparse.Namespace) -> int:
                         if arguments.inputs == "random"
                         else arguments.inputs,
                         "actual_dtypes": [
-                            from_torch_dtype(tensor.dtype).name
-                            for _path, tensor in flatten_outputs(inputs)
+                            evaluator.from_torch_dtype(tensor.dtype).name
+                            for _, tensor in runtime.flatten_outputs(inputs)
                         ],
                         "declared_dtypes": list(declared),
-                        "files": _input_files(arguments.inputs[6:].split(","), inputs)
+                        "files": input_files(arguments.inputs[6:].split(","), inputs)
                         if arguments.inputs.startswith("files:")
                         else [],
                     },
                 },
             }
         )
-    warnings = _failure_warnings(runs, arguments.inputs)
+    warnings = failure_warnings(runs, arguments.inputs)
     passed = all(run["passed"] for run in runs)
     if arguments.json:
         payload = {"target": arguments.source, "runs": runs, "passed": passed}
@@ -654,7 +640,7 @@ def run_check(arguments: argparse.Namespace) -> int:
             payload["warnings"] = warnings
         Path(arguments.json).write_text(json.dumps(payload, default=str, indent=2) + "\n", encoding="utf-8")
     else:
-        sys.stdout.write(_render(arguments.source, runs, warnings))
+        sys.stdout.write(render(arguments.source, runs, warnings))
     return 0 if passed else 1
 
 

@@ -1,11 +1,8 @@
 # TileFoundry Spec — Compiler Architecture Overview
 
-> Architectural entry point. This document is the **map**: the
-> pipeline shape, the support network, and the spec-ownership table.
-> Concrete fields, invariants, and procedures live in the owner specs
-> ([§8](#8-spec-ownership)). Whenever a downstream spec is revised, check it against this
-> document first; whenever a structural change here lands, the
-> downstream owner must follow.
+> Architectural entry point: the **map** of the pipeline shape, the support
+> network, and the spec-ownership table. Fields, invariants, and procedures live
+> in the owner specs ([§8](#8-spec-ownership)).
 
 ## 1. Spec relationship map
 
@@ -72,8 +69,8 @@ layer states facts about the same typed HIR without joining that flow. The
 **type system** (types + shard) and the **IR framework**
 (visitor-mutator + visitor-registry) cut across every pipeline stage:
 they are co-designed with the IR, not standalone modules. Auxiliary
-specs (inspection, evaluator, code-organization) attach where
-indicated and never gain pipeline ownership.
+specs (inspection, evaluator, cli, code-organization) never gain pipeline
+ownership.
 
 ## 2. IR design
 
@@ -100,24 +97,23 @@ The type system is what each `Expr` carries. It is split into a
   `Topology` / `Mesh` family / `ShardAttr` / `ShardLayout`.
   `TensorType.layout` accepts any member of the layout hierarchy.
 
-The full type-relationship diagram lives in [types](./types.md), and
-the layout / shard hierarchy diagram lives in [shard](./shard.md).
+The type-relationship diagram lives in [types](./types.md); the layout / shard
+hierarchy diagram lives in [shard](./shard.md).
 
 ## 4. Parser
 
-The parser turns Python DSL source into a `core_ir.Module`. There are
-two layers: a **module layer** (`parse_module`, the sole top entry)
+The parser turns Python DSL source into a `core.Module`. There are
+two layers: a **module layer** (the `@module` decorator, `parser.module`)
 that assembles the compilation unit, and a **function layer**
 (`parse_function(fn, context)`) that turns each authored Python `FunctionType`
-into an `hir.Function` or `tir.PrimFunction`. The DSL surface
+into a `core.Function` or `core.PrimFunction`. The DSL surface
 (authoring namespace, OpSchema registry, dispatch tokens, AST
 subset, sugar disambiguation) and the lexical-env rules for
 `with Mesh` are owned by [parser](./parser.md).
 
-Inspection is a side-channel consumer of the same IR and type
-objects — DOT, Python DSL pretty-printer, dump integration, and the
-interactive viewer — and never introduces new semantic ownership.
-Concrete presentation contracts live in [inspection](./inspection.md).
+Inspection (DOT, Python DSL pretty-printer, dump integration, interactive
+viewer) is a side-channel consumer of the same IR and type objects and owns no
+semantics ([inspection](./inspection.md)).
 
 ## 5. Analysis & optimization
 
@@ -128,7 +124,7 @@ This stage layers two concerns on top of the same IR:
    Expr-producing `Op` `Call` (HIR value Ops + TIR-owned Expr Ops);
    `verify` covers TIR `Stmt` nodes plus cross-function invariants and
    recursively retriggers `typeinfer` on embedded Expr fields. The
-   dispatch pattern (`DispatchRegistry`, per-class handler
+   dispatch pattern (`Registry`, per-class handler
    registration, `(Call, ctx)` / `(Stmt, ctx)` signature families)
    lives in [visitor-registry](./visitor-registry.md). Concrete
    per-node rules live with the node owner ([tir](./tir.md) /
@@ -156,9 +152,9 @@ final emission must first be lowered into TIR-owned forms.
 
 Codegen groups a module's functions by their target, emits one
 `LinkableModule` per target, and links them into one `LinkedModule`;
-the runtime then loads the `LinkedModule` into a `RuntimeModule`:
+the runtime then loads the `LinkedModule` into a `runtime.Module`:
 
-    verified TIR → codegen emit (per-target LinkableModule) → link → LinkedModule → runtime load → RuntimeModule
+    verified TIR → codegen emit (per-target LinkableModule) → link → LinkedModule → runtime load → runtime.Module
 
 The emit / link pipeline and its products (`LinkableFunction` /
 `LinkableModule` / `LinkedModule`) are owned by [codegen](./codegen.md).
@@ -168,31 +164,28 @@ descriptors stand on are not written in Python: they come from installed,
 source-attributed Architecture and Device documents resolved by stable ID, and
 a composed Target retains each document's ID and content digest
 ([target §10](./target.md#10-installed-hardware-resources)). The Python-side
-`RuntimeModule` boundary (field semantics, ABI, launch rules) is owned
+`runtime.Module` boundary (field semantics, ABI, launch rules) is owned
 by [runtime](./runtime.md).
 
 ## 7. Runtime boundary
 
 The runtime is outside the IR compile pipeline. It provides the
 execution support used by generated target code and by Python-side
-`RuntimeModule` objects:
+`runtime.Module` objects:
 
-- the Python `RuntimeModule` / `RuntimeFunction` surface returned by
+- the Python `runtime.Module` / `runtime.Function` surface returned by
   `build(...)` / `compile(...)` / `jit(...)`;
 - the C++ runtime surface: each target's preamble directly includes its own
   package's runtime header, without an umbrella header or target-selection
   macros; these headers provide `tilefoundry::Topology` / `Mesh` / `ShardLayout`
   primitives and the `tilefoundry::ops::*` op free-function contract;
 - the load path that turns a `LinkedModule` ([codegen](./codegen.md))
-  into a loadable, callable `RuntimeModule`.
-
-All field-level diagrams and ABI contracts live in
-[runtime](./runtime.md).
+  into a loadable, callable `runtime.Module`.
 
 ## 8. Spec ownership
 
-This table is the authoritative spec-to-box map. Each row lists the
-**current** owner; changes to ownership update this table first.
+This table is the authoritative spec-to-box map; ownership changes update it
+first.
 
 | Spec | Owns |
 |---|---|
@@ -200,23 +193,21 @@ This table is the authoritative spec-to-box map. Each row lists the
 | **[core-ir](./core-ir.md)** | core_ir shared node algebra: `Module` / `Expr` / `Op` / `Call` / `Var` / `Constant` / `Tuple`. No types, no `Stmt` |
 | **[types](./types.md)** | Core type system: `Type` union / `TensorType` / `TupleType` / `UnitType` / `DType` / `dim.*` + TensorType invariants |
 | **[shard](./shard.md)** | Shard / layout sublayer: `IntTuple` / `Layout` / `ComposedLayout` / `Mesh` family / `ShardAttr` / `ShardLayout` + shard-binding invariants |
-| **[hir](./hir.md)** | HIR dataflow IR: `Function` (`Expr` subclass), op subdirectories (math / tensor / nn / shape / sharding), `LoopRegion`, `MeshRegion` |
+| **[hir](./hir.md)** | HIR dataflow IR: `Function` (`Expr` subclass), op subdirectories (math / tensor / nn / sharding), `LoopRegion`, `MeshRegion` |
 | **[tir](./tir.md)** | TIR stmt IR: `Stmt` base (tir-only), `PrimFunction`, `Sequential(Stmt)`, control-flow Stmts, effect / tile Ops in `Evaluate(op, args)` form, user `@intrinsic` Stmt generation |
 | **[parser](./parser.md)** | Parser two-layer entry, AST subset, DSL surface rules, OpSchema dispatch contracts, `with Mesh` lexical-env rule |
 | **[inspection](./inspection.md)** | Developer-facing IR presentation: DOT, Python DSL pretty-printer, viewer detail rules, dump integration |
-| **[evaluator](./evaluator.md)** | HIR reference interpreter: `evaluate` entry, `Value` family (`TensorValue` / `TupleValue`), `register_eval` op registry, node-evaluation + `LoopRegion` + layout-domain rules. Logical reference oracle, no codegen / runtime |
-| **[visitor-registry](./visitor-registry.md)** | Derived-visitor dispatch pattern: `DispatchRegistry`, per-class handler registration, four instances (`typeinfer` / `verify` / `codegen` / `cost`) with their Context / Visitor derivations |
+| **[evaluator](./evaluator.md)** | HIR reference interpreter: `evaluate` entry, `Value` family (`TensorValue` / `TupleValue`), `evaluator.registry` op registry, node-evaluation + `LoopRegion` + layout-domain rules. Logical reference oracle, no codegen / runtime |
+| **[visitor-registry](./visitor-registry.md)** | Derived-visitor dispatch pattern: `Registry`, per-class handler registration, four instances (`typeinfer` / `verify` / `codegen` / `cost`) with their Context / Visitor derivations |
 | **[semantic-analysis](./semantic-analysis.md)** | Static analysis service semantics: type propagation (relation-derived type behavior), access relation analysis, shard propagation (logical shape → layout domain, relation-driven propagation, output storage + mesh/layout compatibility). The registration mechanism itself is owned by visitor-registry |
 | **[analysis](./analysis.md)** | Fact layer: the composed authored-HIR measurement — its analysis families, their owned Metadata records, and the narrow Target Facts each family declares |
 | **[visitor-mutator](./visitor-mutator.md)** | IR traversal / rewrite infrastructure: expr / stmt visitors, mutators, identity-preserving rewrite invariants, mixed stmt-expr traversal |
 | **[passes](./passes.md)** | Pass framework + implemented passes: `Pass` / `PassManager`, three pass granularities, per-pass subsections |
 | **[target](./target.md)** | Target capability descriptors, architecture/device facts, Facts projection, and admitted program topology levels |
-| **[codegen](./codegen.md)** | Target-resolved emission classes, emit / link products (`LinkableFunction` / `LinkableModule` in `linkable_function.py` / `linkable_module.py`, `LinkedFunction` / `LinkedModule` in `linked_function.py` / `linked_module.py`) and linking in `link_function.py` / `link_module.py`, the C++ signature family and calling conventions, program-shape / dynamic-CTA source contract, ShardLayout emission |
-| **[runtime](./runtime.md)** | `RuntimeModule` / launcher ABI, C++ runtime surface in target-owned headers, runtime op free-function contract |
-| **[cli](./cli.md)** | Command-line grammar and behavior for models, spec, tutorial, check, analyze, and inspect |
+| **[codegen](./codegen.md)** | Target-resolved emission classes, emit / link products (`LinkableFunction` / `LinkableModule` in `linkable_function.py` / `linkable_module.py`, `LinkedFunction` / `LinkedModule` in `linked_function.py` / `linked_module.py`) and linking in `link_module.py`, the C++ signature family and calling conventions, program-shape / dynamic-CTA source contract, ShardLayout emission |
+| **[runtime](./runtime.md)** | `runtime.Module` / launcher ABI, C++ runtime surface in target-owned headers, runtime op free-function contract |
+| **[cli](./cli.md)** | Command-line grammar and behavior for models, spec, tutorial, check, analyze, target, schedule, and scaffold |
 | **[code-organization](./code-organization.md)** | Implementation guide (not architectural): Python source tree layout |
 
-**Cross-spec sync.** Downstream specs link back to the relevant § of
-this document; a downstream spec change that touches an architectural
-invariant defined here MUST update this ownership map in the same spec
-change. There is no separate sync manifest.
+**Cross-spec sync.** A spec change that touches an architectural invariant
+defined here MUST update this ownership map in the same change.

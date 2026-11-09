@@ -1,7 +1,7 @@
 """Slice two swizzle atoms of an MN-major WGMMA B operand."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 K_SMEM = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((6, 2, 8), (3, 1, 64)), ((1024, 512, 64), (6144, 0, 1))))
 DS_SMEM = ComposedLayout(Swizzle(1, 4, 3), 0, Layout(((8, 8), (6, 1, 16)), ((128, 16), (1024, 1024, 1))))
@@ -12,7 +12,7 @@ def _wg(n):
                              a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN)
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 256)))
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 256)))
 class Wide:
     @func
     def gemm(ds: Tensor[(64, 96), "bf16"], k: Tensor[(96, 192), "bf16"]) -> Tensor[(64, 128), "f32"]:

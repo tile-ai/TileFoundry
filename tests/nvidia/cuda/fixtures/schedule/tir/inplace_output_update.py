@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 32),),
 )
 class InplaceOutputUpdate:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def update(out: Tensor[(2, 4), "f32"], x: Tensor[(1, 4), "f32"], out_1: Tensor[(2, 4), "f32"]):
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
             with Mesh((Topology("thread", 32),), layout=(32,), names=("d0",)) as scope:
@@ -24,7 +24,7 @@ class InplaceOutputUpdate:
                 )
                 T.copy(value_2, window)
 
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def gemm(out: Tensor[(2, 4), "f32"], x: Tensor[(1, 4), "f32"], out_1: Tensor[(2, 4), "f32"]):
         with Mesh((Topology("cta", 1),), layout=(1,), names=("d0",)) as cta:
             value = T.tensor_view(T.ptr_of(out), layout=(2, 4), shape=(2, 4))

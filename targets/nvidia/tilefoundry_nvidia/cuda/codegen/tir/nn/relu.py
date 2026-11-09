@@ -8,17 +8,17 @@ destination tensor must already have been materialised by a preceding
 """
 from __future__ import annotations
 
-from tilefoundry.ir.core import Var
-from tilefoundry.ir.tir.nn import ReLU
-from tilefoundry.visitor_registry.registries import Role, register_codegen
-from tilefoundry_nvidia.cuda import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
+from tilefoundry import codegen
+from tilefoundry.ir import expr
+from tilefoundry.ir.tir import nn
+from tilefoundry_nvidia.cuda import target
+from tilefoundry_nvidia.cuda.codegen import context
 
 
-@register_codegen(CudaTarget, Role.EMIT, ReLU)
-def _emit(call, ctx: CudaCodegenContext) -> None:
+@codegen.register(target.Target, codegen.Role.EMIT, nn.ReLU)
+def emit(call, ctx: context.Context) -> None:
     src, dst = call.args[0], call.args[1]
-    if not isinstance(src, Var) or not isinstance(dst, Var):
+    if not isinstance(src, expr.Var) or not isinstance(dst, expr.Var):
         raise RuntimeError("tir.nn.ReLU: demo path expects Var operands on both sides")
     src_name = ctx.name_for(src)
     dst_name = ctx.name_for(dst)
@@ -26,3 +26,6 @@ def _emit(call, ctx: CudaCodegenContext) -> None:
         f"tilefoundry::ops::elementwise({dst_name}, "
         f"tilefoundry::primitive::relu_op{{}}, {src_name});"
     )
+
+
+__all__: list[str] = []

@@ -7,17 +7,21 @@ import subprocess
 from importlib.resources import files
 from pathlib import Path
 
-from tilefoundry.codegen.context import EmitContext
-from tilefoundry.codegen.context_builder import EmissionGroup, build_codegen_context
-from tilefoundry.codegen.linkable_module import LinkableModule
-from tilefoundry.codegen.linked_function import LinkedFunction
-from tilefoundry.codegen.linked_module import LinkedModule
-from tilefoundry.codegen.options import CodegenOptions
-from tilefoundry.dump import DumpFlags, DumpScope, dump
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.target import CpuTarget
+from jinja2 import Environment, FileSystemLoader, StrictUndefined
+
+from tilefoundry import dump, utils
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import core
+from tilefoundry.target import cpu
+
+from .context import EmitContext
+from .context_builder import EmissionGroup, build_context
+from .linkable_module import LinkableModule
+from .linked_function import LinkedFunction
+from .linked_module import LinkedModule
+from .options import Options
+
+tvm_ffi = utils.LazyModule("tvm_ffi")
 
 
 class CMakeProject:
@@ -58,9 +62,6 @@ class CMakeProject:
 
     def build(self, functions: tuple[LinkedFunction, ...]) -> LinkedModule:
         """Configure and build this project once, returning its library and exports."""
-        import tvm_ffi  # noqa: PLC0415
-        from jinja2 import Environment, FileSystemLoader, StrictUndefined  # noqa: PLC0415
-
         for tool in ("cmake", self.host_cxx):
             if shutil.which(tool) is None:
                 raise RuntimeError(f"link_modules: {tool!r} not on PATH")
@@ -84,15 +85,15 @@ class CMakeProject:
         ]
         build_cmd = ["cmake", "--build", str(build_dir), "--verbose"]
         lib = build_dir / f"lib{self.lib_name}.so"
-        with DumpScope("build"):
-            dump("CMakeLists.txt", cmake_text, DumpFlags.BUILD_LOG)
+        with dump.Scope("build"):
+            dump.dump("CMakeLists.txt", cmake_text, dump.Flags.BUILD_LOG)
             for name, source in self.sources.items():
-                dump(f"module.{name}", source, DumpFlags.BUILD_LOG)
+                dump.dump(f"module.{name}", source, dump.Flags.BUILD_LOG)
             for step, cmd in (("cmake-configure", configure_cmd), ("cmake-build", build_cmd)):
-                dump(f"{step}.cmd.txt", " ".join(cmd) + "\n", DumpFlags.BUILD_LOG)
+                dump.dump(f"{step}.cmd.txt", " ".join(cmd) + "\n", dump.Flags.BUILD_LOG)
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                dump(f"{step}.stdout", proc.stdout, DumpFlags.BUILD_LOG)
-                dump(f"{step}.stderr", proc.stderr, DumpFlags.BUILD_LOG)
+                dump.dump(f"{step}.stdout", proc.stdout, dump.Flags.BUILD_LOG)
+                dump.dump(f"{step}.stderr", proc.stderr, dump.Flags.BUILD_LOG)
                 if proc.returncode != 0:
                     raise RuntimeError(
                         f"link_modules: {step} failed (rc={proc.returncode})\n"
@@ -121,20 +122,20 @@ def link_modules(
 
 
 def link_program(
-    mod: Module, *, workdir: str | Path,
-    options: CodegenOptions = CodegenOptions(),
+    mod: core.Module, *, workdir: str | Path,
+    options: Options = Options(),
 ) -> LinkedModule:
     """Generate code for the whole Module tree and link it into one library."""
-    codegen = build_codegen_context(mod, options)
+    codegen = build_context(mod, options)
     entries = tuple(sorted(
-        (frame.function for frame in list_call_paths(mod).values()
-         if isinstance(frame.function, PrimFunction) and isinstance(frame.function.target, CpuTarget)),
+        (frame.function for frame in valuation.list_call_paths(mod).values()
+         if isinstance(frame.function, core.PrimFunction) and isinstance(frame.function.target, cpu.Target)),
         key=lambda fn: fn.name != mod.entry,
     ))
     if not entries:
         raise ValueError("link_program: expected at least one CPU host entry")
     groups = (
-        *(group for group in codegen.groups if not isinstance(group.target, CpuTarget)),
+        *(group for group in codegen.groups if not isinstance(group.target, cpu.Target)),
         EmissionGroup(mod, entries[0].target, entries),
     )
     modules = []

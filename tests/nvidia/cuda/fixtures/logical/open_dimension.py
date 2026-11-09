@@ -1,10 +1,10 @@
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 N = DimVar("N", 1, 8)
 
 
-@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+@module(entry="main", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class Open:
     @func
     def main(x: Tensor[(N,), "f32"]):

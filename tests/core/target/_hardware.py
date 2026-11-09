@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.target.base import Architecture, Device
+from tilefoundry import target
 
 
-class _BareArchitecture(Architecture):
+class _BareArchitecture(target.Architecture):
     pass
 
 
-class _BareDevice(Device):
+class _BareDevice(target.Device):
     pass
 
 

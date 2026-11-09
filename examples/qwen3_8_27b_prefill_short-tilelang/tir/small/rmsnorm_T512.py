@@ -6,10 +6,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def rmsnorm(
     x: Tensor[(512, 5120), "bf16"], gamma: Tensor[(5120,), "bf16"], scratch: Tensor[(20480,), "bf16"], out: Tensor[(512, 5120), "bf16"]
 ):

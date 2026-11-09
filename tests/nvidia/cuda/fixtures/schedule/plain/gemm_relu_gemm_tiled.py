@@ -3,7 +3,7 @@
 ReLU is the first matmul's epilogue, so every op stays at tile level.
 """
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 1024
 N = 2048
@@ -13,7 +13,7 @@ BN = 16
 BK = 32
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1), Topology("thread", 512)))
 class GEMM_RELU_GEMM_TILED:
     @func

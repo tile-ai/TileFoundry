@@ -7,23 +7,13 @@ happens to inherit from something.
 
 from __future__ import annotations
 
-from tilefoundry.analysis.facts import (
-    ExplicitMemoryLevelFacts,
-    ImplicitMemoryLevelFacts,
-    MemoryHierarchyFacts,
-    MemoryLevelRelation,
-    MemoryRelationKind,
-    PerformanceServiceFacts,
-    ThroughputFacts,
-)
-from tilefoundry.ir.types import DType
+from tilefoundry import target
+from tilefoundry.ir import expr
 
-from .target import AmxTarget
-
-_ROOFLINE_UNIT = "amx"
+ROOFLINE_UNIT = "amx"
 
 
-def memory_hierarchy(target: AmxTarget, query: object = None) -> MemoryHierarchyFacts:
+def memory_hierarchy(tgt: target.Target, query: object = None) -> target.MemoryHierarchyFacts:
     """The AMX memory levels and how they are related.
 
     Nothing shares capacity here: the caches are separate structures from the
@@ -31,11 +21,11 @@ def memory_hierarchy(target: AmxTarget, query: object = None) -> MemoryHierarchy
     flat shape describes both this and a GPU's shared L1 block is the point of
     keeping structure out of the level lists.
     """
-    device = target.device
-    architecture = target.architecture
-    return MemoryHierarchyFacts(
+    device = tgt.device
+    architecture = tgt.architecture
+    return target.MemoryHierarchyFacts(
         explicit_levels=(
-            ExplicitMemoryLevelFacts(
+            target.ExplicitMemoryLevelFacts(
                 name="host",
                 capacity_bytes=device.unified_memory_capacity_bytes,
                 scope="device",
@@ -43,13 +33,13 @@ def memory_hierarchy(target: AmxTarget, query: object = None) -> MemoryHierarchy
             ),
 
 
-            ExplicitMemoryLevelFacts(
+            target.ExplicitMemoryLevelFacts(
                 name="gmem",
                 capacity_bytes=device.unified_memory_capacity_bytes,
                 scope="device",
                 owner=device.unified_memory_owner,
             ),
-            ExplicitMemoryLevelFacts(
+            target.ExplicitMemoryLevelFacts(
                 name="rmem",
                 capacity_bytes=(
                     2 * architecture.staging_bytes + architecture.accumulator_bytes
@@ -59,37 +49,37 @@ def memory_hierarchy(target: AmxTarget, query: object = None) -> MemoryHierarchy
             ),
         ),
         implicit_levels=(
-            ImplicitMemoryLevelFacts(
+            target.ImplicitMemoryLevelFacts(
                 name="l1d",
                 capacity_bytes=device.l1d_bytes_per_performance_core,
                 scope="core",
             ),
-            ImplicitMemoryLevelFacts(
+            target.ImplicitMemoryLevelFacts(
                 name="l2",
                 capacity_bytes=device.l2_bytes_per_performance_cluster,
                 scope="cluster",
             ),
         ),
         relations=(
-            MemoryLevelRelation(kind=MemoryRelationKind.CACHES, near="l1d", far="l2"),
-            MemoryLevelRelation(kind=MemoryRelationKind.CACHES, near="l2", far="gmem"),
+            target.MemoryLevelRelation(kind=target.MemoryRelationKind.CACHES, near="l1d", far="l2"),
+            target.MemoryLevelRelation(kind=target.MemoryRelationKind.CACHES, near="l2", far="gmem"),
         ),
     )
 
 
-def throughput(target: AmxTarget, query: object = None) -> ThroughputFacts:
+def throughput(tgt: target.Target, query: object = None) -> target.ThroughputFacts:
     """The measured AMX rates a roofline divides work by.
 
     Apple publishes no instruction throughput, so these are measured figures for
     one unit rather than a vendor peak. A bound derived from them is a bound
     against this host's observed behaviour.
     """
-    device = target.device
-    rates = device.unit_flops_per_second.get(_ROOFLINE_UNIT, {})
-    return ThroughputFacts(
+    device = tgt.device
+    rates = device.unit_flops_per_second.get(ROOFLINE_UNIT, {})
+    return target.ThroughputFacts(
         peak_flops_per_second=tuple(
             sorted(
-                ((dtype, rate) for dtype, rate in rates.items() if isinstance(dtype, DType)),
+                ((dtype, rate) for dtype, rate in rates.items() if isinstance(dtype, expr.DType)),
                 key=lambda item: item[0].name,
             )
         ),
@@ -100,12 +90,12 @@ def throughput(target: AmxTarget, query: object = None) -> ThroughputFacts:
     )
 
 
-def performance_service(target: AmxTarget, query: object = None) -> PerformanceServiceFacts:
+def performance_service(tgt: target.Target, query: object = None) -> target.PerformanceServiceFacts:
     """Leave generic CPU-thread rates unknown without a P/E placement policy."""
     unit = "thread" if query is None else str(query[0] if isinstance(query, tuple) else query)
     if unit != "thread":
         raise ValueError(f"AMX performance services have no topology level {unit!r}")
-    return PerformanceServiceFacts(unit_flops=(), unit_ops=(), unit_bandwidth=(), unit=unit)
+    return target.PerformanceServiceFacts(unit_flops=(), unit_ops=(), unit_bandwidth=(), unit=unit)
 
 
 

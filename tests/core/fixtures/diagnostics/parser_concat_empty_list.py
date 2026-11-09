@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="empty", target=CpuTarget())
+@module(entry="empty", target=cpu.Target())
 class ConcatEmptyList:
     @func
     def empty(x: Tensor[(1, 4), "f32"]) -> Tensor[(1, 4), "f32"]:

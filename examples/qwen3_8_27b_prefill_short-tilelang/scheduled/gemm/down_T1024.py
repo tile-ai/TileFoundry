@@ -29,7 +29,7 @@ Differences to the kernel:
 - Staging tile: plain (128, 160) bf16 (the kernel swizzles it only when BN is a multiple of 64).
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 1024
 N = 5120
@@ -44,7 +44,7 @@ UNITS = GM * GN
 NSM = 132
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", NSM), Topology("thread", 384)))
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", NSM), Topology("thread", 384)))
 class SCHED_DOWN_T1024:
     @func
     def gemm(a: Tensor[(M, K), "bf16"], w: Tensor[(N, K), "bf16"], residual: Tensor[(M, N), "bf16"]) -> Tensor[(M, N), "bf16"]:

@@ -2,74 +2,66 @@
 
 import pytest
 
-from tilefoundry.inspection import PatternPrinter
-from tilefoundry.ir.pattern import (
-    AndPattern,
-    RangePattern,
-    TensorPattern,
-    WildcardPattern,
-    is_ranked_tensor,
-    is_scalar_tensor,
-)
-from tilefoundry.ir.types import DType, StorageKind, TensorType
+from tilefoundry import inspection
+from tilefoundry.ir import expr, pattern, types
 
 
-def _tensor(shape: tuple[int, ...], dtype: DType = DType.f32) -> TensorType:
-    return TensorType.umat_tensor(shape, dtype)
+def _tensor(shape: tuple[int, ...], dtype: expr.DType = expr.DType.f32) -> types.TensorType:
+    return types.TensorType.from_umat_tensor(shape, dtype)
 
 
 def test_pattern_match_contract() -> None:
     """Singletons + parametric patterns + And combinator share one contract."""
-    assert is_scalar_tensor().match(TensorType.umat_scalar())
-    assert not is_scalar_tensor().match(_tensor((3,)))
-    assert is_ranked_tensor().match(_tensor((3, 4)))
-    scalar = TensorType.umat_scalar()
-    assert not is_ranked_tensor().match(scalar)
-    assert TensorPattern().match(scalar)
-    assert TensorPattern(shape=()).match(scalar)
-    assert not TensorPattern(shape=()).match(_tensor((3,)))
-    for storage in StorageKind:
-        assert TensorPattern(storage=storage).match(scalar)
-    assert not is_ranked_tensor().match(type("FakeTy", (), {"shape": (3, 4)})())
+    assert pattern.is_scalar_tensor().match(types.TensorType.from_umat_scalar())
+    assert not pattern.is_scalar_tensor().match(_tensor((3,)))
+    assert pattern.is_ranked_tensor().match(_tensor((3, 4)))
+    scalar = types.TensorType.from_umat_scalar()
+    assert not pattern.is_ranked_tensor().match(scalar)
+    assert pattern.Tensor().match(scalar)
+    assert pattern.Tensor(shape=()).match(scalar)
+    assert not pattern.Tensor(shape=()).match(_tensor((3,)))
+    for storage in expr.StorageKind:
+        assert pattern.Tensor(storage=storage).match(scalar)
+    assert not pattern.is_ranked_tensor().match(type("FakeTy", (), {"shape": (3, 4)})())
 
-    rank2_bf16 = TensorPattern(shape=(WildcardPattern(),) * 2, dtype=DType.bf16)
-    assert rank2_bf16.match(_tensor((3, 4), DType.bf16))
-    assert not rank2_bf16.match(_tensor((3,), DType.bf16))
-    assert not rank2_bf16.match(_tensor((3, 4), DType.f32))
+    rank2_bf16 = pattern.Tensor(shape=(pattern.Wildcard(),) * 2, dtype=expr.DType.bf16)
+    assert rank2_bf16.match(_tensor((3, 4), expr.DType.bf16))
+    assert not rank2_bf16.match(_tensor((3,), expr.DType.bf16))
+    assert not rank2_bf16.match(_tensor((3, 4), expr.DType.f32))
 
-    combined = AndPattern(
+    combined = pattern.And(
         parts=(
-            TensorPattern(shape=(WildcardPattern(),) * 2),
-            TensorPattern(dtype=DType.f16),
+            pattern.Tensor(shape=(pattern.Wildcard(),) * 2),
+            pattern.Tensor(dtype=expr.DType.f16),
         )
     )
-    assert combined.match(_tensor((3, 4), DType.f16))
-    assert not combined.match(_tensor((3,), DType.f16))
-    assert AndPattern(parts=()).match(TensorType.umat_scalar())
+    assert combined.match(_tensor((3, 4), expr.DType.f16))
+    assert not combined.match(_tensor((3,), expr.DType.f16))
+    assert pattern.And(parts=()).match(types.TensorType.from_umat_scalar())
 
 
 def test_range_pattern_contract() -> None:
     """Specialization ranges are closed and reject non-integer values."""
-    p = RangePattern("S", 1, 4)
+    p = pattern.Range("S", 1, 4)
     assert p.match(1) and p.match(3)
     assert p.match(4)
     assert not p.match(0)
     assert not p.match(2.0)
     assert not p.match(True)
 
-    closed = RangePattern("S", 3, 4)
+    closed = pattern.Range("S", 3, 4)
     assert closed.match(3)
     assert not closed.match(2) and closed.match(4)
 
-    assert RangePattern("S", 4, 4).match(4)
-    assert RangePattern(lo=3).match(3) and RangePattern(lo=3).match(30)
-    assert RangePattern(hi=3).match(-3) and RangePattern(hi=3).match(3)
+    assert pattern.Range("S", 4, 4).match(4)
+    assert pattern.Range(lo=3).match(3) and pattern.Range(lo=3).match(30)
+    assert pattern.Range(hi=3).match(-3) and pattern.Range(hi=3).match(3)
     with pytest.raises(ValueError, match="lower or upper"):
-        RangePattern()
+        pattern.Range()
     with pytest.raises(ValueError, match="both lo and hi"):
-        RangePattern("S", lo=1)
+        pattern.Range("S", lo=1)
     with pytest.raises(ValueError, match="lo <= hi"):
-        RangePattern("S", 5, 4)
+        pattern.Range("S", 5, 4)
 
 
 @pytest.mark.parametrize(
@@ -83,5 +75,5 @@ def test_range_pattern_contract() -> None:
     ],
 )
 def test_pattern_rules_preserve_expression_grouping(expression, expected):
-    a, b, c = (WildcardPattern(name) for name in ("a", "b", "c"))
-    assert PatternPrinter().rules(expression(a, b, c)) == (expected,)
+    a, b, c = (pattern.Wildcard(name) for name in ("a", "b", "c"))
+    assert inspection.PatternPrinter().rules(expression(a, b, c)) == (expected,)

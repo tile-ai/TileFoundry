@@ -1,40 +1,19 @@
+"""HIR ``Concat`` Op: join tensors along an axis."""
+
 from __future__ import annotations
 
 from typing import Tuple
 
 import isl
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.utils import common_placements
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Expr, Op
-from tilefoundry.ir.core.expr import Call
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._helpers import resolve_anchor_storage
-from tilefoundry.ir.isl_interop import normalize_dim_entries
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import Split, TensorType
-from tilefoundry.ir.types.dim import DimAdd, simplify_dim
-from tilefoundry.ir.types.layout import Layout
-from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
-from tilefoundry.ir.types.utils import (
-    require_uniform_partial_slices,
-)
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    iterating,
-    register_access_relation,
-    relations_of,
-)
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry import core, services, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
 
-@register_op(dialect='tf', category='tensor')
-class Concat(Op):
+@expr.register_op(dialect='tf', category='tensor')
+class Concat(expr.Op):
     """Variadic input op.
 
     Variadic input op. `Call.args` is a
@@ -42,16 +21,16 @@ class Concat(Op):
     Expr). The lone Param entry documents element type.
     """
 
-    inputs = ParamDef(kind="input", annotation=Tuple[is_ranked_tensor()], pattern=is_ranked_tensor())
-    axis = ParamDef(kind="attribute", annotation=int)
+    inputs = expr.ParamDef(kind="input", annotation=Tuple[pattern.is_ranked_tensor()], pattern=pattern.is_ranked_tensor())
+    axis = expr.ParamDef(kind="attribute", annotation=int)
 
 
-def _sum_dim(a: Expr, b: Expr) -> Expr:
+def sum_dim(a: expr.Expr, b: expr.Expr) -> expr.Expr:
 
-    return simplify_dim(DimAdd, (a, b))
+    return services.simplify_dim("add", (a, b))
 
 
-def _axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
+def normalized_axis(call: "expr.Call", ctx: "TypeInferContext", rank: int) -> int:
     raw_axis = call.target.axis
     axis = raw_axis + rank if raw_axis < 0 else raw_axis
     if not (0 <= axis < rank):
@@ -59,17 +38,17 @@ def _axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
     return axis
 
 
-@register_access_relation(Concat)
-def _concat_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(Concat)
+def concat_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """Each input reads its own segment of the result; the result is read whole.
 
     The segments are the same arithmetic the forward relation states, so the two
     cannot drift: one offset walk, one guard per input.
     """
-    types = [ctx.type_of(arg) for arg in call.args]
-    rank = len(types[0].shape)
-    axis = _axis(call, ctx, rank)
-    extents = tuple(type_.shape[axis] for type_ in types)
+    type_list = [ctx.type_of(arg) for arg in call.args]
+    rank = len(type_list[0].shape)
+    axis = normalized_axis(call, ctx, rank)
+    extents = tuple(type_.shape[axis] for type_ in type_list)
     if any(not isinstance(extent, int) or isinstance(extent, bool) for extent in extents):
         raise NotImplementedError(
             f"Concat access_relation: concat-axis extents must be static ints, got {extents}"
@@ -82,7 +61,7 @@ def _concat_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
         if offset:
             reads[axis] = f"d{axis} - {offset}"
         inputs.append(
-            AccessRelation(
+            access.Relation(
                 isl.map(
                     f"{{ [{domain_text}] -> [{', '.join(reads)}] : "
                     f"{offset} <= d{axis} < {offset + extent} }}"
@@ -91,24 +70,24 @@ def _concat_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
         )
         offset += extent
     out_shape = (
-        *types[0].shape[:axis],
+        *type_list[0].shape[:axis],
         sum(extents),
-        *types[0].shape[axis + 1 :],
+        *type_list[0].shape[axis + 1 :],
     )
-    return iterating(
+    return access.iterating(
         out_shape,
-        (*inputs, AccessRelation(isl.multi_aff(f"{{ [{domain_text}] -> [{domain_text}] }}"))),
+        (*inputs, access.Relation(isl.multi_aff(f"{{ [{domain_text}] -> [{domain_text}] }}"))),
     )
 
 
-def _reject_concat_axis_splits(call, ctx, types, axis: int) -> None:
-    for index, type_ in enumerate(types):
-        layout = shard_layout_of(type_.layout)
+def reject_concat_axis_splits(call, ctx, type_list, axis: int) -> None:
+    for index, type_ in enumerate(type_list):
+        layout = types.shard_layout_of(type_.layout)
         if layout is None:
             continue
-        targets = split_target_axes(layout, type_.shape)
+        targets = types.split_target_axes(layout, type_.shape)
         if any(
-            isinstance(attr, Split) and targets[mesh_axis] == axis
+            isinstance(attr, types.Split) and targets[mesh_axis] == axis
             for mesh_axis, attr in enumerate(layout.attrs)
         ):
             ctx.error(
@@ -118,14 +97,14 @@ def _reject_concat_axis_splits(call, ctx, types, axis: int) -> None:
             )
 
 
-@register_typeinfer(Concat)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(Concat)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     if not call.args:
         ctx.error(call, "Concat requires at least one input")
-    types = [ctx.type_of(a) for a in call.args]
-    base = types[0]
-    axis = _axis(call, ctx, len(base.shape))
-    for index, t in enumerate(types[1:], start=1):
+    type_list = [ctx.type_of(a) for a in call.args]
+    base = type_list[0]
+    axis = normalized_axis(call, ctx, len(base.shape))
+    for index, t in enumerate(type_list[1:], start=1):
         if len(t.shape) != len(base.shape):
             ctx.error(call, f"input {index} rank must match input 0")
         if t.dtype != base.dtype:
@@ -137,15 +116,15 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                     f"input {index} shape must match input 0 outside axis {axis}",
                 )
     new_shape = list(base.shape)
-    for t in types[1:]:
-        new_shape[axis] = _sum_dim(new_shape[axis], t.shape[axis])
-    new_shape = normalize_dim_entries(tuple(new_shape))
+    for t in type_list[1:]:
+        new_shape[axis] = sum_dim(new_shape[axis], t.shape[axis])
+    new_shape = services.normalize_dim(tuple(new_shape))
 
-    _reject_concat_axis_splits(call, ctx, types, axis)
+    reject_concat_axis_splits(call, ctx, type_list, axis)
     try:
-        relation = relations_of(call, ctx)
-        layout = derive_output_shard_layout(
-            tuple(types),
+        relation = access.relations_of(call, ctx)
+        layout = typeinfer.derive_output_shard_layout(
+            tuple(type_list),
             relation,
             new_shape,
             fresh_strides=True,
@@ -158,23 +137,36 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             f"cannot derive input ownership: {error}; use an explicit Reshard before Concat",
         )
     if layout is not None:
-        require_uniform_partial_slices(types, layout, "Concat")
+        ir_utils.require_uniform_partial_slices(type_list, layout, "Concat")
     else:
-        layout = Layout(new_shape)
-    storage = resolve_anchor_storage(ctx, call, *(t.storage for t in types))
-    return TensorType(shape=new_shape, dtype=base.dtype, layout=layout, storage=storage)
+        layout = types.Layout(new_shape)
+    storage = typeinfer.resolve_anchor_storage(ctx, call, *(t.storage for t in type_list))
+    return types.TensorType(shape=new_shape, dtype=base.dtype, layout=layout, storage=storage)
 
 
-@register_eval(Concat)
-def _eval_concat(ctx):
+@evaluator.register(Concat)
+def eval_concat(ctx):
     def concat(*xs):
-        return torch.cat(xs, dim=ctx.op.axis)
+        return utils.torch.cat(xs, dim=ctx.op.axis)
 
     xs = tuple(arg.tensor for arg in ctx.args)
-    placements = common_placements(*xs)
+    placements = evaluator.common_placements(*xs)
     held = (
         concat(*(x.tensor for x in xs))
         if not placements
         else tuple((p, concat(*(x.to_local(p) for x in xs))) for p in placements)
     )
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
+
+
+@cost.register(Concat)
+def concat_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    """A concatenation places its inputs side by side and computes nothing.
+
+    Every input element is read once and written once, so the traffic is the
+    inputs plus the output -- unlike a slice, which reads only what it keeps.
+    """
+    return cost.Cost({}, cost.traffic(cost.input_types(call, ctx), cost.output_type(call, ctx)))
+
+
+__all__ = ["Concat"]

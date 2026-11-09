@@ -1,9 +1,9 @@
 """Lower arithmetic on a scalar register index through a dynamic slice window."""
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 1)))
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 1)))
 class DynWindowOffset:
     @func
     def gemm(x: Tensor[(64,), "f32"], starts: Tensor[(1,), "i64"]) -> Tensor[(8,), "f32", "rmem"]:

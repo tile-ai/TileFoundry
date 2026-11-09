@@ -2,46 +2,41 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Op, OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import OrPattern, SameConstraint, TensorPattern, WildcardPattern, utils
-from tilefoundry.ir.tir.memory.copy import register_copy_semantics
-from tilefoundry.ir.types import DType, Mesh
-from tilefoundry.ir.types.storage import StorageKind as S
-from tilefoundry_nvidia.cuda.ir.tir.nn.sm80_mma import Mma
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir.tir import memory
+from tilefoundry_nvidia.cuda.ir.tir import nn
 
 
-@register_copy_semantics
-@register_op(dialect="T", category="memory", name="ldmatrix")
-class LdMatrix(Op):
+@memory.register_copy_semantics
+@expr.register_op(dialect="T", category="memory", name="ldmatrix")
+class LdMatrix(expr.Op):
     """Load one warp's shared-memory tile into the SM80 MMA A fragment."""
 
-    capability = OpCapability("ldmatrix")
+    capability = expr.OpCapability("ldmatrix")
     resource = "tensor_core_engine"
     roles = ("src", "dst")
-    required_execution_mesh = Mma.execution_mesh
+    required_execution_mesh = nn.Mma.execution_mesh
 
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.READ,
-        pattern=TensorPattern(
+        effect=expr.MemoryEffect.READ,
+        pattern=pattern.Tensor(
             shape=(16, 16),
-            dtype=WildcardPattern("dtype0", predicates=(OrPattern(DType.bf16, DType.f16),)),
-            storage=S.SMEM,
-            layout=utils.whole_vectors(0, (16,)),
+            dtype=pattern.Wildcard("dtype0", predicates=(pattern.Or(expr.DType.bf16, expr.DType.f16),)),
+            storage=expr.StorageKind.SMEM,
+            layout=pattern.whole_vectors(0, (16,)),
         ),
     )
-    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=Mma.A)
-    execution_mesh = ParamDef(
+    dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=nn.Mma.A)
+    execution_mesh = expr.ParamDef(
         kind="attribute",
-        annotation=Mesh,
-        pattern=Mma.execution_mesh_pattern(),
+        annotation=types.Mesh,
+        pattern=nn.Mma.execution_mesh_pattern(),
         optional=True,
         default=None,
     )
 
-    between = (SameConstraint("shape", "src", "dst"), SameConstraint("dtype", "src", "dst"))
+    between = (pattern.SameConstraint("shape", "src", "dst"), pattern.SameConstraint("dtype", "src", "dst"))
 
 
 __all__ = ["LdMatrix"]

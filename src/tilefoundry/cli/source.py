@@ -11,23 +11,22 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from tilefoundry.analysis.check import check_program, program_dim_vars
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.specialize import SpecializationError
+from tilefoundry import analysis
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import core
 
 
 @dataclass(frozen=True)
 class Program:
     """What every single-size HIR command starts from."""
 
-    module: Module
-    entry: Function
+    module: core.Module
+    entry: core.Function
 
 
 def bind_dims(stated: Sequence[str] | None) -> dict[str, int] | None:
     """Parse --dim and take one extent per dim, before the source runs."""
-    return _one_extent_per_dim(parse_dims(stated))
+    return one_extent_per_dim(parse_dims(stated))
 
 
 def checked_program(
@@ -38,15 +37,15 @@ def checked_program(
     bound = bind_dims(dims)
     module = load_authored_ir(source)
     authored = module.entry_function()
-    _require_bound_dims(module, authored, bound, command=command)
+    require_bound_dims(module, authored, bound, command=command)
     try:
-        checked, entry = check_program(module, authored, topology_level=topology_level, dims=bound)
-    except SpecializationError as error:
+        checked, entry = analysis.check_program(module, authored, topology_level=topology_level, dims=bound)
+    except valuation.SpecializationError as error:
         raise ValueError(f"{command}: {error}") from None
     return Program(checked, entry)
 
 
-def _split_source(source: str) -> tuple[Path, str | None]:
+def split_source(source: str) -> tuple[Path, str | None]:
     path_text, separator, selector = source.partition(":")
     path = Path(path_text).expanduser().resolve()
     if not path.is_file():
@@ -56,7 +55,7 @@ def _split_source(source: str) -> tuple[Path, str | None]:
     return path, selector or None
 
 
-def _unique_values(namespace: dict[str, object], kind: type) -> tuple[object, ...]:
+def unique_values(namespace: dict[str, object], kind: type) -> tuple[object, ...]:
     values: list[object] = []
     seen: set[int] = set()
     for value in namespace.values():
@@ -66,7 +65,7 @@ def _unique_values(namespace: dict[str, object], kind: type) -> tuple[object, ..
     return tuple(values)
 
 
-def select_ir(namespace: dict[str, object], selector: str | None) -> Module:
+def select_ir(namespace: dict[str, object], selector: str | None) -> core.Module:
     if selector is not None:
 
 
@@ -82,7 +81,7 @@ def select_ir(namespace: dict[str, object], selector: str | None) -> Module:
         if selected is None:
             raise ValueError(f"selector {root_name!r} is not defined by the source")
         if not path:
-            if isinstance(selected, Module):
+            if isinstance(selected, core.Module):
                 return selected
             raise TypeError(
                 f"selector {root_name!r} resolves to "
@@ -91,7 +90,7 @@ def select_ir(namespace: dict[str, object], selector: str | None) -> Module:
                 "nor the topology hierarchy they divide over; select the Module "
                 "that declares it."
             )
-        if not isinstance(selected, Module):
+        if not isinstance(selected, core.Module):
             raise TypeError(
                 f"selector root {root_name!r} is {type(selected).__name__}, expected Module"
             )
@@ -102,13 +101,13 @@ def select_ir(namespace: dict[str, object], selector: str | None) -> Module:
         selected.lookup(path[0])
         return replace(selected, entry=path[0])
 
-    modules = _unique_values(namespace, Module)
+    modules = unique_values(namespace, core.Module)
     if len(modules) == 1:
-        return modules[0]  # type: ignore[return-value]
+        return modules[0]
     if len(modules) > 1:
         names = ", ".join(sorted(module.name for module in modules))
         raise ValueError(f"source defines multiple Modules ({names}); add ':Module'")
-    functions = _unique_values(namespace, Function)
+    functions = unique_values(namespace, core.Function)
     if functions:
         names = ", ".join(sorted(function.name for function in functions))
         raise ValueError(
@@ -119,7 +118,7 @@ def select_ir(namespace: dict[str, object], selector: str | None) -> Module:
     raise ValueError("source defines no TileFoundry Module")
 
 
-def _statement_codes(path: Path) -> tuple[list[tuple[ast.stmt, object]], bool]:
+def statement_codes(path: Path) -> tuple[list[tuple[ast.stmt, object]], bool]:
     """Each top-level statement of *path*, compiled to run on its own.
 
     The whole file is compiled first and thrown away, so every rule Python
@@ -162,7 +161,7 @@ def _statement_codes(path: Path) -> tuple[list[tuple[ast.stmt, object]], bool]:
     return codes, postponed
 
 
-def _at_module_level(statement: ast.stmt, *, postponed: bool = False) -> set[str]:
+def at_module_level(statement: ast.stmt, *, postponed: bool = False) -> set[str]:
     """The names *statement* reads while the file runs.
 
     Reads, not spellings: a name being written is not a reading of it. A
@@ -232,7 +231,7 @@ def _at_module_level(statement: ast.stmt, *, postponed: bool = False) -> set[str
     return found
 
 
-def _binds(statement: ast.stmt, name: str) -> bool:
+def binds(statement: ast.stmt, name: str) -> bool:
     """Whether *statement* is what gives *name* its value."""
     if isinstance(statement, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
         return statement.name == name
@@ -253,7 +252,7 @@ def _binds(statement: ast.stmt, name: str) -> bool:
     )
 
 
-def _follows_from(error: BaseException, aside: list[ast.stmt]) -> bool:
+def follows_from(error: BaseException, aside: list[ast.stmt]) -> bool:
     """Whether *error* is a consequence of a statement already set aside.
 
     A statement that was set aside bound nothing, so one reaching for what it
@@ -262,11 +261,11 @@ def _follows_from(error: BaseException, aside: list[ast.stmt]) -> bool:
     sibling would be described as a file with an undefined name in it.
     """
     return isinstance(error, NameError) and any(
-        _binds(statement, error.name or "") for statement in aside
+        binds(statement, error.name or "") for statement in aside
     )
 
 
-def _run_for_selection(path: Path, module: object, root: str) -> None:
+def run_for_selection(path: Path, module: object, root: str) -> None:
     """Execute *path* for the one root *root* names, statement by statement.
 
     A class that refuses to be built refuses while the file runs, so naming one
@@ -279,15 +278,15 @@ def _run_for_selection(path: Path, module: object, root: str) -> None:
     """
     first: BaseException | None = None
     aside: list[ast.stmt] = []
-    codes, postponed = _statement_codes(path)
+    codes, postponed = statement_codes(path)
     for statement, code in codes:
         try:
-            exec(code, module.__dict__)  # noqa: S102 — the authored file
-        except Exception as error:  # noqa: BLE001 — one unfinished statement
-            mine = _binds(statement, root) or root in _at_module_level(
+            exec(code, module.__dict__)
+        except Exception as error:
+            mine = binds(statement, root) or root in at_module_level(
                 statement, postponed=postponed
             )
-            if mine and not _follows_from(error, aside):
+            if mine and not follows_from(error, aside):
                 raise
             aside.append(statement)
             if first is None:
@@ -302,7 +301,7 @@ def load_namespace(source: str) -> tuple[dict[str, object], str | None]:
     Loading it is how an authored file produces anything at all, so its own
     output is captured: what the command prints is its answer, not the file's.
     """
-    path, selector = _split_source(source)
+    path, selector = split_source(source)
     directory = str(path.parent)
     sibling_names = {
         child.stem for child in path.parent.glob("*.py")
@@ -319,21 +318,21 @@ def load_namespace(source: str) -> tuple[dict[str, object], str | None]:
     sys.path.insert(0, directory)
     try:
         for name in previous_modules:
-            del sys.modules[name]
+            sys.modules.pop(name)
         spec = importlib.util.spec_from_file_location(path.stem, path)
         if spec is None or spec.loader is None:
             raise ImportError(f"could not load source module {path}")
         module = importlib.util.module_from_spec(spec)
 
 
-        sys.modules[spec.name] = module
+        sys.modules.update({spec.name: module})
         captured_stdout = io.StringIO()
         with contextlib.redirect_stdout(captured_stdout):
             try:
                 if selector is None:
                     spec.loader.exec_module(module)
                 else:
-                    _run_for_selection(path, module, selector.split(".")[0])
+                    run_for_selection(path, module, selector.split(".")[0])
             except ModuleNotFoundError as error:
                 raise ValueError(
                     f"{path.name} imports {error.name!r}, which is not importable.\n"
@@ -344,12 +343,12 @@ def load_namespace(source: str) -> tuple[dict[str, object], str | None]:
     finally:
         for name in tuple(sys.modules):
             if name.partition(".")[0] in sibling_names:
-                del sys.modules[name]
+                sys.modules.pop(name)
         sys.modules.update(previous_modules)
         sys.path.remove(directory)
 
 
-def load_authored_ir(source: str) -> Module:
+def load_authored_ir(source: str) -> core.Module:
     """Execute one authored file and resolve its optional IR selector.
 
     The result is always a Module. A bare Function is rejected rather than
@@ -360,20 +359,20 @@ def load_authored_ir(source: str) -> Module:
     return select_ir(namespace, selector)
 
 
-def selected_target(ir: Module):
+def selected_target(ir: core.Module):
     """The Target the selection declares.
 
     Analyze reads hardware facts off it, so an undeclared Target is
     an authoring error rather than a cue to pick one: the selection must name
     the device it was written for.
     """
-    if not isinstance(ir, Module):
+    if not isinstance(ir, core.Module):
         raise TypeError(
             f"expected a Module selection, got {type(ir).__name__}. A Function "
             "carries no Target; select the Module that declares it."
         )
     entry = ir.entry_function()
-    if not isinstance(entry, Function):
+    if not isinstance(entry, core.Function):
         raise TypeError("capabilities requires a HIR Function entry")
     return ir.resolve_target()
 
@@ -403,7 +402,7 @@ def parse_dims(stated: Sequence[str] | None) -> dict[str, tuple[int, ...]] | Non
     return dims
 
 
-def _one_extent_per_dim(
+def one_extent_per_dim(
     dims: Mapping[str, tuple[int, ...]] | None,
 ) -> dict[str, int] | None:
     """The one-extent mapping Analyze gives its operation."""
@@ -420,9 +419,9 @@ def _one_extent_per_dim(
     return chosen
 
 
-def _require_bound_dims(
-    module: Module,
-    function: Function,
+def require_bound_dims(
+    module: core.Module,
+    function: core.Function,
     dims: Mapping[str, int] | None,
     *,
     command: str,
@@ -431,7 +430,7 @@ def _require_bound_dims(
     stated = {} if dims is None else dims
     unbound = [
         (name, dim_var)
-        for name, dim_var in program_dim_vars(module, function).items()
+        for name, dim_var in analysis.program_dim_vars(module, function).items()
         if name not in stated
     ]
     if unbound:
@@ -455,6 +454,7 @@ __all__ = [
     "checked_program",
     "load_authored_ir",
     "load_namespace",
+    "one_extent_per_dim",
     "parse_dims",
     "select_ir",
     "selected_target",

@@ -1,7 +1,7 @@
 """The fast implementation of `model.py`: one runtime twin per authored Module,
 every kernel body a launch into `kernels/granite.cu`.
 
-`@runtime_module` holds the two sides to the same shape -- same function names,
+`@runtime.module` holds the two sides to the same shape -- same function names,
 same children, same entry -- so a twin can be measured against the Module it
 stands for one function at a time, which is how every kernel here was arrived
 at. The orchestration is not re-written: `forward` on a layer, on the MoE block
@@ -34,7 +34,7 @@ import torch
 import model as sem
 from kernels import ops
 from tilefoundry.dsl import ModuleList
-from tilefoundry.runtime import runtime_func, runtime_module
+from tilefoundry import runtime
 
 _K = ops()
 
@@ -61,13 +61,13 @@ def _empty(shape, device, dtype=_BF):
 # ---------------------------------------------------------------------------
 
 
-@runtime_module(sem.GraniteMamba)
+@runtime.module(sem.GraniteMamba)
 class MambaMixer:
     """Four kernels: the fused pre-norm and projection, the depthwise
     convolution, the recurrence, and the gated output norm with its
     projection."""
 
-    @runtime_func
+    @runtime.func
     def in_projection(self, hidden, gamma_in, w_in):
         normed = _empty((1, 1, _H), hidden.device)
         _K.rms_norm(hidden, gamma_in, normed, _EPS)
@@ -75,7 +75,7 @@ class MambaMixer:
         _K.gemv(w_in, normed, proj)
         return proj
 
-    @runtime_func
+    @runtime.func
     def conv_step(self, conv_state, entry, conv_w, conv_b):
         # Advances `conv_state` in place: the window this token closes on is
         # the window the next token opens from, and it is 50 KB that would
@@ -84,14 +84,14 @@ class MambaMixer:
         _K.mamba_conv(conv_state, entry, conv_w, conv_b, out)
         return out
 
-    @runtime_func
+    @runtime.func
     def ssm_step(self, ssm_state, x, b_vec, c_vec, dt_raw, a_log, dt_bias, d_skip):
         # Advances `ssm_state` in place, for the same reason and 80x the bytes.
         y = _empty((1, _NH, _PD), x.device)
         _K.mamba_ssm(ssm_state, x, b_vec, c_vec, dt_raw, a_log, dt_bias, d_skip, y)
         return y, ssm_state
 
-    @runtime_func
+    @runtime.func
     def gated_out(self, y, gate, gamma_ssm, w_out):
         normed = _empty((1, _EXP), y.device)
         _K.rms_norm_gated(y, gate, gamma_ssm, normed, _EPS)
@@ -99,7 +99,7 @@ class MambaMixer:
         _K.gemv(w_out, normed, out)
         return out
 
-    @runtime_func
+    @runtime.func
     def mamba_mixer(
         self, hidden, gamma_in, w_in, conv_w, conv_b, a_log, dt_bias, d_skip,
         conv_state, ssm_state, gamma_ssm, w_out,
@@ -125,12 +125,12 @@ class MambaMixer:
 # ---------------------------------------------------------------------------
 
 
-@runtime_module(sem.GraniteAttention)
+@runtime.module(sem.GraniteAttention)
 class Attention:
     """Three kernels for the projections, one online-softmax pass over the live
     cache, one more for the output projection. No rotary: `nope`."""
 
-    @runtime_func
+    @runtime.func
     def qkv(self, hidden, gamma_in, w_q, w_k, w_v):
         normed = _empty((1, 1, _H), hidden.device)
         _K.rms_norm(hidden, gamma_in, normed, _EPS)
@@ -142,7 +142,7 @@ class Attention:
         _K.gemv(w_v, normed, v)
         return q, k, v
 
-    @runtime_func
+    @runtime.func
     def attend(self, q, k_cache, v_cache, cur_pos, mask, w_o):
         # `mask` is the reference's way of saying what `cur_pos` says; the
         # kernel reads the number, so its loop is the live length rather than
@@ -157,7 +157,7 @@ class Attention:
         _K.gemv(w_o, ctx, out)
         return out
 
-    @runtime_func
+    @runtime.func
     def full_attention(
         self, hidden, gamma_in, w_q, w_k, w_v, k_cache, v_cache, cur_pos, mask, w_o
     ):
@@ -174,9 +174,9 @@ class Attention:
 # ---------------------------------------------------------------------------
 
 
-@runtime_module(sem.GraniteRouter)
+@runtime.module(sem.GraniteRouter)
 class Router:
-    @runtime_func
+    @runtime.func
     def routing(self, tokens, w_router):
         # An ordinary matvec for the 72 logits, then one warp for the top ten
         # and their softmax. Selecting inside the projection kernel would tie
@@ -190,17 +190,17 @@ class Router:
         return weights, indices
 
 
-@runtime_module(sem.GraniteMoE)
+@runtime.module(sem.GraniteMoE)
 class MoE:
     router = Router
 
-    @runtime_func
+    @runtime.func
     def post_norm(self, hidden, gamma_post):
         out = _empty((1, _H), hidden.device)
         _K.rms_norm(hidden, gamma_post, out, _EPS)
         return out
 
-    @runtime_func
+    @runtime.func
     def routed_experts(self, tokens, weights, indices, w_gate, w_up, w_down):
         # Two kernels for ten experts. The first reads each expert's gate and
         # up rows together; the second walks all ten down projections into one
@@ -214,7 +214,7 @@ class MoE:
         _K.experts_down(w_down, inner, indices, weights, partial, out)
         return out
 
-    @runtime_func
+    @runtime.func
     def shared_mlp(self, tokens, w_shared_in, w_shared_out):
         # The fused input projection is one matvec over all 3072 rows -- twice
         # the rows in flight that projecting the two halves separately gives --
@@ -227,7 +227,7 @@ class MoE:
         _K.gemv(w_shared_out, inner, out)
         return out
 
-    @runtime_func
+    @runtime.func
     def experts(
         self, tokens, weights, indices, w_gate, w_up, w_down, w_shared_in, w_shared_out
     ):
@@ -249,18 +249,18 @@ def _residual_add(self, a, b):
     return out
 
 
-@runtime_module(sem.GraniteMambaDecoderLayer)
+@runtime.module(sem.GraniteMambaDecoderLayer)
 class MambaDecoderLayer:
     mixer = MambaMixer
     moe = MoE
-    residual_add = runtime_func(_residual_add)
+    residual_add = runtime.func(_residual_add)
 
 
-@runtime_module(sem.GraniteAttentionDecoderLayer)
+@runtime.module(sem.GraniteAttentionDecoderLayer)
 class AttentionDecoderLayer:
     mixer = Attention
     moe = MoE
-    residual_add = runtime_func(_residual_add)
+    residual_add = runtime.func(_residual_add)
 
 
 _LAYER_TWIN = {
@@ -283,19 +283,19 @@ class _Root:
     because their classes are chosen by `config.layer_types` and a class body
     cannot name forty attributes it computes."""
 
-    @runtime_func
+    @runtime.func
     def embed(self, table, token_ids):
         out = _empty((1, 1, _H), table.device)
         _K.embed(table, token_ids, out, sem._EMB_MULT)
         return out
 
-    @runtime_func
+    @runtime.func
     def final_rms_norm(self, hidden, gamma_final):
         out = _empty((1, 1, _H), hidden.device)
         _K.rms_norm(hidden, gamma_final, out, _EPS)
         return out
 
-    @runtime_func
+    @runtime.func
     def lm_head(self, hidden, table):
         # f32 out: these logits are what the sampler compares, and a bf16
         # logit has eight mantissa bits to separate a hundred thousand of them.
@@ -444,7 +444,7 @@ def _root_namespace():
 
 #: The runtime twin of the whole model. Built with `type` rather than a class
 #: statement because its children are named from `config.layer_types`.
-Granite4_0_H_Small = runtime_module(sem.Granite4_0_H_Small)(
+Granite4_0_H_Small = runtime.module(sem.Granite4_0_H_Small)(
     type("Granite4_0_H_Small", (), _root_namespace())
 )
 

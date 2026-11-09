@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 _CTAS, _THREADS = 4, 8
 _ROWS = _CTAS * _THREADS
@@ -51,12 +51,12 @@ class CastWindowHost:
 
     window = CastWindow
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def cast_window_host(
         a: Tensor[(_ROWS,), "f32"], out: Tensor[(_ROWS,), "f16"], filled: Tensor[(_ROWS,), "f32"]
     ):
-        launch(  # noqa: F821
-            window.cast_window_device,  # noqa: F821
+        launch(
+            window.cast_window_device,
             a,
             out,
             filled,

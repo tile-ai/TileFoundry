@@ -1,15 +1,15 @@
 """Modules whose sibling-only weights must stay lazy when one leaf runs."""
 
+from tilefoundry import runtime
 from tilefoundry.dsl import *
-from tilefoundry.runtime import runtime_func, runtime_module
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
 D, W = 64, 4
 PER = 48 * (1 << 30) // 2 // D
 
 
-@module(entry="entry", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", W),))
+@module(entry="entry", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", W),))
 class Mod:
     """Sibling weights total 96 GiB, so checking any leaf loads too much today."""
 
@@ -40,7 +40,7 @@ class Mod:
             return tf.reshard(xs * tf.cast(ws, dtype="f32"), (1, D), "gmem")
 
 
-@module(entry="entry", target=CpuTarget(), topologies=(Topology("cta", W),))
+@module(entry="entry", target=cpu.Target(), topologies=(Topology("cta", W),))
 class Small:
     @func
     def leaf(x: Tensor[(1, D), "f32"]) -> Tensor[(1, D), "f32"]:
@@ -59,12 +59,12 @@ class Small:
             return tf.reshard(tf.mul(xs, ws), (1, D), "gmem")
 
 
-@runtime_module(Small)
+@runtime.module(Small)
 class SmallTwin:
-    @runtime_func
+    @runtime.func
     def leaf(self, x):
         return x + x
 
-    @runtime_func
+    @runtime.func
     def entry(self, x, w):
         return x * w

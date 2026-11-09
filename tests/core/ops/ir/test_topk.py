@@ -23,31 +23,23 @@ from tests.core.ops.ir.op_case import (
     op_case_test,
     raw_shard_tensor_type,
 )
-from tilefoundry.cli.source import load_authored_ir
+from tilefoundry import cli
 from tilefoundry.dsl import *
-from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.core import Call, Constant, Var
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.tensor.index_select import IndexSelect
-from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.hir.tensor.topk import TopK
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.types.dim import dim_min
-from tilefoundry.ir.types.shard_layout import Broadcast, Partial, ShardLayout, Split
-from tilefoundry.visitor_registry.contexts import TypeInferContext
-from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
+from tilefoundry.interfaces import evaluator, typeinfer
+from tilefoundry.ir import core, dim, expr, types
+from tilefoundry.ir.hir import tensor
 
 _F32 = DType.f32
 _I64 = DType.i64
 
 
 def _run_topk(x: torch.Tensor, **attrs):
-    param = Var(type=make_tensor_type(tuple(x.shape), DType.f32), name="x")
-    call = Call(type=param.type, target=TopK(**attrs), args=(param,))
-    result_type = TypeInferVisitor().visit(call, TypeInferContext())
+    param = expr.Var(type=TensorType.from_shape(tuple(x.shape), DType.f32), name="x")
+    call = expr.Call(type=param.type, target=tensor.TopK(**attrs), args=(param,))
+    result_type = typeinfer.TypeInferVisitor().visit(call, typeinfer.TypeInferContext())
     call = replace(call, type=result_type)
-    fn = Function.build(name="topk_case", params=(param,), body=call, return_type=result_type)
-    return evaluate(fn, x)
+    fn = core.Function.from_parts(name="topk_case", params=(param,), body=call, return_type=result_type)
+    return evaluator.evaluate(fn, x)
 
 
 def test_topk_unsorted_selects_same_set():
@@ -76,14 +68,14 @@ def test_topk_keeps_unselected_split():
     layout's selected axis must shrink to k so size(layout)==size(shape).
     """
     x_ty = make_shard_tensor_type(
-        (4, 256), mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)), attrs=(Split(0),)
+        (4, 256), mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)), attrs=(types.Split(0),)
     )
-    out = infer_call(TopK(k=6, axis=-1), x_ty)
+    out = infer_call(tensor.TopK(k=6, axis=-1), x_ty)
     values_ty, indices_ty = out.fields
     assert values_ty.shape == (4, 6) and indices_ty.shape == (4, 6)
     for t in (values_ty, indices_ty):
-        assert isinstance(t.layout, ShardLayout), "sharded input must stay sharded"
-        assert any((isinstance(a, Split) and a.axis == 0 for a in t.layout.attrs)), (
+        assert isinstance(t.layout, types.ShardLayout), "sharded input must stay sharded"
+        assert any((isinstance(a, types.Split) and a.axis == 0 for a in t.layout.attrs)), (
             "non-selected Split(0) must survive TopK"
         )
         assert math.prod(t.layout.layout.shape) == math.prod(t.shape), (
@@ -92,8 +84,8 @@ def test_topk_keeps_unselected_split():
 
 
 def test_topk_layout_describes_selection():
-    source = make_tensor_type((4, 256), _F32, layout=Layout(shape=(4, 256), strides=(256, 1)))
-    values, indices = infer_call(TopK(k=6, axis=-1), source).fields
+    source = TensorType.from_shape((4, 256), _F32, layout=Layout(shape=(4, 256), strides=(256, 1)))
+    values, indices = infer_call(tensor.TopK(k=6, axis=-1), source).fields
     assert values.layout == Layout(shape=(4, 6), strides=(6, 1))
     assert indices.layout == values.layout
 
@@ -113,34 +105,34 @@ def test_topk_broadcast_handles_dynamic_dim():
         (256, s),
         (256, s),
         None,
-        (Broadcast(),),
+        (types.Broadcast(),),
         Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
         dtype=_F32,
     )
-    values_ty, indices_ty = infer_call(TopK(k=6, axis=0), x_ty).fields
+    values_ty, indices_ty = infer_call(tensor.TopK(k=6, axis=0), x_ty).fields
     assert values_ty.shape == (6, s) and indices_ty.shape == (6, s)
     for t in (values_ty, indices_ty):
-        assert isinstance(t.layout, ShardLayout)
-        assert all((isinstance(a, Broadcast) for a in t.layout.attrs)), "replication preserved"
+        assert isinstance(t.layout, types.ShardLayout)
+        assert all((isinstance(a, types.Broadcast) for a in t.layout.attrs)), "replication preserved"
         assert t.layout.layout.shape == (6, s), t.layout.layout.shape
         assert t.layout.layout.strides == (s, 1), "symbolic row-major strides, never None"
 
 
 def test_topk_parser_preserves_largest_sorted():
-    program = load_authored_ir(
+    program = cli.load_authored_ir(
         str(Path(__file__).parents[2] / "fixtures/logical/topk_largest_sorted.py")
     )
     topk = program.entry_function().body.target
-    assert isinstance(topk, TopK)
+    assert isinstance(topk, tensor.TopK)
     assert topk.k == 6 and topk.axis == -1
     assert topk.largest is False and topk.sorted is True
 
 
 POS = DimVar("POS", 1, 8192)
-K = dim_min(512, POS // 4)
+K = dim.minimum(512, POS // 4)
 
 
-def _build_topk_fn(x_shape, k, *, axis: int = -1) -> tuple[Function, "TupleType"]:
+def _build_topk_fn(x_shape, k, *, axis: int = -1) -> tuple[core.Function, "TupleType"]:
     """A one-``Call`` Function ``x ->`` with ``TopK``, typeinfer'd.
 
     A one-``Call`` Function ``x -> (values, indices)`` with ``TopK(k=k,
@@ -148,11 +140,11 @@ def _build_topk_fn(x_shape, k, *, axis: int = -1) -> tuple[Function, "TupleType"
     the built ``Function`` (not the evaluated result) so a caller can
     ``evaluate`` it at more than one concrete binding.
     """
-    x = Var(type=make_tensor_type(x_shape, _F32), name="x")
-    call = Call(type=x.type, target=TopK(k=k, axis=axis), args=(x,))
-    result_type = TypeInferVisitor().visit(call, TypeInferContext())
+    x = expr.Var(type=TensorType.from_shape(x_shape, _F32), name="x")
+    call = expr.Call(type=x.type, target=tensor.TopK(k=k, axis=axis), args=(x,))
+    result_type = typeinfer.TypeInferVisitor().visit(call, typeinfer.TypeInferContext())
     call = replace(call, type=result_type)
-    fn = Function.build(name="topk_dyn_k", params=(x,), body=call, return_type=result_type)
+    fn = core.Function.from_parts(name="topk_dyn_k", params=(x,), body=call, return_type=result_type)
     return (fn, result_type)
 
 
@@ -171,7 +163,7 @@ def test_topk_dynamic_k_evaluates():
     torch.manual_seed(0)
     for pos, expected_k in ((100, 25), (4096, 512)):
         scores = torch.randn(4, pos)
-        vals, idx = evaluate(fn, scores)
+        vals, idx = evaluator.evaluate(fn, scores)
         assert vals.shape == (4, expected_k)
         assert idx.shape == (4, expected_k)
         ref_v, ref_i = torch.topk(scores, expected_k, dim=-1, largest=True, sorted=True)
@@ -193,36 +185,36 @@ def test_dynamic_k_feeds_index_select(table_layout):
     TopK retains its batch axis, so its indices flatten to torch's required 1-D
     vector before selection and the selected rows reshape back to (1, K, D).
     """
-    scores = Var(type=make_tensor_type((1, POS), _F32), name="scores")
-    table = Var(type=make_tensor_type((POS, _D), _F32, layout=table_layout), name="table")
-    topk_call = Call(type=scores.type, target=TopK(k=K, axis=-1), args=(scores,))
-    topk_ty = TypeInferVisitor().visit(topk_call, TypeInferContext())
+    scores = expr.Var(type=TensorType.from_shape((1, POS), _F32), name="scores")
+    table = expr.Var(type=TensorType.from_shape((POS, _D), _F32, layout=table_layout), name="table")
+    topk_call = expr.Call(type=scores.type, target=tensor.TopK(k=K, axis=-1), args=(scores,))
+    topk_ty = typeinfer.TypeInferVisitor().visit(topk_call, typeinfer.TypeInferContext())
     topk_call = replace(topk_call, type=topk_ty)
-    index = Constant(type=TensorType.umat_scalar(), value=1)
-    idx_call = Call(type=topk_ty.fields[1], target=TupleGetItem(), args=(topk_call, index))
-    idx_ty = TypeInferVisitor().visit(idx_call, TypeInferContext())
+    index = expr.Constant(type=TensorType.from_umat_scalar(), value=1)
+    idx_call = expr.Call(type=topk_ty.fields[1], target=tensor.TupleGetItem(), args=(topk_call, index))
+    idx_ty = typeinfer.TypeInferVisitor().visit(idx_call, typeinfer.TypeInferContext())
     idx_call = replace(idx_call, type=idx_ty)
-    flat_index = Call(type=idx_ty, target=Reshape(new_shape=(K,)), args=(idx_call,))
-    flat_index_ty = TypeInferVisitor().visit(flat_index, TypeInferContext())
+    flat_index = expr.Call(type=idx_ty, target=tensor.Reshape(new_shape=(K,)), args=(idx_call,))
+    flat_index_ty = typeinfer.TypeInferVisitor().visit(flat_index, typeinfer.TypeInferContext())
     flat_index = replace(flat_index, type=flat_index_ty)
-    selected = Call(type=idx_ty, target=IndexSelect(dim=0), args=(table, flat_index))
-    selected_ty = TypeInferVisitor().visit(selected, TypeInferContext())
+    selected = expr.Call(type=idx_ty, target=tensor.IndexSelect(dim=0), args=(table, flat_index))
+    selected_ty = typeinfer.TypeInferVisitor().visit(selected, typeinfer.TypeInferContext())
     assert selected_ty.shape == (K, _D)
     if table_layout is not None:
         assert selected_ty.layout == Layout((K, _D), (_D, 1))
     selected = replace(selected, type=selected_ty)
-    output = Call(type=selected_ty, target=Reshape(new_shape=(1, K, _D)), args=(selected,))
-    output_ty = TypeInferVisitor().visit(output, TypeInferContext())
+    output = expr.Call(type=selected_ty, target=tensor.Reshape(new_shape=(1, K, _D)), args=(selected,))
+    output_ty = typeinfer.TypeInferVisitor().visit(output, typeinfer.TypeInferContext())
     assert output_ty.shape == (1, K, _D)
     output = replace(output, type=output_ty)
-    fn = Function.build(
+    fn = core.Function.from_parts(
         name="topk_dyn_k_index_select", params=(scores, table), body=output, return_type=output_ty
     )
     torch.manual_seed(0)
     for pos, expected_k in ((100, 25), (4096, 512)):
         scores_data = torch.randn(1, pos)
         table_data = torch.randn(pos, _D)
-        out = evaluate(fn, scores_data, table_data)
+        out = evaluator.evaluate(fn, scores_data, table_data)
         assert out.shape == (1, expected_k, _D)
         _, ref_idx = torch.topk(scores_data, expected_k, dim=-1, largest=True, sorted=True)
         ref_out = table_data.index_select(0, ref_idx.reshape(-1)).reshape(1, expected_k, _D)
@@ -232,50 +224,50 @@ def test_dynamic_k_feeds_index_select(table_layout):
 CASES = (
     OpCase(
         "oversized_k_rejected",
-        TopK(k=300, axis=-1),
-        (make_tensor_type((4, 256), _F32),),
+        tensor.TopK(k=300, axis=-1),
+        (TensorType.from_shape((4, 256), _F32),),
         error=ExpectedError(match="exceeds axis"),
     ),
     OpCase(
         "split_on_selected_axis_rejected",
-        TopK(k=2, axis=-1),
+        tensor.TopK(k=2, axis=-1),
         (
             make_shard_tensor_type(
                 (4, 256),
                 mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
-                attrs=(Split(1),),
+                attrs=(types.Split(1),),
             ),
         ),
         error=ExpectedError(match="must not be Split-sharded"),
     ),
     OpCase(
         "partial_input_rejected",
-        TopK(k=2, axis=-1),
+        tensor.TopK(k=2, axis=-1),
         (
             make_shard_tensor_type(
                 (4, 256),
                 mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
-                attrs=(Partial("max"),),
+                attrs=(types.Partial("max"),),
             ),
         ),
         error=ExpectedError(match="x carries Partial"),
     ),
     OpCase(
         "dynamic_k_from_ctx_len_propagates_as_symbolic_output_axis",
-        TopK(k=K, axis=-1),
-        (make_tensor_type((4, POS), _F32),),
-        type=TupleType(fields=(make_tensor_type((4, K), _F32), make_tensor_type((4, K), _I64))),
+        tensor.TopK(k=K, axis=-1),
+        (TensorType.from_shape((4, POS), _F32),),
+        type=TupleType(fields=(TensorType.from_shape((4, K), _F32), TensorType.from_shape((4, K), _I64))),
     ),
     OpCase(
         "symbolic_k_hi_bound_exceeds_static_axis_rejected",
-        TopK(k=_BIG_K, axis=-1),
-        (make_tensor_type((4, 100), _F32),),
+        tensor.TopK(k=_BIG_K, axis=-1),
+        (TensorType.from_shape((4, 100), _F32),),
         error=ExpectedError(match="upper bound"),
     ),
     OpCase(
         "invalid_k_type_rejected",
-        TopK(k="oops", axis=-1),
-        (make_tensor_type((4, 256), _F32),),
+        tensor.TopK(k="oops", axis=-1),
+        (TensorType.from_shape((4, 256), _F32),),
         error=ExpectedError(match="DimVar, or dim expression"),
     ),
 )

@@ -5,7 +5,7 @@ its own window of the output, with no global scratch between them.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 ROWS = 64
 COLS = 64
@@ -17,7 +17,7 @@ GROUP_M = 2
 
 @module(
     entry="store",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", CTAS), Topology("thread", 64)),
 )
 class GroupedPersistentStore:

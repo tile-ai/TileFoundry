@@ -7,32 +7,21 @@ orchestration methods. See [core-ir §1](docs/spec/core-ir.md#1-module).
 from __future__ import annotations
 
 import types
-from dataclasses import MISSING, dataclass, field
-from dataclasses import replace as _replace
+from dataclasses import MISSING, dataclass, field, replace
 from typing import Mapping, Union
 
-from tilefoundry import evaluator
-from tilefoundry.evaluator.interpreter import _run_bound
-from tilefoundry.evaluator.value import tensor_type_of
-from tilefoundry.ir.core.expr import Expr
-from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.types.callable_type import callable_type_for
-from tilefoundry.ir.types.mesh import Topology
-from tilefoundry.ir.types.substitute import canonicalize_topology_dims
-from tilefoundry.ir.types.tensor_type import TensorType, TupleType, UnitType
-from tilefoundry.ir.types.utils import types_compatible
-from tilefoundry.target.base import Target, target_instance
+from tilefoundry import services, target
+from tilefoundry.ir import dim, expr
+from tilefoundry.ir import types as ir_types
 
-ModuleFunction = Union[HirFunction, PrimFunction]
+from .function import Function
+from .prim_function import PrimFunction
 
-_MISSING_PREPARED_WEIGHT = (
-    "[runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)"
-)
+ModuleFunction = Union[Function, PrimFunction]
 
 
 @dataclass(eq=False, init=False)
-class ModuleList(Expr):
+class ModuleList(expr.Expr):
     """An instance slot holding shared definitions, with a lazily projected type.
 
     ``ModuleList(definition)`` is a single slot; a count or a tuple makes an
@@ -40,7 +29,7 @@ class ModuleList(Expr):
     """
 
     key: str | None
-    elements: tuple[Module | type[RuntimeModule], ...]
+    elements: tuple[Module | type, ...]
     indexed: bool
 
     __hash__ = object.__hash__
@@ -60,14 +49,8 @@ class ModuleList(Expr):
             indexed = False
         if not elements:
             raise TypeError("ModuleList requires a Module or a non-empty tuple of Modules")
-        if not all(isinstance(element, Module) for element in elements):
-            from tilefoundry.runtime.module import RuntimeModule  # noqa: PLC0415
-
-            if not all(
-                isinstance(element, type) and issubclass(element, RuntimeModule)
-                for element in elements
-            ):
-                raise TypeError("ModuleList requires Modules or runtime module classes")
+        if not all(isinstance(element, (Module, type)) for element in elements):
+            raise TypeError("ModuleList requires Modules or runtime module classes")
         self.key = None
         self.elements = elements
         self.indexed = indexed
@@ -92,13 +75,13 @@ class ModuleList(Expr):
     @property
     def type(self):
         signatures = tuple(
-            callable_type_for(
+            ir_types.callable_type_for(
                 (param for param in entry.params if not param.is_const),
-                UnitType() if isinstance(entry, PrimFunction) else entry.return_type
+                ir_types.UnitType() if isinstance(entry, PrimFunction) else entry.return_type
             )
             for entry in (element.entry_function() for element in self.elements)
         )
-        return TupleType(signatures) if self.indexed else signatures[0]
+        return ir_types.TupleType(signatures) if self.indexed else signatures[0]
 
     @type.setter
     def type(self, value):
@@ -129,7 +112,7 @@ class Module:
     A Module is also the execution domain of the functions it owns: it carries
     the hardware ``target`` and the ordered ``topologies`` budget those
     functions run against. ``topologies=None`` inherits from the caller's
-    ValuationContext; ``topologies=()`` declares a topology-free Module.
+    valuation.Context; ``topologies=()`` declares a topology-free Module.
     """
 
     name: str = field(hash=False)
@@ -137,8 +120,8 @@ class Module:
 
     entry: str | None = None
     children: dict[str, ModuleList] = field(default_factory=dict, hash=False)
-    target: Target | None = None
-    topologies: tuple[Topology, ...] | None = field(default=None, hash=False)
+    target: target.Target | None = None
+    topologies: tuple[ir_types.Topology, ...] | None = field(default=None, hash=False)
     metadata: dict[str, object] = field(default_factory=dict, hash=False)
     methods: Mapping[str, object] = field(default_factory=dict, hash=False)
 
@@ -150,7 +133,7 @@ class Module:
         declared execution context, and assign each instance slot its key.
         """
         if self.target is not None:
-            target_instance(self.target)
+            target.instance(self.target)
         for fn in self.functions:
             seal = getattr(fn, "seal", None)
             if callable(seal):
@@ -171,7 +154,7 @@ class Module:
                 f"method and a function/child module; names must be disjoint"
             )
         if self.topologies is not None:
-            topologies = tuple(canonicalize_topology_dims(t) for t in self.topologies)
+            topologies = tuple(dim.canonicalize_topology_dims(t) for t in self.topologies)
             if topologies != self.topologies:
                 self.topologies = topologies
             names = [t.name for t in self.topologies]
@@ -187,7 +170,7 @@ class Module:
                 if not isinstance(child, Module):
                     raise TypeError(f"Module {self.name!r}: slot {key!r} requires Module definitions")
 
-    def resolve_target(self) -> Target:
+    def resolve_target(self) -> target.Target:
         """Resolve this definition's own target."""
         root = self
         if root.target is not None:
@@ -198,11 +181,11 @@ class Module:
             "tilefoundry spec core-ir target-inheritance"
         )
 
-    def effective_topologies(self) -> tuple[Topology, ...]:
+    def effective_topologies(self) -> tuple[ir_types.Topology, ...]:
         """This definition's declared topology hierarchy, or an empty one."""
         return self.topologies if self.topologies is not None else ()
 
-    def resolve_topology(self, name: str) -> Topology:
+    def resolve_topology(self, name: str) -> ir_types.Topology:
         """The effective Topology named *name*.
 
         The effective Topology named *name*; raises unless exactly one of
@@ -224,13 +207,13 @@ class Module:
         return matches[0]
 
     @property
-    def weights(self) -> Mapping[str, TensorType]:
+    def weights(self) -> Mapping[str, ir_types.TensorType]:
         """The union of every function's ``ConstTensor`` params, in (function, param) order.
 
         The union of every function's ``ConstTensor`` params, in (function,
         param) order.
         """
-        result: dict[str, TensorType] = {}
+        result: dict[str, ir_types.TensorType] = {}
         owner: dict[str, str] = {}
         for fn in self.functions:
             for p in fn.params:
@@ -288,7 +271,7 @@ class Module:
 
         Declared functions and their variants count. Structural equality and
         matching names do not. With ``derived=True``, a recorded
-        ``_specialized_from`` chain may lead back to an owned function; the
+        ``specialized_from`` chain may lead back to an owned function; the
         whole chain is walked, because a rebuild may itself be rebuilt.
 
         See [core-ir §1](docs/spec/core-ir.md#1-module).
@@ -301,11 +284,11 @@ class Module:
                     return True
         if not derived:
             return False
-        origin = getattr(function, "_specialized_from", None)
+        origin = getattr(function, "specialized_from", None)
         while origin is not None:
             if self.owns(origin):
                 return True
-            origin = getattr(origin, "_specialized_from", None)
+            origin = getattr(origin, "specialized_from", None)
         return False
 
     def entry_function(self) -> ModuleFunction:
@@ -327,9 +310,18 @@ class Module:
             )
         return matches[0]
 
+    def replace_functions(self, functions, *, entry: str | None = None) -> None:
+        """Replace this Module's functions in place, and its entry when *entry* is given.
+
+        Passes rewrite a Module tree in place: child Modules are shared by identity.
+        """
+        self.functions = tuple(functions)
+        if entry is not None:
+            self.entry = entry
+
     def __call__(self, *args):
         """Evaluate the declared entry with every parameter supplied."""
-        return evaluator.evaluate(self.entry_function(), *args)
+        return services.evaluate(self.entry_function(), *args)
 
     def load(self, resource) -> "LoadedModule":
         """Remember *resource* for this Module and its children.
@@ -339,10 +331,10 @@ class Module:
 
         [runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)
         """
-        return self._load_under(resource, self.target, (), "")
+        return self.load_under(resource, self.target, (), "")
 
-    def _load_under(self, resource, target, topologies, path: str) -> "LoadedModule":
-        target = self.target if self.target is not None else target
+    def load_under(self, resource, tgt, topologies, path: str) -> "LoadedModule":
+        tgt = self.target if self.target is not None else tgt
         topologies = self.topologies if self.topologies is not None else topologies
         children = {}
         for key, slot in self.children.items():
@@ -350,123 +342,19 @@ class Module:
             child_path = f"{path}.{key}" if path else key
             if slot.indexed:
                 children[key] = tuple(
-                    child._load_under(base.subtree(str(i)), target, topologies, f"{child_path}.{i}")
+                    child.load_under(base.subtree(str(i)), tgt, topologies, f"{child_path}.{i}")
                     for i, child in enumerate(slot.elements)
                 )
             else:
-                children[key] = slot.elements[0]._load_under(base, target, topologies, child_path)
+                children[key] = slot.elements[0].load_under(base, tgt, topologies, child_path)
         return LoadedModule(
             module=self, resource=resource, children=children,
-            target=target, topologies=topologies, path=path,
+            target=tgt, topologies=topologies, path=path,
         )
 
     def prepare(self, raw, out_dir: str, *, device: str = "cpu") -> None:
         """Prepare canonical weights and write the safetensors checkpoint."""
-        staged: dict[str, object] = {}
-        self._prepare_into(raw, "", staged, device, target=self.target)
-        flat = {name: value.detach().contiguous().cpu() for name, value in staged.items()}
-
-        import json  # noqa: PLC0415 -- stdlib, only needed here
-        from pathlib import Path  # noqa: PLC0415
-
-        from safetensors.torch import save_file  # noqa: PLC0415 -- optional runtime dep
-
-        out = Path(out_dir)
-        out.mkdir(parents=True, exist_ok=True)
-        shard = "model-00001-of-00001.safetensors"
-        save_file(flat, str(out / shard))
-        (out / "model.safetensors.index.json").write_text(
-            json.dumps({"weight_map": {name: shard for name in flat}})
-        )
-
-    def _prepare_into(
-        self, raw, prefix: str, flat: dict, device: str, *,
-        target=None, topologies=(), path: str = "",
-    ) -> "LoadedModule":
-        """Stage this node's canonical weights, children before their owner.
-
-        Converters are HIR bodies on this offline path, making the local
-        evaluator import the one intentional Module-to-evaluator execution dependency.
-        """
-        import torch  # noqa: PLC0415 -- optional runtime dep
-
-        from tilefoundry.runtime.resource import (  # noqa: PLC0415 -- runtime depends on Module
-            DictResource,
-        )
-
-        target = self.target if self.target is not None else target
-        topologies = self.topologies if self.topologies is not None else topologies
-        children = {}
-        for key, slot in self.children.items():
-            base = raw.subtree(key)
-            child_path = f"{path}.{key}" if path else key
-            if slot.indexed:
-                children[key] = tuple(
-                    child._prepare_into(
-                        base.subtree(str(i)), f"{prefix}{key}.{i}.", flat, device,
-                        target=target, topologies=topologies, path=f"{child_path}.{i}",
-                    )
-                    for i, child in enumerate(slot.elements)
-                )
-            else:
-                children[key] = slot.elements[0]._prepare_into(
-                    base, f"{prefix}{key}.", flat, device,
-                    target=target, topologies=topologies, path=child_path,
-                )
-        converter_map: dict[str, ModuleFunction] = {}
-        for fn in self.functions:
-            for weight_name, conv in getattr(fn, "converters", ()):
-                prior = converter_map.get(weight_name)
-                if prior is not None and prior is not conv:
-                    raise ValueError(
-                        f"Module {self.name!r}: weight {weight_name!r} has "
-                        f"more than one registered converter"
-                    )
-                converter_map[weight_name] = conv
-
-        def _fetch(name):
-            parts = raw.load_group(name)
-            value = torch.stack(parts) if parts is not None else raw.load(name)
-            return value.to(device)
-
-        reading = LoadedModule(
-            module=self, resource=DictResource(flat, prefix=prefix), children=children,
-            target=target, topologies=topologies, path=path,
-        )
-        for weight_name, decl_type in self.weights.items():
-            conv = converter_map.get(weight_name)
-            key = prefix + weight_name
-            if conv is None:
-                value = _fetch(weight_name)
-            else:
-                value = _run_bound(
-                    conv, [_fetch(param.name) for param in conv.params],
-                    device=device, reading=reading,
-                )
-            actual = tensor_type_of(value, like=decl_type)
-            if actual.shape != decl_type.shape:
-                source = (
-                    f"converter for weight {key!r}"
-                    if conv is not None
-                    else f"raw weight {key!r}"
-                )
-                raise ValueError(
-                    f"Module {self.name!r}: {source} has shape "
-                    f"{actual.shape}, declared {decl_type.shape}"
-                )
-            if not types_compatible(decl_type, actual):
-                source = (
-                    f"converter for weight {key!r}"
-                    if conv is not None
-                    else f"raw weight {key!r}"
-                )
-                raise ValueError(
-                    f"Module {self.name!r}: {source} has dtype {value.dtype}, declared "
-                    f"{decl_type.dtype}; the way out is a weight converter on the model, "
-                    "not a flag on the read side"
-                )
-            flat[key] = value
-        return reading
+        services.prepare(self, raw, out_dir, device=device)
 
 @dataclass(frozen=True)
 class LoadedModule:
@@ -478,8 +366,8 @@ class LoadedModule:
     module: Module
     resource: object
     children: dict[str, LoadedModule | tuple[LoadedModule, ...]] = field(default_factory=dict)
-    target: Target | None = None
-    topologies: tuple[Topology, ...] = ()
+    target: target.Target | None = None
+    topologies: tuple[ir_types.Topology, ...] = ()
     path: str = ""
 
     @property
@@ -493,8 +381,8 @@ class LoadedModule:
         module = self.module
         matches = tuple(fn for fn in module.functions if fn.name == name)
         if len(matches) == 1:
-            return _replace(
-                self, module=_replace(module, entry=name, target=self.target, topologies=self.topologies)
+            return replace(
+                self, module=replace(module, entry=name, target=self.target, topologies=self.topologies)
             )
         if len(matches) > 1:
             raise AttributeError(
@@ -513,7 +401,7 @@ class LoadedModule:
 
     def __call__(self, *args):
         """Evaluate this loading's declared entry with activation arguments."""
-        return evaluator.evaluate(self, *args)
+        return services.evaluate(self, *args)
 
     def evaluation_target(self):
         """Run my declared entry, its constants read from this loading."""
@@ -553,4 +441,4 @@ def resolve_symbol(module, name: str, *, nested: tuple[str, ...] = ()) -> Module
     return matches[0]
 
 
-__all__ = ["Module", "ModuleList", "LoadedModule", "resolve_symbol"]
+__all__ = ["LoadedModule", "Module", "ModuleFunction", "ModuleList", "resolve_symbol"]

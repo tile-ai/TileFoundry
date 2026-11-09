@@ -1,12 +1,12 @@
 """A name bound before a mesh scope, rebound inside it, and returned after it."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 N = 8
 
 
-@module(entry="probe", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", N),))
+@module(entry="probe", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", N),))
 class EscapedRebindInLoop:
     @func
     def probe(x: Tensor[(N, 4), "f32"]) -> Tensor[(N, 4), "f32"]:

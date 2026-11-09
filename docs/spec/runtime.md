@@ -16,46 +16,44 @@ sections were consolidated under their owning files.
 ### 1.1 `runtime/module.py`
 
 An ir `Module` (the semantic definition — @func bodies the evaluator runs) and
-a `RuntimeModule` (the runtime instance — kernel bodies) are twins: same
-`name`, same child tree, same `entry`. `@runtime_module` / `@runtime_func`
+a `runtime.Module` (the runtime instance — kernel bodies) are twins: same
+`name`, same child tree, same `entry`. `@runtime.module` / `@runtime.func`
 (`tilefoundry.runtime.decorator`, below) build one twin mechanically from the
-other, validated one-to-one at decoration time; the correspondence is
-additionally held by comparing the two numerically ([§1.9](#19-runtimemeasurepy)), against bounds the
-comparison's caller states — a `RuntimeModule` never runs the HIR evaluator.
+other, validated one-to-one at decoration time. The correspondence is held by
+comparing the two numerically ([§1.9](#19-runtimemeasurepy)) against bounds the
+comparison's caller states; a `runtime.Module` never runs the HIR evaluator.
 
-#### `RuntimeModule`
+#### `runtime.Module`
 
-<!-- generated: py-module-RuntimeModule -->
+<!-- generated: py-module-Module -->
 ```python
 # src/tilefoundry/runtime/module.py
-class RuntimeModule:
+class Module:
     name: str
     entry: str | None
-    children: dict[str, RuntimeModule | tuple[RuntimeModule, ...]]
+    children: dict[str, Module | tuple[Module, ...]]
+    module: "core.Module | None" = None
 
     def __init__(
         self,
         name: str,
         entry: str | None = None,
-        children: dict[str, RuntimeModule | tuple[RuntimeModule, ...]] | None = None,
+        children: dict[str, Module | tuple[Module, ...]] | None = None,
     ) -> None: ...
-
-    @property
-    def module(self): ...
 
     def forward(self, *args): ...
 
     def __call__(self, *args): ...
 
-    def load(self, resource: RuntimeResource, *, placement: "Placement | None" = None) -> None: ...
+    def load(self, resource: Resource, *, placement: "types.Placement | None" = None) -> None: ...
 ```
 <!-- /generated -->
 
 - constraints:
   - the base class is authored like a `torch.nn.Module`: subclass it, build
     the child tree in `__init__` (children registered via `children=`), write
-    the composition in `forward`. Function bodies are `RuntimeFunction`
-    attributes called from `forward`. `@runtime_module` (below) generates
+    the composition in `forward`. Function bodies are `runtime.Function`
+    attributes called from `forward`. `@runtime.module` (below) generates
     this subclass mechanically from a semantic `Module` and is the normal
     authoring path; a direct subclass remains available for special cases
     (e.g. `CompiledModule`, below).
@@ -72,73 +70,80 @@ class RuntimeModule:
     every other program's data ([§1.10](#110-shardtensor)).
     Weight prefixes follow module paths, matching ir attribute addressing.
     Lifecycle: construct (structure) → `load` (remember source) → call. A
-    `RuntimeModule` does **not** run `prepare`; it loads straight from the
+    `runtime.Module` does **not** run `prepare`; it loads straight from the
     directory the semantic side prepared ([§1.3](#13-runtimedecoratorpy)).
-  - correspondence contract: the runtime twin's `forward` and the semantic
-    evaluator's `evaluate(LoadedModule, ...)` must agree on the same inputs —
-    `measure.check` comparing them against stated bounds ([§1.9](#19-runtimemeasurepy)) is that
-    contract.
+  - correspondence contract: the twin's `forward` and the semantic
+    `evaluate(LoadedModule, ...)` MUST agree on the same inputs, as judged by
+    `measure.check` against stated bounds ([§1.9](#19-runtimemeasurepy)).
   - `module` names the authored `Module` a twin was generated from, so a
     caller holding an implementation can reach what it is judged against. A
-    `RuntimeModule` that stands for no single authored Module — a compiled entry,
+    `runtime.Module` that stands for no single authored Module — a compiled entry,
     a hand-written subclass — MUST report `None` rather than something chosen
     for it, and a caller that needs one MUST refuse instead of substituting.
-  - `module` is therefore reserved on a twin. An authored `Module` MAY name a
-    function, child or method `module`, and a generated twin binds each of those
-    as an attribute, which would shadow the accessor. `@runtime_module` MUST
-    reject such a Module when it is decorated, rather than generate a twin whose
-    accessor answers something else.
-  - the base class itself holds no weights or resource, and never runs the
-    HIR evaluator.
+  - `module` is therefore reserved on a twin, as are `bound`, `resource`,
+    `placement`, `setup`, `to_local`, `from_local` and `weight_of`, which a
+    generated twin keeps its own state and helpers under. An authored `Module`
+    MAY name a function, child or method `module`, and a generated twin binds
+    each of those as an attribute, which would shadow the field.
+    `@runtime.module` MUST reject such a Module when it is decorated, rather than
+    generate a twin whose field answers something else.
+  - the base class holds no weights or resource.
   - two origins: compiled — `tilefoundry.build` / `compile` / `jit` →
-    `LinkedModule` → the loader binds a `CompiledModule` (a `RuntimeModule`,
-    not a `RuntimeFunction`) ([§1.4](#14-runtimeloaderpy)); handwritten — a `@runtime_module`
+    `LinkedModule` → the loader binds a `CompiledModule` (a `runtime.Module`,
+    not a `runtime.Function`) ([§1.4](#14-runtimeloaderpy)); handwritten — a `@runtime.module`
     class (below), loading from a prepared checkpoint directory via a
-    `RuntimeResource` ([§1.8](#18-runtimeresourcepy)).
+    `runtime.Resource` ([§1.8](#18-runtimeresourcepy)).
 
 #### `CompiledModule`
 
 <!-- generated: py-module-CompiledModule -->
 ```python
 # src/tilefoundry/runtime/module.py
-class CompiledModule(RuntimeModule):
-    def __init__(self, type: CallableSignature, fn: Callable) -> None: ...
+class CompiledModule(Module):
+    def __init__(self, type: codegen.CallableSignature, fn: Callable) -> None: ...
 
-    def load(self, resource: RuntimeResource, *, placement: "Placement | None" = None) -> None: ...
+    def load(self, resource: Resource, *, placement: "types.Placement | None" = None) -> None: ...
+
+    def program_ids(self) -> tuple: ...
 
     def forward(self, *args): ...
+
+    def alloc_outputs(self, args) -> tuple: ...
 ```
 <!-- /generated -->
 
 `CompiledModule.forward(*args)` uses the out-param ABI (`type.output_count`
 trailing params are outputs):
 
-- **Auto-alloc**: `len(args) == type.input_count` — allocates output tensors
-  from the first input's device/dtype, calls the entry, returns result(s).
-- **Pre-alloc**: `len(args) == len(type.params)` — uses provided output tensors,
-  returns same output(s). All outputs must be provided; partial → `TypeError`.
+- **Auto-alloc**: `len(args) == type.input_count` — allocates the outputs on
+  the device of the first `torch.Tensor` among the inputs, calls the entry,
+  returns result(s). With no `torch.Tensor` input it raises `TypeError`.
+- **Pre-alloc**: `len(args) == len(type.params)` — uses the provided output
+  tensors and returns them. Any other argument count raises `TypeError`.
 - **Return**: single output → bare tensor; multiple outputs → `tuple`.
+- **Program ids**: when `type.leading` is non-empty, the ids of those topology
+  levels, read from the `Placement` given to `load`, are passed ahead of the
+  arguments; with no `Placement` the call raises `ValueError`.
 
-Auto-alloc is torch-only; non-torch inputs raise `TypeError`. Output metadata
-(dtype, shape) comes from `CallableSignature.output_params` — each
-`TensorSignature.type` carries them (set by codegen from lowered IR, NOT
-guessed at runtime). This convention is specific to `CompiledModule`; other
-`RuntimeModule.forward` implementations are not bound by it.
+Output shape and dtype come from `CallableSignature.output_params` (set by
+codegen from lowered IR, never guessed at runtime). This convention is specific
+to `CompiledModule`; other `runtime.Module.forward` implementations are not
+bound by it.
 
 ### 1.2 `runtime/function.py`
 
-`RuntimeFunction` is the **base class** for a node's function body; a body
+`runtime.Function` is the **base class** for a node's function body; a body
 subclasses it and overrides `__call__`. A handwritten torch or another implementation
 implementation takes whatever it needs (converted weights, caches) at
-construction and returns its value(s) directly. `RuntimeFunction.type` is the
+construction and returns its value(s) directly. `runtime.Function.type` is the
 `CallableSignature` codegen produced for that function
 ([codegen §4.4](./codegen.md#44-signatures)).
 
 <!-- generated: py-function -->
 ```python
 # src/tilefoundry/runtime/function.py
-class RuntimeFunction:
-    def __init__(self, type: CallableSignature) -> None: ...
+class Function:
+    def __init__(self, type: codegen.CallableSignature) -> None: ...
 
     def __call__(self, *args): ...
 ```
@@ -156,10 +161,10 @@ class RuntimeFunction:
 <!-- generated: py-decorator -->
 ```python
 # src/tilefoundry/runtime/decorator.py
-def runtime_func(fn: Callable) -> Callable: ...
+def func(fn: Callable) -> Callable: ...
 
 
-def runtime_module(sem: Module) -> Callable[[type], type]: ...
+def module(sem: ir_core.Module) -> Callable[[type], type]: ...
 ```
 <!-- /generated -->
 
@@ -176,15 +181,15 @@ A converter is an HIR body like any other and MAY reach another node's function.
 
 `load` and `prepare` are methods on the IR `Module` owned by
 [core-ir §1](./core-ir.md#1-module). Execution of a loaded reading is entered
-through `evaluator.evaluate`; this section defines that runtime-facing behavior
+through `interfaces.evaluator.evaluate`; this section defines that runtime-facing behavior
 and the distinct loaded view:
 
 ```python
 class LoadedModule:
     """Bind one reading of an IR Module to its resource."""
 
-    module: Module
-    resource: RuntimeResource
+    module: core.Module
+    resource: object  # a runtime.Resource
     children: dict[str, LoadedModule | tuple[LoadedModule, ...]]
     target: Target | None
     topologies: tuple[Topology, ...]
@@ -214,7 +219,7 @@ passes only activations; constants come from its resource at first use.
     slot adds its key, each indexed slot adds `key.i`, joined with dots. A missing
     weight diagnostic MUST retain `missing declared weight '<name>'` and include
     the complete path-plus-weight key, e.g. `layers.3.w`. This MUST NOT extend the
-    RuntimeResource protocol.
+    runtime.Resource protocol.
   - `Module.prepare` (semantic side, offline, once): walk every instance,
     children before their parent, using the same key and index segments as load.
     Each instance MUST run its definition's converters independently against its
@@ -236,7 +241,7 @@ passes only activations; constants come from its resource at first use.
     checkpoints, two devices — and each reading is independent of the others.
     A definition reached from two slots therefore yields one `LoadedModule` per
     instance rather than one binding the last instance wins. This is the semantic-side
-    counterpart of the `RuntimeModule` twin's own `load` ([§1.1](#11-runtimemodulepy)).
+    counterpart of the `runtime.Module` twin's own `load` ([§1.1](#11-runtimemodulepy)).
   - The caller supplies `evaluate(..., device=...)`. Every activation and every
     weight used by the reading MUST already be on that device; a mismatch is
     rejected at the activation binding or weight's first-use point, naming the
@@ -274,32 +279,32 @@ passes only activations; constants come from its resource at first use.
     across steps. These methods bind on the runtime twin in the same way as
     `forward`.
 
-#### `@runtime_module` / `@runtime_func`
+#### `@runtime.module` / `@runtime.func`
 
 
-`@runtime_module(sem)` is a class decorator taking the semantic `Module`
-instance; it returns a `RuntimeModule` subclass whose instances are *sem*'s
+`@runtime.module(sem)` is a class decorator taking the semantic `Module`
+instance; it returns a `runtime.Module` subclass whose instances are *sem*'s
 runtime twin — same function names, same child tree, same entry.
-`@runtime_func` tags a plain method as a kernel body: same call signature as
+`@runtime.func` tags a plain method as a kernel body: same call signature as
 the semantic `@func` of the same name, weight params included.
 
 ```python
 # example
-@runtime_module(attention_sem)
+@runtime.module(attention_sem)
 class Attention:
-    @runtime_func                                    # weight params included, in the
+    @runtime.func                                    # weight params included, in the
     def mla_kv_update(self, hidden, gamma_kv, w_kv,  # semantic @func's own order
                       cos_pos, sin_pos, kv_cache0, cur_pos, s):
         ...  # a real kernel body, e.g. a torch or another implementation implementation
 
-    moe = SomeMoeRuntimeClass  # a @runtime_module class, not an instance
+    moe = SomeMoeRuntimeClass  # a @runtime.module class, not an instance
 ```
 
 - constraints:
   - decoration-time validation is **strictly one-to-one**: the
-    `@runtime_func` name set (a tagged method, or a `RuntimeFunction`
+    `@runtime.func` name set (a tagged method, or a `runtime.Function`
     instance class attribute — a heavy kernel that owns its own compilation
-    state, standing in for a `@runtime_func`) MUST equal `sem`'s function
+    state, standing in for a `@runtime.func`) MUST equal `sem`'s function
     name set, and the child-attribute name set MUST equal `sem.children`'s
     key set; missing *or* extra either MUST be rejected. Each slot MUST
     match both its single/indexed form and its number of elements, and a mismatch
@@ -319,8 +324,7 @@ class Attention:
     runtime side: inside them, `self.<fn>` / `self.<child>` resolve to the
     runtime twin's own kernels / children. Absent an own `forward`, the generated
     class runs `sem.methods["forward"]` if present, else calls the entry function
-    by name. A loaded semantic Module resolves the same named functions,
-    children, and methods ([§1.3](#13-runtimedecoratorpy)).
+    by name.
 
 ### 1.4 `runtime/loader.py`
 
@@ -333,26 +337,27 @@ def load_linked_module(linked: "LinkedModule") -> CompiledModule: ...
 
 ```
 Module (IR) → codegen: per-target LinkableModule… → LinkedModule (.so + metadata)
-LinkedModule → load → CompiledModule (fully-loaded, public, callable RuntimeModule)
+LinkedModule → load → CompiledModule (fully-loaded, public, callable runtime.Module)
 ```
 
 `LinkedModule` is a codegen product
 ([codegen §4.3](./codegen.md#43-linkedmodule)); the loader that turns it into a
 `CompiledModule` is owned here. The loader and `LinkedModule` are not public
-API; only `CompiledModule` (a `RuntimeModule`) is. `load_linked_module` returns
+API; only `CompiledModule` (a `runtime.Module`) is. `load_linked_module` returns
 `CompiledModule(type=replace(entry.signature, name=entry.name), fn=entry_callable)`,
-where `entry` is the first `LinkedFunction`, the `Module.entry` host;
-`name` / `entry` are its registration name. Its `forward` implements the out-param calling
-convention directly ([§1.1](#11-runtimemodulepy)) — there is no separate function-body object it
-delegates to. The compiled path has no `resource` / `weights` / `states`
-(weights are ordinary entry arguments), so its `load` is the inherited no-op.
+where `entry` is the first `LinkedFunction` (codegen sorts the `Module.entry`
+host first); `name` / `entry` are its registration name. Its `forward`
+implements the out-param calling convention directly
+([§1.1](#11-runtimemodulepy)). The compiled path has no `resource` / `weights`
+(weights are ordinary entry arguments), so `load` only records the
+`Placement` and recurses into no children.
 
 #### Launcher ABI
 
-`tilefoundry.build(mod)` internally runs codegen and links the artifact (see
-[codegen](./codegen.md)), then loads it and binds the entry; these are
-implementation details. Users interact only with `RuntimeModule.__call__` /
-`RuntimeFunction.__call__`.
+`tilefoundry.build(mod)` runs codegen, links the artifact (see
+[codegen](./codegen.md)), loads it and binds the entry; it MUST raise
+`ValueError` when `Module.entry` is not a CPU host `PrimFunction`. Users interact
+only with `runtime.Module.__call__` / `runtime.Function.__call__`.
 
 Load contract:
 
@@ -360,13 +365,14 @@ Load contract:
   ([codegen §4.3](./codegen.md#43-linkedmodule))
 - loading uses `tvm_ffi.load_module(...)`
 - immediately after loading, entry binding uses
-  `tvm_ffi.get_global_func(entry.name)`; `RuntimeModule.entry` is this
+  `tvm_ffi.get_global_func(entry.name)`; `runtime.Module.entry` is this
   dotted registration name
 - the loader keeps every library it loads until process exit, because the
   global registration table does not keep the shared library loaded
 - host registration allows override: another load replaces the global entry,
   while an existing `CompiledModule` retains its own callable
-- the compiled loader requires exactly one `LinkedFunction`
+- a library that lacks the entry's registration is a `RuntimeError` naming the
+  library and the entry
 - callable arguments are DLPack-compatible tensors; `torch.Tensor` is one
   supported caller-side provider but is not the semantic contract itself
 
@@ -391,65 +397,97 @@ A refused launch MUST raise `RuntimeError` from the call and identify the
 kernel and device error. Execution faults may surface asynchronously at the
 next device synchronization.
 
-### 1.6 `compile.py`
+### 1.6 `compiler/`
 
-<!-- generated: py-compile -->
+<!-- generated: py-compile-options -->
 ```python
-# src/tilefoundry/compile.py
+# src/tilefoundry/compiler/options.py
 @dataclass(frozen=True)
-class CompilerOptions:
-    target: Target
-
-    def canonical_text(self) -> str: ...
-
-
-def normalize_to_module(fn_or_mod: HirFunction | Module) -> Module: ...
-
-
-def build(mod: Module, /, *, target: Target | None = None) -> "RuntimeModule": ...
-
-
-def compile(mod: Module, /, *, target: Target | None = None) -> "RuntimeModule": ...
-
-
-def jit(
-    fn_or_mod, /, *, target: Target | None = None, options: CompilerOptions | None = None, **kwargs
-) -> "RuntimeModule": ...
+class Options:
+    target: tilefoundry_target.Target
+    passes: passes.Options = passes.Options()
+    codegen: codegen.Options = codegen.Options()
+    dump: dump.Flags = dump.Flags.ALL
 ```
 <!-- /generated -->
 
-- constraints:
-  - accepts only TileFoundry IR (`Function` / `Module`); raw Python functions
-    raise `TypeError`; the full input contract is stated below.
+<!-- generated: py-compile -->
+```python
+# src/tilefoundry/compiler/compilation.py
+def normalize_to_module(fn_or_mod: core.Function | core.Module) -> core.Module: ...
+
+
+def resolve_options(
+    operation: str,
+    mod: core.Module,
+    target: tilefoundry_target.Target | None,
+    options: Options | None,
+) -> Options: ...
+
+
+def build(
+    mod: core.Module,
+    /,
+    *,
+    target: tilefoundry_target.Target | None = None,
+    options: Options | None = None,
+) -> "runtime.Module": ...
+
+
+def compile(
+    mod: core.Module,
+    /,
+    *,
+    target: tilefoundry_target.Target | None = None,
+    options: Options | None = None,
+) -> "runtime.Module": ...
+```
+<!-- /generated -->
+
+```python
+# src/tilefoundry/compiler/jit_cache.py: `jit` is the one instance of `Jit`
+def jit(
+    fn_or_mod, /, *, target: Target | None = None, options: Options | None = None, **kwargs
+) -> "runtime.Module": ...
+
+
+class Jit:
+    def __call__(self, fn_or_mod, /, *, target=None, options=None, **kwargs) -> "runtime.Module": ...
+    def cache_clear(self) -> None: ...
+    def cache_info(self) -> dict: ...  # {"size": N}
+```
 
 `tilefoundry.jit(fn_or_mod, *, target=None, options=None)` is the JIT
-entry point.  It accepts a `hir.Function` or `Module`, normalizes to a
-`Module`, compiles with cache, and returns a callable `RuntimeModule`.
+entry point. It accepts a `core.Function` or `Module`, normalizes to a
+`Module`, compiles with cache, and returns a callable `runtime.Module`.
 
 **Input contract**:
-- Only TileFoundry IR objects (`Function` / `Module`) accepted.
-- Raw Python functions raise `TypeError` — use `@func` first.
+- Only TileFoundry IR objects (`Function` / `Module`) are accepted; anything
+  else, including a raw Python function, raises `TypeError` — use `@func`
+  first. An unexpected keyword raises `TypeError`.
 - A stated `target` MUST be a constructed Target instance. Strings
   MUST be refused and MUST NOT select a backend or construct a Target.
-- A Module-owned Target takes precedence and is retained as the exact instance;
-  a conflicting explicit Target or `CompilerOptions.target` MUST fail.
+- A Module-owned Target is retained as the exact instance; a conflicting
+  explicit Target or `Options.target` MUST fail. With no Module Target the
+  Target is the explicit one, else `Options.target`, else the host CPU
+  (`resolve_options`).
 - Topology is declared by the `Module`; a single-function
   `@func(topologies=...)` declares it through the implicit `Module` that
   decorator yields ([parser §2.1](./parser.md#21-syntax)).
-- Mesh layout is expressed in the DSL with lexical `with Mesh(...) as mesh` scopes.
-- `jit()` has no `cta_mesh` / `thread_mesh` parameters.
+- Mesh layout is expressed with lexical `with Mesh(...) as mesh` scopes;
+  `jit()` has no `cta_mesh` / `thread_mesh` parameters.
 
-**Pipeline**: `jit()` reuses [passes §6](./passes.md#6-top-level-api)'s `build()`
-pipeline (`compile()`). It auto-wraps a bare `Function` input into a
-single-function `Module` that declares no execution context.
+**Pipeline**: `jit()` runs `compile()` ([passes §6](./passes.md#6-top-level-api)).
+A bare `Function` input is wrapped into a single-function `Module` that
+declares no execution context.
 
-**Cache**: in-process dict cache keyed by
-`sha256(canonical_module_text + target_text + canonical_options_text)`.
+**Cache**: in-process dict cache, held by the `jit` object, keyed by
+`sha256(canonical_module_text + "\0" + repr(options))`; the `repr` of the frozen
+`compiler.Options` names the Target and every stage's option.
 `canonical_module_text` includes functions, declared topology hierarchies, and
 `with Mesh` scopes. Independently compiled Modules declare their execution
-context ([core-ir §1](./core-ir.md#1-module)). No
-Python object identity and no
-dedicated `cta_mesh` / `thread_mesh` key fields participate in the key.
+context ([core-ir §1](./core-ir.md#1-module)). No Python object identity
+participates in the key.
 `jit.cache_clear()` evicts; `jit.cache_info()` returns `{"size": N}`.
 
 ### 1.8 `runtime/resource.py`
@@ -472,22 +510,28 @@ class Preprocessed:
     read: Convert
 
 
-class RuntimeResource(Protocol):
-    def load(self, name: str) -> torch.Tensor: ...
+def resolved_device(device: str) -> str: ...
 
-    def load_group(self, name: str) -> "tuple[torch.Tensor, ...] | None": ...
 
-    def subtree(self, seg: str) -> "RuntimeResource": ...
+class Resource(Protocol):
+    def load(self, name: str) -> utils.torch.Tensor: ...
+
+    def load_group(self, name: str) -> "tuple[utils.torch.Tensor, ...] | None": ...
+
+    def subtree(self, seg: str) -> "Resource": ...
 
 
 class DictResource:
     def __init__(
-        self, data: Mapping[str, torch.Tensor], prefix: str = "", alias: AliasMap | None = None
+        self,
+        data: Mapping[str, utils.torch.Tensor],
+        prefix: str = "",
+        alias: AliasMap | None = None,
     ) -> None: ...
 
-    def load(self, name: str) -> torch.Tensor: ...
+    def load(self, name: str) -> utils.torch.Tensor: ...
 
-    def load_group(self, name: str) -> "tuple[torch.Tensor, ...] | None": ...
+    def load_group(self, name: str) -> "tuple[utils.torch.Tensor, ...] | None": ...
 
     def subtree(self, seg: str) -> "DictResource": ...
 
@@ -497,9 +541,15 @@ class SafetensorsResource:
         self, ckpt_dir: str, prefix: str = "", *, device: str, alias: AliasMap | None = None
     ) -> None: ...
 
-    def load(self, name: str) -> torch.Tensor: ...
+    def share_cache_of(self, parent: "SafetensorsResource") -> None: ...
 
-    def load_group(self, name: str) -> "tuple[torch.Tensor, ...] | None": ...
+    def index(self) -> dict[str, str]: ...
+
+    def read_one(self, raw_key: str) -> utils.torch.Tensor: ...
+
+    def load(self, name: str) -> utils.torch.Tensor: ...
+
+    def load_group(self, name: str) -> "tuple[utils.torch.Tensor, ...] | None": ...
 
     def subtree(self, seg: str) -> "SafetensorsResource": ...
 
@@ -507,21 +557,23 @@ class SafetensorsResource:
 class DrawnResource:
     def __init__(
         self,
-        module: Module | ModuleList,
-        generator: torch.Generator,
+        module: core.Module | core.ModuleList,
+        generator: utils.torch.Generator,
         device: str,
-        drawn: dict[str, torch.Tensor] | None = None,
+        drawn: dict[str, utils.torch.Tensor] | None = None,
         prefix: str = "",
     ) -> None: ...
 
-    def load(self, name: str) -> torch.Tensor: ...
+    def load(self, name: str) -> utils.torch.Tensor: ...
 
     def load_group(self, name: str) -> None: ...
 
     def subtree(self, seg: str) -> "DrawnResource": ...
 
 
-def draw_tensor(declared: TensorType, generator: torch.Generator, device: str) -> torch.Tensor: ...
+def draw_tensor(
+    declared: types.TensorType, generator: utils.torch.Generator, device: str
+) -> utils.torch.Tensor: ...
 ```
 <!-- /generated -->
 
@@ -536,8 +588,8 @@ def draw_tensor(declared: TensorType, generator: torch.Generator, device: str) -
     `None` when *name* has no tuple-valued alias — the ordinary, one-to-one
     case.
   - `subtree(seg)` returns a view scoped under one more path *segment*
-    (`seg` is itself alias-resolved), so a child `RuntimeModule` addresses
-    its own weights by their bare (unprefixed) name — `RuntimeModule.__init__`
+    (`seg` is itself alias-resolved), so a child `runtime.Module` addresses
+    its own weights by their bare (unprefixed) name — `runtime.Module.__init__`
     never sees a dotted name.
   - the resource resolves names and reads tensors. It MUST NOT stack, and it
     reshapes only where a `Preprocessed` alias entry states that the checkpoint
@@ -547,8 +599,10 @@ def draw_tensor(declared: TensorType, generator: torch.Generator, device: str) -
     `torch.stack`, and so does any value that is a function of more than one raw
     tensor. `Preprocessed` MUST resolve to one name: a tuple-valued name is
     rejected at construction, naming the weight converter as the way to express
-    it. Precision is not preprocessing: a read MUST return the checkpoint's own
-    stored element type and be validated against the declaration ([§1.3](#13-runtimedecoratorpy)).
+    it. Precision is not preprocessing: every read tensor keeps the element type
+    the checkpoint stores, a declaration requiring another precision uses a
+    weight converter, and `load` validates the converted or raw result against
+    the declaration ([§1.3](#13-runtimedecoratorpy)).
 
 An `alias` entry renames one path *segment* or *leaf* **within the current
 scope**, joined onto the caller's already-accumulated prefix: lookup order is
@@ -603,10 +657,6 @@ to one relative name.
     the same name again would produce another random tensor, so the two sides
     of a comparison would no longer receive the same value. It has no alias
     groups, so `load_group` always returns `None`.
-  - every read tensor keeps the element type the checkpoint stores. A
-    declaration requiring a different precision uses a weight converter
-    ([§1.3](#13-runtimedecoratorpy)), and `load` validates the converted or raw result against that
-    declaration.
 
 ### 1.9 `runtime/measure.py`
 
@@ -622,7 +672,11 @@ class Predicate:
     guidance: ClassVar[str] = ""
 
     def measure(
-        self, candidate: torch.Tensor, reference: torch.Tensor | None
+        self, candidate: utils.torch.Tensor, reference: utils.torch.Tensor | None
+    ) -> "PredicateResult": ...
+
+    def result(
+        self, values: Mapping[str, float], passed: bool, note: str | None = None
     ) -> "PredicateResult": ...
 
 
@@ -687,10 +741,12 @@ class NanInf(Predicate):
     def measure(self, candidate, reference=None): ...
 
 
-PREDICATES: Mapping[str, type[Predicate]] = {
-    predicate.name: predicate
-    for predicate in (AllClose, RelL2, Cosine, Equal, Ulp, MaxAbs, MaxRel, NanInf)
-}
+PREDICATES: Mapping[str, type[Predicate]] = MappingProxyType(
+    {
+        predicate.name: predicate
+        for predicate in (AllClose, RelL2, Cosine, Equal, Ulp, MaxAbs, MaxRel, NanInf)
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -713,7 +769,7 @@ class Report:
     def passed(self) -> bool: ...
 
 
-def flatten_outputs(x, path: str = "output") -> list[tuple[str, torch.Tensor]]: ...
+def flatten_outputs(x, path: str = "output") -> list[tuple[str, utils.torch.Tensor]]: ...
 
 
 def check(
@@ -732,12 +788,13 @@ def check(
   - `check` runs `candidate(*inputs)`, and `reference(*inputs)` when there is a
     reference, and measures each output against the predicates *expect* states
     for it. Neither *reference* nor *expect* has a default.
-  - an input MAY be a bare tensor or an arbitrarily nested tuple of tensors. Every
-    leaf MUST be a tensor.
-  - a result MAY be a bare tensor or an arbitrarily nested tuple of tensors
-    (e.g. `forward`'s `(logits, past_key_values)`). `check` flattens both
-    results and MUST reject a candidate whose flattened structure, shape or
-    dtype differs from the reference's.
+  - `inputs` is passed positionally to both callables.
+  - a result MUST be a bare tensor or an arbitrarily nested tuple of tensors
+    (e.g. `forward`'s `(logits, past_key_values)`); any other leaf raises
+    `TypeError`. `check` flattens both results and MUST reject a candidate
+    whose flattened structure, shape or dtype differs from the reference's.
+    A returned `ShardTensor` is compared as the one program's piece it holds;
+    data of more than one program raises `TypeError` ([§1.10](#110-shardtensor)).
   - every produced tensor MUST have exactly one non-empty list of predicates,
     and a path *expect* names that was not produced MUST be rejected. A result
     that flattens to nothing MUST be an error rather than a pass.
@@ -752,8 +809,8 @@ def check(
   - `OutputCheck.passed` and `Report.passed` are read-only properties derived
     as `all` of their parts; neither is accepted as a constructor field, so a
     verdict cannot disagree with the measurements printed beside it.
-  - it is not specific to `RuntimeModule`: *candidate* / *reference* may be a
-    `RuntimeModule` bound method, a raw torch callable, or an evaluator
+  - it is not specific to `runtime.Module`: *candidate* / *reference* may be a
+    `runtime.Module` bound method, a raw torch callable, or an evaluator
     closure — anything callable on *inputs*.
 
 ### 1.10 `ShardTensor`
@@ -769,25 +826,27 @@ OneFlow's. The evaluator holds its values in the same class
 <!-- generated: py-tensor -->
 ```python
 # src/tilefoundry/core/tensor.py
-def local_type(type: TensorType) -> TensorType: ...
+def local_type(type: types.TensorType) -> types.TensorType: ...
 
 
 @dataclass(frozen=True)
 class ShardTensor:
-    type: TensorType
-    tensor: "torch.Tensor | tuple[tuple[Placement, torch.Tensor], ...]"
+    type: types.TensorType
+    tensor: "utils.torch.Tensor | tuple[tuple[types.Placement, utils.torch.Tensor], ...]"
 
     @property
     def is_global(self) -> bool: ...
 
     @property
-    def placements(self) -> tuple[Placement, ...]: ...
+    def placements(self) -> tuple[types.Placement, ...]: ...
 
-    def to_local(self, placement: "Placement | None") -> "torch.Tensor": ...
+    def to_local(self, placement: "types.Placement | None") -> "utils.torch.Tensor": ...
 
     def to_global(self) -> "ShardTensor": ...
 
-    def reshard(self, type: TensorType) -> "ShardTensor": ...
+    def reshard(self, type: types.TensorType) -> "ShardTensor": ...
+
+    def window(self, whole, shard: types.ShardLayout, placement: types.Placement): ...
 ```
 <!-- /generated -->
 
@@ -811,7 +870,7 @@ class ShardTensor:
     that differ, MUST be refused.
   - a level whose id is unfixed MUST be left undivided
     ([shard §5.1](shard.md#51-placement)).
-  - a `RuntimeModule`'s public boundary takes and returns `ShardTensor`, while
+  - a `runtime.Module`'s public boundary takes and returns `ShardTensor`, while
     a body -- a Python reference or a launched kernel alike -- only ever
     receives the local `torch.Tensor`. A returned tensor is already one
     program's, so it is returned as a local view: this program's piece under the

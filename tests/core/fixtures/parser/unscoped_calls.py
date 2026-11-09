@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="logical", target=CpuTarget())
+@module(entry="logical", target=cpu.Target())
 class Logical:
     @func
     def logical(x: Tensor[(4,), "f32"]):
         return tf.add(x, x)
 
 
-@module(entry="tir", target=CpuTarget())
+@module(entry="tir", target=cpu.Target())
 class Tir:
     @prim_func
     def tir(x: Tensor[(4,), "f32"]):

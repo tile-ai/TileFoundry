@@ -53,10 +53,10 @@ if _HERE not in sys.path:
 
 from config import REAL  # noqa: E402 -- must follow the sys.path bootstrap
 from tilefoundry import DType, func, module
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 from tilefoundry.dsl import ConstTensor, ModuleList, Tensor, tf  # noqa: F401 -- tf used by @func bodies
-from tilefoundry.evaluator import to_torch_dtype
-from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.interfaces.evaluator import to_torch_dtype
+from tilefoundry.ir.expr import DimVar
 from tilefoundry.runtime import Absolute
 
 
@@ -757,7 +757,7 @@ def build(config):
     # "measuring or scheduling against a device the author never declared is a
     # silent wrong answer". The constructed H200 SXM Target states 132 SMs,
     # 4.8 TB/s of HBM, and 989.5 TFLOP/s dense bf16 from the installed document.
-    @module(target=CudaTarget("nvidia.h200_sxm"))
+    @module(target=cuda.Target("nvidia.h200_sxm"))
     class Qwen3_5Decoder:
         """The layer stack in `config.layer_types` order, and the step around it
         -- embedding, the walk, the closing norm, the head. Each layer is an

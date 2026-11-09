@@ -9,24 +9,12 @@ import pytest
 from tests.core._corpus import case
 from tests.nvidia.cuda.analysis.sync_cases import FIXTURES, GEMM, SyncCase, _analyzed
 from tests.nvidia.cuda.schedule._support import _RetainedStatements
-from tilefoundry.ir.tir import CpAsyncCommit, CpAsyncWait
-from tilefoundry.ir.tir.async_copy import CopyAsync
-from tilefoundry.ir.tir.memory import Copy, Fill
-from tilefoundry.ir.tir.sync import Sync
-from tilefoundry.ir.types import StorageKind
-from tilefoundry.passes.transforms import LoweringError
+from tilefoundry.ir import expr, tir
+from tilefoundry.ir.tir import memory
+from tilefoundry.passes import transforms
 from tilefoundry.schedule import finalize
-from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import (
-    CopyAsyncTensor,
-    CopyAsyncTensorTx,
-)
-from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
-from tilefoundry_nvidia.cuda.ir.tir.sync.wgmma import (
-    FenceProxyAsync,
-    WgmmaCommitGroup,
-    WgmmaFence,
-    WgmmaWaitGroup,
-)
+from tilefoundry_nvidia.cuda.ir.tir import memory as tir_memory
+from tilefoundry_nvidia.cuda.ir.tir import nn, sync
 
 
 def _lowered(module):
@@ -57,9 +45,9 @@ class RowWindows(SyncCase):
 
     def guard(self, state, problems):
         operations = _operations(state)
-        start = operations.index(CopyAsync)
-        end = operations.index(Copy, start)
-        assert operations[start + 1 : end] == [CpAsyncCommit, CpAsyncWait, Sync]
+        start = operations.index(tir.async_copy.CopyAsync)
+        end = operations.index(memory.Copy, start)
+        assert operations[start + 1 : end] == [tir.async_copy.CpAsyncCommit, tir.async_copy.CpAsyncWait, tir.sync.Sync]
 
 
 @case
@@ -70,8 +58,8 @@ class LaneRows(SyncCase):
 
     def guard(self, state, problems):
         operations = _operations(state)
-        assert Copy in operations
-        assert Sync not in operations
+        assert memory.Copy in operations
+        assert tir.sync.Sync not in operations
 
 
 @case
@@ -87,19 +75,19 @@ class TmaLoadsBeforeWgmma(SyncCase):
 
     def guard(self, state, problems):
         kinds = [
-            (type(op), op.storage) if isinstance(op, FenceProxyAsync) else type(op)
+            (type(op), op.storage) if isinstance(op, sync.FenceProxyAsync) else type(op)
             for op in _loop_operations(state)
-            if isinstance(op, (Sync, FenceProxyAsync, CopyAsyncTensorTx, TiledMma))
+            if isinstance(op, (tir.sync.Sync, sync.FenceProxyAsync, tir_memory.CopyAsyncTensorTx, nn.TiledMma))
         ]
-        first = kinds.index(TiledMma)
+        first = kinds.index(nn.TiledMma)
         assert kinds[: first + 1] == [
-            Sync,
-            (FenceProxyAsync, StorageKind.GMEM),
-            Sync,
-            CopyAsyncTensorTx,
-            CopyAsyncTensorTx,
-            Sync,
-            TiledMma,
+            tir.sync.Sync,
+            (sync.FenceProxyAsync, expr.StorageKind.GMEM),
+            tir.sync.Sync,
+            tir_memory.CopyAsyncTensorTx,
+            tir_memory.CopyAsyncTensorTx,
+            tir.sync.Sync,
+            nn.TiledMma,
         ]
 
 
@@ -116,14 +104,14 @@ class TmaStoreAfterPlainWrites(SyncCase):
 
     def guard(self, state, problems):
         kinds = [
-            (type(op), op.storage) if isinstance(op, FenceProxyAsync) else type(op)
+            (type(op), op.storage) if isinstance(op, sync.FenceProxyAsync) else type(op)
             for op in _lowered(state).operations
-            if isinstance(op, (Fill, Copy, FenceProxyAsync, Sync, CopyAsyncTensor))
+            if isinstance(op, (memory.Fill, memory.Copy, sync.FenceProxyAsync, tir.sync.Sync, tir_memory.CopyAsyncTensor))
         ]
-        fill = kinds.index(Fill)
-        assert kinds[fill : fill + 3] == [Fill, (FenceProxyAsync, StorageKind.GMEM), Sync]
-        store = kinds.index(CopyAsyncTensor)
-        assert kinds[store - 3 : store] == [Copy, (FenceProxyAsync, None), Sync]
+        fill = kinds.index(memory.Fill)
+        assert kinds[fill : fill + 3] == [memory.Fill, (sync.FenceProxyAsync, expr.StorageKind.GMEM), tir.sync.Sync]
+        store = kinds.index(tir_memory.CopyAsyncTensor)
+        assert kinds[store - 3 : store] == [memory.Copy, (sync.FenceProxyAsync, None), tir.sync.Sync]
 
 
 @case
@@ -138,17 +126,17 @@ class TmaStoreBetweenReads(SyncCase):
 
     def guard(self, state, problems):
         kinds = [
-            (type(op), op.storage) if isinstance(op, FenceProxyAsync) else type(op)
+            (type(op), op.storage) if isinstance(op, sync.FenceProxyAsync) else type(op)
             for op in _lowered(state).operations
-            if isinstance(op, (Copy, FenceProxyAsync, Sync, CopyAsyncTensor))
+            if isinstance(op, (memory.Copy, sync.FenceProxyAsync, tir.sync.Sync, tir_memory.CopyAsyncTensor))
         ]
-        store = kinds.index(CopyAsyncTensor)
+        store = kinds.index(tir_memory.CopyAsyncTensor)
         assert kinds[store - 2 : store + 3] == [
-            (FenceProxyAsync, StorageKind.GMEM),
-            Sync,
-            CopyAsyncTensor,
-            Sync,
-            Copy,
+            (sync.FenceProxyAsync, expr.StorageKind.GMEM),
+            tir.sync.Sync,
+            tir_memory.CopyAsyncTensor,
+            tir.sync.Sync,
+            memory.Copy,
         ]
 
 
@@ -163,10 +151,10 @@ class CarryCopies(SyncCase):
 
     def guard(self, state, problems):
         kinds = [
-            type(op) for op in _loop_operations(state) if isinstance(op, (Sync, Copy, TiledMma))
+            type(op) for op in _loop_operations(state) if isinstance(op, (tir.sync.Sync, memory.Copy, nn.TiledMma))
         ]
-        first = kinds.index(Copy)
-        assert kinds[first - 2 :] == [TiledMma, Sync, Copy, Copy]
+        first = kinds.index(memory.Copy)
+        assert kinds[first - 2 :] == [nn.TiledMma, tir.sync.Sync, memory.Copy, memory.Copy]
 
 
 @case
@@ -180,11 +168,11 @@ class WgmmaRegisterOperand(SyncCase):
 
     def guard(self, state, problems):
         operations = _operations(state)
-        start = operations.index(WgmmaFence)
-        assert operations[start - 3 : start] == [WgmmaCommitGroup, WgmmaWaitGroup, Copy]
-        assert operations[start : start + 10] == [WgmmaFence, TiledMma] * 4 + [
-            WgmmaCommitGroup,
-            WgmmaWaitGroup,
+        start = operations.index(sync.WgmmaFence)
+        assert operations[start - 3 : start] == [sync.WgmmaCommitGroup, sync.WgmmaWaitGroup, memory.Copy]
+        assert operations[start : start + 10] == [sync.WgmmaFence, nn.TiledMma] * 4 + [
+            sync.WgmmaCommitGroup,
+            sync.WgmmaWaitGroup,
         ]
 
 
@@ -196,14 +184,14 @@ class TwoGroups(SyncCase):
 
     def guard(self, state, problems):
         operations = _operations(state)
-        start = operations.index(TiledMma) + 1
+        start = operations.index(nn.TiledMma) + 1
         assert operations[start : start + 6] == [
-            CpAsyncCommit,
-            WgmmaCommitGroup,
-            CpAsyncWait,
-            WgmmaWaitGroup,
-            Sync,
-            Copy,
+            tir.async_copy.CpAsyncCommit,
+            sync.WgmmaCommitGroup,
+            tir.async_copy.CpAsyncWait,
+            sync.WgmmaWaitGroup,
+            tir.sync.Sync,
+            memory.Copy,
         ]
 
 
@@ -219,5 +207,5 @@ class LoweringNeedsSync(SyncCase):
 
     def guard(self, state, problems):
         result = _analyzed(state, analysis=("memory",))
-        with pytest.raises(LoweringError, match="needs the result of analyze"):
+        with pytest.raises(transforms.LoweringError, match="needs the result of analyze"):
             finalize(result)

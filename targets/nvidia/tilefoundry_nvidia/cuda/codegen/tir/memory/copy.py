@@ -10,38 +10,37 @@ whose layout is the run-time length. That is what the retired
 
 from __future__ import annotations
 
-from tilefoundry.ir.tir.memory.copy import Copy
-from tilefoundry.ir.types.shard_layout import ShardLayout
-from tilefoundry.ir.types.utils import shape_has_dim_var, shape_runtime_total
-from tilefoundry.visitor_registry.registries import Role, register_codegen
-from tilefoundry_nvidia.cuda import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
+from tilefoundry import codegen
+from tilefoundry.ir import expr, types, utils
+from tilefoundry.ir.tir import memory
+from tilefoundry_nvidia.cuda import target
+from tilefoundry_nvidia.cuda.codegen import context
 
 
-def _is_shard(var) -> bool:
-    return isinstance(getattr(var.type, "layout", None), ShardLayout)
+def is_shard(var) -> bool:
+    return isinstance(getattr(var.type, "layout", None), types.ShardLayout)
 
 
-def _tensor_expr(var, ctx: CudaCodegenContext) -> str:
+def tensor_expr(var, ctx: context.Context) -> str:
     base = ctx.name_for(var)
     return f"{base}_tensor" if ctx.is_kernel_param(var) else base
 
 
-def _has_dyn_shape(var) -> bool:
+def has_dyn_shape(var) -> bool:
     shape = getattr(getattr(var, "type", None), "shape", ())
-    return shape_has_dim_var(shape)
+    return expr.shape_has_dim_var(shape)
 
 
-@register_codegen(CudaTarget, Role.EMIT, Copy)
-def _emit(call, ctx: CudaCodegenContext) -> None:
+@codegen.register(target.Target, codegen.Role.EMIT, memory.Copy)
+def emit(call, ctx: context.Context) -> None:
     source, destination = call.args[0], call.args[1]
-    src_shard = _is_shard(source)
-    dst_shard = _is_shard(destination)
-    dyn = _has_dyn_shape(source) or _has_dyn_shape(destination)
-    src = _tensor_expr(source, ctx)
-    dst = _tensor_expr(destination, ctx)
+    src_shard = is_shard(source)
+    dst_shard = is_shard(destination)
+    dyn = has_dyn_shape(source) or has_dyn_shape(destination)
+    src = tensor_expr(source, ctx)
+    dst = tensor_expr(destination, ctx)
     if dyn and not src_shard and not dst_shard:
-        n = shape_runtime_total(destination.type.shape, ctx.dynamic_extents)
+        n = utils.shape_runtime_total(destination.type.shape, ctx.dynamic_extents)
 
 
         ctx.emit("{")
@@ -54,3 +53,6 @@ def _emit(call, ctx: CudaCodegenContext) -> None:
         ctx.emit("}")
         return
     ctx.emit(f"tilefoundry::ops::copy({src}, {dst});")
+
+
+__all__: list[str] = []

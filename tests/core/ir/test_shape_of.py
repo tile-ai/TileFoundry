@@ -4,36 +4,33 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.core import Var, VerifyError
-from tilefoundry.ir.tir.shape import ShapeOf
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.visitor_registry.verify import _verify_shape_of
+from tilefoundry import verifier
+from tilefoundry.ir import core, expr, types
 
 
-def _x_param() -> Var:
-    return Var(
-        type=TensorType(shape=(4, 8), dtype=DType.f32, layout=None, storage="gmem"), name="x"
+def _x_param() -> expr.Var:
+    return expr.Var(
+        type=types.TensorType(shape=(4, 8), dtype=expr.DType.f32, layout=None, storage="gmem"), name="x"
     )
 
 
 def test_shape_of_rejects_negative_axis():
     p = _x_param()
-    so = ShapeOf(
-        type=TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM),
+    so = core.ShapeOf(
+        type=types.TensorType.from_scalar(dtype=expr.DType.i32, storage=expr.StorageKind.RMEM),
         param=p,
         axis=-1,
     )
-    with pytest.raises(VerifyError, match="non-negative"):
-        _verify_shape_of(so)
+    with pytest.raises(expr.VerifyError, match="non-negative"):
+        verifier.verify_shape_of(so)
 
 
 def test_shape_of_rejects_wrong_type():
     p = _x_param()
-    so = ShapeOf(
-        type=TensorType(shape=(4,), dtype=DType.i32, layout=None, storage="rmem"),
+    so = core.ShapeOf(
+        type=types.TensorType(shape=(4,), dtype=expr.DType.i32, layout=None, storage="rmem"),
         param=p,
         axis=0,
     )
-    with pytest.raises(VerifyError, match="rank-0 i32"):
-        _verify_shape_of(so)
+    with pytest.raises(expr.VerifyError, match="rank-0 i32"):
+        verifier.verify_shape_of(so)

@@ -6,98 +6,70 @@ import copy
 
 import pytest
 
-import tilefoundry.ir.isl_interop as isl_interop
-import tilefoundry.ir.types.substitute as dim_substitute
-from tilefoundry.ir.core import Tuple, TypeInferContext
-from tilefoundry.ir.core.expr import Call, Constant, Var
-from tilefoundry.ir.core.kinds import UnaryKind
-from tilefoundry.ir.hir.math.unary import Unary
-from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.types import (
-    ComposedLayout,
-    DType,
-    Layout,
-    Mesh,
-    ShardLayout,
-    TensorType,
-    Topology,
-    TupleType,
-)
-from tilefoundry.ir.types.dim import (
-    DimAdd,
-    DimFloorDiv,
-    DimMax,
-    DimMin,
-    DimMod,
-    DimMul,
-    DimSub,
-    DimVar,
-    simplify_dim,
-)
-from tilefoundry.ir.types.shard_layout import Broadcast
-from tilefoundry.visitor_registry.access_relation import broadcast_shapes
-from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
+from tilefoundry import services
+from tilefoundry.interfaces import access, typeinfer
+from tilefoundry.ir import expr, types
+from tilefoundry.ir.hir import math, tensor
 
 
-def _i64(v: int) -> Constant:
-    return Constant(type=TensorType.scalar(DType.i64), value=v)
+def _i64(v: int) -> expr.Constant:
+    return expr.Constant(type=types.TensorType.from_scalar(expr.DType.i64), value=v)
 
 
-def _sym(name: str) -> Call:
+def _sym(name: str) -> expr.Call:
     """A symbolic dim Expr — wrap a DimVar in a Call so its presence breaks all-Constant folding.
 
     A symbolic dim Expr — wrap a DimVar in a Call so its
     presence breaks all-Constant folding.
     """
-    return Call(
-        type=TensorType.scalar(DType.i64),
-        target=DimVar(name=name, lo=1, hi=1023),
+    return expr.Call(
+        type=types.TensorType.from_scalar(expr.DType.i64),
+        target=expr.DimVar(name=name, lo=1, hi=1023),
         args=(),
     )
 
 
 def test_simplify_dim_only_constructs_constant_arithmetic() -> None:
     table = [
-        (DimAdd, 3, 4),
-        (DimSub, 10, 4),
-        (DimMul, 3, 4),
-        (DimFloorDiv, 17, 4),
-        (DimMod, 17, 5),
-        (DimMin, 7, 3),
-        (DimMax, 7, 3),
-        (DimFloorDiv, -7, 2),
+        (expr.DimAdd, "add", 3, 4),
+        (expr.DimSub, "sub", 10, 4),
+        (expr.DimMul, "mul", 3, 4),
+        (expr.DimFloorDiv, "floordiv", 17, 4),
+        (expr.DimMod, "mod", 17, 5),
+        (expr.DimMin, "min", 7, 3),
+        (expr.DimMax, "max", 7, 3),
+        (expr.DimFloorDiv, "floordiv", -7, 2),
     ]
-    for op_cls, a, b in table:
-        result = simplify_dim(op_cls, (_i64(a), _i64(b)))
-        assert isinstance(result, Call)
+    for op_cls, kind, a, b in table:
+        result = services.simplify_dim(kind, (_i64(a), _i64(b)))
+        assert isinstance(result, expr.Call)
         assert isinstance(result.target, op_cls)
         assert result.args == (_i64(a), _i64(b))
-        assert result.type == TensorType.umat_scalar()
+        assert result.type == types.TensorType.from_umat_scalar()
 
 
 def test_simplify_dim_constructs_symbolic_and_invalid_arithmetic() -> None:
     sym = _sym("M")
-    for op_cls in (DimAdd, DimFloorDiv):
+    for kind, op_cls in (("add", expr.DimAdd), ("floordiv", expr.DimFloorDiv)):
         for args in ((sym, _i64(0)), (_i64(0), sym)):
-            result = simplify_dim(op_cls, args)
-            assert isinstance(result, Call)
+            result = services.simplify_dim(kind, args)
+            assert isinstance(result, expr.Call)
             assert isinstance(result.target, op_cls)
             assert result.args == args
 
-    div_zero = simplify_dim(DimFloorDiv, (_i64(10), _i64(0)))
-    assert isinstance(div_zero, Call)
-    assert isinstance(div_zero.target, DimFloorDiv)
+    div_zero = services.simplify_dim("floordiv", (_i64(10), _i64(0)))
+    assert isinstance(div_zero, expr.Call)
+    assert isinstance(div_zero.target, expr.DimFloorDiv)
     assert div_zero.args == (_i64(10), _i64(0))
 
-    b_true = Constant(type=TensorType.scalar(DType.i64), value=True)
-    bool_arg = simplify_dim(DimAdd, (b_true, _i64(1)))
-    assert isinstance(bool_arg, Call)
-    assert isinstance(bool_arg.target, DimAdd)
+    b_true = expr.Constant(type=types.TensorType.from_scalar(expr.DType.i64), value=True)
+    bool_arg = services.simplify_dim("add", (b_true, _i64(1)))
+    assert isinstance(bool_arg, expr.Call)
+    assert isinstance(bool_arg.target, expr.DimAdd)
 
 
 def test_dim_call_arithmetic_is_pure_construction_in_both_directions() -> None:
-    seq = DimVar("S_chain", 1, 1023)
+    seq = expr.DimVar("S_chain", 1, 1023)
     base = seq - 1
 
     expressions = (
@@ -113,27 +85,27 @@ def test_dim_call_arithmetic_is_pure_construction_in_both_directions() -> None:
         8 % base,
     )
 
-    assert all(isinstance(expr, Call) for expr in expressions)
-    assert [type(expr.target) for expr in expressions] == [
-        DimAdd,
-        DimAdd,
-        DimSub,
-        DimSub,
-        DimMul,
-        DimMul,
-        DimFloorDiv,
-        DimFloorDiv,
-        DimMod,
-        DimMod,
+    assert all(isinstance(node, expr.Call) for node in expressions)
+    assert [type(node.target) for node in expressions] == [
+        expr.DimAdd,
+        expr.DimAdd,
+        expr.DimSub,
+        expr.DimSub,
+        expr.DimMul,
+        expr.DimMul,
+        expr.DimFloorDiv,
+        expr.DimFloorDiv,
+        expr.DimMod,
+        expr.DimMod,
     ]
 
 
 def test_non_dim_calls_do_not_gain_dimension_arithmetic() -> None:
-    tensor = TensorType.umat_tensor((8,), DType.f32)
-    value = Var(type=tensor, name="value")
-    ordinary = Call(
-        type=tensor,
-        target=Unary(kind=UnaryKind.NEG),
+    tensor_value = types.TensorType.from_umat_tensor((8,), expr.DType.f32)
+    value = expr.Var(type=tensor_value, name="value")
+    ordinary = expr.Call(
+        type=tensor_value,
+        target=math.Unary(kind=expr.UnaryKind.NEG),
         args=(value,),
     )
     operations = (
@@ -155,40 +127,40 @@ def test_non_dim_calls_do_not_gain_dimension_arithmetic() -> None:
 
 
 def test_typeinfer_canonicalizes_equivalent_symbolic_shapes() -> None:
-    seq = DimVar("S_canonical", 1, 8192)
-    verbose = simplify_dim(
-        DimFloorDiv,
+    seq = expr.DimVar("S_canonical", 1, 8192)
+    verbose = services.simplify_dim(
+        "floordiv",
         (
-            simplify_dim(
-                DimAdd,
-                (simplify_dim(DimSub, (simplify_dim(DimAdd, (seq, 0)), 0)), 0),
+            services.simplify_dim(
+                "add",
+                (services.simplify_dim("sub", (services.simplify_dim("add", (seq, 0)), 0)), 0),
             ),
             1,
         ),
     )
     def layout(dim):
-        return ComposedLayout(
-            inner=Layout(shape=(dim,), strides=(dim,)),
+        return types.ComposedLayout(
+            inner=types.Layout(shape=(dim,), strides=(dim,)),
             offset=dim,
-            outer=ShardLayout(
-                layout=Layout(shape=(dim,), strides=(dim,)),
-                attrs=(Broadcast(),),
-                mesh=Mesh(
-                    topologies=(Topology("cta", dim),),
-                    layout=Layout(shape=(dim,), strides=(1,)),
+            outer=types.ShardLayout(
+                layout=types.Layout(shape=(dim,), strides=(dim,)),
+                attrs=(types.Broadcast(),),
+                mesh=types.Mesh(
+                    topologies=(types.Topology("cta", dim),),
+                    layout=types.Layout(shape=(dim,), strides=(1,)),
                 ),
             ),
         )
 
-    verbose_type = TensorType(
-        shape=(verbose, 128), dtype=DType.f32, layout=layout(verbose), storage="gmem"
+    verbose_type = types.TensorType(
+        shape=(verbose, 128), dtype=expr.DType.f32, layout=layout(verbose), storage="gmem"
     )
-    direct_type = TensorType(
-        shape=(seq, 128), dtype=DType.f32, layout=layout(seq), storage="gmem"
+    direct_type = types.TensorType(
+        shape=(seq, 128), dtype=expr.DType.f32, layout=layout(seq), storage="gmem"
     )
 
-    inferred = TypeInferVisitor().visit(
-        Var(type=verbose_type, name="verbose"), TypeInferContext()
+    inferred = typeinfer.TypeInferVisitor().visit(
+        expr.Var(type=verbose_type, name="verbose"), typeinfer.TypeInferContext()
     )
 
     assert inferred == direct_type
@@ -198,17 +170,17 @@ def test_typeinfer_canonicalizes_equivalent_symbolic_shapes() -> None:
 def test_static_typeinfer_does_not_enter_dim_canonicalization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    static = TensorType(
-        shape=(8, 128), dtype=DType.f32, layout=Layout((8, 128), (128, 1)), storage="gmem"
+    static = types.TensorType(
+        shape=(8, 128), dtype=expr.DType.f32, layout=types.Layout((8, 128), (128, 1)), storage="gmem"
     )
 
     def fail_if_called(_):
         raise AssertionError("static types must not enter isl canonicalization")
 
-    monkeypatch.setattr(dim_substitute, "normalize_dim", fail_if_called)
+    monkeypatch.setattr("tilefoundry.ir.dim.substitute.normalize", fail_if_called)
 
     assert (
-        TypeInferVisitor().visit(Var(type=static, name="static"), TypeInferContext())
+        typeinfer.TypeInferVisitor().visit(expr.Var(type=static, name="static"), typeinfer.TypeInferContext())
         is static
     )
 
@@ -224,52 +196,52 @@ def test_a_fully_static_dim_has_one_canonical_int_representation() -> None:
     ``Binary`` broadcast failed comparing ``(1,4,32,Constant(128))`` against a
     param's ``(1,4,32,128)`` — the rotate-half bug.
     """
-    ty = TensorType(
+    ty = types.TensorType(
         shape=(_i64(1), _i64(4), _i64(32), _i64(128)),
-        dtype=DType.bf16,
+        dtype=expr.DType.bf16,
         layout=None,
         storage="gmem",
     )
     assert ty.shape == (1, 4, 32, 128)
     assert all(isinstance(d, int) and not isinstance(d, bool) for d in ty.shape)
 
-    s = DimVar(name="S_ti", lo=1, hi=7)
-    mixed = TensorType(shape=(s, _i64(128)), dtype=DType.f32, layout=None, storage="gmem")
+    s = expr.DimVar(name="S_ti", lo=1, hi=7)
+    mixed = types.TensorType(shape=(s, _i64(128)), dtype=expr.DType.f32, layout=None, storage="gmem")
     assert mixed.shape[0] is s
     assert mixed.shape[1] == 128 and isinstance(mixed.shape[1], int)
 
-    param = TensorType(
+    param = types.TensorType(
         shape=(1, 4, 32, 128),
-        dtype=DType.bf16,
-        layout=Layout((1, 4, 32, 128)),
+        dtype=expr.DType.bf16,
+        layout=types.Layout((1, 4, 32, 128)),
         storage="gmem",
     )
-    x = Constant(type=param, value=None)
-    starts = Tuple(
-        type=TupleType(fields=(TensorType.scalar(DType.i64),) * 4),
+    x = expr.Constant(type=param, value=None)
+    starts = expr.Tuple(
+        type=types.TupleType(fields=(types.TensorType.from_scalar(expr.DType.i64),) * 4),
         elements=(_i64(0), _i64(0), _i64(0), _i64(0)),
     )
-    sliced = TypeInferVisitor().visit(
-        Call(
-            type=TensorType.scalar(DType.bf16),
-            target=Slice(sizes=(1, 4, 32, 128), strides=(1, 1, 1, 1)),
+    sliced = typeinfer.TypeInferVisitor().visit(
+        expr.Call(
+            type=types.TensorType.from_scalar(expr.DType.bf16),
+            target=tensor.Slice(sizes=(1, 4, 32, 128), strides=(1, 1, 1, 1)),
             args=(x, starts),
         ),
-        TypeInferContext(),
+        typeinfer.TypeInferContext(),
     )
     for dim in sliced.shape:
         assert isinstance(dim, int) and not isinstance(dim, bool), (
             f"expected canonical int static dim, got {type(dim).__name__}: {dim}"
         )
     assert sliced.shape == param.shape == (1, 4, 32, 128)
-    assert broadcast_shapes(sliced.shape, param.shape) == (1, 4, 32, 128)
+    assert access.broadcast_shapes(sliced.shape, param.shape) == (1, 4, 32, 128)
 
 
 def test_constant_dim_arithmetic_normalizes_when_stored_as_an_op_attribute() -> None:
-    constructed = simplify_dim(DimMul, (4, 2))
-    assert isinstance(constructed, Call)
+    constructed = services.simplify_dim("mul", (4, 2))
+    assert isinstance(constructed, expr.Call)
 
-    reshape = Reshape(new_shape=(constructed, 16))
+    reshape = tensor.Reshape(new_shape=(constructed, 16))
 
     assert reshape.new_shape == (8, 16)
 
@@ -280,9 +252,9 @@ def test_static_op_attributes_do_not_enter_dim_normalization(
     def fail_if_called(_):
         raise AssertionError("static attributes must not enter isl normalization")
 
-    monkeypatch.setattr(isl_interop, "normalize_dim", fail_if_called)
+    monkeypatch.setattr("tilefoundry.ir.dim.isl_interop.normalize", fail_if_called)
 
-    assert Reshape(new_shape=(8, 16)).new_shape == (8, 16)
+    assert tensor.Reshape(new_shape=(8, 16)).new_shape == (8, 16)
 
 
 def test_unary_propagates_dim_var_in_shape() -> None:
@@ -292,11 +264,11 @@ def test_unary_propagates_dim_var_in_shape() -> None:
     that ``DimVar`` (with the same bounds) on the result type — the
     dynamic dim is not collapsed to a concrete int.
     """
-    s = DimVar(name="S_ti", lo=1, hi=7)
-    in_ty = TensorType(shape=(s, 8), dtype=DType.f32, layout=None, storage="gmem")
-    x = Var(type=in_ty, name="x")
-    call = Call(type=in_ty, target=Unary(kind=UnaryKind.NEG), args=(x,))
-    out_ty = TypeInferVisitor().visit(call, TypeInferContext())
+    s = expr.DimVar(name="S_ti", lo=1, hi=7)
+    in_ty = types.TensorType(shape=(s, 8), dtype=expr.DType.f32, layout=None, storage="gmem")
+    x = expr.Var(type=in_ty, name="x")
+    call = expr.Call(type=in_ty, target=math.Unary(kind=expr.UnaryKind.NEG), args=(x,))
+    out_ty = typeinfer.TypeInferVisitor().visit(call, typeinfer.TypeInferContext())
     assert out_ty.shape == (s, 8)
 
     assert out_ty.shape[0] is s
@@ -309,8 +281,8 @@ def test_a_copied_dim_var_is_the_canonical_one() -> None:
     Test-side deep copies must preserve the canonical ``DimVar`` so a copied
     signature still binds against the dimension its caller wrote.
     """
-    s = DimVar(name="S_copy", lo=1, hi=7)
-    in_ty = TensorType(shape=(s, 8), dtype=DType.f32, layout=None, storage="gmem")
+    s = expr.DimVar(name="S_copy", lo=1, hi=7)
+    in_ty = types.TensorType(shape=(s, 8), dtype=expr.DType.f32, layout=None, storage="gmem")
 
     assert copy.deepcopy(s) is s
     assert copy.deepcopy(in_ty).shape == in_ty.shape

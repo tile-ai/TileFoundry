@@ -7,8 +7,9 @@ and its gradient using the existing HIR operations.
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.ir.types import DType, TensorType, TupleType
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.ir.expr import DType
+from tilefoundry.ir.types import TensorType, TupleType
+from tilefoundry_nvidia import cuda
 
 B, T, C, H, G, D, F, V = 8, 8, 16, 4, 2, 4, 64, 32
 N = B * T
@@ -38,7 +39,7 @@ def training_program(participants=2, *, retain=False, replicas=1):
         raise ValueError(f"supported (participants, replicas): {SUPPORTED_MESHES}")
     batch = max(B, participants)
     tokens_per_batch = batch * T
-    target = CudaTarget("nvidia.h200_sxm", device_count=participants)
+    target = cuda.Target("nvidia.h200_sxm", device_count=participants)
     gpu = Topology("gpu", participants)
     mesh_shape = (participants,) if replicas == 1 else (replicas, participants // replicas)
     mesh_names = ("shard",) if replicas == 1 else ("replicate", "shard")
@@ -49,7 +50,7 @@ def training_program(participants=2, *, retain=False, replicas=1):
         if participants == 1:
             attr = Broadcast()
         attrs = attr if isinstance(attr, tuple) else ((attr,) if replicas == 1 else (Broadcast(), attr))
-        return ShardLayout.default(shape, mesh, attrs, storage="gmem", owners=target.storage_owners)
+        return ShardLayout.from_logical(shape, mesh, attrs, storage="gmem", owners=target.storage_owners)
 
     def tensor(shape, attr=Split(0)):
         return TensorType(shape, DType.f32, layout(shape, attr), "gmem")

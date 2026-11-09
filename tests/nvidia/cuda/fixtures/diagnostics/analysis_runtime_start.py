@@ -1,8 +1,8 @@
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="read", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+@module(entry="read", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class RuntimeStart:
     @func
     def read(x: Tensor[(16,), "f32"], start: Tensor[(), "i64"]):

@@ -6,7 +6,7 @@ memory, register fragments, and issuing warpgroups; only the launch changes.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 128
 N = 16
@@ -19,7 +19,7 @@ GRID_N = 17
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", GRID_M * GRID_N), Topology("thread", 384)),
 )
 class WGMMA_CTA_GRID_4X17:

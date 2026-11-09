@@ -7,15 +7,9 @@ from pathlib import Path
 import pytest
 
 from tests.core._corpus import Case, case, check_case, special
-from tilefoundry.analysis.check import check_program
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.ir.core import Call, binding_name
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.visitor import collect_exprs, expr_children
-from tilefoundry.parser import ParseError
-from tilefoundry.visitor_registry.contexts import TypeInferContext
-from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
+from tilefoundry import analysis, cli, parser
+from tilefoundry.interfaces import typeinfer
+from tilefoundry.ir import core, expr
 
 PLACED = Path(__file__).parents[1] / "fixtures" / "placed"
 
@@ -31,9 +25,9 @@ class FunctionMeshOuterRegion(MeshVisibilityCase):
 
     def guard(self, state, problems):
         stage = state.stage
-        assert isinstance(stage.body, MeshRegion)
+        assert isinstance(stage.body, core.MeshRegion)
         assert [topology.name for topology in stage.body.mesh.topologies] == ["cta"]
-        assert isinstance(stage.body.body, MeshRegion)
+        assert isinstance(stage.body.body, core.MeshRegion)
         assert [topology.name for topology in stage.body.body.mesh.topologies] == ["thread"]
 
 
@@ -43,8 +37,8 @@ class InnerLayoutCoveredByScope(MeshVisibilityCase):
 
     def guard(self, state, problems):
         body = state.rmsnorm.body
-        assert isinstance(body, MeshRegion)
-        TypeInferVisitor().visit(body, TypeInferContext())
+        assert isinstance(body, core.MeshRegion)
+        typeinfer.TypeInferVisitor().visit(body, typeinfer.TypeInferContext())
 
 
 @case
@@ -55,20 +49,20 @@ class SiblingChainCapturesAtBoundary(MeshVisibilityCase):
 
     def guard(self, state, problems):
         entry = state.entry_function()
-        check_program(state, entry)
-        regions = [expr for expr in collect_exprs(entry.body) if isinstance(expr, MeshRegion)]
-        leaves = [region for region in regions if binding_name(region.body) is not None]
+        analysis.check_program(state, entry)
+        regions = [node for node in core.collect_exprs(entry.body) if isinstance(node, core.MeshRegion)]
+        leaves = [region for region in regions if expr.binding_name(region.body) is not None]
         assert all(
-            not any(isinstance(expr, MeshRegion) for expr in collect_exprs(region.body))
+            not any(isinstance(node, core.MeshRegion) for node in core.collect_exprs(region.body))
             for region in leaves
         )
         final = next(
             region for region in leaves if [param.name for param in region.params] == ["acc", "rhs"]
         )
         previous = final.args[0]
-        assert isinstance(previous, MeshRegion)
+        assert isinstance(previous, core.MeshRegion)
         assert [param.name for param in previous.params] == ["acc", "lhs"]
-        assert isinstance(previous.args[0], MeshRegion)
+        assert isinstance(previous.args[0], core.MeshRegion)
 
 
 CASES = special(MeshVisibilityCase)
@@ -81,41 +75,41 @@ def test_mesh_visibility_case(case: MeshVisibilityCase) -> None:
 
 def test_region_boundary_captures_sibling_value() -> None:
     """A sibling region receives an earlier region value through its boundary."""
-    RegionBoundaries = load_authored_ir(f"{PLACED / 'region_boundaries.py'}:RegionBoundaries")
+    RegionBoundaries = cli.load_authored_ir(f"{PLACED / 'region_boundaries.py'}:RegionBoundaries")
     body = RegionBoundaries.entry_function().body
-    scopes = [expr for expr in collect_exprs(body) if isinstance(expr, MeshRegion)]
+    scopes = [node for node in core.collect_exprs(body) if isinstance(node, core.MeshRegion)]
     helper_call = next(
-        expr
-        for expr in collect_exprs(body)
-        if isinstance(expr, Call)
-        and isinstance(expr.target, Function)
-        and expr.target.name == "helper"
+        node
+        for node in core.collect_exprs(body)
+        if isinstance(node, expr.Call)
+        and isinstance(node.target, core.Function)
+        and node.target.name == "helper"
     )
     assert any(
         scope.mesh.topologies[0].name == "cta"
-        and helper_call in collect_exprs(scope.body)
+        and helper_call in core.collect_exprs(scope.body)
         for scope in scopes
     )
-    producer = next(scope for scope in scopes if binding_name(scope.body) == "v2")
+    producer = next(scope for scope in scopes if expr.binding_name(scope.body) == "v2")
     parents = [
-        expr
-        for expr in collect_exprs(body)
-        if producer in expr_children(expr)
+        node
+        for node in core.collect_exprs(body)
+        if producer in core.expr_children(node)
     ]
     assert len(parents) == 2
-    assert any(isinstance(parent, MeshRegion) and producer in parent.args for parent in parents)
+    assert any(isinstance(parent, core.MeshRegion) and producer in parent.args for parent in parents)
 
     core_diagnostics = Path(__file__).parents[3] / "core" / "fixtures" / "diagnostics"
-    load_authored_ir(str(core_diagnostics / "region_rebind.py"))
-    load_authored_ir(str(core_diagnostics / "region_tuple_rebind.py"))
+    cli.load_authored_ir(str(core_diagnostics / "region_rebind.py"))
+    cli.load_authored_ir(str(core_diagnostics / "region_tuple_rebind.py"))
 
 
 def test_unscoped_init_rejected_at_call() -> None:
     path = Path(__file__).parents[1] / "fixtures" / "diagnostics" / "unscoped_call_loop.py"
     source = path.read_text()
     line = next(i for i, text in enumerate(source.splitlines(), 1) if "out = tf.zeros" in text)
-    with pytest.raises(ParseError, match="runs outside every mesh scope") as raised:
-        load_authored_ir(str(path))
+    with pytest.raises(parser.ParseError, match="runs outside every mesh scope") as raised:
+        cli.load_authored_ir(str(path))
     assert f"unscoped_call_loop.py:{line}:" in str(raised.value)
     assert "tf.zeros" in str(raised.value)
     assert "inside with Mesh(...)" in str(raised.value)

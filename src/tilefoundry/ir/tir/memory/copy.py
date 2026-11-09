@@ -8,62 +8,56 @@ Load / Store too. The Op is placed in Stmt position as
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_schedule_eval, schedule_eval_registry
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op, OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import SameConstraint, utils
-from tilefoundry.ir.types import UnitType
-from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
-from tilefoundry.visitor_registry.access_relation import (
-    identity_relations,
-    register_access_relation,
-)
-from tilefoundry.visitor_registry.registries import typeinfer_registry, verify_stmt_registry
+from tilefoundry import core
+from tilefoundry.interfaces import access, evaluator, typeinfer
+from tilefoundry.interfaces import verify as interfaces_verify
+from tilefoundry.ir import expr, pattern, types
 
 
-@register_op(dialect='T', category='memory')
-class Copy(Op):
+@expr.register_op(dialect='T', category='memory')
+class Copy(expr.Op):
     """Copies ``src`` into ``dst`` (in-place memory write)."""
 
-    capability = OpCapability(None)
+    capability = expr.OpCapability(None)
 
-    execution_mesh = utils.memory_execution_mesh()
+    execution_mesh = pattern.memory_execution_mesh()
 
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.READ,
-        pattern=utils.operand_tile(0, execution_mesh=execution_mesh),
+        effect=expr.MemoryEffect.READ,
+        pattern=pattern.operand_tile(0, execution_mesh=execution_mesh),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.WRITE,
-        pattern=utils.operand_tile(1, execution_mesh=execution_mesh),
+        effect=expr.MemoryEffect.WRITE,
+        pattern=pattern.operand_tile(1, execution_mesh=execution_mesh),
     )
 
-    between = (SameConstraint("shape", "src", "dst"), SameConstraint("dtype", "src", "dst"))
+    between = (pattern.SameConstraint("shape", "src", "dst"), pattern.SameConstraint("dtype", "src", "dst"))
 
 
-@register_typeinfer(Copy)
-def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
-    return UnitType()
+@typeinfer.register(Copy)
+def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
+    return types.UnitType()
 
 
-register_access_relation(Copy)(identity_relations)
+access.register_relation(Copy)(access.identity_relations)
 
 
-@register_schedule_eval(Copy)
-def _eval_scheduled_copy(ctx):
-    return TensorValue(ShardTensor(ctx.result_type, ctx.args[0].data))
+@evaluator.register(Copy)
+def eval_scheduled_copy(ctx):
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, ctx.args[0].data))
 
 
 def register_copy_semantics(op, *, verify=True):
     """Reuse Copy's value, type and access rules for a transfer declaration."""
-    register_typeinfer(op)(typeinfer_registry.lookup(Copy))
-    register_access_relation(op)(identity_relations)
-    register_schedule_eval(op)(schedule_eval_registry.lookup(Copy))
-    if verify:
-        register_verify_stmt(op)(verify_stmt_registry.lookup(Copy))
+    typeinfer.register(op)(typeinfer.registry.require(Copy))
+    access.register_relation(op)(access.identity_relations)
+    evaluator.register(op)(evaluator.registry.require(Copy))
+    rule = interfaces_verify.registry.get(Copy, None)
+    if verify and rule is not None:
+        interfaces_verify.register(op)(rule)
     return op
+
+
+__all__ = ["Copy", "register_copy_semantics"]

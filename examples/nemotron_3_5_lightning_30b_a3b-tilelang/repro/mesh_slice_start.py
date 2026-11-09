@@ -20,11 +20,11 @@ from __future__ import annotations
 
 from tilefoundry import func, module
 from tilefoundry.dsl import Mesh, Tensor, tf
-from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target import CudaTarget
+from tilefoundry.ir.types import Topology
+from tilefoundry_nvidia import cuda
 
 D, BLK, W, N = 64, 8, 4, 32
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 _CTA = Topology("cta", W)
 
 

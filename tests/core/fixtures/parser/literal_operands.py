@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="add_literal", target=CpuTarget())
+@module(entry="add_literal", target=cpu.Target())
 class FloatLiteral:
     @func
     def add_literal(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
         return x + 1.0
 
 
-@module(entry="scale", target=CpuTarget())
+@module(entry="scale", target=cpu.Target())
 class CastLiteral:
     @func
     def scale(x: Tensor[(8,), "bf16"]) -> Tensor[(8,), "bf16"]:

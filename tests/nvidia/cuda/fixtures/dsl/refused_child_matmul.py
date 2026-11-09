@@ -18,7 +18,7 @@ class RefusedChildMatmul:
                 tf.reshard(a[:, 0:16], (M, 16), "smem"),
                 tf.reshard(b[0:16, :], (16, N), "smem"),
             )
-            for k in tf.tile(16, K, 16):  # noqa: F405 -- authored tile loop
+            for k in tf.tile(16, K, 16):
                 acc = acc + tf.matmul(
                     tf.reshard(a[:, k], (M, 16), "smem"),
                     tf.reshard(b[k, :], (16, N), "smem"),

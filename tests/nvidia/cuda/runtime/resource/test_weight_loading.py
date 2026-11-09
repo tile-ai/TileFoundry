@@ -16,9 +16,8 @@ from threading import Thread
 import pytest
 import torch
 
-from tilefoundry.cli.source import load_authored_ir, load_namespace
-from tilefoundry.ir.types import Placement
-from tilefoundry.runtime.resource import DictResource, SafetensorsResource
+from tilefoundry import cli, runtime
+from tilefoundry.ir import types
 
 PLACED = Path(__file__).parents[2] / "fixtures" / "placed"
 
@@ -55,37 +54,37 @@ def test_weight_shard_per_card(tmp_path) -> None:
             "nothing to get wrong, so a skip here would report a pass it never earned"
         )
 
-    tiny_tp_decoder = load_namespace(str(PLACED / "tiny_tp_decoder.py"))[0]
+    tiny_tp_decoder = cli.load_namespace(str(PLACED / "tiny_tp_decoder.py"))[0]
     PROJECT_FULL, DECODE_FULL = tiny_tp_decoder["PROJECT_FULL"], tiny_tp_decoder["DECODE_FULL"]
     R, C = tiny_tp_decoder["R"], tiny_tp_decoder["C"]
     TinyTPDecoderLMTwin = tiny_tp_decoder["TinyTPDecoderLMTwin"]
-    TinyTPDecoderLM = load_authored_ir(f"{PLACED / 'tiny_tp_decoder.py'}:TinyTPDecoderLM")
+    TinyTPDecoderLM = cli.load_authored_ir(f"{PLACED / 'tiny_tp_decoder.py'}:TinyTPDecoderLM")
     TinyTPDecoderLM.prepare(
-        DictResource(
+        runtime.DictResource(
             {"layer.project_weight": PROJECT_FULL, "layer.decode_weight": DECODE_FULL}
         ),
         str(tmp_path),
     )
-    reads = _Counted(SafetensorsResource(str(tmp_path), device="cuda"))
+    reads = _Counted(runtime.SafetensorsResource(str(tmp_path), device="cuda"))
     failures: list[BaseException] = []
 
     def run(gpu: int) -> None:
         try:
             torch.cuda.set_device(gpu)
             twin = TinyTPDecoderLMTwin()
-            twin.load(reads, placement=Placement({"gpu": gpu}))
+            twin.load(reads, placement=types.Placement({"gpu": gpu}))
 
             x, row = torch.zeros(R, C, device=gpu), torch.zeros(R, device=gpu)
             first, replicated = twin.forward(x, row, 2)
             again, _ = twin.forward(x, row, 2)
 
-            here = Placement({"gpu": gpu})
+            here = types.Placement({"gpu": gpu})
             assert first.to_local(here).device.index == gpu
             assert replicated.to_local(here).device.index == gpu
             assert again.to_local(here).data_ptr() == first.to_local(here).data_ptr(), (
                 "the second call read the weight again instead of the one it held"
             )
-        except BaseException as error:  # noqa: BLE001 -- reported on the main thread
+        except BaseException as error:
             failures.append(error)
 
     threads = [Thread(target=run, args=(gpu,)) for gpu in (0, 1)]
@@ -104,10 +103,10 @@ def test_weight_shard_per_card(tmp_path) -> None:
 def test_weight_load_reads_noncanonical_axes(tmp_path, case):
     """A split inside an axis, or mesh axes in the other order, still select the right elements."""
     root, size = {"cyclic": ("CyclicSplitWeight", 8), "mesh_order": ("MeshOrderWeight", 32)}[case]
-    program = load_authored_ir(f"{PLACED / 'cyclic_split_weight.py'}:{root}")
-    twin_type = load_namespace(str(PLACED / "cyclic_split_weight.py"))[0][f"{root}Twin"]
-    program.prepare(DictResource({"weight": torch.arange(size, dtype=torch.float32)}), str(tmp_path))
+    program = cli.load_authored_ir(f"{PLACED / 'cyclic_split_weight.py'}:{root}")
+    twin_type = cli.load_namespace(str(PLACED / "cyclic_split_weight.py"))[0][f"{root}Twin"]
+    program.prepare(runtime.DictResource({"weight": torch.arange(size, dtype=torch.float32)}), str(tmp_path))
     twin = twin_type()
-    twin.load(SafetensorsResource(str(tmp_path), device="cpu"), placement=Placement({"gpu": 1}))
+    twin.load(runtime.SafetensorsResource(str(tmp_path), device="cpu"), placement=types.Placement({"gpu": 1}))
     expected = {"cyclic": [1.0, 5.0], "mesh_order": [8.0]}[case]
-    assert twin.read().to_local(Placement({"gpu": 1})).flatten().tolist() == expected
+    assert twin.read().to_local(types.Placement({"gpu": 1})).flatten().tolist() == expected

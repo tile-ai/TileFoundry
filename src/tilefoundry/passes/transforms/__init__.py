@@ -1,10 +1,23 @@
+"""The concrete transforms of the pass pipeline."""
+
 from __future__ import annotations
 
-from .convert_hir_to_tir import ConvertHIRToTIR, LoweringError
+from .convert_hir_to_tir import (
+    BINDING,
+    INDEX,
+    ConvertHIRToTIR,
+    Lowering,
+    LoweringError,
+    StoragePlan,
+    TirBuilder,
+    TirScope,
+    View,
+    accepted_aliases,
+    copy_mesh,
+    issue_owner,
+    label,
+    lowers_to_dim,
+    operand_types,
+    selected_op,
+)
 from .host_entry import InsertHostEntryPass
-
-__all__ = [
-    "ConvertHIRToTIR",
-    "InsertHostEntryPass",
-    "LoweringError",
-]

@@ -8,7 +8,7 @@ materialized RMS scales and negative exp(A_log) are retained explicitly.
 import math
 from tilefoundry import module, func
 from tilefoundry.dsl import Tensor, ConstTensor, ModuleList, Topology, tf
-from tilefoundry.target import AmxTarget
+from tilefoundry_apple import amx
 
 
 def projection(M, N, K):
@@ -384,7 +384,7 @@ def build(config, S, *, linear=projection):
 
     definitions = {kind: layer(kind) for kind in set(kinds)}
 
-    @module(target=AmxTarget(), topologies=(Topology("core", 8), Topology("amx", 1)))
+    @module(target=amx.Target(), topologies=(Topology("core", 8), Topology("amx", 1)))
     class Base:
         layers = ModuleList(tuple(definitions[kind] for kind in kinds))
         norm = ModuleList(Norm)
@@ -404,7 +404,7 @@ def build(config, S, *, linear=projection):
     import hashlib
 
     lines = [
-        "@module(entry='prefill',target=AmxTarget(),topologies=(Topology('core',8),Topology('amx',1)))",
+        "@module(entry='prefill',target=amx.Target(),topologies=(Topology('core',8),Topology('amx',1)))",
         "class QwenPrefill:",
         "    layers=ModuleList(DEFINITIONS)",
         "    norm=ModuleList(NORM)",
@@ -434,7 +434,7 @@ def build(config, S, *, linear=projection):
         func=func,
         Tensor=Tensor,
         ConstTensor=ConstTensor,
-        AmxTarget=AmxTarget,
+        amx=amx,
         Topology=Topology,
         S=S,
         R=R,

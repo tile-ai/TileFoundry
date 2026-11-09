@@ -30,7 +30,7 @@ class AssetEntry:
 
 
 
-_ASSET_MANIFEST: tuple[AssetEntry, ...] = (
+ASSET_MANIFEST: tuple[AssetEntry, ...] = (
     AssetEntry(
         name="graphviz.umd.js",
         url="https://unpkg.com/@hpcc-js/wasm@2.33.8/dist/graphviz.umd.js",
@@ -47,23 +47,23 @@ _ASSET_MANIFEST: tuple[AssetEntry, ...] = (
     ),
 )
 
-_DOWNLOAD_TIMEOUT = 30
-_ENV_OVERRIDE = "TILEFOUNDRY_VIEWER_ASSET_DIR"
+DOWNLOAD_TIMEOUT = 30
+ENV_OVERRIDE = "TILEFOUNDRY_VIEWER_ASSET_DIR"
 
 
-def manifest_version(manifest: tuple[AssetEntry, ...] = _ASSET_MANIFEST) -> str:
+def manifest_version(manifest: tuple[AssetEntry, ...] = ASSET_MANIFEST) -> str:
     """Short stable id for a manifest.
 
     Short stable id for a manifest — bumping any URL/hash migrates the
     cache to a fresh subdirectory and orphans the old one.
     """
-    h = hashlib.sha1()  # noqa: S324 — cache-key only, not security
+    h = hashlib.sha1()
     for e in manifest:
         h.update(f"{e.name}\0{e.url}\0{e.sha256}\0".encode())
     return h.hexdigest()[:12]
 
 
-def _resolve_cache_root(manifest: tuple[AssetEntry, ...] = _ASSET_MANIFEST) -> Path:
+def resolve_cache_root(manifest: tuple[AssetEntry, ...] = ASSET_MANIFEST) -> Path:
     """Cache directory holding the vendored JS.
 
     ``TILEFOUNDRY_VIEWER_ASSET_DIR`` (if set) is used verbatim — handy for
@@ -71,14 +71,14 @@ def _resolve_cache_root(manifest: tuple[AssetEntry, ...] = _ASSET_MANIFEST) -> P
     live under ``$XDG_CACHE_HOME``/``~/.cache`` in a manifest-versioned
     subdir so a version bump never collides with stale bytes.
     """
-    override = os.environ.get(_ENV_OVERRIDE)
+    override = os.environ.get(ENV_OVERRIDE)
     if override:
         return Path(override).expanduser()
     base = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser()
     return base / "tilefoundry" / "viewer-assets" / manifest_version(manifest)
 
 
-def _selfcheck_pinned(manifest: tuple[AssetEntry, ...]) -> None:
+def selfcheck_pinned(manifest: tuple[AssetEntry, ...]) -> None:
     """Selfcheck pinned.
 
     Refuse to run if any unpkg URL slipped back to a bare ``@<major>``
@@ -96,23 +96,23 @@ def _selfcheck_pinned(manifest: tuple[AssetEntry, ...]) -> None:
             )
 
 
-def _sha256_of(path: Path) -> str:
+def sha256_of(path: Path) -> str:
     h = hashlib.sha256()
     h.update(path.read_bytes())
     return h.hexdigest()
 
 
-def _download(entry: AssetEntry, target: Path) -> None:
+def download(entry: AssetEntry, target: Path) -> None:
     """Fetch ``entry.url`` to ``target`` atomically; verify SHA256.
 
     Fetch ``entry.url`` to ``target`` atomically; verify SHA256. One
     retry on transient ``URLError``; otherwise raise with an offline hint.
     """
     last_err: Exception | None = None
-    for _attempt in range(2):
+    for _ in range(2):
         try:
-            with urllib.request.urlopen(  # noqa: S310 -- pinned HTTPS URL
-                entry.url, timeout=_DOWNLOAD_TIMEOUT
+            with urllib.request.urlopen(
+                entry.url, timeout=DOWNLOAD_TIMEOUT
             ) as resp:
                 data = resp.read()
             tmp = target.with_suffix(target.suffix + ".tmp")
@@ -132,7 +132,7 @@ def _download(entry: AssetEntry, target: Path) -> None:
         f"asset {entry.name!r}: download failed from {entry.url}\n"
         f"  cache path: {target}\n"
         f"  cause: {last_err}\n"
-        f"  offline? pre-populate the cache and set {_ENV_OVERRIDE} to that directory."
+        f"  offline? pre-populate the cache and set {ENV_OVERRIDE} to that directory."
     )
 
 
@@ -151,16 +151,16 @@ def ensure_assets(
       never silently re-fetched).
     * absent → downloaded, atomically written, hash-verified.
     """
-    manifest = manifest if manifest is not None else _ASSET_MANIFEST
-    _selfcheck_pinned(manifest)
-    root = cache_root if cache_root is not None else _resolve_cache_root(manifest)
+    manifest = manifest if manifest is not None else ASSET_MANIFEST
+    selfcheck_pinned(manifest)
+    root = cache_root if cache_root is not None else resolve_cache_root(manifest)
     root.mkdir(parents=True, exist_ok=True)
 
     paths: dict[str, Path] = {}
     for entry in manifest:
         target = root / entry.name
         if target.exists():
-            actual = _sha256_of(target)
+            actual = sha256_of(target)
             if actual != entry.sha256:
                 raise RuntimeError(
                     f"asset {entry.name!r}: cached file SHA256 mismatch at {target}\n"
@@ -168,7 +168,7 @@ def ensure_assets(
                     f"  the cached file does not match the pinned manifest — refusing to use it."
                 )
         else:
-            _download(entry, target)
+            download(entry, target)
         paths[entry.name] = target
     return paths
 

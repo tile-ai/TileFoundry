@@ -11,16 +11,14 @@ import pytest
 import torch
 
 import tilefoundry
-import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
 from tests.core._corpus import reload
-from tilefoundry.cli.source import load_namespace
+from tilefoundry import cli, inspection
 from tilefoundry.dsl import *
-from tilefoundry.inspection import as_script
-from tilefoundry_nvidia import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.tir.memory.tensor_view import render_shard_layout_value
+from tilefoundry_nvidia import cuda
+from tilefoundry_nvidia.cuda.codegen.tir import memory
 
 SWIZZLED_SQUARE = Path(__file__).parents[2] / "fixtures" / "ops" / "swizzled_square.py"
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 _ROWS, _COLS = 128, 4
 _THREADS = Mesh((Topology("thread", _ROWS),), Layout((_ROWS,), (1,)), ("t",))
 
@@ -34,13 +32,13 @@ def test_swizzled_smem_load_executes() -> None:
     through the same layout returns the same numbers whether it is applied or
     dropped entirely.
     """
-    namespace = load_namespace(str(SWIZZLED_SQUARE))[0]
+    namespace = cli.load_namespace(str(SWIZZLED_SQUARE))[0]
     SwizzledSquare, _swizzled_rows = namespace["SwizzledSquare"], namespace["_swizzled_rows"]
-    source = as_script(SwizzledSquare)
+    source = inspection.as_script(SwizzledSquare)
     restored = reload(source, "SwizzledSquare")
-    assert as_script(restored) == source
+    assert inspection.as_script(restored) == source
 
-    preamble, _ = render_shard_layout_value("tile", _swizzled_rows(_THREADS))
+    preamble, _ = memory.render_shard_layout_value("tile", _swizzled_rows(_THREADS))
     assert any(
         "cute::make_composed_layout(cute::Swizzle<2, 2, 2>{}, cute::Int<0>{}, "
         "cute::make_layout(cute::make_shape(cute::Int<128>{}, cute::Int<4>{}), "

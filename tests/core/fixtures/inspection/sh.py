@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="sh", target=CpuTarget())
+@module(entry="sh", target=cpu.Target())
 class Sh:
     @func
     def sh(x: Tensor[(4, 8), "f32"]):

@@ -6,10 +6,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def gated_norm(
     core: Tensor[(1, 1024, 48, 128), "bf16"], z: Tensor[(1, 1024, 6144), "bf16", ((1, 1024, 6144), (17039360, 16640, 1))], gamma_gdn: ConstTensor[(128,), "bf16"], out: Tensor[(1024, 48, 16, 8), "bf16"]
 ):

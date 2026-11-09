@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.rtx_6000_ada"),
+    target=cuda.Target("nvidia.rtx_6000_ada"),
     topologies=(Topology("cta", 1), Topology("thread", 32),),
 )
 class Sm89E4m3Gemm:
-    @prim_func(target=CudaTarget("nvidia.rtx_6000_ada"))
+    @prim_func(target=cuda.Target("nvidia.rtx_6000_ada"))
     def gemm(
         a: Tensor[(16, 128), "fp8e4m3"], b: Tensor[(128, 8), "fp8e4m3", ((128, 8), (1, 128))], out: Tensor[(16, 8), "f32"]
     ):

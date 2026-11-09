@@ -2,39 +2,22 @@
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.utils import common_placements
-from tilefoundry.evaluator.value import TensorValue, TupleValue
-from tilefoundry.ir.core import Constant, Op, Tuple
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor, is_scalar_tensor
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.utils import require_matching_partial_state, static_dim_value
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    control_read,
-    iterating,
-    logical_coordinates,
-    placed_window,
-    register_access_relation,
-    window_source,
-)
+from tilefoundry import core
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types, utils
 
 
-@register_op(name="insert_slice", dialect='tf', category='tensor')
-class InsertSlice(Op):
+@expr.register_op(name="insert_slice", dialect='tf', category='tensor')
+class InsertSlice(expr.Op):
     """Return ``dst`` with ``update`` written into the window at ``offsets``."""
 
-    dst = ParamDef(kind="input", pattern=is_ranked_tensor())
-    update = ParamDef(kind="input", pattern=is_ranked_tensor())
+    dst = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    update = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
 
-    offsets = ParamDef(kind="input", pattern=is_scalar_tensor())
+    offsets = expr.ParamDef(kind="input", pattern=pattern.is_scalar_tensor())
 
 
-def _offset_axes(call: "Call", rank: int) -> tuple:
+def offset_axes(call: "expr.Call", rank: int) -> tuple:
     """Where the window starts on each axis, as a number or as the value it is.
 
     The offsets arrive either as one tuple naming every axis or as one rank-0
@@ -43,19 +26,19 @@ def _offset_axes(call: "Call", rank: int) -> tuple:
     is kept as the operand element it is, so a relation can name it.
     """
     given = call.args[2]
-    if isinstance(given, Tuple):
+    if isinstance(given, expr.Tuple):
         return tuple(
-            int(item.value) if isinstance(item, Constant) and isinstance(item.value, int) else item
+            int(item.value) if isinstance(item, expr.Constant) and isinstance(item.value, int) else item
             for item in given.elements
         )
     start = (
-        int(given.value) if isinstance(given, Constant) and isinstance(given.value, int) else given
+        int(given.value) if isinstance(given, expr.Constant) and isinstance(given.value, int) else given
     )
     return (start, *(0 for _ in range(rank - 1)))
 
 
-@register_access_relation(InsertSlice)
-def _insert_slice_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(InsertSlice)
+def insert_slice_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """The result is dst with a window replaced, so every index reads itself.
 
     The window is exactly the update's own shape wherever it lands, so both
@@ -68,30 +51,30 @@ def _insert_slice_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     result = ctx.type_of(call.args[0])
     rank = len(result.shape)
     update = ctx.type_of(call.args[1])
-    offsets = _offset_axes(call, rank)
-    complement, written = placed_window(
+    offsets = offset_axes(call, rank)
+    complement, written = access.placed_window(
         offsets, tuple(update.shape), rank, within=tuple(result.shape)
     )
-    read_update = window_source(
+    read_update = access.window_source(
         offsets,
         rank,
         update,
         update,
-        logical_coordinates(result, result),
+        access.logical_coordinates(result, result),
         extents=tuple(update.shape),
     )
-    return iterating(
+    return access.iterating(
         result.shape,
         (
             complement,
             read_update,
-            *(control_read(rank, ctx, arg) for arg in call.args[2:]),
+            *(access.control_read(rank, ctx, arg) for arg in call.args[2:]),
             written,
         ),
     )
 
 
-def _check_axis(ax: int, dst_ext, upd_ext, off_expr, ctx, call) -> None:
+def check_axis(ax: int, dst_ext, upd_ext, off_expr, ctx, call) -> None:
     """Per-axis window checks: the update extent must fit.
 
     Per-axis window checks: the update extent must fit, and a *literal*
@@ -104,15 +87,15 @@ def _check_axis(ax: int, dst_ext, upd_ext, off_expr, ctx, call) -> None:
             call,
             f"offset for axis {ax} must be a rank-0 scalar, got shape {off_ty.shape}",
         )
-    if off_ty.dtype not in (DType.i32, DType.i64):
+    if off_ty.dtype not in (expr.DType.i32, expr.DType.i64):
         ctx.error(
             call,
             f"offset for axis {ax} must be an integer scalar, got {off_ty.dtype}",
         )
-    d, u = static_dim_value(dst_ext), static_dim_value(upd_ext)
+    d, u = expr.static_dim_value(dst_ext), expr.static_dim_value(upd_ext)
     if d is not None and u is not None and u > d:
         ctx.error(call, f"update extent {u} exceeds dst extent {d} on axis {ax}")
-    if isinstance(off_expr, Constant):
+    if isinstance(off_expr, expr.Constant):
         o = int(off_expr.value)
         if o < 0:
             ctx.error(call, f"offset {o} on axis {ax} must be non-negative")
@@ -123,8 +106,8 @@ def _check_axis(ax: int, dst_ext, upd_ext, off_expr, ctx, call) -> None:
             )
 
 
-@register_typeinfer(InsertSlice)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(InsertSlice)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     dst_ty = ctx.type_of(call.args[0])
     upd_ty = ctx.type_of(call.args[1])
     off_expr = call.args[2]
@@ -133,15 +116,15 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ctx.error(call, f"update rank {len(upd_ty.shape)} must equal dst rank {rank}")
     if dst_ty.dtype != upd_ty.dtype:
         ctx.error(call, f"dst/update dtype mismatch {dst_ty.dtype} vs {upd_ty.dtype}")
-    require_matching_partial_state(dst_ty, upd_ty, "dst", "update")
-    if isinstance(off_expr, Tuple):
+    utils.require_matching_partial_state(dst_ty, upd_ty, "dst", "update")
+    if isinstance(off_expr, expr.Tuple):
         if len(off_expr.elements) != rank:
             ctx.error(
                 call,
                 f"offsets tuple length {len(off_expr.elements)} must equal dst rank {rank}",
             )
         for ax, off_el in enumerate(off_expr.elements):
-            _check_axis(ax, dst_ty.shape[ax], upd_ty.shape[ax], off_el, ctx, call)
+            check_axis(ax, dst_ty.shape[ax], upd_ty.shape[ax], off_el, ctx, call)
     else:
         off_ty = ctx.type_of(off_expr)
         if len(off_ty.shape) != 0:
@@ -150,7 +133,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 f"offsets must be a rank-0 scalar start or a per-axis tuple, got "
                 f"shape {off_ty.shape}",
             )
-        if off_ty.dtype not in (DType.i32, DType.i64):
+        if off_ty.dtype not in (expr.DType.i32, expr.DType.i64):
             ctx.error(call, f"offsets must be an integer scalar, got {off_ty.dtype}")
         if rank != 1:
             ctx.error(
@@ -158,37 +141,54 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 f"a bare scalar offset applies only to a rank-1 dst; a rank-{rank} "
                 "dst needs a per-axis offset tuple",
             )
-        _check_axis(0, dst_ty.shape[0], upd_ty.shape[0], off_expr, ctx, call)
+        check_axis(0, dst_ty.shape[0], upd_ty.shape[0], off_expr, ctx, call)
     return dst_ty
 
 
-@register_eval(InsertSlice)
-def _eval_insert_slice(ctx):
-    def insert_slice(dst, upd, *starts):
-        sl = []
-        for ax, start in enumerate(int(start.reshape(-1)[0].item()) for start in starts):
-            n = upd.shape[ax]
-            if start < 0 or start + n > dst.shape[ax]:
-                raise ValueError(
-                    f"insert_slice: window [{start}, {start + n}) out of bounds on axis "
-                    f"{ax} for dst extent {dst.shape[ax]}"
-                )
-            sl.append(slice(start, start + n))
-        win = tuple(sl)
-        out = dst.clone()
-        out[win] = upd.reshape(out[win].shape).to(out.dtype)
-        return out
+def inserted_slice(dst, upd, *starts):
+    sl = []
+    for ax, start in enumerate(int(start.reshape(-1)[0].item()) for start in starts):
+        n = upd.shape[ax]
+        if start < 0 or start + n > dst.shape[ax]:
+            raise ValueError(
+                f"insert_slice: window [{start}, {start + n}) out of bounds on axis "
+                f"{ax} for dst extent {dst.shape[ax]}"
+            )
+        sl.append(slice(start, start + n))
+    win = tuple(sl)
+    out = dst.clone()
+    out[win] = upd.reshape(out[win].shape).to(out.dtype)
+    return out
 
+
+@evaluator.register(InsertSlice)
+def eval_insert_slice(ctx):
     offsets = ctx.args[2]
-    offsets = offsets.elements if isinstance(offsets, TupleValue) else (offsets,)
+    offsets = offsets.elements if isinstance(offsets, evaluator.TupleValue) else (offsets,)
     xs = tuple(arg.tensor for arg in (ctx.args[0], ctx.args[1], *offsets))
-    placements = common_placements(*xs)
+    placements = evaluator.common_placements(*xs)
     held = (
-        insert_slice(*(x.tensor for x in xs))
+        inserted_slice(*(x.tensor for x in xs))
         if not placements
-        else tuple((p, insert_slice(*(x.to_local(p) for x in xs))) for p in placements)
+        else tuple((p, inserted_slice(*(x.to_local(p) for x in xs))) for p in placements)
     )
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
 __all__ = ["InsertSlice"]
+
+
+@cost.register(InsertSlice)
+def insert_slice_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    """Read and write the update window without charging the untouched dst."""
+    _, update, offsets = cost.input_types(call, ctx)
+    window = utils.tensor_bytes(update)
+    return cost.Cost(
+        {},
+        (
+            cost.TrafficBytes(),
+            cost.TrafficBytes(read=window),
+            cost.TrafficBytes(read=utils.tensor_bytes(offsets)),
+            cost.TrafficBytes(write=window),
+        ),
+    )

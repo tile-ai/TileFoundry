@@ -32,7 +32,7 @@ import math
 from pathlib import Path
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _CONFIG = json.loads((Path(__file__).parent / "config.json").read_text(encoding="utf-8"))
 config = _CONFIG["text_config"]
@@ -77,7 +77,7 @@ N = DimVar("seq_len", CHUNK, 8192)
 
 @module(
     entry="down",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 132), Topology("thread", 384)),
 )
 class MLP:
@@ -106,7 +106,7 @@ class MLP:
 
 @module(
     entry="delta_rule",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 132), Topology("thread", 384)),
 )
 class GatedDeltaNet:
@@ -262,7 +262,7 @@ class GatedDeltaNet:
 
 @module(
     entry="o_proj",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 132), Topology("thread", 384)),
 )
 class Attention:
@@ -373,7 +373,7 @@ def _full_layer_forward(self, hidden, cos, sin):
 
 @module(
     entry="input_norm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 132), Topology("thread", 384)),
 )
 class LinearAttentionLayer:
@@ -385,7 +385,7 @@ class LinearAttentionLayer:
 
 @module(
     entry="input_norm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 132), Topology("thread", 384)),
 )
 class FullAttentionLayer:
@@ -419,7 +419,7 @@ def rope_tables(n: int, device):
 
 @module(
     entry="final",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 132), Topology("thread", 384)),
 )
 class Qwen3_8_27B:

@@ -4,42 +4,15 @@ from __future__ import annotations
 
 from enum import Enum
 
-from tilefoundry.ir.core import Op, OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import (
-    ComposedLayoutPattern,
-    DistinctConstraint,
-    LayoutPattern,
-    MeshPattern,
-    OrPattern,
-    SameConstraint,
-    SameModesConstraint,
-    StarPattern,
-    SwitchPattern,
-    SwizzlePattern,
-    WildcardPattern,
-    utils,
-)
-from tilefoundry.ir.pattern import (
-    predicates as P,
-)
-from tilefoundry.ir.tir.memory.copy import register_copy_semantics
-from tilefoundry.ir.types import Mesh, Swizzle, UnitType
-from tilefoundry.ir.types.storage import StorageKind as S
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    identity_access,
-    iterating,
-    register_access_relation,
-    state_access,
-)
+from tilefoundry.interfaces import access, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir.tir import memory
 
 TMA_RANK = 5
 BOX_EXTENT = 256
 TMA_UNIT_BITS = 16 * 8
 SWIZZLE_PLACE = "swizzle"
-TMA_STORAGES = (S.GMEM, S.SMEM)
+TMA_STORAGES = (expr.StorageKind.GMEM, expr.StorageKind.SMEM)
 
 
 class TmaSwizzle(Enum):
@@ -51,39 +24,39 @@ class TmaSwizzle(Enum):
     SW128 = 128
 
     @property
-    def swizzle(self) -> Swizzle | None:
-        return None if self is TmaSwizzle.NONE else Swizzle(self.value.bit_length() - 5, 4, 3)
+    def swizzle(self) -> types.Swizzle | None:
+        return None if self is TmaSwizzle.NONE else types.Swizzle(self.value.bit_length() - 5, 4, 3)
 
 
-def _dim(name: str) -> WildcardPattern:
-    return WildcardPattern(name)
+def dim_wildcard(name: str) -> pattern.Wildcard:
+    return pattern.Wildcard(name)
 
 
-def _dim_formulas(name: str, dtype: str, *, span: int | None = None) -> tuple:
-    dim = WildcardPattern(name)
-    parts = [*_dim_range(name), P.Bits(dtype) * dim % TMA_UNIT_BITS == 0]
+def dim_formulas(name: str, dtype: str, *, span: int | None = None) -> tuple:
+    dim = pattern.Wildcard(name)
+    parts = [*dim_range(name), pattern.Bits(dtype) * dim % TMA_UNIT_BITS == 0]
     if span is not None:
-        parts.append(P.Bits(dtype) * dim <= span * 8)
+        parts.append(pattern.Bits(dtype) * dim <= span * 8)
     return tuple(parts)
 
 
-def _dim_range(name: str) -> tuple:
-    dim = WildcardPattern(name)
+def dim_range(name: str) -> tuple:
+    dim = pattern.Wildcard(name)
     return dim >= 1, dim <= BOX_EXTENT
 
 
-def TmaBoxPattern(dtype: str, *, allow_partial=False) -> SwitchPattern:
-    rest = tuple(_dim(f"dim{index}") for index in range(1, TMA_RANK))
+def tma_box_pattern(dtype: str, *, allow_partial=False) -> pattern.Switch:
+    rest = tuple(dim_wildcard(f"dim{index}") for index in range(1, TMA_RANK))
     rest_formulas = tuple(
-        formula for index in range(1, TMA_RANK) for formula in _dim_range(f"dim{index}")
+        formula for index in range(1, TMA_RANK) for formula in dim_range(f"dim{index}")
     )
-    plain_dims = (_dim("dim0"), *rest)
+    plain_dims = (dim_wildcard("dim0"), *rest)
     boxes = {
-        TmaSwizzle.NONE: LayoutPattern(
+        TmaSwizzle.NONE: pattern.Layout(
             predicates=(
-                P.PlainArrangement(allow_partial=allow_partial),
-                P.BoxDims(plain_dims, dtype, BOX_EXTENT, allow_partial=allow_partial),
-                *_dim_formulas("dim0", dtype),
+                pattern.PlainArrangement(allow_partial=allow_partial),
+                pattern.BoxDims(plain_dims, dtype, BOX_EXTENT, allow_partial=allow_partial),
+                *dim_formulas("dim0", dtype),
                 *rest_formulas,
             )
         )
@@ -94,108 +67,108 @@ def TmaBoxPattern(dtype: str, *, allow_partial=False) -> SwitchPattern:
     ):
         swizzle = mode.swizzle
         leading = f"dim{index}"
-        dims = (_dim(leading), *rest)
-        boxes[mode] = ComposedLayoutPattern(
-            SwizzlePattern(swizzle.bits, swizzle.base, swizzle.shift),
+        dims = (dim_wildcard(leading), *rest)
+        boxes[mode] = pattern.ComposedLayout(
+            pattern.Swizzle(swizzle.bits, swizzle.base, swizzle.shift),
             0,
-            LayoutPattern(
+            pattern.Layout(
                 predicates=(
-                    P.PlainArrangement(allow_partial=allow_partial),
-                    P.BoxDims(
+                    pattern.PlainArrangement(allow_partial=allow_partial),
+                    pattern.BoxDims(
                         dims,
                         dtype,
                         BOX_EXTENT,
                         span=mode.value,
                         allow_partial=allow_partial,
                     ),
-                    *_dim_formulas(leading, dtype, span=mode.value),
+                    *dim_formulas(leading, dtype, span=mode.value),
                     *rest_formulas,
                 )
             ),
         )
-    return SwitchPattern(SWIZZLE_PLACE, boxes)
+    return pattern.Switch(SWIZZLE_PLACE, boxes)
 
 
-def TmaGlobalPattern(dtype: str) -> LayoutPattern:
-    steps = tuple(WildcardPattern(f"step{index}") for index in range(1, TMA_RANK))
-    return LayoutPattern(
+def tma_global_pattern(dtype: str) -> pattern.Layout:
+    steps = tuple(pattern.Wildcard(f"step{index}") for index in range(1, TMA_RANK))
+    return pattern.Layout(
         predicates=(
-            P.PlainArrangement(),
-            P.TensorMap(steps, dtype),
-            *(P.Bits(dtype) * step % TMA_UNIT_BITS == 0 for step in steps),
+            pattern.PlainArrangement(),
+            pattern.TensorMap(steps, dtype),
+            *(pattern.Bits(dtype) * step % TMA_UNIT_BITS == 0 for step in steps),
         )
     )
 
 
-def TmaOperandPattern(storage: str, dtype: str) -> SwitchPattern:
-    return SwitchPattern(
+def tma_operand_pattern(storage: str, dtype: str) -> pattern.Switch:
+    return pattern.Switch(
         storage,
         {
-            S.GMEM: TmaGlobalPattern(dtype),
-            S.SMEM: TmaBoxPattern(dtype),
+            expr.StorageKind.GMEM: tma_global_pattern(dtype),
+            expr.StorageKind.SMEM: tma_box_pattern(dtype),
         },
     )
 
 
-def _warp_scope() -> MeshPattern:
-    layout = LayoutPattern(
-        ((StarPattern(OrPattern(1)), 32),),
-        ((StarPattern(WildcardPattern()), 1),),
+def warp_scope() -> pattern.Mesh:
+    layout = pattern.Layout(
+        ((pattern.Star(pattern.Or(1)), 32),),
+        ((pattern.Star(pattern.Wildcard()), 1),),
     )
-    sliced = ComposedLayoutPattern(
+    sliced = pattern.ComposedLayout(
         inner=None,
-        offset=WildcardPattern("p0"),
+        offset=pattern.Wildcard("p0"),
         outer=layout,
-        predicates=(WildcardPattern("p0") % 32 == 0, P.Forward(), P.Injective()),
+        predicates=(pattern.Wildcard("p0") % 32 == 0, pattern.Forward(), pattern.Injective()),
     )
-    return MeshPattern(("thread",), sliced)
+    return pattern.Mesh(("thread",), sliced)
 
 
-@register_op(dialect="T", category="async", name="copy_async_tensor")
-class CopyAsyncTensor(Op):
+@expr.register_op(dialect="T", category="async", name="copy_async_tensor")
+class CopyAsyncTensor(expr.Op):
     """Move one tensor-map box between global and shared memory."""
 
-    capability = OpCapability("cp.async.bulk.tensor")
+    capability = expr.OpCapability("cp.async.bulk.tensor")
     resource = "tma_engine"
 
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.READ,
-        pattern=utils.operand_tile(
+        effect=expr.MemoryEffect.READ,
+        pattern=pattern.operand_tile(
             0,
             TMA_STORAGES,
-            TmaOperandPattern(utils.storage_place(0), utils.dtype_place(0)),
+            tma_operand_pattern(pattern.storage_place(0), pattern.dtype_place(0)),
         ),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.WRITE,
-        pattern=utils.operand_tile(
+        effect=expr.MemoryEffect.WRITE,
+        pattern=pattern.operand_tile(
             1,
             TMA_STORAGES,
-            TmaOperandPattern(utils.storage_place(1), utils.dtype_place(1)),
+            tma_operand_pattern(pattern.storage_place(1), pattern.dtype_place(1)),
         ),
     )
     between = (
-        SameConstraint("shape", "src", "dst"),
-        SameConstraint("dtype", "src", "dst"),
-        DistinctConstraint("storage", "src", "dst"),
-        SameModesConstraint("src", "dst"),
+        pattern.SameConstraint("shape", "src", "dst"),
+        pattern.SameConstraint("dtype", "src", "dst"),
+        pattern.DistinctConstraint("storage", "src", "dst"),
+        pattern.SameModesConstraint("src", "dst"),
     )
-    execution_mesh = ParamDef(
+    execution_mesh = expr.ParamDef(
         kind="attribute",
-        annotation=Mesh,
-        pattern=_warp_scope(),
+        annotation=types.Mesh,
+        pattern=warp_scope(),
         optional=True,
         default=None,
     )
 
 
-register_copy_semantics(CopyAsyncTensor, verify=False)
+memory.register_copy_semantics(CopyAsyncTensor, verify=False)
 
 
-@register_op(dialect="T", category="async", name="copy_async_tensor_tx")
-class CopyAsyncTensorTx(Op):
+@expr.register_op(dialect="T", category="async", name="copy_async_tensor_tx")
+class CopyAsyncTensorTx(expr.Op):
     """Load one tensor-map box into shared memory, completing its bytes on an mbarrier word.
 
     Lowering emits it for a selected ``CopyAsyncTensor`` from global to shared
@@ -204,50 +177,54 @@ class CopyAsyncTensorTx(Op):
     in ``dst`` for every issuing thread when the operation ends.
     """
 
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.READ,
-        pattern=utils.operand_tile(
-            0, S.GMEM, TmaOperandPattern(utils.storage_place(0), utils.dtype_place(0))
+        effect=expr.MemoryEffect.READ,
+        pattern=pattern.operand_tile(
+            0,
+            expr.StorageKind.GMEM,
+            tma_operand_pattern(pattern.storage_place(0), pattern.dtype_place(0)),
         ),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.WRITE,
-        pattern=utils.operand_tile(
-            1, S.SMEM, TmaOperandPattern(utils.storage_place(1), utils.dtype_place(1))
+        effect=expr.MemoryEffect.WRITE,
+        pattern=pattern.operand_tile(
+            1,
+            expr.StorageKind.SMEM,
+            tma_operand_pattern(pattern.storage_place(1), pattern.dtype_place(1)),
         ),
     )
-    barrier = ParamDef(
+    barrier = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.READ | MemoryEffect.WRITE,
-        pattern=utils.tensor_in(S.SMEM),
+        effect=expr.MemoryEffect.READ | expr.MemoryEffect.WRITE,
+        pattern=pattern.tensor_in(expr.StorageKind.SMEM),
     )
     between = (
-        SameConstraint("shape", "src", "dst"),
-        SameConstraint("dtype", "src", "dst"),
-        SameModesConstraint("src", "dst"),
+        pattern.SameConstraint("shape", "src", "dst"),
+        pattern.SameConstraint("dtype", "src", "dst"),
+        pattern.SameModesConstraint("src", "dst"),
     )
-    execution_mesh = ParamDef(
+    execution_mesh = expr.ParamDef(
         kind="attribute",
-        annotation=Mesh,
-        pattern=_warp_scope(),
+        annotation=types.Mesh,
+        pattern=warp_scope(),
         optional=True,
         default=None,
     )
 
 
-@register_typeinfer(CopyAsyncTensorTx)
-def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
-    return UnitType()
+@typeinfer.register(CopyAsyncTensorTx)
+def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
+    return types.UnitType()
 
 
-@register_access_relation(CopyAsyncTensorTx)
-def _tensor_tx_access(call, ctx):
+@access.register_relation(CopyAsyncTensorTx)
+def tensor_tx_access(call, ctx):
     source = ctx.type_of(call.args[0])
-    data = identity_access(len(source.shape))
-    barrier = state_access(ctx.type_of(call.args[2]), len(source.shape))
-    return iterating(source.shape, (data, data, barrier, data))
+    data = access.identity(len(source.shape))
+    barrier = access.state(ctx.type_of(call.args[2]), len(source.shape))
+    return access.iterating(source.shape, (data, data, barrier, data))
 
 
 __all__ = [
@@ -258,8 +235,9 @@ __all__ = [
     "TMA_RANK",
     "TMA_STORAGES",
     "TMA_UNIT_BITS",
-    "TmaBoxPattern",
-    "TmaGlobalPattern",
-    "TmaOperandPattern",
+    "tma_box_pattern",
+    "tma_global_pattern",
+    "tma_operand_pattern",
     "TmaSwizzle",
+    "warp_scope",
 ]

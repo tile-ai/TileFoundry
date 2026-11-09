@@ -7,7 +7,7 @@ that tile straight back, so the root's own call is typed by the same rule;
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 64
 N = 32
@@ -54,7 +54,7 @@ class ChildMatmulStaged:
     ) -> Tensor[(M, N), "f32"]:
         pass
 
-    @staged.specialize(RangePattern("k_len", BK, K))
+    @staged.specialize(pattern.Range("k_len", BK, K))
     def staged_any_length(
         a: Tensor[(M, K_LEN), "bf16"], b: Tensor[(K_LEN, N), "bf16"]
     ) -> Tensor[(M, N), "f32"]:
@@ -69,7 +69,7 @@ class ChildMatmulStaged:
             return tf.reshard(acc, (M, N), "gmem")
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 class ChildMatmulRoot:
     child = ChildMatmul
     direct = ChildMatmulDirect
@@ -77,14 +77,14 @@ class ChildMatmulRoot:
 
     @func
     def gemm(a: Tensor[(M, K), "bf16"], b: Tensor[(K, N), "bf16"]) -> Tensor[(M, N), "f32"]:
-        return child(a, b)  # noqa: F821 -- class-body binding
+        return child(a, b)
 
     @func
     def gemm_on_chip(a: Tensor[(M, K), "bf16"], b: Tensor[(K, N), "bf16"]):
-        return direct(a, b)  # noqa: F821 -- class-body binding
+        return direct(a, b)
 
     @func
     def gemm_staged(
         a: Tensor[(M, K_LEN), "bf16"], b: Tensor[(K_LEN, N), "bf16"]
     ) -> Tensor[(M, N), "f32"]:
-        return staged(a, b)  # noqa: F821 -- class-body binding
+        return staged(a, b)

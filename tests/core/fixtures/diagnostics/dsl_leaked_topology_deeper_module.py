@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 try:
 
@@ -15,7 +15,7 @@ except RuntimeError:
 
 
 def define_one_level_deeper():
-    @module(entry="probe", target=CpuTarget())
+    @module(entry="probe", target=cpu.Target())
     class Later:
         @func
         def probe(x: Tensor[(1,), "f32"]) -> Tensor[(1,), "f32"]:

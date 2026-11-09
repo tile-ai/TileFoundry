@@ -1,12 +1,12 @@
 """Store a narrowed WGMMA accumulator into SW32 shared memory."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 P_SMEM = ComposedLayout(Swizzle(1, 4, 3), 0, Layout(((4, 2, 8), (3, 16)), ((256, 128, 16), (1024, 1))))
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 128)))
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 128)))
 class StoreP:
     @func
     def gemm(s: Tensor[(64, 48), "f32"]) -> Tensor[(64, 48), "bf16"]:

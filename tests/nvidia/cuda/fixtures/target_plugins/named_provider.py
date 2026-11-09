@@ -1,6 +1,6 @@
-from tilefoundry.target import Target, register_target
+from tilefoundry import target
 
 
-@register_target
-class NamedTarget(Target):
+@target.register
+class NamedTarget(target.Target):
     name = 'vendor.named'

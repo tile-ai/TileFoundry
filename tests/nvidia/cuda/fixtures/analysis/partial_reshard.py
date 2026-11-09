@@ -1,7 +1,7 @@
 """Complete replicated partials while retaining an independent tensor split."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 REPLICAS = DimVar("replicas", 1, 4)
 SHARDS = DimVar("shards", 1, 4)
@@ -13,7 +13,7 @@ PARTIAL = ShardLayout(LOCAL, (Partial("sum"), Split(0)), MESH)
 
 @module(
     entry="complete",
-    target=CudaTarget("nvidia.h200_sxm", device_count=16),
+    target=cuda.Target("nvidia.h200_sxm", device_count=16),
     topologies=(GPU, Topology("cta", 1)),
 )
 class PartialReshard:

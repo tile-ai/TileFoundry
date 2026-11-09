@@ -18,44 +18,13 @@ import pytest
 
 from tests.core._corpus import Case, case, check_case, special
 from tests.nvidia.cuda.models.qwen3_1_7b.case import CASE as QWEN_CASE
-from tilefoundry.analysis.api import analyze
-from tilefoundry.analysis.check import check_program
-from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.metadata import ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata
-from tilefoundry.analysis.registry import Analyzer
-from tilefoundry.cli.source import load_authored_ir
+from tilefoundry import analysis, cli, target
 from tilefoundry.dsl import *
-from tilefoundry.ir.core import (
-    Call,
-    Constant,
-    Tuple,
-    Var,
-    VerifyError,
-    attach_metadata,
-    get_metadata,
-)
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.nn.matmul import MatMul
-from tilefoundry.ir.hir.schedule import ScheduleOp
-from tilefoundry.ir.hir.tensor.empty import Empty
-from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.hir.tensor.zeros import Zeros
-from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.tir.memory import Copy
-from tilefoundry.ir.types import DType, Layout, Mesh, TensorType, TupleType
-from tilefoundry.ir.types.layout import ComposedLayout, flatten
-from tilefoundry.ir.types.shard_layout import ShardLayout
-from tilefoundry.ir.types.utils import tensor_types
-from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.target import Target
-from tilefoundry.visitor_registry.contexts import ValuationContext
-from tilefoundry.visitor_registry.valuation import ValuationVisitor
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import core, expr, hir, types, utils
+from tilefoundry.ir.hir import math, nn, tensor
+from tilefoundry.ir.tir import memory
+from tilefoundry_nvidia import cuda
 from tilefoundry_nvidia.cuda.models.qwen3_1_7b.model import Qwen3_1_7B
 
 _H200 = "nvidia.h200_sxm"
@@ -68,24 +37,24 @@ ANALYSIS = FIXTURES / "analysis"
 
 def _matmul_records(
     result,
-) -> tuple[tuple[ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata], ...]:
+) -> tuple[tuple[analysis.ComputeCostMetadata, analysis.MemoryMetadata, analysis.RegionMemoryMetadata], ...]:
     """Both halves of each occurrence's MatMul record."""
     records = []
 
     def visit(frame):
-        for expr in collect_exprs(frame.function.body):
-            if not isinstance(expr, Call):
+        for node in core.collect_exprs(frame.function.body):
+            if not isinstance(node, expr.Call):
                 continue
-            child = frame._callee_context(expr)
+            child = frame.callee_context(node)
             if child is not None:
                 visit(child)
-            elif isinstance(expr.target, MatMul):
-                record = get_metadata(expr, ComputeCostMetadata)
-                moved = get_metadata(expr, MemoryMetadata)
+            elif isinstance(node.target, nn.MatMul):
+                record = expr.get_metadata(node, analysis.ComputeCostMetadata)
+                moved = expr.get_metadata(node, analysis.MemoryMetadata)
                 assert record is not None
                 records.append((record, moved))
 
-    visit(ValuationContext(result.module, result.function))
+    visit(valuation.Context(result.module, result.function))
     return tuple(records)
 
 
@@ -109,13 +78,13 @@ def _traffic(records) -> dict[str, int]:
 
 
 def test_repeated_call_counts_twice() -> None:
-    CrossModule = load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
-    _Twice = load_authored_ir(f"{ANALYSIS / 'expert_called_twice.py'}:_Twice")
-    one_result = analyze(
-        *check_program(CrossModule, CrossModule.entry_function()),
+    CrossModule = cli.load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
+    _Twice = cli.load_authored_ir(f"{ANALYSIS / 'expert_called_twice.py'}:_Twice")
+    one_result = analysis.analyze(
+        *analysis.check_program(CrossModule, CrossModule.entry_function()),
         analysis="compute-cost",
     )
-    two_result = analyze(*check_program(_Twice, _Twice.entry_function()), analysis="compute-cost")
+    two_result = analysis.analyze(*analysis.check_program(_Twice, _Twice.entry_function()), analysis="compute-cost")
     one_records = _matmul_records(one_result)
     two_records = _matmul_records(two_result)
     one = _flops(one_records)
@@ -126,20 +95,20 @@ def test_repeated_call_counts_twice() -> None:
 
 
 def test_looped_call_counts_per_trip() -> None:
-    CrossModule = load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
-    _Looped = load_authored_ir(f"{ANALYSIS / 'expert_called_in_loop.py'}:_Looped")
-    one_result = analyze(
-        *check_program(CrossModule, CrossModule.entry_function()),
+    CrossModule = cli.load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
+    _Looped = cli.load_authored_ir(f"{ANALYSIS / 'expert_called_in_loop.py'}:_Looped")
+    one_result = analysis.analyze(
+        *analysis.check_program(CrossModule, CrossModule.entry_function()),
         analysis="compute-cost",
     )
-    looped_result = analyze(
-        *check_program(_Looped, _Looped.entry_function()),
+    looped_result = analysis.analyze(
+        *analysis.check_program(_Looped, _Looped.entry_function()),
         analysis="compute-cost",
     )
     one_occurrence = _matmul_records(one_result)
     looped_occurrence = _matmul_records(looped_result)
-    one_root = get_metadata(one_result.function, ComputeCostMetadata)
-    looped_root = get_metadata(looped_result.function, ComputeCostMetadata)
+    one_root = expr.get_metadata(one_result.function, analysis.ComputeCostMetadata)
+    looped_root = expr.get_metadata(looped_result.function, analysis.ComputeCostMetadata)
 
     assert len(one_occurrence) == 1 and looped_occurrence == one_occurrence
     assert one_root is not None and looped_root is not None
@@ -149,14 +118,14 @@ def test_looped_call_counts_per_trip() -> None:
 
 
 def test_fused_weight_traffic_matches_callees() -> None:
-    _Direct = load_authored_ir(f"{ANALYSIS / 'direct_weight_matmul.py'}:_Direct")
-    direct_result = analyze(
-        *check_program(_Direct, _Direct.entry_function()),
+    _Direct = cli.load_authored_ir(f"{ANALYSIS / 'direct_weight_matmul.py'}:_Direct")
+    direct_result = analysis.analyze(
+        *analysis.check_program(_Direct, _Direct.entry_function()),
         analysis=("compute-cost", "memory"),
     )
-    CrossModule = load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
-    fused_result = analyze(
-        *check_program(CrossModule, CrossModule.entry_function()),
+    CrossModule = cli.load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
+    fused_result = analysis.analyze(
+        *analysis.check_program(CrossModule, CrossModule.entry_function()),
         analysis=("compute-cost", "memory"),
     )
     direct = _traffic(_matmul_records(direct_result))
@@ -166,9 +135,9 @@ def test_fused_weight_traffic_matches_callees() -> None:
 
 
 def test_child_hierarchy_mismatch_rejected() -> None:
-    _Mismatch = load_authored_ir(f"{ANALYSIS / 'child_on_another_hierarchy.py'}:_Mismatch")
-    with pytest.raises(AnalysisError, match="different topology hierarchy") as caught:
-        analyze(*check_program(_Mismatch, _Mismatch.entry_function()), analysis="compute-cost")
+    _Mismatch = cli.load_authored_ir(f"{ANALYSIS / 'child_on_another_hierarchy.py'}:_Mismatch")
+    with pytest.raises(analysis.Error, match="different topology hierarchy") as caught:
+        analysis.analyze(*analysis.check_program(_Mismatch, _Mismatch.entry_function()), analysis="compute-cost")
     assert "launch" not in str(caught.value)
 
 
@@ -184,14 +153,14 @@ class ChildOnCallerHierarchy(CrossModuleCase):
     name: str | None = "_Agreeing"
 
     def guard(self, state, problems):
-        result = analyze(
-            *check_program(state, state.entry_function(), dims={"child_topology_extent": 132}),
+        result = analysis.analyze(
+            *analysis.check_program(state, state.entry_function(), dims={"child_topology_extent": 132}),
             analysis=("compute-cost", "memory"),
         )
         assert set(result.metadata_types) >= {
-            ComputeCostMetadata,
-            MemoryMetadata,
-            RegionMemoryMetadata,
+            analysis.ComputeCostMetadata,
+            analysis.MemoryMetadata,
+            analysis.RegionMemoryMetadata,
         }
 
 
@@ -199,15 +168,15 @@ class ReferenceProgram(CrossModuleCase):
     """The shared programs measure as one root each; what a call means is not restated."""
 
     def guard(self, state, problems):
-        result = analyze(
-            *check_program(state, state.entry_function()),
+        result = analysis.analyze(
+            *analysis.check_program(state, state.entry_function()),
             analysis=("compute-cost", "memory"),
         )
 
         assert set(result.metadata_types) >= {
-            ComputeCostMetadata,
-            MemoryMetadata,
-            RegionMemoryMetadata,
+            analysis.ComputeCostMetadata,
+            analysis.MemoryMetadata,
+            analysis.RegionMemoryMetadata,
         }
 
 
@@ -232,14 +201,14 @@ class FusedReference(ReferenceProgram):
 def _placed_primitives(fn) -> list[tuple[str, object]]:
     """Each costed primitive result in *fn* that a sliced Mesh reached."""
     found: list[tuple[str, object]] = []
-    for expr in collect_exprs(fn.body):
-        if not isinstance(expr, Call) or isinstance(expr.target, Function):
+    for node in core.collect_exprs(fn.body):
+        if not isinstance(node, expr.Call) or isinstance(node.target, core.Function):
             continue
-        for leaf in tensor_types(expr.type):
-            if isinstance(leaf.layout, ShardLayout) and isinstance(
-                leaf.layout.mesh.layout, ComposedLayout
+        for leaf in utils.tensor_types(node.type):
+            if isinstance(leaf.layout, types.ShardLayout) and isinstance(
+                leaf.layout.mesh.layout, types.ComposedLayout
             ):
-                found.append((type(expr.target).__name__, leaf.layout.mesh.layout))
+                found.append((type(node.target).__name__, leaf.layout.mesh.layout))
     return found
 
 
@@ -258,7 +227,7 @@ class MoEMegaKernelBranches(CrossModuleCase):
         expected = {"routed_expert": ((120,), 0), "shared_expert": ((12,), 120)}
         reached = {
             fn.name: _placed_primitives(fn)
-            for frame in list_call_paths(check_program(state, state.entry_function())[0]).values()
+            for frame in valuation.list_call_paths(analysis.check_program(state, state.entry_function())[0]).values()
             for fn in (frame.function,)
         }
 
@@ -267,7 +236,7 @@ class MoEMegaKernelBranches(CrossModuleCase):
             assert placed, branch
             assert {op for op, _ in placed} - {"Reshard"}, branch
             for _op, layout in placed:
-                assert flatten(layout.outer).shape == shape
+                assert types.flatten(layout.outer).shape == shape
                 assert layout.offset == offset
 
 
@@ -275,7 +244,7 @@ def _stacked_program(count, trips=None):
     """The ScaledChild stack with *count* layers whose loop reaches *trips* of them."""
     trips = count if trips is None else trips
     reached = "" if trips == count else f"_reaching_{trips}"
-    return load_authored_ir(f"{ANALYSIS / f'scaled_child_stack_{count}{reached}.py'}:Stack")
+    return cli.load_authored_ir(f"{ANALYSIS / f'scaled_child_stack_{count}{reached}.py'}:Stack")
 
 
 def _call_program(definition, *, count=1, indexed=False, name="run"):
@@ -284,24 +253,24 @@ def _call_program(definition, *, count=1, indexed=False, name="run"):
     calls = []
     value = param
     for index in range(count):
-        target = slot
+        tgt = slot
         if indexed:
-            target = Call(
-                TupleGetItem(),
-                (slot, Constant(index, type=TensorType.scalar(DType.i32))),
+            tgt = expr.Call(
+                tensor.TupleGetItem(),
+                (slot, expr.Constant(index, type=types.TensorType.from_scalar(expr.DType.i32))),
                 type=slot.type.fields[index],
             )
-        value = Call(target, (value,), type=param.type)
+        value = expr.Call(tgt, (value,), type=param.type)
         calls.append(value)
     if name == "twice":
         calls[1].args = (param,)
-        value = Call(Binary(kind=BinaryKind.ADD), tuple(calls), type=param.type)
+        value = expr.Call(math.Binary(kind=BinaryKind.ADD), tuple(calls), type=param.type)
     if name == "looped":
         carry = replace(param, name="carry")
-        iteration = Call(slot, (carry,), type=param.type)
-        body = Tuple((iteration,), type=TupleType((param.type,)))
-        loop = LoopRegion(
-            induction_var=Var("i", type=TensorType.scalar(DType.i32)),
+        iteration = expr.Call(slot, (carry,), type=param.type)
+        body = expr.Tuple((iteration,), type=types.TupleType((param.type,)))
+        loop = core.LoopRegion(
+            induction_var=expr.Var("i", type=types.TensorType.from_scalar(expr.DType.i32)),
             params=(carry,),
             args=(param,),
             body=body,
@@ -312,13 +281,13 @@ def _call_program(definition, *, count=1, indexed=False, name="run"):
             type=body.type,
         )
         value = loop
-    function = Function.build(name=name, params=(param,), body=value, return_type=param.type)
-    return Module(
+    function = core.Function.from_parts(name=name, params=(param,), body=value, return_type=param.type)
+    return core.Module(
         name,
         (function,),
         name,
         children={"layers" if indexed else "mm": slot},
-        target=CudaTarget(_H200),
+        target=cuda.Target(_H200),
         topologies=_CTA,
     )
 
@@ -337,11 +306,11 @@ def _call_program(definition, *, count=1, indexed=False, name="run"):
 def test_retained_calls_match_acceptance_values(
     kind, flops, traffic, peak, persistent, occurrences
 ):
-    Expert = load_authored_ir(f"{HIR_COMPOSITION}:Expert")
-    CrossModule = load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
-    ScaledChild = load_authored_ir(f"{SCALED_MODULES}:ScaledChild")
-    FusedScaledParent = load_authored_ir(f"{SCALED_MODULES}:FusedScaledParent")
-    StackedScaledParent = load_authored_ir(f"{SCALED_MODULES}:StackedScaledParent")
+    Expert = cli.load_authored_ir(f"{HIR_COMPOSITION}:Expert")
+    CrossModule = cli.load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
+    ScaledChild = cli.load_authored_ir(f"{SCALED_MODULES}:ScaledChild")
+    FusedScaledParent = cli.load_authored_ir(f"{SCALED_MODULES}:FusedScaledParent")
+    StackedScaledParent = cli.load_authored_ir(f"{SCALED_MODULES}:StackedScaledParent")
     roots = {
         "cross": CrossModule,
         "twice": _call_program(Expert, count=2, name="twice"),
@@ -351,33 +320,33 @@ def test_retained_calls_match_acceptance_values(
         "stacked": replace(StackedScaledParent, topologies=_CTA),
     }
     root = roots[kind]
-    result = analyze(
-        *check_program(root, root.entry_function()),
+    result = analysis.analyze(
+        *analysis.check_program(root, root.entry_function()),
         analysis=("compute-cost", "memory"),
     )
-    cost = get_metadata(result.function, ComputeCostMetadata)
-    moved = get_metadata(result.function, RegionMemoryMetadata)
+    cost = expr.get_metadata(result.function, analysis.ComputeCostMetadata)
+    moved = expr.get_metadata(result.function, analysis.RegionMemoryMetadata)
     region = moved.peak_for("gmem")
     assert cost.flops.of("f32").total == flops
     assert moved.traffic.storage.of("gmem").total.total_bytes == traffic
     assert (region.peak_bytes, region.persistent_bytes) == (peak, persistent)
     assert len(result.functions) == 2
-    frames = tuple(ValuationVisitor.definitions(ValuationContext(result.module, result.function)))
+    frames = tuple(valuation.definitions(valuation.Context(result.module, result.function)))
     sites = [
         (call, child)
         for frame in frames
-        for call in collect_exprs(frame.function.body)
-        if isinstance(call, Call) and (child := frame._callee_context(call)) is not None
+        for call in core.collect_exprs(frame.function.body)
+        if isinstance(call, expr.Call) and (child := frame.callee_context(call)) is not None
     ]
     assert len(sites) == occurrences
     if kind == "stacked":
         assert (
-            sum(isinstance(node, LoopRegion) for node in collect_exprs(result.function.body)) == 1
+            sum(isinstance(node, core.LoopRegion) for node in core.collect_exprs(result.function.body)) == 1
         )
     for call, child in sites:
-        assert get_metadata(child.function.body, ComputeCostMetadata) is not None
-        assert get_metadata(call, ComputeCostMetadata) == get_metadata(
-            child.function, ComputeCostMetadata
+        assert expr.get_metadata(child.function.body, analysis.ComputeCostMetadata) is not None
+        assert expr.get_metadata(call, analysis.ComputeCostMetadata) == expr.get_metadata(
+            child.function, analysis.ComputeCostMetadata
         )
 
 
@@ -385,12 +354,12 @@ def test_derived_size_ignores_instance_count():
     sizes = []
     for count in (3, 28):
         root = _stacked_program(count)
-        checked, function = check_program(root, root.entry_function())
-        functions = tuple(frame.function for frame in list_call_paths(checked).values())
-        sizes.append((sum(len(collect_exprs(body.body)) for body in functions), len(functions)))
-        assert sum(isinstance(node, LoopRegion) for node in collect_exprs(function.body)) == 1
-        with pytest.raises(AnalysisError, match="derived body nodes.*node budget"):
-            check_program(root, root.entry_function(), budget=sizes[-1][0] - 1)
+        checked, function = analysis.check_program(root, root.entry_function())
+        functions = tuple(frame.function for frame in valuation.list_call_paths(checked).values())
+        sizes.append((sum(len(core.collect_exprs(body.body)) for body in functions), len(functions)))
+        assert sum(isinstance(node, core.LoopRegion) for node in core.collect_exprs(function.body)) == 1
+        with pytest.raises(analysis.Error, match="derived body nodes.*node budget"):
+            analysis.check_program(root, root.entry_function(), budget=sizes[-1][0] - 1)
     assert sizes[0] == sizes[1]
     assert sizes[0][1] == 2
 
@@ -400,59 +369,59 @@ def test_qwen_stack_shares_layer_definition():
     assert len(elements) == 28
     assert all(element is elements[0] for element in elements)
     root = QWEN_CASE.build()
-    checked, _function = check_program(root, root.lookup("decoder_layer"), dims={"ctx_len": 128})
+    checked, _function = analysis.check_program(root, root.lookup("decoder_layer"), dims={"ctx_len": 128})
     assert (
-        sum(len(collect_exprs(frame.function.body)) for frame in list_call_paths(checked).values())
+        sum(len(core.collect_exprs(frame.function.body)) for frame in valuation.list_call_paths(checked).values())
         <= 10_000
     )
 
 
 def _direct_program(callee, params, calls):
-    body = Tuple(tuple(calls), type=TupleType(tuple(call.type for call in calls)))
-    function = Function.build(name="root", params=params, body=body, return_type=body.type)
-    return Module(
-        "DirectCalls", (callee, function), "root", target=CudaTarget(_H200), topologies=_CTA
+    body = expr.Tuple(tuple(calls), type=types.TupleType(tuple(call.type for call in calls)))
+    function = core.Function.from_parts(name="root", params=params, body=body, return_type=body.type)
+    return core.Module(
+        "DirectCalls", (callee, function), "root", target=cuda.Target(_H200), topologies=_CTA
     )
 
 
 @pytest.mark.parametrize("difference", ["layout", "storage", "mesh"])
 def test_callee_rejects_different_signatures(difference):
-    type_ = TensorType((4, 8), DType.f32, None, StorageKind.UMAT)
-    left = Var("left", type=type_)
+    type_ = types.TensorType((4, 8), expr.DType.f32, None, StorageKind.UMAT)
+    left = expr.Var("left", type=type_)
     changed = {
-        "layout": replace(type_, layout=Layout((4, 8), (1, 4))),
+        "layout": replace(type_, layout=types.Layout((4, 8), (1, 4))),
         "storage": replace(type_, storage=StorageKind.SMEM),
         "mesh": type_,
     }[difference]
-    right = Var("right", type=changed)
-    held = Var("x", type=type_)
-    callee = Function.build(name="helper", params=(held,), body=held, return_type=type_)
-    first = Call(callee, (left,), type=type_)
-    second = Call(callee, (right,), type=changed)
+    right = expr.Var("right", type=changed)
+    held = expr.Var("x", type=type_)
+    callee = core.Function.from_parts(name="helper", params=(held,), body=held, return_type=type_)
+    first = expr.Call(callee, (left,), type=type_)
+    second = expr.Call(callee, (right,), type=changed)
     if difference == "mesh":
-        first = MeshRegion(Mesh(_CTA, Layout((1,), (1,)), ("first",)), first, type=type_)
-        second = MeshRegion(Mesh(_CTA, Layout((1,), (1,)), ("second",)), second, type=changed)
+        first = core.MeshRegion(types.Mesh(_CTA, types.Layout((1,), (1,)), ("first",)), first, type=type_)
+        second = core.MeshRegion(types.Mesh(_CTA, types.Layout((1,), (1,)), ("second",)), second, type=changed)
     root = _direct_program(callee, (left, right), (first, second))
     with pytest.raises(
-        AnalysisError, match="callee 'helper'.*root/<value 0>.*root/<value 1>.*versus"
+        analysis.Error, match="callee 'helper'.*root/<value 0>.*root/<value 1>.*versus"
     ):
-        check_program(root, root.entry_function())
+        analysis.check_program(root, root.entry_function())
 
 
 def test_bodiless_and_recursive_callees_rejected():
-    type_ = TensorType((4,), DType.f32, None, StorageKind.UMAT)
-    param = Var("x", type=type_)
-    callee = Function.build(name="helper", params=(param,), body=None, return_type=type_)
-    root = _direct_program(callee, (param,), (Call(callee, (param,), type=type_),))
-    with pytest.raises(VerifyError, match="cannot analyze Function 'helper' without a body"):
-        check_program(root, root.entry_function())
-    callee.body = Call(callee, (param,), type=type_)
-    with pytest.raises(VerifyError, match="recursive call path through 'root/helper/helper'"):
-        check_program(root, root.entry_function())
+    type_ = types.TensorType((4,), expr.DType.f32, None, StorageKind.UMAT)
+    param = expr.Var("x", type=type_)
+    callee = core.Function.from_parts(name="helper", params=(param,), body=None, return_type=type_)
+    root = _direct_program(callee, (param,), (expr.Call(callee, (param,), type=type_),))
+    with pytest.raises(expr.VerifyError, match="cannot analyze Function 'helper' without a body"):
+        analysis.check_program(root, root.entry_function())
+    callee.body = expr.Call(callee, (param,), type=type_)
+    with pytest.raises(expr.VerifyError, match="recursive call path through 'root/helper/helper'"):
+        analysis.check_program(root, root.entry_function())
 
 
 @dataclass(frozen=True)
-class _WriteGuardTarget(Target):
+class _WriteGuardTarget(target.Target):
     name: ClassVar[str] = "test.occurrence.write.guard"
     algorithm: object = None
 
@@ -462,161 +431,161 @@ class _WriteGuardTarget(Target):
 
 def test_undeclared_metadata_write_rejected():
     def write_on_definition(_function, context):
-        attach_metadata(_function.body, MemoryMetadata())
+        _function.body.attach_metadata(analysis.MemoryMetadata())
 
-    target = _WriteGuardTarget(
-        Analyzer("bad", write_on_definition, produces=(ComputeCostMetadata,))
+    tgt = _WriteGuardTarget(
+        target.Analyzer("bad", write_on_definition, produces=(analysis.ComputeCostMetadata,))
     )
-    CrossModule = load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
-    root = replace(CrossModule, target=target, topologies=None)
-    with pytest.raises(AnalysisError, match="changed Metadata it does not declare"):
-        analyze(*check_program(root, root.entry_function()), analysis="bad")
+    CrossModule = cli.load_authored_ir(f"{HIR_COMPOSITION}:CrossModule")
+    root = replace(CrossModule, target=tgt, topologies=None)
+    with pytest.raises(analysis.Error, match="changed Metadata it does not declare"):
+        analysis.analyze(*analysis.check_program(root, root.entry_function()), analysis="bad")
 
 
 def test_repeated_callee_shares_placement():
-    type_ = TensorType((32,), DType.f32, Layout((32,)), StorageKind.GMEM)
-    scalar = TensorType.scalar(DType.i32)
-    zero = Constant(0, type=scalar)
-    starts = Tuple((zero,), type=TupleType((scalar,)))
-    shared_copy = ScheduleOp(op=Copy())
-    shared_type = replace(type_, layout=Layout((32,), (1,)), storage=StorageKind.SMEM)
+    type_ = types.TensorType((32,), expr.DType.f32, types.Layout((32,)), StorageKind.GMEM)
+    scalar = types.TensorType.from_scalar(expr.DType.i32)
+    zero = expr.Constant(0, type=scalar)
+    starts = expr.Tuple((zero,), type=types.TupleType((scalar,)))
+    shared_copy = hir.schedule.ScheduleOp(op=memory.Copy())
+    shared_type = replace(type_, layout=types.Layout((32,), (1,)), storage=StorageKind.SMEM)
 
     def copy(value):
-        destination = Call(Empty(type=shared_type), (), type=shared_type)
-        return Call(shared_copy, (value, destination), type=shared_type)
+        destination = expr.Call(tensor.Empty(type=shared_type), (), type=shared_type)
+        return expr.Call(shared_copy, (value, destination), type=shared_type)
 
     def write_back(value):
-        out = Call(Zeros(type=type_), (), type=type_)
-        return Call(InsertSlice(), (out, value, starts), type=type_)
+        out = expr.Call(tensor.Zeros(type=type_), (), type=type_)
+        return expr.Call(tensor.InsertSlice(), (out, value, starts), type=type_)
 
-    x, w = Var("x", type=type_), Var("w", type=type_, is_const=True)
-    product = Call(Binary(kind=BinaryKind.MUL), (copy(x), copy(w)), type=type_)
-    helper = Function.build(
+    x, w = expr.Var("x", type=type_), expr.Var("w", type=type_, is_const=True)
+    product = expr.Call(math.Binary(kind=BinaryKind.MUL), (copy(x), copy(w)), type=type_)
+    helper = core.Function.from_parts(
         name="helper", params=(x, w), body=write_back(product), return_type=type_
     )
-    root_x, root_w = Var("root_x", type=type_), Var("root_w", type=type_, is_const=True)
-    cap_x, cap_w = Var("cap_x", type=type_), Var("cap_w", type=type_)
-    first = Call(helper, (cap_x, cap_w), type=type_)
-    second = Call(helper, (cap_x, cap_w), type=type_)
-    result = write_back(Call(Binary(kind=BinaryKind.ADD), (copy(first), copy(second)), type=type_))
+    root_x, root_w = expr.Var("root_x", type=type_), expr.Var("root_w", type=type_, is_const=True)
+    cap_x, cap_w = expr.Var("cap_x", type=type_), expr.Var("cap_w", type=type_)
+    first = expr.Call(helper, (cap_x, cap_w), type=type_)
+    second = expr.Call(helper, (cap_x, cap_w), type=type_)
+    result = write_back(expr.Call(math.Binary(kind=BinaryKind.ADD), (copy(first), copy(second)), type=type_))
     topologies = (Topology("cta", 1), Topology("thread", 32))
-    body = MeshRegion(
-        Mesh(topologies, Layout((1, 32), (32, 1)), ("block", "lane")),
+    body = core.MeshRegion(
+        types.Mesh(topologies, types.Layout((1, 32), (32, 1)), ("block", "lane")),
         result,
         params=(cap_x, cap_w),
         args=(root_x, root_w),
         type=type_,
     )
-    function = Function.build(name="root", params=(root_x, root_w), body=body, return_type=type_)
-    root = Module(
+    function = core.Function.from_parts(name="root", params=(root_x, root_w), body=body, return_type=type_)
+    root = core.Module(
         "SharedPressure",
         (helper, function),
         "root",
-        target=CudaTarget(_H200),
+        target=cuda.Target(_H200),
         topologies=topologies,
     )
-    analyzed = analyze(*check_program(root, function), analysis="memory")
+    analyzed = analysis.analyze(*analysis.check_program(root, function), analysis="memory")
     derived = next(fn for fn in analyzed.functions if fn.name == "helper")
     temporaries = [
         node
-        for node in collect_exprs(derived.body)
-        if isinstance(node, Call)
-        and isinstance(node.target, Empty)
+        for node in core.collect_exprs(derived.body)
+        if isinstance(node, expr.Call)
+        and isinstance(node.target, tensor.Empty)
         and node.type.storage is StorageKind.SMEM
     ]
     assert len(temporaries) == 2
-    frame = ValuationContext(analyzed.module, analyzed.function)
+    frame = valuation.Context(analyzed.module, analyzed.function)
     calls = [
         child
-        for node in collect_exprs(analyzed.function.body)
-        if isinstance(node, Call)
-        and (child := frame._callee_context(node)) is not None
+        for node in core.collect_exprs(analyzed.function.body)
+        if isinstance(node, expr.Call)
+        and (child := frame.callee_context(node)) is not None
         and child.function is derived
     ]
     assert len(calls) == 2
     assert calls[0].function is calls[1].function
-    offsets = [get_metadata(node, MemoryMetadata).offsets for node in temporaries]
+    offsets = [expr.get_metadata(node, analysis.MemoryMetadata).offsets for node in temporaries]
     assert all(len(held) == 1 for held in offsets)
 
 
 def test_partial_loop_counts_reached_weights():
     root = _stacked_program(3, trips=2)
-    result = analyze(*check_program(root, root.entry_function()), analysis="memory")
-    peak = get_metadata(result.function, RegionMemoryMetadata).peak_for("gmem")
+    result = analysis.analyze(*analysis.check_program(root, root.entry_function()), analysis="memory")
+    peak = expr.get_metadata(result.function, analysis.RegionMemoryMetadata).peak_for("gmem")
     assert (peak.persistent_bytes, peak.peak_bytes) == (48, 64)
 
 
 def test_callee_alias_placement_agrees():
-    type_ = TensorType((32,), DType.f32, Layout((32,)), StorageKind.GMEM)
-    short = replace(type_, shape=(16,), layout=Layout((16,)))
-    scalar = TensorType.scalar(DType.i32)
-    x, y = Var("x", type=type_), Var("y", type=short)
-    offset = Var("offset", type=scalar)
-    shared_type = replace(type_, layout=Layout((32,), (1,)), storage=StorageKind.SMEM)
-    shared_short = replace(short, layout=Layout((16,), (1,)), storage=StorageKind.SMEM)
-    held = Call(
-        ScheduleOp(op=Copy()),
+    type_ = types.TensorType((32,), expr.DType.f32, types.Layout((32,)), StorageKind.GMEM)
+    short = replace(type_, shape=(16,), layout=types.Layout((16,)))
+    scalar = types.TensorType.from_scalar(expr.DType.i32)
+    x, y = expr.Var("x", type=type_), expr.Var("y", type=short)
+    offset = expr.Var("offset", type=scalar)
+    shared_type = replace(type_, layout=types.Layout((32,), (1,)), storage=StorageKind.SMEM)
+    shared_short = replace(short, layout=types.Layout((16,), (1,)), storage=StorageKind.SMEM)
+    held = expr.Call(
+        hir.schedule.ScheduleOp(op=memory.Copy()),
         (
             x,
-            Call(Empty(type=shared_type), (), type=shared_type),
+            expr.Call(tensor.Empty(type=shared_type), (), type=shared_type),
         ),
         type=shared_type,
     )
-    update = Call(
-        ScheduleOp(op=Copy()),
+    update = expr.Call(
+        hir.schedule.ScheduleOp(op=memory.Copy()),
         (
             y,
-            Call(Empty(type=shared_short), (), type=shared_short),
+            expr.Call(tensor.Empty(type=shared_short), (), type=shared_short),
         ),
         type=shared_short,
     )
-    starts = Tuple((offset,), type=TupleType((scalar,)))
-    updated = Call(InsertSlice(), (held, update, starts), type=type_)
-    value = Call(Binary(kind=BinaryKind.ADD), (updated, updated), type=type_)
-    zero = Constant(0, type=scalar)
-    result = Call(
-        InsertSlice(),
+    starts = expr.Tuple((offset,), type=types.TupleType((scalar,)))
+    updated = expr.Call(tensor.InsertSlice(), (held, update, starts), type=type_)
+    value = expr.Call(math.Binary(kind=BinaryKind.ADD), (updated, updated), type=type_)
+    zero = expr.Constant(0, type=scalar)
+    result = expr.Call(
+        tensor.InsertSlice(),
         (
-            Call(Zeros(type=type_), (), type=type_),
+            expr.Call(tensor.Zeros(type=type_), (), type=type_),
             value,
-            Tuple((zero,), type=TupleType((scalar,))),
+            expr.Tuple((zero,), type=types.TupleType((scalar,))),
         ),
         type=type_,
     )
-    helper = Function.build(name="helper", params=(x, y, offset), body=result, return_type=type_)
-    root_x, root_y = Var("root_x", type=type_), Var("root_y", type=short)
-    cap_x, cap_y = Var("cap_x", type=type_), Var("cap_y", type=short)
+    helper = core.Function.from_parts(name="helper", params=(x, y, offset), body=result, return_type=type_)
+    root_x, root_y = expr.Var("root_x", type=type_), expr.Var("root_y", type=short)
+    cap_x, cap_y = expr.Var("cap_x", type=type_), expr.Var("cap_y", type=short)
     calls = tuple(
-        Call(helper, (cap_x, cap_y, Constant(i, type=scalar)), type=type_) for i in (1, 2)
+        expr.Call(helper, (cap_x, cap_y, expr.Constant(i, type=scalar)), type=type_) for i in (1, 2)
     )
-    values = Tuple(calls, type=TupleType((type_, type_)))
+    values = expr.Tuple(calls, type=types.TupleType((type_, type_)))
     topologies = (Topology("cta", 1), Topology("thread", 32))
-    body = MeshRegion(
-        Mesh(topologies, Layout((1, 32), (32, 1)), ("block", "lane")),
+    body = core.MeshRegion(
+        types.Mesh(topologies, types.Layout((1, 32), (32, 1)), ("block", "lane")),
         values,
         params=(cap_x, cap_y),
         args=(root_x, root_y),
         type=values.type,
     )
-    function = Function.build(
+    function = core.Function.from_parts(
         name="root", params=(root_x, root_y), body=body, return_type=body.type
     )
-    root = Module(
-        "SharedAliases", (helper, function), "root", target=CudaTarget(_H200), topologies=topologies
+    root = core.Module(
+        "SharedAliases", (helper, function), "root", target=cuda.Target(_H200), topologies=topologies
     )
-    analyzed = analyze(*check_program(root, function), analysis="memory")
+    analyzed = analysis.analyze(*analysis.check_program(root, function), analysis="memory")
     derived = next(fn for fn in analyzed.functions if fn.name == "helper")
-    frame = ValuationContext(analyzed.module, analyzed.function)
+    frame = valuation.Context(analyzed.module, analyzed.function)
     reached = [
         child.function
-        for node in collect_exprs(analyzed.function.body)
-        if isinstance(node, Call) and (child := frame._callee_context(node)) is not None
+        for node in core.collect_exprs(analyzed.function.body)
+        if isinstance(node, expr.Call) and (child := frame.callee_context(node)) is not None
     ]
     assert reached == [derived, derived]
     buffers = [
-        get_metadata(node, MemoryMetadata)
-        for node in collect_exprs(derived.body)
-        if isinstance(node, Call) and isinstance(node.target, Empty)
+        expr.get_metadata(node, analysis.MemoryMetadata)
+        for node in core.collect_exprs(derived.body)
+        if isinstance(node, expr.Call) and isinstance(node.target, tensor.Empty)
     ]
     assert len(buffers) == 2
     assert all(len(record.offsets) == 1 for record in buffers)

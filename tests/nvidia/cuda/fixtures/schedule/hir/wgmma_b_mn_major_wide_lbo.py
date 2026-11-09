@@ -1,12 +1,12 @@
 """Admit an MN-major B descriptor with a wide leading byte offset."""
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 A_SMEM = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((8, 8), 16), ((512, 64), 1)))
 V_SMEM = ComposedLayout(Swizzle(3, 4, 3), 0, Layout((32, (2, 64)), (64, (2048, 1))))
 V_TOP = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((2, 8), (2, 64)), ((512, 64), (2048, 1))))
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 128)))
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 128)))
 class MnMajorB:
     @func
     def gemm(a: Tensor[(64, 16), "f16"], v: Tensor[(32, 128), "f16"]) -> Tensor[(64, 128), "f32", "umat"]:

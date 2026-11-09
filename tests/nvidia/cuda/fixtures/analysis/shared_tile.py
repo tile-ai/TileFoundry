@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@module(entry="split", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
+@module(entry="split", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
 class _SharedTile:
     @func
     def split(source: Tensor[(1056, 6600), "f32"]):

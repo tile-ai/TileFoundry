@@ -1,7 +1,7 @@
 """Scheduled HIR: embedding gather for M = 512 prompt tokens: out[t] = table[ids[t]].
 Runtime kernel: runtime/kernels/small.py embed_kernel(M=512): one CTA per token, the row staged through shared memory by cp.async, then stored."""
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 512
 V = 248320
@@ -10,7 +10,7 @@ TH = 128
 PER = H // TH
 
 
-@module(entry="embed", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", M), Topology("thread", TH)))
+@module(entry="embed", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", M), Topology("thread", TH)))
 class SCHED_EMBED_T512:
     @func
     def embed(ids: Tensor[(M,), "i64"], table: Tensor[(V, H), "bf16"]) -> Tensor[(M, H), "bf16"]:

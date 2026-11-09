@@ -14,8 +14,8 @@ import pytest
 import torch
 
 import tilefoundry
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry import cli
+from tilefoundry_nvidia import cuda
 
 INTEGRATION = Path(__file__).parents[1] / "fixtures" / "integration"
 _TILE = 12
@@ -32,8 +32,8 @@ def test_dynamic_cta_kernel_matches_torch() -> None:
     One compiled artifact squares the tensor at three ``Ntile`` shapes via
     the host-computed grid; all match torch with no recompile.
     """
-    DynSquare = load_authored_ir(f"{INTEGRATION / 'dynamic_cta_square.py'}:DynSquare")
-    rm = tilefoundry.compile(DynSquare, target=CudaTarget("nvidia.h200_sxm"))
+    DynSquare = cli.load_authored_ir(f"{INTEGRATION / 'dynamic_cta_square.py'}:DynSquare")
+    rm = tilefoundry.compile(DynSquare, target=cuda.Target("nvidia.h200_sxm"))
     for nt in (4, 8, 17):
         torch.manual_seed(nt)
         x = torch.randn(nt, _TILE, dtype=torch.float32, device="cuda")

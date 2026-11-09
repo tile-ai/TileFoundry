@@ -6,75 +6,63 @@ sugar names (``neg`` / ``abs`` / ``rsqrt`` / ``logical_not``).
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.kinds import UnaryKind
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import TensorPattern
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.utils import reject_partials
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    identity_relations,
-    register_access_relation,
-)
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
 
-@register_op(dialect="tf", category="math", aliases={
-    "neg": {"kind": UnaryKind.NEG},
-    "abs": {"kind": UnaryKind.ABS},
-    "logical_not": {"kind": UnaryKind.NOT},
-    "rsqrt": {"kind": UnaryKind.RSQRT},
-    "exp": {"kind": UnaryKind.EXP},
-    "log": {"kind": UnaryKind.LOG},
-    "square": {"kind": UnaryKind.SQUARE},
-    "ceil": {"kind": UnaryKind.CEIL},
-    "round": {"kind": UnaryKind.ROUND},
-    "exp2": {"kind": UnaryKind.EXP2},
-    "log2": {"kind": UnaryKind.LOG2},
+@expr.register_op(dialect="tf", category="math", aliases={
+    "neg": {"kind": expr.UnaryKind.NEG},
+    "abs": {"kind": expr.UnaryKind.ABS},
+    "logical_not": {"kind": expr.UnaryKind.NOT},
+    "rsqrt": {"kind": expr.UnaryKind.RSQRT},
+    "exp": {"kind": expr.UnaryKind.EXP},
+    "log": {"kind": expr.UnaryKind.LOG},
+    "square": {"kind": expr.UnaryKind.SQUARE},
+    "ceil": {"kind": expr.UnaryKind.CEIL},
+    "round": {"kind": expr.UnaryKind.ROUND},
+    "exp2": {"kind": expr.UnaryKind.EXP2},
+    "log2": {"kind": expr.UnaryKind.LOG2},
 })
-class Unary(Op):
+class Unary(expr.Op):
     """Value-form pointwise unary operation."""
 
-    x = ParamDef(kind="input", pattern=TensorPattern())
-    kind = ParamDef(kind="attribute", annotation=UnaryKind)
+    x = expr.ParamDef(kind="input", pattern=pattern.Tensor())
+    kind = expr.ParamDef(kind="attribute", annotation=expr.UnaryKind)
 
 
-_MONOTONE_INCREASING = frozenset(
+MONOTONE_INCREASING = frozenset(
     {
-        UnaryKind.EXP,
-        UnaryKind.LOG,
-        UnaryKind.RELU,
-        UnaryKind.CEIL,
-        UnaryKind.ROUND,
-        UnaryKind.EXP2,
-        UnaryKind.LOG2,
+        expr.UnaryKind.EXP,
+        expr.UnaryKind.LOG,
+        expr.UnaryKind.RELU,
+        expr.UnaryKind.CEIL,
+        expr.UnaryKind.ROUND,
+        expr.UnaryKind.EXP2,
+        expr.UnaryKind.LOG2,
     }
 )
 
-_LINEAR = frozenset({UnaryKind.NEG})
+LINEAR = frozenset({expr.UnaryKind.NEG})
 
 
-@register_typeinfer(Unary)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(Unary)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     op = call.target
-    if not isinstance(op.kind, UnaryKind):
+    if not isinstance(op.kind, expr.UnaryKind):
         ctx.error(call, f"Unary: kind must be UnaryKind, got {type(op.kind)}")
     x_ty = ctx.type_of(call.args[0])
-    if op.kind is UnaryKind.NOT and x_ty.dtype != DType.bool:
+    if op.kind is expr.UnaryKind.NOT and x_ty.dtype != expr.DType.bool:
         ctx.error(call, "Unary NOT: operand must be bool")
-    if op.kind in _MONOTONE_INCREASING:
+    if op.kind in MONOTONE_INCREASING:
         commutes_with = frozenset({"max", "min"})
-    elif op.kind in _LINEAR:
+    elif op.kind in LINEAR:
         commutes_with = frozenset({"sum"})
     else:
         commutes_with = frozenset()
-    reject_partials("x", x_ty.layout, commutes_with=commutes_with)
-    return TensorType(
+    ir_utils.reject_partials("x", x_ty.layout, commutes_with=commutes_with)
+    return types.TensorType(
         shape=x_ty.shape,
         dtype=x_ty.dtype,
         layout=x_ty.layout,
@@ -82,28 +70,52 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     )
 
 
-@register_eval(Unary)
-def _eval_unary(ctx):
+@evaluator.register(Unary)
+def eval_unary(ctx):
     fn = {
-        UnaryKind.NEG: torch.neg,
-        UnaryKind.ABS: torch.abs,
-        UnaryKind.NOT: torch.logical_not,
-        UnaryKind.RELU: torch.relu,
-        UnaryKind.SQUARE: torch.square,
-        UnaryKind.RSQRT: torch.rsqrt,
-        UnaryKind.EXP: torch.exp,
-        UnaryKind.LOG: torch.log,
-        UnaryKind.CEIL: torch.ceil,
-        UnaryKind.ROUND: torch.round,
-        UnaryKind.EXP2: torch.exp2,
-        UnaryKind.LOG2: torch.log2,
+        expr.UnaryKind.NEG: utils.torch.neg,
+        expr.UnaryKind.ABS: utils.torch.abs,
+        expr.UnaryKind.NOT: utils.torch.logical_not,
+        expr.UnaryKind.RELU: utils.torch.relu,
+        expr.UnaryKind.SQUARE: utils.torch.square,
+        expr.UnaryKind.RSQRT: utils.torch.rsqrt,
+        expr.UnaryKind.EXP: utils.torch.exp,
+        expr.UnaryKind.LOG: utils.torch.log,
+        expr.UnaryKind.CEIL: utils.torch.ceil,
+        expr.UnaryKind.ROUND: utils.torch.round,
+        expr.UnaryKind.EXP2: utils.torch.exp2,
+        expr.UnaryKind.LOG2: utils.torch.log2,
     }[ctx.op.kind]
     x = ctx.args[0].tensor
     held = fn(x.tensor) if x.is_global else tuple((p, fn(t)) for p, t in x.tensor)
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
 __all__ = ["Unary"]
 
 
-register_access_relation(Unary)(identity_relations)
+access.register_relation(Unary)(access.identity_relations)
+
+
+SPECIAL = frozenset(
+    {expr.UnaryKind.RSQRT, expr.UnaryKind.EXP, expr.UnaryKind.LOG, expr.UnaryKind.EXP2, expr.UnaryKind.LOG2}
+)
+
+
+@cost.register(Unary)
+def unary_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    """An exponential is not a multiply, a negated truth is not arithmetic.
+
+    ``_SPECIAL`` holds the kinds the machine answers on its
+    special-function unit, at a rate of its own -- a quarter of the scalar one
+    here. Counting one of those as a single FLOP would put it on the float pipe
+    at four times the throughput the unit has, so it is a service rather than
+    arithmetic. What is left for ``flops`` is the arithmetic that really is a
+    multiply or an add.
+    """
+    kind = call.target.kind
+    if kind in SPECIAL:
+        return cost.serviced(call, ctx, "special")
+    if kind is expr.UnaryKind.NOT:
+        return cost.serviced(call, ctx, "predicate")
+    return cost.elementwise(call, ctx)

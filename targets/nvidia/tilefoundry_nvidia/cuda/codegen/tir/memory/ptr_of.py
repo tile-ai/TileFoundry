@@ -7,14 +7,14 @@ backing cute tensor / gmem pointer).
 
 from __future__ import annotations
 
-from tilefoundry.ir.tir.memory.ptr_of import PtrOf
-from tilefoundry.visitor_registry.registries import Role, register_codegen
-from tilefoundry_nvidia.cuda import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
+from tilefoundry import codegen
+from tilefoundry.ir.tir import memory
+from tilefoundry_nvidia.cuda import target
+from tilefoundry_nvidia.cuda.codegen import context
 
 
-@register_codegen(CudaTarget, Role.EMIT, PtrOf)
-def _emit(let_stmt, ctx: CudaCodegenContext) -> None:
+@codegen.register(target.Target, codegen.Role.EMIT, memory.PtrOf)
+def emit(let_stmt, ctx: context.Context) -> None:
     call = let_stmt.value
     src = call.args[0]
     src_name = ctx.name_for(src)
@@ -22,3 +22,6 @@ def _emit(let_stmt, ctx: CudaCodegenContext) -> None:
         src_name += "_tensor"
     var_name = ctx.name_for(let_stmt.var)
     ctx.emit(f"auto {var_name} = {src_name}.data();")
+
+
+__all__: list[str] = []

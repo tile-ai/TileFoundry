@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 32),),
 )
 class LoopOutputs:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"), output_count=3)
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"), output_count=3)
     def gemm(
         x: Tensor[(2, 4), "bf16"], scratch: Tensor[(8,), "bf16"], out: Tensor[(2, 4), "bf16"], out_1: Tensor[(2, 4), "bf16"], out_2: Tensor[(2, 4), "bf16"]
     ):

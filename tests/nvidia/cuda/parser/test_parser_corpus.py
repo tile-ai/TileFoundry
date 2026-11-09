@@ -8,32 +8,23 @@ import pytest
 
 from tests.core._corpus import case, cases
 from tests.core.parser._parser_case import ParserCase, check_parser_case, unique_parser_cases
-from tilefoundry.cli.source import load_namespace
-from tilefoundry.ir.core import Call, Constant, Var, binding_name
-from tilefoundry.ir.core.module import Module, ModuleList
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.tensor.arange import Arange
-from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.hir.tensor.where import Where
-from tilefoundry.ir.module_utils import list_call_paths
-from tilefoundry.ir.pattern import RangePattern
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.visitor import collect_exprs, expr_children
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry import cli
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import core, expr, pattern, types
+from tilefoundry.ir.hir import tensor
+from tilefoundry_nvidia import cuda
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 
 
-def _child(mod: Module, name: str) -> Module:
+def _child(mod: core.Module, name: str) -> core.Module:
     return mod.children[name].elements[0]
 
 
 def _structural_equal(a, b) -> bool:
     if type(a) is not type(b):
         return False
-    if isinstance(a, Function):
+    if isinstance(a, core.Function):
         return (
             a.name == b.name
             and len(a.params) == len(b.params)
@@ -41,22 +32,22 @@ def _structural_equal(a, b) -> bool:
             and _structural_equal(a.body, b.body)
             and _structural_equal(a.return_type, b.return_type)
         )
-    if isinstance(a, Var):
+    if isinstance(a, expr.Var):
         return a.name == b.name and _structural_equal(a.type, b.type)
-    if isinstance(a, Constant):
+    if isinstance(a, expr.Constant):
         return a.value == b.value
-    if isinstance(a, MeshRegion):
+    if isinstance(a, core.MeshRegion):
         return (
             _attr_equal(a.mesh, b.mesh)
             and _structural_equal(a.body, b.body)
             and _structural_equal(a.type, b.type)
         )
-    if isinstance(a, Call):
+    if isinstance(a, expr.Call):
         if type(a.target) is not type(b.target) or len(a.args) != len(b.args):
             return False
         if not all(_structural_equal(aa, bb) for aa, bb in zip(a.args, b.args)):
             return False
-        for pi in type(a.target).params():
+        for pi in expr.parameters_of(type(a.target)):
             if pi.kind == "attribute":
                 if getattr(a.target, pi.name, None) != getattr(b.target, pi.name, None):
                     if not _attr_equal(
@@ -65,7 +56,7 @@ def _structural_equal(a, b) -> bool:
                     ):
                         return False
         return _structural_equal(a.type, b.type)
-    if isinstance(a, TensorType):
+    if isinstance(a, types.TensorType):
         return (
             a.shape == b.shape
             and a.dtype == b.dtype
@@ -94,7 +85,7 @@ class NanValueFill(ParserCase):
 
     def guard(self, state, problems):
         value = state.rebuilt.entry_function().body[0].body[0].args[1]
-        assert isinstance(value, Constant)
+        assert isinstance(value, expr.Constant)
         assert math.isnan(value.value)
 
 
@@ -136,7 +127,7 @@ class Dispatching(ParserCase):
         (rebuilt_child,) = rebuilt.children.values()
         (variant,) = rebuilt.entry_function().variants
         assert rebuilt.entry_function().body is None
-        assert variant.specializations == (RangePattern("n_print", 1, 8),)
+        assert variant.specializations == (pattern.Range("n_print", 1, 8),)
         assert variant.body.target is rebuilt_child
         assert len(variant.body.args) == 1
         assert [
@@ -155,18 +146,18 @@ class ContextTree(ParserCase):
         problems.run("empty child entry", self.empty_child_entry, state.printed, state.rebuilt)
 
     def root_context(self, rebuilt):
-        context = load_namespace(str(self.path))[0]
-        assert isinstance(rebuilt, Module)
+        context = cli.load_namespace(str(self.path))[0]
+        assert isinstance(rebuilt, core.Module)
         assert rebuilt.name == "ContextTree"
         assert rebuilt.entry == "forward"
-        assert rebuilt.target == CudaTarget("nvidia.h200_sxm")
+        assert rebuilt.target == cuda.Target("nvidia.h200_sxm")
         assert rebuilt.topologies == (context["CONTEXT_CTA"], context["CONTEXT_WARP"])
 
         assert [fn.name for fn in rebuilt.functions] == ["spare", "forward"]
         assert rebuilt.entry_function().name == "forward"
 
     def child_contexts(self, rebuilt):
-        context = load_namespace(str(self.path))[0]
+        context = cli.load_namespace(str(self.path))[0]
         assert sorted(rebuilt.children) == [
             "inherits",
             "nominates_nothing",
@@ -179,8 +170,8 @@ class ContextTree(ParserCase):
         inherits = _child(rebuilt, "inherits")
         assert inherits.target is None
         assert inherits.topologies is None
-        assert list_call_paths(rebuilt)["inherits.step"].target == CudaTarget("nvidia.h200_sxm")
-        assert list_call_paths(rebuilt)["inherits.step"].topologies == (
+        assert valuation.list_call_paths(rebuilt)["inherits.step"].target == cuda.Target("nvidia.h200_sxm")
+        assert valuation.list_call_paths(rebuilt)["inherits.step"].topologies == (
             context["CONTEXT_CTA"],
             context["CONTEXT_WARP"],
         )
@@ -226,9 +217,9 @@ class FlashSplitKDecode(ParserCase):
         ir, rebuilt = state.ir, state.rebuilt
         assert rebuilt.topologies == ir.topologies
         slices = [
-            expr
-            for expr in collect_exprs(rebuilt.entry_function().body)
-            if isinstance(expr, Call) and isinstance(expr.target, Slice)
+            node
+            for node in core.collect_exprs(rebuilt.entry_function().body)
+            if isinstance(node, expr.Call) and isinstance(node.target, tensor.Slice)
         ]
         assert len(slices) == 2
 
@@ -246,10 +237,10 @@ class PrefillDecodeAttention(ParserCase):
         assert len(variants) == 2
         for variant in variants:
             targets = {
-                type(expr.target) for expr in collect_exprs(variant.body) if isinstance(expr, Call)
+                type(node.target) for node in core.collect_exprs(variant.body) if isinstance(node, expr.Call)
             }
-            assert Arange in targets
-            assert Where in targets
+            assert tensor.Arange in targets
+            assert tensor.Where in targets
 
 
 @case
@@ -273,11 +264,11 @@ class RegionBoundaries(ParserCase):
     def guard(self, state, problems):
         body = state.rebuilt.entry_function().body
         producer = next(
-            expr
-            for expr in collect_exprs(body)
-            if isinstance(expr, MeshRegion) and binding_name(expr.body) == "v2"
+            node
+            for node in core.collect_exprs(body)
+            if isinstance(node, core.MeshRegion) and expr.binding_name(node.body) == "v2"
         )
-        assert sum(producer in expr_children(expr) for expr in collect_exprs(body)) == 2
+        assert sum(producer in core.expr_children(node) for node in core.collect_exprs(body)) == 2
 
 
 @dataclass(frozen=True)
@@ -295,10 +286,10 @@ class ScaledParent(ParserCase):
             assert len(slot.elements) == len(ir.children[key].elements)
             assert all(element is slots[0].elements[0] for element in slot.elements)
         original_calls = [
-            expr for expr in collect_exprs(ir.entry_function().body) if isinstance(expr, Call)
+            node for node in core.collect_exprs(ir.entry_function().body) if isinstance(node, expr.Call)
         ]
         restored_calls = [
-            expr for expr in collect_exprs(rebuilt.entry_function().body) if isinstance(expr, Call)
+            node for node in core.collect_exprs(rebuilt.entry_function().body) if isinstance(node, expr.Call)
         ]
         assert len(restored_calls) == len(original_calls)
 
@@ -310,9 +301,9 @@ class PairedScaledParent(ScaledParent):
 
     def scaled_calls(self, rebuilt):
         restored_calls = [
-            expr for expr in collect_exprs(rebuilt.entry_function().body) if isinstance(expr, Call)
+            node for node in core.collect_exprs(rebuilt.entry_function().body) if isinstance(node, expr.Call)
         ]
-        targets = [expr.target for expr in restored_calls if isinstance(expr.target, ModuleList)]
+        targets = [node.target for node in restored_calls if isinstance(node.target, core.ModuleList)]
         assert targets == list(rebuilt.children.values())
 
 
@@ -323,11 +314,11 @@ class StackedScaledParent(ScaledParent):
 
     def scaled_calls(self, rebuilt):
         restored_calls = [
-            expr for expr in collect_exprs(rebuilt.entry_function().body) if isinstance(expr, Call)
+            node for node in core.collect_exprs(rebuilt.entry_function().body) if isinstance(node, expr.Call)
         ]
-        (index,) = (expr for expr in restored_calls if isinstance(expr.target, TupleGetItem))
+        (index,) = (node for node in restored_calls if isinstance(node.target, tensor.TupleGetItem))
         assert index.args[0] is rebuilt.children["layers"]
-        assert any(expr.target is index for expr in restored_calls)
+        assert any(node.target is index for node in restored_calls)
 
 
 EXPECTED = {

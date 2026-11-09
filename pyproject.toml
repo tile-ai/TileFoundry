@@ -96,12 +96,8 @@ target-version = "py312"
 #   D100 D104      module and package docstrings (C9)
 #   B006 B008      no mutable or call parameter defaults (S6)
 #   PLC0415        import-outside-top-level (C1)
-#   PLR6301        a method that does not use self is a function (S3; preview)
 #   TID251         banned-api
-select = ["E", "F", "W", "I", "D2", "D3", "D4", "D100", "D104", "B006", "B008", "N", "PLC0415", "PLR6301", "TID251"]
-# Preview only for the rules selected by exact code (PLR6301), not whole families.
-preview = true
-explicit-preview-rules = true
+select = ["E", "F", "W", "I", "D2", "D3", "D4", "D100", "D104", "B006", "B008", "N", "PLC0415", "TID251"]
 
 # Ignored rules:
 #   E501  line-too-long — long strings / compact code stay on one line.
@@ -113,6 +109,15 @@ explicit-preview-rules = true
 #         ``r`` / ``a``) are allowed.
 ignore = ["E501", "F821", "E741"]
 
+[tool.ruff.lint.flake8-bugbear]
+# S6: the option records are frozen, so a default may be one.
+extend-immutable-calls = [
+    "tilefoundry.codegen.Options",
+    "tilefoundry.codegen.options.Options",
+    "tilefoundry.passes.Options",
+    "tilefoundry.passes.options.Options",
+]
+
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "typing.TYPE_CHECKING".msg = "Use quoted forward references; TYPE_CHECKING shims are not used in TileFoundry."
 "typing_extensions.TYPE_CHECKING".msg = "Use quoted forward references; TYPE_CHECKING shims are not used in TileFoundry."
@@ -122,29 +127,56 @@ ignore = ["E501", "F821", "E741"]
 # authoring-surface ergonomics. Internal implementation code in
 # `src/` uses explicit imports except for the curated DSL re-exports.
 # The source rules of docs/spec/code-organization.md §0 bind src and targets only.
-"tests/**/*.py" = ["F403", "F405", "D100", "D104", "B008", "N", "PLR6301"]
-"scripts/**/*.py" = ["D100", "D104", "B008", "N", "PLR6301"]
+"tests/**/*.py" = ["F403", "F405", "D100", "D104", "B008", "N"]
+"scripts/**/*.py" = ["D100", "D104", "B008", "N"]
 "src/tilefoundry/dsl/__init__.py" = ["F403"]
+# An __init__.py only re-exports, so its imports are its exports (C3).
+"**/__init__.py" = ["F401"]
+# The DSL requires `with Mesh(...) as name:` even when a fixture never reads the name.
+"tests/**/fixtures/**/*.py" = ["F841"]
+# The conftests of installed suites re-export the fixtures of tests/core/installed/conftest.py.
+"tests/*/*/installed/conftest.py" = ["F401"]
+# The fixture file re-exports ChildMatmulRoot so its namespace holds the CUDA root beside the CPU root.
+"tests/nvidia/cuda/fixtures/dsl/child_matmul_cpu_root.py" = ["F401"]
+# These conftests import torch late: the root one after xdist binds a device, the other only when an sm89 test runs.
+"tests/conftest.py" = ["PLC0415"]
+"tests/nvidia/conftest.py" = ["PLC0415"]
+# The script puts its own directory on sys.path before importing its sibling script.
+"scripts/finalize_plan_context.py" = ["E402"]
+# The orchestrator templates import the user project's modules after argument parsing.
+"src/tilefoundry/orchestrator/*/run.py" = ["PLC0415"]
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
 [tool.ruff.lint.pep8-naming]
-# S10: method names dispatched by reflection on a class name.
-ignore-names = ["visit_*", "visit_leaf_*", "print_*"]
+# S10: method names dispatched by reflection on a class name (``default_visit_T`` is the fallback of ``visit_T``), the ``refused_T`` / ``predicate_T`` / ``rules_T`` / ``alternatives_T`` readers of the pattern printer, the one-letter shard attribute constructors S, P, B and V of the DSL, and the formula constructors Bits, In, ForAll, Sum and Count of the pattern language.
+ignore-names = ["visit_*", "visit_leaf_*", "default_visit_T", "print_*", "refused_*", "predicate_*", "rules_*", "alternatives_*", "S", "P", "B", "V", "Bits", "In", "ForAll", "Sum", "Count"]
 
 [tool.code_organization]
-# docs/spec/code-organization.md §0: the rules scripts/code_organization_lint.py checks.
-roots = ["src/tilefoundry", "targets/nvidia/tilefoundry_nvidia", "targets/apple/tilefoundry_apple"]
-exclude = ["src/tilefoundry/orchestrator/*", "*/models/*"]
-# S5: plugin loading points that import modules by name.
-dynamic_import_modules = ["tilefoundry.target.base", "tilefoundry.cli.target"]
-# S8: value classes whose subclasses are frozen dataclasses.
-value_bases = ["tilefoundry.ir.types.tensor_type.Type", "tilefoundry.ir.types.layout.LayoutBase"]
-# C7: the module that calls check_registries, the registry class, and key owners.
-composition_root = "tilefoundry"
-registry_classes = ["tilefoundry.visitor_registry.registries.DispatchRegistry"]
-target_base = "tilefoundry.target.base.Target"
-core_node_packages = ["tilefoundry.ir.core"]
+# docs/spec/code-organization.md §0, checked by scripts/code_organization_lint.py. Every rule
+# applies to every Python file; `src` names the first-party import roots, as in ruff.
+src = ["src", "targets/nvidia", "targets/apple"]
+
+[tool.code_organization.per-file-ignores]
+# Shipped model sources, orchestrator templates and examples are copied into user projects.
+"*/models/*" = ["ALL"]
+"src/tilefoundry/orchestrator/*" = ["ALL"]
+"examples/*" = ["ALL"]
+# Tests and scripts are not imported as library code: only the import rules C10 and C11 bind them.
+"tests/*" = ["S1", "S2", "S4", "S5", "S7", "S8", "S9", "S11", "C3", "C4", "C5", "C6"]
+"scripts/*" = ["S1", "S2", "S4", "S5", "S7", "S8", "S9", "S11", "C3", "C4", "C5", "C6"]
+"setup.py" = ["C3", "C4"]
+"targets/*/setup.py" = ["C3", "C4"]
+# These tests import names from the shipped model sources, which follow no rule.
+"tests/nvidia/cuda/analysis/test_analyze_cross_module.py" = ["C11"]
+"tests/nvidia/cuda/fixtures/cli/nested_checkpoint.py" = ["C11"]
+# The user entry points re-export names of other directories (D57, D58).
+"src/tilefoundry/__init__.py" = ["C3", "C11"]
+"src/tilefoundry/dsl/__init__.py" = ["C3", "C11"]
+# Plugin loading points import modules by name.
+"src/tilefoundry/target/registry.py" = ["S5"]
+"src/tilefoundry/cli/target.py" = ["S5"]
+"src/tilefoundry/utils/lazy.py" = ["S5"]
 
 [tool.comment_hygiene]
 # docs/spec/code-organization.md C8 and the documentation rules of scripts/comment_hygiene_lint.py.
@@ -158,6 +190,9 @@ exempt = [
     "tests/core/models/dense_decode.py",
     "targets/nvidia/tilefoundry_nvidia/cuda/models/",
     "examples/",
+    "src/tilefoundry/orchestrator/",
+    # Canonical printer output; the TIR printer ends every launch line with a noqa comment.
+    "tests/nvidia/cuda/fixtures/tir/",
 ]
 # Comment prefixes that address a tool; every one is a violation (C8).
 directive_prefixes = ["noqa", "type:", "pragma:", "ruff:", "pylint:", "pyright:", "mypy:", "fmt:", "isort:", "hygiene:"]
@@ -182,15 +217,25 @@ name = "C2 layers of tilefoundry (top row first)"
 type = "layers"
 containers = ["tilefoundry"]
 layers = [
-    "compile | module | script | dsl | cli",
+    "bootstrap",
+    "dsl | cli",
+    "compiler",
     "schedule | runtime",
-    "inspection | passes | codegen",
+    "codegen",
+    "inspection | passes",
     "analysis | parser",
+    "verifier",
     "ir.hir | ir.tir",
-    "(interfaces)",
-    "ir.core | ir.clause | ir.pattern | core | target",
+    "interfaces",
+    "ir.core",
+    "ir.clause | ir.pattern | core",
+    "target",
+    "ir.utils",
+    "ir.dim",
     "ir.types",
-    "(dispatch) | (services) | utils | dump",
+    "ir.expr",
+    "services",
+    "dispatch | utils | dump",
 ]
 
 [[tool.importlinter.contracts]]

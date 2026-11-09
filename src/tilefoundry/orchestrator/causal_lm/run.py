@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 from transformers import AutoTokenizer
 
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core import Module
 from tilefoundry.runtime import SafetensorsResource
 
 
@@ -47,9 +47,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.epilog = "Context is limited by the kernel declarations in model.py."
     args = parser.parse_args(argv)
 
-    import model  # noqa: PLC0415
-    from generation import decode  # noqa: PLC0415
-    from hf_alias import hf_alias  # noqa: PLC0415
+    import model
+    from generation import decode
+    from hf_alias import hf_alias
 
     device = str(torch.accelerator.current_accelerator()) if args.device is None else args.device
     loaded = _root(vars(model)).load(

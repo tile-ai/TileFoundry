@@ -2,7 +2,7 @@
 one row reads every weight byte once, 2.54 GB, memory-bound at every length).
 Runtime kernel: runtime/kernels/small.py gemv_kernel(N=248320, K=5120, rows=16, threads=256)."""
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 N = 248320
 K = 5120
@@ -13,7 +13,7 @@ VEC = 8
 CHUNKS = K // (32 * VEC)
 
 
-@module(entry="lm_head", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", N // ROWS), Topology("thread", 256)))
+@module(entry="lm_head", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", N // ROWS), Topology("thread", 256)))
 class SCHED_LM_HEAD:
     @func
     def lm_head(x: Tensor[(1, K), "bf16"], w: Tensor[(N, K), "bf16"]) -> Tensor[(1, N), "bf16"]:

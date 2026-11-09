@@ -1,7 +1,7 @@
 """An RS WGMMA issues four times and shares A with an ordinary register copy."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 V_SMEM = ComposedLayout(
     Swizzle(3, 4, 3), 0, Layout(((4, 2, 8), (1, 64)), ((1024, 512, 64), (1024, 1)))
@@ -10,7 +10,7 @@ V_SMEM = ComposedLayout(
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 128)),
 )
 class WgmmaRs:

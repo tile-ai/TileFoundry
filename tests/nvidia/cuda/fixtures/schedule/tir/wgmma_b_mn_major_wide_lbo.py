@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 128),),
 )
 class WgmmaBMnMajorWideLbo:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def gemm(
         a: Tensor[(64, 16), "f16"], v: Tensor[(32, 128), "f16"], out: Tensor[(64, 128), "f32"]
     ):

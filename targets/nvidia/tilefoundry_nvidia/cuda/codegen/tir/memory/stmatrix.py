@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from tilefoundry.visitor_registry.registries import Role, register_codegen
-from tilefoundry_nvidia.cuda import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
-from tilefoundry_nvidia.cuda.ir.tir.memory.stmatrix import StMatrix
+from tilefoundry import codegen
+from tilefoundry_nvidia.cuda import target
+from tilefoundry_nvidia.cuda.codegen import context
+from tilefoundry_nvidia.cuda.ir.tir import memory
 
 
-@register_codegen(CudaTarget, Role.EMIT, StMatrix)
-def _emit(call, ctx: CudaCodegenContext) -> None:
+@codegen.register(target.Target, codegen.Role.EMIT, memory.StMatrix)
+def emit(call, ctx: context.Context) -> None:
     raise RuntimeError("tir.cuda.memory.StMatrix: no emitter without stmatrix runtime support")
+
+
+__all__: list[str] = []

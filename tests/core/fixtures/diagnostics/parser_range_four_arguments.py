@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="looping", target=CpuTarget())
+@module(entry="looping", target=cpu.Target())
 class RangeFourArguments:
     @func
     def looping(x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):

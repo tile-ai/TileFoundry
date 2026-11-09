@@ -8,10 +8,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def gate_g(
     a: Tensor[(1, 1024, 48), "bf16", ((1, 1024, 48), (17039360, 16640, 1))], a_log: ConstTensor[(48,), "bf16"], dt_bias: ConstTensor[(48,), "bf16"], out: Tensor[(128, 8, 16, 3), "f32"]
 ):

@@ -9,40 +9,31 @@ import pytest
 import torch
 
 from tests.core._corpus import Problems
-from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.core import Call, Var
-from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types import DType, TensorType, Topology, TupleType, make_tensor_type
-from tilefoundry.ir.types.layout import Layout
-from tilefoundry.ir.types.shard_layout import ShardLayout, Split, shard_layout_local_shape
-from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes, TypeInferContext
-from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
-from tilefoundry.visitor_registry.visitors import CostEvaluator
+from tilefoundry.interfaces import cost, evaluator, typeinfer
+from tilefoundry.ir import core, expr, types
 
 
 @dataclass(frozen=True)
 class ExpectedError:
     match: str
-    exc: type = VerifyError
+    exc: type = expr.VerifyError
 
 
 @dataclass(frozen=True)
 class Cost:
-    flops: Mapping[DType, int] = field(default_factory=dict)
+    flops: Mapping[expr.DType, int] = field(default_factory=dict)
     ops: Mapping[str, int] = field(default_factory=dict)
-    traffic: tuple[TrafficBytes, ...] = ()
+    traffic: tuple[cost.TrafficBytes, ...] = ()
     topology_level: str | None = None
-    topologies: tuple[Topology, ...] = ()
+    topologies: tuple[types.Topology, ...] = ()
 
 
 @dataclass(frozen=True)
 class OpCase:
     name: str
     op: object
-    inputs: tuple[TensorType | torch.Tensor, ...]
-    type: TensorType | TupleType | None = None
+    inputs: tuple[types.TensorType | torch.Tensor, ...]
+    type: types.TensorType | types.TupleType | None = None
     error: ExpectedError | None = None
     value: torch.Tensor | tuple | None = None
     cost: Cost | None = None
@@ -56,20 +47,20 @@ class OpCase:
         return self.name
 
 
-def make_call(op, input_types) -> Call:
+def make_call(op, input_types) -> expr.Call:
     """Build a Call over typed variables, with a placeholder for nullary ops."""
-    args = tuple(Var(type=t, name=f"x{i}") for i, t in enumerate(input_types))
-    return Call(
-        type=input_types[0] if input_types else TensorType.umat_scalar(), target=op, args=args
+    args = tuple(expr.Var(type=t, name=f"x{i}") for i, t in enumerate(input_types))
+    return expr.Call(
+        type=input_types[0] if input_types else types.TensorType.from_umat_scalar(), target=op, args=args
     )
 
 
 def _infer(call, target=None):
     if target is None:
-        return TypeInferVisitor().visit(call, TypeInferContext())
-    function = Function.build(name="case", params=call.args, body=call, return_type=call.type)
-    module = Module(name="Case", functions=(function,), entry="case", target=target)
-    return TypeInferVisitor().visit(call, TypeInferContext(module=module, function=function))
+        return typeinfer.TypeInferVisitor().visit(call, typeinfer.TypeInferContext())
+    function = core.Function.from_parts(name="case", params=call.args, body=call, return_type=call.type)
+    module = core.Module(name="Case", functions=(function,), entry="case", target=target)
+    return typeinfer.TypeInferVisitor().visit(call, typeinfer.TypeInferContext(module=module, function=function))
 
 
 def infer_call(op, *input_types, target=None):
@@ -78,18 +69,18 @@ def infer_call(op, *input_types, target=None):
 
 
 _DTYPE_OF = {
-    torch.float32: DType.f32,
-    torch.float16: DType.f16,
-    torch.bfloat16: DType.bf16,
-    torch.float8_e4m3fn: DType.fp8e4m3,
-    torch.int32: DType.i32,
-    torch.int64: DType.i64,
-    torch.bool: DType.bool,
+    torch.float32: expr.DType.f32,
+    torch.float16: expr.DType.f16,
+    torch.bfloat16: expr.DType.bf16,
+    torch.float8_e4m3fn: expr.DType.fp8e4m3,
+    torch.int32: expr.DType.i32,
+    torch.int64: expr.DType.i64,
+    torch.bool: expr.DType.bool,
 }
 
 
-def tensor_type_of(t: torch.Tensor, storage: str = "gmem") -> TensorType:
-    return make_tensor_type(tuple(t.shape), _DTYPE_OF[t.dtype], storage)
+def tensor_type_of(t: torch.Tensor, storage: str = "gmem") -> types.TensorType:
+    return types.TensorType.from_shape(tuple(t.shape), _DTYPE_OF[t.dtype], storage)
 
 
 def _input_types(case):
@@ -101,23 +92,23 @@ def _input_types(case):
 
 
 def _evaluate(call, inputs):
-    function = Function.build(name="eval_case", params=call.args, body=call, return_type=call.type)
-    return evaluate(function, *inputs)
+    function = core.Function.from_parts(name="eval_case", params=call.args, body=call, return_type=call.type)
+    return evaluator.evaluate(function, *inputs)
 
 
 def _cost(call, expected, input_types):
-    context = CostContext(
+    context = cost.Context(
         selected_types={id(arg): type_ for arg, type_ in zip(call.args, input_types)},
         selected_output_type=call.type,
         topology_level=expected.topology_level,
         topologies=expected.topologies,
     )
-    return CostEvaluator().visit_Call(call, context)
+    return cost.Visitor().visit_Call(call, context)
 
 
 def run_op_case(case: OpCase, problems: Problems) -> None:
-    types = problems.run("input types", _input_types, case)
-    call = problems.run("Call", make_call, case.op, types)
+    type_list = problems.run("input types", _input_types, case)
+    call = problems.run("Call", make_call, case.op, type_list)
     if case.error is not None:
 
         def refused(call):
@@ -134,10 +125,10 @@ def run_op_case(case: OpCase, problems: Problems) -> None:
         actual = problems.run("evaluate", _evaluate, typed, case.inputs)
         problems.run("value", _assert_value, actual, case.value, atol=case.atol, rtol=case.rtol)
     if case.cost is not None:
-        cost = problems.run("cost", _cost, typed, case.cost, types)
-        problems.expect("flops", lambda c: c.flops == case.cost.flops, cost)
-        problems.expect("ops", lambda c: c.ops == case.cost.ops, cost)
-        problems.expect("traffic", lambda c: c.traffic == case.cost.traffic, cost)
+        cost_value = problems.run("cost", _cost, typed, case.cost, type_list)
+        problems.expect("flops", lambda c: c.flops == case.cost.flops, cost_value)
+        problems.expect("ops", lambda c: c.service == case.cost.ops, cost_value)
+        problems.expect("traffic", lambda c: c.traffic == case.cost.traffic, cost_value)
 
 
 def check_op_case(case: OpCase) -> None:
@@ -155,8 +146,8 @@ def op_case_test(cases: Sequence[OpCase]):
 
 
 def raw_shard_tensor_type(
-    shape, layout_shape, strides, attrs, mesh, *, dtype=DType.f32, storage="gmem"
-) -> TensorType:
+    shape, layout_shape, strides, attrs, mesh, *, dtype=expr.DType.f32, storage="gmem"
+) -> types.TensorType:
     """Raw shard tensor type.
 
     A sharded ``TensorType`` built directly from an explicit (possibly
@@ -166,12 +157,12 @@ def raw_shard_tensor_type(
     produce (an implicit ``strides=None`` layout, or a stride pattern that
     isn't plain C-order).
     """
-    return TensorType(
+    return types.TensorType(
         shape=shape,
         dtype=dtype,
         storage=storage,
-        layout=ShardLayout(
-            layout=Layout(shape=layout_shape, strides=strides), attrs=attrs, mesh=mesh
+        layout=types.ShardLayout(
+            layout=types.Layout(shape=layout_shape, strides=strides), attrs=attrs, mesh=mesh
         ),
     )
 
@@ -182,8 +173,8 @@ def split_local_extents(ty) -> list:
     Every entry must be 1 on a canonical layout
     ([shard §7.1.1](docs/spec/shard.md#711-layoutshape)).
     """
-    local = shard_layout_local_shape(ty.layout)
-    return [local[a.axis] for a in ty.layout.attrs if isinstance(a, Split)]
+    local = types.shard_layout_local_shape(ty.layout)
+    return [local[a.axis] for a in ty.layout.attrs if isinstance(a, types.Split)]
 
 
 def _norm_shape(shape) -> tuple:
@@ -197,7 +188,7 @@ def _norm_shape(shape) -> tuple:
     return tuple(getattr(d, "value", d) for d in shape)
 
 
-def assert_tensor_type(actual: TensorType, expected: TensorType) -> None:
+def assert_tensor_type(actual: types.TensorType, expected: types.TensorType) -> None:
     """Compare the typeinfer output against an expected ``TensorType`` on shape / dtype / storage.
 
     Compare the typeinfer output against an expected ``TensorType`` on
@@ -217,8 +208,8 @@ def assert_type(actual, expected) -> None:
     Compare a typeinfer output ``Type`` against ``expected``: ``TupleType``
     fieldwise, ``TensorType`` on shape/dtype/storage/layout.
     """
-    if isinstance(expected, TupleType):
-        assert isinstance(actual, TupleType), f"expected TupleType, got {actual!r}"
+    if isinstance(expected, types.TupleType):
+        assert isinstance(actual, types.TupleType), f"expected TupleType, got {actual!r}"
         assert len(actual.fields) == len(expected.fields), (
             f"tuple arity {len(actual.fields)} != {len(expected.fields)}"
         )

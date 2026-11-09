@@ -6,11 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tilefoundry.analysis import analyze
-from tilefoundry.analysis.check import check_program
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.inspection.analysis_report import render_analysis
-from tilefoundry.inspection.python_printer import HirPrinter
+from tilefoundry import analysis, cli, inspection
 
 FIXTURES_ROOT = Path(__file__).parents[1] / "fixtures"
 TYPE_FIXTURE = FIXTURES_ROOT / "inspection" / "type_printer_sugar.py"
@@ -45,10 +41,10 @@ def test_annotation_keeps_printed_program(
     The printer fixture's annotated-only golden is shared with its round-trip
     golden, so a type rendered two ways shows up as one diff.
     """
-    module = load_authored_ir(f"{fixture}:{module_name}" if module_name else str(fixture))
-    result = analyze(*check_program(module, module.entry_function()), analysis=families)
-    rendered = render_analysis(result, operands=operands)
+    module = cli.load_authored_ir(f"{fixture}:{module_name}" if module_name else str(fixture))
+    result = analysis.analyze(*analysis.check_program(module, module.entry_function()), analysis=families)
+    rendered = inspection.render_analysis(result, operands=operands)
     assert rendered.annotated == golden.read_text()
     assert _without_comments(rendered.annotated) == _without_comments(
-        HirPrinter().render(result.function, target=result.module.target).source
+        inspection.HirPrinter().render(result.function, target=result.module.target).source
     )

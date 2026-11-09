@@ -75,7 +75,7 @@ Differences to the kernel:
   wgmma fences/waits) is not stated; TileFoundry derives it from the data flow.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 T_ = 256
 NC = T_ // 64
@@ -92,7 +92,7 @@ F_OFF = 28672
 PACK = 28864
 
 
-@module(entry="gdn_chunk", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", HV * NC), Topology("thread", 256)))
+@module(entry="gdn_chunk", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", HV * NC), Topology("thread", 256)))
 class SCHED_GDN_CHUNK_T256:
     @func
     def gdn_chunk(q: Tensor[(T_, 16, D), "bf16"], k: Tensor[(T_, 16, D), "bf16"], v: Tensor[(T_, HV, D), "bf16"],

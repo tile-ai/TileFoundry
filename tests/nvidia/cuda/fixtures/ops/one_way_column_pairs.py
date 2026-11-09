@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 @module(
@@ -40,10 +40,10 @@ class OneWay:
 
     one_way = _OneWay
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def one_way_host(a: Tensor[(4, 64), "f32"], out: Tensor[(4, 64), "f32"]):
-        launch(  # noqa: F821
-            one_way.one_way,  # noqa: F821
+        launch(
+            one_way.one_way,
             a,
             out,
             grid=(1, 1, 1),

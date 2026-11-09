@@ -5,7 +5,7 @@ the second axis that tells them apart.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 ROWS = 64
 COLS = 64
@@ -13,7 +13,7 @@ COLS = 64
 
 @module(
     entry="store",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 4), Topology("thread", 32)),
 )
 class TmaStoreCtaRows:

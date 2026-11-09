@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _HIDDEN = 2048
 _GRID = 128
@@ -15,7 +15,7 @@ _ROW_TILE = 256
 _GROUPS = 3
 _OUTPUTS = _GROUPS * _STRIP
 _SEQ = DimVar("seq_len", 0, 8192)
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 _CTA = Topology("cta", _GRID)
 
 

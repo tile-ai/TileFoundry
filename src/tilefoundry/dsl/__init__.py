@@ -9,25 +9,68 @@ See [parser §2](docs/spec/parser.md#2-syntax-and-rules).
 
 from __future__ import annotations
 
-# ruff: noqa: I001 -- curated re-export order; alphabetical sort breaks staged imports.
+from tilefoundry.ir import pattern
+from tilefoundry.ir.core import ModuleList, shape_of
+from tilefoundry.ir.dim import ceildiv
+from tilefoundry.ir.expr import (
+    TARGET_MEMORY_OWNER,
+    BinaryKind,
+    BoolDType,
+    DimVar,
+    DType,
+    FloatDType,
+    IntegerDType,
+    ReduceKind,
+    StorageKind,
+    StorageOwners,
+    UnaryKind,
+    resolve_storage,
+)
+from tilefoundry.ir.types import (
+    B,
+    Broadcast,
+    CallableType,
+    ComposedLayout,
+    IntTuple,
+    Layout,
+    LayoutBase,
+    Mesh,
+    P,
+    Partial,
+    Placement,
+    PointerType,
+    S,
+    ShardAttr,
+    ShardLayout,
+    Split,
+    Swizzle,
+    TensorType,
+    Topology,
+    TupleType,
+    Type,
+    UnitType,
+    V,
+    Varying,
+    callable_type_for,
+    local_layout,
+    local_layout_and_offset,
+    local_readback,
+    mesh_coords,
+    partial_reductions_by_axis,
+    shard_layout_of,
+)
+from tilefoundry.ir.utils import make_shard_tensor_type
+from tilefoundry.parser import func, module, prim_func
 
-from tilefoundry.dsl import tf, T
-from tilefoundry.dsl._tensor import ConstTensor, Tensor
-
-
-from tilefoundry.script import func, prim_func
-from tilefoundry.module import module
-from tilefoundry.ir.core.module import ModuleList
-from tilefoundry.ir import types as _types
-from tilefoundry.ir.types import *
-from tilefoundry.ir.pattern import RangePattern, Pattern
-from tilefoundry.ir.types.dim import DimVar, ceildiv
-from tilefoundry.ir.core.kinds import ReduceKind, UnaryKind, BinaryKind
-from tilefoundry.ir.tir.shape import shape_of
+from . import T, namespace, tf
+from .tensor import ConstTensor, Tensor
 
 __all__ = [
+    "Varying",
+    "V",
     "tf",
     "T",
+    "namespace",
     "ConstTensor",
     "Tensor",
     "func",
@@ -35,9 +78,45 @@ __all__ = [
     "ModuleList",
     "prim_func",
     "shape_of",
-    *_types.__all__,
-    "Pattern",
-    "RangePattern",
+    "TARGET_MEMORY_OWNER",
+    "StorageOwners",
+    "resolve_storage",
+    "local_layout",
+    "local_layout_and_offset",
+    "local_readback",
+    "mesh_coords",
+    "partial_reductions_by_axis",
+    "shard_layout_of",
+    "B",
+    "BoolDType",
+    "Broadcast",
+    "CallableType",
+    "ComposedLayout",
+    "DType",
+    "FloatDType",
+    "IntTuple",
+    "IntegerDType",
+    "Layout",
+    "LayoutBase",
+    "Mesh",
+    "P",
+    "Partial",
+    "Placement",
+    "PointerType",
+    "S",
+    "ShardAttr",
+    "ShardLayout",
+    "Split",
+    "StorageKind",
+    "Swizzle",
+    "TensorType",
+    "Topology",
+    "TupleType",
+    "Type",
+    "UnitType",
+    "callable_type_for",
+    "make_shard_tensor_type",
+    "pattern",
     "DimVar",
     "ceildiv",
     "ReduceKind",

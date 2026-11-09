@@ -145,7 +145,7 @@ default that exists on only one machine is a guess.
 The first run compiles the kernels into `kernels/.build/` (once, about a minute).
 
     model.py            the model as authored HIR — the reference
-    runtime_model.py    its runtime twin, one @runtime_func per authored function
+    runtime_model.py    its runtime twin, one @runtime.func per authored function
     kernels/granite.cu  16 kernels plus the build shim
     run.py              the entry point
     hf_alias.py         maps the checkpoint's names onto the Module's

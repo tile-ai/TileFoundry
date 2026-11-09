@@ -11,10 +11,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def whole_last(
     out: Tensor[(1024, 14336), "bf16"], x: Tensor[(1, 1024, 5120), "bf16"], w: Tensor[(14336, 5120), "bf16"], gamma_q: ConstTensor[(256,), "bf16"], gamma_k: ConstTensor[(256,), "bf16"], cos: Tensor[(1024, 64), "bf16"], sin: Tensor[(1024, 64), "bf16"], out_1: Tensor[(1024, 14336), "bf16"]
 ):

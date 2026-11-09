@@ -16,12 +16,8 @@ from safetensors.torch import load_file, save_file
 
 from tests.core.cli._check import MESH_CHECK_ARGS
 from tests.nvidia.cuda.models.corpus import MODELS_ROOT
-from tilefoundry import cli
-from tilefoundry.cli.source import load_authored_ir, load_namespace, select_ir
-from tilefoundry.evaluator import evaluate
-from tilefoundry.evaluator.value import to_torch_dtype
-from tilefoundry.runtime import DictResource
-from tilefoundry.runtime.resource import DrawnResource
+from tilefoundry import cli, runtime
+from tilefoundry.interfaces import evaluator
 
 ROUTING = f"{MODELS_ROOT / 'qwen3_5_35b_a3b' / 'model.py'}:Qwen3_5Router.routing"
 LEAF_WEIGHTS = Path(__file__).parents[1] / "fixtures" / "placed" / "leaf_weights.py"
@@ -47,52 +43,52 @@ class RecordingResource:
 
 
 def test_load_reads_no_weights():
-    Mod = load_authored_ir(f"{LEAF_WEIGHTS}:Mod")
-    Small = load_authored_ir(f"{LEAF_WEIGHTS}:Small")
-    SmallTwin = load_namespace(str(LEAF_WEIGHTS))[0]["SmallTwin"]
+    Mod = cli.load_authored_ir(f"{LEAF_WEIGHTS}:Mod")
+    Small = cli.load_authored_ir(f"{LEAF_WEIGHTS}:Small")
+    SmallTwin = cli.load_namespace(str(LEAF_WEIGHTS))[0]["SmallTwin"]
     for mod, mk in (
         (Mod, Mod.load),
         (Small, Small.load),
         (Small, SmallTwin().load),
     ):
-        rec = RecordingResource(DrawnResource(mod, cpu_gen(), "cpu"))
+        rec = RecordingResource(runtime.DrawnResource(mod, cpu_gen(), "cpu"))
         mk(rec)
         assert rec.asked == []
 
 
 def test_evaluate_reads_own_consts():
-    Small = load_authored_ir(f"{LEAF_WEIGHTS}:Small")
-    D = load_namespace(str(LEAF_WEIGHTS))[0]["D"]
-    rec = RecordingResource(DrawnResource(Small, cpu_gen(), "cpu"))
-    evaluate(Small.load(rec).leaf, torch.zeros(1, D))
+    Small = cli.load_authored_ir(f"{LEAF_WEIGHTS}:Small")
+    D = cli.load_namespace(str(LEAF_WEIGHTS))[0]["D"]
+    rec = RecordingResource(runtime.DrawnResource(Small, cpu_gen(), "cpu"))
+    evaluator.evaluate(Small.load(rec).leaf, torch.zeros(1, D))
     assert rec.asked == []
-    evaluate(Small.load(rec), torch.zeros(1, D))
+    evaluator.evaluate(Small.load(rec), torch.zeros(1, D))
     assert rec.asked == ["w"]
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a second device")
 def test_foreign_device_weight_named():
-    Small = load_authored_ir(f"{LEAF_WEIGHTS}:Small")
-    D = load_namespace(str(LEAF_WEIGHTS))[0]["D"]
-    rec = RecordingResource(DrawnResource(Small, cpu_gen(), "cpu"))
+    Small = cli.load_authored_ir(f"{LEAF_WEIGHTS}:Small")
+    D = cli.load_namespace(str(LEAF_WEIGHTS))[0]["D"]
+    rec = RecordingResource(runtime.DrawnResource(Small, cpu_gen(), "cpu"))
     with pytest.raises(ValueError, match=r"'w'"):
-        evaluate(
+        evaluator.evaluate(
             Small.load(rec),
             torch.zeros(1, D, device="cuda"),
         )
 
 
 def test_missing_weight_named():
-    loaded = load_authored_ir(f"{LEAF_WEIGHTS}:Small").load(DictResource({}))
+    loaded = cli.load_authored_ir(f"{LEAF_WEIGHTS}:Small").load(runtime.DictResource({}))
     with pytest.raises(KeyError, match=r"missing declared weight 'w'"):
-        evaluate(loaded, torch.zeros(1, load_namespace(str(LEAF_WEIGHTS))[0]["D"]))
+        evaluator.evaluate(loaded, torch.zeros(1, cli.load_namespace(str(LEAF_WEIGHTS))[0]["D"]))
 
 
 def test_twin_binds_weights_once():
-    Small = load_authored_ir(f"{LEAF_WEIGHTS}:Small")
-    leaf_weights = load_namespace(str(LEAF_WEIGHTS))[0]
+    Small = cli.load_authored_ir(f"{LEAF_WEIGHTS}:Small")
+    leaf_weights = cli.load_namespace(str(LEAF_WEIGHTS))[0]
     D = leaf_weights["D"]
-    rec = RecordingResource(DrawnResource(Small, cpu_gen(), "cpu"))
+    rec = RecordingResource(runtime.DrawnResource(Small, cpu_gen(), "cpu"))
     twin = leaf_weights["SmallTwin"]()
     twin.load(rec)
     twin.entry(torch.zeros(1, D))
@@ -101,15 +97,14 @@ def test_twin_binds_weights_once():
 
 
 def test_input_weight_axes_independent(tmp_path):
-    from tilefoundry.cli import build_parser  # noqa: PLC0415 -- existing parser shape changes in M4
 
     source = f"{LEAF_WEIGHTS}:Small.entry"
     a, b = tmp_path / "a.pt", tmp_path / "b.pt"
     for path in (a, b):
-        torch.save(torch.zeros(1, load_namespace(str(LEAF_WEIGHTS))[0]["D"]), path)
+        torch.save(torch.zeros(1, cli.load_namespace(str(LEAF_WEIGHTS))[0]["D"]), path)
     for inputs in ("random", f"files:{a},{b}"):
         for weights in ("random", f"ckpt:{tmp_path}"):
-            build_parser().parse_args(
+            cli.build_parser().parse_args(
                 [
                     "check",
                     source,
@@ -134,20 +129,20 @@ def routing(tmp_path_factory) -> dict[str, Path]:
     """
     where = tmp_path_factory.mktemp("routing")
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    namespace, _ = load_namespace(ROUTING)
-    leaf = select_ir(namespace, "Qwen3_5Router")
+    namespace, _ = cli.load_namespace(ROUTING)
+    leaf = cli.select_ir(namespace, "Qwen3_5Router")
     declared = leaf.lookup("routing")
 
     generator = torch.Generator(device=device).manual_seed(11)
     drawn = [
         torch.randn(tuple(param.type.shape), generator=generator, device=device).to(
-            to_torch_dtype(param.type.dtype)
+            evaluator.to_torch_dtype(param.type.dtype)
         )
         for param in declared.params
     ]
     tokens, w_router = drawn
-    weights, indices = evaluate(
-        leaf.load(DictResource({"w_router": w_router})).routing,
+    weights, indices = evaluator.evaluate(
+        leaf.load(runtime.DictResource({"w_router": w_router})).routing,
         tokens,
     )
 

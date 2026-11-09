@@ -9,7 +9,7 @@ weight, so its K windows are K-contiguous. The block offsets ``kb * BLOCK`` are
 scalar index arithmetic, which costs nothing.
 """
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 128
 N = 128
@@ -19,7 +19,7 @@ K_BLOCKS = K // BLOCK
 N_BLOCKS = N // BLOCK
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", 1), Topology("thread", 256)))
 class FP8_BLOCK_SCALED_GEMM:
     @func

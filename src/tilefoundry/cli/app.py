@@ -1,0 +1,396 @@
+"""The ``tilefoundry`` command: its parser and its dispatch."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from importlib.metadata import metadata, version
+from types import MappingProxyType
+from typing import Sequence
+
+from tilefoundry import analysis
+from tilefoundry.ir import expr
+
+from .analyze import ANALYSES, EVIDENCE, guidance, run_authored_analysis
+from .check import add_arguments, run_check
+from .check import guidance as check_guidance
+from .models import run_models
+from .scaffold import run_scaffold
+from .schedule import run_candidates, run_facts, run_finalize
+from .spec import run_spec
+from .target import (
+    load_registrations,
+    registry_path,
+    run_add_document,
+    run_add_module,
+    run_list,
+    run_remove,
+    run_show,
+)
+from .tutorial import PAGES, page_lines, render_page, run_tutorial
+
+COMMANDS = MappingProxyType({
+    "models": "list the described models, or show one of them",
+    "spec": "read one specification: its sections, or one of them",
+    "tutorial": "learn the two-step workflow: its pages, or one of them",
+    "check": "compare an implementation against its reference, output by output",
+    "analyze": "report what a program costs: flops, traffic, bounds, timing",
+    "target": "list, show, add, or remove compilation targets",
+    "schedule": "finalize scheduled HIR and inspect instruction choices",
+    "scaffold": "generate an editable project for the program's Target",
+})
+
+TARGET_COMMANDS = MappingProxyType({
+    "list": "list every available target as reconstructing Python",
+    "show": "show the documents retained by one target identity",
+    "add": "add one Target provider or hardware document",
+    "remove": "remove one entry shown by target list",
+})
+
+SCHEDULE_COMMANDS = MappingProxyType({
+    "finalize": "lower scheduled HIR to verified TIR",
+    "facts": "describe the instructions admitted by one target",
+    "candidates": "report instruction choices for unscheduled HIR sites",
+})
+
+
+def project_summary() -> str:
+    """The packaged one-line description of the project.
+
+    Read from installed metadata rather than restated here, so there is one copy
+    of the sentence and no second one to drift.
+    """
+    return metadata("tilefoundry")["Summary"].rstrip(".")
+
+
+def add_source_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "source",
+        metavar="SOURCE",
+        help="model.py[:Module[.function]]",
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tilefoundry",
+        description=f"TileFoundry — {project_summary()}",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--registry",
+        metavar="PATH",
+        help="use this installation registry instead",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"tilefoundry {version('tilefoundry')}",
+        help="print the installed version and exit",
+    )
+    commands = parser.add_subparsers(dest="command", title="Common commands", metavar="<command>")
+
+    models_value = commands.add_parser(
+        "models", help=COMMANDS["models"], description=COMMANDS["models"]
+    )
+    models_value.add_argument(
+        "name",
+        nargs="?",
+        metavar="NAME",
+        help="which model; with none, list the models there are",
+    )
+    models_value.add_argument(
+        "--source", action="store_true", help="print the model's authored source instead"
+    )
+
+    spec = commands.add_parser("spec", help=COMMANDS["spec"], description=COMMANDS["spec"])
+    spec.add_argument(
+        "topic",
+        nargs="?",
+        metavar="TOPIC",
+        help="which document; with none, list the documents there are",
+    )
+    spec.add_argument(
+        "section",
+        nargs="?",
+        metavar="SECTION",
+        help="one section's key, as the outline prints it; with none, print the outline",
+    )
+
+    try:
+        pages = "Pages:\n  <page>\n" + "\n".join(page_lines())
+    except OSError:
+        pages = None
+    tutorial = commands.add_parser(
+        "tutorial",
+        help=COMMANDS["tutorial"],
+        description=COMMANDS["tutorial"],
+        epilog=pages,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        usage="tilefoundry tutorial [-h] [<page>] [FAMILY]",
+    )
+    tutorial.add_argument(
+        "page",
+        nargs="?",
+        choices=(*PAGES[1:], "orchestrator"),
+        metavar="PAGE",
+        help=argparse.SUPPRESS,
+    )
+    tutorial.add_argument(
+        "family",
+        nargs="?",
+        metavar="FAMILY",
+        help=argparse.SUPPRESS,
+    )
+    tutorial.set_defaults(command_parser=tutorial)
+
+    check = commands.add_parser(
+        "check",
+        help=COMMANDS["check"],
+        description=COMMANDS["check"],
+        epilog=check_guidance(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    add_arguments(check)
+
+    analyze = commands.add_parser(
+        "analyze",
+        help=COMMANDS["analyze"],
+        description=COMMANDS["analyze"],
+        epilog=guidance(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    add_source_argument(analyze)
+    analyze.add_argument(
+        "out", metavar="PATH", nargs="?", help="write the report here; stdout carries none of it"
+    )
+    for selector in ANALYSES:
+        analyze.add_argument(f"--{selector}", action="store_true", help=EVIDENCE[selector])
+    analyze.add_argument(
+        "--topology",
+        metavar="LEVEL",
+        help=(
+            "topology level whose unit the per-unit figures describe; defaults "
+            "to the module's coarsest declared level"
+        ),
+    )
+    analyze.add_argument(
+        "--dim",
+        action="append",
+        metavar="NAME=EXTENT",
+        help="bind one dimension the model left open, for example ctx_len=1024",
+    )
+    analyze.add_argument(
+        "--operands",
+        action="store_true",
+        help=(
+            "add what each operand of a call moved to its annotation; the JSON "
+            "report carries it either way"
+        ),
+    )
+    analyze.add_argument(
+        "--json", action="store_true", help="render the report as JSON instead of text"
+    )
+    analyze.set_defaults(command_parser=analyze)
+
+    target = commands.add_parser(
+        "target",
+        help=COMMANDS["target"],
+        description=f"tilefoundry target — {COMMANDS['target']}",
+    )
+    target.set_defaults(command_parser=target)
+    target_commands = target.add_subparsers(
+        dest="target_command", title="Commands", metavar="<command>"
+    )
+    target_commands.add_parser("list", help=TARGET_COMMANDS["list"])
+    target_show = target_commands.add_parser("show", help=TARGET_COMMANDS["show"])
+    target_show.add_argument("identity", metavar="IDENTITY")
+    target_add = target_commands.add_parser("add", help=TARGET_COMMANDS["add"])
+    target_add.add_argument(
+        "--document",
+        action="store_true",
+        help="add a hardware document instead of a Target provider module",
+    )
+    target_add.add_argument("source", metavar="MODULE|PATH")
+    target_remove = target_commands.add_parser("remove", help=TARGET_COMMANDS["remove"])
+    target_remove.add_argument("name", metavar="NAME")
+
+    schedule = commands.add_parser(
+        "schedule",
+        help=COMMANDS["schedule"],
+        description=f"tilefoundry schedule — {COMMANDS['schedule']}",
+    )
+    schedule.set_defaults(command_parser=schedule)
+    schedule_commands = schedule.add_subparsers(
+        dest="schedule_command", title="Commands", metavar="<command>"
+    )
+    schedule_finalize = schedule_commands.add_parser(
+        "finalize", help=SCHEDULE_COMMANDS["finalize"]
+    )
+    add_source_argument(schedule_finalize)
+    schedule_finalize.add_argument(
+        "out", metavar="PATH", help="write the TIR here; stdout carries none of it"
+    )
+    schedule_finalize.add_argument(
+        "--json", action="store_true", help="write an object containing the TIR source"
+    )
+    schedule_finalize.add_argument(
+        "--dim", action="append", metavar="NAME=EXTENT",
+        help="bind one extent for an open program dimension",
+    )
+    schedule_facts = schedule_commands.add_parser("facts", help=SCHEDULE_COMMANDS["facts"])
+    schedule_facts.set_defaults(command_parser=schedule_facts)
+    schedule_facts.add_argument("--target", required=True, metavar="TARGET")
+    schedule_facts.add_argument(
+        "op_or_out",
+        metavar="OP|PATH",
+        help="one Op to select, or PATH when listing every Op",
+    )
+    schedule_facts.add_argument(
+        "out",
+        nargs="?",
+        metavar="PATH",
+        help="write one selected Op here; stdout carries none of it",
+    )
+    schedule_facts.add_argument("--json", action="store_true", help="write the same facts as JSON")
+    schedule_candidates = schedule_commands.add_parser(
+        "candidates", help=SCHEDULE_COMMANDS["candidates"]
+    )
+    add_source_argument(schedule_candidates)
+    schedule_candidates.add_argument(
+        "out", metavar="PATH", help="write the candidate report here; stdout carries none of it"
+    )
+    schedule_candidates.add_argument(
+        "--json", action="store_true", help="write the same candidate report as JSON"
+    )
+    schedule_candidates.add_argument(
+        "--dim",
+        action="append",
+        metavar="NAME=EXTENT",
+        help="bind one open dimension to a concrete extent; repeat for other dimensions",
+    )
+    scaffold = commands.add_parser(
+        "scaffold", help=COMMANDS["scaffold"], description=COMMANDS["scaffold"]
+    )
+    add_source_argument(scaffold)
+    scaffold.add_argument("out_dir", metavar="OUT_DIR", help="write the project to an empty directory")
+
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command is None:
+        parser.print_help()
+        return 0
+    if args.command == "target" and args.target_command is None:
+        args.command_parser.print_help()
+        return 0
+    if args.command == "schedule" and args.schedule_command is None:
+        args.command_parser.print_help()
+        return 0
+    if args.command == "tutorial" and args.page is None:
+        try:
+            print(render_page(PAGES[0]))
+        except OSError as error:
+            print(f"tilefoundry: warning: {error}", file=sys.stderr)
+        args.command_parser.print_help()
+        return 0
+    analyses: tuple[str, ...] = ()
+    if args.command == "analyze":
+        analyses = tuple(name for name in ANALYSES if getattr(args, name.replace("-", "_")))
+        if args.json and not analyses:
+            args.command_parser.error(
+                "--json requires at least one analysis flag: "
+                + ", ".join(f"--{name}" for name in ANALYSES)
+            )
+    try:
+        registrations = load_registrations(registry_path(args.registry))
+    except (OSError, TypeError, ValueError) as error:
+        print(f"tilefoundry: error: {error}", file=sys.stderr)
+        return 1
+    for warning in registrations.warnings:
+        print(f"tilefoundry: warning: {warning}", file=sys.stderr)
+    if args.command == "scaffold":
+        try:
+            return run_scaffold(args.source, args.out_dir)
+        except Exception as error:
+            print(f"tilefoundry scaffold: error: {error}", file=sys.stderr)
+            return 1
+    if args.command == "models":
+        try:
+            return run_models(args.name, source=args.source)
+        except (OSError, ValueError) as error:
+            print(f"tilefoundry: error: {error}", file=sys.stderr)
+            return 1
+    if args.command == "spec":
+        try:
+            return run_spec(args.topic, args.section)
+        except (OSError, ValueError) as error:
+            print(f"tilefoundry: error: {error}", file=sys.stderr)
+            return 1
+    if args.command == "tutorial":
+        try:
+            return run_tutorial(args.page, args.family)
+        except (OSError, ValueError) as error:
+            print(f"tilefoundry: error: {error}", file=sys.stderr)
+            return 1
+    if args.command == "check":
+        try:
+            return run_check(args)
+        except Exception as error:
+            print(f"tilefoundry check: error: {error}", file=sys.stderr)
+            return 1
+    if args.command == "target":
+        try:
+            if args.target_command == "list":
+                return run_list(registrations)
+            if args.target_command == "show":
+                return run_show(args.identity)
+            if args.target_command == "add":
+                if args.document:
+                    return run_add_document(args.source, registrations)
+                return run_add_module(args.source, registrations)
+            return run_remove(args.name, registrations)
+        except Exception as error:
+            print(f"tilefoundry: error: {error}", file=sys.stderr)
+            return 1
+    if args.command == "schedule":
+        try:
+            if args.schedule_command == "candidates":
+                return run_candidates(
+                    args.source, args.out, as_json=args.json, dims=args.dim
+                )
+            if args.schedule_command == "facts":
+                op, out = (
+                    (None, args.op_or_out)
+                    if args.out is None
+                    else (args.op_or_out, args.out)
+                )
+                return run_facts(
+                    op,
+                    args.target,
+                    out,
+                    as_json=args.json,
+                )
+            return run_finalize(args.source, args.out, as_json=args.json, dims=args.dim)
+        except Exception as error:
+            print(f"tilefoundry: error: {error}", file=sys.stderr)
+            return 1
+    try:
+        return run_authored_analysis(
+            args.source,
+            analyses,
+            args.out,
+            topology=args.topology,
+            as_json=args.json,
+            operands=args.operands,
+            dims=args.dim,
+        )
+    except (analysis.Error, expr.VerifyError, OSError, TypeError, ValueError) as error:
+        print(f"tilefoundry: error: {error}", file=sys.stderr)
+        return 1
+
+
+__all__ = ["build_parser", "main"]

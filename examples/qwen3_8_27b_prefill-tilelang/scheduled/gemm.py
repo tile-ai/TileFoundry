@@ -50,9 +50,9 @@ The tile plans (kernels/gemm.py `plan`, evidence/STEP4.md):
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 CTAS, BM, BN, BK, STAGES = 132, 128, 256, 64, 3
 H, I = 5120, 17408
 HQ, HKV, HD, ROT, HALF = 24, 4, 256, 64, 32   # attention heads, head dim, rotary dims

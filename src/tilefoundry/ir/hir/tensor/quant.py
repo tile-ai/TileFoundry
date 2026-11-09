@@ -8,44 +8,24 @@ from __future__ import annotations
 
 import isl
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue, to_torch_dtype
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import DType, ShardLayout, TensorType, TupleType
-from tilefoundry.ir.types.dim import DimFloorDiv, simplify_dim
-from tilefoundry.ir.types.int_tuple import compatible_profile, mode_axes
-from tilefoundry.ir.types.layout import Layout, flatten
-from tilefoundry.ir.types.shard_layout import (
-    Split,
-    shard_layout_local_shape,
-    split_target_axes,
-)
-from tilefoundry.ir.types.storage import StorageOwners
-from tilefoundry.ir.types.utils import reject_partials, static_dim_value
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    iterating,
-    register_access_relation,
-)
+from tilefoundry import core, services, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
+from tilefoundry.ir.types import int_tuple
 
 
-@register_op(dialect='tf', category='tensor')
-class Quant(Op):
+@expr.register_op(dialect='tf', category='tensor')
+class Quant(expr.Op):
     """Per-token-group FP8 quantize. Multi-output (x_q, x_scale)."""
 
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
-    scheme = ParamDef(kind="attribute", annotation=str, default="per_token_group")
-    group = ParamDef(kind="attribute", annotation=int, default=128)
-    target_dtype = ParamDef(kind="attribute", annotation=DType, default=DType.fp8e4m3)
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    scheme = expr.ParamDef(kind="attribute", annotation=str, default="per_token_group")
+    group = expr.ParamDef(kind="attribute", annotation=int, default=128)
+    target_dtype = expr.ParamDef(kind="attribute", annotation=expr.DType, default=expr.DType.fp8e4m3)
 
 
-def _dense_extent(factors) -> int | None:
+def dense_extent(factors) -> int | None:
     extent = 1
     for size, stride in sorted(factors, key=lambda item: item[1]):
         if size == 1:
@@ -56,39 +36,39 @@ def _dense_extent(factors) -> int | None:
     return extent
 
 
-def _logical_shard_attrs(call, ctx, x_ty, group: int):
+def logical_shard_attrs(call, ctx, x_ty, group: int):
     layout = x_ty.layout
-    targets = split_target_axes(layout, x_ty.shape)
+    targets = types.split_target_axes(layout, x_ty.shape)
     last_axis = len(x_ty.shape) - 1
     if last_axis in targets:
         try:
-            local_shape = shard_layout_local_shape(layout)
-            layout_axes = mode_axes(compatible_profile(layout.layout.shape, x_ty.shape))
+            local_shape = types.shard_layout_local_shape(layout)
+            layout_axes = int_tuple.mode_axes(int_tuple.compatible_profile(layout.layout.shape, x_ty.shape))
             strides = layout.layout.strides
             global_factors = []
             local_factors = []
             for physical_axis, logical_axis in enumerate(layout_axes):
                 if logical_axis != last_axis:
                     continue
-                size = static_dim_value(layout.layout.shape[physical_axis])
-                local_size = static_dim_value(local_shape[physical_axis])
-                stride = static_dim_value(strides[physical_axis])
+                size = expr.static_dim_value(layout.layout.shape[physical_axis])
+                local_size = expr.static_dim_value(local_shape[physical_axis])
+                stride = expr.static_dim_value(strides[physical_axis])
                 if size is None or local_size is None or stride is None:
                     raise ValueError("dynamic last-axis factor")
                 global_factors.append((size, stride))
                 local_factors.append((local_size, stride))
-            global_last = _dense_extent(global_factors)
-            local_last = _dense_extent(local_factors)
+            global_last = dense_extent(global_factors)
+            local_last = dense_extent(local_factors)
             aligned = (
-                global_last == static_dim_value(x_ty.shape[last_axis])
+                global_last == expr.static_dim_value(x_ty.shape[last_axis])
                 and local_last is not None
                 and local_last % group == 0
             )
             for mesh_axis, (attr, target) in enumerate(zip(layout.attrs, targets)):
-                if not isinstance(attr, Split) or target != last_axis:
+                if not isinstance(attr, types.Split) or target != last_axis:
                     continue
-                split_extent = static_dim_value(layout.layout.shape[attr.axis])
-                mesh_extent = static_dim_value(flatten(layout.mesh.layout).shape[mesh_axis])
+                split_extent = expr.static_dim_value(layout.layout.shape[attr.axis])
+                mesh_extent = expr.static_dim_value(types.flatten(layout.mesh.layout).shape[mesh_axis])
                 aligned = (
                     aligned
                     and split_extent is not None
@@ -105,33 +85,33 @@ def _logical_shard_attrs(call, ctx, x_ty, group: int):
                 "an explicit Reshard before Quant",
             )
     return tuple(
-        Split(target) if isinstance(attr, Split) else attr
+        types.Split(target) if isinstance(attr, types.Split) else attr
         for attr, target in zip(layout.attrs, targets)
     )
 
 
-def _result_layouts(call, ctx, x_ty, scale_shape, group: int):
-    if isinstance(x_ty.layout, ShardLayout):
-        attrs = _logical_shard_attrs(call, ctx, x_ty, group)
+def result_layouts(call, ctx, x_ty, scale_shape, group: int):
+    if isinstance(x_ty.layout, types.ShardLayout):
+        attrs = logical_shard_attrs(call, ctx, x_ty, group)
         try:
             return (
-                ShardLayout.default(
+                types.ShardLayout.from_logical(
                     x_ty.shape,
                     x_ty.layout.mesh,
                     attrs,
                     storage=x_ty.storage,
                     owners=ctx.target.storage_owners
                     if ctx is not None and ctx.target is not None
-                    else StorageOwners((), {}),
+                    else expr.StorageOwners((), {}),
                 ),
-                ShardLayout.default(
+                types.ShardLayout.from_logical(
                     scale_shape,
                     x_ty.layout.mesh,
                     attrs,
                     storage=x_ty.storage,
                     owners=ctx.target.storage_owners
                     if ctx is not None and ctx.target is not None
-                    else StorageOwners((), {}),
+                    else expr.StorageOwners((), {}),
                 ),
             )
         except ValueError as error:
@@ -140,13 +120,13 @@ def _result_layouts(call, ctx, x_ty, scale_shape, group: int):
                 f"cannot derive result sharding: {error}; use an explicit Reshard before Quant",
             )
     return (
-        Layout(x_ty.shape),
-        Layout(scale_shape),
+        types.Layout(x_ty.shape),
+        types.Layout(scale_shape),
     )
 
 
-@register_typeinfer(Quant)
-def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
+@typeinfer.register(Quant)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TupleType:
     x_ty = ctx.type_of(call.args[0])
     if not x_ty.shape:
         ctx.error(call, "x must be at least rank-1")
@@ -163,39 +143,39 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
             call,
             f"group must be a positive non-boolean integer, got {group!r}",
         )
-    if op.target_dtype != DType.fp8e4m3:
+    if op.target_dtype != expr.DType.fp8e4m3:
         ctx.error(
             call,
             f"target_dtype must be fp8e4m3, got {op.target_dtype}",
         )
 
-    reject_partials("x", x_ty.layout)
+    ir_utils.reject_partials("x", x_ty.layout)
     last = x_ty.shape[-1]
     if isinstance(last, int):
         if last % group != 0:
             ctx.error(call, f"last dim {last} not divisible by group={group}")
         scale_last = last // group
     else:
-        scale_last = simplify_dim(DimFloorDiv, (last, group))
+        scale_last = services.simplify_dim("floordiv", (last, group))
     scale_shape = x_ty.shape[:-1] + (scale_last,)
-    q_layout, scale_layout = _result_layouts(call, ctx, x_ty, scale_shape, group)
-    x_q_ty = TensorType(
+    q_layout, scale_layout = result_layouts(call, ctx, x_ty, scale_shape, group)
+    x_q_ty = types.TensorType(
         shape=x_ty.shape,
         dtype=op.target_dtype,
         layout=q_layout,
         storage=x_ty.storage,
     )
-    scale_ty = TensorType(
+    scale_ty = types.TensorType(
         shape=scale_shape,
-        dtype=DType.f32,
+        dtype=expr.DType.f32,
         layout=scale_layout,
         storage=x_ty.storage,
     )
-    return TupleType(fields=(x_q_ty, scale_ty))
+    return types.TupleType(fields=(x_q_ty, scale_ty))
 
 
-@register_eval(Quant)
-def _eval_quant(ctx):
+@evaluator.register(Quant)
+def eval_quant(ctx):
     fields = ctx.result_type.fields
 
     def quant(x):
@@ -203,15 +183,15 @@ def _eval_quant(ctx):
         group = ctx.op.group
         last = x.shape[-1]
         if last % group:
-            raise EvalError(f"Quant: runtime last dim {last} not divisible by group={group}")
+            raise evaluator.EvalError(f"Quant: runtime last dim {last} not divisible by group={group}")
         grouped = x.reshape(*x.shape[:-1], last // group, group)
         absmax = grouped.abs().amax(dim=-1)
-        scale = torch.where(absmax == 0, torch.ones_like(absmax), absmax / 448.0)
+        scale = utils.torch.where(absmax == 0, utils.torch.ones_like(absmax), absmax / 448.0)
         quantized = (
             (grouped / scale.unsqueeze(-1))
             .clamp(-448.0, 448.0)
             .reshape(x.shape)
-            .to(to_torch_dtype(DType.fp8e4m3))
+            .to(evaluator.to_torch_dtype(expr.DType.fp8e4m3))
         )
         return quantized, scale
 
@@ -221,13 +201,13 @@ def _eval_quant(ctx):
     else:
         each = [(p, quant(t)) for p, t in x.tensor]
         held = tuple(tuple((p, out[i]) for p, out in each) for i in range(len(fields)))
-    return TupleValue(
-        tuple(TensorValue(ShardTensor(field, data)) for field, data in zip(fields, held, strict=True))
+    return evaluator.TupleValue(
+        tuple(evaluator.TensorValue(core.ShardTensor(field, data)) for field, data in zip(fields, held, strict=True))
     )
 
 
-@register_access_relation(Quant)
-def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> tuple[AccessRelation, ...]:
+@access.register_relation(Quant)
+def quant_access_relation(call: "expr.Call", ctx: "TypeInferContext") -> tuple[access.Relation, ...]:
     """GLOBAL black-box quant.
 
     - input ``x`` is read element-wise → identity multi_aff over the rank-N
@@ -241,20 +221,30 @@ def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> tuple[Acces
     group = call.target.group
 
     dims = ", ".join(f"i{k}" for k in range(rank))
-    ident = AccessRelation(isl.map(f"{{ [{dims}] -> [{dims}] }}"))
+    ident = access.Relation(isl.map(f"{{ [{dims}] -> [{dims}] }}"))
 
     if rank == 0:
-        scale_rel = ident  # pragma: no cover
+        scale_rel = ident
     else:
         outer = ", ".join(f"i{k}" for k in range(rank - 1))
         last = f"i{rank - 1}"
         out_dims = (outer + ", ") if outer else ""
-        scale_rel = AccessRelation(isl.map(f"{{ [{dims}] -> [{out_dims}floor({last}/{group})] }}"))
+        scale_rel = access.Relation(isl.map(f"{{ [{dims}] -> [{out_dims}floor({last}/{group})] }}"))
 
-    return iterating(
+    return access.iterating(
         x_ty.shape,
         (ident, ident, scale_rel),
     )
 
 
 __all__ = ["Quant"]
+
+
+@cost.register(Quant)
+def quant_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    inputs = cost.input_types(call, ctx)
+    output = cost.output_type(call, ctx)
+    source = inputs[0]
+    if not isinstance(source, types.TensorType):
+        raise ValueError("Quant cost requires a tensor input")
+    return cost.Cost({expr.DType.f32: 4 * ir_utils.numel(source)}, cost.traffic(inputs, output))

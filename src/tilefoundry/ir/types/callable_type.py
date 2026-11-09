@@ -1,3 +1,5 @@
+"""The type of a callable value."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -53,6 +55,7 @@ def callable_type_for_prim_function(fn) -> CallableType:
 
 __all__ = [
     "CallableType",
+    "bind_annotation",
     "callable_type_for",
     "callable_type_for_prim_function",
 ]

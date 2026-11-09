@@ -1,7 +1,7 @@
 """Four CTAs call a retained callee that stores a row window through a tensor map."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 ROWS = 64
 COLS = 64
@@ -10,7 +10,7 @@ CTAS = 4
 
 @module(
     entry="store",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", CTAS), Topology("thread", 32)),
 )
 class TmaStoreInCallee:
@@ -27,6 +27,6 @@ class TmaStoreInCallee:
         with Mesh(("cta",), layout=(CTAS,), names=("block",)) as cta:
             out = tf.empty(Tensor[(CTAS * ROWS, COLS), "f32"])
             for row in range(cta.block * ROWS, CTAS * ROWS, CTAS * ROWS):
-                tile = window(x[row:row + ROWS, :])  # noqa: F821 -- class-body binding
+                tile = window(x[row:row + ROWS, :])
                 out = tf.insert_slice(out, tile, (row, 0))
             return out

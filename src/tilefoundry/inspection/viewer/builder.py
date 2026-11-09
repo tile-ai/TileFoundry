@@ -2,21 +2,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 import graphviz
 
-from tilefoundry.inspection.print_context import HirPrintContext
-from tilefoundry.inspection.printer_base import PythonPrinter
-from tilefoundry.ir.core import Tuple as HirTuple
-from tilefoundry.ir.core.expr import Call, Constant, Var
-from tilefoundry.ir.core.register import get_registered_name
-from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard_layout import ShardLayout
-from tilefoundry.ir.types.tensor_type import TensorType, TupleType
+from tilefoundry.inspection import print_context, printer_base
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import core, expr, types
+from tilefoundry.ir.hir import tensor
 
 from .htmltable import Cell, Span, Table
 from .palette import (
@@ -30,7 +24,7 @@ from .palette import (
 )
 
 
-def _renderable_functions(root) -> list[tuple[str, "HirFunction"]]:
+def renderable_functions(root) -> list[tuple[str, "core.Function"]]:
     """The ``(label, function)`` units to draw.
 
     The ``(label, function)`` units to draw. A dispatch prototype (body
@@ -38,18 +32,12 @@ def _renderable_functions(root) -> list[tuple[str, "HirFunction"]]:
     specialization signature — so the graph shows the executable bodies, never a
     bodyless prototype.
     """
-    from tilefoundry.ir.core.module import Module  # noqa: PLC0415 — avoid import cycle
-    from tilefoundry.ir.hir.function import (  # noqa: PLC0415
-        Function as _HirFunction,
-    )
-    from tilefoundry.ir.hir.specialize import canonical_specialization_signature  # noqa: PLC0415
-
-    funcs = root.functions if isinstance(root, Module) else [root]
-    out: list[tuple[str, _HirFunction]] = []
+    funcs = root.functions if isinstance(root, core.Module) else [root]
+    out: list[tuple[str, core.Function]] = []
     for fn in funcs:
-        if isinstance(fn, _HirFunction) and getattr(fn, "variants", ()):
+        if isinstance(fn, core.Function) and getattr(fn, "variants", ()):
             for v in fn.variants:
-                sig = canonical_specialization_signature(v.specializations)
+                sig = valuation.canonical_specialization_signature(v.specializations)
                 out.append((f"{v.name}${sig}", v))
         else:
             out.append((fn.name, fn))
@@ -78,7 +66,7 @@ class DetailIndex:
     as the graph.
     """
     entries: dict[str, DetailRef] = field(default_factory=dict)
-    context: HirPrintContext = field(default_factory=HirPrintContext)
+    context: print_context.HirPrintContext = field(default_factory=print_context.HirPrintContext)
 
     def add(self, visual_id: str, ref: DetailRef) -> None:
 
@@ -91,16 +79,16 @@ class DetailIndex:
         return self.entries.get(visual_id)
 
 
-_CONST_DTYPE_SUFFIX: dict[str, str] = {
+CONST_DTYPE_SUFFIX = MappingProxyType({
     "f32": "f", "f16": "h", "bf16": "bf16", "fp8e4m3": "fp8",
-}
+})
 
 
-def _format_constant(c: Constant) -> str:
+def format_constant(c: expr.Constant) -> str:
     ty = getattr(c, "type", None)
     suffix = (
-        _CONST_DTYPE_SUFFIX.get(ty.dtype.name, "")
-        if isinstance(ty, TensorType) and isinstance(ty.dtype, DType)
+        CONST_DTYPE_SUFFIX.get(ty.dtype.name, "")
+        if isinstance(ty, types.TensorType) and isinstance(ty.dtype, expr.DType)
         else ""
     )
 
@@ -112,7 +100,7 @@ def _format_constant(c: Constant) -> str:
         return repr(value)
 
     value = c.value
-    if isinstance(ty, TensorType) and ty.shape == ():
+    if isinstance(ty, types.TensorType) and ty.shape == ():
         return f"const({format_value(value)})"
     try:
         items = list(value)
@@ -123,103 +111,145 @@ def _format_constant(c: Constant) -> str:
     return f"const([{head}{tail}])"
 
 
-def _type_text(ty, context=None) -> str:
-    printer = PythonPrinter()
+def type_text(ty, context=None) -> str:
+    printer = printer_base.PythonPrinter()
     if context is None:
-        context = HirPrintContext()
+        context = print_context.HirPrintContext()
     return printer.print(ty, context)
 
 
-def _pretty_attr_value(value, *, context=None) -> str:
-    if isinstance(value, Constant):
-        return _format_constant(value)
-    if isinstance(value, DType):
+def pretty_attr_value(value, *, context=None) -> str:
+    if isinstance(value, expr.Constant):
+        return format_constant(value)
+    if isinstance(value, expr.DType):
         return value.name
-    if isinstance(value, (TensorType, TupleType, ShardLayout)):
-        return _type_text(value, context)
+    if isinstance(value, (types.TensorType, types.TupleType, types.ShardLayout)):
+        return type_text(value, context)
     if isinstance(value, tuple):
-        inner = ", ".join(_pretty_attr_value(v, context=context) for v in value)
+        inner = ", ".join(pretty_attr_value(v, context=context) for v in value)
         return f"({inner}{',' if len(value) == 1 else ''})"
     if isinstance(value, list):
-        return "[" + ", ".join(_pretty_attr_value(v, context=context) for v in value) + "]"
+        return "[" + ", ".join(pretty_attr_value(v, context=context) for v in value) + "]"
     if isinstance(value, str):
         return value
     return repr(value)
 
 
-def _op_attributes(target, *, context=None) -> list[tuple[str, str]]:
+def op_attributes(target, *, context=None) -> list[tuple[str, str]]:
     try:
-        pdefs = type(target).params()
+        pdefs = expr.parameters_of(type(target))
     except (AttributeError, TypeError):
         return []
     return [
-        (p.name, _pretty_attr_value(getattr(target, p.name, None), context=context))
+        (p.name, pretty_attr_value(getattr(target, p.name, None), context=context))
         for p in pdefs
         if getattr(p, "kind", None) == "attribute"
     ]
 
 
-def _returns_of(ty, context=None) -> list[dict]:
-    if isinstance(ty, TupleType):
+def returns_of(ty, context=None) -> list[dict]:
+    if isinstance(ty, types.TupleType):
         return [
-            {"idx": i, "type": _type_text(field, context)}
+            {"idx": i, "type": type_text(field, context)}
             for i, field in enumerate(ty.fields)
         ]
     if ty is None:
         return []
-    return [{"idx": 0, "type": _type_text(ty, context)}]
+    return [{"idx": 0, "type": type_text(ty, context)}]
 
 
 def format_detail(
-    visual_id: str, ref: "DetailRef", context: HirPrintContext | None = None
+    visual_id: str, ref: "DetailRef", context: print_context.HirPrintContext | None = None
 ) -> dict:
     """Format a detail-panel payload from a live HIR reference."""
-    context = context or HirPrintContext()
-    expr = ref.hir_expr
+    context = context or print_context.HirPrintContext()
+    node = ref.hir_expr
     name = ref.kind
     params: list[dict] = []
     attrs: list[dict] = []
     returns: list[dict] = []
 
-    if isinstance(expr, HirFunction):
-        name = expr.name
-        params = [{"name": p.name, "type": _type_text(p.type, context)} for p in expr.params]
-        returns = _returns_of(expr.return_type, context)
-    elif isinstance(expr, Var):
-        name = expr.name
-        returns = _returns_of(expr.type, context)
-    elif isinstance(expr, Constant):
-        name = _format_constant(expr)
-        returns = _returns_of(expr.type, context)
-    elif isinstance(expr, HirTuple):
+    if isinstance(node, core.Function):
+        name = node.name
+        params = [{"name": p.name, "type": type_text(p.type, context)} for p in node.params]
+        returns = returns_of(node.return_type, context)
+    elif isinstance(node, expr.Var):
+        name = node.name
+        returns = returns_of(node.type, context)
+    elif isinstance(node, expr.Constant):
+        name = format_constant(node)
+        returns = returns_of(node.type, context)
+    elif isinstance(node, expr.Tuple):
         name = "Tuple"
-        params = [{"name": f"e{i}", "type": _type_text(item.type, context)} for i, item in enumerate(expr.elements)]
-        returns = _returns_of(expr.type, context)
-    elif isinstance(expr, Call):
-        target = expr.target
-        if isinstance(target, HirFunction):
+        params = [{"name": f"e{i}", "type": type_text(item.type, context)} for i, item in enumerate(node.elements)]
+        returns = returns_of(node.type, context)
+    elif isinstance(node, expr.Call):
+        target = node.target
+        if isinstance(target, core.Function):
             name = target.name
             pnames = [p.name for p in target.params]
         else:
-            name = get_registered_name(target)
+            name = expr.get_registered_name(target)
             try:
-                pnames = [p.name for p in type(target).params() if p.kind == "input"]
+                pnames = [p.name for p in expr.parameters_of(type(target)) if p.kind == "input"]
             except (AttributeError, TypeError):
                 pnames = []
-            attrs = [{"key": key, "value": value} for key, value in _op_attributes(target, context=context)]
+            attrs = [{"key": key, "value": value} for key, value in op_attributes(target, context=context)]
         params = [
-            {"name": pnames[i] if i < len(pnames) else f"in{i}", "type": _type_text(arg.type, context)}
-            for i, arg in enumerate(expr.args)
+            {"name": pnames[i] if i < len(pnames) else f"in{i}", "type": type_text(arg.type, context)}
+            for i, arg in enumerate(node.args)
         ]
-        returns = _returns_of(expr.type, context)
+        returns = returns_of(node.type, context)
     else:
-        returns = _returns_of(getattr(expr, "type", None), context)
+        returns = returns_of(getattr(node, "type", None), context)
 
     return {"id": visual_id, "kind": ref.kind, "name": name,
             "params": params, "returns": returns, "attrs": attrs}
 
 
-class ViewerBuilder:
+def output_arity(ty) -> int:
+    """Number of result slots a value of type ``ty`` exposes.
+
+    Number of result slots a value of type ``ty`` exposes — one per
+    ``TupleType`` field, else a single output.
+    """
+    return len(ty.fields) if isinstance(ty, types.TupleType) else 1
+
+
+def output_marker_row(slot: int, width: int) -> Cell:
+    """Bottom ``out<i>`` marker row appended to a region's real return producer node.
+
+    Bottom ``out<i>`` marker row appended to a region's real return
+    producer node (instead of a separate anchor node).
+    """
+    return Cell(
+        text=f"▼ out{slot}", colspan=(width if width > 1 else None),
+        bgcolor="#e7efe1", color=MUTED, align="CENTER", font_size=10,
+    )
+
+
+def out_port_cells(n_out: int, width: int) -> list[Cell]:
+    """Out port cells.
+
+    Quiet ``:out<i>`` anchor cells (one per result slot) whose
+    colspans sum to ``width`` so the row never goes ragged (ragged
+    HTML-table rows make ``dot`` warn).
+    """
+    cells = []
+    for i in range(n_out):
+        if n_out <= width:
+            base, rem = divmod(width, n_out)
+            colspan = base + (1 if i >= n_out - rem else 0)
+        else:
+            colspan = 1
+        cells.append(
+            Cell(text=f"out{i}", port=f"out{i}", bgcolor="#f7f8f3",
+                 color=MUTED, align="CENTER", font_size=10, colspan=colspan)
+        )
+    return cells
+
+
+class Builder:
     """Walk an HIR ``Function`` or ``Module`` and emit a typed DOT graph.
 
     ``collapsed`` is a set of ``region_visual_id`` strings. A collapsed
@@ -233,92 +263,52 @@ class ViewerBuilder:
         self.collapsed = set(collapsed or ())
 
 
-        self.printer = PythonPrinter()
-        self.context = HirPrintContext()
-        if isinstance(root, HirFunction) and isinstance(root.body, MeshRegion):
+        self.printer = printer_base.PythonPrinter()
+        self.context = print_context.HirPrintContext()
+        if isinstance(root, core.Function) and isinstance(root.body, core.MeshRegion):
             self.context.push_mesh(root.body.mesh, "mesh")
         self.index = DetailIndex(context=self.context)
 
 
 
 
-        self._call_outputs: dict[int, list[str]] = {}
+        self.call_outputs: dict[int, list[str]] = {}
 
     def build(self) -> graphviz.Digraph:
-        from tilefoundry.ir.core.module import Module  # noqa: PLC0415 — avoid import cycle
-        g = graphviz.Digraph(name=self._root_name(), strict=False)
+        g = graphviz.Digraph(name=self.root_name(), strict=False)
         g.attr(rankdir="TB", bgcolor="#eef4ec", compound="true", newrank="true")
         g.attr("node", shape="plain", margin="0")
         g.attr("edge", color="#555555", arrowsize="0.58", penwidth="1.0")
 
-        if isinstance(self.root, (Module, HirFunction)):
+        if isinstance(self.root, (core.Module, core.Function)):
 
 
 
-            for i, (label, fn) in enumerate(_renderable_functions(self.root)):
-                self._emit_function_region(g, fn, call_path=(label,), local_idx=i)
+            for i, (label, fn) in enumerate(renderable_functions(self.root)):
+                self.emit_function_region(g, fn, call_path=(label,), local_idx=i)
         else:
-            raise TypeError(f"ViewerBuilder root must be HirFunction or Module, got {type(self.root).__name__}")
+            raise TypeError(f"Builder root must be HirFunction or Module, got {type(self.root).__name__}")
 
         return g
 
-    def _root_name(self) -> str:
-        if isinstance(self.root, HirFunction):
+    def root_name(self) -> str:
+        if isinstance(self.root, core.Function):
             return self.root.name
         return "module"
 
-    def _visual_id(self, call_path: tuple[str, ...], local: str) -> str:
+    def visual_id(self, call_path: tuple[str, ...], local: str) -> str:
         return "__".join(call_path) + f"__{local}"
 
-    @staticmethod
-    def _output_arity(ty) -> int:
-        """Number of result slots a value of type ``ty`` exposes.
-
-        Number of result slots a value of type ``ty`` exposes — one per
-        ``TupleType`` field, else a single output.
-        """
-        return len(ty.fields) if isinstance(ty, TupleType) else 1
-
-    @staticmethod
-    def _output_marker_row(slot: int, width: int) -> Cell:
-        """Bottom ``out<i>`` marker row appended to a region's real return producer node.
-
-        Bottom ``out<i>`` marker row appended to a region's real return
-        producer node (instead of a separate anchor node).
-        """
-        return Cell(
-            text=f"▼ out{slot}", colspan=(width if width > 1 else None),
-            bgcolor="#e7efe1", color=MUTED, align="CENTER", font_size=10,
-        )
-
-    @staticmethod
-    def _out_port_cells(n_out: int, width: int) -> list[Cell]:
-        """Out port cells.
-
-        Quiet ``:out<i>`` anchor cells (one per result slot) whose
-        colspans sum to ``width`` so the row never goes ragged (ragged
-        HTML-table rows make ``dot`` warn).
-        """
-        cells = []
-        for i in range(n_out):
-            if n_out <= width:
-                base, rem = divmod(width, n_out)
-                colspan = base + (1 if i >= n_out - rem else 0)
-            else:
-                colspan = 1
-            cells.append(
-                Cell(text=f"out{i}", port=f"out{i}", bgcolor="#f7f8f3",
-                     color=MUTED, align="CENTER", font_size=10, colspan=colspan)
-            )
-        return cells
 
 
 
 
-    def _emit_function_region(
+
+
+    def emit_function_region(
         self,
         g: graphviz.Digraph,
-        fn: HirFunction,
+        fn: core.Function,
         *,
         call_path: tuple[str, ...],
         local_idx: int,
@@ -330,14 +320,14 @@ class ViewerBuilder:
         Expanded regions expose actual body producers; routing them through the
         header would visually introduce a self-dependency.
         """
-        region_vid = self._visual_id(call_path, f"r{local_idx}")
-        node_vid = self._visual_id(call_path, f"fn{local_idx}")
+        region_vid = self.visual_id(call_path, f"r{local_idx}")
+        node_vid = self.visual_id(call_path, f"fn{local_idx}")
         is_collapsed = region_vid in self.collapsed
-        n_out = self._output_arity(fn.return_type)
+        n_out = output_arity(fn.return_type)
         depth = (len(call_path) - 1) // 2
 
 
-        self._emit_function_node(g, fn, node_vid, region_vid, call_path, collapsed=is_collapsed)
+        self.emit_function_node(g, fn, node_vid, region_vid, call_path, collapsed=is_collapsed)
         self.index.add(
             node_vid,
             DetailRef(
@@ -375,11 +365,11 @@ class ViewerBuilder:
 
 
 
-            elements = fn.body.elements if isinstance(fn.body, HirTuple) else (fn.body,)
+            elements = fn.body.elements if isinstance(fn.body, expr.Tuple) else (fn.body,)
             outputs: list[str] = []
             direct_output_nodes: list[str] = []
             for slot, elem in enumerate(elements):
-                ref = self._walk_expr(
+                ref = self.walk_expr(
                     sub, elem, call_path=call_path, visited=visited,
                     local_counter=inner_local_counter, output_slot=slot,
                 )
@@ -387,7 +377,7 @@ class ViewerBuilder:
 
 
 
-                if not (isinstance(elem, Call) and isinstance(elem.target, HirFunction)):
+                if not (isinstance(elem, expr.Call) and isinstance(elem.target, core.Function)):
                     direct_output_nodes.append(ref.split(":")[0])
 
             if len(direct_output_nodes) > 1:
@@ -398,10 +388,10 @@ class ViewerBuilder:
 
         return node_vid, outputs
 
-    def _emit_function_node(
+    def emit_function_node(
         self,
         g: graphviz.Digraph,
-        fn: HirFunction,
+        fn: core.Function,
         node_vid: str,
         region_vid: str,
         call_path: tuple[str, ...],
@@ -469,7 +459,7 @@ class ViewerBuilder:
         width = 2 + n_params
         title.add_row(
             Cell(
-                spans=(Span(text=_type_text(fn.return_type, self.context)),),
+                spans=(Span(text=type_text(fn.return_type, self.context)),),
                 colspan=width, color=INK, bold=True, font_size=12,
             )
         )
@@ -479,17 +469,17 @@ class ViewerBuilder:
 
 
         if collapsed:
-            title.add_row(*self._out_port_cells(self._output_arity(fn.return_type), width))
+            title.add_row(*out_port_cells(output_arity(fn.return_type), width))
 
         g.node(node_vid, label=title.to_html())
 
 
 
 
-    def _walk_expr(
+    def walk_expr(
         self,
         g: graphviz.Digraph,
-        expr,
+        node2,
         *,
         call_path: tuple[str, ...],
         visited: dict[int, str],
@@ -505,76 +495,76 @@ class ViewerBuilder:
         ``output_slot`` marks this expr as the function's ``i``-th return
         value: an ``out<i>`` marker row is appended to its node.
         """
-        key = id(expr)
+        key = id(node2)
         if key in visited:
             return visited[key]
 
-        if isinstance(expr, HirTuple):
-            return self._emit_tuple(
-                g, expr, call_path=call_path, visited=visited, local_counter=local_counter
+        if isinstance(node2, expr.Tuple):
+            return self.emit_tuple(
+                g, node2, call_path=call_path, visited=visited, local_counter=local_counter
             )
 
-        if isinstance(expr, Var):
+        if isinstance(node2, expr.Var):
 
             local = f"v{local_counter[0]}"
             local_counter[0] += 1
-            vid = self._visual_id(call_path, local)
-            self.index.add(vid, DetailRef(hir_expr=expr, kind="Var", call_path=call_path))
+            vid = self.visual_id(call_path, local)
+            self.index.add(vid, DetailRef(hir_expr=node2, kind="Var", call_path=call_path))
             tbl = Table(cellpadding=4, bgcolor=PAPER, color=HAIR)
             tbl.add_row(
-                Cell(text=f"Var {expr.name}", href="javascript:void(0)", title=f"expr:{vid}",
+                Cell(text=f"Var {node2.name}", href="javascript:void(0)", title=f"expr:{vid}",
                      bgcolor=exprkind_color("Var"), color="#ffffff", bold=True)
             )
-            tbl.add_row(Cell(spans=(Span(text=_type_text(expr.type, self.context)),), color=MUTED, font_size=11))
+            tbl.add_row(Cell(spans=(Span(text=type_text(node2.type, self.context)),), color=MUTED, font_size=11))
             if output_slot is not None:
-                tbl.add_row(self._output_marker_row(output_slot, 1))
+                tbl.add_row(output_marker_row(output_slot, 1))
             g.node(vid, label=tbl.to_html())
             visited[key] = vid
             return vid
 
-        if isinstance(expr, Constant):
+        if isinstance(node2, expr.Constant):
             local = f"c{local_counter[0]}"
             local_counter[0] += 1
-            vid = self._visual_id(call_path, local)
-            self.index.add(vid, DetailRef(hir_expr=expr, kind="Constant", call_path=call_path))
+            vid = self.visual_id(call_path, local)
+            self.index.add(vid, DetailRef(hir_expr=node2, kind="Constant", call_path=call_path))
             tbl = Table(cellpadding=4, bgcolor=PAPER, color=HAIR)
             tbl.add_row(
-                Cell(text=_format_constant(expr), href="javascript:void(0)", title=f"expr:{vid}",
+                Cell(text=format_constant(node2), href="javascript:void(0)", title=f"expr:{vid}",
                      bgcolor=exprkind_color("Constant"), color="#ffffff", bold=True)
             )
-            tbl.add_row(Cell(spans=(Span(text=_type_text(expr.type, self.context)),), color=MUTED, font_size=11))
+            tbl.add_row(Cell(spans=(Span(text=type_text(node2.type, self.context)),), color=MUTED, font_size=11))
             if output_slot is not None:
-                tbl.add_row(self._output_marker_row(output_slot, 1))
+                tbl.add_row(output_marker_row(output_slot, 1))
             g.node(vid, label=tbl.to_html())
             visited[key] = vid
             return vid
 
-        if isinstance(expr, Call):
-            return self._emit_call(
-                g, expr, call_path=call_path, visited=visited,
+        if isinstance(node2, expr.Call):
+            return self.emit_call(
+                g, node2, call_path=call_path, visited=visited,
                 local_counter=local_counter, output_slot=output_slot,
             )
 
 
         local = f"x{local_counter[0]}"
         local_counter[0] += 1
-        vid = self._visual_id(call_path, local)
-        self.index.add(vid, DetailRef(hir_expr=expr, kind=type(expr).__name__, call_path=call_path))
+        vid = self.visual_id(call_path, local)
+        self.index.add(vid, DetailRef(hir_expr=node2, kind=type(node2).__name__, call_path=call_path))
         tbl = Table()
         tbl.add_row(
-            Cell(text=type(expr).__name__, href="javascript:void(0)", title=f"expr:{vid}",
+            Cell(text=type(node2).__name__, href="javascript:void(0)", title=f"expr:{vid}",
                  bgcolor=MUTED, color="#ffffff", bold=True)
         )
         if output_slot is not None:
-            tbl.add_row(self._output_marker_row(output_slot, 1))
+            tbl.add_row(output_marker_row(output_slot, 1))
         g.node(vid, label=tbl.to_html())
         visited[key] = vid
         return vid
 
-    def _emit_call(
+    def emit_call(
         self,
         g: graphviz.Digraph,
-        call: Call,
+        call: expr.Call,
         *,
         call_path: tuple[str, ...],
         visited: dict[int, str],
@@ -584,18 +574,18 @@ class ViewerBuilder:
 
 
 
-        if isinstance(call.target, HirFunction):
+        if isinstance(call.target, core.Function):
             inner_idx = local_counter[0]
             local_counter[0] += 1
             inner_path = call_path + (call.target.name, str(inner_idx))
-            inner_vid, outputs = self._emit_function_region(
+            inner_vid, outputs = self.emit_function_region(
                 g, call.target, call_path=inner_path, local_idx=inner_idx,
                 call_args=call.args,
             )
 
 
             for i, arg in enumerate(call.args):
-                src = self._walk_expr(
+                src = self.walk_expr(
                     g, arg, call_path=call_path, visited=visited, local_counter=local_counter
                 )
                 g.edge(src, f"{inner_vid}:pin{i}")
@@ -604,7 +594,7 @@ class ViewerBuilder:
 
 
 
-            self._call_outputs[id(call)] = outputs
+            self.call_outputs[id(call)] = outputs
             result_ref = outputs[0]
             visited[id(call)] = result_ref
             return result_ref
@@ -612,8 +602,8 @@ class ViewerBuilder:
 
         local = f"c{local_counter[0]}"
         local_counter[0] += 1
-        vid = self._visual_id(call_path, local)
-        op_label = get_registered_name(call.target)
+        vid = self.visual_id(call_path, local)
+        op_label = expr.get_registered_name(call.target)
         self.index.add(vid, DetailRef(hir_expr=call, kind=op_label, call_path=call_path))
 
         tbl = Table(cellpadding=6, bgcolor=PAPER, color=HAIR)
@@ -632,7 +622,7 @@ class ViewerBuilder:
 
 
         try:
-            input_param_names = [p.name for p in type(call.target).params() if p.kind == "input"]
+            input_param_names = [p.name for p in expr.parameters_of(type(call.target)) if p.kind == "input"]
         except (AttributeError, TypeError):
             input_param_names = []
         for i in range(len(call.args)):
@@ -656,14 +646,14 @@ class ViewerBuilder:
 
 
 
-        for key, val in _op_attributes(call.target, context=self.context):
+        for key, val in op_attributes(call.target, context=self.context):
             tbl.add_row(
                 Cell(text=f"{key}: {val}", colspan=width, color=MUTED,
                      font_size=11, align="LEFT")
             )
         tbl.add_row(
             Cell(
-                spans=(Span(text=_type_text(call.type, self.context)),),
+                spans=(Span(text=type_text(call.type, self.context)),),
                 colspan=width,
                 color=INK,
                 bold=True,
@@ -674,13 +664,13 @@ class ViewerBuilder:
 
 
 
-        n_out = self._output_arity(call.type)
+        n_out = output_arity(call.type)
         if n_out > 1:
-            tbl.add_row(*self._out_port_cells(n_out, width))
+            tbl.add_row(*out_port_cells(n_out, width))
 
 
         if output_slot is not None:
-            tbl.add_row(self._output_marker_row(output_slot, width))
+            tbl.add_row(output_marker_row(output_slot, width))
         g.node(vid, label=tbl.to_html())
         visited[id(call)] = vid
 
@@ -689,14 +679,14 @@ class ViewerBuilder:
 
         tuple_index = None
         if (
-            isinstance(call.target, TupleGetItem)
+            isinstance(call.target, tensor.TupleGetItem)
             and len(call.args) == 2
-            and isinstance(call.args[1], Constant)
+            and isinstance(call.args[1], expr.Constant)
             and isinstance(call.args[1].value, int)
         ):
             tuple_index = call.args[1].value
         for i, arg in enumerate(call.args):
-            src = self._walk_expr(
+            src = self.walk_expr(
                 g, arg, call_path=call_path, visited=visited, local_counter=local_counter
             )
             if tuple_index is not None and i == 0:
@@ -705,7 +695,7 @@ class ViewerBuilder:
 
 
 
-                outs = self._call_outputs.get(id(arg))
+                outs = self.call_outputs.get(id(arg))
                 if outs is not None:
                     src = outs[tuple_index]
                 elif ":" not in src:
@@ -714,10 +704,10 @@ class ViewerBuilder:
 
         return vid
 
-    def _emit_tuple(
+    def emit_tuple(
         self,
         g: graphviz.Digraph,
-        tup: HirTuple,
+        tup: expr.Tuple,
         *,
         call_path: tuple[str, ...],
         visited: dict[int, str],
@@ -728,11 +718,11 @@ class ViewerBuilder:
         Emit a value-form ``Tuple`` bundler. Each element flows into an
         ``:in<i>`` port; a consuming ``TupleGetItem`` reads field ``i`` from
         the matching ``:out<i>`` port. (A ``return (...)`` Tuple is handled
-        directly by ``_emit_function_region`` and never reaches here.)
+        directly by ``emit_function_region`` and never reaches here.)
         """
         local = f"t{local_counter[0]}"
         local_counter[0] += 1
-        vid = self._visual_id(call_path, local)
+        vid = self.visual_id(call_path, local)
         self.index.add(vid, DetailRef(hir_expr=tup, kind="Tuple", call_path=call_path))
 
         n = len(tup.elements)
@@ -767,7 +757,7 @@ class ViewerBuilder:
         visited[id(tup)] = vid
 
         for i, elem in enumerate(tup.elements):
-            src = self._walk_expr(
+            src = self.walk_expr(
                 g, elem, call_path=call_path, visited=visited, local_counter=local_counter
             )
             g.edge(src, f"{vid}:in{i}")
@@ -776,6 +766,6 @@ class ViewerBuilder:
 
 
 __all__ = [
-    "DetailIndex", "DetailRef", "ViewerBuilder",
+    "DetailIndex", "DetailRef", "Builder",
     "format_detail",
 ]

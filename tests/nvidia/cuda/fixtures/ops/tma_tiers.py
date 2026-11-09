@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.ir.types.shard_layout import Broadcast
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.ir import types
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="tma_tiers_host",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("thread", 128),),
 )
 class TmaTiers:
     """Both staging tiers in one device function, one operand pair each."""
 
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def tma_tiers_device(
         bulk_a: Tensor[(256,), "f32"],
         bulk_b: Tensor[(256,), "f32"],
@@ -27,7 +27,7 @@ class TmaTiers:
             bulk_view = T.tensor_view(
                 T.ptr_of(bulk_a),
                 layout=ShardLayout(
-                    layout=Layout(shape=(256,), strides=(1,)), attrs=(Broadcast(),), mesh=m
+                    layout=Layout(shape=(256,), strides=(1,)), attrs=(types.Broadcast(),), mesh=m
                 ),
             )
             bulk_stage = T.alloc_tensor(
@@ -36,7 +36,7 @@ class TmaTiers:
                     "f32",
                     ShardLayout(
                         layout=Layout(shape=(256,), strides=(1,)),
-                        attrs=(Broadcast(),),
+                        attrs=(types.Broadcast(),),
                         mesh=m,
                     ),
                     "smem",
@@ -52,7 +52,7 @@ class TmaTiers:
             odd_view = T.tensor_view(
                 T.ptr_of(odd_a),
                 layout=ShardLayout(
-                    layout=Layout(shape=(5,), strides=(1,)), attrs=(Broadcast(),), mesh=mo
+                    layout=Layout(shape=(5,), strides=(1,)), attrs=(types.Broadcast(),), mesh=mo
                 ),
             )
             odd_stage = T.alloc_tensor(
@@ -61,7 +61,7 @@ class TmaTiers:
                     "f32",
                     ShardLayout(
                         layout=Layout(shape=(5,), strides=(1,)),
-                        attrs=(Broadcast(),),
+                        attrs=(types.Broadcast(),),
                         mesh=mo,
                     ),
                     "smem",
@@ -74,15 +74,15 @@ class TmaTiers:
             T.mbarrier_wait_parity(odd_bar, 0)
             T.copy(odd_stage, odd_b)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def tma_tiers_host(
         bulk_a: Tensor[(256,), "f32"],
         bulk_b: Tensor[(256,), "f32"],
         odd_a: Tensor[(5,), "f32"],
         odd_b: Tensor[(5,), "f32"],
     ):
-        launch(  # noqa: F821
-            tma_tiers_device,  # noqa: F821
+        launch(
+            tma_tiers_device,
             bulk_a,
             bulk_b,
             odd_a,

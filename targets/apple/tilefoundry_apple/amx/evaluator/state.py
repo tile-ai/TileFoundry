@@ -23,15 +23,35 @@ class AMXState:
     def to_bytes(self):
         return bytes(self.x + self.y + self.z)
 
+    def enable(self):
+        """Clear every register and mark the engine enabled."""
+        if self.enabled:
+            raise RuntimeError("AMX is already enabled")
+        self.x[:] = bytes(512)
+        self.y[:] = bytes(512)
+        self.z[:] = bytes(4096)
+        self.enabled = True
 
-def emulate_AMX_SET(state, operand=0):
-    if state.enabled:
-        raise RuntimeError("AMX is already enabled")
-    state.x[:] = bytes(512)
-    state.y[:] = bytes(512)
-    state.z[:] = bytes(4096)
-    state.enabled = True
+    def disable(self):
+        self.enabled = False
+
+    def restore_enabled(self, enabled):
+        self.enabled = enabled
+
+    def copy_register(self, source, source_index, target, target_index):
+        """Copy one 64-byte register between the X and Y banks."""
+        banks = {"x": self.x, "y": self.y}
+        banks[target][target_index * 64 : (target_index + 1) * 64] = banks[source][
+            source_index * 64 : (source_index + 1) * 64
+        ]
 
 
-def emulate_AMX_CLR(state, operand=0):
-    state.enabled = False
+def emulate_amx_set(state, operand=0):
+    state.enable()
+
+
+def emulate_amx_clr(state, operand=0):
+    state.disable()
+
+
+__all__ = ["AMXState", "emulate_amx_clr", "emulate_amx_set"]

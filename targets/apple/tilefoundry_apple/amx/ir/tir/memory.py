@@ -1,84 +1,74 @@
-from tilefoundry.ir.core import OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.pattern import (
-    LayoutPattern,
-    OrPattern,
-    RangePattern,
-    SwitchPattern,
-    TensorPattern,
-    WildcardPattern,
-)
-from tilefoundry.ir.pattern.predicates import Bits, Table, variable
-from tilefoundry.ir.types import DType, StorageKind
-from tilefoundry.visitor_registry.candidates import HirMatch
+"""AMX register load and store Ops."""
+
+from tilefoundry.interfaces import schedule
+from tilefoundry.ir import expr, pattern
+from tilefoundry.ir.hir import sharding
 
 from .common import (
     TYPES,
     AmxOp,
     TransferCount,
-    bind,
     instruction_versions,
 )
+from .semantics import register_semantics
 
-R = MemoryEffect.READ
-W = MemoryEffect.WRITE
+R = expr.MemoryEffect.READ
+W = expr.MemoryEffect.WRITE
 
 
 class Ldx(AmxOp):
-    hir_matches = (HirMatch(Reshard, operands={"src": "x", "dst": "result"}),)
+    hir_matches = (schedule.HirMatch(sharding.Reshard, operands={"src": "x", "dst": "result"}),)
     mnemonic = "LDX"
-    capability = OpCapability("amx_ldx")
+    capability = expr.OpCapability("amx_ldx")
     resource = "amx_engine"
     roles = ("src", "dst")
     writes = ("dst",)
     register_roles = {"src": "memory", "dst": "x"}
-    count = ParamDef(
+    count = expr.ParamDef(
         kind="attribute",
         annotation=TransferCount,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "count",
             predicates=(
-                SwitchPattern(
+                pattern.Switch(
                     "amx_generation",
                     {
-                        1: OrPattern(TransferCount.ONE, TransferCount.TWO),
-                        2: OrPattern(TransferCount.ONE, TransferCount.TWO, TransferCount.FOUR),
-                        3: OrPattern(TransferCount.ONE, TransferCount.TWO, TransferCount.FOUR),
-                        4: OrPattern(TransferCount.ONE, TransferCount.TWO, TransferCount.FOUR),
+                        1: pattern.Or(TransferCount.ONE, TransferCount.TWO),
+                        2: pattern.Or(TransferCount.ONE, TransferCount.TWO, TransferCount.FOUR),
+                        3: pattern.Or(TransferCount.ONE, TransferCount.TWO, TransferCount.FOUR),
+                        4: pattern.Or(TransferCount.ONE, TransferCount.TWO, TransferCount.FOUR),
                     },
                 ),
             ),
         ),
         default=TransferCount.ONE,
     )
-    nonconsecutive = ParamDef(
+    nonconsecutive = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "nonconsecutive",
             predicates=(
-                SwitchPattern(
+                pattern.Switch(
                     "count",
                     {
                         TransferCount.ONE: False,
-                        TransferCount.TWO: SwitchPattern(
+                        TransferCount.TWO: pattern.Switch(
                             "amx_generation",
                             {
                                 1: False,
                                 2: False,
-                                3: OrPattern(False, True),
-                                4: OrPattern(False, True),
+                                3: pattern.Or(False, True),
+                                4: pattern.Or(False, True),
                             },
                         ),
-                        TransferCount.FOUR: SwitchPattern(
+                        TransferCount.FOUR: pattern.Switch(
                             "amx_generation",
                             {
                                 1: False,
                                 2: False,
-                                3: OrPattern(False, True),
-                                4: OrPattern(False, True),
+                                3: pattern.Or(False, True),
+                                4: pattern.Or(False, True),
                             },
                         ),
                     },
@@ -87,122 +77,119 @@ class Ldx(AmxOp):
         ),
         default=False,
     )
-    dtype = ParamDef(
+    dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("dtype", predicates=(OrPattern(*TYPES),)),
-        default=DType.u8,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("dtype", predicates=(pattern.Or(*TYPES),)),
+        default=expr.DType.u8,
     )
-    register = ParamDef(
+    register = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("register", predicates=(RangePattern(lo=0, hi=7),)),
+        pattern=pattern.Wildcard("register", predicates=(pattern.Range(lo=0, hi=7),)),
         default=0,
     )
-    memory_offset = ParamDef(
+    memory_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "memory_offset",
             predicates=(
-                RangePattern(lo=0, hi=511),
-                variable("transfer_rows") == Table((0, 1, 2, 0, 4))[variable("count")],
-                variable("transfer_lanes") == 512 // Bits("dtype"),
-                variable("transfer_stride")
-                == (512 // Bits("dtype"))
+                pattern.Range(lo=0, hi=511),
+                pattern.variable("transfer_rows") == pattern.Table((0, 1, 2, 0, 4))[pattern.variable("count")],
+                pattern.variable("transfer_lanes") == 512 // pattern.Bits("dtype"),
+                pattern.variable("transfer_stride")
+                == (512 // pattern.Bits("dtype"))
                 * (
                     1
-                    + Table((0, 1))[variable("nonconsecutive")]
-                    * (Table((0, 1, 4, 0, 2))[variable("count")] - 1)
+                    + pattern.Table((0, 1))[pattern.variable("nonconsecutive")]
+                    * (pattern.Table((0, 1, 4, 0, 2))[pattern.variable("count")] - 1)
                 ),
             ),
         ),
         default=0,
     )
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.GMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-                (WildcardPattern("transfer_lanes"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.GMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+                (pattern.Wildcard("transfer_lanes"), 1),
             ),
         ),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
         effect=W,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-                (WildcardPattern("transfer_stride"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+                (pattern.Wildcard("transfer_stride"), 1),
             ),
         ),
     )
-
-    def __init__(self, **attrs):
-        bind(self, attrs)
 
 
 class Ldy(AmxOp):
-    hir_matches = (HirMatch(Reshard, operands={"src": "x", "dst": "result"}),)
+    hir_matches = (schedule.HirMatch(sharding.Reshard, operands={"src": "x", "dst": "result"}),)
     mnemonic = "LDY"
-    capability = OpCapability("amx_ldy")
+    capability = expr.OpCapability("amx_ldy")
     resource = "amx_engine"
     roles = ("src", "dst")
     writes = ("dst",)
     register_roles = {"src": "memory", "dst": "y"}
-    count = ParamDef(
+    count = expr.ParamDef(
         kind="attribute",
         annotation=TransferCount,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "count",
             predicates=(
-                SwitchPattern(
+                pattern.Switch(
                     "amx_generation",
                     {
-                        1: OrPattern(TransferCount.ONE, TransferCount.TWO),
-                        2: OrPattern(TransferCount.ONE, TransferCount.TWO, TransferCount.FOUR),
-                        3: OrPattern(TransferCount.ONE, TransferCount.TWO, TransferCount.FOUR),
-                        4: OrPattern(TransferCount.ONE, TransferCount.TWO, TransferCount.FOUR),
+                        1: pattern.Or(TransferCount.ONE, TransferCount.TWO),
+                        2: pattern.Or(TransferCount.ONE, TransferCount.TWO, TransferCount.FOUR),
+                        3: pattern.Or(TransferCount.ONE, TransferCount.TWO, TransferCount.FOUR),
+                        4: pattern.Or(TransferCount.ONE, TransferCount.TWO, TransferCount.FOUR),
                     },
                 ),
             ),
         ),
         default=TransferCount.ONE,
     )
-    nonconsecutive = ParamDef(
+    nonconsecutive = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "nonconsecutive",
             predicates=(
-                SwitchPattern(
+                pattern.Switch(
                     "count",
                     {
                         TransferCount.ONE: False,
-                        TransferCount.TWO: SwitchPattern(
+                        TransferCount.TWO: pattern.Switch(
                             "amx_generation",
                             {
                                 1: False,
                                 2: False,
-                                3: OrPattern(False, True),
-                                4: OrPattern(False, True),
+                                3: pattern.Or(False, True),
+                                4: pattern.Or(False, True),
                             },
                         ),
-                        TransferCount.FOUR: SwitchPattern(
+                        TransferCount.FOUR: pattern.Switch(
                             "amx_generation",
                             {
                                 1: False,
                                 2: False,
-                                3: OrPattern(False, True),
-                                4: OrPattern(False, True),
+                                3: pattern.Or(False, True),
+                                4: pattern.Or(False, True),
                             },
                         ),
                     },
@@ -211,575 +198,559 @@ class Ldy(AmxOp):
         ),
         default=False,
     )
-    dtype = ParamDef(
+    dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("dtype", predicates=(OrPattern(*TYPES),)),
-        default=DType.u8,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("dtype", predicates=(pattern.Or(*TYPES),)),
+        default=expr.DType.u8,
     )
-    register = ParamDef(
+    register = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("register", predicates=(RangePattern(lo=0, hi=7),)),
+        pattern=pattern.Wildcard("register", predicates=(pattern.Range(lo=0, hi=7),)),
         default=0,
     )
-    memory_offset = ParamDef(
+    memory_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "memory_offset",
             predicates=(
-                RangePattern(lo=0, hi=511),
-                variable("transfer_rows") == Table((0, 1, 2, 0, 4))[variable("count")],
-                variable("transfer_lanes") == 512 // Bits("dtype"),
-                variable("transfer_stride")
-                == (512 // Bits("dtype"))
+                pattern.Range(lo=0, hi=511),
+                pattern.variable("transfer_rows") == pattern.Table((0, 1, 2, 0, 4))[pattern.variable("count")],
+                pattern.variable("transfer_lanes") == 512 // pattern.Bits("dtype"),
+                pattern.variable("transfer_stride")
+                == (512 // pattern.Bits("dtype"))
                 * (
                     1
-                    + Table((0, 1))[variable("nonconsecutive")]
-                    * (Table((0, 1, 4, 0, 2))[variable("count")] - 1)
+                    + pattern.Table((0, 1))[pattern.variable("nonconsecutive")]
+                    * (pattern.Table((0, 1, 4, 0, 2))[pattern.variable("count")] - 1)
                 ),
             ),
         ),
         default=0,
     )
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.GMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-                (WildcardPattern("transfer_lanes"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.GMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+                (pattern.Wildcard("transfer_lanes"), 1),
             ),
         ),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
         effect=W,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-                (WildcardPattern("transfer_stride"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+                (pattern.Wildcard("transfer_stride"), 1),
             ),
         ),
     )
 
-    def __init__(self, **attrs):
-        bind(self, attrs)
 
-
-@register_op(dialect="T", namespace="amx", category="memory", name="ldz")
+@expr.register_op(dialect="T", namespace="amx", category="memory", name="ldz")
 class Ldz(AmxOp):
-    hir_matches = (HirMatch(Reshard, operands={"src": "x", "dst": "result"}),)
+    hir_matches = (schedule.HirMatch(sharding.Reshard, operands={"src": "x", "dst": "result"}),)
     mnemonic = "LDZ"
-    capability = OpCapability("amx_ldz")
+    capability = expr.OpCapability("amx_ldz")
     resource = "amx_engine"
     roles = ("src", "dst")
     writes = ("dst",)
     register_roles = {"src": "memory", "dst": "z"}
-    count = ParamDef(
+    count = expr.ParamDef(
         kind="attribute",
         annotation=TransferCount,
-        pattern=WildcardPattern(
-            "count", predicates=(OrPattern(TransferCount.ONE, TransferCount.TWO),)
+        pattern=pattern.Wildcard(
+            "count", predicates=(pattern.Or(TransferCount.ONE, TransferCount.TWO),)
         ),
         default=TransferCount.ONE,
     )
-    nonconsecutive = ParamDef(
+    nonconsecutive = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("nonconsecutive", predicates=(False,)),
+        pattern=pattern.Wildcard("nonconsecutive", predicates=(False,)),
         default=False,
     )
-    dtype = ParamDef(
+    dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("dtype", predicates=(OrPattern(*TYPES),)),
-        default=DType.u8,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("dtype", predicates=(pattern.Or(*TYPES),)),
+        default=expr.DType.u8,
     )
-    register = ParamDef(
+    register = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("register", predicates=(RangePattern(lo=0, hi=63),)),
+        pattern=pattern.Wildcard("register", predicates=(pattern.Range(lo=0, hi=63),)),
         default=0,
     )
-    memory_offset = ParamDef(
+    memory_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "memory_offset",
             predicates=(
-                RangePattern(lo=0, hi=511),
-                variable("transfer_rows") == Table((0, 1, 2, 0, 4))[variable("count")],
-                variable("transfer_lanes") == 512 // Bits("dtype"),
-                variable("transfer_stride")
-                == (512 // Bits("dtype"))
+                pattern.Range(lo=0, hi=511),
+                pattern.variable("transfer_rows") == pattern.Table((0, 1, 2, 0, 4))[pattern.variable("count")],
+                pattern.variable("transfer_lanes") == 512 // pattern.Bits("dtype"),
+                pattern.variable("transfer_stride")
+                == (512 // pattern.Bits("dtype"))
                 * (
                     1
-                    + Table((0, 1))[variable("nonconsecutive")]
-                    * (Table((0, 1, 4, 0, 2))[variable("count")] - 1)
+                    + pattern.Table((0, 1))[pattern.variable("nonconsecutive")]
+                    * (pattern.Table((0, 1, 4, 0, 2))[pattern.variable("count")] - 1)
                 ),
             ),
         ),
         default=0,
     )
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.GMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-                (WildcardPattern("transfer_lanes"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.GMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+                (pattern.Wildcard("transfer_lanes"), 1),
             ),
         ),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
         effect=W,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-                (WildcardPattern("transfer_lanes"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+                (pattern.Wildcard("transfer_lanes"), 1),
             ),
         ),
     )
 
-    def __init__(self, **attrs):
-        bind(self, attrs)
 
-
-@register_op(dialect="T", namespace="amx", category="memory", name="ldzi")
+@expr.register_op(dialect="T", namespace="amx", category="memory", name="ldzi")
 class Ldzi(AmxOp):
-    hir_matches = (HirMatch(Reshard, operands={"src": "x", "dst": "result"}),)
+    hir_matches = (schedule.HirMatch(sharding.Reshard, operands={"src": "x", "dst": "result"}),)
     mnemonic = "LDZI"
-    capability = OpCapability("amx_ldzi")
+    capability = expr.OpCapability("amx_ldzi")
     resource = "amx_engine"
     roles = ("src", "dst")
     writes = ("dst",)
     register_roles = {"src": "memory", "dst": "z"}
-    count = ParamDef(
+    count = expr.ParamDef(
         kind="attribute",
         annotation=TransferCount,
-        pattern=WildcardPattern("count", predicates=(TransferCount.ONE,)),
+        pattern=pattern.Wildcard("count", predicates=(TransferCount.ONE,)),
         default=TransferCount.ONE,
     )
-    nonconsecutive = ParamDef(
+    nonconsecutive = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("nonconsecutive", predicates=(False,)),
+        pattern=pattern.Wildcard("nonconsecutive", predicates=(False,)),
         default=False,
     )
-    dtype = ParamDef(
+    dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("dtype", predicates=(OrPattern(DType.u32, DType.i32, DType.f32),)),
-        default=DType.u32,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("dtype", predicates=(pattern.Or(expr.DType.u32, expr.DType.i32, expr.DType.f32),)),
+        default=expr.DType.u32,
     )
-    register = ParamDef(
+    register = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("register", predicates=(RangePattern(lo=0, hi=63),)),
+        pattern=pattern.Wildcard("register", predicates=(pattern.Range(lo=0, hi=63),)),
         default=0,
     )
-    memory_offset = ParamDef(
+    memory_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "memory_offset",
             predicates=(
-                RangePattern(lo=0, hi=511),
-                variable("transfer_rows") == Table((0, 1, 2, 0, 4))[variable("count")],
-                variable("transfer_lanes") == 512 // Bits("dtype"),
-                variable("transfer_stride")
-                == (512 // Bits("dtype"))
+                pattern.Range(lo=0, hi=511),
+                pattern.variable("transfer_rows") == pattern.Table((0, 1, 2, 0, 4))[pattern.variable("count")],
+                pattern.variable("transfer_lanes") == 512 // pattern.Bits("dtype"),
+                pattern.variable("transfer_stride")
+                == (512 // pattern.Bits("dtype"))
                 * (
                     1
-                    + Table((0, 1))[variable("nonconsecutive")]
-                    * (Table((0, 1, 4, 0, 2))[variable("count")] - 1)
+                    + pattern.Table((0, 1))[pattern.variable("nonconsecutive")]
+                    * (pattern.Table((0, 1, 4, 0, 2))[pattern.variable("count")] - 1)
                 ),
             ),
         ),
         default=0,
     )
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.GMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-                (WildcardPattern("transfer_lanes"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.GMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+                (pattern.Wildcard("transfer_lanes"), 1),
             ),
         ),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
         effect=W,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern((1, (2, 8)), (0, (16, 1))),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout((1, (2, 8)), (0, (16, 1))),
         ),
     )
 
-    def __init__(self, **attrs):
-        bind(self, attrs)
 
-
-@register_op(dialect="T", namespace="amx", category="memory", name="stx")
+@expr.register_op(dialect="T", namespace="amx", category="memory", name="stx")
 class Stx(AmxOp):
-    hir_matches = (HirMatch(Reshard, operands={"src": "x", "dst": "result"}),)
+    hir_matches = (schedule.HirMatch(sharding.Reshard, operands={"src": "x", "dst": "result"}),)
     mnemonic = "STX"
-    capability = OpCapability("amx_stx")
+    capability = expr.OpCapability("amx_stx")
     resource = "amx_engine"
     roles = ("src", "dst")
     writes = ("dst",)
     register_roles = {"src": "x", "dst": "memory"}
-    count = ParamDef(
+    count = expr.ParamDef(
         kind="attribute",
         annotation=TransferCount,
-        pattern=WildcardPattern(
-            "count", predicates=(OrPattern(TransferCount.ONE, TransferCount.TWO),)
+        pattern=pattern.Wildcard(
+            "count", predicates=(pattern.Or(TransferCount.ONE, TransferCount.TWO),)
         ),
         default=TransferCount.ONE,
     )
-    nonconsecutive = ParamDef(
+    nonconsecutive = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("nonconsecutive", predicates=(False,)),
+        pattern=pattern.Wildcard("nonconsecutive", predicates=(False,)),
         default=False,
     )
-    dtype = ParamDef(
+    dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("dtype", predicates=(OrPattern(*TYPES),)),
-        default=DType.u8,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("dtype", predicates=(pattern.Or(*TYPES),)),
+        default=expr.DType.u8,
     )
-    register = ParamDef(
+    register = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("register", predicates=(RangePattern(lo=0, hi=7),)),
+        pattern=pattern.Wildcard("register", predicates=(pattern.Range(lo=0, hi=7),)),
         default=0,
     )
-    memory_offset = ParamDef(
+    memory_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "memory_offset",
             predicates=(
-                RangePattern(lo=0, hi=511),
-                variable("transfer_rows") == Table((0, 1, 2, 0, 4))[variable("count")],
-                variable("transfer_lanes") == 512 // Bits("dtype"),
-                variable("transfer_stride")
-                == (512 // Bits("dtype"))
+                pattern.Range(lo=0, hi=511),
+                pattern.variable("transfer_rows") == pattern.Table((0, 1, 2, 0, 4))[pattern.variable("count")],
+                pattern.variable("transfer_lanes") == 512 // pattern.Bits("dtype"),
+                pattern.variable("transfer_stride")
+                == (512 // pattern.Bits("dtype"))
                 * (
                     1
-                    + Table((0, 1))[variable("nonconsecutive")]
-                    * (Table((0, 1, 4, 0, 2))[variable("count")] - 1)
+                    + pattern.Table((0, 1))[pattern.variable("nonconsecutive")]
+                    * (pattern.Table((0, 1, 4, 0, 2))[pattern.variable("count")] - 1)
                 ),
             ),
         ),
         default=0,
     )
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-                (WildcardPattern("transfer_lanes"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+                (pattern.Wildcard("transfer_lanes"), 1),
             ),
         ),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
         effect=W,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.GMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-                (WildcardPattern("transfer_lanes"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.GMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+                (pattern.Wildcard("transfer_lanes"), 1),
             ),
         ),
     )
 
-    def __init__(self, **attrs):
-        bind(self, attrs)
 
-
-@register_op(dialect="T", namespace="amx", category="memory", name="sty")
+@expr.register_op(dialect="T", namespace="amx", category="memory", name="sty")
 class Sty(AmxOp):
-    hir_matches = (HirMatch(Reshard, operands={"src": "x", "dst": "result"}),)
+    hir_matches = (schedule.HirMatch(sharding.Reshard, operands={"src": "x", "dst": "result"}),)
     mnemonic = "STY"
-    capability = OpCapability("amx_sty")
+    capability = expr.OpCapability("amx_sty")
     resource = "amx_engine"
     roles = ("src", "dst")
     writes = ("dst",)
     register_roles = {"src": "y", "dst": "memory"}
-    count = ParamDef(
+    count = expr.ParamDef(
         kind="attribute",
         annotation=TransferCount,
-        pattern=WildcardPattern(
-            "count", predicates=(OrPattern(TransferCount.ONE, TransferCount.TWO),)
+        pattern=pattern.Wildcard(
+            "count", predicates=(pattern.Or(TransferCount.ONE, TransferCount.TWO),)
         ),
         default=TransferCount.ONE,
     )
-    nonconsecutive = ParamDef(
+    nonconsecutive = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("nonconsecutive", predicates=(False,)),
+        pattern=pattern.Wildcard("nonconsecutive", predicates=(False,)),
         default=False,
     )
-    dtype = ParamDef(
+    dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("dtype", predicates=(OrPattern(*TYPES),)),
-        default=DType.u8,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("dtype", predicates=(pattern.Or(*TYPES),)),
+        default=expr.DType.u8,
     )
-    register = ParamDef(
+    register = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("register", predicates=(RangePattern(lo=0, hi=7),)),
+        pattern=pattern.Wildcard("register", predicates=(pattern.Range(lo=0, hi=7),)),
         default=0,
     )
-    memory_offset = ParamDef(
+    memory_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "memory_offset",
             predicates=(
-                RangePattern(lo=0, hi=511),
-                variable("transfer_rows") == Table((0, 1, 2, 0, 4))[variable("count")],
-                variable("transfer_lanes") == 512 // Bits("dtype"),
-                variable("transfer_stride")
-                == (512 // Bits("dtype"))
+                pattern.Range(lo=0, hi=511),
+                pattern.variable("transfer_rows") == pattern.Table((0, 1, 2, 0, 4))[pattern.variable("count")],
+                pattern.variable("transfer_lanes") == 512 // pattern.Bits("dtype"),
+                pattern.variable("transfer_stride")
+                == (512 // pattern.Bits("dtype"))
                 * (
                     1
-                    + Table((0, 1))[variable("nonconsecutive")]
-                    * (Table((0, 1, 4, 0, 2))[variable("count")] - 1)
+                    + pattern.Table((0, 1))[pattern.variable("nonconsecutive")]
+                    * (pattern.Table((0, 1, 4, 0, 2))[pattern.variable("count")] - 1)
                 ),
             ),
         ),
         default=0,
     )
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-                (WildcardPattern("transfer_lanes"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+                (pattern.Wildcard("transfer_lanes"), 1),
             ),
         ),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
         effect=W,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.GMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-                (WildcardPattern("transfer_lanes"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.GMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+                (pattern.Wildcard("transfer_lanes"), 1),
             ),
         ),
     )
 
-    def __init__(self, **attrs):
-        bind(self, attrs)
 
-
-@register_op(dialect="T", namespace="amx", category="memory", name="stz")
+@expr.register_op(dialect="T", namespace="amx", category="memory", name="stz")
 class Stz(AmxOp):
-    hir_matches = (HirMatch(Reshard, operands={"src": "x", "dst": "result"}),)
+    hir_matches = (schedule.HirMatch(sharding.Reshard, operands={"src": "x", "dst": "result"}),)
     mnemonic = "STZ"
-    capability = OpCapability("amx_stz")
+    capability = expr.OpCapability("amx_stz")
     resource = "amx_engine"
     roles = ("src", "dst")
     writes = ("dst",)
     register_roles = {"src": "z", "dst": "memory"}
-    count = ParamDef(
+    count = expr.ParamDef(
         kind="attribute",
         annotation=TransferCount,
-        pattern=WildcardPattern(
-            "count", predicates=(OrPattern(TransferCount.ONE, TransferCount.TWO),)
+        pattern=pattern.Wildcard(
+            "count", predicates=(pattern.Or(TransferCount.ONE, TransferCount.TWO),)
         ),
         default=TransferCount.ONE,
     )
-    nonconsecutive = ParamDef(
+    nonconsecutive = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("nonconsecutive", predicates=(False,)),
+        pattern=pattern.Wildcard("nonconsecutive", predicates=(False,)),
         default=False,
     )
-    dtype = ParamDef(
+    dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("dtype", predicates=(OrPattern(*TYPES),)),
-        default=DType.u8,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("dtype", predicates=(pattern.Or(*TYPES),)),
+        default=expr.DType.u8,
     )
-    register = ParamDef(
+    register = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("register", predicates=(RangePattern(lo=0, hi=63),)),
+        pattern=pattern.Wildcard("register", predicates=(pattern.Range(lo=0, hi=63),)),
         default=0,
     )
-    memory_offset = ParamDef(
+    memory_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "memory_offset",
             predicates=(
-                RangePattern(lo=0, hi=511),
-                variable("transfer_rows") == Table((0, 1, 2, 0, 4))[variable("count")],
-                variable("transfer_lanes") == 512 // Bits("dtype"),
-                variable("transfer_stride")
-                == (512 // Bits("dtype"))
+                pattern.Range(lo=0, hi=511),
+                pattern.variable("transfer_rows") == pattern.Table((0, 1, 2, 0, 4))[pattern.variable("count")],
+                pattern.variable("transfer_lanes") == 512 // pattern.Bits("dtype"),
+                pattern.variable("transfer_stride")
+                == (512 // pattern.Bits("dtype"))
                 * (
                     1
-                    + Table((0, 1))[variable("nonconsecutive")]
-                    * (Table((0, 1, 4, 0, 2))[variable("count")] - 1)
+                    + pattern.Table((0, 1))[pattern.variable("nonconsecutive")]
+                    * (pattern.Table((0, 1, 4, 0, 2))[pattern.variable("count")] - 1)
                 ),
             ),
         ),
         default=0,
     )
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-                (WildcardPattern("transfer_lanes"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+                (pattern.Wildcard("transfer_lanes"), 1),
             ),
         ),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
         effect=W,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.GMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-                (WildcardPattern("transfer_lanes"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.GMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+                (pattern.Wildcard("transfer_lanes"), 1),
             ),
         ),
     )
 
-    def __init__(self, **attrs):
-        bind(self, attrs)
 
-
-@register_op(dialect="T", namespace="amx", category="memory", name="stzi")
+@expr.register_op(dialect="T", namespace="amx", category="memory", name="stzi")
 class Stzi(AmxOp):
-    hir_matches = (HirMatch(Reshard, operands={"src": "x", "dst": "result"}),)
+    hir_matches = (schedule.HirMatch(sharding.Reshard, operands={"src": "x", "dst": "result"}),)
     mnemonic = "STZI"
-    capability = OpCapability("amx_stzi")
+    capability = expr.OpCapability("amx_stzi")
     resource = "amx_engine"
     roles = ("src", "dst")
     writes = ("dst",)
     register_roles = {"src": "z", "dst": "memory"}
-    count = ParamDef(
+    count = expr.ParamDef(
         kind="attribute",
         annotation=TransferCount,
-        pattern=WildcardPattern("count", predicates=(TransferCount.ONE,)),
+        pattern=pattern.Wildcard("count", predicates=(TransferCount.ONE,)),
         default=TransferCount.ONE,
     )
-    nonconsecutive = ParamDef(
+    nonconsecutive = expr.ParamDef(
         kind="attribute",
         annotation=bool,
-        pattern=WildcardPattern("nonconsecutive", predicates=(False,)),
+        pattern=pattern.Wildcard("nonconsecutive", predicates=(False,)),
         default=False,
     )
-    dtype = ParamDef(
+    dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern("dtype", predicates=(OrPattern(DType.u32, DType.i32, DType.f32),)),
-        default=DType.u32,
+        annotation=expr.DType,
+        pattern=pattern.Wildcard("dtype", predicates=(pattern.Or(expr.DType.u32, expr.DType.i32, expr.DType.f32),)),
+        default=expr.DType.u32,
     )
-    register = ParamDef(
+    register = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("register", predicates=(RangePattern(lo=0, hi=63),)),
+        pattern=pattern.Wildcard("register", predicates=(pattern.Range(lo=0, hi=63),)),
         default=0,
     )
-    memory_offset = ParamDef(
+    memory_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "memory_offset",
             predicates=(
-                RangePattern(lo=0, hi=511),
-                variable("transfer_rows") == Table((0, 1, 2, 0, 4))[variable("count")],
-                variable("transfer_lanes") == 512 // Bits("dtype"),
-                variable("transfer_stride")
-                == (512 // Bits("dtype"))
+                pattern.Range(lo=0, hi=511),
+                pattern.variable("transfer_rows") == pattern.Table((0, 1, 2, 0, 4))[pattern.variable("count")],
+                pattern.variable("transfer_lanes") == 512 // pattern.Bits("dtype"),
+                pattern.variable("transfer_stride")
+                == (512 // pattern.Bits("dtype"))
                 * (
                     1
-                    + Table((0, 1))[variable("nonconsecutive")]
-                    * (Table((0, 1, 4, 0, 2))[variable("count")] - 1)
+                    + pattern.Table((0, 1))[pattern.variable("nonconsecutive")]
+                    * (pattern.Table((0, 1, 4, 0, 2))[pattern.variable("count")] - 1)
                 ),
             ),
         ),
         default=0,
     )
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.RMEM,
-            layout=LayoutPattern((1, (2, 8)), (0, (16, 1))),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Layout((1, (2, 8)), (0, (16, 1))),
         ),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
         effect=W,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-            dtype=WildcardPattern("dtype"),
-            storage=StorageKind.GMEM,
-            layout=LayoutPattern(
-                (WildcardPattern("transfer_rows"), WildcardPattern("transfer_lanes")),
-                (WildcardPattern("transfer_lanes"), 1),
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+            dtype=pattern.Wildcard("dtype"),
+            storage=expr.StorageKind.GMEM,
+            layout=pattern.Layout(
+                (pattern.Wildcard("transfer_rows"), pattern.Wildcard("transfer_lanes")),
+                (pattern.Wildcard("transfer_lanes"), 1),
             ),
         ),
     )
-
-    def __init__(self, **attrs):
-        bind(self, attrs)
 
 
 LdxV1, LdxV2, LdxV3 = instruction_versions(Ldx, (1, 2, 3), name="ldx", category="memory")
 
 LdyV1, LdyV2, LdyV3 = instruction_versions(Ldy, (1, 2, 3), name="ldy", category="memory")
+
+register_semantics((Ldz, Ldzi, Stx, Sty, Stz, Stzi, LdxV1, LdxV2, LdxV3, LdyV1, LdyV2, LdyV3,))
+
+
+__all__ = ["Ldz", "Ldzi", "Stx", "Sty", "Stz", "Stzi", "LdxV1", "LdxV2", "LdxV3", "LdyV1", "LdyV2", "LdyV3"]

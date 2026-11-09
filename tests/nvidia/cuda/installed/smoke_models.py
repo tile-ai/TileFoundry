@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.cli import data, models
 
 REPO = Path(__file__).resolve().parents[4]
@@ -168,7 +169,7 @@ def test_models_source_reads_target_resources(
     )
     target = SimpleNamespace(name="added_target", value="added_target")
     monkeypatch.setattr(data, "entry_points", lambda **kwargs: (target,))
-    monkeypatch.setattr(data, "load_targets", lambda: {target.name: object})
+    monkeypatch.setattr(tilefoundry_target, "load", lambda: {target.name: object})
     monkeypatch.setattr(data, "resource_files", lambda package: root)
 
     assert models.run_models("added", source=True) == 0

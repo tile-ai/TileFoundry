@@ -11,19 +11,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from tilefoundry.ir.pattern import ShardLayoutPattern
-from tilefoundry.ir.pattern.utils import (
-    declared_execution_mesh,
-    declared_shape,
-    fixed_pattern_value,
-    selected_pattern,
-)
-from tilefoundry.ir.types import Layout, Mesh, ShardLayout, Topology
-from tilefoundry.ir.types.int_tuple import compatible_profile, flatten, mode_axes, product
-from tilefoundry.ir.types.layout import flatten as flatten_layout
-from tilefoundry.ir.types.layout import unflatten
-from tilefoundry.ir.types.layout_algebra import coalesce
-from tilefoundry.ir.types.stride import crd2idx
+from tilefoundry.ir import pattern, types
+from tilefoundry.ir.types import int_tuple, layout_algebra
 from tilefoundry_nvidia.cuda.ir.tir.nn import wgmma
 
 from ._operand_layout import _bound_fragment
@@ -122,10 +111,10 @@ def cute_reference():
 
 
 def _canonical(shape, strides, *, values=False):
-    modes = list(zip(flatten(tuple(shape)), flatten(tuple(strides)), strict=True))
+    modes = list(zip(types.flatten(tuple(shape)), types.flatten(tuple(strides)), strict=True))
     if values:
         modes.sort(key=lambda pair: pair[1])
-    return coalesce(Layout(tuple(s for s, _ in modes), tuple(d for _, d in modes)))
+    return layout_algebra.coalesce(types.Layout(tuple(s for s, _ in modes), tuple(d for _, d in modes)))
 
 
 def reference_tv(raw, *, broadcast=False):
@@ -141,9 +130,9 @@ def reference_tv(raw, *, broadcast=False):
         s = s if isinstance(s, tuple) else (s,)
         d = d if isinstance(d, tuple) else (d,)
         parts.append(
-            Layout(s, d) if broadcast and index == 1 else _canonical(s, d, values=index == 1)
+            types.Layout(s, d) if broadcast and index == 1 else _canonical(s, d, values=index == 1)
         )
-    return Layout(tuple(p.shape for p in parts), tuple(p.strides for p in parts))
+    return types.Layout(tuple(p.shape for p in parts), tuple(p.strides for p in parts))
 
 
 def to_tv_layout(atom, role):
@@ -152,31 +141,31 @@ def to_tv_layout(atom, role):
     bindings = getattr(atom, "bindings", {})
     assert role in atom.roles
     operand = atom.role(role) if not copy else getattr(type(atom), role).pattern
-    shape = declared_shape(selected_pattern(operand, bindings), bindings)
-    pattern = selected_pattern(operand, bindings).layout
-    if copy and not isinstance(pattern, ShardLayoutPattern):
-        vector = pattern.predicates[0].widths[0] * 8
-        rows = product(shape) * 16 // vector
-        return Layout(((rows,), (vector,)), ((vector,), (1,)))
-    if pattern.attrs == wgmma.BROADCAST:
+    shape = pattern.declared_shape(pattern.selected(operand, bindings), bindings)
+    declared = pattern.selected(operand, bindings).layout
+    if copy and not isinstance(declared, pattern.ShardLayout):
+        vector = declared.predicates[0].widths[0] * 8
+        rows = int_tuple.product(shape) * 16 // vector
+        return types.Layout(((rows,), (vector,)), ((vector,), (1,)))
+    if declared.attrs == wgmma.BROADCAST:
         shape = shape[::-1] if role == "B" else shape
-        threads = product(flatten(atom.required_execution_mesh.layout.shape))
-        return Layout(((threads,), shape), ((0,), (1, shape[0])))
+        threads = int_tuple.product(types.flatten(atom.required_execution_mesh.layout.shape))
+        return types.Layout(((threads,), shape), ((0,), (1, shape[0])))
 
     if copy:
         mesh_pattern = type(atom).execution_mesh.pattern
-        mesh = Mesh(
-            (Topology("thread", 32),),
-            Layout(
-                fixed_pattern_value(mesh_pattern.layout.outer.shape, bindings),
-                fixed_pattern_value(mesh_pattern.layout.outer.strides, bindings),
+        mesh = types.Mesh(
+            (types.Topology("thread", 32),),
+            types.Layout(
+                pattern.fixed_value(mesh_pattern.layout.outer.shape, bindings),
+                pattern.fixed_value(mesh_pattern.layout.outer.strides, bindings),
             ),
         )
-        shard = ShardLayout(Layout(pattern.layout.shape), pattern.attrs, mesh)
+        shard = types.ShardLayout(types.Layout(declared.layout.shape), declared.attrs, mesh)
     else:
         shard = _bound_fragment(atom, role)
-    axes = mode_axes(compatible_profile(shard.layout.shape, shape))
-    extents = flatten(shard.layout.shape)
+    axes = int_tuple.mode_axes(int_tuple.compatible_profile(shard.layout.shape, shape))
+    extents = types.flatten(shard.layout.shape)
     steps = [0] * len(extents)
     for axis in range(len(shape)):
         group = tuple(i for i, target in enumerate(axes) if target == axis)
@@ -196,7 +185,7 @@ def to_tv_layout(atom, role):
                 if axis == 1 and reached == 8:
                     step = 2048
     thread_axes = [attr.axis for attr in shard.attrs]
-    mesh_steps = flatten(shard.mesh.layout.strides)
+    mesh_steps = types.flatten(shard.mesh.layout.strides)
     thread_axes = [axis for _, axis in sorted(zip(mesh_steps, thread_axes, strict=True))]
     value_axes = [i for i in range(len(steps)) if i not in thread_axes]
     parts = [
@@ -207,15 +196,15 @@ def to_tv_layout(atom, role):
         )
         for index, axes in enumerate((thread_axes, value_axes))
     ]
-    return Layout(tuple(p.shape for p in parts), tuple(p.strides for p in parts))
+    return types.Layout(tuple(p.shape for p in parts), tuple(p.strides for p in parts))
 
 
 def to_byte_layout(layout, shape, element_bytes, region):
     """Enumerate a rectangular region; swizzle acts on bytes, including the offset."""
-    grouped = unflatten(flatten_layout(layout.outer), compatible_profile(layout.outer.shape, shape))
+    grouped = types.unflatten(types.flatten(layout.outer), int_tuple.compatible_profile(layout.outer.shape, shape))
     addresses = []
     for row, column in itertools.product(range(region[0]), range(region[1])):
-        offset = layout.offset + crd2idx((row, column), grouped.shape, grouped.strides)
+        offset = layout.offset + types.crd2idx((row, column), grouped.shape, grouped.strides)
         addresses.append(layout.inner(offset * element_bytes))
     return tuple(addresses)
 
@@ -225,13 +214,13 @@ def to_thread_layout(atom):
     if hasattr(atom, "role"):
         layout = atom.required_execution_mesh.layout
     else:
-        assert declared_execution_mesh(atom).match(atom.required_execution_mesh) is not None
-        pattern = type(atom).execution_mesh.pattern.layout.outer
-        layout = Layout(pattern.shape, pattern.strides)
+        assert pattern.declared_execution_mesh(atom).match(atom.required_execution_mesh) is not None
+        declared = type(atom).execution_mesh.pattern.layout.outer
+        layout = types.Layout(declared.shape, declared.strides)
     modes = sorted(
-        zip(flatten(layout.shape), flatten(layout.strides), strict=True), key=lambda p: p[1]
+        zip(types.flatten(layout.shape), types.flatten(layout.strides), strict=True), key=lambda p: p[1]
     )
-    return coalesce(Layout(tuple(s for s, _ in modes), tuple(d for _, d in modes)))
+    return layout_algebra.coalesce(types.Layout(tuple(s for s, _ in modes), tuple(d for _, d in modes)))
 
 
 def reference_threads(raw):

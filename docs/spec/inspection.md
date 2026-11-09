@@ -9,7 +9,7 @@ HTML viewer, and dump integration.
 ## 1. HIR DOT
 
 ```python
-def hir_function_to_dot(fn: hir.Function) -> str:
+def hir_function_to_dot(fn: core.Function) -> str:
     """Render an SSA HIR function as Graphviz DOT.
 
     Args:
@@ -21,7 +21,7 @@ def hir_function_to_dot(fn: hir.Function) -> str:
     ...
 
 
-def module_entry_to_dot(module: Module) -> str:
+def module_entry_to_dot(module: core.Module) -> str:
     """Render a Module's entry function as Graphviz DOT.
 
     Args:
@@ -80,7 +80,7 @@ class PythonPrintOptions:
 
 
 def hir_function_to_python(
-    fn: hir.Function, *, options: PythonPrintOptions | None = None
+    fn: core.Function, *, options: PythonPrintOptions | None = None
 ) -> str:
     """Render a HIR function as Python DSL source.
 
@@ -102,7 +102,7 @@ def hir_function_to_python(
 
 ```python
 def as_script(
-    fn: hir.Function | tir.PrimFunction | Module,
+    fn: core.Function | core.PrimFunction | core.Module,
     *,
     module: str | None = None,
     options: PythonPrintOptions | None = None,
@@ -120,7 +120,7 @@ def as_script(
     ...
 
 
-def module_to_python(fn: hir.Function, module_name: str = "M") -> str:
+def module_to_python(fn: core.Function, module_name: str = "M") -> str:
     """Render a function through the module-wrapper compatibility alias.
 
     Args:
@@ -140,9 +140,12 @@ explicit wrapper request. Module output computes imports from names actually
 used by the rendered program and MUST remain lint-clean.
 
 - constraints:
-  - Module input MUST emit every HIR Function. Meshes used by a function are
-    written at their scope boundary, and mixed HIR/TIR Modules MUST be
-    rejected.
+  - Module input MUST emit every Function. A Module whose functions are all
+    `PrimFunction`s goes to the TIR printer; any other Module goes to the HIR
+    module printer, which prints each HIR Function as `@func` and each
+    `PrimFunction` as `@prim_func`. Meshes used by a function are written at
+    their scope boundary. The TIR printer raises `NotImplementedError` for an
+    HIR Function it reaches.
 
 The printer MUST emit each Module definition once before the slots that use it,
 with class-body bindings preserving shared definitions and instance keys.
@@ -174,15 +177,12 @@ executed. A Target subclass with a different constructor customizes ordinary
 ### 2.3 DSL text forms
 
 DSL text forms for tensor / layout / shard annotations are owned by
-[parser](./parser.md). The printer reuses those forms only when they
-round-trip without losing mesh / layout / storage information;
-otherwise it falls back to the verbose `ShardLayout(...)`.
-
-Layouts and placements use the forms described in
+[parser](./parser.md). Layouts and placements use the forms described in
 [shard §6](./shard.md#6-shardattr), with acceptance rules in
-[parser §2](./parser.md#2-syntax-and-rules). The printer uses sugar when it
-preserves the value and the needed lexical bindings; otherwise it emits a
-complete constructor. Python-evaluated constructor arguments retain
+[parser §2](./parser.md#2-syntax-and-rules). The printer uses sugar only when it
+preserves the value, including mesh / layout / storage information and the
+needed lexical bindings; otherwise it emits a complete constructor
+(`ShardLayout(...)`). Python-evaluated constructor arguments retain
 `Layout(...)` and `ComposedLayout(...)`.
 
 HIR operations and tile-window loops MUST use `tf.<name>(...)` and
@@ -193,10 +193,9 @@ Storage attributes MUST be emitted as strings.
 
 The printer has one type-text surface: the canonical `Tensor[...]` form of
 [parser §2.1](./parser.md#21-syntax), used by `as_script()`, comments, DOT,
-the viewer graph, and viewer detail panels. Comments may flatten this text onto
-one physical line, but MUST NOT change its syntax or semantics. The same
-printer visitor supplies type, dimension, layout, and shard-attribute text;
-there is no separate compact, display-only type language.
+the viewer graph, and viewer detail panels, all supplied by the same printer
+visitor. Comments may flatten this text onto one physical line, but MUST NOT
+change its syntax or semantics.
 
 The meaning of `Split` / `Partial` / `Broadcast` is owned by
 [shard](./shard.md); these forms define only render syntax. Canonical DType text
@@ -205,20 +204,15 @@ emit that name as a quoted DSL string.
 
 ### 2.4 Pretty-print / debug display contract
 
-Pretty print is the core presentation layer. Sugar, debug dumps, DOT, and
-viewer type/value text reuse the same canonical DSL text forms in
-[§2.3](#23-dsl-text-forms). That keeps round-trippable source, labels, and
-detail panes semantically aligned.
+Sugar, debug dumps, DOT, and viewer type/value text reuse the canonical DSL
+text forms of [§2.3](#23-dsl-text-forms). Op attributes that are `DType`,
+`TensorType`, `Layout`, or `ShardLayout` are rendered through that printer, not
+raw `repr()`.
 
-- op attributes that are `DType`, `TensorType`, `Layout`, or `ShardLayout` are
-  rendered through the [§2.3](#23-dsl-text-forms) printer; `DType` uses its canonical name and these
-  values do not use raw `repr()` output
-
-`repr()` is a debug surface, not the source of truth.  It may delegate to
-the [§2.3](#23-dsl-text-forms) implementation for context-free values, but context-dependent
-printing (for example, choosing stable mesh names across a whole function)
-must use an explicit pretty-printer API rather than relying on no-argument
-`repr()`.
+`repr()` is a debug surface, not the source of truth. It may delegate to the
+[§2.3](#23-dsl-text-forms) implementation for context-free values, but
+context-dependent printing (for example, stable mesh names across a whole
+function) MUST use an explicit pretty-printer API.
 
 ### 2.5 Mesh bindings and file header
 
@@ -287,12 +281,12 @@ variant as an `@<name>.specialize(pattern)` block in declared order:
 def f(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
     pass
 
-@f.specialize(RangePattern("S", 1, 3))
+@f.specialize(pattern.Range("S", 1, 3))
 def small_sequence(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
     ...
 ```
 
-The pattern prints in its constructor form (`RangePattern("S", 1, 3)`;
+The pattern prints in its constructor form (`pattern.Range("S", 1, 3)`;
 other `Pattern` subclasses fall back to `repr(pattern)`). The emitted binding
 mirrors the authoring surface ([parser.md §2.1](./parser.md#21-syntax));
 when an IR variant has no display label, the printer synthesizes a valid binding
@@ -352,20 +346,16 @@ point and lets the parser's final-RHS carry rule rebuild the same loop.
 A `DimVar` shape entry prints as its bare name, and a shape-valued op attribute
 holding one MUST print it the same way rather than as its repr. The rendering
 MUST therefore also emit, once, a declaration binding each such name to the
-`DimVar` it stands for, with the envelope bounds it was declared with. Without
-those declarations the printed source names something nothing defines and cannot
-be imported at all, which is a weaker artifact than display-only is meant to be
--- the whole point of printing a program is that somebody can be handed the file.
-The bounds are not recoverable from the name, so they are restated rather than
-inferred.
+`DimVar` it stands for, with the envelope bounds it was declared with, so the
+printed file can be imported. The bounds are not recoverable from the name, so
+they are restated rather than inferred.
 
 ### 2.8 Record comment forms
 
 A record attached to an expression is typed fields and nothing else
 ([core-ir §2](./core-ir.md#2-expr)). What one looks like on a printed line is
-decided here, by walking its fields: a family that wrote its own form string
-would be deciding presentation, and every family would then spell one value its
-own way.
+decided here, by walking its fields; a family MUST NOT write its own form
+string.
 
 A record MUST declare that it renders as a comment, and MAY declare which keys
 it emits: a field by its own name, anything else as a projection carrying its
@@ -374,11 +364,8 @@ renders as nothing, which is how an annotation that is not a report -- a binding
 name, a constraint -- stays off the line.
 
 A record an analysis report projects ([analysis §1](./analysis.md#1-authored-hir-metrics))
-MUST NOT emit a key that projection cannot state; it MAY emit fewer, because a
-comment is read on a line and JSON is read by a program. A record no report
-projects is comment-only -- `SourceSpanMetadata` is where an expression was
-authored, which no family measures -- and there is no projection for it to be a
-subset of.
+MUST NOT emit a key that projection cannot state; it MAY emit fewer. A record no
+report projects (for example `SourceSpanMetadata`) is comment-only.
 
 One separator per layer, and a separator MUST NOT appear inside a value it
 separates unless that value brackets itself:
@@ -420,9 +407,9 @@ summary and node records ([analysis §2](./analysis.md#2-composed-analysis)).
 
 ### 2.9 Pattern declaration reports
 
-`PatternPrinter` renders operation-declaration patterns as reports rather than
-as executable Python source. It is a pure MRO-dispatched visitor and does not
-take a print context:
+`PatternPrinter` renders operation-declaration patterns as reports, not as
+executable Python source. It is a pure MRO-dispatched visitor and takes no print
+context:
 
 ```python
 printer = PatternPrinter()
@@ -441,7 +428,7 @@ their names, unnamed wildcards print `_`, and star captures print `*name`.
 Predicate conditions retain structural traversal and authored declaration
 order; de-duplication keeps the first occurrence. Declaration rendering MUST
 traverse the authored pattern directly: nested switches retain every branch
-condition, and `OrPattern` lists its alternatives as a set. Tensor shape, dtype,
+condition, and `pattern.Or` lists its alternatives as a set. Tensor shape, dtype,
 storage and layout retain their symbolic constraints. Parameter lines include
 declared Enum domains, optionality and defaults. Ordinary boolean and other
 literal predicates retain their value constraints.
@@ -453,13 +440,13 @@ API, separate from declaration rendering; its bindings retain declaration order.
 Every `Pattern` carries its own `predicates` slot. The structural line comes
 only from that pattern's structural fields, while its predicate block comes
 only from `pattern.predicates`; the printer MUST NOT infer one role from the
-text produced for the other. `ShardLayoutPattern` arrangements render all
+text produced for the other. `pattern.ShardLayout` arrangements render all
 three declared fields through the same visitor/rules dispatch: local layout,
 shard attrs, and holder mesh. Instruction declarations call the reserved field
 `execution mesh` everywhere, including the standalone facts field and the
 declaration attributes section.
 
-A refusal at a `SwitchPattern` reports its parameter name, actual subject,
+A refusal at a `pattern.Switch` reports its parameter name, actual subject,
 and declared branch values: `param has no matching branch for subject;
 branches: value, ...`. It does not report a predicate from a rejected branch.
 
@@ -475,8 +462,7 @@ candidate has an empty reason. Type inference uses the same rendering.
 Refusal subjects use the same DSL notation as the report operands; dtype and
 storage values use their surface names. Structural patterns use that notation
 as well, rather than mixing Python repr with DSL text.
-Standalone `refusal` renders the path and reason without an instruction id;
-the former `reason (bindings)` spelling is removed.
+Standalone `refusal` renders the path and reason without an instruction id.
 
 This report printer is separate from `PythonPrinter`: it does not inherit the
 round-trip source printer, request import or mesh-name registration, or accept
@@ -487,18 +473,17 @@ printer lazily to render structural `Refusal` evidence without creating an
 ## 3. Viewer
 
 The viewer is the interactive HIR inspector. `Viewer(root).serve(port,
-open_browser)` (root = `hir.Function` or `Module`) starts a local HTTP
-server and opens a browser page that lays the graph out **client-side**
-via the vendored WebAssembly Graphviz build (`@hpcc-js/wasm`) — there is
-no server-side `dot` process. The page offers pan / zoom, a detail panel,
-collapsible function regions, node search, and upstream/downstream
-highlight on top of the rendered SVG.
+open_browser)` (root = `core.Function` or `Module`) starts a local HTTP server
+and opens a browser page that lays the graph out **client-side** with the
+vendored WebAssembly Graphviz build (`@hpcc-js/wasm`); no `dot` process exists.
+The page offers pan / zoom, a detail panel, collapsible function regions, node
+search, and upstream/downstream highlight on the rendered SVG.
 
 ### 3.1 Architecture
 
 ```
 HIR Function / Module
-        │  ViewerBuilder (visitor)
+        │  viewer.Builder (visitor)
         ▼
 graphviz.Digraph  ──►  /api/dot?collapsed=<csv>   (DOT text)
    + DetailIndex   ──►  /api/expr/<visual_id>       (detail JSON, on demand)
@@ -515,18 +500,17 @@ d3-zoom pan/zoom · click → detail + highlight · search · collapse toggle
   .serve(...)` ensures the vendored JS is cached, then serves five GET
   routes and returns the bound port: `/` (page), `/static/<name>`
   (first-party files, then cached vendor JS), `/api/dot?collapsed=<csv>`
-  (a fresh `ViewerBuilder(root, collapsed).build().source`),
+  (a fresh `viewer.Builder(root, collapsed).build().source`),
   `/api/expr/<visual_id>` (detail JSON formatted on demand from the
-  `DetailIndex`), and `/api/palette` (the colour palette). No `dot`
-  subprocess exists anywhere in the package. The server runs on a
+  `DetailIndex`), and `/api/palette` (the colour palette). The server runs on a
   background daemon thread; `serve` returns the bound port immediately
   unless `block` holds the process open. When `block` is unset it
   follows `open_browser` — an interactive call (`open_browser=True`)
   blocks until interrupted so the page stays reachable; a programmatic
   call returns.
-- **Builder.** `ViewerBuilder` walks the HIR `Function` / `Module`
+- **Builder.** `viewer.Builder` walks the HIR `Function` / `Module`
   directly into a `graphviz.Digraph`; there is no intermediate model. A
-  `Call(target=hir.Function)` and a top-level `Function` share one
+  `Call(target=core.Function)` and a top-level `Function` share one
   unified emitter — a collapsed region renders as a stand-in node, an
   expanded one as a `subgraph cluster_<region_visual_id>`.
 - **Frontend** is `static/index.html` + `static/viewer.js` (first-party,
@@ -618,17 +602,17 @@ Vendored browser JS lives only in the user cache, never in the repo.
 
 ## 4. Dump Integration
 
-`tilefoundry.dump.DumpScope` + `FileDumper` / `MemoryDumper` / `NullDumper`
+`tilefoundry.dump.Scope` + `FileDumper` / `MemoryDumper` / `NullDumper`
 provide per-test, per-pass IR dumping (see [passes §6](./passes.md#6-top-level-api)).
 
 ```python
 # example
-from tilefoundry.dump import DumpFlags, dump, current_scope
-dump("ir.py", src, DumpFlags.PASS_IR)
+from tilefoundry import dump
+dump.dump("ir.py", src, dump.Flags.PASS_IR)
 ```
 
 ```python
-class DumpFlags(IntFlag):
+class Flags(IntFlag):
     """Enumerate dump categories."""
 
     NONE = 0
@@ -639,13 +623,13 @@ class DumpFlags(IntFlag):
     ALL = PASS_IR | CODEGEN_SOURCE | BUILD_LOG | ANALYSIS
 
 
-class DumpScope:
+class Scope:
     """Install or narrow a dynamically scoped dump destination."""
 
     def __init__(
         self,
         subdir: str | None = None,
-        flags: DumpFlags | None = None,
+        flags: Flags | None = None,
         *,
         dumper: IDumpper | None = None,
     ) -> None: ...
@@ -654,22 +638,22 @@ class DumpScope:
         self,
         name: str,
         content: str | bytes | Callable[[], str | bytes],
-        flag: DumpFlags,
+        flag: Flags,
     ) -> None: ...
 
 
 def dump(
     name: str,
     content: str | bytes | Callable[[], str | bytes],
-    flag: DumpFlags,
+    flag: Flags,
 ) -> None: ...
 ```
 
 - constraints:
-  - `DumpScope(subdir, flags)` MUST nest beneath the active scope and intersect
+  - `Scope(subdir, flags)` MUST nest beneath the active scope and intersect
     its flags with the parent's. Without a parent it MUST remain a no-op.
-  - `DumpScope(dumper=..., flags=...)` MUST replace the active scope.
-  - Both `dump(...)` and `DumpScope.dump(...)` accept strings, bytes, or a
+  - `Scope(dumper=..., flags=...)` MUST replace the active scope.
+  - Both `dump(...)` and `Scope.dump(...)` accept strings, bytes, or a
     no-argument callable returning either. Module-level `dump(...)` MUST NOT
     call the producer without an active scope. Both interfaces MUST NOT call
     the producer when the requested flag is disabled. When
@@ -681,6 +665,6 @@ def dump(
     A non-master worker appends `__<worker-id>` to the test-name leaf rather
     than adding a worker directory. `pytest.mark.no_dump` disables it.
   - A completed `analyze(...)` call MUST dump its complete report data as
-    `analysis.json` when `DumpFlags.ANALYSIS` is enabled. Every conclusion in
+    `analysis.json` when `Flags.ANALYSIS` is enabled. Every conclusion in
     that dump MUST come from the selected typed records; the report layer MUST
     NOT reconstruct target-aware findings that no record carries.

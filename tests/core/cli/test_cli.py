@@ -6,12 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tilefoundry import cli
-from tilefoundry.cli.source import (
-    _one_extent_per_dim,
-    load_authored_ir,
-)
-from tilefoundry.target import registered_targets
+from tilefoundry import cli, target
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 
@@ -24,11 +19,11 @@ def test_parse_dims_reads_extents() -> None:
     assert cli.parse_dims(["ctx_len=8", "seq_len=1"]) == {"ctx_len": (8,), "seq_len": (1,)}
     assert cli.parse_dims(["ctx_len=0,1,37"]) == {"ctx_len": (0, 1, 37)}
 
-    assert _one_extent_per_dim(cli.parse_dims(None)) is None
-    assert _one_extent_per_dim(cli.parse_dims([])) == {}
-    assert _one_extent_per_dim(cli.parse_dims(["ctx_len=1024"])) == {"ctx_len": 1024}
+    assert cli.one_extent_per_dim(cli.parse_dims(None)) is None
+    assert cli.one_extent_per_dim(cli.parse_dims([])) == {}
+    assert cli.one_extent_per_dim(cli.parse_dims(["ctx_len=1024"])) == {"ctx_len": 1024}
     with pytest.raises(ValueError, match="asking several EXTENTs together is for check"):
-        _one_extent_per_dim(cli.parse_dims(["ctx_len=0,1,37"]))
+        cli.one_extent_per_dim(cli.parse_dims(["ctx_len=0,1,37"]))
 
 
 @pytest.mark.parametrize(
@@ -137,11 +132,11 @@ def test_analyze_json_requires_analysis_flag(capsys, tmp_path) -> None:
 def test_reload_keeps_one_target_registration() -> None:
     source = FIXTURES / "cli/reload_target/model.py"
 
-    first = load_authored_ir(f"{source}:Model")
-    second = load_authored_ir(f"{source}:Model")
+    first = cli.load_authored_ir(f"{source}:Model")
+    second = cli.load_authored_ir(f"{source}:Model")
 
     assert type(first.target) is not type(second.target)
-    assert registered_targets()["tests.cli.reload_target"] is type(first.target)
+    assert target.registered()["tests.cli.reload_target"] is type(first.target)
 
 
 def test_provider_registers_decorated_targets(
@@ -154,15 +149,15 @@ def test_provider_registers_decorated_targets(
 
     assert cli.main([*prefix, "add", provider_name]) == 0
     assert "VendorOne()" in capsys.readouterr().out
-    assert "tests.cli.vendor_one" in registered_targets()
+    assert "tests.cli.vendor_one" in target.registered()
     assert all(
-        target_type.__name__ != "_VendorBase" for target_type in registered_targets().values()
+        target_type.__name__ != "_VendorBase" for target_type in target.registered().values()
     )
 
     assert cli.main([*prefix, "remove", provider_name]) == 0
-    assert "tests.cli.vendor_one" not in registered_targets()
+    assert "tests.cli.vendor_one" not in target.registered()
     capsys.readouterr()
 
     assert cli.main([*prefix, "add", provider_name]) == 0
     assert "VendorOne()" in capsys.readouterr().out
-    assert "tests.cli.vendor_one" in registered_targets()
+    assert "tests.cli.vendor_one" in target.registered()

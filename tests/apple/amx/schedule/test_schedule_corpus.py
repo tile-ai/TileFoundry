@@ -7,17 +7,11 @@ from pathlib import Path
 import pytest
 
 from tests.core._corpus import Case, Problems, case, cases
-from tilefoundry.analysis.check import check_program
-from tilefoundry.ir.core import Call, get_registered_name, value_label
-from tilefoundry.ir.hir.schedule import ScheduleOp, match_instruction
-from tilefoundry.ir.types.layout import size
-from tilefoundry.ir.visitor import collect_exprs
+from tilefoundry import analysis
+from tilefoundry.interfaces import schedule, typeinfer, valuation
+from tilefoundry.ir import core, expr, hir, types
 from tilefoundry.schedule import candidates
-from tilefoundry.visitor_registry.candidates import candidate_operands
-from tilefoundry.visitor_registry.contexts import TypeInferContext
-from tilefoundry.visitor_registry.instruction import check_call
-from tilefoundry.visitor_registry.valuation import ValuationVisitor
-from tilefoundry_apple.amx.ir.tir import Fma16, Fma32, Fma64
+from tilefoundry_apple.amx.ir import tir
 
 ROOT = Path(__file__).parents[1] / "fixtures"
 
@@ -36,17 +30,17 @@ class AmxCase(Case):
 
     def guard(self, state, problems):
         assert [(t.name, t.size) for t in state.module.topologies] == [("thread", 12)]
-        contexts = ValuationVisitor.index_contexts(
+        contexts = valuation.index_contexts(
             state.entry,
-            TypeInferContext(module=state.module, function=state.entry,
+            typeinfer.TypeInferContext(module=state.module, function=state.entry,
                              target=state.module.resolve_target(), owner=state.entry),
         )
-        calls = [expr for expr in collect_exprs(state.entry.body) if isinstance(expr, Call)]
+        calls = [node for node in core.collect_exprs(state.entry.body) if isinstance(node, expr.Call)]
         assert calls
         for call in calls:
             mesh = contexts[id(call)].current_mesh
             assert tuple(t.name for t in mesh.topologies) == ("thread",)
-            assert size(mesh.layout) == self.workers > 1
+            assert types.size(mesh.layout) == self.workers > 1
 
         supported = {
             "ldx": "ldx_v2", "ldy": "ldy_v2", "extrx": "extrx_v2",
@@ -55,9 +49,9 @@ class AmxCase(Case):
         }
         if state.candidates is None:
             names = {
-                get_registered_name(type(expr.target.op))
-                for expr in collect_exprs(state.entry.body)
-                if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)
+                expr.get_registered_name(type(node.target.op))
+                for node in core.collect_exprs(state.entry.body)
+                if isinstance(node, expr.Call) and isinstance(node.target, hir.schedule.ScheduleOp)
             }
         else:
             names = {
@@ -111,23 +105,23 @@ class MatMul(AmxCase):
         _rejects(state, "odd_m", "T.amx.fma32")
         _rejects(state, "transposed_axes", "T.amx.fma32")
         _rejects(state, "ordinary_memory", "T.amx.fma32")
-        contexts = ValuationVisitor.index_contexts(
+        contexts = valuation.index_contexts(
             state.entry,
-            TypeInferContext(module=state.module, function=state.entry,
+            typeinfer.TypeInferContext(module=state.module, function=state.entry,
                              target=state.module.resolve_target(), owner=state.entry),
         )
         for label, instruction, expected in (
-            ("half", Fma16, (1, 2, 2)), ("single", Fma32, (1, 4, 2)),
-            ("double", Fma64, (1, 8, 2)),
+            ("half", tir.Fma16, (1, 2, 2)), ("single", tir.Fma32, (1, 4, 2)),
+            ("double", tir.Fma64, (1, 8, 2)),
         ):
-            call = next(expr for expr in collect_exprs(state.entry.body)
-                        if isinstance(expr, Call) and (value_label(expr) or "").split(":")[0] == label)
+            call = next(node for node in core.collect_exprs(state.entry.body)
+                        if isinstance(node, expr.Call) and (expr.value_label(node) or "").split(":")[0] == label)
             frame = contexts[id(call)]
-            attrs, operands = candidate_operands(call, instruction)
-            matches = match_instruction(instruction, attrs, operands, frame.current_mesh, frame=frame)
+            attrs, operands = schedule.candidate_operands(call, instruction)
+            matches = hir.schedule.match_instruction(instruction, attrs, operands, frame.current_mesh, frame=frame)
             assert matches
             for match in matches:
-                _, projection = check_call(match.op, operands, frame.current_mesh, frame=frame)
+                _, projection = schedule.check_call(match.op, operands, frame.current_mesh, frame=frame)
                 assert projection.repeat == expected, (label, projection.repeat)
 
 
@@ -192,22 +186,22 @@ class Explicit(AmxCase):
         super().guard(state, problems)
         assert state.candidates is None
         instructions = {
-            get_registered_name(type(expr.target.op)) for expr in collect_exprs(state.entry.body)
-            if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)
+            expr.get_registered_name(type(node2.target.op)) for node2 in core.collect_exprs(state.entry.body)
+            if isinstance(node2, expr.Call) and isinstance(node2.target, hir.schedule.ScheduleOp)
         }
         assert {"T.amx.set", "T.amx.clr", "T.amx.genlut_v2", "T.amx.extrx_v2", "T.amx.extry_v2"} <= instructions
         assert not any(name.startswith("tf.") for name in instructions)
-        for expr in collect_exprs(state.entry.body):
-            if not isinstance(expr, Call):
+        for node in core.collect_exprs(state.entry.body):
+            if not isinstance(node, expr.Call):
                 continue
-            assert isinstance(expr.target, ScheduleOp)
-            name = get_registered_name(type(expr.target.op))
+            assert isinstance(node.target, hir.schedule.ScheduleOp)
+            name = expr.get_registered_name(type(node.target.op))
             if name == "T.amx.genlut_v2":
-                assert expr.target.op.mode.name == "LOOKUP32_2"
-                assert expr.args[0].type.dtype.name == "u8"
-                assert expr.args[0].type.shape == (4,)
+                assert node.target.op.mode.name == "LOOKUP32_2"
+                assert node.args[0].type.dtype.name == "u8"
+                assert node.args[0].type.shape == (4,)
             if name in ("T.amx.extrx_v2", "T.amx.extry_v2"):
-                assert expr.target.op.mode.name == "COPY"
+                assert node.target.op.mode.name == "COPY"
 
 
 CASES = cases(ROOT, case_type=AmxCase)
@@ -217,7 +211,7 @@ CASES = cases(ROOT, case_type=AmxCase)
 def test_schedule_case(case: AmxCase) -> None:
     problems = Problems(case)
     module = problems.run("load", case.load)
-    checked = problems.run("check", lambda m: check_program(m, m.entry_function()), module)
+    checked = problems.run("check", lambda m: analysis.check_program(m, m.entry_function()), module)
     report = None if case.explicit else problems.run("candidates", lambda pair: candidates(*pair), checked)
     if checked is not None:
         state = CandidateState(*checked, report)

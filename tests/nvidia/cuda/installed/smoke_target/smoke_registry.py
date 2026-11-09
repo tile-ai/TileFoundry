@@ -35,7 +35,7 @@ def test_registered_targets_drive_commands(
 
     listed = tf("--registry", registry, "target", "list")
     assert listed.returncode == 0, listed.stderr
-    assert 'CudaTarget("vendor.v100_sxm2_32gb")' in listed.stdout
+    assert 'cuda.Target("vendor.v100_sxm2_32gb")' in listed.stdout
     assert "identity: vendor.v100_sxm2_32gb   added" in listed.stdout
     assert "VendorNpuTarget()" in listed.stdout
     assert "identity: vendor.npu   added" in listed.stdout
@@ -79,7 +79,7 @@ def test_registered_targets_drive_commands(
     after = tf("--registry", registry, "target", "list")
     assert after.returncode == 0, after.stderr
     assert "VendorNpuTarget()" not in after.stdout
-    assert 'CudaTarget("vendor.v100_sxm2_32gb")' in after.stdout
+    assert 'cuda.Target("vendor.v100_sxm2_32gb")' in after.stdout
 
     if default_before is None:
         assert not default_registry.exists()

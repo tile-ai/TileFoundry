@@ -1,10 +1,10 @@
 """A CTA-sharded elementwise square for the CPU target."""
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="main", target=CpuTarget(), topologies=(Topology("cta", 168),))
+@module(entry="main", target=cpu.Target(), topologies=(Topology("cta", 168),))
 class Mine:
     @func
     def main(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:

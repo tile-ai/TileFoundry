@@ -5,20 +5,11 @@ from __future__ import annotations
 import torch
 
 from tests.core.ops.ir.op_case import Cost, ExpectedError, OpCase, op_case_test
-from tilefoundry.ir.hir.tensor.where import Where
-from tilefoundry.ir.types import (
-    DType,
-    Layout,
-    Mesh,
-    Topology,
-    make_shard_tensor_type,
-    make_tensor_type,
-)
-from tilefoundry.ir.types.shard_layout import Split
-from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.visitor_registry.contexts import TrafficBytes
+from tilefoundry.interfaces import cost
+from tilefoundry.ir import expr, types, utils
+from tilefoundry.ir.hir import tensor
 
-_MESH = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
+_MESH = types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",))
 
 
 def _make_where_evaluates_right_aligned_broadcast():
@@ -27,7 +18,7 @@ def _make_where_evaluates_right_aligned_broadcast():
     other = torch.full((1, 3, 1), -1.0)
     return OpCase(
         "broadcast",
-        Where(),
+        tensor.Where(),
         (condition, input_, other),
         value=torch.where(condition, input_, other),
     )
@@ -37,71 +28,71 @@ CASES = (
     _make_where_evaluates_right_aligned_broadcast(),
     OpCase(
         "where",
-        Where(),
+        tensor.Where(),
         (
-            make_tensor_type((2, 3, 4), DType.bool),
-            make_tensor_type((2, 3, 4), DType.f32),
-            make_tensor_type((2, 3, 4), DType.f32),
+            types.TensorType.from_shape((2, 3, 4), expr.DType.bool),
+            types.TensorType.from_shape((2, 3, 4), expr.DType.f32),
+            types.TensorType.from_shape((2, 3, 4), expr.DType.f32),
         ),
         cost=Cost(
             ops={"select": 24},
             traffic=(
-                TrafficBytes(read=3),
-                TrafficBytes(read=96),
-                TrafficBytes(read=96),
-                TrafficBytes(write=96),
+                cost.TrafficBytes(read=3),
+                cost.TrafficBytes(read=96),
+                cost.TrafficBytes(read=96),
+                cost.TrafficBytes(write=96),
             ),
         ),
     ),
     OpCase(
         "condition_does_not_anchor_storage",
-        Where(),
+        tensor.Where(),
         (
-            make_tensor_type((8, 8), DType.bool, storage="gmem"),
-            make_tensor_type((2, 8, 8), DType.f32, storage="rmem"),
-            make_tensor_type((1, 8, 1), DType.f32, storage="rmem"),
+            types.TensorType.from_shape((8, 8), expr.DType.bool, storage="gmem"),
+            types.TensorType.from_shape((2, 8, 8), expr.DType.f32, storage="rmem"),
+            types.TensorType.from_shape((1, 8, 1), expr.DType.f32, storage="rmem"),
         ),
-        type=make_tensor_type(
-            (2, 8, 8), DType.f32, layout=Layout((2, 8, 8), (64, 8, 1)), storage="rmem"
+        type=types.TensorType.from_shape(
+            (2, 8, 8), expr.DType.f32, layout=types.Layout((2, 8, 8), (64, 8, 1)), storage="rmem"
         ),
     ),
     OpCase(
         "sharded_scores_anchor_distribution",
-        Where(),
+        tensor.Where(),
         (
-            make_tensor_type((8, 8), DType.bool, storage=StorageKind.UMAT),
-            make_shard_tensor_type((2, 16, 8, 8), mesh=_MESH, attrs=(Split(1),), storage="smem"),
-            make_shard_tensor_type((2, 16, 8, 8), mesh=_MESH, attrs=(Split(1),), storage="smem"),
+            types.TensorType.from_shape((8, 8), expr.DType.bool, storage=expr.StorageKind.UMAT),
+            utils.make_shard_tensor_type((2, 16, 8, 8), mesh=_MESH, attrs=(types.Split(1),), storage="smem"),
+            utils.make_shard_tensor_type((2, 16, 8, 8), mesh=_MESH, attrs=(types.Split(1),), storage="smem"),
         ),
-        type=make_shard_tensor_type((2, 16, 8, 8), mesh=_MESH, attrs=(Split(1),), storage="smem"),
+        type=utils.make_shard_tensor_type((2, 16, 8, 8), mesh=_MESH, attrs=(types.Split(1),), storage="smem"),
     ),
     OpCase(
         "condition_must_be_bool",
-        Where(),
+        tensor.Where(),
         (
-            make_tensor_type((2, 3), DType.i64),
-            make_tensor_type((2, 3), DType.f32),
-            make_tensor_type((2, 3), DType.f32),
+            types.TensorType.from_shape((2, 3), expr.DType.i64),
+            types.TensorType.from_shape((2, 3), expr.DType.f32),
+            types.TensorType.from_shape((2, 3), expr.DType.f32),
         ),
         error=ExpectedError(match="condition must have bool dtype"),
     ),
     OpCase(
         "branches_must_share_dtype",
-        Where(),
+        tensor.Where(),
         (
-            make_tensor_type((2, 3), DType.bool),
-            make_tensor_type((2, 3), DType.f32),
-            make_tensor_type((2, 3), DType.f16),
+            types.TensorType.from_shape((2, 3), expr.DType.bool),
+            types.TensorType.from_shape((2, 3), expr.DType.f32),
+            types.TensorType.from_shape((2, 3), expr.DType.f16),
         ),
         error=ExpectedError(match="data branch dtype mismatch"),
     ),
     OpCase(
         "all_inputs_must_broadcast",
-        Where(),
+        tensor.Where(),
         (
-            make_tensor_type((2, 4), DType.bool),
-            make_tensor_type((2, 3), DType.f32),
-            make_tensor_type((2, 3), DType.f32),
+            types.TensorType.from_shape((2, 4), expr.DType.bool),
+            types.TensorType.from_shape((2, 3), expr.DType.f32),
+            types.TensorType.from_shape((2, 3), expr.DType.f32),
         ),
         error=ExpectedError(match="cannot broadcast"),
     ),

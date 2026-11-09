@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="sync_square_host",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("thread", 128),),
 )
 class SyncSquare:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def sync_square_device(a: Tensor[(4, 32), "f32"]):
         with Mesh((Topology("thread", 128),), layout=(4, 32), names=("w", "t")) as m:
             view = T.tensor_view(T.ptr_of(a), layout=(4 @ m.w, 32 @ m.t))
@@ -26,7 +26,7 @@ class SyncSquare:
             T.binary(reg, reg, reg, kind=BinaryKind.MUL)
             T.copy(reg, view)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def sync_square_host(a: Tensor[(4, 32), "f32"]):
         launch(sync_square_device, a, grid=(
         1,

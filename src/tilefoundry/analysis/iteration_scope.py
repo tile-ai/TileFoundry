@@ -6,52 +6,35 @@ from dataclasses import dataclass, field, replace
 
 import isl
 
-from tilefoundry.ir.core import Expr, Var, get_metadata
-from tilefoundry.ir.core.expr import SSAValue
-from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.types import Mesh, Topology
-from tilefoundry.ir.types.layout import ComposedLayout, get, size
-from tilefoundry.ir.types.utils import leaf_rank, leaf_span, static_dim_value
-from tilefoundry.ir.visitor import expr_children
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    access_relation_registry,
-    identity_access,
-    projected,
-    relations_of,
-    renaming_relation,
-)
-from tilefoundry.visitor_registry.buffer_alias import aliased_operand
-from tilefoundry.visitor_registry.contexts import TypeInferContext
-from tilefoundry.visitor_registry.valuation import ValuationVisitor
+from tilefoundry.interfaces import access, typeinfer, valuation
+from tilefoundry.ir import core, expr, types, utils
 
 from .access import (
+    RegionBindingResolver,
     SnapshotEntry,
-    _RegionBindingResolver,
     buffer_alias,
     eliminate_parameters,
     resolve_access,
 )
-from .errors import AnalysisError
+from .errors import Error
 from .loop_domain import induction_name, iteration_domain, refuse_runtime_bound, span_bounds
 from .metadata import ExecutionMeshMetadata
-from .precision import AnalysisPrecision
+from .precision import Precision
 from .visitor import AnalyzeContext
 
 
-def _positions_at(mesh: Mesh, unit: str, topologies: tuple[Topology, ...]) -> int:
+def positions_at(mesh: types.Mesh, unit: str, topologies: tuple[types.Topology, ...]) -> int:
     """Count mesh positions at the selected unit and all coarser topology levels."""
     declared = {topology.name: index for index, topology in enumerate(topologies)}
     selected = declared[unit]
-    stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
+    stated = mesh.layout.outer if isinstance(mesh.layout, types.ComposedLayout) else mesh.layout
     positions = 1
     for index, topology in enumerate(mesh.topologies):
         if declared[topology.name] > selected:
             continue
-        count = size(get(stated, index))
+        count = types.size(types.get(stated, index))
         if not isinstance(count, int) or isinstance(count, bool) or count < 1:
-            raise AnalysisError(
+            raise Error(
                 f"mesh level {topology.name!r} needs positive static extents, got {count!r}"
             )
         positions *= count
@@ -65,7 +48,7 @@ class Repeats:
     varying_loop_trips: int
     loop_trips: int
     mesh_positions: int
-    trips_precision: AnalysisPrecision
+    trips_precision: Precision
 
 
 @dataclass
@@ -75,8 +58,8 @@ class DefinitionSnapshot:
     owner: object
     parent: IterationScope | None = None
     children: tuple = ()
-    domain: AccessRelation = field(default_factory=lambda: AccessRelation(isl.map("{ [] -> [] }")))
-    mesh: Mesh | None = None
+    domain: access.Relation = field(default_factory=lambda: access.Relation(isl.map("{ [] -> [] }")))
+    mesh: types.Mesh | None = None
     topologies: tuple = ()
     values: dict = field(default_factory=dict)
     locations: dict = field(default_factory=dict)
@@ -84,6 +67,20 @@ class DefinitionSnapshot:
     outputs: dict = field(default_factory=dict)
     relations: dict = field(default_factory=dict)
     refused: dict = field(default_factory=dict)
+
+    def add_child(self, child: IterationScope) -> None:
+        """Record *child* as the last scope nested in this definition."""
+        self.children += (child,)
+
+    def locate(self, node, scope: IterationScope) -> None:
+        """Record that *node* stands in *scope*."""
+        self.locations[id(node)] = scope
+
+    def share(self, values: dict, locations: dict | None = None) -> None:
+        """Read value facts, and optionally locations, from the tables of an enclosing build."""
+        self.values = values
+        if locations is not None:
+            self.locations = locations
 
 
 @dataclass
@@ -97,12 +94,20 @@ class ResolvedSnapshot:
     scopes: dict = field(default_factory=dict)
     accesses: dict = field(default_factory=dict)
 
+    def keep_allocation(self, node, summary) -> None:
+        """Remember the allocation summary resolved at *node*."""
+        self.allocations[id(node)] = summary
+
 
 @dataclass
 class ScopeSnapshot:
     definition: DefinitionSnapshot
     attachments: dict = field(default_factory=dict)
     resolved: ResolvedSnapshot = field(default_factory=ResolvedSnapshot)
+
+    def attach(self, call_site, entry: IterationScope) -> None:
+        """Graft *entry* as the calling environment of *call_site*."""
+        self.attachments[call_site] = entry
 
 
 @dataclass
@@ -117,7 +122,7 @@ class ValueProvenance:
 
     @property
     def arguments(self):
-        return self.scope._binding._arguments
+        return self.scope.binding.arguments
 
     @property
     def caller_provenance(self):
@@ -128,14 +133,14 @@ class ValueProvenance:
     def resolved(self):
         return self.scope.snapshot.resolved.values
 
-    def lookup(self, value: SSAValue) -> SnapshotEntry:
+    def lookup(self, value: core.SSAValue) -> SnapshotEntry:
         if value in self.resolved:
             return self.resolved[value]
         entry = self.snapshot.get(value)
         if entry is None:
             if self.scope.parent is not None:
                 return self.scope.parent.provenance.lookup(value)
-            raise AnalysisError(f"no source recorded for {value.expr!r}")
+            raise Error(f"no source recorded for {value.expr!r}")
         if self.caller_provenance is None:
             return entry
         self.resolved[value] = self.resolve(entry)
@@ -147,7 +152,7 @@ class ValueProvenance:
         actual = (
             None
             if argument is None
-            else caller_provenance.lookup(SSAValue(argument, entry.root.index))
+            else caller_provenance.lookup(core.SSAValue(argument, entry.root.index))
         )
         changing = set(entry.varies)
         for formal, bound in self.arguments.items():
@@ -172,17 +177,17 @@ class ValueProvenance:
 
     def actual(self, formal, index=0):
         if self.caller_provenance is None or id(formal) not in self.arguments:
-            raise AnalysisError("parameter has no binding in this calling context")
-        return self.caller_provenance.lookup(SSAValue(self.arguments[id(formal)], index))
+            raise Error("parameter has no binding in this calling context")
+        return self.caller_provenance.lookup(core.SSAValue(self.arguments[id(formal)], index))
 
     def result(self, index=0):
-        return self.lookup(SSAValue(self.scope.root.owner.body, index))
+        return self.lookup(core.SSAValue(self.scope.root.owner.body, index))
 
     def varies(self, value):
         argument = self.arguments.get(id(value))
         if argument is not None and self.caller_provenance is not None:
             return self.caller_provenance.varies(argument)
-        entry = self.snapshot.get(SSAValue(value))
+        entry = self.snapshot.get(core.SSAValue(value))
         changing = set() if entry is None else set(entry.varies)
         if self.caller_provenance is not None:
             for formal, argument in self.arguments.items():
@@ -206,18 +211,18 @@ class ValueProvenance:
 
 
 @dataclass
-class AccessAnalysis:
+class ScopeAccess:
     """Declared boundaries, resolved accesses, and projections in one environment."""
 
     scope: IterationScope
 
     @property
     def accesses(self):
-        return self._bound_accesses("accesses")
+        return self.bound_accesses("accesses")
 
     @property
     def outputs(self):
-        return self._bound_accesses("outputs")
+        return self.bound_accesses("outputs")
 
     @property
     def relations(self):
@@ -237,11 +242,23 @@ class AccessAnalysis:
     def projections(self):
         return self.scope.snapshot.resolved.relations
 
+    def cache_projection(self, key, value) -> None:
+        """Remember the projection stored under *key*."""
+        self.projections[key] = value
+
+    def record_relations(self, call, stated) -> None:
+        """Remember the relations *call*'s operation states for its boundaries."""
+        self.relations[id(call)] = (call, stated)
+
+    def refuse(self, view, calls) -> None:
+        """Mark *calls* as refused in *view*."""
+        self.refused[view] = self.refused.get(view, frozenset()) | calls
+
     @property
     def instance(self):
-        return self.scope._binding._instance
+        return self.scope.binding.instance
 
-    def _bound_accesses(self, name):
+    def bound_accesses(self, name):
         definition = getattr(self.scope.snapshot.definition, name)
         if self.scope.caller_scope is None:
             return definition
@@ -265,7 +282,7 @@ class AccessAnalysis:
                             **{
                                 kind: None
                                 if getattr(source, kind) is None
-                                else identity_access(
+                                else access.identity(
                                     getattr(source, kind).relation.dim(isl.dim_type.OUT)
                                 )
                                 for kind in ("narrow", "device", "unit")
@@ -286,7 +303,7 @@ class AccessAnalysis:
                         prefix = instance.relation.add_dims(
                             isl.dim_type.IN, relation.relation.dim(isl.dim_type.IN)
                         )
-                        relation = relation._result(
+                        relation = relation.aligned(
                             prefix.flat_range_product(relation.relation),
                             instance.values,
                             may_access=instance.may_access,
@@ -300,16 +317,16 @@ class AccessAnalysis:
         cache = self.scope.snapshot.resolved.parameters
         key = ("resolver", view)
         if key not in cache:
-            cache[key] = _RegionBindingResolver(narrow=view == "narrow")
-        return cache[key].visit(value, self.scope) if isinstance(value, Expr) else value
+            cache[key] = RegionBindingResolver(narrow=view == "narrow")
+        return cache[key].visit(value, self.scope) if isinstance(value, expr.Expr) else value
 
-    def _affine(self, value, *, caller=False):
+    def affine(self, value, *, caller=False):
         cache = self.scope.snapshot.resolved.parameters
         key = ("affine", id(value), caller)
         if key not in cache:
             values = {}
             scope = self.scope.caller_scope if caller else self.scope
-            term = AccessRelation.affine_of(value, scope, values=values)
+            term = access.affine_of(value, scope, values=values)
             cache[key] = (value, term, values)
         return cache[key][1:]
 
@@ -317,8 +334,8 @@ class AccessAnalysis:
         key = (id(call), ctx.topology_level)
         if key not in self.projections:
             stated = self.relations.get(id(call))
-            stated = relations_of(call, ctx) if stated is None else stated[1]
-            self.projections[key] = tuple(r.normalized(ctx) for r in projected(stated, call, ctx))
+            stated = access.relations_of(call, ctx) if stated is None else stated[1]
+            self.projections[key] = tuple(r.normalized(ctx) for r in access.projected(stated, call, ctx))
         return self.projections[key]
 
     def project(self, relation, *, view="narrow"):
@@ -326,23 +343,23 @@ class AccessAnalysis:
         key = ("bound", id(relation), view)
         if key in self.projections:
             return self.projections[key][1]
-        result = self._project(relation, view=view)
+        result = self.project_relation(relation, view=view)
         self.projections[key] = (relation, result)
         return result
 
-    def _project(self, relation, *, view):
+    def project_relation(self, relation, *, view):
         provenance = self.scope.provenance
         caller_provenance = provenance.caller_provenance
         if caller_provenance is None:
             return relation.constrain(self.scope.domain)
         result = relation
         for name, value in tuple(relation.values.items()):
-            if not isinstance(value, Expr):
+            if not isinstance(value, expr.Expr):
                 continue
             resolved = self.resolve_parameter(value, view=view)
             if resolved is value:
                 continue
-            term, values = self._affine(resolved, caller=True)
+            term, values = self.affine(resolved, caller=True)
             named = isl.pw_aff(f"[{name}] -> {{ [({name})] }}")
             result = result.constrain(named.eq_set(term).params(), values).project((value,))
         caller = caller_provenance.scope
@@ -359,91 +376,101 @@ class IterationScope:
                 owner,
                 parent,
                 children,
-                AccessRelation(isl.map("{ [] -> [] }")) if domain is None else domain,
+                access.Relation(isl.map("{ [] -> [] }")) if domain is None else domain,
                 mesh,
                 topologies,
             )
         )
-        self._definition = self
-        self._binding = self
+        self.definition = self
+        self.binding = self
         self.caller_scope = None
-        self._arguments = {}
-        self._instance = None
+        self.arguments = {}
+        self.instance = None
         self.provenance = ValueProvenance(self)
-        self.access = AccessAnalysis(self)
+        self.access = ScopeAccess(self)
 
     @classmethod
-    def _entry(cls, definition, binding=None, *, caller=None, arguments=None, instance=None):
+    def from_definition(
+        cls, definition, binding=None, *, caller=None, arguments=None, instance=None
+    ):
+        """A calling-environment entry over the shared facts of *definition*."""
         entry = object.__new__(cls)
-        entry.snapshot = ScopeSnapshot(definition.snapshot.definition)
-        entry._definition = definition
-        entry._binding = entry if binding is None else binding
-        entry.caller_scope = caller if binding is None else binding.caller_scope
-        entry._arguments = {} if arguments is None else dict(arguments)
-        entry._instance = instance
-        entry.provenance = ValueProvenance(entry)
-        entry.access = AccessAnalysis(entry)
+        entry.bind(definition, binding, caller, arguments, instance)
         return entry
+
+    def bind(self, definition, binding, caller, arguments, instance) -> None:
+        """Place this scope in the calling environment given by *binding* or *caller*."""
+        self.snapshot = ScopeSnapshot(definition.snapshot.definition)
+        self.definition = definition
+        self.binding = self if binding is None else binding
+        self.caller_scope = caller if binding is None else binding.caller_scope
+        self.arguments = {} if arguments is None else dict(arguments)
+        self.instance = instance
+        self.provenance = ValueProvenance(self)
+        self.access = ScopeAccess(self)
 
     def attach(self, *, call_site, callee, arguments, instance=None):
         """Graft one call edge without visiting or copying the definition's children."""
-        key = SSAValue(call_site)
+        key = core.SSAValue(call_site)
         previous = self.snapshot.attachments.get(key)
         if (
             previous is None
-            or previous._definition is not callee
-            or previous._instance is not instance
-            or previous._arguments.keys() != arguments.keys()
-            or any(previous._arguments[name] is not value for name, value in arguments.items())
+            or previous.definition is not callee
+            or previous.instance is not instance
+            or previous.arguments.keys() != arguments.keys()
+            or any(previous.arguments[name] is not value for name, value in arguments.items())
         ):
-            self.snapshot.attachments[key] = self._entry(
-                callee,
-                caller=self,
-                arguments=arguments,
-                instance=instance,
+            self.snapshot.attach(
+                key,
+                self.from_definition(callee, caller=self, arguments=arguments, instance=instance),
             )
         return self.snapshot.attachments[key]
 
     def attachment(self, call_site):
         """Follow an existing edge in this calling environment."""
-        call_site = call_site if isinstance(call_site, SSAValue) else SSAValue(call_site)
+        call_site = call_site if isinstance(call_site, core.SSAValue) else core.SSAValue(call_site)
         edges = self.snapshot.attachments
-        if call_site not in edges and self._definition is not self:
-            template = self._definition.snapshot.attachments.get(call_site)
+        if call_site not in edges and self.definition is not self:
+            template = self.definition.snapshot.attachments.get(call_site)
             if template is not None:
                 instance = template.access.instance
-                edges[call_site] = self._entry(
-                    template._definition,
-                    caller=self,
-                    arguments=template.provenance.arguments,
-                    instance=None if instance is None else self.access.project(instance),
+                self.snapshot.attach(
+                    call_site,
+                    self.from_definition(
+                        template.definition,
+                        caller=self,
+                        arguments=template.provenance.arguments,
+                        instance=None if instance is None else self.access.project(instance),
+                    ),
                 )
         return edges.get(call_site)
 
-    def _at_definition(self, definition):
+    def at_definition(self, definition):
         if self.caller_scope is None:
             return definition
-        root = self._binding
-        if definition is root._definition:
+        root = self.binding
+        if definition is root.definition:
             return root
         nodes = root.snapshot.resolved.scopes
         if definition not in nodes:
-            nodes[definition] = self._entry(definition, root)
+            nodes[definition] = self.from_definition(definition, root)
         return nodes[definition]
 
     def at(self, path):
         """Locate an occurrence using recorded locations and existing call edges."""
         scope = self
         for index, operation in enumerate(path):
-            operation = operation if isinstance(operation, SSAValue) else SSAValue(operation)
-            scope = scope._at_definition(scope.snapshot.definition.locations[id(operation.expr)])
+            operation = (
+                operation if isinstance(operation, core.SSAValue) else core.SSAValue(operation)
+            )
+            scope = scope.at_definition(scope.snapshot.definition.locations[id(operation.expr)])
             if index + 1 < len(path):
                 scope = scope.attachment(operation)
                 if scope is None:
-                    raise AnalysisError("access path has no recorded call attachment")
+                    raise Error("access path has no recorded call attachment")
         return scope
 
-    def _access_environment(self, path):
+    def access_environment(self, path):
         """Interpret the existing access index in its attached execution environment."""
         origin = self.at(path)
         loops = list(origin.loop_scopes)
@@ -460,15 +487,27 @@ class IterationScope:
     @property
     def parent(self):
         parent = self.snapshot.definition.parent
-        return None if parent is None else self._at_definition(parent)
+        return None if parent is None else self.at_definition(parent)
 
     @property
     def children(self):
-        return tuple(self._at_definition(child) for child in self.snapshot.definition.children)
+        return tuple(self.at_definition(child) for child in self.snapshot.definition.children)
 
-    @children.setter
-    def children(self, value):
-        self.snapshot.definition.children = value
+    def add_child(self, child):
+        """Nest *child* last in this scope's definition."""
+        self.snapshot.definition.add_child(child)
+
+    def locate(self, node, scope=None):
+        """Record that *node* stands in *scope*, or in this scope when none is given."""
+        self.snapshot.definition.locate(node, self if scope is None else scope)
+
+    def share_facts(self, values, locations=None):
+        """Read value facts, and optionally locations, from the tables of an enclosing build."""
+        self.snapshot.definition.share(values, locations)
+
+    def keep_allocation(self, node, summary):
+        """Remember the allocation summary resolved at *node*."""
+        self.snapshot.resolved.keep_allocation(node, summary)
 
     @property
     def domain(self):
@@ -495,7 +534,7 @@ class IterationScope:
 
     @property
     def loop_scopes(self):
-        return tuple(reversed([s for s in self.ancestors() if isinstance(s.owner, LoopRegion)]))
+        return tuple(reversed([s for s in self.ancestors() if isinstance(s.owner, core.LoopRegion)]))
 
     @property
     def captures(self):
@@ -506,8 +545,8 @@ class IterationScope:
 
     def capture_root(self, value):
         """Read capture identities without recursively resolving their relations."""
-        while isinstance(value, Var):
-            entry = self.provenance.snapshot.get(SSAValue(value))
+        while isinstance(value, expr.Var):
+            entry = self.provenance.snapshot.get(core.SSAValue(value))
             if entry is None or entry.forward is None:
                 break
             value = entry.forward.expr
@@ -529,7 +568,7 @@ class IterationScope:
         return (
             1
             if self.mesh is None or unit is None
-            else _positions_at(self.mesh, unit, self.topologies)
+            else positions_at(self.mesh, unit, self.topologies)
         )
 
     def active_positions(self, unit):
@@ -538,7 +577,7 @@ class IterationScope:
 
     def dependency_trips(self, formals):
         changing = set().union(*(self.provenance.varies(p) for p in formals))
-        count, precision = 1, AnalysisPrecision.EXACT
+        count, precision = 1, Precision.EXACT
         provenance = self.provenance
         while provenance is not None:
             for loop in provenance.scope.loop_scopes:
@@ -551,19 +590,19 @@ class IterationScope:
 
     def repeats_of(self, call, unit, stop=None):
         varying = loops = 1
-        precision = AnalysisPrecision.EXACT
+        precision = Precision.EXACT
         changing = self.provenance.varies(call)
         for scope in self.ancestors():
             if scope is stop:
                 break
-            if isinstance(scope.owner, LoopRegion):
+            if isinstance(scope.owner, core.LoopRegion):
                 loops *= scope.trips()
                 if id(scope.owner) in changing:
                     varying *= scope.trips()
                 precision = precision.join(scope.trips_precision)
         return Repeats(varying, loops, self.mesh_positions(unit), precision)
 
-    def _counted(self) -> tuple[int, AnalysisPrecision]:
+    def counted(self) -> tuple[int, Precision]:
         """This scope's iteration count relative to its parent, and how exact it is.
 
         A loop runs its own span, not the grid it is entered from, so the count
@@ -573,24 +612,22 @@ class IterationScope:
         widest span is an upper bound on every coordinate's count, which is
         what every consumer of a trip count already reads it as.
         """
-        if isinstance(self.owner, MeshRegion) or self.parent is None:
-            return 1, AnalysisPrecision.EXACT
+        if isinstance(self.owner, core.MeshRegion) or self.parent is None:
+            return 1, Precision.EXACT
         owner = self.owner
-        step = static_dim_value(owner.step)
+        step = expr.static_dim_value(owner.step)
         if step is None:
-            raise AnalysisError(
+            raise Error(
                 f"loop {induction_name(owner)!r} steps by {owner.step!r}, which is not "
                 "a number; how often it runs is not stated"
             )
         bounds = span_bounds(owner)
         if bounds is None:
             refuse_runtime_bound(
-                owner, "extent" if static_dim_value(owner.extent) is None else "start"
+                owner, "extent" if expr.static_dim_value(owner.extent) is None else "start"
             )
         least, widest = bounds
-        precision = (
-            AnalysisPrecision.EXACT if widest <= least else AnalysisPrecision.UPPER_BOUND
-        )
+        precision = Precision.EXACT if widest <= least else Precision.UPPER_BOUND
         if step <= 0 or widest <= 0:
             return 1, precision
         return max(1, -(-widest // step)), precision
@@ -599,11 +636,11 @@ class IterationScope:
         """Return this scope's iteration count relative to its parent."""
         cache = self.snapshot.resolved.parameters
         if "trips" not in cache:
-            cache["trips"] = self._counted()
+            cache["trips"] = self.counted()
         return cache["trips"][0]
 
     @property
-    def trips_precision(self) -> AnalysisPrecision:
+    def trips_precision(self) -> Precision:
         """How exactly :meth:`trips` counts this scope's iterations.
 
         ``EXACT`` where the span between the bounds is a number, ``UPPER_BOUND``
@@ -614,7 +651,7 @@ class IterationScope:
         return self.snapshot.resolved.parameters["trips"][1]
 
 
-class ScopeBuilder(ValuationVisitor[None]):
+class ScopeBuilder(valuation.Visitor[None]):
     """Calculate one definition's value and access facts in a single traversal."""
 
     def __init__(
@@ -626,22 +663,22 @@ class ScopeBuilder(ValuationVisitor[None]):
         self.snapshot = {}
         self.seeds = {}
 
-    def _views(self, ctx):
+    def views_of(self, ctx):
         logical = ctx if ctx.topology_level is None else replace(ctx, topology_level=None)
         return {view: ctx if view == "unit" else logical for view in self.views}
 
-    def _record(self, expr, ctx, *, forward=None, alias=None, relations=None, views=None):
-        ctx.scope.snapshot.definition.locations[id(expr)] = ctx.scope
-        views = self._views(ctx) if views is None else views
+    def record_node(self, node, ctx, *, forward=None, alias=None, relations=None, views=None):
+        ctx.scope.locate(node)
+        views = self.views_of(ctx) if views is None else views
         scope = ctx.scope
         changing = set()
-        for operand in expr_children(expr):
+        for operand in core.expr_children(node):
             changing.update(scope.provenance.varies(operand))
-        if id(expr) in self.seeds:
-            changing.add(id(self.seeds[id(expr)].owner))
-        if isinstance(expr, Var) and any(expr is p for p in self.graph.params):
-            changing.add(id(expr))
-        for value in SSAValue.leaves(expr):
+        if id(node) in self.seeds:
+            changing.add(id(self.seeds[id(node)].owner))
+        if isinstance(node, expr.Var) and any(node is p for p in self.graph.params):
+            changing.add(id(node))
+        for value in core.ssa_leaves(node):
             source = None if forward is None else forward[value.index]
             origin = None if source is None else scope.provenance.lookup(source)
             if origin is not None:
@@ -653,7 +690,7 @@ class ScopeBuilder(ValuationVisitor[None]):
                     relation, root = getattr(origin, view), origin.root
                 elif alias is not None:
                     origin_alias = scope.provenance.lookup(alias.target)
-                    relation = renaming_relation(expr, local, relations[view]).normalized(scope)
+                    relation = access.renaming_relation(node, local, relations[view]).normalized(scope)
                     relation, _ = eliminate_parameters(
                         relation,
                         scope,
@@ -666,7 +703,7 @@ class ScopeBuilder(ValuationVisitor[None]):
                     relation = None if upstream is None else relation.compose(upstream)
                     root = origin_alias.root
                 else:
-                    relation = identity_access(leaf_rank(value.leaf(local.local_type_of(expr))))
+                    relation = access.identity(utils.leaf_rank(value.leaf(local.local_type_of(node))))
                 view_relations[view] = (
                     None if relation is None else relation.constrain(scope.domain)
                 )
@@ -674,29 +711,29 @@ class ScopeBuilder(ValuationVisitor[None]):
                 root, **view_relations, varies=frozenset(changing), forward=source
             )
 
-    def _record_accesses(self, call, ctx):
-        scope, access = ctx.scope, ctx.scope.access
-        if not SSAValue.leaves(call) or access_relation_registry.lookup(type(call.target)) is None:
-            self._record(call, ctx)
+    def record_accesses(self, call, ctx):
+        scope, acc = ctx.scope, ctx.scope.access
+        if not core.ssa_leaves(call) or not access.relation_registry.has(type(call.target)):
+            self.record_node(call, ctx)
             return
-        views = self._views(ctx)
+        views = self.views_of(ctx)
         logical = views["device"] if "device" in views else replace(ctx, topology_level=None)
         try:
-            stated = relations_of(call, logical)
-            access.relations[id(call)] = (call, stated)
+            stated = access.relations_of(call, logical)
+            acc.record_relations(call, stated)
             relations = {
-                view: access.projected_relations(call, local) for view, local in views.items()
+                view: acc.projected_relations(call, local) for view, local in views.items()
             }
             alias = (
                 buffer_alias(call, logical, relations["narrow"])
-                if aliased_operand(call) is not None
+                if access.aliased_operand(call) is not None
                 else None
             )
-            self._record(call, ctx, alias=alias, relations=relations, views=views)
+            self.record_node(call, ctx, alias=alias, relations=relations, views=views)
             for view, local in views.items():
                 for inputs, boundaries, into in (
-                    (True, relations[view][: len(call.args)], access.accesses),
-                    (False, relations[view][len(call.args) :], access.outputs),
+                    (True, relations[view][: len(call.args)], acc.accesses),
+                    (False, relations[view][len(call.args) :], acc.outputs),
                 ):
                     built = tuple(
                         item
@@ -712,15 +749,15 @@ class ScopeBuilder(ValuationVisitor[None]):
                             formals=() if self.is_root else self.graph.params,
                         )
                     )
-                    into.setdefault(view, {})[(SSAValue(call),)] = (call, built)
+                    into.setdefault(view, {})[(core.SSAValue(call),)] = (call, built)
         except (NotImplementedError, TypeError, ValueError, isl.Error):
-            self._record(call, ctx)
+            self.record_node(call, ctx)
             for view in self.views:
-                access.refused[view] = access.refused.get(view, frozenset()) | {call}
-                access.accesses.setdefault(view, {})[(SSAValue(call),)] = (call, ())
+                acc.refuse(view, {call})
+                acc.accesses.setdefault(view, {})[(core.SSAValue(call),)] = (call, ())
 
     def on_region_start(self, region, ctx):
-        inner = TypeInferContext.enter_region(ctx, region)
+        inner = typeinfer.TypeInferContext.enter_region(ctx, region)
         child = IterationScope(
             region,
             parent=ctx.scope,
@@ -728,18 +765,17 @@ class ScopeBuilder(ValuationVisitor[None]):
             mesh=inner.current_mesh,
             topologies=ctx.topologies,
         )
-        child.snapshot.definition.values = self.snapshot
-        child.snapshot.definition.locations = ctx.scope.snapshot.definition.locations
-        child.snapshot.definition.locations[id(region)] = ctx.scope
-        ctx.scope.children += (child,)
+        child.share_facts(self.snapshot, ctx.scope.snapshot.definition.locations)
+        ctx.scope.locate(region)
+        ctx.scope.add_child(child)
         inner = replace(inner, scope=child)
-        if isinstance(region, LoopRegion):
+        if isinstance(region, core.LoopRegion):
             for param in (region.induction_var, *(phi for phi, _, _ in region.carries())):
                 self.seeds[id(param)] = child
-                child.snapshot.definition.locations[id(param)] = child
+                child.locate(param)
         for param, argument in region.captures():
-            self._record(param, inner, forward=SSAValue.leaves(argument))
-            self._memo[id(param)] = (param, None)
+            self.record_node(param, inner, forward=core.ssa_leaves(argument))
+            self.memo[id(param)] = (param, None)
         return inner
 
     def on_region_end(self, region, operands, ctx):
@@ -748,72 +784,70 @@ class ScopeBuilder(ValuationVisitor[None]):
             for view, records in getattr(ctx.scope.access, name).items():
                 getattr(parent, name).setdefault(view, {}).update(records)
         for view, refused in ctx.scope.access.refused.items():
-            parent.refused[view] = parent.refused.get(view, frozenset()) | refused
+            parent.refuse(view, refused)
         parent.relations.update(ctx.scope.access.relations)
         return operands
 
-    def visit_leaf_Tuple(self, expr, operands, ctx):
-        self._record(
-            expr,
+    def visit_leaf_Tuple(self, node, operands, ctx):
+        self.record_node(
+            node,
             ctx,
-            forward=tuple(v for element in expr.elements for v in SSAValue.leaves(element)),
+            forward=tuple(v for element in node.elements for v in core.ssa_leaves(element)),
         )
 
-    def visit_leaf_MeshRegion(self, expr, operands, ctx):
-        self._record(expr, ctx, forward=SSAValue.leaves(expr.body))
+    def visit_leaf_MeshRegion(self, node, operands, ctx):
+        self.record_node(node, ctx, forward=core.ssa_leaves(node.body))
 
-    def visit_leaf_LoopRegion(self, expr, operands, ctx):
-        values = tuple(phi for phi, _, _ in expr.carries()) or (expr.body,)
-        self._record(
-            expr, ctx, forward=tuple(v for value in values for v in SSAValue.leaves(value))
+    def visit_leaf_LoopRegion(self, node, operands, ctx):
+        values = tuple(phi for phi, _, _ in node.carries()) or (node.body,)
+        self.record_node(
+            node, ctx, forward=tuple(v for value in values for v in core.ssa_leaves(value))
         )
 
     def visit_TupleGetItem(self, call, ctx):
-        index = static_dim_value(call.args[1])
-        self._record_accesses(call, ctx)
+        index = expr.static_dim_value(call.args[1])
+        self.record_accesses(call, ctx)
         if index is not None:
-            begin, count = leaf_span(call.args[0].type, index)
-            self._record(
+            begin, count = utils.leaf_span(call.args[0].type, index)
+            self.record_node(
                 call,
                 ctx,
-                forward=tuple(SSAValue(call.args[0], i) for i in range(begin, begin + count)),
+                forward=tuple(core.SSAValue(call.args[0], i) for i in range(begin, begin + count)),
             )
 
     def on_call_start(self, call, ctx):
         inner = super().on_call_start(call, ctx)
-        ctx.scope.snapshot.definition.locations[id(call)] = ctx.scope
+        ctx.scope.locate(call)
         return inner
 
     def visit_Call(self, call, ctx):
         self.visit_operands(call, ctx)
         callee_scope = ctx.callee_scope
         if callee_scope is None:
-            handler = getattr(self, f"visit_{type(call.target).__name__}", self._record_accesses)
+            handler = getattr(self, f"visit_{type(call.target).__name__}", self.record_accesses)
             handler(call, ctx)
             return
-        for value in SSAValue.leaves(call):
+        for value in core.ssa_leaves(call):
             self.snapshot[value] = replace(
                 callee_scope.provenance.result(value.index), forward=None
             )
         for name in ("accesses", "outputs"):
             for view, records in getattr(callee_scope.access, name).items():
                 into = getattr(ctx.scope.access, name).setdefault(view, {})
-                into.update({(SSAValue(call), *path): record for path, record in records.items()})
+                into.update({(core.SSAValue(call), *path): record for path, record in records.items()})
         for view, refused in callee_scope.access.refused.items():
-            ctx.scope.access.refused[view] = (
-                ctx.scope.access.refused.get(view, frozenset()) | refused
-            )
+            ctx.scope.access.refuse(view, refused)
 
-    def default_visit_leaf(self, expr, operands, ctx):
-        self._record(expr, ctx)
+    def default_visit_leaf(self, node, operands, ctx):
+        self.record_node(node, ctx)
 
     def build(self):
-        mesh = get_metadata(self.graph, ExecutionMeshMetadata)
+        mesh = expr.get_metadata(self.graph, ExecutionMeshMetadata)
         root = IterationScope(
             self.graph, mesh=None if mesh is None else mesh.mesh, topologies=self.context.topologies
         )
-        root.snapshot.definition.values = self.snapshot
-        self.context.scope = root
+        root.share_facts(self.snapshot)
+        self.context.bind_scope(root)
         ctx = replace(self.context, owner=self.graph, parent=None, current_mesh=root.mesh)
         for param in self.graph.params:
             self.visit(param, ctx)
@@ -823,3 +857,11 @@ class ScopeBuilder(ValuationVisitor[None]):
 
 def build_scopes(module, graph, *, views=("narrow", "device", "unit"), ctx=None):
     return ScopeBuilder(module, graph, views=views, ctx=ctx).build()
+
+
+__all__ = [
+    "IterationScope",
+    "Repeats",
+    "ScopeBuilder",
+    "build_scopes",
+]

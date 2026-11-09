@@ -9,33 +9,17 @@ from tests.nvidia.cuda.schedule._support import (
     _evaluate_call,
     _UnstatedInstruction,
 )
-from tilefoundry.evaluator import EvalError
-from tilefoundry.evaluator.value import to_torch_dtype
-from tilefoundry.ir.hir.schedule import ScheduleOp
-from tilefoundry.ir.tir.arange import Arange as TirArange
-from tilefoundry.ir.tir.async_copy import CopyAsync
-from tilefoundry.ir.types import (
-    DType,
-    Layout,
-    Mesh,
-    Partial,
-    ShardLayout,
-    StorageKind,
-    TensorType,
-    Topology,
-)
-from tilefoundry_nvidia.cuda.ir.tir.memory.copy_reduce_async_tensor import CopyReduceAsyncTensor
-from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
-from tilefoundry_nvidia.cuda.ir.tir.nn.sm80_mma import Mma
-from tilefoundry_nvidia.cuda.ir.tir.nn.wgmma import Form, Wgmma
+from tilefoundry.interfaces import evaluator
+from tilefoundry.ir import expr, hir, tir, types
+from tilefoundry_nvidia.cuda.ir.tir import memory, nn
 
 
-@pytest.mark.parametrize("dtype", (DType.i32, DType.i64))
+@pytest.mark.parametrize("dtype", (expr.DType.i32, expr.DType.i64))
 def test_schedule_arange_evaluates_static_coordinates(dtype) -> None:
-    type_ = TensorType((8,), dtype, Layout((8,), (1,)), StorageKind.RMEM)
-    torch_dtype = to_torch_dtype(dtype)
+    type_ = types.TensorType((8,), dtype, types.Layout((8,), (1,)), expr.StorageKind.RMEM)
+    torch_dtype = evaluator.to_torch_dtype(dtype)
     result = _evaluate_call(
-        ScheduleOp(op=TirArange(start=3, step=2)),
+        hir.schedule.ScheduleOp(op=tir.arange.Arange(start=3, step=2)),
         ((type_, torch.empty(8, dtype=torch_dtype)),),
         type_,
     )
@@ -43,13 +27,13 @@ def test_schedule_arange_evaluates_static_coordinates(dtype) -> None:
 
 
 def test_schedule_copy_returns_source() -> None:
-    layout = Layout((4,), (1,))
-    source_type = TensorType((4,), DType.bf16, layout, StorageKind.GMEM)
-    result_type = TensorType((4,), DType.bf16, layout, StorageKind.SMEM)
+    layout = types.Layout((4,), (1,))
+    source_type = types.TensorType((4,), expr.DType.bf16, layout, expr.StorageKind.GMEM)
+    result_type = types.TensorType((4,), expr.DType.bf16, layout, expr.StorageKind.SMEM)
     source = torch.arange(4, dtype=torch.bfloat16)
 
     result = _evaluate_call(
-        ScheduleOp(op=CopyAsync()),
+        hir.schedule.ScheduleOp(op=tir.async_copy.CopyAsync()),
         ((source_type, source), (result_type, torch.zeros_like(source))),
         result_type,
     )
@@ -58,18 +42,18 @@ def test_schedule_copy_returns_source() -> None:
 
 
 def test_reduce_store_adds_to_destination():
-    cta = Mesh((Topology("cta", 2),), Layout((2,), (1,)))
-    source_type = TensorType(
+    cta = types.Mesh((types.Topology("cta", 2),), types.Layout((2,), (1,)))
+    source_type = types.TensorType(
         (64, 64),
-        DType.f32,
-        ShardLayout(Layout((64, 64), (64, 1)), (Partial("sum"),), cta),
-        StorageKind.SMEM,
+        expr.DType.f32,
+        types.ShardLayout(types.Layout((64, 64), (64, 1)), (types.Partial("sum"),), cta),
+        expr.StorageKind.SMEM,
     )
-    result_type = TensorType((64, 64), DType.f32, Layout((64, 64), (64, 1)), StorageKind.GMEM)
+    result_type = types.TensorType((64, 64), expr.DType.f32, types.Layout((64, 64), (64, 1)), expr.StorageKind.GMEM)
     source = torch.arange(4096, dtype=torch.float32).reshape(64, 64)
     destination = torch.full_like(source, 7)
     result = _evaluate_call(
-        ScheduleOp(op=CopyReduceAsyncTensor()),
+        hir.schedule.ScheduleOp(op=memory.CopyReduceAsyncTensor()),
         ((source_type, source), (result_type, destination)),
         result_type,
     )
@@ -79,12 +63,12 @@ def test_reduce_store_adds_to_destination():
 @pytest.mark.parametrize(
     ("atom", "dtype", "shape"),
     (
-        pytest.param(Mma(), DType.bf16, (16, 16, 8), id="sm80_bf16"),
+        pytest.param(nn.Mma(), expr.DType.bf16, (16, 16, 8), id="sm80_bf16"),
         pytest.param(
-            Wgmma(n=8, dtype="fp8e4m3", form=Form.SS), DType.fp8e4m3, (64, 32, 8), id="fp8_ss"
+            nn.Wgmma(n=8, dtype="fp8e4m3", form=nn.Form.SS), expr.DType.fp8e4m3, (64, 32, 8), id="fp8_ss"
         ),
         pytest.param(
-            Wgmma(n=8, dtype="fp8e4m3", form=Form.RS), DType.fp8e4m3, (64, 32, 8), id="fp8_rs"
+            nn.Wgmma(n=8, dtype="fp8e4m3", form=nn.Form.RS), expr.DType.fp8e4m3, (64, 32, 8), id="fp8_rs"
         ),
     ),
 )
@@ -94,10 +78,10 @@ def test_schedule_mma_accumulates_exact_product(atom, dtype, shape) -> None:
     Column 0 of lhs holds 2**-8, so each sum carries bits an operand-dtype result drops.
     """
     m, k, n = shape
-    operand = to_torch_dtype(dtype)
-    acc_type = TensorType((m, n), DType.f32, None, StorageKind.RMEM)
-    lhs_type = TensorType((m, k), dtype, None, StorageKind.RMEM)
-    rhs_type = TensorType((k, n), dtype, None, StorageKind.RMEM)
+    operand = evaluator.to_torch_dtype(dtype)
+    acc_type = types.TensorType((m, n), expr.DType.f32, None, expr.StorageKind.RMEM)
+    lhs_type = types.TensorType((m, k), dtype, None, expr.StorageKind.RMEM)
+    rhs_type = types.TensorType((k, n), dtype, None, expr.StorageKind.RMEM)
     acc = torch.arange(m * n, dtype=torch.float32).reshape(m, n)
     lhs = (torch.arange(m * k).reshape(m, k) % 5).float()
     lhs[:, 0] = 2.0**-8
@@ -105,7 +89,7 @@ def test_schedule_mma_accumulates_exact_product(atom, dtype, shape) -> None:
     rhs = (torch.arange(k * n).reshape(k, n) % 3).to(operand)
 
     scheduled = _evaluate_call(
-        ScheduleOp(op=TiledMma(atom=atom)),
+        hir.schedule.ScheduleOp(op=nn.TiledMma(atom=atom)),
         ((acc_type, acc), (lhs_type, lhs), (rhs_type, rhs)),
         acc_type,
     )
@@ -116,8 +100,8 @@ def test_schedule_mma_accumulates_exact_product(atom, dtype, shape) -> None:
 
 
 def test_schedule_evaluation_rejects_unregistered_instruction() -> None:
-    type_ = TensorType((4,), DType.bf16, Layout((4,), (1,)), StorageKind.RMEM)
+    type_ = types.TensorType((4,), expr.DType.bf16, types.Layout((4,), (1,)), expr.StorageKind.RMEM)
     value = torch.arange(4, dtype=torch.bfloat16)
 
-    with pytest.raises(EvalError, match="no schedule evaluator registered"):
-        _evaluate_call(ScheduleOp(op=_UnstatedInstruction()), ((type_, value),), type_)
+    with pytest.raises(evaluator.EvalError, match="no schedule evaluator registered"):
+        _evaluate_call(hir.schedule.ScheduleOp(op=_UnstatedInstruction()), ((type_, value),), type_)

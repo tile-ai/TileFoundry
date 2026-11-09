@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="caller", target=CpuTarget())
+@module(entry="caller", target=cpu.Target())
 class _Forward:
     @func
     def caller(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
-        y = callee(x, g)  # noqa: F821 — defined below, unresolved on purpose
+        y = callee(x, g)
         return tf.add(y, y)
 
     @func

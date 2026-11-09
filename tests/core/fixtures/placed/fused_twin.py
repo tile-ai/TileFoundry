@@ -1,11 +1,11 @@
 """A placed square-subtract expression and its runtime reference."""
 
+from tilefoundry import runtime
 from tilefoundry.dsl import *
-from tilefoundry.runtime import runtime_func, runtime_module
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="fused", target=CpuTarget(), topologies=(Topology("cta", 168),))
+@module(entry="fused", target=cpu.Target(), topologies=(Topology("cta", 168),))
 class Fused:
     @func
     def fused(x: Tensor[(168,), "f32"]) -> Tensor[(168,), "f32"]:
@@ -16,8 +16,8 @@ class Fused:
             return tf.reshard(shifted, (168 @ cta.block,), "gmem")
 
 
-@runtime_module(Fused)
+@runtime.module(Fused)
 class FusedTwin:
-    @runtime_func
+    @runtime.func
     def fused(self, x):
         return x * x - x

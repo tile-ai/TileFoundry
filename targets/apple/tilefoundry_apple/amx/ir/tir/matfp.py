@@ -1,16 +1,8 @@
-from tilefoundry.ir.core import OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.hir.nn.matmul import MatMul
-from tilefoundry.ir.pattern import (
-    LayoutPattern,
-    RangePattern,
-    SwitchPattern,
-    TensorPattern,
-    WildcardPattern,
-)
-from tilefoundry.ir.pattern.predicates import Bits, In, Table, variable
-from tilefoundry.ir.types import DType, StorageKind
-from tilefoundry.visitor_registry.candidates import HirMatch
+"""AMX MATFP Ops."""
+
+from tilefoundry.interfaces import schedule
+from tilefoundry.ir import expr, pattern
+from tilefoundry.ir.hir import nn
 
 from .common import (
     FPALU,
@@ -19,18 +11,18 @@ from .common import (
     IndexMode,
     Repeat,
     Shuffle,
-    bind,
     instruction_versions,
 )
+from .semantics import register_semantics
 
-R = MemoryEffect.READ
-W = MemoryEffect.WRITE
+R = expr.MemoryEffect.READ
+W = expr.MemoryEffect.WRITE
 
 
 class Matfp(AmxOp):
     hir_matches = tuple(
-        HirMatch(
-            MatMul,
+        schedule.HirMatch(
+            nn.MatMul,
             when={"a_layout": "MK", "b_layout": "KN"},
             attributes={"fp_mode": mode, "alu": FPALU.ADD_PRODUCT},
             operands={"acc": "result", "lhs": "lhs", "rhs": "rhs"},
@@ -38,85 +30,85 @@ class Matfp(AmxOp):
         for mode in FPMode
     )
     mnemonic = "MATFP"
-    capability = OpCapability("amx_matfp")
+    capability = expr.OpCapability("amx_matfp")
     resource = "amx_engine"
     roles = ("acc", "lhs", "rhs", "table")
     writes = ("acc",)
     register_roles = {"acc": "z", "lhs": "y", "rhs": "x", "table": "indexed_bank"}
-    fp_mode = ParamDef(
+    fp_mode = expr.ParamDef(
         kind="attribute",
         annotation=FPMode,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "fp_mode",
             predicates=(
-                (variable("amx_generation") >= 2)
-                | ~In(variable("fp_mode"), (FPMode.BF16, FPMode.BF16_F32)),
+                (pattern.variable("amx_generation") >= 2)
+                | ~pattern.In(pattern.variable("fp_mode"), (FPMode.BF16, FPMode.BF16_F32)),
             ),
         ),
         default=FPMode.F32,
     )
-    dtype = ParamDef(
+    dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern(
+        annotation=expr.DType,
+        pattern=pattern.Wildcard(
             "dtype",
             predicates=(
                 (
-                    variable("dtype")
-                    == Table(
+                    pattern.variable("dtype")
+                    == pattern.Table(
                         (
-                            DType.bf16,
-                            DType.bf16,
-                            DType.f16,
-                            DType.f16,
-                            DType.f32,
-                            DType.f64,
-                            DType.f64,
-                            DType.f64,
+                            expr.DType.bf16,
+                            expr.DType.bf16,
+                            expr.DType.f16,
+                            expr.DType.f16,
+                            expr.DType.f32,
+                            expr.DType.f64,
+                            expr.DType.f64,
+                            expr.DType.f64,
                         )
-                    )[variable("fp_mode")]
+                    )[pattern.variable("fp_mode")]
                 ),
-                (variable("x_lanes") == 512 // Bits("dtype")),
-                (variable("y_lanes") == 512 // Bits("dtype")),
+                (pattern.variable("x_lanes") == 512 // pattern.Bits("dtype")),
+                (pattern.variable("y_lanes") == 512 // pattern.Bits("dtype")),
             ),
         ),
-        default=DType.f32,
+        default=expr.DType.f32,
     )
-    acc_dtype = ParamDef(
+    acc_dtype = expr.ParamDef(
         kind="attribute",
-        annotation=DType,
-        pattern=WildcardPattern(
+        annotation=expr.DType,
+        pattern=pattern.Wildcard(
             "acc_dtype",
             predicates=(
                 (
-                    variable("acc_dtype")
-                    == Table(
+                    pattern.variable("acc_dtype")
+                    == pattern.Table(
                         (
-                            DType.bf16,
-                            DType.f32,
-                            DType.f16,
-                            DType.f32,
-                            DType.f32,
-                            DType.f64,
-                            DType.f64,
-                            DType.f64,
+                            expr.DType.bf16,
+                            expr.DType.f32,
+                            expr.DType.f16,
+                            expr.DType.f32,
+                            expr.DType.f32,
+                            expr.DType.f64,
+                            expr.DType.f64,
+                            expr.DType.f64,
                         )
-                    )[variable("fp_mode")]
+                    )[pattern.variable("fp_mode")]
                 ),
             ),
         ),
-        default=DType.f32,
+        default=expr.DType.f32,
     )
-    alu = ParamDef(
+    alu = expr.ParamDef(
         kind="attribute",
         annotation=FPALU,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "alu",
             predicates=(
-                In(variable("alu"), (FPALU.ADD_PRODUCT, FPALU.SUB_PRODUCT, FPALU.POSITIVE_SELECT)),
-                (variable("amx_generation") >= 2)
-                | In(
-                    variable("alu"),
+                pattern.In(pattern.variable("alu"), (FPALU.ADD_PRODUCT, FPALU.SUB_PRODUCT, FPALU.POSITIVE_SELECT)),
+                (pattern.variable("amx_generation") >= 2)
+                | pattern.In(
+                    pattern.variable("alu"),
                     (
                         FPALU.ADD_PRODUCT,
                         FPALU.SUB_PRODUCT,
@@ -129,202 +121,202 @@ class Matfp(AmxOp):
         ),
         default=FPALU.ADD_PRODUCT,
     )
-    index_mode = ParamDef(
+    index_mode = expr.ParamDef(
         kind="attribute",
         annotation=IndexMode,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "index_mode",
             predicates=(
-                (variable("alu") == FPALU.ADD_PRODUCT) | (variable("index_mode") == IndexMode.NONE),
+                (pattern.variable("alu") == FPALU.ADD_PRODUCT) | (pattern.variable("index_mode") == IndexMode.NONE),
             ),
         ),
         default=IndexMode.NONE,
     )
-    index_register = ParamDef(
+    index_register = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "index_register",
             predicates=(
-                RangePattern(lo=0, hi=7),
-                (variable("index_mode") != IndexMode.NONE) | (variable("index_register") == 0),
+                pattern.Range(lo=0, hi=7),
+                (pattern.variable("index_mode") != IndexMode.NONE) | (pattern.variable("index_register") == 0),
             ),
         ),
         default=0,
     )
-    x_offset = ParamDef(
+    x_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("x_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("x_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    y_offset = ParamDef(
+    y_offset = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("y_offset", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("y_offset", predicates=(pattern.Range(lo=0, hi=511),)),
         default=64,
     )
-    z_row = ParamDef(
+    z_row = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("z_row", predicates=(RangePattern(lo=0, hi=7),)),
+        pattern=pattern.Wildcard("z_row", predicates=(pattern.Range(lo=0, hi=7),)),
         default=0,
     )
-    mask = ParamDef(
+    mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("mask", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("mask", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    y_mask = ParamDef(
+    y_mask = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern("y_mask", predicates=(RangePattern(lo=0, hi=511),)),
+        pattern=pattern.Wildcard("y_mask", predicates=(pattern.Range(lo=0, hi=511),)),
         default=0,
     )
-    shuffle_x = ParamDef(
+    shuffle_x = expr.ParamDef(
         kind="attribute",
         annotation=Shuffle,
-        pattern=WildcardPattern("shuffle_x"),
+        pattern=pattern.Wildcard("shuffle_x"),
         default=Shuffle.NONE,
     )
-    shuffle_y = ParamDef(
+    shuffle_y = expr.ParamDef(
         kind="attribute",
         annotation=Shuffle,
-        pattern=WildcardPattern("shuffle_y"),
+        pattern=pattern.Wildcard("shuffle_y"),
         default=Shuffle.NONE,
     )
-    repeat = ParamDef(
+    repeat = expr.ParamDef(
         kind="attribute",
         annotation=Repeat,
-        pattern=WildcardPattern("repeat", predicates=(Repeat.ONE,)),
+        pattern=pattern.Wildcard("repeat", predicates=(Repeat.ONE,)),
         default=Repeat.ONE,
     )
-    broadcast_mode = ParamDef(
+    broadcast_mode = expr.ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=WildcardPattern(
+        pattern=pattern.Wildcard(
             "broadcast_mode",
             predicates=(
-                RangePattern(lo=0, hi=7),
-                (variable("repeat") != Repeat.ONE) | (variable("broadcast_mode") == 0),
-                (variable("rows") == 1),
-                (variable("z_step") == 512 // Bits("acc_dtype")),
+                pattern.Range(lo=0, hi=7),
+                (pattern.variable("repeat") != Repeat.ONE) | (pattern.variable("broadcast_mode") == 0),
+                (pattern.variable("rows") == 1),
+                (pattern.variable("z_step") == 512 // pattern.Bits("acc_dtype")),
                 (
                     (
-                        (variable("acc_rows") == 512 // Bits("dtype"))
-                        & (variable("acc_lanes") == 512 // Bits("dtype"))
-                        & (variable("acc_ratio") == Bits("acc_dtype") // Bits("dtype"))
-                        & (variable("acc_inner") == 512 // Bits("acc_dtype"))
+                        (pattern.variable("acc_rows") == 512 // pattern.Bits("dtype"))
+                        & (pattern.variable("acc_lanes") == 512 // pattern.Bits("dtype"))
+                        & (pattern.variable("acc_ratio") == pattern.Bits("acc_dtype") // pattern.Bits("dtype"))
+                        & (pattern.variable("acc_inner") == 512 // pattern.Bits("acc_dtype"))
                         & (
-                            variable("acc_wide")
-                            == Table((0, 0, 1, 1, 1))[Bits("acc_dtype") // Bits("dtype")]
+                            pattern.variable("acc_wide")
+                            == pattern.Table((0, 0, 1, 1, 1))[pattern.Bits("acc_dtype") // pattern.Bits("dtype")]
                         )
                     )
                     & (
-                        ((Bits("acc_dtype") == Bits("dtype")) & (variable("acc_step") == 64))
+                        ((pattern.Bits("acc_dtype") == pattern.Bits("dtype")) & (pattern.variable("acc_step") == 64))
                         | (
-                            (Bits("acc_dtype") != Bits("dtype"))
-                            & (variable("acc_step") == 512 // Bits("dtype"))
+                            (pattern.Bits("acc_dtype") != pattern.Bits("dtype"))
+                            & (pattern.variable("acc_step") == 512 // pattern.Bits("dtype"))
                         )
                     )
                 ),
-                (variable("table_side") == Table((0, 1, 1, 1, 1))[variable("index_mode")]),
+                (pattern.variable("table_side") == pattern.Table((0, 1, 1, 1, 1))[pattern.variable("index_mode")]),
                 (
-                    variable("lhs_count")
-                    == ((512 // Bits("dtype")) * Table((8, 8, 2, 8, 4))[variable("index_mode")] + 7)
+                    pattern.variable("lhs_count")
+                    == ((512 // pattern.Bits("dtype")) * pattern.Table((8, 8, 2, 8, 4))[pattern.variable("index_mode")] + 7)
                     // 8
                 ),
-                (variable("lhs_packed") == Table((0, 0, 1, 0, 1))[variable("index_mode")]),
+                (pattern.variable("lhs_packed") == pattern.Table((0, 0, 1, 0, 1))[pattern.variable("index_mode")]),
                 (
-                    variable("rhs_count")
-                    == ((512 // Bits("dtype")) * Table((8, 2, 8, 4, 8))[variable("index_mode")] + 7)
+                    pattern.variable("rhs_count")
+                    == ((512 // pattern.Bits("dtype")) * pattern.Table((8, 2, 8, 4, 8))[pattern.variable("index_mode")] + 7)
                     // 8
                 ),
-                (variable("rhs_packed") == Table((0, 1, 0, 1, 0))[variable("index_mode")]),
+                (pattern.variable("rhs_packed") == pattern.Table((0, 1, 0, 1, 0))[pattern.variable("index_mode")]),
             ),
         ),
         default=0,
     )
-    acc = ParamDef(
+    acc = expr.ParamDef(
         kind="input",
         effect=R | W,
-        pattern=TensorPattern(
-            shape=(WildcardPattern("acc_rows"), WildcardPattern("acc_lanes")),
-            dtype=WildcardPattern("acc_dtype"),
-            storage=StorageKind.RMEM,
-            layout=SwitchPattern(
+        pattern=pattern.Tensor(
+            shape=(pattern.Wildcard("acc_rows"), pattern.Wildcard("acc_lanes")),
+            dtype=pattern.Wildcard("acc_dtype"),
+            storage=expr.StorageKind.RMEM,
+            layout=pattern.Switch(
                 "acc_wide",
                 {
-                    0: LayoutPattern(
-                        (WildcardPattern("acc_rows"), WildcardPattern("acc_lanes")),
-                        (WildcardPattern("acc_step"), 1),
+                    0: pattern.Layout(
+                        (pattern.Wildcard("acc_rows"), pattern.Wildcard("acc_lanes")),
+                        (pattern.Wildcard("acc_step"), 1),
                     ),
-                    1: LayoutPattern(
+                    1: pattern.Layout(
                         (
-                            WildcardPattern("acc_rows"),
-                            (WildcardPattern("acc_ratio"), WildcardPattern("acc_inner")),
+                            pattern.Wildcard("acc_rows"),
+                            (pattern.Wildcard("acc_ratio"), pattern.Wildcard("acc_inner")),
                         ),
-                        (WildcardPattern("acc_step"), (WildcardPattern("z_step"), 1)),
+                        (pattern.Wildcard("acc_step"), (pattern.Wildcard("z_step"), 1)),
                     ),
                 },
             ),
         ),
     )
-    lhs = ParamDef(
+    lhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=SwitchPattern(
+        pattern=pattern.Switch(
             "lhs_packed",
             {
-                0: TensorPattern(
-                    shape=(WildcardPattern("y_lanes"), 1),
-                    dtype=WildcardPattern("dtype"),
-                    storage=StorageKind.RMEM,
-                    layout=LayoutPattern((WildcardPattern("y_lanes"), 1), (1, 0)),
+                0: pattern.Tensor(
+                    shape=(pattern.Wildcard("y_lanes"), 1),
+                    dtype=pattern.Wildcard("dtype"),
+                    storage=expr.StorageKind.RMEM,
+                    layout=pattern.Layout((pattern.Wildcard("y_lanes"), 1), (1, 0)),
                 ),
-                1: TensorPattern(
-                    shape=(WildcardPattern("lhs_count"),),
-                    dtype=DType.u8,
-                    storage=StorageKind.RMEM,
-                    layout=LayoutPattern((WildcardPattern("lhs_count"),), (1,)),
+                1: pattern.Tensor(
+                    shape=(pattern.Wildcard("lhs_count"),),
+                    dtype=expr.DType.u8,
+                    storage=expr.StorageKind.RMEM,
+                    layout=pattern.Layout((pattern.Wildcard("lhs_count"),), (1,)),
                 ),
             },
         ),
     )
-    rhs = ParamDef(
+    rhs = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=SwitchPattern(
+        pattern=pattern.Switch(
             "rhs_packed",
             {
-                0: TensorPattern(
-                    shape=(1, WildcardPattern("x_lanes")),
-                    dtype=WildcardPattern("dtype"),
-                    storage=StorageKind.RMEM,
-                    layout=LayoutPattern((1, WildcardPattern("x_lanes")), (0, 1)),
+                0: pattern.Tensor(
+                    shape=(1, pattern.Wildcard("x_lanes")),
+                    dtype=pattern.Wildcard("dtype"),
+                    storage=expr.StorageKind.RMEM,
+                    layout=pattern.Layout((1, pattern.Wildcard("x_lanes")), (0, 1)),
                 ),
-                1: TensorPattern(
-                    shape=(WildcardPattern("rhs_count"),),
-                    dtype=DType.u8,
-                    storage=StorageKind.RMEM,
-                    layout=LayoutPattern((WildcardPattern("rhs_count"),), (1,)),
+                1: pattern.Tensor(
+                    shape=(pattern.Wildcard("rhs_count"),),
+                    dtype=expr.DType.u8,
+                    storage=expr.StorageKind.RMEM,
+                    layout=pattern.Layout((pattern.Wildcard("rhs_count"),), (1,)),
                 ),
             },
         ),
     )
-    table = ParamDef(
+    table = expr.ParamDef(
         kind="input",
         effect=R,
-        pattern=SwitchPattern(
+        pattern=pattern.Switch(
             "table_side",
             {
                 0: None,
-                1: TensorPattern(
-                    shape=(WildcardPattern("x_lanes"),),
-                    dtype=WildcardPattern("dtype"),
-                    storage=StorageKind.RMEM,
-                    layout=LayoutPattern((WildcardPattern("x_lanes"),), (1,)),
+                1: pattern.Tensor(
+                    shape=(pattern.Wildcard("x_lanes"),),
+                    dtype=pattern.Wildcard("dtype"),
+                    storage=expr.StorageKind.RMEM,
+                    layout=pattern.Layout((pattern.Wildcard("x_lanes"),), (1,)),
                 ),
             },
         ),
@@ -332,8 +324,10 @@ class Matfp(AmxOp):
         default=None,
     )
 
-    def __init__(self, **attrs):
-        bind(self, attrs)
-
 
 MatfpV1, MatfpV2 = instruction_versions(Matfp, (1, 2), name="matfp", category="nn")
+
+register_semantics((MatfpV1, MatfpV2,))
+
+
+__all__ = ["MatfpV1", "MatfpV2"]

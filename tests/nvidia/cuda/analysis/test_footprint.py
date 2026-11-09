@@ -7,90 +7,85 @@ from pathlib import Path
 import isl
 import pytest
 
-from tilefoundry.analysis import (
-    AnalysisPrecision,
-)
-from tilefoundry.analysis.footprint import ReachedAddresses, footprint_of, merged
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.ir.core.expr import SSAValue
-from tilefoundry.ir.types import DType
+from tilefoundry import analysis, cli
+from tilefoundry.ir import core, expr
 
 INVARIANT_REUSE = f"{Path(__file__).parents[1] / 'fixtures/placed/hand_checked.py'}:InvariantReuse"
 
 
-@pytest.mark.parametrize("counted_precision", tuple(AnalysisPrecision))
+@pytest.mark.parametrize("counted_precision", tuple(analysis.Precision))
 @pytest.mark.parametrize(
-    "missing_precision", (AnalysisPrecision.LOWER_BOUND, AnalysisPrecision.UNKNOWN)
+    "missing_precision", (analysis.Precision.LOWER_BOUND, analysis.Precision.UNKNOWN)
 )
 def test_uncounted_boundary_lowers_precision(
-    counted_precision: AnalysisPrecision,
-    missing_precision: AnalysisPrecision,
+    counted_precision: analysis.Precision,
+    missing_precision: analysis.Precision,
 ) -> None:
-    buffer = load_authored_ir(INVARIANT_REUSE).entry_function().params[0]
-    uncounted = ReachedAddresses(
-        target=SSAValue(buffer),
+    buffer = cli.load_authored_ir(INVARIANT_REUSE).entry_function().params[0]
+    uncounted = analysis.ReachedAddresses(
+        target=core.SSAValue(buffer),
         output_index=0,
         dtype=None,
         reached=None,
         precision=missing_precision,
     )
-    counted = ReachedAddresses(
-        SSAValue(buffer),
+    counted = analysis.ReachedAddresses(
+        core.SSAValue(buffer),
         0,
-        DType.bf16,
+        expr.DType.bf16,
         isl.set("{ [i] : 0 <= i < 4 }"),
         counted_precision,
     )
 
-    footprint = footprint_of(
-        merged((uncounted, counted)),
+    footprint = analysis.footprint_of(
+        analysis.merged((uncounted, counted)),
     )
 
-    assert {value: held for value, _ownership, held in footprint.buffers}[SSAValue(buffer)].of(
+    assert {value: held for value, _ownership, held in footprint.buffers}[core.SSAValue(buffer)].of(
         "gmem"
     ).total == 8
     expected = (
         missing_precision
-        if counted_precision in (AnalysisPrecision.EXACT, missing_precision)
-        else AnalysisPrecision.UNKNOWN
+        if counted_precision in (analysis.Precision.EXACT, missing_precision)
+        else analysis.Precision.UNKNOWN
     )
     assert footprint.precision is expected
-    assert footprint_of((uncounted,)).precision is missing_precision
+    assert analysis.footprint_of((uncounted,)).precision is missing_precision
 
 
-@pytest.mark.parametrize("left", tuple(AnalysisPrecision))
-@pytest.mark.parametrize("right", tuple(AnalysisPrecision))
+@pytest.mark.parametrize("left", tuple(analysis.Precision))
+@pytest.mark.parametrize("right", tuple(analysis.Precision))
 def test_tuple_output_footprints_add(
-    left: AnalysisPrecision,
-    right: AnalysisPrecision,
+    left: analysis.Precision,
+    right: analysis.Precision,
 ) -> None:
-    buffer = load_authored_ir(INVARIANT_REUSE).entry_function().params[0]
+    buffer = cli.load_authored_ir(INVARIANT_REUSE).entry_function().params[0]
     addresses = isl.set("{ [i] : 0 <= i < 4 }")
     reached = tuple(
-        ReachedAddresses(
-            target=SSAValue(buffer),
+        analysis.ReachedAddresses(
+            target=core.SSAValue(buffer),
             output_index=index,
-            dtype=DType.bf16,
+            dtype=expr.DType.bf16,
             reached=addresses,
             precision=precision,
         )
         for index, precision in enumerate((left, right))
     )
 
-    distinct = merged(reached)
-    footprint = footprint_of(
+    distinct = analysis.merged(reached)
+    footprint = analysis.footprint_of(
         distinct,
     )
     by_value = {value: held for value, _ownership, held in footprint.buffers}
-    gmem = by_value[SSAValue(buffer)].of("gmem")
+    gmem = by_value[core.SSAValue(buffer)].of("gmem")
 
     assert len(distinct) == 2
     assert gmem is not None and gmem.total == 2 * 4 * 2
     expected = (
         right
-        if left is AnalysisPrecision.EXACT
+        if left is analysis.Precision.EXACT
         else left
-        if right is AnalysisPrecision.EXACT or left is right
-        else AnalysisPrecision.UNKNOWN
+        if right is analysis.Precision.EXACT or left is right
+        else analysis.Precision.UNKNOWN
     )
     assert footprint.precision is expected

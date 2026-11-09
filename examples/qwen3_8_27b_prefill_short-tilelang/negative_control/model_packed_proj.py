@@ -20,7 +20,7 @@ import math
 from pathlib import Path
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _CONFIG = json.loads((Path(__file__).parent.parent / "config.json").read_text(encoding="utf-8"))
 config = _CONFIG["text_config"]
@@ -71,7 +71,7 @@ _TW = T + _WINDOW
 
 
 
-@module(entry="layer", target=CudaTarget("nvidia.h200_sxm"),
+@module(entry="layer", target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", 132), Topology("thread", 384)))
 class Qwen3_8DeltaNetLayer:
     """`Qwen3_5DecoderLayer` with a `Qwen3_5GatedDeltaNet` token mixer.
@@ -276,7 +276,7 @@ class Qwen3_8DeltaNetLayer:
         return attended + swiglu(post, w_gate, w_up, w_down), window, state
 
 
-@module(entry="layer", target=CudaTarget("nvidia.h200_sxm"),
+@module(entry="layer", target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", 132), Topology("thread", 384)))
 class Qwen3_8AttentionLayer:
     """`Qwen3_5DecoderLayer` with a gated `Qwen3_5Attention` token mixer."""
@@ -402,7 +402,7 @@ _LAYER = {"linear_attention": Qwen3_8DeltaNetLayer, "full_attention": Qwen3_8Att
 
 @module(
     entry="prefill",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 132), Topology("thread", 384)),
 )
 class Qwen3_8_27B:

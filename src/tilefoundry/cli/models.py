@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from tilefoundry.cli import data
+from . import data
 
 
 def catalog() -> dict[str, Any]:
@@ -16,10 +16,10 @@ def catalog() -> dict[str, Any]:
     The shipped catalog. The installed package carries no corpus, so the
     inventory is read from data rather than built by importing anything.
     """
-    return {"models": [model for model, _directory in data.model_catalog().values()]}
+    return {"models": [model for model, _ in data.model_catalog().values()]}
 
 
-def _find(name: str) -> dict[str, Any]:
+def find(name: str) -> dict[str, Any]:
     known = catalog()["models"]
     for model in known:
         if model["name"] == name:
@@ -28,7 +28,7 @@ def _find(name: str) -> dict[str, Any]:
     raise ValueError(f"no model named {name!r}; the catalog has {names}")
 
 
-def _counts(model: dict[str, Any]) -> str:
+def count_summary(model: dict[str, Any]) -> str:
     counts = model["counts"]
     return f"{counts['leaf_modules']} leaf modules, {counts['functions']} functions"
 
@@ -36,18 +36,18 @@ def _counts(model: dict[str, Any]) -> str:
 def render_models() -> str:
     """Every model the installation describes, with the size of each forest."""
     known = data.model_catalog()
-    models = [model for model, _directory in known.values()]
+    models = [model for model, _ in known.values()]
     if not models:
         return "0 models: no installed target ships models\n"
     width = max(len(model["name"]) for model in models)
 
-    roots = dict.fromkeys(directory.parent for _model, directory in known.values())
+    roots = dict.fromkeys(directory.parent for _, directory in known.values())
     lines = [f"Models in {', '.join(str(root) for root in roots)}:", ""]
-    lines += [f"  {model['name']:<{width}}  {_counts(model)}" for model in models]
+    lines += [f"  {model['name']:<{width}}  {count_summary(model)}" for model in models]
     return "\n".join(lines) + "\n"
 
 
-def _label(node: dict[str, Any]) -> str:
+def label(node: dict[str, Any]) -> str:
     """A node's Modules by name: one, or a run written as the range it covers."""
     names = node["names"]
     if len(names) == 1:
@@ -55,13 +55,13 @@ def _label(node: dict[str, Any]) -> str:
     return f"{names[0]}..{names[-1]}  ({len(names)} identical, each as shown)"
 
 
-def _tree(node: dict[str, Any], depth: int) -> list[str]:
+def tree(node: dict[str, Any], depth: int) -> list[str]:
     indent = "  " * depth
     mark = "*" if node["leaf"] else " "
-    lines = [f"{mark} {indent}{_label(node)}"]
+    lines = [f"{mark} {indent}{label(node)}"]
     lines += [f"    {indent}{signature}" for signature in node["functions"]]
     for child in node["modules"]:
-        lines += _tree(child, depth + 1)
+        lines += tree(child, depth + 1)
     return lines
 
 
@@ -72,10 +72,10 @@ def render_model(name: str) -> str:
     identically shaped, consecutively numbered Modules is one entry naming its range
     and how many it stands for.
     """
-    model = _find(name)
-    lines = [model["name"], _counts(model), ""]
+    model = find(name)
+    lines = [model["name"], count_summary(model), ""]
     for root in model["modules"]:
-        lines += _tree(root, 0)
+        lines += tree(root, 0)
     return "\n".join(lines) + "\n"
 
 
@@ -99,7 +99,7 @@ def render_source_directory(directory: Path, files: tuple[Path, ...]) -> str:
 
 def model_source(name: str) -> str:
     """The shipped model directory followed by one source summary per file."""
-    _find(name)
+    find(name)
     files = data.model_files(name)
     directory = data.model_catalog()[name][1]
     return render_source_directory(directory, files)

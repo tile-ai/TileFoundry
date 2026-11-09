@@ -1,44 +1,26 @@
+"""HIR ``Stack`` Op: join tensors along a new axis."""
+
 from __future__ import annotations
 
 from typing import Tuple
 
 import isl
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.utils import common_placements
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._helpers import resolve_anchor_storage
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.layout import Layout
-from tilefoundry.ir.types.utils import (
-    require_uniform_partial_slices,
-)
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    identity_access,
-    iterating,
-    register_access_relation,
-    relations_of,
-)
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
 
-@register_op(dialect='tf', category='tensor')
-class Stack(Op):
+@expr.register_op(dialect='tf', category='tensor')
+class Stack(expr.Op):
     """Variadic input op. See Concat for encoding rationale."""
 
-    inputs = ParamDef(kind="input", annotation=Tuple[is_ranked_tensor()], pattern=is_ranked_tensor())
-    axis = ParamDef(kind="attribute", annotation=int)
+    inputs = expr.ParamDef(kind="input", annotation=Tuple[pattern.is_ranked_tensor()], pattern=pattern.is_ranked_tensor())
+    axis = expr.ParamDef(kind="attribute", annotation=int)
 
 
-def _axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
+def normalized_axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
     raw_axis = call.target.axis
     axis = raw_axis + rank + 1 if raw_axis < 0 else raw_axis
     if not (0 <= axis <= rank):
@@ -46,25 +28,25 @@ def _axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
     return axis
 
 
-@register_typeinfer(Stack)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(Stack)
+def _(call: "Call", ctx: "TypeInferContext") -> types.TensorType:
     if not call.args:
         ctx.error(call, "Stack requires at least one input")
-    types = [ctx.type_of(a) for a in call.args]
-    base = types[0]
-    for index, t in enumerate(types[1:], start=1):
+    type_list = [ctx.type_of(a) for a in call.args]
+    base = type_list[0]
+    for index, t in enumerate(type_list[1:], start=1):
         if t.shape != base.shape:
             ctx.error(call, f"input {index} shape must match input 0")
         if t.dtype != base.dtype:
             ctx.error(call, f"input {index} dtype must match input 0")
-    axis = _axis(call, ctx, len(base.shape))
+    axis = normalized_axis(call, ctx, len(base.shape))
     new_shape = list(base.shape)
     new_shape.insert(axis, len(call.args))
     new_shape = tuple(new_shape)
     try:
-        relation = relations_of(call, ctx)
-        layout = derive_output_shard_layout(
-            tuple(types),
+        relation = access.relations_of(call, ctx)
+        layout = typeinfer.derive_output_shard_layout(
+            tuple(type_list),
             relation,
             new_shape,
             fresh_strides=True,
@@ -77,30 +59,30 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             f"cannot derive input ownership: {error}; use an explicit Reshard before Stack",
         )
     if layout is not None:
-        require_uniform_partial_slices(types, layout, "Stack")
+        ir_utils.require_uniform_partial_slices(type_list, layout, "Stack")
     else:
-        layout = Layout(new_shape)
-    storage = resolve_anchor_storage(ctx, call, *(t.storage for t in types))
-    return TensorType(shape=new_shape, dtype=base.dtype, layout=layout, storage=storage)
+        layout = types.Layout(new_shape)
+    storage = typeinfer.resolve_anchor_storage(ctx, call, *(t.storage for t in type_list))
+    return types.TensorType(shape=new_shape, dtype=base.dtype, layout=layout, storage=storage)
 
 
-@register_eval(Stack)
-def _eval_stack(ctx):
+@evaluator.register(Stack)
+def eval_stack(ctx):
     def stack(*xs):
-        return torch.stack(xs, dim=ctx.op.axis)
+        return utils.torch.stack(xs, dim=ctx.op.axis)
 
     xs = tuple(arg.tensor for arg in ctx.args)
-    placements = common_placements(*xs)
+    placements = evaluator.common_placements(*xs)
     held = (
         stack(*(x.tensor for x in xs))
         if not placements
         else tuple((p, stack(*(x.to_local(p) for x in xs))) for p in placements)
     )
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
-@register_access_relation(Stack)
-def _stack_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(Stack)
+def stack_access(call: "Call", ctx) -> tuple[access.Relation, ...]:
     """Each input writes one position of the new axis, and is read whole.
 
     The result has one more axis than its inputs, so an input's relation drops
@@ -111,17 +93,23 @@ def _stack_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     """
     stacked = tuple(ctx.type_of(call.args[0]).shape)
     rank = len(stacked) + 1
-    axis = _axis(call, ctx, rank - 1)
+    axis = normalized_axis(call, ctx, rank - 1)
     out_shape = (*stacked[:axis], len(call.args), *stacked[axis:])
     dims = [f"d{index}" for index in range(rank)]
     domain = ", ".join(dims)
     reads = ", ".join(dim for index, dim in enumerate(dims) if index != axis)
     inputs = tuple(
-        AccessRelation(
+        access.Relation(
             isl.map(f"{{ [{domain}] -> [{reads}] : d{axis} = {position} }}")
             if rank > 1
             else isl.map(f"{{ [{domain}] -> [] : d{axis} = {position} }}")
         )
         for position in range(len(call.args))
     )
-    return iterating(out_shape, (*inputs, identity_access(rank)))
+    return access.iterating(out_shape, (*inputs, access.identity(rank)))
+
+
+cost.register(Stack)(cost.structure)
+
+
+__all__ = ["Stack"]

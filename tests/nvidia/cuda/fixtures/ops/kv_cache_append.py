@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _CACHE_SHAPE = (2, 64, 4, 8)
 _NEW_SHAPE = (2, 4, 4, 8)
@@ -12,7 +12,7 @@ _CTA = Topology("cta", 2)
 
 @module(
     entry="append",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(_CTA,),
 )
 class _KVCacheAppend:

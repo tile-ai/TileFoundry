@@ -7,16 +7,13 @@ from pathlib import Path
 import pytest
 
 from tests.core._corpus import Case, case, check_case, special
-from tilefoundry.codegen.context import EmitContext
-from tilefoundry.codegen.context_builder import build_codegen_context
-from tilefoundry.codegen.linkable_function import LinkableFunction
-from tilefoundry.codegen.linkable_module import LinkableModule
+from tilefoundry import codegen
 
 SQUARE = Path(__file__).parents[1] / "fixtures" / "tir" / "square.py"
 
 
-def _linkable_function(name: str) -> LinkableFunction:
-    return LinkableFunction(
+def _linkable_function(name: str) -> codegen.LinkableFunction:
+    return codegen.LinkableFunction(
         name=name,
         declaration=f"void {name}(int);",
         definition=f"void {name}(int x) {{ {name}_body(x); }}",
@@ -29,19 +26,19 @@ def _param_types(parameter_list: str) -> list[str]:
     return [part.strip().rsplit(" ", 1)[0].strip() for part in inner.split(",")]
 
 
-def _host_unit(square) -> LinkableModule:
+def _host_unit(square) -> codegen.LinkableModule:
     """The host translation unit of a module whose entry launches a shape-dispatched kernel."""
     entry = square.entry_function()
-    root = build_codegen_context(square)
+    root = codegen.build_context(square)
     group = next(group for group in root.groups if entry in group.functions)
     view = root.for_group(group)
     return entry.target.resolve(
-        LinkableModule, square, (entry,), entry.target.resolve(EmitContext, view)
+        codegen.LinkableModule, square, (entry,), entry.target.resolve(codegen.EmitContext, view)
     )
 
 
 def test_unit_orders_declarations_before_definitions() -> None:
-    unit = LinkableModule(
+    unit = codegen.LinkableModule(
         target="cuda",
         language="cu",
         preamble="#include <one.h>",

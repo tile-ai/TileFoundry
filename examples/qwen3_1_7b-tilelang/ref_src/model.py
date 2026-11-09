@@ -58,9 +58,9 @@ from transformers import Qwen3Config
 
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, ModuleList, Tensor, tf  # noqa: F401 — tf used by @func bodies
-from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.mesh import Topology
-from tilefoundry.target import CudaTarget
+from tilefoundry.ir.expr import DimVar
+from tilefoundry.ir.types import Topology
+from tilefoundry_nvidia import cuda
 
 
 def published(path: Path | None = None) -> Qwen3Config:
@@ -265,7 +265,7 @@ class Qwen3_1_7B_DecoderLayer:
         return h1 + mlp_out, k_new, v_new
 
 
-@module(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
+@module(target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 132), Topology("thread", 512)))
 class Qwen3_1_7B:
     """The ordered layer stack plus the norm that closes it."""
 
@@ -355,8 +355,8 @@ class Qwen3_1_7B:
         """
         import torch  # noqa: PLC0415
 
-        from tilefoundry.evaluator.value import to_torch_dtype  # noqa: PLC0415
-        from tilefoundry.ir.types import DType  # noqa: PLC0415
+        from tilefoundry.interfaces.evaluator import to_torch_dtype
+        from tilefoundry.ir.expr import DType
 
         device = _generation_device(device)
         empty = (1, 0, config.num_key_value_heads, config.head_dim)

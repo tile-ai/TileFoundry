@@ -2,7 +2,7 @@
 
 ## 1. `sync`
 
-`CudaTarget.get_analyzer("sync")` adds this family to the core families. See
+`cuda.Target.get_analyzer("sync")` adds this family to the core families. See
 [analysis §1.2](../../../../../../docs/spec/analysis.md#12-analysis-families).
 A Target that does not add it refuses the selector. See
 [analysis §2.2](../../../../../../docs/spec/analysis.md#22-target-selected-analyzers).
@@ -195,7 +195,7 @@ class SyncPlanMetadata(IRMetadata):
     `CopyAsyncTensor` is issued by whole aligned warps, as its execution mesh
     pattern states ([tir](./tir.md#copyasynctensor)), so its first issuing
     thread starts a warp. The plan orders no word.
-  - **Refusals.** The family raises `AnalysisError` when an action or a barrier
+  - **Refusals.** The family raises `analysis.Error` when an action or a barrier
     breaks a MUST of **Units** or **Placement**. It also raises it for a loop
     whose state does not settle within its limit, and for a pair that
     **CTAs** refuses.
@@ -234,7 +234,7 @@ class Effect:
     fence: bool = False
     chain: tuple[int, DType] | None = None   # a WGMMA's (n, dtype)
 
-completion_registry: DispatchRegistry     # keyed by class
+completion_registry: Registry     # keyed by class
 def effects(issued: Issued, **fields) -> tuple[Effect, ...]: ...
 def completion_of(issued: Issued, *, key: type | None = None) -> tuple[Effect, ...]: ...
 ```

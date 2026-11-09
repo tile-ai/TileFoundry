@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 size = DimVar("prototype_size", 1, 8)
 
 
 @module(
     entry="root",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1),),
 )
 class TupleDispatch:
@@ -20,7 +20,7 @@ class TupleDispatch:
     ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
         pass
 
-    @root.specialize(RangePattern("prototype_size", 1, 8))
+    @root.specialize(pattern.Range("prototype_size", 1, 8))
     def both(
         x: Tensor[(size,), "f32"],
     ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:

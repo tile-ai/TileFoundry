@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="run", target=CpuTarget())
+@module(entry="run", target=cpu.Target())
 class MissingTopology:
     @func(mesh=Mesh(("cta",), (8,), names=("b",)))
-    def run(x: Tensor[(8 @ mesh.b, 8), "f32"]):  # noqa: F821
+    def run(x: Tensor[(8 @ mesh.b, 8), "f32"]):
         return tf.add(x, x)

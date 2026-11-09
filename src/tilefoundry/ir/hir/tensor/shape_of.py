@@ -1,42 +1,39 @@
+"""HIR ``ShapeOf`` Op: the shape of a tensor as a rank-1 tensor."""
+
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.expr import Constant
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    readnone_relations,
-    register_access_relation,
-)
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
 
 
-@register_op(name="shape_of", dialect='tf', category='tensor')
-class ShapeOf(Op):
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
+@expr.register_op(name="shape_of", dialect='tf', category='tensor')
+class ShapeOf(expr.Op):
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
 
 
-@register_typeinfer(ShapeOf)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(ShapeOf)
+def _(call: "Call", ctx: "TypeInferContext") -> types.TensorType:
     x_ty = ctx.type_of(call.args[0])
-    rank_expr = Constant(type=TensorType.umat_scalar(), value=len(x_ty.shape))
-    return TensorType.umat_tensor((rank_expr,), DType.i64)
+    rank_expr = expr.Constant(type=types.TensorType.from_umat_scalar(), value=len(x_ty.shape))
+    return types.TensorType.from_umat_tensor((rank_expr,), expr.DType.i64)
 
 
-@register_eval(ShapeOf)
-def _eval_shape_of(ctx):
-    def shape_of(x):
-        return torch.tensor(tuple(x.shape), dtype=torch.int64)
+def shape_tensor(x):
+    return utils.torch.tensor(tuple(x.shape), dtype=utils.torch.int64)
 
+
+@evaluator.register(ShapeOf)
+def eval_shape_of(ctx):
     x = ctx.args[0].tensor
-    held = shape_of(x.tensor) if x.is_global else tuple((p, shape_of(t)) for p, t in x.tensor)
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    held = shape_tensor(x.tensor) if x.is_global else tuple((p, shape_tensor(t)) for p, t in x.tensor)
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
-register_access_relation(ShapeOf)(readnone_relations(lambda types: (len(types[0].shape),)))
+access.register_relation(ShapeOf)(access.readnone_relations(lambda type_list: (len(type_list[0].shape),)))
+
+
+cost.register(ShapeOf)(cost.metadata_view)
+
+
+__all__ = ["ShapeOf"]

@@ -6,45 +6,40 @@ write). Wrapped by ``Evaluate(Fill, ...)`` in Stmt position.
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Constant, Op
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_scalar_tensor, utils
-from tilefoundry.ir.types import UnitType
-from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
-from tilefoundry.visitor_registry.access_relation import (
-    identity_relations,
-    register_access_relation,
-)
+from tilefoundry.interfaces import access, typeinfer, verify
+from tilefoundry.ir import expr, pattern, types
 
 
-@register_op(dialect='T', category='memory')
-class Fill(Op):
+@expr.register_op(dialect='T', category='memory')
+class Fill(expr.Op):
     """Fills ``tensor`` element-wise with ``value`` (rank-0 scalar)."""
 
-    execution_mesh = utils.memory_execution_mesh()
+    execution_mesh = pattern.memory_execution_mesh()
 
-    tensor = ParamDef(
+    tensor = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.WRITE,
-        pattern=utils.operand_tile(0, execution_mesh=execution_mesh),
+        effect=expr.MemoryEffect.WRITE,
+        pattern=pattern.operand_tile(0, execution_mesh=execution_mesh),
     )
-    value = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=is_scalar_tensor())
+    value = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=pattern.is_scalar_tensor())
 
 
-@register_typeinfer(Fill)
-def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
-    return UnitType()
+@typeinfer.register(Fill)
+def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
+    return types.UnitType()
 
 
-register_access_relation(Fill)(identity_relations)
+access.register_relation(Fill)(access.identity_relations)
 
 
-@register_verify_stmt(Fill)
-def _(call: "Call", ctx: "VerifyContext") -> None:
+@verify.register(Fill)
+def _(call: "Call", ctx: "verify.Context") -> None:
     t_ty = ctx.type_of(call.args[0])
     v_ty = ctx.type_of(call.args[1])
     if v_ty.dtype != t_ty.dtype and not (
-        isinstance(call.args[1], Constant) and call.args[1].value == 0
+        isinstance(call.args[1], expr.Constant) and call.args[1].value == 0
     ):
         ctx.error(call, f"Fill dtype mismatch: {v_ty.dtype} vs {t_ty.dtype}")
+
+
+__all__ = ["Fill"]

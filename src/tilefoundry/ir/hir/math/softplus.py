@@ -1,44 +1,43 @@
+"""HIR pointwise ``Softplus`` Op."""
+
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.utils import reject_partials
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    identity_relations,
-    register_access_relation,
-)
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
-_COMMUTES_WITH = frozenset({"max", "min"})
+COMMUTES_WITH = frozenset({"max", "min"})
 
 
-@register_op(dialect='tf', category='math')
-class Softplus(Op):
+@expr.register_op(dialect='tf', category='math')
+class Softplus(expr.Op):
     """Pointwise softplus ``log(1 + e**x)``."""
 
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
 
 
-@register_typeinfer(Softplus)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(Softplus)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     x_ty = ctx.type_of(call.args[0])
-    reject_partials("x", x_ty.layout, commutes_with=_COMMUTES_WITH)
+    ir_utils.reject_partials("x", x_ty.layout, commutes_with=COMMUTES_WITH)
     return x_ty
 
 
-@register_eval(Softplus)
-def _eval_softplus(ctx):
-    softplus = torch.nn.functional.softplus
+@evaluator.register(Softplus)
+def eval_softplus(ctx):
+    softplus = utils.torch.nn.functional.softplus
     x = ctx.args[0].tensor
     held = softplus(x.tensor) if x.is_global else tuple((p, softplus(t)) for p, t in x.tensor)
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
-register_access_relation(Softplus)(identity_relations)
+access.register_relation(Softplus)(access.identity_relations)
+
+
+@cost.register(Softplus)
+def softplus_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    return cost.elementwise(call, ctx)
+
+
+__all__ = ["Softplus"]

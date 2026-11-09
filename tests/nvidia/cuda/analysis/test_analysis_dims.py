@@ -8,24 +8,10 @@ from pathlib import Path
 import pytest
 
 from tests.nvidia.cuda.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
-from tilefoundry.analysis import (
-    ComputeCostMetadata,
-    analyze,
-)
-from tilefoundry.analysis.check import check_program
-from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.ir.core import get_metadata
-from tilefoundry.ir.hir.specialize import (
-    SpecializationError,
-    origin_of,
-    residual_dims,
-    variant_for,
-)
-from tilefoundry.ir.types import Topology
-from tilefoundry.visitor_registry.contexts import ValuationContext
-from tilefoundry.visitor_registry.valuation import ValuationVisitor
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry import analysis, cli
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import expr, types
+from tilefoundry_nvidia import cuda
 
 CONTEXT = 32
 
@@ -39,24 +25,24 @@ FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 def _aimed():
     """The decode example, aimed at one machine."""
     gqa_decode = Path(__file__).parents[3] / "core/fixtures/placed/gqa_decode.py"
-    GqaOnline = load_authored_ir(f"{gqa_decode}:GqaOnline")
+    GqaOnline = cli.load_authored_ir(f"{gqa_decode}:GqaOnline")
     return replace(
-        GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),)
+        GqaOnline, target=cuda.Target("nvidia.h200_sxm"), topologies=(types.Topology("cta", 8),)
     )
 
 
 def test_analyze_at_stated_size() -> None:
     module = _aimed()
     authored = module.entry_function()
-    checked, function = check_program(module, authored, dims=DIMS)
-    result = analyze(checked, function, analysis=FAMILIES)
+    checked, function = analysis.check_program(module, authored, dims=DIMS)
+    result = analysis.analyze(checked, function, analysis=FAMILIES)
     assert result.metadata_types
     assert result.module is checked
     assert result.function is not authored
     assert result.function.name == authored.name
     assert all(
-        residual_dims(frame.function, frame) == ()
-        for frame in ValuationVisitor.definitions(ValuationContext(result.module, result.function))
+        valuation.residual_dims(frame.function, frame) == ()
+        for frame in valuation.definitions(valuation.Context(result.module, result.function))
     )
 
 
@@ -65,22 +51,22 @@ def test_static_view_records() -> None:
     module = QWEN3_1_7B.build()
     function = module.lookup("mlp")
 
-    checked, derived = check_program(module, function)
-    result = analyze(checked, derived, analysis="compute-cost")
+    checked, derived = analysis.check_program(module, function)
+    result = analysis.analyze(checked, derived, analysis="compute-cost")
 
     assert result.module is checked
     assert result.function is derived
     assert result.function.name == function.name
-    assert origin_of(result.function) is function
-    assert get_metadata(result.function, ComputeCostMetadata) is not None
-    assert get_metadata(function, ComputeCostMetadata) is None
+    assert valuation.origin_of(result.function) is function
+    assert expr.get_metadata(result.function, analysis.ComputeCostMetadata) is not None
+    assert expr.get_metadata(function, analysis.ComputeCostMetadata) is None
 
 
 def test_unknown_dim_refused() -> None:
     module = _aimed()
 
-    with pytest.raises(SpecializationError, match="no dimension named"):
-        check_program(module, module.entry_function(), dims={**DIMS, "batch": 2})
+    with pytest.raises(valuation.SpecializationError, match="no dimension named"):
+        analysis.check_program(module, module.entry_function(), dims={**DIMS, "batch": 2})
 
 
 def test_unbound_dim_refused() -> None:
@@ -92,8 +78,8 @@ def test_unbound_dim_refused() -> None:
     """
     module = _aimed()
 
-    with pytest.raises(SpecializationError, match="was not given a size"):
-        check_program(module, module.entry_function(), dims={"batch": 4})
+    with pytest.raises(valuation.SpecializationError, match="was not given a size"):
+        analysis.check_program(module, module.entry_function(), dims={"batch": 4})
 
 
 def test_malformed_dims_refused() -> None:
@@ -101,10 +87,10 @@ def test_malformed_dims_refused() -> None:
     module = _aimed()
     entry = module.entry_function()
 
-    with pytest.raises(SpecializationError, match="non-empty mapping"):
-        check_program(module, entry, dims={})
-    with pytest.raises(SpecializationError, match="takes an integer extent"):
-        check_program(module, entry, dims={"ctx_len": 32.0})
+    with pytest.raises(valuation.SpecializationError, match="non-empty mapping"):
+        analysis.check_program(module, entry, dims={})
+    with pytest.raises(valuation.SpecializationError, match="takes an integer extent"):
+        analysis.check_program(module, entry, dims={"ctx_len": 32.0})
 
 
 def test_foreign_function_refused() -> None:
@@ -116,8 +102,8 @@ def test_foreign_function_refused() -> None:
     module = _aimed()
     foreign = QWEN3_1_7B.build().lookup("mlp")
 
-    with pytest.raises(AnalysisError, match="is owned by no single node of module"):
-        check_program(module, foreign, dims=DIMS)
+    with pytest.raises(analysis.Error, match="is owned by no single node of module"):
+        analysis.check_program(module, foreign, dims=DIMS)
 
 
 def test_entry_keeps_name() -> None:
@@ -127,6 +113,6 @@ def test_entry_keeps_name() -> None:
     program, so anything that identifies the entry by name still finds it.
     """
     module = _aimed()
-    variant = variant_for(module.entry_function(), DIMS)
+    variant = valuation.variant_for(module.entry_function(), DIMS)
 
     assert variant.name == module.entry_function().name

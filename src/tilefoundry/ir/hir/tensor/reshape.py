@@ -1,62 +1,41 @@
+"""HIR ``Reshape`` Op: change the logical shape of a tensor."""
+
 from __future__ import annotations
 
 from dataclasses import replace
 
-from tilefoundry.core import ShardTensor, local_type
-from tilefoundry.evaluator.dim import resolve_dim
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import EvalError, TensorValue
-from tilefoundry.ir.core import Call, Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.layout import Layout, flatten
-from tilefoundry.ir.types.shard_layout import (
-    Partial,
-    ShardLayout,
-    Split,
-)
-from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.types.substitute import dim_vars_in
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    identity_access,
-    iterating,
-    linearized_view,
-    register_access_relation,
-)
-from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
+from tilefoundry import core
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import dim, expr, pattern, types
 
-from ._view_layout import derive_view_layout
+from .view_layout import derive_view_layout
 
 
-@register_op(dialect='tf', category='tensor')
-class Reshape(Op):
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
-    new_shape = ParamDef(kind="attribute", annotation=tuple)
+@expr.register_op(dialect='tf', category='tensor')
+class Reshape(expr.Op):
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    new_shape = expr.ParamDef(kind="attribute", annotation=tuple)
 
 
-@register_access_relation(Reshape)
-def _reshape_relations(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(Reshape)
+def reshape_relations(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """Where a result coordinate sits in the source it was renamed from."""
     out_shape = tuple(call.target.new_shape)
-    return iterating(
+    return access.iterating(
         out_shape,
         (
-            linearized_view(out_shape, tuple(ctx.type_of(call.args[0]).shape)),
-            identity_access(len(out_shape)),
+            access.linearized_view(out_shape, tuple(ctx.type_of(call.args[0]).shape)),
+            access.identity(len(out_shape)),
         ),
     )
 
 
-@register_buffer_alias(Reshape)
-def _buffer_alias(call: Call) -> int:
+@access.register_alias(Reshape)
+def buffer_alias(call: expr.Call) -> int:
     return 0
 
 
-def is_induction_var_singleton_reshape(expr) -> bool:
+def is_induction_var_singleton_reshape(node) -> bool:
     """Whether ``expr`` has the singleton view form for a loop index.
 
     HIR induction variables use ``UMAT`` storage; the exact induction-variable
@@ -64,15 +43,15 @@ def is_induction_var_singleton_reshape(expr) -> bool:
     preflight and partition gates aligned with that representation.
     """
     return (
-        isinstance(expr, Call)
-        and isinstance(expr.target, Reshape)
-        and expr.args[0].type.shape == ()
-        and expr.args[0].type.storage is StorageKind.UMAT
-        and expr.type.shape == (1,)
+        isinstance(node, expr.Call)
+        and isinstance(node.target, Reshape)
+        and node.args[0].type.shape == ()
+        and node.args[0].type.storage is expr.StorageKind.UMAT
+        and node.type.shape == (1,)
     )
 
 
-def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
+def carry_sharded_reshape(layout: types.ShardLayout, new_shape: tuple):
     """Carry static sharding across an aligned view reshape.
 
     Layout positions may merge or divide at exact factor boundaries. A divided
@@ -91,13 +70,13 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
     axis_strides = axis_layout.strides
     n_axis = len(axis_shape)
 
-    mesh_shape = flatten(layout.mesh.layout).shape
+    mesh_shape = types.flatten(layout.mesh.layout).shape
     split_mesh_extent: dict[int, int] = {}
     for mesh_axis_idx, attr in enumerate(layout.attrs):
-        if isinstance(attr, Split) and mesh_axis_idx < len(mesh_shape):
+        if isinstance(attr, types.Split) and mesh_axis_idx < len(mesh_shape):
             split_mesh_extent[attr.axis] = int(mesh_shape[mesh_axis_idx])
 
-    def _next_nonunit(start: int) -> int:
+    def next_nonunit(start: int) -> int:
         i = start
         while i < n_axis and int(axis_shape[i]) == 1:
             i += 1
@@ -107,8 +86,8 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
     old_to_new: dict[int, int] = {}
     ci = 0
     pending: tuple[int, int, int | None] | None = None
-    for dim in new_shape:
-        d = int(dim)
+    for dim_value in new_shape:
+        d = int(dim_value)
         if d == 1:
             new_positions.append((1, 0, None))
             continue
@@ -118,7 +97,7 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
                 cs, stride, old_pos = pending
                 pending = None
             else:
-                ci = _next_nonunit(ci)
+                ci = next_nonunit(ci)
                 if ci >= n_axis:
                     return None
                 cs = int(axis_shape[ci])
@@ -154,12 +133,12 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
                 new_positions.append((needed, base_stride, old_pos))
             pending = (residual, stride, None)
             prod = d
-    if pending is not None or _next_nonunit(ci) < n_axis:
+    if pending is not None or next_nonunit(ci) < n_axis:
         return None
 
     new_attrs = []
     for attr in layout.attrs:
-        if isinstance(attr, Split):
+        if isinstance(attr, types.Split):
             if attr.axis not in old_to_new:
                 return None
             new_attrs.append(replace(attr, axis=old_to_new[attr.axis]))
@@ -168,24 +147,24 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
 
     out_shape = tuple(s for s, _, _ in new_positions)
     out_strides = tuple(st for _, st, _ in new_positions)
-    new_layout = Layout(shape=out_shape, strides=out_strides)
-    return ShardLayout(layout=new_layout, attrs=tuple(new_attrs), mesh=layout.mesh)
+    new_layout = types.Layout(shape=out_shape, strides=out_strides)
+    return types.ShardLayout(layout=new_layout, attrs=tuple(new_attrs), mesh=layout.mesh)
 
 
-@register_typeinfer(Reshape)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(Reshape)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     x_ty = ctx.type_of(call.args[0])
     new_shape = tuple(call.target.new_shape)
 
-    genuine_sharding = isinstance(x_ty.layout, ShardLayout) and any(
-        isinstance(attr, (Split, Partial)) for attr in x_ty.layout.attrs
+    genuine_sharding = isinstance(x_ty.layout, types.ShardLayout) and any(
+        isinstance(attr, (types.Split, types.Partial)) for attr in x_ty.layout.attrs
     )
-    if x_ty.storage is StorageKind.UMAT and new_shape == () and not genuine_sharding:
-        return TensorType.umat_scalar(x_ty.dtype)
+    if x_ty.storage is expr.StorageKind.UMAT and new_shape == () and not genuine_sharding:
+        return types.TensorType.from_umat_scalar(x_ty.dtype)
 
     new_layout = None
-    if isinstance(x_ty.layout, ShardLayout):
-        new_layout = _carry_sharded_reshape(x_ty.layout, new_shape)
+    if isinstance(x_ty.layout, types.ShardLayout):
+        new_layout = carry_sharded_reshape(x_ty.layout, new_shape)
         if new_layout is None and genuine_sharding:
             ctx.error(
                 call,
@@ -193,25 +172,25 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 "not align with the input layout factorization",
             )
         if new_layout is None:
-            new_layout = replace(x_ty.layout, layout=Layout(new_shape))
+            new_layout = replace(x_ty.layout, layout=types.Layout(new_shape))
     else:
 
-        def reshaped(layout: Layout) -> Layout | None:
+        def reshaped(layout: types.Layout) -> types.Layout | None:
             nonunit = tuple(axis for axis, extent in enumerate(layout.shape) if extent != 1)
             if (
                 len(nonunit) < len(layout.shape)
                 and new_shape == tuple(layout.shape[axis] for axis in nonunit)
             ):
-                return Layout(new_shape, tuple(layout.strides[axis] for axis in nonunit))
-            expected = Layout(layout.shape).strides
+                return types.Layout(new_shape, tuple(layout.strides[axis] for axis in nonunit))
+            expected = types.Layout(layout.shape).strides
             if layout.strides != expected:
                 return None
-            return Layout(new_shape)
+            return types.Layout(new_shape)
 
         new_layout = derive_view_layout(x_ty, new_shape, reshaped)
     if new_layout is None:
         ctx.error(call, f"Reshape cannot preserve {type(x_ty.layout).__name__} layout")
-    return TensorType(
+    return types.TensorType(
         shape=new_shape,
         dtype=x_ty.dtype,
         layout=new_layout,
@@ -219,22 +198,22 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     )
 
 
-def _bound_or_inferred(dim, bindings):
-    if any(name not in bindings for name in dim_vars_in(dim)):
+def bound_or_inferred(dim_value, bindings):
+    if any(name not in bindings for name in dim.var_names(dim_value)):
         return -1
-    return resolve_dim(dim, bindings)
+    return evaluator.resolve_dim(dim_value, bindings)
 
 
-@register_eval(Reshape)
-def _eval_reshape(ctx):
+@evaluator.register(Reshape)
+def eval_reshape(ctx):
     """Reshape to the result type; each piece of a local view to its local type."""
 
     def shape_of(type):
-        shape = tuple(_bound_or_inferred(d, ctx.dim_bindings) for d in type.shape)
+        shape = tuple(bound_or_inferred(d, ctx.dim_bindings) for d in type.shape)
         if -1 in shape:
-            shape = tuple(_bound_or_inferred(d, ctx.dim_bindings) for d in ctx.op.new_shape)
+            shape = tuple(bound_or_inferred(d, ctx.dim_bindings) for d in ctx.op.new_shape)
         if shape.count(-1) > 1:
-            raise EvalError(
+            raise evaluator.EvalError(
                 "reshape: at most one dynamic axis can be inferred, "
                 f"got new_shape={ctx.op.new_shape!r}"
             )
@@ -244,6 +223,14 @@ def _eval_reshape(ctx):
     if x.is_global:
         held = x.tensor.reshape(shape_of(ctx.result_type))
     else:
-        shape = shape_of(local_type(ctx.result_type))
+        shape = shape_of(core.local_type(ctx.result_type))
         held = tuple((p, t.reshape(shape)) for p, t in x.tensor)
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
+
+
+@cost.register(Reshape)
+def reshape_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    return cost.Cost({}, cost.idle(call))
+
+
+__all__ = ["Reshape"]

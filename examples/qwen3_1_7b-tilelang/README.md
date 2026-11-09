@@ -76,7 +76,7 @@ The first run compiles the tilelang kernels (once, a few minutes).
                           reference, never edited
     fast/kernels.py       the tilelang kernels, one decode step's worth
     fast/engine.py        weight packing, buffers, and the graph capture
-    fast/twin.py          @runtime_module twins, so `tilefoundry check` can judge
+    fast/twin.py          @runtime.module twins, so `tilefoundry check` can judge
                           the kernels against the reference
     fast/test_kernels.py  the torch spelling of every kernel -- the interface they
                           were written against

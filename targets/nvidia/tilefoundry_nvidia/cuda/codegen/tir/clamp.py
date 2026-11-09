@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.tir.clamp import Clamp
-from tilefoundry.visitor_registry.registries import Role, register_codegen
-from tilefoundry_nvidia.cuda import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
+from tilefoundry import codegen
+from tilefoundry.ir import tir
+from tilefoundry_nvidia.cuda import target
+from tilefoundry_nvidia.cuda.codegen import context
 
 
-@register_codegen(CudaTarget, Role.EMIT, Clamp)
-def _emit(call, ctx: CudaCodegenContext) -> None:
+@codegen.register(target.Target, codegen.Role.EMIT, tir.clamp.Clamp)
+def emit(call, ctx: context.Context) -> None:
     src, dst = call.args
     op = call.target
     src_n = ctx.name_for(src)
@@ -18,3 +18,6 @@ def _emit(call, ctx: CudaCodegenContext) -> None:
         f"tilefoundry::ops::elementwise({dst_n}, tilefoundry::primitive::clamp_op{{"
         f"{float(op.min_val)}f, {float(op.max_val)}f}}, {src_n});"
     )
+
+
+__all__: list[str] = []

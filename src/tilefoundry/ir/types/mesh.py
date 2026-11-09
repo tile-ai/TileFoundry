@@ -1,9 +1,14 @@
+"""Meshes: hardware levels, the arrangement of their positions, and sub-mesh slices."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.types.int_tuple import compatible_profile
-from tilefoundry.ir.types.layout import (
+from tilefoundry import services
+
+from . import layout
+from .int_tuple import compatible_profile
+from .layout import (
     ComposedLayout,
     Layout,
     LayoutBase,
@@ -12,27 +17,21 @@ from tilefoundry.ir.types.layout import (
     size,
     unflatten,
 )
-from tilefoundry.ir.types.layout import rank as _rank
-from tilefoundry.ir.types.layout_algebra import filter, is_contiguous
-from tilefoundry.ir.types.stride import compact_major, compact_row_major, crd2idx, idx2crd
-from tilefoundry.ir.types.tensor_type import ShapeDim
+from .layout_algebra import filter, is_contiguous
+from .stride import compact_major, compact_row_major, crd2idx, idx2crd
+from .topology import Topology
 
-
-@dataclass(frozen=True)
-class Topology:
-    """Name one hardware level and its explicit static or symbolic size."""
-
-    name: str
-
-    size: "ShapeDim"
-
-    def __post_init__(self) -> None:
-        if self.size is None:
-            raise ValueError(
-                f"Topology {self.name!r}: extent must be explicit; None is not "
-                "a ShapeDim. The rule: "
-                "tilefoundry spec target topology-levels"
-            )
+__all__ = [
+    "Mesh",
+    "axis_keys",
+    "check_topology",
+    "flattened_levels",
+    "levels",
+    "separate",
+    "starts",
+    "topology_names",
+    "within_scope",
+]
 
 
 @dataclass(frozen=True)
@@ -53,6 +52,7 @@ class Mesh:
     names: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        """Normalize the layout to one arrangement per level and refuse an unnamed extent."""
         if len(self.topologies) > 1 and any(
             not isinstance(topology, Topology) for topology in self.topologies
         ):
@@ -60,7 +60,7 @@ class Mesh:
         topology_names = tuple(getattr(topology, "name", topology) for topology in self.topologies)
         if len(set(topology_names)) != len(topology_names):
             raise ValueError(f"Mesh topology names must be unique, got {topology_names!r}")
-        object.__setattr__(self, "layout", _nested(self.layout, tuple(self.topologies)))
+        object.__setattr__(self, "layout", nested_levels(self.layout, tuple(self.topologies)))
         for axis, extent in enumerate(flatten(self.layout.shape)):
             if extent is None:
                 raise ValueError(
@@ -141,13 +141,70 @@ class Mesh:
             layout=ComposedLayout(
                 inner=None,
                 offset=offset,
-                outer=_joined_layout(tuple(sub_levels)),
+                outer=joined_layout(tuple(sub_levels)),
             ),
             names=self.names,
         )
 
+    @classmethod
+    def from_meshes(cls, *meshes: Mesh) -> Mesh:
+        """Compose nested mesh scopes, preserving slices in device numbering."""
+        if not meshes:
+            raise ValueError("make_mesh requires at least one mesh")
+        result = meshes[0]
+        for inner in meshes[1:]:
+            here, there = topology_names(result), topology_names(inner)
+            if set(here).isdisjoint(there):
+                result = joined(
+                    (*result.topologies, *inner.topologies),
+                    (*levels(result), *levels(inner)),
+                    (*starts(result), *starts(inner)),
+                    (*result.names, *inner.names),
+                    sliced=isinstance(result.layout, ComposedLayout)
+                    or isinstance(inner.layout, ComposedLayout),
+                )
+            elif set(here) <= set(there):
+                result = inner
+            elif len(there) < len(here) and here[-len(there) :] == there:
+                current = result
+                kept = len(here) - len(there)
+                above = levels(result)[:kept]
+                named = sum(len(flatten(level.shape)) for level in above)
+                result = joined(
+                    (*result.topologies[:kept], *inner.topologies),
+                    (*above, *levels(inner)),
+                    (*starts(result)[:kept], *starts(inner)),
+                    (*result.names[:named], *inner.names),
+                    sliced=isinstance(result.layout, ComposedLayout)
+                    or isinstance(inner.layout, ComposedLayout),
+                )
+                if not within_scope(result, current):
+                    parent_positions = {
+                        name: (filter(arrangement, major="row"), start)
+                        for name, arrangement, start in zip(here, levels(current), starts(current))
+                        if name in there
+                    }
+                    inner_positions = {
+                        name: (filter(arrangement, major="row"), start)
+                        for name, arrangement, start in zip(there, levels(inner), starts(inner))
+                    }
+                    raise ValueError(
+                        f"replacement scope selects positions {inner_positions}, outside parent "
+                        f"scope positions {parent_positions}; both must be continuous and each "
+                        "replacement selection must be contained in its parent selection"
+                    )
+            else:
+                shared = sorted(set(here) & set(there))
+                unnamed = sorted(set(here) - set(there))
+                raise ValueError(
+                    f"{shared} named again while {unnamed} is not; a scope either "
+                    "replaces the levels in force or adds levels below them"
+                )
+        check_topology(result)
+        return result
 
-def _nested(layout, topologies: tuple) -> "Layout | ComposedLayout":
+
+def nested_levels(layout_value, topologies: tuple) -> "Layout | ComposedLayout":
     """What a mesh was written as, with every level's axes under its own mode.
 
     A mesh naming one level states that level's arrangement directly. One
@@ -158,27 +215,27 @@ def _nested(layout, topologies: tuple) -> "Layout | ComposedLayout":
     back is level ``i``'s own arrangement, and a boundary no prefix of axes
     lands on is refused rather than guessed.
     """
-    if not isinstance(layout, LayoutBase):
-        extents = tuple(flatten(layout))
-        layout = Layout(extents, compact_row_major(extents))
-    if isinstance(layout, ComposedLayout):
-        if layout.outer is None or (
-            len(layout.outer.shape) == len(topologies)
-            and all(isinstance(mode, tuple) for mode in layout.outer.shape)
+    if not isinstance(layout_value, LayoutBase):
+        extents = tuple(flatten(layout_value))
+        layout_value = Layout(extents, compact_row_major(extents))
+    if isinstance(layout_value, ComposedLayout):
+        if layout_value.outer is None or (
+            len(layout_value.outer.shape) == len(topologies)
+            and all(isinstance(mode, tuple) for mode in layout_value.outer.shape)
         ):
-            return layout
+            return layout_value
         return ComposedLayout(
-            inner=layout.inner,
-            offset=layout.offset,
-            outer=_nested(layout.outer, topologies),
+            inner=layout_value.inner,
+            offset=layout_value.offset,
+            outer=nested_levels(layout_value.outer, topologies),
         )
-    if len(layout.shape) == len(topologies) and all(
-        isinstance(mode, tuple) for mode in layout.shape
+    if len(layout_value.shape) == len(topologies) and all(
+        isinstance(mode, tuple) for mode in layout_value.shape
     ):
-        return layout
+        return layout_value
 
-    extents = tuple(flatten(layout.shape))
-    stated = layout.strides
+    extents = tuple(flatten(layout_value.shape))
+    stated = layout_value.strides
     steps = tuple(flatten(stated))
     layout_flat = Layout(extents, steps)
     if len(topologies) == 1:
@@ -223,7 +280,7 @@ def levels(mesh: Mesh) -> tuple[Layout, ...]:
             "a mesh whose slice states an identity box states no arrangement of "
             "its own, so its levels select nothing"
         )
-    return tuple(get(stated, index) for index in range(_rank(stated)))
+    return tuple(get(stated, index) for index in range(layout.rank(stated)))
 
 
 def flattened_levels(mesh: Mesh) -> tuple[tuple[tuple, tuple], ...]:
@@ -255,16 +312,18 @@ def starts(mesh: Mesh) -> tuple[int, ...]:
     return tuple(idx2crd(offset, sizes, compact_major(sizes)))
 
 
+def dim_at_most(a, b) -> bool:
+    """Prove ``a <= b`` from the conservative range of their difference."""
+    if isinstance(a, int) and isinstance(b, int):
+        return a <= b
+    bounds = services.dim_range(services.simplify_dim("sub", (b, a)))
+    return bounds is not None and bounds[0] >= 0
+
+
 def within_scope(mesh: Mesh, current: Mesh) -> bool:
-    """Whether each continuous selection is contained in the enclosing level.
-
-    Defer dimension interop: it imports core/types, whose staged imports
-    include this mesh.
-    """
-    from tilefoundry.ir.isl_interop import dim_at_most  # noqa: PLC0415
-
-    enclosing = dict(zip(_named(current), zip(levels(current), starts(current))))
-    for name, arrangement, start in zip(_named(mesh), levels(mesh), starts(mesh)):
+    """Whether each continuous selection is contained in the enclosing level."""
+    enclosing = dict(zip(topology_names(current), zip(levels(current), starts(current))))
+    for name, arrangement, start in zip(topology_names(mesh), levels(mesh), starts(mesh)):
         if name not in enclosing:
             return False
         outer_arrangement, at_start = enclosing[name]
@@ -299,7 +358,7 @@ def check_topology(mesh: Mesh) -> None:
             )
 
 
-def _joined_layout(levels: tuple[Layout, ...]) -> Layout:
+def joined_layout(levels: tuple[Layout, ...]) -> Layout:
     if len(levels) == 1:
         return levels[0]
     return Layout(
@@ -308,7 +367,7 @@ def _joined_layout(levels: tuple[Layout, ...]) -> Layout:
     )
 
 
-def _joined(
+def joined(
     topologies: tuple[Topology, ...],
     levels: tuple[Layout, ...],
     starts: tuple[int, ...],
@@ -316,76 +375,19 @@ def _joined(
     *,
     sliced: bool,
 ) -> Mesh:
-    layout: Layout | ComposedLayout = _joined_layout(levels)
+    layout_value: Layout | ComposedLayout = joined_layout(levels)
     if sliced:
         sizes = tuple(topology.size for topology in topologies)
         if not all(isinstance(size, int) for size in sizes):
             raise ValueError("joining sliced meshes needs static topology extents")
         offset = crd2idx(starts, sizes, compact_major(sizes))
         if offset != 0:
-            layout = ComposedLayout(None, offset, layout)
-    return Mesh(topologies, layout, names)
+            layout_value = ComposedLayout(None, offset, layout_value)
+    return Mesh(topologies, layout_value, names)
 
 
-def _named(mesh: Mesh) -> tuple[str, ...]:
+def topology_names(mesh: Mesh) -> tuple[str, ...]:
     return tuple(getattr(topology, "name", topology) for topology in mesh.topologies)
-
-
-def make_mesh(*meshes: Mesh) -> Mesh:
-    """Compose nested mesh scopes, preserving slices in device numbering."""
-    if not meshes:
-        raise ValueError("make_mesh requires at least one mesh")
-    result = meshes[0]
-    for inner in meshes[1:]:
-        here, there = _named(result), _named(inner)
-        if set(here).isdisjoint(there):
-            result = _joined(
-                (*result.topologies, *inner.topologies),
-                (*levels(result), *levels(inner)),
-                (*starts(result), *starts(inner)),
-                (*result.names, *inner.names),
-                sliced=isinstance(result.layout, ComposedLayout)
-                or isinstance(inner.layout, ComposedLayout),
-            )
-        elif set(here) <= set(there):
-            result = inner
-        elif len(there) < len(here) and here[-len(there) :] == there:
-            current = result
-            kept = len(here) - len(there)
-            above = levels(result)[:kept]
-            named = sum(len(flatten(level.shape)) for level in above)
-            result = _joined(
-                (*result.topologies[:kept], *inner.topologies),
-                (*above, *levels(inner)),
-                (*starts(result)[:kept], *starts(inner)),
-                (*result.names[:named], *inner.names),
-                sliced=isinstance(result.layout, ComposedLayout)
-                or isinstance(inner.layout, ComposedLayout),
-            )
-            if not within_scope(result, current):
-                parent_positions = {
-                    name: (filter(arrangement, major="row"), start)
-                    for name, arrangement, start in zip(here, levels(current), starts(current))
-                    if name in there
-                }
-                inner_positions = {
-                    name: (filter(arrangement, major="row"), start)
-                    for name, arrangement, start in zip(there, levels(inner), starts(inner))
-                }
-                raise ValueError(
-                    f"replacement scope selects positions {inner_positions}, outside parent "
-                    f"scope positions {parent_positions}; both must be continuous and each "
-                    "replacement selection must be contained in its parent selection"
-                )
-        else:
-            shared = sorted(set(here) & set(there))
-            unnamed = sorted(set(here) - set(there))
-            raise ValueError(
-                f"{shared} named again while {unnamed} is not; a scope either "
-                "replaces the levels in force or adds levels below them"
-            )
-    check_topology(result)
-    return result
 
 
 def axis_keys(mesh: Mesh) -> tuple[tuple[str, str | None], ...]:
@@ -408,22 +410,9 @@ def separate(mesh: Mesh) -> tuple[Mesh, ...]:
     for topology, level, start in zip(mesh.topologies, levels(mesh), starts(mesh)):
         axis_count = len(flatten(level.shape))
         names = mesh.names[names_at : names_at + axis_count]
-        layout: Layout | ComposedLayout = level
+        layout_value: Layout | ComposedLayout = level
         if sliced and start != 0:
-            layout = ComposedLayout(None, start, level)
-        separated.append(Mesh((topology,), layout, names))
+            layout_value = ComposedLayout(None, start, level)
+        separated.append(Mesh((topology,), layout_value, names))
         names_at += axis_count
     return tuple(separated)
-
-
-__all__ = [
-    "Mesh",
-    "Topology",
-    "axis_keys",
-    "check_topology",
-    "levels",
-    "make_mesh",
-    "separate",
-    "starts",
-    "within_scope",
-]

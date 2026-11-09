@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
 @module(
     entry="run",
-    target=CpuTarget(),
+    target=cpu.Target(),
     topologies=(Topology("cta", 2), Topology("thread", 4)),
 )
 class CoarseRmem:
     @func(mesh=Mesh(("cta",), (2,), names=("block",)))
-    def run(x: Tensor[(8 @ mesh.block,), "f32", "rmem"]):  # noqa: F821
+    def run(x: Tensor[(8 @ mesh.block,), "f32", "rmem"]):
         with Mesh(("thread",), (4,), names=("lane",)) as _lanes:
             return tf.add(x, x)

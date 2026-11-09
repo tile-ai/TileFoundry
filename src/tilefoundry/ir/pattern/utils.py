@@ -6,72 +6,69 @@ from collections.abc import Callable
 from dataclasses import replace
 from enum import Enum
 
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import get_registered_name
-from tilefoundry.ir.types import (
-    DType,
-    StorageKind,
-)
+from tilefoundry import target
+from tilefoundry.ir import expr
 
-from . import predicates as P
-from .match import PatternMatcher, evaluated
+from .match import Matcher, Pattern, evaluated
 from .pattern import (
-    AndPattern,
-    ComposedLayoutPattern,
-    LayoutPattern,
-    MeshPattern,
-    OrPattern,
-    Pattern,
-    RangePattern,
-    ShardLayoutPattern,
-    StarPattern,
-    SwitchPattern,
-    TensorPattern,
-    WildcardPattern,
+    And,
+    Bits,
+    ComposedLayout,
+    In,
+    Layout,
+    Mesh,
+    Or,
+    Range,
+    ShardLayout,
+    Star,
+    Switch,
+    Tensor,
+    Wildcard,
 )
+from .predicates import WholeVectors
 
-MOVED_STORAGES = (StorageKind.GMEM, StorageKind.SMEM, StorageKind.RMEM)
+MOVED_STORAGES = (expr.StorageKind.GMEM, expr.StorageKind.SMEM, expr.StorageKind.RMEM)
 
 
 def tensor_in(
-    storage: StorageKind,
-    execution_mesh: MeshPattern | None = None,
-) -> TensorPattern:
+    storage: expr.StorageKind,
+    execution_mesh: Mesh | None = None,
+) -> Tensor:
     """A tensor of any shape and dtype held in *storage*."""
     layout = None
-    if storage == StorageKind.RMEM and execution_mesh is not None:
-        layout = _sharded_on(execution_mesh)
-    return TensorPattern(storage=storage, layout=layout)
+    if storage == expr.StorageKind.RMEM and execution_mesh is not None:
+        layout = sharded_on(execution_mesh)
+    return Tensor(storage=storage, layout=layout)
 
 
 def operand_tile(
     index: int,
     storage=None,
     layout=None,
-    execution_mesh: MeshPattern | None = None,
-) -> TensorPattern:
+    execution_mesh: Mesh | None = None,
+) -> Tensor:
     """A tensor tile whose dtype and storage captures are named by operand slot."""
     storages = MOVED_STORAGES if storage is None else storage
     dtype_name = dtype_place(index)
     storage_name = storage_place(index)
-    predicates = [P.Bits(dtype_name) % 8 == 0]
+    predicates = [Bits(dtype_name) % 8 == 0]
     if isinstance(storages, tuple):
-        predicates.append(P.In(WildcardPattern(storage_name), storages))
+        predicates.append(In(Wildcard(storage_name), storages))
     if layout is None and execution_mesh is not None:
-        sharded = _sharded_on(execution_mesh)
+        sharded = sharded_on(execution_mesh)
         if isinstance(storages, tuple):
-            layout = SwitchPattern(
+            layout = Switch(
                 storage_name,
                 {
-                    held: sharded if held == StorageKind.RMEM else WildcardPattern()
+                    held: sharded if held == expr.StorageKind.RMEM else Wildcard()
                     for held in storages
                 },
             )
-        elif storages == StorageKind.RMEM:
+        elif storages == expr.StorageKind.RMEM:
             layout = sharded
-    return TensorPattern(
-        dtype=WildcardPattern(dtype_name),
-        storage=(WildcardPattern(storage_name) if isinstance(storages, tuple) else storages),
+    return Tensor(
+        dtype=Wildcard(dtype_name),
+        storage=(Wildcard(storage_name) if isinstance(storages, tuple) else storages),
         layout=layout,
         predicates=tuple(predicates),
     )
@@ -87,12 +84,12 @@ def storage_place(index: int) -> str:
     return f"storage{index}"
 
 
-def whole_vectors(index: int, widths: tuple[int, ...]) -> LayoutPattern:
+def whole_vectors(index: int, widths: tuple[int, ...]) -> Layout:
     """Whole vectors at *widths*, counted in operand *index*'s element dtype."""
-    return LayoutPattern(
+    return Layout(
         predicates=(
-            P.WholeVectors(
-                WildcardPattern("width"),
+            WholeVectors(
+                Wildcard("width"),
                 dtype_place(index),
                 widths,
             ),
@@ -100,27 +97,27 @@ def whole_vectors(index: int, widths: tuple[int, ...]) -> LayoutPattern:
     )
 
 
-_THREAD_EXECUTION_LAYOUT = ComposedLayoutPattern(
+THREAD_EXECUTION_LAYOUT = ComposedLayout(
     inner=None,
-    offset=WildcardPattern("p0"),
-    outer=LayoutPattern(
-        (StarPattern(WildcardPattern("execution_shape")),),
-        (StarPattern(WildcardPattern("execution_strides")),),
+    offset=Wildcard("p0"),
+    outer=Layout(
+        (Star(Wildcard("execution_shape")),),
+        (Star(Wildcard("execution_strides")),),
     ),
 )
 
 
-def thread_execution_mesh() -> MeshPattern:
+def thread_execution_mesh() -> Mesh:
     """Declare one contiguous non-empty run of executing threads."""
-    return MeshPattern(("thread",), _THREAD_EXECUTION_LAYOUT)
+    return Mesh(("thread",), THREAD_EXECUTION_LAYOUT)
 
 
-def memory_execution_mesh() -> MeshPattern:
+def memory_execution_mesh() -> Mesh:
     """Bind a contiguous run at the current innermost topology level."""
-    return MeshPattern(WildcardPattern(), _THREAD_EXECUTION_LAYOUT)
+    return Mesh(Wildcard(), THREAD_EXECUTION_LAYOUT)
 
 
-def declared_execution_mesh(op_type, target=None) -> MeshPattern | OrPattern:
+def declared_execution_mesh(op_type, tgt=None) -> Mesh | Or:
     """Resolve one execution declaration, specializing memory levels from Target Facts."""
     declaration = op_type if isinstance(op_type, type) else type(op_type)
     factory = getattr(op_type, "execution_mesh_pattern", None)
@@ -128,62 +125,58 @@ def declared_execution_mesh(op_type, target=None) -> MeshPattern | OrPattern:
         declared = factory()
     else:
         stated = getattr(declaration, "execution_mesh", None)
-        declared = stated.pattern if isinstance(stated, ParamDef) else stated
-    choices = declared.patterns if isinstance(declared, OrPattern) else (declared,)
-    if not choices or not all(isinstance(choice, MeshPattern) for choice in choices):
-        name = get_registered_name(declaration)
+        declared = stated.pattern if isinstance(stated, expr.ParamDef) else stated
+    choices = declared.patterns if isinstance(declared, Or) else (declared,)
+    if not choices or not all(isinstance(choice, Mesh) for choice in choices):
+        name = expr.get_registered_name(declaration)
         raise ValueError(
             f"{name} execution_mesh must be a constant, ParamDef, or operand mesh reference"
         )
-    if target is not None and any(isinstance(choice.topologies, WildcardPattern) for choice in choices):
-        from tilefoundry.target.facts import MemoryExecutionFacts  # noqa: PLC0415
-
-        levels = target.get_facts(MemoryExecutionFacts).topologies
+    if tgt is not None and any(isinstance(choice.topologies, Wildcard) for choice in choices):
+        levels = tgt.get_facts(target.MemoryExecutionFacts).topologies
         expanded = []
         for choice in choices:
-            if isinstance(choice.topologies, WildcardPattern):
+            if isinstance(choice.topologies, Wildcard):
                 expanded.extend(replace(choice, topologies=(level,)) for level in levels)
             else:
                 expanded.append(choice)
         choices = tuple(expanded)
-        return choices[0] if len(choices) == 1 else OrPattern(*choices)
+        return choices[0] if len(choices) == 1 else Or(*choices)
     return declared
 
 
-def _sharded_on(execution_mesh: MeshPattern) -> OrPattern:
+def sharded_on(execution_mesh: Mesh) -> Or:
     """A lexical tile, or a shard explicitly held by *execution_mesh*."""
-    return OrPattern(
-        ShardLayoutPattern(
-            layout=WildcardPattern(),
-            attrs=WildcardPattern(),
+    return Or(
+        ShardLayout(
+            layout=Wildcard(),
+            attrs=Wildcard(),
             mesh=execution_mesh,
         ),
-        LayoutPattern(),
+        Layout(),
     )
 
 
-def selected_pattern(pattern, bindings: dict):
+def selected(pattern, bindings: dict):
     """Resolve declaration branches fixed by already-bound attributes."""
-    if isinstance(pattern, TensorPattern):
-        return replace(pattern, layout=selected_pattern(pattern.layout, bindings))
-    if isinstance(pattern, SwitchPattern) and pattern.param in bindings:
+    if isinstance(pattern, Tensor):
+        return replace(pattern, layout=selected(pattern.layout, bindings))
+    if isinstance(pattern, Switch) and pattern.param in bindings:
         branch = dict(pattern.branches).get(bindings[pattern.param])
-        return None if branch is None else selected_pattern(branch, bindings)
-    if isinstance(pattern, (AndPattern, OrPattern)):
-        parts = pattern.parts if isinstance(pattern, AndPattern) else pattern.patterns
-        selected = tuple(
-            held for part in parts if (held := selected_pattern(part, bindings)) is not None
-        )
-        if len(selected) == 1:
-            return selected[0]
+        return None if branch is None else selected(branch, bindings)
+    if isinstance(pattern, (And, Or)):
+        parts = pattern.parts if isinstance(pattern, And) else pattern.patterns
+        kept = tuple(held for part in parts if (held := selected(part, bindings)) is not None)
+        if len(kept) == 1:
+            return kept[0]
     return pattern
 
 
 def variants(
-    parameters: tuple[ParamDef, ...],
+    parameters: tuple[expr.ParamDef, ...],
     *,
     vary_defaulted: bool,
-    values: Callable[[ParamDef], tuple] | None = None,
+    values: Callable[[expr.ParamDef], tuple] | None = None,
 ) -> tuple[dict, ...]:
     """Every binding of *parameters* that their patterns admit, in declaration order.
 
@@ -197,36 +190,36 @@ def variants(
     for param in parameters:
         if param.has_default and not vary_defaulted:
             continue
-        options = _finite_options(param, values)
+        options = finite_options(param, values)
         if options is None:
             continue
         held = []
         for state in states:
             for value in options:
-                matcher = PatternMatcher(state)
+                matcher = Matcher(state)
                 if matcher.match(param.pattern, value) and matcher.solve() is True:
                     held.append({**matcher.bindings, param.name: value})
         states = tuple(held)
     return states
 
 
-def _finite_options(param: ParamDef, values) -> tuple | None:
+def finite_options(param: expr.ParamDef, values) -> tuple | None:
     annotation = param.annotation
     if isinstance(annotation, type) and issubclass(annotation, Enum):
         return tuple(annotation)
-    if annotation is DType:
-        return tuple(DType._members().values())
+    if annotation is expr.DType:
+        return tuple(expr.dtype_members().values())
     return None if values is None else values(param)
 
 
-def fixed_pattern_value(value, bindings: dict):
+def fixed_value(value, bindings: dict):
     """Resolve one declaration value when every symbolic leaf is bound."""
-    if isinstance(value, SwitchPattern):
+    if isinstance(value, Switch):
         if value.param not in bindings:
             return None
-        return fixed_pattern_value(dict(value.branches).get(bindings[value.param]), bindings)
+        return fixed_value(dict(value.branches).get(bindings[value.param]), bindings)
     if isinstance(value, tuple):
-        parts = tuple(fixed_pattern_value(item, bindings) for item in value)
+        parts = tuple(fixed_value(item, bindings) for item in value)
         return None if any(item is None for item in parts) else parts
     if value is None or type(value) in (int, str):
         return value
@@ -237,11 +230,11 @@ def fixed_pattern_value(value, bindings: dict):
     return resolved if resolved is not None else value if name is None else None
 
 
-def declared_shape(pattern: TensorPattern | None, bindings: dict) -> tuple | None:
+def declared_shape(pattern: Tensor | None, bindings: dict) -> tuple | None:
     """Return a tensor declaration's concrete shape, when it states one."""
     if pattern is None or pattern.shape is None:
         return None
-    shape = fixed_pattern_value(pattern.shape, bindings)
+    shape = fixed_value(pattern.shape, bindings)
     return shape if isinstance(shape, tuple) and all(type(dim) is int for dim in shape) else None
 
 
@@ -252,7 +245,7 @@ def declared_symbol_axes(
     axes = []
     for index, param in enumerate(params):
         pattern = param.pattern.read_on(op) if hasattr(param.pattern, "read_on") else param.pattern
-        pattern = selected_pattern(pattern, bindings)
+        pattern = selected(pattern, bindings)
         for axis, dim in enumerate(getattr(pattern, "shape", None) or ()):
             if getattr(dim, "name", None) == name:
                 axes.append((index, axis))
@@ -271,25 +264,30 @@ def locate_dim_var(params: tuple, name: str) -> tuple[int, int] | None:
     return None
 
 
-def _mangle_variant_name(name: str, specializations: tuple[Pattern, ...]) -> str:
-    if len(specializations) != 1 or not isinstance(specializations[0], RangePattern):
-        raise TypeError("variant requires exactly one RangePattern")
+def mangle_variant_name(name: str, specializations: tuple[Pattern, ...]) -> str:
+    if len(specializations) != 1 or not isinstance(specializations[0], Range):
+        raise TypeError("variant requires exactly one pattern.Range")
     pattern = specializations[0]
     if not pattern.dim_var or pattern.lo is None or pattern.hi is None:
-        raise TypeError("variant RangePattern requires dim_var, lo, and hi")
+        raise TypeError("variant pattern.Range requires dim_var, lo, and hi")
     return f"{name}${pattern.dim_var}${pattern.lo}_{pattern.hi}"
 
 
 __all__ = [
     "MOVED_STORAGES",
-    "_mangle_variant_name",
     "declared_execution_mesh",
+    "declared_shape",
+    "declared_symbol_axes",
     "dtype_place",
-    "variants",
+    "fixed_value",
     "locate_dim_var",
+    "mangle_variant_name",
+    "memory_execution_mesh",
     "operand_tile",
+    "selected",
     "storage_place",
     "tensor_in",
     "thread_execution_mesh",
+    "variants",
     "whole_vectors",
 ]

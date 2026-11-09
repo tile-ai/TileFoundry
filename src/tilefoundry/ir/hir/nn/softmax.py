@@ -1,34 +1,23 @@
+"""HIR ``SoftMax`` Op."""
+
 from __future__ import annotations
 
 import isl
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.utils import reject_partials
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    iterating,
-    normalised_rows,
-    register_access_relation,
-)
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
 
-@register_op(dialect='tf', category='nn')
-class SoftMax(Op):
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
-    axis = ParamDef(kind="attribute", annotation=int)
+@expr.register_op(dialect='tf', category='nn')
+class SoftMax(expr.Op):
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    axis = expr.ParamDef(kind="attribute", annotation=int)
 
 
-@register_access_relation(SoftMax)
-def _softmax_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(SoftMax)
+def softmax_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """One row normalised per iteration, read whole and written whole.
 
     Every element of a row needs the row's own maximum and sum before any of it
@@ -41,29 +30,37 @@ def _softmax_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     logical_x = ctx.type_of(call.args[0])
     authored = call.target.axis
     axis = authored + len(logical_x.shape) if authored < 0 else authored
-    rows, names, guards = normalised_rows(x_ty, logical_x, axis)
+    rows, names, guards = access.normalised_rows(x_ty, logical_x, axis)
     domain = ", ".join(f"d{index}" for index in range(len(rows)))
     where = f" : {' and '.join(guards)}" if guards else ""
-    row = AccessRelation(isl.map(f"{{ [{domain}] -> [{', '.join(names)}]{where} }}"))
-    return iterating(
+    row = access.Relation(isl.map(f"{{ [{domain}] -> [{', '.join(names)}]{where} }}"))
+    return access.iterating(
         rows,
         (row, row),
     )
 
 
-@register_typeinfer(SoftMax)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(SoftMax)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     x_ty = ctx.type_of(call.args[0])
-    reject_partials("x", x_ty.layout)
+    ir_utils.reject_partials("x", x_ty.layout)
     return x_ty
 
 
-@register_eval(SoftMax)
-def _eval_softmax(ctx):
+@evaluator.register(SoftMax)
+def eval_softmax(ctx):
     def softmax(x):
-        out = torch.softmax(x.float(), dim=ctx.op.axis)
-        return out.to(to_torch_dtype(ctx.result_type.dtype))
+        out = utils.torch.softmax(x.float(), dim=ctx.op.axis)
+        return out.to(evaluator.to_torch_dtype(ctx.result_type.dtype))
 
     x = ctx.args[0].tensor
     held = softmax(x.tensor) if x.is_global else tuple((p, softmax(t)) for p, t in x.tensor)
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
+
+
+@cost.register(SoftMax)
+def softmax_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    return cost.elementwise(call, ctx)
+
+
+__all__ = ["SoftMax"]

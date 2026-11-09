@@ -7,10 +7,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
-@prim_func(target=CudaTarget("nvidia.h200_sxm"))
+@prim_func(target=cuda.Target("nvidia.h200_sxm"))
 def whole(
     x: Tensor[(1, 1024, 17408), "bf16"], hidden: Tensor[(1, 1024, 5120), "bf16"], w: ConstTensor[(5120, 17408), "bf16"], scratch: Tensor[(32768,), "bf16"], scratch_1: Tensor[(32768,), "bf16"], out: Tensor[(1024, 5120), "bf16"]
 ):

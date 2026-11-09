@@ -1,13 +1,10 @@
 # TileFoundry Spec — hir (`@func` pure SSA dataflow IR)
 
-Defines HIR, the pure SSA-as-DAG dataflow IR: its `Expr` constructs — the
-`Function` container, the structured-SSA exceptions `LoopRegion` and
-`MeshRegion`, and the
-HIR Op subdirectories (math / tensor / nn / shape / sharding) — together with
-their HIR-specific typing rules. Mesh scope is authored in the parser
-([parser](./parser.md)) and its `Mesh` / `Topology` are defined by shard
-([shard §5](./shard.md#5-mesh)); HIR links to those owners where a construct carries
-the result.
+Defines HIR, the pure SSA-as-DAG dataflow IR: the `Function` container, the
+structured-SSA exceptions `LoopRegion` and `MeshRegion`, and the HIR Op
+subdirectories (math / tensor / nn / sharding), with their HIR-specific typing
+rules. Mesh scope is authored in the parser ([parser](./parser.md)); `Mesh` /
+`Topology` are defined by shard ([shard §5](./shard.md#5-mesh)).
 
 ```mermaid
 flowchart TB
@@ -16,7 +13,7 @@ flowchart TB
     Function["<b>Function</b> (Expr)"]
     LoopRegion["<b>LoopRegion</b> (Expr)"]
     MeshRegion["<b>MeshRegion</b> (Expr)"]
-    HirOpBase["<b>hir.Op</b> subclasses<br/>math / tensor / nn / shape / sharding"]
+    HirOpBase["<b>hir.Op</b> subclasses<br/>math / tensor / nn / sharding"]
 
     Expr --> Function
     Expr --> LoopRegion
@@ -27,11 +24,9 @@ flowchart TB
 ## 1. HIR Expr constructs
 
 HIR values are `Expr` nodes ([core-ir §2](./core-ir.md#2-expr)): a `Function`
-container, the loop-phi-shaped `LoopRegion`, the execution-region
-`MeshRegion`, and value `Op` calls. HIR is
-pure **SSA-as-DAG** — there are no `Region` / `Block` abstractions and no Stmt
-sequence; `LoopRegion` carries loop-phi-shaped SSA and `MeshRegion` carries
-the structured execution region.
+container, the loop-phi-shaped `LoopRegion`, the execution-region `MeshRegion`,
+and value `Op` calls. HIR is pure **SSA-as-DAG**: there are no `Region` / `Block`
+abstractions and no Stmt sequence.
 
 ### 1.1 `Function`
 
@@ -55,7 +50,7 @@ class Function(Expr):
     body: Expr | None
     return_type: Type
     return_annotation: Type | None = None
-    specializations: tuple[Pattern, ...] = field(default_factory=tuple)
+    specializations: tuple[pattern.Pattern, ...] = field(default_factory=tuple)
     variants: tuple["Function", ...] = field(default_factory=tuple)
     converters: tuple[tuple[str, "Function"], ...] = field(default_factory=tuple)
 ```
@@ -94,23 +89,22 @@ A plain Python `Module` method stays on the host. Each HIR `Function` it enters
 therefore begins its own invocation; the method itself is not interpreted,
 traced, or dummy-run as HIR.
 
-`Function.body` is a **single Expr** (usually a Call DAG, possibly
-nested inside a `LoopRegion`). HIR has no Stmt sequence; name
-reuse lives in the parser's lexical environment, not the IR. The one
-exception is a **dispatch prototype** — a specialized function's base,
-whose body is `None` (written `pass` in the DSL); it declares the
-signature and dispatch envelope only, and its variants carry the
-implementations (see **Shape dispatch and specializations** below).
-
-`Function` always returns by value; explicit output parameters are
-TIR-only (see [tir](./tir.md)). Crossing that boundary materialises the
-HIR return value into a TIR explicit output buffer parameter.
+`Function.body` is a **single Expr** (usually a Call DAG, possibly nested inside
+a `LoopRegion`); name reuse lives in the parser's lexical environment, not the
+IR. The one exception is a **dispatch prototype**, whose body is `None` (written
+`pass` in the DSL; see **Shape dispatch and specializations** below). Crossing
+into TIR materialises the HIR return value into a TIR explicit output buffer
+parameter ([tir](./tir.md)).
 
 The return type MAY carry a `Partial(reduction)` in a `TensorType`, or in any
 tensor field of a nested `TupleType`. Function construction, type inference,
 and call elaboration MUST allow that state. A Function boundary MUST preserve
 the `ShardLayout` mesh and per-axis reduction; it MUST NOT complete the value
-or reject it merely because it is `Partial`.
+or reject it merely because it is `Partial`. When a layout-unconstrained
+parameter binds to a sharded argument, inference carries each
+`Partial(reduction)` at its original mesh-axis index through the body and into
+the concrete return type, including tuple fields. Only an explicit `Reshard` or
+allreduce completes that state.
 
 A `with Mesh(("cta",), layout=...) as cta:` inside the body names a level of
 the execution domain the owning `Module` declares. The name MUST resolve to
@@ -184,12 +178,6 @@ Argument ↔ parameter binding is:
   monomorphize a dynamic shape into a concrete one (that is **Shape
   dispatch and specializations** below, unaffected by call typing).
 
-The per-mesh-axis `Partial` state is part of the actual argument type. When a
-layout-unconstrained parameter binds to a sharded argument, inference MUST
-carry each `Partial(reduction)` at its original mesh-axis index through the
-body and into the concrete return type, including tuple fields. Only an
-explicit `Reshard` or allreduce may complete that state.
-
 When the body cannot express a propagated sharding (e.g. a reshape
 whose layout factorization straddles a new axis), typeinfer fails at that
 op, not at the boundary. A dispatch-prototype callee
@@ -206,12 +194,10 @@ function records its origin and chosen dimensions as specified by the
 A wholly omitted tensor layout remains `None` in a parameter or return
 annotation and imposes no layout constraint. A stated layout or placement is
 concrete when constructed and MUST match exactly; unwritten strides use the
-default constructor with the enclosing storage and target. Parameter `type`
-and function `return_type` store concrete value types, separately from their
-authored annotations.
+default constructor with the enclosing storage and target.
 
-**SSA shape**. HIR is pure **SSA-as-DAG** — sharing of intermediate
-results is expressed by Python object identity:
+**SSA shape.** Sharing of intermediate results is expressed by Python object
+identity:
 
 - *Single use*: nest the Calls.
   `Call(Binary(kind=MUL), (Call(Binary(kind=ADD), (a, b)), c))` does
@@ -220,10 +206,8 @@ results is expressed by Python object identity:
   env so subsequent `mul(c, c)` / `sub(c, d)` share the same Call
   node. The IR has no binding nodes; DAG edges express "same value".
 
-There are no `Region` / `Block` abstractions in HIR. The single
-structured exception that carries loop-phi-shaped SSA is
-`LoopRegion` ([§1.2](#12-loopregion)). Everything else is a
-pure Call DAG.
+The only structured exceptions to the pure Call DAG are `LoopRegion`
+([§1.2](#12-loopregion)) and `MeshRegion` ([§1.2.1](#121-meshregion)).
 
 **Function typing rules.** `Function` is not an `Op` and is not registered in
 the Op typeinfer registry. `TypeInferVisitor` handles it directly as a
@@ -234,7 +218,7 @@ the Op typeinfer registry. `TypeInferVisitor` handles it directly as a
 - Within a `Function` signature, every occurrence of a same-name
   `DimVar` across `params` and `return_type` MUST agree on its
   `(lo, hi)` bounds; a disagreement is a verify error. A
-  `RangePattern` specialization MUST anchor to a `DimVar` reachable
+  `pattern.Range` specialization MUST anchor to a `DimVar` reachable
   from an input parameter and lie within that `DimVar`'s envelope
   (see **Shape dispatch and specializations** below).
 
@@ -273,9 +257,9 @@ freeze** below).
 
   | role | purpose | lookup handle | `_` allowed | binding uniqueness | parser ledger classification |
   |---|---|---|---|---|---|
-  | **kernel / prototype** | Module execution unit | `fn.name` | no | unique within the Module class body | `_Entry.bound[binding] = KERNEL`; `id(fn)` is not in `_Entry.owned` |
-  | **variant** | Implementation for a dim range | `f"{base}${dim}${lo}_{hi}"` | no | unique within the base | `_Entry.bound[binding] = VARIANT`; `id(fn)` is in `_Entry.owned` |
-  | **converter** | Offline weight conversion | `f"{base}.converter[{weight}]"` | yes | reusable | `_Entry.bound[binding] = CONVERTER`; `id(fn)` is in `_Entry.owned` |
+  | **kernel / prototype** | Module execution unit | `fn.name` | no | unique within the Module class body | `ModuleBuildContext.bindings[binding] = FunctionRole.ROOT`; `id(fn)` is not in `ModuleBuildContext.owned` |
+  | **variant** | Implementation for a dim range | `f"{base}${dim}${lo}_{hi}"` | no | unique within the base | `ModuleBuildContext.bindings[binding] = FunctionRole.VARIANT`; `id(fn)` is in `ModuleBuildContext.owned` |
+  | **converter** | Offline weight conversion | `f"{base}.converter[{weight}]"` | yes | reusable | `ModuleBuildContext.bindings[binding] = FunctionRole.CONVERTER`; `id(fn)` is in `ModuleBuildContext.owned` |
 
   The parser enforces this table during decoration. A parser-authored variant
   MUST carry a non-underscore display label, while a `Function` built directly
@@ -294,15 +278,15 @@ freeze** below).
   inherit the prototype's mesh; variant and base parameter and return types
   MUST still match. Authored layout forms and their acceptance rules are owned
   by [shard §6](./shard.md#6-shardattr) and [parser §2](./parser.md#2-syntax-and-rules).
-- A variant carries exactly one `RangePattern` in `specializations`.
+- A variant carries exactly one `pattern.Range` in `specializations`.
   The canonical signature is
   `";".join(f"{p.dim_var}${p.lo}_{p.hi}" for p in specializations)`
-  (v0 allows only `RangePattern`). Two variants of one base MUST have
+  (v0 allows only `pattern.Range`). Two variants of one base MUST have
   distinct canonical signatures.
 
 *Envelope coverage.* A dispatched function's parameter
 `TensorType.shape` carries a `DimVar(name, lo, hi)` whose `(lo, hi)` is
-the dispatch envelope; `RangePattern` references that `DimVar` by name.
+the dispatch envelope; `pattern.Range` references that `DimVar` by name.
 The variants' closed ranges MUST **partition** the envelope — pairwise
 **disjoint** and jointly **complete** (their union is exactly the DimVar's
 closed `[lo, hi]` envelope). Adjacent closed ranges are written
@@ -311,15 +295,14 @@ therefore selects exactly one variant.
 
 *Prototype body.* A base's `body is None`: the prototype is never
 typeinferred, lowered, or evaluated as a body. Only its variants carry
-executable bodies. There is no base body to fall back to.
+executable bodies.
 
 *Dispatch resolution.* A `Call` whose target is a dispatch prototype
-(`variants != ()`) is a dispatch call: the variant whose `RangePattern`
+(`variants != ()`) is a dispatch call: the variant whose `pattern.Range`
 matches is selected and is the call's result. Evaluation selects from the
 call's concrete argument shapes; specialization selects from the caller's
 stated dimension bindings. Both use the same variant table. A shape outside
-the envelope matches no variant and is an error; there is no base body to fall
-back to (the prototype body is `None`). A `Call` whose target has
+the envelope matches no variant and is an error. A `Call` whose target has
 `variants == ()` is a direct call to that body.
 
 *Authoring freeze.* Variants accumulate during authoring, before the
@@ -356,9 +339,9 @@ class LoopRegion(Expr):
     start: ShapeDim = 0
 ```
 - constraints:
-  - the only HIR exception to pure Call DAG: loop-phi-shaped structured SSA that
-    folds a tile-style loop into one `Expr` value; `type` is `TensorType` (single
-    carry) or `TupleType` (multi-carry).
+  - loop-phi-shaped structured SSA that folds a tile-style loop into one `Expr`
+    value; `type` is `TensorType` (single carry), `TupleType` (multi-carry), or
+    the body's type (no carry).
   - mutable during the compiler's authorised typing and metadata updates.
 
 **Iteration domain.** Both DSL loop surfaces — `for i in tf.tile(...)` and
@@ -431,11 +414,10 @@ and `k > len(params)` is an error. A carried value whose state changes between
 Broadcast and Varying is rejected with its axis and an explicit entry-to-Varying
 or yield-to-Broadcast Reshard remedy. The carry result is the entry type of the
 first `k` parameters: a more specific yield does not narrow it, and a loop that
-runs no iteration has that type. There is no fixed-point iteration.
+runs no iteration has that type. A no-carry loop (`k == 0`) has the type of its
+body. There is no fixed-point iteration.
 
-`LoopRegion.type` is `TensorType` (single carry) or `TupleType`
-(multi-carry); the value is the Expr itself, not a `Call`.
-Parser-side rules: see
+The loop value is the Expr itself, not a `Call`. Parser-side rules: see
 [parser §3](./parser.md#3-implementation-overview).
 
 ### 1.2.1 `MeshRegion`
@@ -504,7 +486,7 @@ the pointer — code carries no back-link to this catalog. `ParamDef` plumbing
 stays in code; the mechanism is owned by [core-ir §2.3](./core-ir.md#23-op).
 
 **HIR-specific typing hooks.** Each op's constraints are enforced by its
-registered `@register_typeinfer(<OpClass>)` body via `ctx.error(...)`
+registered `typeinfer.register(<OpClass>)` body via `ctx.error(...)`
 ([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)):
 
 - `Local(x)`: `x.type.layout` MUST be `ShardLayout`. The result
@@ -541,15 +523,12 @@ surface aliases ([core-ir §2.3](./core-ir.md#23-op)) over the kinded Ops; there
 per-name IR classes.
 [torch element-wise ops](https://pytorch.org/docs/stable/torch.html#pointwise-ops).
 
-One spelling is preferred, so that two authors reading the same IR write it the
-same way: an arithmetic or comparison operand pair SHOULD be written with the
-Python operator (`a + b`, `a * b`, `a < b`), and a sub-tensor SHOULD be written as
-a subscript (`x[:, :, j:j + 1]`, `x[:, :, 3]`). The named forms `tf.add(a, b)` and
-`slice(x, begin=…, end=…, strides=…)` remain the underlying surface — they are what
-the operator and subscript resolve to, and they stay available where a name must be
-computed — but they are not the form to reach for first. Both spellings build the
-same IR, so the choice carries no semantic weight; leaving it open is what lets one
-model read one way and its neighbour another.
+An arithmetic or comparison operand pair SHOULD be written with the Python
+operator (`a + b`, `a * b`, `a < b`), and a sub-tensor SHOULD be written as a
+subscript (`x[:, :, j:j + 1]`, `x[:, :, 3]`). The named forms `tf.add(a, b)` and
+`slice(x, begin=…, end=…, strides=…)` are what the operator and subscript resolve
+to and stay available where a name must be computed. Both spellings build the
+same IR.
 
 ##### Binary
 ```python
@@ -809,9 +788,8 @@ An output with no real sharding receives a fresh C-order `Layout`.
 ##### Rank and ShapeOf
 
 - `Rank` produces a rank-0 `i64`; `ShapeOf` produces a rank-1 `i64` vector with
-  one entry per input axis.
-- Both results are host shape metadata with `layout=default_layout(shape)` and
-  `storage=umat`, not device-resident tensors.
+  one entry per input axis. Both are host shape metadata (`storage=umat`), not
+  device-resident tensors.
 - Evaluation MUST read the concrete runtime tensor rank and extents. A symbolic
   input `TensorType.shape` is the result bound, not the value returned at
   runtime.
@@ -1093,8 +1071,7 @@ class Reshape(Op):
     `Split`-bound positions interacting across the same regroup — is not yet
     supported and MUST fail closed.
   - A reshape of a genuine `ShardLayout` not expressible by the above MUST fail
-    closed rather than fabricate or discard a layout. An unexpressible bare,
-    fully-`Broadcast` `ShardLayout` instead follows the `None`-layout rule above.
+    closed rather than fabricate or discard a layout.
 
 ##### Cast
 ```python
@@ -1113,10 +1090,10 @@ class Cast(Op):
   - Identity in shape / storage / layout; only the element dtype changes to
     `dtype`. A `ShardLayout` input keeps its layout (the relation is the identity).
   - `Cast` is the conversion boundary for the low-precision dtypes (`fp8e4m3` /
-    `f8e8m0` / `f4e2m1`, see [types §3](./types.md#3-dtype)), accepted as either the input or the
-    target dtype.
-  - The evaluator supports a `dtype` in `{f32, f16, bf16, fp8e4m3, f8e8m0, i32,
-    i64, bool}`; evaluating a `Cast` to a dtype outside this set (e.g. `f4e2m1`)
+    `f8e8m0` / `f4e2m1`, see [types §3](./types.md#3-dtype)), accepted as either
+    the input or the target dtype.
+  - The evaluator supports `{f32, f64, f16, bf16, fp8e4m3, f8e8m0, i8, i16, i32,
+    i64, u8, u16, u32, bool}`; a `Cast` involving another dtype (e.g. `f4e2m1`)
     raises an unsupported-dtype error.
 
 ##### IndexAdd / IndexCopy / IndexSelect
@@ -1340,8 +1317,8 @@ class CacheUpdate(Op):
     `cache.len`.
   - `cur_pos` and `s` MUST be i32 scalar tensors. A scalar is rank-0 or has
     only literal size-1 dimensions; typeinfer rejects another dtype or shape.
-  - The write interval is runtime data, never a shape dimension. The result has
-    `cache`'s same static shape; no context-length `DimVar` grows with a write.
+  - The write interval is runtime data, never a shape dimension: the result has
+    `cache`'s static shape.
   - `cur_pos >= 0`, `1 <= s <= new.len`, and `cur_pos + s <= cache.len` MUST
     be checked at eval/runtime, not typeinfer, because their operands are
     runtime values.
@@ -1381,27 +1358,22 @@ class TopK(Op):
 - constraints:
   - The result is a `(values, indices)` tuple; both shrink the selected axis to
     length `k`; `values` keep `x`'s dtype and `indices` are `i64`.
-  - `k` is a `ShapeDim` ([types §4](./types.md#4-dim--symbolic-shape-dimensions)): a static `int`, or a dynamic
-    k derived from a context-length `DimVar` (e.g. `dim_min(512, CTX_LEN //
-    4)`) — a first-class value propagated as the selected axis's symbolic
-    length in the output shape, not a pad+mask workaround. `k` MUST satisfy
-    the `ShapeDim` contract (`int` / `DimVar` / dim-arithmetic `Expr`); any
-    other value fails typeinfer.
+  - `k` is a `ShapeDim` ([types §4](./types.md#4-dim--symbolic-shape-dimensions)):
+    a static `int`, or a dynamic value derived from a `DimVar` (e.g.
+    `minimum(512, CTX_LEN // 4)`) that becomes the selected axis's symbolic
+    length in the output shape. Any other value fails typeinfer.
   - `k` MUST be non-negative (checked whenever `k` is static) and MUST NOT
     exceed the selected-axis length (checked whenever the axis length is
     static and `k` is either static or a symbolic value whose
     statically-derivable upper bound — `DimVar.hi`, composed through
     `DimMin`/`DimMax`/`DimAdd`/`DimMul`/`DimFloorDiv`/`DimMod` — is known). A
     symbolic `k` against a symbolic axis length, or an upper bound that does
-    not statically compose (e.g. through `DimSub`, or a `DimFloorDiv`/
-    `DimMod` with a symbolic divisor), is not checked at typeinfer — it fails
-    open, same as the pre-existing static-only check this widens.
-  - A symbolic `k`'s `DimVar`(s) MUST be resolvable from `x`'s own (input)
-    shape at evaluation time: narrower than `LoopRegion`'s `ShapeDim`
-    fields ([§1.2](#12-loopregion)), which resolve against the enclosing
-    Function's full parameter shapes — a `k` expression whose `DimVar`
-    appears only in some other argument, never in `x`, is not resolvable at
-    TopK's evaluation site.
+    not statically compose (e.g. through `DimSub`, or a `DimFloorDiv`/`DimMod`
+    with a symbolic divisor), is not checked at typeinfer.
+  - A symbolic `k`'s `DimVar`(s) MUST be resolvable from `x`'s own shape at
+    evaluation time. This is narrower than `LoopRegion`'s `ShapeDim` fields
+    ([§1.2](#12-loopregion)), which resolve against the whole Function's
+    parameter shapes.
   - The selected axis MUST NOT be `Split`-sharded by a `ShardLayout`; a split
     selected axis fails typeinfer.
   - A `ShardLayout` output preserves the non-selected sharding and any
@@ -1409,11 +1381,9 @@ class TopK(Op):
     layout keeps size parity with the result shape.
   - `sorted` returns the selected elements ordered by `largest`; otherwise the
     same selected set is returned in an unspecified order.
-  - `x` MUST NOT carry a `Partial(reduction)` mesh axis: `indices` identifies
-    *which* position wins, which cannot be recovered from a per-device
-    partial value without a paired value+device-identity reduction that a
-    plain `Partial` attr cannot express; typeinfer rejects any `Partial`
-    input regardless of `reduction` or `k`.
+  - `x` MUST NOT carry a `Partial(reduction)` mesh axis: a winning index cannot
+    be recovered from a per-device partial value; typeinfer rejects any
+    `Partial` input regardless of `reduction` or `k`.
 
 #### `ir/hir/nn/`
 
@@ -1451,7 +1421,7 @@ Consensus torch.nn.functional ops.
   - Where no Target is in reach (`ctx.resolve_target()` is `None`), a `MatMul`
     with an operand in `smem` or `rmem` has `umat` result storage: which
     instruction computes it, and so where it lands, is decided once a Target
-    is known. A shared child is typed under the visitor's current ValuationContext.
+    is known. A shared child is typed under the visitor's current valuation.Context.
   - `Conv2D` requires rank-4 NCHW input and OIHW weight, a rank-1 bias, and one
     common operand dtype. `stride` and `dilation` are positive length-2 tuples,
     `padding` is a non-negative length-2 tuple, and `groups` is positive. Input
@@ -1475,9 +1445,8 @@ Consensus torch.nn.functional ops.
     I/KH/KW axes from any factorized local layout. Traffic has exactly four
     slots: complete reads of input, weight, and bias followed by one complete
     result write.
-  - `SoftMax` normalizes across an axis (a non-monotonic combination of every
-    value on that axis), so no `reduction` provably commutes; typeinfer rejects
-    every `Partial` input.
+  - `SoftMax` normalizes across an axis, so no `reduction` provably commutes;
+    typeinfer rejects every `Partial` input.
   - `LayerNorm(axis=a)` normalizes over the complete trailing shape
     `x.shape[a:]`, after resolving `a` in `[-rank, rank)`. Weight and bias shapes
     MUST each equal that suffix exactly rather than merely broadcast to it.
@@ -1504,10 +1473,9 @@ class Gelu(Op):
 ```
 - constraints:
   - Elementwise: the output type, shape, and layout are `x`'s.
-  - `x * Phi(x)` dips below zero before rising back through it near zero, so
-    GELU is **not** monotone and commutes with no reduction — unlike the
-    `ReLU` / `Sigmoid` / `Tanh` group above, which commutes with `max` / `min`.
-    typeinfer rejects any `Partial` operand with a `Reshard` remedy.
+  - GELU is **not** monotone, so it commutes with no reduction (unlike
+    `ReLU` / `Sigmoid` / `Tanh`); typeinfer rejects any `Partial` operand with a
+    `Reshard` remedy.
 
 ##### Silu
 ```python
@@ -1525,9 +1493,8 @@ class Silu(Op):
   - Fused rather than decomposed into `Sigmoid` + `Binary(MUL)`: the fused form
     does not round the intermediate `sigmoid(x)` to `x`'s dtype, so at reduced
     precision the two differ by up to ~1 ULP per element.
-  - `x * sigmoid(x)` has a minimum near `x = -1.278`, so SiLU is **not** monotone
-    and commutes with no reduction; typeinfer rejects any `Partial` operand with a
-    `Reshard` remedy, as `Gelu` does.
+  - SiLU is **not** monotone, so it commutes with no reduction; typeinfer rejects
+    any `Partial` operand with a `Reshard` remedy, as `Gelu` does.
 
 ##### RMSNorm
 ```python
@@ -1553,9 +1520,9 @@ class RMSNorm(Op):
     axis MUST stay inside a single op instance: it is never an
     iteration-domain axis of its own, only an existential range that both
     the read and the write cover in full.
-  - `x` / `weight` normalize across an axis (a non-monotonic combination of
-    every value on that axis), so no mesh-axis reduction provably commutes;
-    typeinfer rejects any `Partial` operand.
+  - Normalization combines every value on the axis non-monotonically, so no
+    mesh-axis reduction provably commutes; typeinfer rejects any `Partial`
+    operand.
 
 ##### RoPE
 ```python
@@ -1592,6 +1559,9 @@ class RoPE(Op):
 
 ##### MeshCoord
 
+Defined as `dim.MeshCoord` in `ir/dim/mesh_coord.py` (registered in dialect `tf`,
+category `sharding`); `ir.hir.sharding` does not export it.
+
 ```python
 class MeshCoord(Op):
     """Return the current unit's coordinates along the given mesh axes."""
@@ -1626,9 +1596,7 @@ class Reshard(Op):
 ```
 - constraints:
   - Omitting `layout` preserves `x.layout`; omitting `storage` preserves
-    `x.storage`.
-  - The output preserves the input logical `TensorType.shape`.
-  - Supplied `layout` is a `LayoutBase` (`Layout` / `ComposedLayout` / `ShardLayout`).
+    `x.storage`. The output preserves the input logical `TensorType.shape`.
   - Memory analysis and lowering MUST treat a Reshard as a view iff storage
     is unchanged, the shape is literal, both structural address boxes agree,
     and on every mesh axis with a `Partial` end both ends are equal, or a
@@ -1662,11 +1630,9 @@ class Reshard(Op):
     | rmem with independent Split modes | copy | copy | copy |
 
   - Every other Reshard MUST retain its independent buffer and instruction
-    selection requirements.
-  - Destination storage is concrete, not unmaterialized.
-  - The single op covers zero-copy view, cross-storage copy, cross-CTA
-  redistribute, and mixed cases; typeinfer and the recursive-local Cost
-  Evaluator classify the call.
+    selection requirements. Destination storage is concrete.
+  - One op covers zero-copy view, cross-storage copy, cross-CTA redistribute, and
+    mixed cases; typeinfer and the cost evaluator classify the call.
 
 **Stride resolution.** Storage direction follows the physical addressability
 hierarchy `rmem < smem < gmem` (per-thread / per-CTA / per-program). Typeinfer
@@ -1725,13 +1691,16 @@ class Local(Op):
 
 ## 2. Function specialization API
 
+The names below are declared in `interfaces/valuation/specialize.py` and exported
+as `valuation.<name>`.
+
 ```python
 class SpecializationError(ValueError):
     """Report that a function cannot be specialized as requested."""
 
 
-PROVENANCE = "_specialized_from"
-BOUND_DIMS = "_specialized_dims"
+PROVENANCE = "specialized_from"
+BOUND_DIMS = "specialized_dims"
 
 
 def origin_of(function: object) -> Function | None:
@@ -1779,7 +1748,7 @@ class InstantiateDimensionCloner(ExprCloner):
     def function(self, function: Function) -> Function: ...
 
 
-def residual_dims(fn: Function, frame: ValuationContext | None = None) -> tuple[str, ...]:
+def residual_dims(fn: Function, frame: valuation.Context | None = None) -> tuple[str, ...]:
     """Return every dimension still stated as a range.
 
     Args:
@@ -1792,7 +1761,7 @@ def residual_dims(fn: Function, frame: ValuationContext | None = None) -> tuple[
     ...
 
 
-def dim_vars_reached(fn: Function, frame: ValuationContext | None = None) -> dict[str, object]:
+def dim_vars_reached(fn: Function, frame: valuation.Context | None = None) -> dict[str, object]:
     """Return residual dimension declarations by name.
 
     Args:
@@ -1828,6 +1797,6 @@ def dim_vars_reached(fn: Function, frame: ValuationContext | None = None) -> dic
     graph, including signatures, bodies, Op attributes, loop bounds, variants,
     and called functions, including return types. Runtime values without a
     `DimVar` are rejected later by their consumer.
-  - Instance dimension scans MUST receive a `ValuationContext` and recurse through
+  - Instance dimension scans MUST receive a `valuation.Context` and recurse through
     element entries using the current frame's children ([core-ir §2.1](./core-ir.md#21-call)).
     Function-only graphs retain the frame-free query API.

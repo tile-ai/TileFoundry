@@ -2,75 +2,59 @@
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_schedule_eval
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op, OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import SameConstraint, SameModesConstraint, utils
-from tilefoundry.ir.types import Mesh, UnitType
-from tilefoundry.ir.types.storage import StorageKind as S
-from tilefoundry.ir.types.utils import tensor_bytes
-from tilefoundry.visitor_registry import register_cost_evaluator, register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    identity_relations,
-    register_access_relation,
-)
-from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes
-from tilefoundry_nvidia.cuda.ir.tir.memory.copy_async_tensor import (
-    TmaBoxPattern,
-    TmaGlobalPattern,
-    _warp_scope,
-)
+from tilefoundry import core
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types, utils
+
+from .copy_async_tensor import tma_box_pattern, tma_global_pattern, warp_scope
 
 
-@register_op(dialect="T", category="async", name="copy_reduce_async_tensor")
-class CopyReduceAsyncTensor(Op):
+@expr.register_op(dialect="T", category="async", name="copy_reduce_async_tensor")
+class CopyReduceAsyncTensor(expr.Op):
     """Add a logical partial sum to the global destination; hardware adds in L2."""
 
-    capability = OpCapability("cp.async.bulk.tensor")
+    capability = expr.OpCapability("cp.async.bulk.tensor")
     resource = "tma_engine"
-    src = ParamDef(
+    src = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.READ,
-        pattern=utils.operand_tile(
-            0, S.SMEM, TmaBoxPattern(utils.dtype_place(0), allow_partial=True)
+        effect=expr.MemoryEffect.READ,
+        pattern=pattern.operand_tile(
+            0, expr.StorageKind.SMEM, tma_box_pattern(pattern.dtype_place(0), allow_partial=True)
         ),
     )
-    dst = ParamDef(
+    dst = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.READ | MemoryEffect.WRITE,
-        pattern=utils.operand_tile(1, S.GMEM, TmaGlobalPattern(utils.dtype_place(1))),
+        effect=expr.MemoryEffect.READ | expr.MemoryEffect.WRITE,
+        pattern=pattern.operand_tile(1, expr.StorageKind.GMEM, tma_global_pattern(pattern.dtype_place(1))),
     )
-    kind = ParamDef(kind="attribute", pattern="add", default="add")
-    execution_mesh = ParamDef(
-        kind="attribute", annotation=Mesh, pattern=_warp_scope(), optional=True, default=None
+    kind = expr.ParamDef(kind="attribute", pattern="add", default="add")
+    execution_mesh = expr.ParamDef(
+        kind="attribute", annotation=types.Mesh, pattern=warp_scope(), optional=True, default=None
     )
     between = (
-        SameConstraint("shape", "src", "dst"),
-        SameConstraint("dtype", "src", "dst"),
-        SameModesConstraint("src", "dst", allow_partial=True),
+        pattern.SameConstraint("shape", "src", "dst"),
+        pattern.SameConstraint("dtype", "src", "dst"),
+        pattern.SameModesConstraint("src", "dst", allow_partial=True),
     )
 
 
-@register_typeinfer(CopyReduceAsyncTensor)
+@typeinfer.register(CopyReduceAsyncTensor)
 def _(call, ctx):
-    return UnitType()
+    return types.UnitType()
 
 
-register_access_relation(CopyReduceAsyncTensor)(identity_relations)
+access.register_relation(CopyReduceAsyncTensor)(access.identity_relations)
 
 
-@register_schedule_eval(CopyReduceAsyncTensor)
+@evaluator.register(CopyReduceAsyncTensor)
 def _(ctx):
-    return TensorValue(ShardTensor(ctx.result_type, ctx.args[1].data + ctx.args[0].data))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, ctx.args[1].data + ctx.args[0].data))
 
 
-@register_cost_evaluator(CopyReduceAsyncTensor)
+@cost.register(CopyReduceAsyncTensor)
 def _(call, ctx):
-    src, dst = (tensor_bytes(ctx.local_type_of(arg)) for arg in call.args)
-    return Cost({}, (TrafficBytes(read=src), TrafficBytes(write=dst), TrafficBytes()))
+    src, dst = (utils.tensor_bytes(ctx.local_type_of(arg)) for arg in call.args)
+    return cost.Cost({}, (cost.TrafficBytes(read=src), cost.TrafficBytes(write=dst), cost.TrafficBytes()))
 
 
 __all__ = ["CopyReduceAsyncTensor"]

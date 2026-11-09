@@ -12,23 +12,14 @@ import pytest
 import torch
 
 import tilefoundry
-import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
-from tilefoundry.cli.source import load_authored_ir
+from tilefoundry import cli, verifier
 from tilefoundry.dsl import *
-from tilefoundry.ir.core import Var, VerifyError
-from tilefoundry.ir.core.kinds import ReduceKind
-from tilefoundry.ir.hir.schedule import operand_relations
-from tilefoundry.ir.isl_interop import shape_to_isl_set
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.reduce import Reduce
-from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
-from tilefoundry.ir.types.shard_layout import Broadcast
-from tilefoundry.ir.types.stride import compact_row_major
-from tilefoundry.visitor_registry.verify import verify_prim_function
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.interfaces import schedule
+from tilefoundry.ir import core, dim, expr, tir, types
+from tilefoundry_nvidia import cuda
 
 OPS = Path(__file__).parents[2] / "fixtures" / "ops"
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 _MESH = Mesh((Topology("thread", 32),), Layout((32,), (1,)), ("t",))
 _OTHER_MESH = Mesh((Topology("thread", 32),), Layout((4, 8), (8, 1)), ("w", "t"))
 
@@ -41,37 +32,37 @@ def _sharded(
     mesh: Mesh = _MESH,
     layout=None,
 ):
-    return make_tensor_type(
+    return TensorType.from_shape(
         (n,),
         dtype,
         storage=storage,
-        layout=ShardLayout(layout or Layout((n,), (1,)), (Broadcast(),), mesh),
+        layout=ShardLayout(layout or Layout((n,), (1,)), (types.Broadcast(),), mesh),
     )
 
 
-def _pf(*types, axes: tuple = (0,)) -> PrimFunction:
-    args = tuple(Var(type=type_, name=f"a{index}") for index, type_ in enumerate(types))
-    layout = getattr(types[0], "layout", None)
+def _pf(*type_list, axes: tuple = (0,)) -> core.PrimFunction:
+    args = tuple(expr.Var(type=type_, name=f"a{index}") for index, type_ in enumerate(type_list))
+    layout = getattr(type_list[0], "layout", None)
     mesh = layout.mesh if isinstance(layout, ShardLayout) else _MESH
-    return PrimFunction(
-        target=CudaTarget("nvidia.h200_sxm"),
+    return core.PrimFunction(
+        target=cuda.Target("nvidia.h200_sxm"),
         name="fn",
         params=args,
-        body=Sequential(
+        body=core.Sequential(
             body=(
-                MeshScope(
+                core.MeshScope(
                     mesh,
-                    Var(name="thread", type=mesh),
-                    Sequential(
+                    expr.Var(name="thread", type=mesh),
+                    core.Sequential(
                         body=(
-                            Evaluate(
-                                callable=Reduce(axes=axes, keepdim=True, kind=ReduceKind.MEAN),
+                            core.Evaluate(
+                                callable=tir.reduce.Reduce(axes=axes, keepdim=True, kind=expr.ReduceKind.MEAN),
                                 args=args,
                             ),
                         )
                     ),
                 ),
-                Return(),
+                core.Return(),
             )
         ),
     )
@@ -83,7 +74,7 @@ _THREADS_128 = Mesh((Topology("thread", 128),), Layout((128,), (1,)), ("t",))
 def _split(shape: tuple, axis: int):
     """A source cut along *axis* over the 128-thread mesh."""
     strides = (shape[1], 1)
-    return make_tensor_type(
+    return TensorType.from_shape(
         shape,
         DType.f32,
         storage="rmem",
@@ -92,11 +83,11 @@ def _split(shape: tuple, axis: int):
 
 
 def _replicated(shape: tuple, storage: str = "rmem"):
-    return make_tensor_type(
+    return TensorType.from_shape(
         shape,
         DType.f32,
         storage=storage,
-        layout=ShardLayout(Layout(shape, compact_row_major(shape)), (Broadcast(),), _THREADS_128),
+        layout=ShardLayout(Layout(shape, types.compact_row_major(shape)), (types.Broadcast(),), _THREADS_128),
     )
 
 
@@ -156,37 +147,37 @@ def test_workspace_holds_slot_per_warp(operands, axes, refused) -> None:
     """
     function = _pf(*operands, axes=axes)
     if refused is not None:
-        with pytest.raises(VerifyError, match=refused):
-            verify_prim_function(function)
+        with pytest.raises(expr.VerifyError, match=refused):
+            verifier.verify_prim_function(function)
         return
-    verify_prim_function(function)
-    (statement,) = (stmt for stmt in function.body.body[0].body.body if isinstance(stmt, Evaluate))
-    types = tuple(arg.type for arg in statement.args)
-    reached = operand_relations(statement.callable, types)[2].relation
-    source = shape_to_isl_set(tuple(operands[0].shape), {})
+    verifier.verify_prim_function(function)
+    (statement,) = (stmt for stmt in function.body.body[0].body.body if isinstance(stmt, core.Evaluate))
+    type_list = tuple(arg.type for arg in statement.args)
+    reached = schedule.operand_relations(statement.callable, type_list)[2].relation
+    source = dim.shape_to_isl_set(tuple(operands[0].shape), {})
     assert reached.is_equal(isl.map.from_domain_and_range(source, isl.set("{ [s] : 0 <= s < 4 }")))
 
 
 def test_reduce_refuses_nonfloat_dtype() -> None:
     with pytest.raises(
-        VerifyError,
+        expr.VerifyError,
         match=r"could not satisfy src_dtype in \{f32, f16, bf16\}",
     ):
-        verify_prim_function(_pf(_sharded(8, dtype=DType.fp8e4m3), _sharded(1)))
+        verifier.verify_prim_function(_pf(_sharded(8, dtype=DType.fp8e4m3), _sharded(1)))
 
 
 def test_reduce_refuses_swizzled_source() -> None:
     swizzled = ComposedLayout(Swizzle(2, 2, 2), 0, Layout((8,), (1,)))
     with pytest.raises(
-        VerifyError,
+        expr.VerifyError,
         match=r"does not match Layout\(\(\*_\,\), \(\*_\,\)\)",
     ):
-        verify_prim_function(_pf(_sharded(8, layout=swizzled), _sharded(1)))
+        verifier.verify_prim_function(_pf(_sharded(8, layout=swizzled), _sharded(1)))
 
 
 def test_refuses_operands_on_different_meshes() -> None:
-    with pytest.raises(VerifyError, match=r"does not match \*mesh_shape"):
-        verify_prim_function(_pf(_sharded(8), _sharded(1, mesh=_OTHER_MESH)))
+    with pytest.raises(expr.VerifyError, match=r"does not match \*mesh_shape"):
+        verifier.verify_prim_function(_pf(_sharded(8), _sharded(1, mesh=_OTHER_MESH)))
 
 
 _ENTRY = r"tilefoundry::ops::reduce<tilefoundry::ops::"
@@ -195,7 +186,7 @@ _ENTRY = r"tilefoundry::ops::reduce<tilefoundry::ops::"
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_reduce_tiers_match_torch() -> None:
     """One compile behind four assertions, each naming the tier that failed."""
-    ReduceTiers = load_authored_ir(f"{OPS / 'reduce_tiers.py'}:ReduceTiers")
+    ReduceTiers = cli.load_authored_ir(f"{OPS / 'reduce_tiers.py'}:ReduceTiers")
     rm = tilefoundry.compile(ReduceTiers, target=_CUDA)
     torch.manual_seed(0)
     a_plain = torch.randn(128, 8, dtype=torch.float32, device="cuda")
@@ -244,7 +235,7 @@ def test_cta_thread_mesh_reduces() -> None:
     intra-CTA tier: 32 lanes and 4 warps per group, one slot per warp, and
     eight kept cells combined one at a time.
     """
-    TwoLevelReduce = load_authored_ir(f"{OPS / 'two_level_reduce.py'}:TwoLevelReduce")
+    TwoLevelReduce = cli.load_authored_ir(f"{OPS / 'two_level_reduce.py'}:TwoLevelReduce")
     rm = tilefoundry.compile(TwoLevelReduce, target=_CUDA)
     torch.manual_seed(0)
     a_two = torch.randn(8, 4, 128, 4, dtype=torch.float32, device="cuda")

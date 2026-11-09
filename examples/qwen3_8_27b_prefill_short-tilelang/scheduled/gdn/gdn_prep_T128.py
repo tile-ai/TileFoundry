@@ -62,7 +62,7 @@ Differences to the kernel:
   bf16 value widened exactly (the f32 slot is storage only, not a rounding change).
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 T_ = 128
 R = 2
@@ -79,7 +79,7 @@ PACK = CONV + 96
 EPS_L2 = 9.98377799987793e-07
 
 
-@module(entry="gdn_prep", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", NB * 80), Topology("thread", W * 32)))
+@module(entry="gdn_prep", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", NB * 80), Topology("thread", W * 32)))
 class SCHED_GDN_PREP_T128:
     @func
     def gdn_prep(proj: Tensor[(T_, PROJ), "bf16"], conv_w: Tensor[(CONV, 4), "bf16", Layout((CONV, 4), (4, 1))],

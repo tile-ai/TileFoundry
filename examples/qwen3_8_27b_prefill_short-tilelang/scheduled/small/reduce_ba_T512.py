@@ -10,14 +10,14 @@ order. The kernel writes the 96 values into columns 16384..16479 of the (M, 1664
 GDN projection buffer; this program's result is the (M, 96) block itself.
 """
 from tilefoundry.dsl import *
-from tilefoundry.target import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 512
 S = 8
 N = 96
 
 
-@module(entry="reduce_ba", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", M), Topology("thread", N)))
+@module(entry="reduce_ba", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", M), Topology("thread", N)))
 class SCHED_REDUCE_BA_T512:
     @func
     def reduce_ba(p: Tensor[(S, M, N), "f32"]) -> Tensor[(M, N), "bf16"]:

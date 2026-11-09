@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 32), Topology("thread", 1),),
 )
 class StridedReturnWindow:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
+    @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def gemm(x: Tensor[(32, 14336), "bf16"], out: Tensor[(24, 256), "bf16", "rmem"]):
         with Mesh((Topology("cta", 32),), layout=(32,), names=("d0",)) as cta:
             with Mesh((Topology("thread", 1),), layout=(1,), names=("d0",)) as scope:

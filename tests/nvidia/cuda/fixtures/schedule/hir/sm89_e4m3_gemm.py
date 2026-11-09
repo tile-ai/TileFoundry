@@ -8,7 +8,7 @@ belong to the implementation, as in ``tests/nvidia/cuda/fixtures/tir/e4m3_gemm.p
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 16
 N = 8
@@ -18,7 +18,7 @@ BK = 32
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.rtx_6000_ada"),
+    target=cuda.Target("nvidia.rtx_6000_ada"),
     topologies=(Topology("cta", 1), Topology("thread", 32)),
 )
 class SM89_E4M3_GEMM:

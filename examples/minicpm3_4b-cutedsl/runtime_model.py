@@ -1,6 +1,6 @@
 """MiniCPM3-4B's decode step, made fast: the runtime twin of `model.py`.
 
-`@runtime_module` pins the shape of this file -- the same function names as the
+`@runtime.module` pins the shape of this file -- the same function names as the
 authored Module, the same child tree -- so what is left to decide is what each
 of those functions *does*. The answer is one CuTeDSL launch wherever two would
 do, six per layer:
@@ -48,7 +48,7 @@ from model import (
     _KV_A_PROJ, _LORA_EPS, _NOPE, _QK, _V, config,
 )
 from tilefoundry.dsl import ModuleList
-from tilefoundry.runtime import runtime_func, runtime_module
+from tilefoundry import runtime
 
 _H = config.num_attention_heads
 _HID = config.hidden_size
@@ -155,7 +155,7 @@ def _attention_block(self, hidden, cos_cache, sin_cache, pos_ids, k_cache, v_cac
     add in `o_proj`'s epilogue instead of a kernel of its own.
     """
     s = self.scratch
-    b = self._bound
+    b = self.bound
     x = hidden.reshape(_HID)
     self._ctx.set(k_cache.shape[1] if k_cache.dim() == 4 else k_cache.shape[0])
 
@@ -187,7 +187,7 @@ def _attention_block(self, hidden, cos_cache, sin_cache, pos_ids, k_cache, v_cac
 
 def _mlp_block(self, hidden, residual, alpha):
     s = self.scratch
-    b = self._bound
+    b = self.bound
     K.rmsnorm_gemv_swiglu(hidden.reshape(_HID), b["gamma_post"], b["w_gate"],
                           b["w_up"], _EPS, out=s.act)
     if residual is None:
@@ -209,12 +209,12 @@ def _full_caches(self, k_cache, v_cache):
     return k_cache.reshape(-1, _H, _QK), v_cache.reshape(-1, _H, _V)
 
 
-@runtime_func
+@runtime.func
 def _input_rms_norm(self, hidden, gamma_in):
     return K.rmsnorm(hidden.reshape(_HID), gamma_in, _EPS).reshape(1, 1, _HID)
 
 
-@runtime_func
+@runtime.func
 def _mla_attention(
     self, hidden, gamma_in, w_q_a, gamma_q_a, w_q_b, w_kv_a, gamma_kv_a, w_kv_b,
     cos_cache, sin_cache, pos_ids, k_cache, v_cache, scale, w_o,
@@ -227,12 +227,12 @@ def _mla_attention(
             v_new.reshape(1, 1, _H, _V))
 
 
-@runtime_func
+@runtime.func
 def _mlp(self, hidden, gamma_post, w_gate, w_up, w_down):
     return _mlp_block(self, hidden, None, None).reshape(1, 1, _HID)
 
 
-@runtime_func
+@runtime.func
 def _decoder_layer(
     self, hidden, gamma_in, w_q_a, gamma_q_a, w_q_b, w_kv_a, gamma_kv_a, w_kv_b,
     cos_cache, sin_cache, pos_ids, k_cache, v_cache, scale, w_o, gamma_post,
@@ -249,7 +249,7 @@ def _decoder_layer(
 def _layer_load(self, resource) -> None:
     """Read this layer's weights, then put each in the layout its kernel reads."""
     super(MiniCPM3_4B_DecoderLayer_Runtime, self).load(resource)
-    b = self._bound
+    b = self.bound
     for name in ("w_q_b", "w_kv_b", "w_o", "w_gate", "w_up", "w_down"):
         b[name] = _row_major(b[name])
     self._w_qkv_a = torch.cat((_row_major(b["w_q_a"]), _row_major(b["w_kv_a"])), 0)
@@ -261,7 +261,7 @@ def _layer_load(self, resource) -> None:
         self._ctx = _Ctx(device)
 
 
-MiniCPM3_4B_DecoderLayer_Runtime = runtime_module(MiniCPM3_4B_DecoderLayer)(
+MiniCPM3_4B_DecoderLayer_Runtime = runtime.module(MiniCPM3_4B_DecoderLayer)(
     type("MiniCPM3_4B_DecoderLayer_Runtime", (), {
         "__doc__": "One MLA decoder layer as six CuTeDSL launches.",
         "input_rms_norm": _input_rms_norm,
@@ -279,19 +279,19 @@ MiniCPM3_4B_DecoderLayer_Runtime = runtime_module(MiniCPM3_4B_DecoderLayer)(
 
 # ── the stack ────────────────────────────────────────────────────────────────
 
-@runtime_func
+@runtime.func
 def _embed(self, w_embed, token_ids):
     return K.embed_scaled(w_embed, token_ids, EMBED_SCALE,
                           out=self._hidden).reshape(1, 1, _HID)
 
 
-@runtime_func
+@runtime.func
 def _final_rms_norm(self, hidden, gamma_final):
     return K.rmsnorm(hidden.reshape(_HID), gamma_final, _EPS,
                      out=self._normed).reshape(1, 1, _HID)
 
 
-@runtime_func
+@runtime.func
 def _lm_head(self, hidden, w_head):
     return K.lm_head_gemv(hidden.reshape(_HID), w_head, LOGITS_SCALING,
                           out=self._logits).reshape(1, _VOCAB)
@@ -301,8 +301,8 @@ def _root_load(self, resource) -> None:
     super(MiniCPM3_4B_Runtime, self).load(resource)
     # The head is declared `(hidden, vocab)` for `matmul`; a GEMV wants one
     # vocabulary row -- 2560 contiguous elements -- under each warp.
-    self._bound["w_head"] = self._bound["w_head"].t().contiguous()
-    device = self._bound["w_head"].device
+    self.bound["w_head"] = self.bound["w_head"].t().contiguous()
+    device = self.bound["w_head"].device
 
     self._hidden = torch.empty(_HID, device=device, dtype=_DT)
     self._normed = torch.empty(_HID, device=device, dtype=_DT)
@@ -444,7 +444,7 @@ def _capturable(self, args) -> bool:
     )
 
 
-MiniCPM3_4B_Runtime = runtime_module(MiniCPM3_4B)(
+MiniCPM3_4B_Runtime = runtime.module(MiniCPM3_4B)(
     type("MiniCPM3_4B_Runtime", (), {
         "__doc__": "The 62-layer stack and the two scaled ends, as one decode step.",
         "embed": _embed,

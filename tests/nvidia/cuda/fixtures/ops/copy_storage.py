@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from tests.core.fixtures.tir.layouts import split_pairs, split_rows, split_short_rows
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 
 @module(entry="copy_storage_host", target=_CUDA, topologies=(Topology("thread", 128),))
@@ -59,7 +59,7 @@ class CopyStorage:
             T.copy(bcast_src, bcast_frag)
             T.copy(bcast_frag, bcast_dst)
 
-    @prim_func(target=CpuTarget())
+    @prim_func(target=cpu.Target())
     def copy_storage_host(
         a_smem: Tensor[(128, 4), "f32"],
         b_smem: Tensor[(128, 4), "f32"],
@@ -72,8 +72,8 @@ class CopyStorage:
         a_narrow: Tensor[(128, 2), "f32"],
         b_narrow: Tensor[(128, 2), "f32"],
     ):
-        launch(  # noqa: F821
-            copy_storage_device,  # noqa: F821
+        launch(
+            copy_storage_device,
             a_smem,
             b_smem,
             a_rmem,

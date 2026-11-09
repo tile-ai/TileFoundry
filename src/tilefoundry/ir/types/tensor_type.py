@@ -1,104 +1,114 @@
+"""Value types: tensors, tuples of values, the unit type, and the ``Type`` union."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Union
 
-from tilefoundry.ir.types.storage import StorageKind, resolve_storage
+from tilefoundry.ir import expr
 
-from .dtype import DType
+from .layout import Layout
+
+__all__ = ["ShapeDim", "TensorType", "TupleType", "Type", "UnitType"]
 
 type ShapeDim = "int | DimVar | Expr"
-"""A shape entry: static, symbolic, or expression-valued.
-
-The string forward reference keeps this module free of any import of core
-expressions; annotations never require evaluating it at runtime.
-"""
-
-
-def _canonicalize_static_dims(shape: tuple) -> tuple:
-    """Replace integer ``Constant`` shape entries with canonical plain integers.
-
-    Symbolic and dynamic expressions pass through. The deferred import avoids
-    an expression/type cycle and fails closed by returning the original shape.
-
-    See [types §4](docs/spec/types.md#4-dim--symbolic-shape-dimensions).
-    """
-    try:
-        from tilefoundry.ir.core.expr import Constant  # noqa: PLC0415 - cycle guard
-    except ImportError:  # pragma: no cover - import-cycle guard, fail closed
-        return shape
-    out = []
-    changed = False
-    for d in shape:
-        if isinstance(d, Constant) and isinstance(d.value, int) and not isinstance(d.value, bool):
-            out.append(int(d.value))
-            changed = True
-        else:
-            out.append(d)
-    return tuple(out) if changed else shape
+"""A shape entry: static, symbolic, or expression-valued."""
 
 
 @dataclass(frozen=True)
 class TensorType:
+    """A ranked value: its shape, element type, layout and storage level.
+
+    See [types §2](docs/spec/types.md#2-tensortype).
+    """
+
     shape: tuple[ShapeDim, ...]
-    dtype: DType
+    dtype: expr.DType
     layout: "LayoutBase | None"
 
-    storage: StorageKind
+    storage: expr.StorageKind
 
     def __post_init__(self) -> None:
+        """Normalize the storage and replace integer ``Constant`` extents by plain integers.
 
-        normalized = resolve_storage(self.storage)
+        Symbolic and dynamic expressions pass through.
+
+        See [types §4](docs/spec/types.md#4-dim--symbolic-shape-dimensions).
+        """
+        normalized = expr.resolve_storage(self.storage)
         if normalized is None:
             raise TypeError("TensorType.storage must be a StorageKind, not None")
         if normalized is not self.storage:
             object.__setattr__(self, "storage", normalized)
 
         if any(not isinstance(d, int) for d in self.shape):
-            canon = _canonicalize_static_dims(self.shape)
-            if canon is not self.shape:
-                object.__setattr__(self, "shape", canon)
+            out = []
+            changed = False
+            for d in self.shape:
+                if isinstance(d, expr.Constant) and isinstance(d.value, int) and not isinstance(d.value, bool):
+                    out.append(int(d.value))
+                    changed = True
+                else:
+                    out.append(d)
+            if changed:
+                object.__setattr__(self, "shape", tuple(out))
 
-    @staticmethod
-    def scalar(
-        dtype: DType,
+    @classmethod
+    def from_scalar(
+        cls,
+        dtype: expr.DType,
         layout: "LayoutBase | None" = None,
-        storage: StorageKind = StorageKind.UMAT,
-    ) -> "TensorType":
-        from .layout import Layout  # noqa: PLC0415
-
-        return TensorType(
+        storage: expr.StorageKind = expr.StorageKind.UMAT,
+    ) -> TensorType:
+        """A rank-0 value of *dtype*."""
+        return cls(
             shape=(),
             dtype=dtype,
             layout=Layout(()) if layout is None else layout,
             storage=storage,
         )
 
-    @staticmethod
-    def umat_scalar(dtype: DType = DType.i64) -> "TensorType":
+    @classmethod
+    def from_umat_scalar(cls, dtype: expr.DType = expr.DType.i64) -> TensorType:
         """Canonical rank-0 value whose residency is not decided.
 
         Shape elements and dimension arithmetic results use this single form
         so structural type equality holds across construction sites.
         """
-        return TensorType.scalar(dtype)
+        return cls.from_scalar(dtype)
 
-    @staticmethod
-    def umat_tensor(shape: tuple, dtype: DType = DType.i64) -> "TensorType":
+    @classmethod
+    def from_umat_tensor(cls, shape: tuple, dtype: expr.DType = expr.DType.i64) -> TensorType:
         """Canonical ranked value whose residency is not decided."""
-        from .layout import Layout  # noqa: PLC0415
-
         shape = tuple(shape)
-        return TensorType(
+        return cls(
             shape=shape,
             dtype=dtype,
             layout=Layout(shape),
-            storage=StorageKind.UMAT,
+            storage=expr.StorageKind.UMAT,
+        )
+
+    @classmethod
+    def from_shape(
+        cls,
+        shape: tuple,
+        dtype: expr.DType = expr.DType.f32,
+        storage: "str | expr.StorageKind" = "gmem",
+        layout: object = None,
+    ) -> TensorType:
+        """A plain (unsharded) tensor of *shape*; its layout defaults to the compact one."""
+        return cls(
+            shape=tuple(shape),
+            dtype=dtype,
+            layout=Layout(tuple(shape)) if layout is None else layout,
+            storage=storage,
         )
 
 
 @dataclass(frozen=True)
 class TupleType:
+    """An ordered group of values."""
+
     fields: tuple[Union["TensorType", "TupleType", "CallableType"], ...]
 
 
@@ -114,5 +124,3 @@ class UnitType:
 
 
 Type = Union[TensorType, TupleType, UnitType, "CallableType", "PointerType"]
-
-__all__ = ["DType", "TensorType", "TupleType", "UnitType", "Type"]

@@ -8,8 +8,8 @@ import pytest
 
 import tilefoundry
 from tests.core._corpus import Case, case, check_case, special
-from tilefoundry.passes.transforms import LoweringError
-from tilefoundry_nvidia.cuda.passes.transforms import insert_default_host_entry
+from tilefoundry.passes import transforms
+from tilefoundry_nvidia.cuda.passes import transforms as passes_transforms
 
 
 class HostEntryCase(Case):
@@ -23,7 +23,7 @@ class ExistingHostEntry(HostEntryCase):
     path: Path = Path(__file__).parents[1] / "fixtures/tir/square.py"
 
     def guard(self, state, problems):
-        assert insert_default_host_entry(state) is state
+        assert passes_transforms.insert_default_host_entry(state) is state
 
 
 @case
@@ -33,7 +33,7 @@ class MissingHostEntry(HostEntryCase):
     path: Path = Path(__file__).parents[1] / "fixtures/schedule/tir/loop_outputs.py"
 
     def guard(self, state, problems):
-        assert insert_default_host_entry(state) is state
+        assert passes_transforms.insert_default_host_entry(state) is state
         with pytest.raises(ValueError, match=r"tilefoundry.build: Module.entry .* is not a CPU host entry"):
             tilefoundry.compile(state)
 
@@ -54,7 +54,7 @@ class AmbiguousHIRHost(HostEntryCase):
     name: str | None = "AmbiguousHIRHost"
 
     def guard(self, state, problems):
-        with pytest.raises(LoweringError, match="host 'host' launches 2 HIR functions; expected exactly one"):
+        with pytest.raises(transforms.LoweringError, match="host 'host' launches 2 HIR functions; expected exactly one"):
             tilefoundry.compile(state)
 
 

@@ -8,26 +8,18 @@ import pytest
 import torch
 
 import tilefoundry
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.codegen.context import EmitContext
-from tilefoundry.codegen.context_builder import build_codegen_context, mangle
-from tilefoundry.codegen.linkable_module import LinkableModule
+from tilefoundry import cli, codegen
 from tilefoundry.dsl import *
-from tilefoundry.ir.core import Constant, Var
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.tir.launch import Launch
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import Evaluate, Sequential
-from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.target import CpuTarget
-from tilefoundry_nvidia import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.abi import launcher_symbol
+from tilefoundry.ir import core, expr, tir
+from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
+from tilefoundry_nvidia.cuda import codegen as cuda_codegen
 
 CODEGEN = Path(__file__).parents[1] / "fixtures" / "codegen"
 
 
-def _tensor(name: str, shape=(8,)) -> Var:
-    return Var(
+def _tensor(name: str, shape=(8,)) -> expr.Var:
+    return expr.Var(
         name=name,
         type=TensorType(
             shape=shape,
@@ -38,45 +30,45 @@ def _tensor(name: str, shape=(8,)) -> Var:
     )
 
 
-def _device(name: str) -> PrimFunction:
-    return PrimFunction(
+def _device(name: str) -> core.PrimFunction:
+    return core.PrimFunction(
         name=name,
         params=(_tensor("a"),),
-        body=Sequential(body=()),
-        target=CudaTarget("nvidia.h200_sxm"),
+        body=core.Sequential(body=()),
+        target=cuda.Target("nvidia.h200_sxm"),
     )
 
 
-def _launch(device: PrimFunction, *args: Var, block: int = 32) -> Evaluate:
-    ref = SymbolRef(
+def _launch(device: core.PrimFunction, *args: expr.Var, block: int = 32) -> core.Evaluate:
+    ref = core.SymbolRef(
         name=device.name,
         type=CallableType(return_type=UnitType(), parameters=tuple(p.type for p in device.params)),
     )
-    i64 = TensorType.scalar(DType.i64, storage=StorageKind.RMEM)
-    one = Constant(type=i64, value=1)
-    block_expr = Constant(type=i64, value=block)
-    return Evaluate(
-        callable=Launch(),
+    i64 = TensorType.from_scalar(DType.i64, storage=StorageKind.RMEM)
+    one = expr.Constant(type=i64, value=1)
+    block_expr = expr.Constant(type=i64, value=block)
+    return core.Evaluate(
+        callable=tir.launch.Launch(),
         args=(ref, one, one, one, block_expr, one, one, *args),
     )
 
 
-def _module(devices, launches, params) -> tuple[Module, PrimFunction]:
-    host = PrimFunction(
+def _module(devices, launches, params) -> tuple[core.Module, core.PrimFunction]:
+    host = core.PrimFunction(
         name="host",
         params=tuple(params),
-        body=Sequential(body=tuple(launches)),
-        target=CpuTarget(),
+        body=core.Sequential(body=tuple(launches)),
+        target=cpu.Target(),
     )
-    return Module(name="multi", functions=(*devices, host), entry="host"), host
+    return core.Module(name="multi", functions=(*devices, host), entry="host"), host
 
 
 def _source(devices, launches, params) -> str:
     mod, host = _module(devices, launches, params)
-    root = build_codegen_context(mod)
+    root = codegen.build_context(mod)
     group = next(group for group in root.groups if host in group.functions)
     view = root.for_group(group)
-    return host.target.resolve(LinkableModule, mod, (host,), host.target.resolve(EmitContext, view)).source
+    return host.target.resolve(codegen.LinkableModule, mod, (host,), host.target.resolve(codegen.EmitContext, view)).source
 
 
 def test_launches_keep_order_and_blocks() -> None:
@@ -88,8 +80,8 @@ def test_launches_keep_order_and_blocks() -> None:
         (a, b),
     )
     mod, _ = _module((first, second), (), ())
-    assert source.index(launcher_symbol(mangle(mod, first))) < source.index(
-        launcher_symbol(mangle(mod, second))
+    assert source.index(cuda_codegen.launcher_symbol(codegen.mangle(mod, first))) < source.index(
+        cuda_codegen.launcher_symbol(codegen.mangle(mod, second))
     )
     assert "1, 32, 0" in source
     assert "1, 64, 0" in source
@@ -98,14 +90,14 @@ def test_launches_keep_order_and_blocks() -> None:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_two_launches_write_outputs() -> None:
     """Both compiled objects retain their callable and library after registration override."""
-    _TwoCopyLaunches = load_authored_ir(f"{CODEGEN / 'two_copy_launches.py'}:_TwoCopyLaunches")
+    _TwoCopyLaunches = cli.load_authored_ir(f"{CODEGEN / 'two_copy_launches.py'}:_TwoCopyLaunches")
     torch.manual_seed(0)
     x0 = torch.randn(1, 128, device="cuda")
     x1 = torch.randn(1, 128, device="cuda")
     out0 = torch.empty_like(x0)
     out1 = torch.empty_like(x1)
     runtimes = [
-        tilefoundry.compile(_TwoCopyLaunches, target=CudaTarget("nvidia.h200_sxm"))
+        tilefoundry.compile(_TwoCopyLaunches, target=cuda.Target("nvidia.h200_sxm"))
         for _ in range(2)
     ]
     for runtime in runtimes:
@@ -136,7 +128,7 @@ def test_device_function_launches_twice() -> None:
     device = _device("device")
     source = _source((device,), (_launch(device, a, block=32), _launch(device, a, block=64)), (a,))
     mod, _ = _module((device,), (), ())
-    symbol = launcher_symbol(mangle(mod, device))
+    symbol = cuda_codegen.launcher_symbol(codegen.mangle(mod, device))
     assert source.count(f'extern "C" const char* {symbol}') == 1
     assert source.count(f"{symbol}(a.data_ptr()") == 2
 
@@ -144,16 +136,16 @@ def test_device_function_launches_twice() -> None:
 def test_extent_like_name_stays_parameter() -> None:
     """An open axis is stated by the type, so no name is reserved for one."""
     a, looks_hidden = _tensor("a"), _tensor("a_shape_0")
-    device = PrimFunction(
+    device = core.PrimFunction(
         name="device",
         params=(a, looks_hidden),
-        body=Sequential(body=()),
-        target=CudaTarget("nvidia.h200_sxm"),
+        body=core.Sequential(body=()),
+        target=cuda.Target("nvidia.h200_sxm"),
     )
     source = _source((device,), (_launch(device, a, looks_hidden),), (a, looks_hidden))
     assert "tvm::ffi::Tensor a_shape_0" in source
     mod, _ = _module((device,), (), ())
-    symbol = launcher_symbol(mangle(mod, device))
+    symbol = cuda_codegen.launcher_symbol(codegen.mangle(mod, device))
     assert f"{symbol}(a.data_ptr(), a_shape_0.data_ptr()" in source
 
 
@@ -161,4 +153,4 @@ def test_single_launch_path_remains_available() -> None:
     a = _tensor("a")
     device = _device("device")
     source = _source((device,), (_launch(device, a),), (a,))
-    assert launcher_symbol(mangle(_module((device,), (), ())[0], device)) in source
+    assert cuda_codegen.launcher_symbol(codegen.mangle(_module((device,), (), ())[0], device)) in source

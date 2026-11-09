@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
-_H200 = CudaTarget("nvidia.h200_sxm")
+_H200 = cuda.Target("nvidia.h200_sxm")
 _CTA = (Topology("cta", 132),)
 
 
@@ -26,7 +26,7 @@ class MoEMegaKernel:
             with cta[:120] as routed:
                 local = tf.reshard(tokens, (120 @ routed.tile, 64), "gmem")
                 placed = tf.relu(local)
-            return tf.reshard(placed, (120, 64), "gmem")  # noqa: F821
+            return tf.reshard(placed, (120, 64), "gmem")
 
     @func
     def shared_expert(tokens: Tensor[(120, 64), "f32"]):
@@ -34,9 +34,9 @@ class MoEMegaKernel:
             with cta[120:] as shared:
                 local = tf.reshard(tokens, (120 @ shared.tile, 64), "gmem")
                 placed = tf.square(local)
-            return tf.reshard(placed, (120, 64), "gmem")  # noqa: F821
+            return tf.reshard(placed, (120, 64), "gmem")
 
     @func
     def experts(tokens: Tensor[(120, 64), "f32"]):
         with Mesh(("cta",), layout=(132,), names=("tile",)) as _whole:
-            return tf.add(routed_expert(tokens), shared_expert(tokens))  # noqa: F821
+            return tf.add(routed_expert(tokens), shared_expert(tokens))

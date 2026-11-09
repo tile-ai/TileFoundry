@@ -7,9 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tilefoundry.cli.source import load_authored_ir
-from tilefoundry.inspection import as_script
-from tilefoundry.parser import ParseError
+from tilefoundry import cli, inspection, parser
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 LOOP_ITERATORS = {
@@ -21,11 +19,11 @@ LOOP_ITERATORS = {
 
 
 def test_function_accepts_leading_docstring() -> None:
-    documented = load_authored_ir(
+    documented = cli.load_authored_ir(
         f"{FIXTURES}/parser/documented_function.py:Documented"
     ).entry_function()
 
-    assert "This is documentation" not in as_script(documented)
+    assert "This is documentation" not in inspection.as_script(documented)
 
 
 @pytest.mark.parametrize(
@@ -46,5 +44,5 @@ def test_loop_iterator_names_arity_error(iterator: str, expected: str) -> None:
     Encoding each iterator's arity is what lets the generated grammar show the
     accepted forms, so the reason is stated before the shape rejects.
     """
-    with pytest.raises(ParseError, match=re.escape(expected)):
-        load_authored_ir(str(FIXTURES / "diagnostics" / LOOP_ITERATORS[iterator]))
+    with pytest.raises(parser.ParseError, match=re.escape(expected)):
+        cli.load_authored_ir(str(FIXTURES / "diagnostics" / LOOP_ITERATORS[iterator]))

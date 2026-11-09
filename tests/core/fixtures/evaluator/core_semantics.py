@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="add_scalar", target=CpuTarget())
+@module(entry="add_scalar", target=cpu.Target())
 class AddScalar:
     @func
     def add_scalar(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
         return tf.add(x, 2.0)
 
 
-@module(entry="caller", target=CpuTarget())
+@module(entry="caller", target=cpu.Target())
 class CallerCallee:
     @func
     def callee(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
@@ -24,7 +24,7 @@ class CallerCallee:
         return tf.mul(callee(a, b), b)
 
 
-@module(entry="carry_sum", target=CpuTarget())
+@module(entry="carry_sum", target=cpu.Target())
 class CarrySum:
     @func
     def carry_sum(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
@@ -34,7 +34,7 @@ class CarrySum:
         return acc
 
 
-@module(entry="carry_two", target=CpuTarget())
+@module(entry="carry_two", target=cpu.Target())
 class CarryTwo:
     @func
     def carry_two(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:

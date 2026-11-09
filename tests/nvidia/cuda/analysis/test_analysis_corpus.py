@@ -21,38 +21,10 @@ from tests.nvidia.cuda.analysis._contracts import (
     assert_internal_contract,
     assert_reported_contract,
 )
-from tilefoundry.analysis import (
-    AnalysisPrecision,
-    AnalysisResult,
-    ComputeCostMetadata,
-    MemoryMetadata,
-    PerformanceMetadata,
-    PerformanceSummaryMetadata,
-    analyze,
-)
-from tilefoundry.analysis.access import eliminate_parameters
-from tilefoundry.analysis.allocation import aligned
-from tilefoundry.analysis.api import _build_context
-from tilefoundry.analysis.check import check_program
-from tilefoundry.analysis.compute_cost import local_duration_ns
-from tilefoundry.analysis.iteration_scope import IterationScope, build_scopes
-from tilefoundry.analysis.liveness import LivenessMetadata
-from tilefoundry.analysis.report import render_json, report_data
-from tilefoundry.cli import main as cli_main
-from tilefoundry.cli.source import load_authored_ir, load_namespace
-from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.core import Call, get_metadata
-from tilefoundry.ir.core.expr import SSAValue
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.nn.rms_norm import RMSNorm
-from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
-from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
-from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.target import PerformanceServiceFacts, ThroughputFacts
+from tilefoundry import analysis, cli, inspection, target
+from tilefoundry.interfaces import evaluator
+from tilefoundry.ir import core, expr
+from tilefoundry.ir.hir import nn, sharding, tensor
 
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 
@@ -83,16 +55,16 @@ class AnalysisCase(Case):
         shown = ",".join(f"{k}={v}" for k, v in (self.dims or {}).items()) or "static"
         return f"{self.path.stem}.{self.name}[{shown}]"
 
-    def program(self) -> tuple[Module, Function]:
+    def program(self) -> tuple[core.Module, core.Function]:
         module = self.load()
         return module, module.entry_function()
 
 
 @dataclass(frozen=True)
 class Analyzed:
-    result: AnalysisResult | None
+    result: analysis.Result | None
     report: dict | None
-    scopes: tuple[IterationScope, ...] | None
+    scopes: tuple[analysis.IterationScope, ...] | None
 
 
 def _case_source(case: AnalysisCase) -> str:
@@ -116,7 +88,7 @@ def _peaks_match(case, report):
         )
         assert peak["peak_bytes"] >= largest_value
         aligned_live_upper = sum(
-            aligned(lifetime["bytes"], _ALLOCATION_ALIGNMENT) for lifetime in level_lifetimes
+            analysis.aligned(lifetime["bytes"], _ALLOCATION_ALIGNMENT) for lifetime in level_lifetimes
         )
         if peak["peak_bytes"] > aligned_live_upper:
             over_bound.add(memory_level)
@@ -139,13 +111,13 @@ def _cli_report(case, tmp_path, capsys):
     ]
     for name, extent in (case.dims or {}).items():
         command.extend(("--dim", f"{name}={extent}"))
-    assert cli_main(command) == 0
+    assert cli.main(command) == 0
     assert capsys.readouterr() == ("", "")
     return json.loads(report_path.read_text())
 
 
 def _report(result):
-    data = report_data(
+    data = inspection.report_data(
         module=result.module,
         function=result.function,
         analyses=result.analyses,
@@ -153,11 +125,11 @@ def _report(result):
         executed=result.executed,
         metadata_types=result.metadata_types,
     )
-    return json.loads(render_json(data))
+    return json.loads(inspection.render_json(data))
 
 
 def _scopes(result):
-    context = _build_context(result.module, result.function, topology_level=result.level)
+    context = analysis.build_context(result.module, result.function, topology_level=result.topology_level)
     return tuple(
         scope
         for local in context
@@ -169,28 +141,28 @@ def _scopes(result):
 
 def _predicted_ns(module, dims=None) -> int:
     """What the four families together say one program takes."""
-    result = analyze(
-        *check_program(module, module.entry_function(), topology_level="cta", dims=dims),
+    result = analysis.analyze(
+        *analysis.check_program(module, module.entry_function(), topology_level="cta", dims=dims),
         analysis=FAMILIES,
         level="cta",
     )
-    summary = get_metadata(result.function, PerformanceSummaryMetadata)
+    summary = expr.get_metadata(result.function, analysis.PerformanceSummaryMetadata)
     assert summary is not None
     return summary.timeline.end_ns - summary.timeline.start_ns
 
 
 def _constants(stem: str, *names: str) -> tuple:
-    namespace = load_namespace(str(PLACED / f"{stem}.py"))[0]
+    namespace = cli.load_namespace(str(PLACED / f"{stem}.py"))[0]
     return tuple(namespace[name] for name in names)
 
 
 def _first_duration(result, kind) -> int:
     call = next(
-        expr
-        for expr in collect_exprs(result.function.body)
-        if isinstance(expr, Call) and isinstance(expr.target, kind)
+        node
+        for node in core.collect_exprs(result.function.body)
+        if isinstance(node, expr.Call) and isinstance(node.target, kind)
     )
-    timeline = get_metadata(call, PerformanceMetadata).timeline
+    timeline = expr.get_metadata(call, analysis.PerformanceMetadata).timeline
     return timeline.end_ns - timeline.start_ns
 
 
@@ -203,7 +175,7 @@ class MoreWork(AnalysisCase):
         smaller, dims, report = self.smaller, self.smaller_dims, state.report
         summary = report["functions"][0]["function_records"]["performance"]
         timeline = summary["timeline"]
-        module = load_authored_ir(str(PLACED / smaller))
+        module = cli.load_authored_ir(str(PLACED / smaller))
         assert _predicted_ns(module, dims=dims) <= timeline["end_ns"] - timeline["start_ns"]
 
 
@@ -223,14 +195,14 @@ class FsdpTraining(AnalysisCase):
         held = (w1.detach().clone(), w2.detach().clone(), torch.zeros_like(w1), torch.zeros_like(w2))
         for step in range(2):
             x = (torch.randn(8, 8, generator=generator) / 4 + step / 10).requires_grad_()
-            target = torch.randn(8, 4, generator=generator) / 4
+            tgt = torch.randn(8, 4, generator=generator) / 4
             optimizer.zero_grad()
             expected_y = torch.relu(x @ w1) @ w2
-            loss = torch.nn.functional.mse_loss(expected_y, target)
+            loss = torch.nn.functional.mse_loss(expected_y, tgt)
             loss.backward()
             expected = (expected_y.detach(), loss.detach(), x.grad, w1.grad.clone(), w2.grad.clone())
             before = tuple(item.clone() for item in held)
-            actual = evaluate(state.result.function, x.detach(), target, *held)
+            actual = evaluator.evaluate(state.result.function, x.detach(), tgt, *held)
             for item, saved in zip(held, before, strict=True):
                 assert torch.equal(item, saved), f"step {step}: an input was written"
             normalized = (*actual[:2], actual[2] / participants, *actual[3:5])
@@ -521,9 +493,9 @@ class UnderFilled(AnalysisCase):
 
     def guard(self, state, problems):
         result = state.result
-        assert get_metadata(result.function, PerformanceSummaryMetadata).wave == (40, 132)
+        assert expr.get_metadata(result.function, analysis.PerformanceSummaryMetadata).wave == (40, 132)
         row = 1024 * 16 * 1_000_000_000
-        assert _first_duration(result, Reshard) == -(-row // (row // 353))
+        assert _first_duration(result, sharding.Reshard) == -(-row // (row // 353))
 
 
 @case
@@ -536,13 +508,13 @@ class SharedWindow(AnalysisCase):
     def guard(self, state, problems):
         result = state.result
         insert = next(
-            expr
-            for expr in collect_exprs(result.function.body)
-            if isinstance(expr, Call) and isinstance(expr.target, InsertSlice)
+            node
+            for node in core.collect_exprs(result.function.body)
+            if isinstance(node, expr.Call) and isinstance(node.target, tensor.InsertSlice)
         )
-        gmem = get_metadata(insert, MemoryMetadata).traffic.storage.of("gmem")
+        gmem = expr.get_metadata(insert, analysis.MemoryMetadata).traffic.storage.of("gmem")
         assert gmem.total.write == 4 * gmem.at(0).write == 4 * 256
-        assert _first_duration(result, InsertSlice) == 3
+        assert _first_duration(result, tensor.InsertSlice) == 3
 
 
 @case
@@ -555,13 +527,13 @@ class PlacedWindow(AnalysisCase):
     def guard(self, state, problems):
         result = state.result
         insert = next(
-            expr
-            for expr in collect_exprs(result.function.body)
-            if isinstance(expr, Call) and isinstance(expr.target, InsertSlice)
+            node
+            for node in core.collect_exprs(result.function.body)
+            if isinstance(node, expr.Call) and isinstance(node.target, tensor.InsertSlice)
         )
-        gmem = get_metadata(insert, MemoryMetadata).traffic.storage.of("gmem")
+        gmem = expr.get_metadata(insert, analysis.MemoryMetadata).traffic.storage.of("gmem")
         assert gmem.total.write == 4 * gmem.at(0).write == 4 * 256
-        assert _first_duration(result, InsertSlice) == 7
+        assert _first_duration(result, tensor.InsertSlice) == 7
 
 
 @case
@@ -599,30 +571,30 @@ class InvariantReuse(AnalysisCase):
             "total": 384,
             "per_unit": [96],
         }
-        root = build_scopes(result.module, result.function)
+        root = analysis.build_scopes(result.module, result.function)
         scopes = tuple(dict.fromkeys((root, *root.snapshot.definition.locations.values())))
         loaded = next(
             call
             for scope in scopes
             for path, (call, _) in scope.access.accesses.get("narrow", {}).items()
             if root.at(path[:1]) is scope
-            if isinstance(call.target, Reshard)
+            if isinstance(call.target, sharding.Reshard)
         )
         n_scope = next(
             scope
             for scope in scopes
-            if isinstance(scope.owner, LoopRegion) and scope.owner.induction_var.name == "n"
+            if isinstance(scope.owner, core.LoopRegion) and scope.owner.induction_var.name == "n"
         )
         assert not n_scope.is_variant(loaded)
-        target = result.module.resolve_target()
-        duration = local_duration_ns(
-            get_metadata(loaded, ComputeCostMetadata),
-            target.get_facts(ThroughputFacts),
-            target.get_facts(PerformanceServiceFacts, result.topology_level),
-            moved=get_metadata(loaded, MemoryMetadata),
+        tgt = result.module.resolve_target()
+        duration = analysis.local_duration_ns(
+            expr.get_metadata(loaded, analysis.ComputeCostMetadata),
+            tgt.get_facts(target.ThroughputFacts),
+            tgt.get_facts(target.PerformanceServiceFacts, result.topology_level),
+            moved=expr.get_metadata(loaded, analysis.MemoryMetadata),
             level=result.topology_level,
         )
-        timeline = get_metadata(loaded, PerformanceMetadata).timeline
+        timeline = expr.get_metadata(loaded, analysis.PerformanceMetadata).timeline
         assert (timeline.end_ns - timeline.start_ns) * timeline.trips == duration * 12
 
 
@@ -791,7 +763,7 @@ class PersistentGemmFlat(AnalysisCase):
     persistent: PersistentSchedule | None = PersistentSchedule(
         loop_trips=(("t", 30), ("ki", 128)),
         store_loop="t",
-        store_precision=AnalysisPrecision.EXACT,
+        store_precision=analysis.Precision.EXACT,
         compared_units=((0,), (1,)),
     )
 
@@ -832,7 +804,7 @@ class PersistentGemmTiled(AnalysisCase):
     persistent: PersistentSchedule | None = PersistentSchedule(
         loop_trips=(("mi", 5), ("ni", 6), ("ki", 128)),
         store_loop="ni",
-        store_precision=AnalysisPrecision.EXACT,
+        store_precision=analysis.Precision.EXACT,
         compared_units=((0, 0), (1, 0)),
     )
 
@@ -887,7 +859,7 @@ class LayerDecode(AnalysisCase):
             scope
             for scope in scopes
             for path, (call, _) in scope.access.accesses.get("narrow", {}).items()
-            if len(path) == 1 and scope.at(path) is scope and isinstance(call.target, RMSNorm)
+            if len(path) == 1 and scope.at(path) is scope and isinstance(call.target, nn.RMSNorm)
         ]
         assert len(rms_scopes) == 4
         assert all(not scope.loop_scopes for scope in rms_scopes)
@@ -919,12 +891,12 @@ class LayerPrefill(AnalysisCase):
             (scope, access)
             for scope in scopes
             for path, (call, accesses) in scope.access.outputs.get("narrow", {}).items()
-            if len(path) == 1 and scope.at(path) is scope and isinstance(call.target, CacheUpdate)
+            if len(path) == 1 and scope.at(path) is scope and isinstance(call.target, tensor.CacheUpdate)
             for access in accesses
         ]
         assert cache_writes and all(
-            eliminate_parameters(access.relation, scope, access.target.leaf(), narrow=True)[1]
-            is AnalysisPrecision.UPPER_BOUND
+            analysis.eliminate_parameters(access.relation, scope, access.target.leaf(), narrow=True)[1]
+            is analysis.Precision.UPPER_BOUND
             for scope, access in cache_writes
         ), "CacheUpdate cur/width lack RangeMetadata; widest_allowed must keep writes UPPER_BOUND"
 
@@ -976,14 +948,14 @@ class RmsnormQuantSeq2(AnalysisCase):
     def guard(self, state, problems):
         result = state.result
         reshaped = next(
-            expr
-            for expr in collect_exprs(result.function.body)
-            if isinstance(expr, Call) and isinstance(expr.target, Reshape)
+            node
+            for node in core.collect_exprs(result.function.body)
+            if isinstance(node, expr.Call) and isinstance(node.target, tensor.Reshape)
         )
-        liveness = get_metadata(result.function, LivenessMetadata)
-        assert liveness.interval_of(SSAValue(reshaped)).last_used_at == 21
-        assert get_metadata(reshaped, MemoryMetadata).buffer_bytes is None
-        assert not get_metadata(reshaped, MemoryMetadata).offsets
+        liveness = expr.get_metadata(result.function, analysis.LivenessMetadata)
+        assert liveness.interval_of(core.SSAValue(reshaped)).last_used_at == 21
+        assert expr.get_metadata(reshaped, analysis.MemoryMetadata).buffer_bytes is None
+        assert not expr.get_metadata(reshaped, analysis.MemoryMetadata).offsets
 
 
 EXPECTED = {
@@ -1248,8 +1220,8 @@ def test_analysis_case(
     scopes = None
     if case.api or case.internal:
         program = problems.run("program", case.program)
-        checked = problems.run("check", lambda pair: check_program(*pair, dims=case.dims), program)
-        result = problems.run("analyze", lambda pair: analyze(*pair, analysis=FAMILIES), checked)
+        checked = problems.run("check", lambda pair: analysis.check_program(*pair, dims=case.dims), program)
+        result = problems.run("analyze", lambda pair: analysis.analyze(*pair, analysis=FAMILIES), checked)
         if case.internal:
             problems.expect("checked module", lambda r, pair: r.module is pair[0], result, checked)
         report = problems.run("report", _report, result)

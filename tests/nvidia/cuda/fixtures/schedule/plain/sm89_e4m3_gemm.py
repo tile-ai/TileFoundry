@@ -5,7 +5,7 @@ runs in four 32-wide slices; each slice is loaded into registers, where the SM89
 warp MMA reads its operands, and its product is added into the F32 accumulator.
 """
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 16
 N = 8
@@ -13,7 +13,7 @@ K = 128
 BK = 32
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.rtx_6000_ada"),
+@module(entry="gemm", target=cuda.Target("nvidia.rtx_6000_ada"),
         topologies=(Topology("cta", 1), Topology("thread", 32)))
 class SM89_E4M3_GEMM:
     @func

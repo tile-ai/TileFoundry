@@ -4,55 +4,45 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from tilefoundry.ir.core import Op, OpCapability
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import (
-    DistinctConstraint,
-    SameConstraint,
-    WildcardPattern,
-    utils,
-)
-from tilefoundry.ir.types import DType, StorageKind, UnitType
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    identity_relations,
-    register_access_relation,
-)
+from tilefoundry.interfaces import access, typeinfer
+from tilefoundry.ir import expr, pattern, types
 
-_EXECUTION_MESH = utils.thread_execution_mesh()
-_IN_RMEM = utils.tensor_in(StorageKind.RMEM, _EXECUTION_MESH)
+EXECUTION_MESH = pattern.thread_execution_mesh()
+IN_RMEM = pattern.tensor_in(expr.StorageKind.RMEM, EXECUTION_MESH)
 
 
-@register_op(dialect="T", category="arith", name="cast")
-class Cast(Op):
+@expr.register_op(dialect="T", category="arith", name="cast")
+class Cast(expr.Op):
     """Convert a register tile to another dtype without changing its shape."""
 
-    capability = OpCapability(None)
+    capability = expr.OpCapability(None)
 
-    src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_IN_RMEM)
-    dst = ParamDef(
+    src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=IN_RMEM)
+    dst = expr.ParamDef(
         kind="input",
-        effect=MemoryEffect.WRITE,
-        pattern=replace(_IN_RMEM, dtype=WildcardPattern("cast_dtype")),
+        effect=expr.MemoryEffect.WRITE,
+        pattern=replace(IN_RMEM, dtype=pattern.Wildcard("cast_dtype")),
     )
-    dtype = ParamDef(kind="attribute", annotation=DType, pattern=WildcardPattern("cast_dtype"))
+    dtype = expr.ParamDef(kind="attribute", annotation=expr.DType, pattern=pattern.Wildcard("cast_dtype"))
     between = (
-        SameConstraint("shape", "src", "dst"),
-        DistinctConstraint("dtype", "src", "dst"),
+        pattern.SameConstraint("shape", "src", "dst"),
+        pattern.DistinctConstraint("dtype", "src", "dst"),
     )
-    execution_mesh = _EXECUTION_MESH
+    execution_mesh = EXECUTION_MESH
 
     def __init__(self, **attrs) -> None:
         dtype = attrs.get("dtype")
         if isinstance(dtype, str):
-            attrs["dtype"] = DType.from_name(dtype)
+            attrs["dtype"] = expr.DType.from_name(dtype)
         super().__init__(**attrs)
 
 
-@register_typeinfer(Cast)
-def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
-    return UnitType()
+@typeinfer.register(Cast)
+def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
+    return types.UnitType()
 
 
-register_access_relation(Cast)(identity_relations)
+access.register_relation(Cast)(access.identity_relations)
+
+
+__all__ = ["Cast"]

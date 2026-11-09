@@ -13,3 +13,6 @@ class CudaLaunchAttr(IntEnum):
     COOPERATIVE = 1
     PROGRAMMATIC_STREAM_SERIALIZATION = 2
     CLUSTER_DIMENSION = 3
+
+
+__all__ = ["CudaLaunchAttr"]

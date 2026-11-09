@@ -2,47 +2,41 @@
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.utils import reject_partials
-from tilefoundry.utils.lazy import torch
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    identity_relations,
-    register_access_relation,
-)
+from tilefoundry import core, utils
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
 
-@register_op(dialect='tf', category='nn')
-class Silu(Op):
+@expr.register_op(dialect='tf', category='nn')
+class Silu(expr.Op):
     """Pointwise ``x * sigmoid(x)``, as one fused op."""
 
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
 
 
-@register_typeinfer(Silu)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(Silu)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     x_ty = ctx.type_of(call.args[0])
 
-    reject_partials("x", x_ty.layout)
+    ir_utils.reject_partials("x", x_ty.layout)
     return x_ty
 
 
-@register_eval(Silu)
-def _eval_silu(ctx):
-    silu = torch.nn.functional.silu
+@evaluator.register(Silu)
+def eval_silu(ctx):
+    silu = utils.torch.nn.functional.silu
     x = ctx.args[0].tensor
     held = silu(x.tensor) if x.is_global else tuple((p, silu(t)) for p, t in x.tensor)
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
 __all__ = ["Silu"]
 
 
-register_access_relation(Silu)(identity_relations)
+access.register_relation(Silu)(access.identity_relations)
+
+
+@cost.register(Silu)
+def silu_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    return cost.elementwise(call, ctx)

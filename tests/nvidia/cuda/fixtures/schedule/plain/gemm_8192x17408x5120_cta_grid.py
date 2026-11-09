@@ -8,7 +8,7 @@ candidates`` about before writing the schedule, so what it states is each
 CTA's tiles and the storage they move between.
 """
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 8192
 K = 5120
@@ -20,7 +20,7 @@ GM = M // BM
 GN = N // BN
 
 
-@module(entry="gemm", target=CudaTarget("nvidia.h200_sxm"),
+@module(entry="gemm", target=cuda.Target("nvidia.h200_sxm"),
         topologies=(Topology("cta", GM * GN), Topology("thread", 384)))
 class GEMM_8192X17408X5120_CTA_GRID:
     @func

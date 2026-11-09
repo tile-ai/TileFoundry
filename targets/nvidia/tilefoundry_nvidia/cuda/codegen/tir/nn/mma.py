@@ -8,20 +8,17 @@ emitter in this stage
 """
 from __future__ import annotations
 
-from tilefoundry.ir.core import Var
-from tilefoundry.ir.core.register import get_registered_name
-from tilefoundry.visitor_registry.registries import Role, register_codegen
-from tilefoundry_nvidia.cuda import CudaTarget
-from tilefoundry_nvidia.cuda.codegen.context import CudaCodegenContext
-from tilefoundry_nvidia.cuda.ir.tir.nn.mma import TiledMma
-from tilefoundry_nvidia.cuda.ir.tir.nn.sm80_mma import Mma as Sm80Mma
-from tilefoundry_nvidia.cuda.ir.tir.nn.sm89_mma import Mma as Sm89Mma
+from tilefoundry import codegen
+from tilefoundry.ir import expr
+from tilefoundry_nvidia.cuda import target
+from tilefoundry_nvidia.cuda.codegen import context
+from tilefoundry_nvidia.cuda.ir.tir import nn
 
 
-@register_codegen(CudaTarget, Role.EMIT, TiledMma)
-def _emit(call, ctx: CudaCodegenContext) -> None:
+@codegen.register(target.Target, codegen.Role.EMIT, nn.TiledMma)
+def emit(call, ctx: context.Context) -> None:
     acc, lhs, rhs = call.args[0], call.args[1], call.args[2]
-    if not isinstance(lhs, Var) or not isinstance(rhs, Var) or not isinstance(acc, Var):
+    if not isinstance(lhs, expr.Var) or not isinstance(rhs, expr.Var) or not isinstance(acc, expr.Var):
         raise RuntimeError(
             "tir.cuda.nn.TiledMma: codegen path expects Var operands on acc/lhs/rhs"
         )
@@ -29,9 +26,12 @@ def _emit(call, ctx: CudaCodegenContext) -> None:
     l = ctx.name_for(lhs)
     r = ctx.name_for(rhs)
     atom = call.target.atom
-    if not isinstance(atom, (Sm80Mma, Sm89Mma)):
+    if not isinstance(atom, (nn.sm80_mma.Mma, nn.sm89_mma.Mma)):
         raise RuntimeError(
-            f"tir.cuda.nn.TiledMma: no codegen handler for atom {get_registered_name(atom)}"
+            f"tir.cuda.nn.TiledMma: no codegen handler for atom {expr.get_registered_name(atom)}"
         )
 
     ctx.emit(f"tilefoundry::ops::mma({l}, {r}, {a});")
+
+
+__all__: list[str] = []

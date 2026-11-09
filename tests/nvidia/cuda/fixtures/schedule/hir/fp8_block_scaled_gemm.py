@@ -9,7 +9,7 @@ and the scaled block added to the f32 accumulator.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 128
 N = 128
@@ -22,7 +22,7 @@ STAGES = 2
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 1), Topology("thread", 384)),
 )
 class FP8_BLOCK_SCALED_GEMM:

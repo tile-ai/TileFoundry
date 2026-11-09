@@ -8,18 +8,14 @@ import inspect
 from types import FunctionType
 from typing import Any
 
-from .ast_pattern import (
-    FuncParserContext,
-    FunctionPattern,
-    MatchContext,
-    parse_node,
-)
+from .ast_pattern import FuncContext, MatchContext, parse_node
+from .pattern_nodes import FunctionPattern
 
 
-class FuncParserVisitor:
+class FuncVisitor:
     """Walk one authored function from its selected root pattern."""
 
-    def __init__(self, context: FuncParserContext):
+    def __init__(self, context: FuncContext):
         self.context = context
         self.root_pattern = FunctionPattern()
 
@@ -31,7 +27,7 @@ class FuncParserVisitor:
         return self.visit(node)
 
 
-def _extract_function_def(fn: FunctionType) -> tuple[ast.FunctionDef, str]:
+def extract_function_def(fn: FunctionType) -> tuple[ast.FunctionDef, str]:
     if not isinstance(fn, FunctionType):
         raise TypeError(f"parse_function expects a Python function, got {type(fn).__name__}")
     try:
@@ -53,19 +49,19 @@ def _extract_function_def(fn: FunctionType) -> tuple[ast.FunctionDef, str]:
     return functions[0], source_filename
 
 
-def parse_function(fn: FunctionType, context: FuncParserContext) -> Any:
+def parse_function(fn: FunctionType, context: FuncContext) -> Any:
     """Parse one authored Python function using its typed parser context."""
-    node, source_filename = _extract_function_def(fn)
+    node, source_filename = extract_function_def(fn)
     context = dataclasses.replace(
         context,
         source_filename=(
             source_filename if context.source_filename == "<string>" else context.source_filename
         ),
     )
-    return FuncParserVisitor(context).visit_function(node)
+    return FuncVisitor(context).visit_function(node)
 
 
 __all__ = [
-    "FuncParserVisitor",
+    "FuncVisitor",
     "parse_function",
 ]

@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import replace
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 _ROUNDING_M = 14_593
 _ROUNDING_N = 11_489
 _ROUNDING_K = 298_224_413
-_H200 = CudaTarget("nvidia.h200_sxm")
-_LARGE_H200 = CudaTarget(
+_H200 = cuda.Target("nvidia.h200_sxm")
+_LARGE_H200 = cuda.Target(
     replace(_H200.device, hbm_capacity_bytes=300_000_000_000_000_000),
     architecture=_H200.architecture,
 )

@@ -15,19 +15,13 @@ import pytest
 import torch
 
 import tilefoundry
-import tilefoundry_nvidia.cuda.codegen  # noqa: F401 -- trigger emitter autodiscovery
-from tilefoundry.cli.source import load_authored_ir
+from tilefoundry import cli, verifier
 from tilefoundry.dsl import *
-from tilefoundry.ir.core import Var, VerifyError
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.tir.arith import Binary
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import Evaluate, MeshScope, Return, Sequential
-from tilefoundry.visitor_registry.verify import verify_prim_function
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry.ir import core, expr, tir
+from tilefoundry_nvidia import cuda
 
 OPS = Path(__file__).parents[2] / "fixtures" / "ops"
-_CUDA = CudaTarget("nvidia.h200_sxm")
+_CUDA = cuda.Target("nvidia.h200_sxm")
 
 _CTAS, _THREADS = 4, 8
 _ROWS = _CTAS * _THREADS
@@ -35,29 +29,29 @@ _ROWS = _CTAS * _THREADS
 
 def test_binary_refuses_smem_operand() -> None:
     types = (
-        make_tensor_type((8,), storage="smem"),
-        make_tensor_type((8,), storage="rmem"),
-        make_tensor_type((8,), storage="rmem"),
+        TensorType.from_shape((8,), storage="smem"),
+        TensorType.from_shape((8,), storage="rmem"),
+        TensorType.from_shape((8,), storage="rmem"),
     )
-    args = tuple(Var(type=type_, name=f"a{index}") for index, type_ in enumerate(types))
+    args = tuple(expr.Var(type=type_, name=f"a{index}") for index, type_ in enumerate(types))
     mesh = Mesh((Topology("thread", 32),), Layout((32,), (1,)))
-    fn = PrimFunction(
-        target=CudaTarget("nvidia.h200_sxm"),
+    fn = core.PrimFunction(
+        target=cuda.Target("nvidia.h200_sxm"),
         name="fn",
         params=args,
-        body=Sequential(
+        body=core.Sequential(
             body=(
-                MeshScope(
+                core.MeshScope(
                     mesh,
-                    Var(name="thread", type=mesh),
-                    Sequential(body=(Evaluate(callable=Binary(kind=BinaryKind.ADD), args=args),)),
+                    expr.Var(name="thread", type=mesh),
+                    core.Sequential(body=(core.Evaluate(callable=tir.arith.Binary(kind=expr.BinaryKind.ADD), args=args),)),
                 ),
-                Return(),
+                core.Return(),
             )
         ),
     )
-    with pytest.raises(VerifyError, match=r"lhs: smem does not match rmem"):
-        verify_prim_function(fn)
+    with pytest.raises(expr.VerifyError, match=r"lhs: smem does not match rmem"):
+        verifier.verify_prim_function(fn)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
@@ -68,7 +62,7 @@ def test_elementwise_mesh_cuts_match_torch() -> None:
     block of rows while a thread takes one of them is the grid one level writes
     as two axes.
     """
-    Elementwise = load_authored_ir(f"{OPS / 'elementwise_mesh_cuts.py'}:Elementwise")
+    Elementwise = cli.load_authored_ir(f"{OPS / 'elementwise_mesh_cuts.py'}:Elementwise")
     rm = tilefoundry.compile(Elementwise, target=_CUDA)
     torch.manual_seed(0)
     a = torch.randn(32, dtype=torch.float32, device="cuda")
@@ -93,7 +87,7 @@ def test_elementwise_mesh_cuts_match_torch() -> None:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_cast_and_fill_execute() -> None:
     """Effect-form Cast, Fill on a kernel parameter, and a mesh-coordinate window."""
-    CastWindowHost = load_authored_ir(f"{OPS / 'cast_window.py'}:CastWindowHost")
+    CastWindowHost = cli.load_authored_ir(f"{OPS / 'cast_window.py'}:CastWindowHost")
     rm = tilefoundry.compile(CastWindowHost, target=_CUDA)
     torch.manual_seed(0)
     a = torch.randn(_ROWS, dtype=torch.float32, device="cuda")

@@ -158,7 +158,7 @@ nothing but the checkpoint. Pass `--prepared <dir>` to put it elsewhere.
 | `--quiet` | the two output lines only |
 
     model.py            the model as authored HIR — the reference every number is measured against
-    runtime_model.py    its runtime twin: the @runtime_module tree, the buffers, the captured graph
+    runtime_model.py    its runtime twin: the @runtime.module tree, the buffers, the captured graph
     kernels/            the CuTeDSL kernels, plus the torch spelling of the interface
                         they were written against
     run.py              the entry point

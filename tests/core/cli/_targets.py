@@ -4,21 +4,20 @@ from __future__ import annotations
 
 import pytest
 
-import tilefoundry.cli.target as target_cli
 from tilefoundry import cli
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-class ListedCpuTarget(CpuTarget):
+class ListedCpuTarget(cpu.Target):
     name = "tests.cli.listed_cpu"
 
 
 def listed_identities(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> list[str]:
-    builtins = target_cli.available_targets()
+    builtins = cli.target.available_targets()
     monkeypatch.setattr(
-        target_cli,
+        cli.target,
         "available_targets",
         lambda: (*builtins, ListedCpuTarget()),
     )

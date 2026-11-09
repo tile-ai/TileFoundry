@@ -3,6 +3,6 @@
 from dataclasses import replace
 
 from tests.core.fixtures.placed.gqa_decode import GqaOnline
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
-GqaOnline = replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm"))
+GqaOnline = replace(GqaOnline, target=cuda.Target("nvidia.h200_sxm"))

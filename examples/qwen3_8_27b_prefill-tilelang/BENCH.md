@@ -203,7 +203,7 @@ largest error measured.
 | authored HIR | `model.py` (`hf_alias()` maps the checkpoint's names) |
 | scheduled HIR | `scheduled/{norm,embed_final,gemm,gdn_elementwise,gdn,attention}.py`: one Module per (model.py function, length), every model.py function covered |
 | finalized TIR | `tir/*.py`, 35 representative files for 75 (kernel function, length) jobs (`tir/INDEX.md`), from `tools/finalize_all.sh`: `tilefoundry schedule finalize` for each, run through `tools/finalize_deep.py` (the CLI's own `main` with a deeper Python stack, which the delta rule's `intra_wup` needs); one log per job in `reports/finalize/` |
-| tilelang runtime module | `runtime_model.py` (the twin of `model.py`, `@runtime_module` per HIR Module) + `kernels/` |
+| tilelang runtime module | `runtime_model.py` (the twin of `model.py`, `@runtime.module` per HIR Module) + `kernels/` |
 | entry point | `run.py` |
 
 Which TIR comes from which scheduled HIR, and which scheduled HIR from which

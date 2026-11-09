@@ -4,22 +4,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.types.storage import StorageKind, resolve_storage
+from tilefoundry.ir import expr
 
-from .base import WhereClause
+from .base import Where
 
 
 @dataclass(frozen=True)
-class StorageClause(WhereClause):
+class Storage(Where):
     """Filter a value by one current IR StorageKind."""
 
-    storage: StorageKind | None = None
+    storage: expr.StorageKind | None = None
 
     def __post_init__(self) -> None:
-        value = resolve_storage(self.storage)
+        value = expr.resolve_storage(self.storage)
         if value is None:
             raise ValueError("storage constraint requires a concrete StorageKind")
         object.__setattr__(self, "storage", value)
 
 
-__all__ = ["StorageClause"]
+__all__ = ["Storage"]

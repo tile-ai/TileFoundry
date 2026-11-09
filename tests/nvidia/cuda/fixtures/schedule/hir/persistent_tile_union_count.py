@@ -5,7 +5,7 @@ weight tiles exercise the union of mesh-parameter fibers without quantifiers.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 M = 4224
 K = 512
@@ -22,7 +22,7 @@ PIECE_TILES = K // (PIECES * BK)
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", CTAS), Topology("thread", 384)),
 )
 class PersistentTileUnionCount:

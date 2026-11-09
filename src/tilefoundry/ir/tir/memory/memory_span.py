@@ -1,4 +1,4 @@
-"""TIR view Expr Op: `tir.view.MemorySpan`.
+"""TIR view Expr Op: `tir.memory.Span`.
 
 Describes a contiguous memory span over a pointer.
 Placeholder — demo does not use it; typeinfer mirrors input type.
@@ -6,21 +6,20 @@ Placeholder — demo does not use it; typeinfer mirrors input type.
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import TensorType
-from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.interfaces import typeinfer
+from tilefoundry.ir import expr, pattern, types
 
 
-@register_op(name="memory_span", dialect='T', category='memory')
-class MemorySpan(Op):
+@expr.register_op(name="memory_span", dialect='T', category='memory')
+class Span(expr.Op):
     """Re-interpret a memory region as a typed tensor (value form)."""
 
-    x = ParamDef(kind="input", pattern=is_ranked_tensor())
+    x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
 
 
-@register_typeinfer(MemorySpan)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+@typeinfer.register(Span)
+def _(call: "Call", ctx: "TypeInferContext") -> types.TensorType:
     return ctx.type_of(call.args[0])
+
+
+__all__ = ["Span"]

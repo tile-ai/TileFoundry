@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from tilefoundry.dsl._stub_gen import main
+from .stub_gen import main
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+__all__ = []

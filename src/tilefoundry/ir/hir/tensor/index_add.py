@@ -2,45 +2,30 @@
 
 from __future__ import annotations
 
-from tilefoundry.core import ShardTensor
-from tilefoundry.evaluator.registry import register_eval
-from tilefoundry.evaluator.utils import common_placements
-from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir.tensor.index_select import _norm_dim
-from tilefoundry.ir.pattern import is_ranked_tensor
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard_layout import Split, shard_layout_of
-from tilefoundry.ir.types.utils import reject_partials
-from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelation,
-    iterating,
-    logical_coordinates,
-    reached_at,
-    register_access_relation,
-)
+from tilefoundry import core
+from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.ir import expr, pattern, types, utils
+
+from .index_select import norm_dim
 
 
-@register_op(name="index_add", dialect='tf', category='tensor')
-class IndexAdd(Op):
+@expr.register_op(name="index_add", dialect='tf', category='tensor')
+class IndexAdd(expr.Op):
     """Return ``dst`` with ``src`` slices accumulated at ``index`` along ``dim``."""
 
-    dst = ParamDef(kind="input", pattern=is_ranked_tensor())
-    index = ParamDef(kind="input", pattern=is_ranked_tensor())
-    src = ParamDef(kind="input", pattern=is_ranked_tensor())
-    dim = ParamDef(kind="attribute", annotation=int, default=0)
+    dst = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    index = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    src = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
+    dim = expr.ParamDef(kind="attribute", annotation=int, default=0)
 
 
-def _infer_index_write(
-    call: "Call",
+def infer_index_write(
+    call: "expr.Call",
     ctx: "TypeInferContext",
     *,
     op_name: str,
-    index_dtypes: tuple[DType, ...],
-) -> TensorType:
+    index_dtypes: tuple[expr.DType, ...],
+) -> types.TensorType:
     dst_ty = ctx.type_of(call.args[0])
     index_ty = ctx.type_of(call.args[1])
     src_ty = ctx.type_of(call.args[2])
@@ -63,7 +48,7 @@ def _infer_index_write(
             f"{op_name}: dst/src dtype mismatch {dst_ty.dtype} vs {src_ty.dtype}",
         )
 
-    dim = _norm_dim(call.target.dim, dst_rank, ctx, call)
+    dim = norm_dim(call.target.dim, dst_rank, ctx, call)
     for axis, (dst_extent, src_extent) in enumerate(zip(dst_ty.shape, src_ty.shape)):
         if axis != dim and dst_extent != src_extent:
             ctx.error(
@@ -79,12 +64,12 @@ def _infer_index_write(
         )
 
     for name, ty in (("dst", dst_ty), ("index", index_ty), ("src", src_ty)):
-        reject_partials(name, ty.layout)
-        _reject_splits(ctx, call, op_name, name, ty)
+        utils.reject_partials(name, ty.layout)
+        reject_splits(ctx, call, op_name, name, ty)
     return dst_ty
 
 
-def _reject_splits(ctx, call: "Call", op_name: str, name: str, type_: TensorType) -> None:
+def reject_splits(ctx, call: "expr.Call", op_name: str, name: str, type_: types.TensorType) -> None:
     """Refuse a sharded operand here, where the author can still be told why.
 
     Which rows a participant owns is decided by index *values*, so a split
@@ -93,10 +78,10 @@ def _reject_splits(ctx, call: "Call", op_name: str, name: str, type_: TensorType
     three things that only work together. Until they exist, a split is refused
     at the boundary the author wrote rather than costed as if it were whole.
     """
-    layout = shard_layout_of(type_.layout)
+    layout = types.shard_layout_of(type_.layout)
     if layout is None:
         return
-    if any(isinstance(attr, Split) for attr in layout.attrs):
+    if any(isinstance(attr, types.Split) for attr in layout.attrs):
         ctx.error(
             call,
             f"{op_name}: {name} is Split, and which rows a participant writes "
@@ -105,36 +90,36 @@ def _reject_splits(ctx, call: "Call", op_name: str, name: str, type_: TensorType
         )
 
 
-@register_typeinfer(IndexAdd)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    return _infer_index_write(
+@typeinfer.register(IndexAdd)
+def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
+    return infer_index_write(
         call,
         ctx,
         op_name="IndexAdd",
-        index_dtypes=(DType.i32, DType.i64),
+        index_dtypes=(expr.DType.i32, expr.DType.i64),
     )
 
 
-@register_eval(IndexAdd)
-def _eval_index_add(ctx):
+@evaluator.register(IndexAdd)
+def eval_index_add(ctx):
     def index_add(dst, index, src):
-        return dst.clone().index_add_(_norm_dim(ctx.op.dim, dst.dim()), index, src)
+        return dst.clone().index_add_(norm_dim(ctx.op.dim, dst.dim()), index, src)
 
     xs = tuple(arg.tensor for arg in ctx.args)
-    placements = common_placements(*xs)
+    placements = evaluator.common_placements(*xs)
     held = (
         index_add(*(x.tensor for x in xs))
         if not placements
         else tuple((p, index_add(*(x.to_local(p) for x in xs))) for p in placements)
     )
-    return TensorValue(ShardTensor(ctx.result_type, held))
+    return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 
-__all__ = ["IndexAdd"]
+__all__ = ["IndexAdd", "infer_index_write"]
 
 
-@register_access_relation(IndexAdd)
-def _index_add_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
+@access.register_relation(IndexAdd)
+def index_add_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """The rows the index names are read, added to, and written back.
 
     Two questions, and the index answers only one. Which rows are reached its
@@ -151,11 +136,27 @@ def _index_add_access(call: "Call", ctx) -> tuple[AccessRelation, ...]:
     logical_dst = ctx.type_of(call.args[0])
     rank = len(dst.shape)
     dim = call.target.dim + rank if call.target.dim < 0 else call.target.dim
-    carried = logical_coordinates(dst, logical_dst)
-    rows = reached_at(rank, dst, logical_dst, carried, free=(dim,))
-    named = reached_at(rank, index, ctx.type_of(call.args[1]), {}, free=(0,))
-    payload = reached_at(rank, src, ctx.type_of(call.args[2]), carried, free=(dim,))
-    return iterating(
+    carried = access.logical_coordinates(dst, logical_dst)
+    rows = access.reached_at(rank, dst, logical_dst, carried, free=(dim,))
+    named = access.reached_at(rank, index, ctx.type_of(call.args[1]), {}, free=(0,))
+    payload = access.reached_at(rank, src, ctx.type_of(call.args[2]), carried, free=(dim,))
+    return access.iterating(
         dst.shape,
         (rows, named, payload, rows),
+    )
+
+
+@cost.register(IndexAdd)
+def index_add_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
+    _, index, src = cost.input_types(call, ctx)
+    touched = utils.tensor_bytes(src)
+    return cost.operation(
+        src.dtype,
+        utils.numel(src),
+        (
+            cost.TrafficBytes(read=touched),
+            cost.TrafficBytes(read=utils.tensor_bytes(index)),
+            cost.TrafficBytes(read=touched),
+            cost.TrafficBytes(write=touched),
+        ),
     )

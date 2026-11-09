@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
-@module(entry="composed_mesh_pipeline", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4), Topology("thread", 8),))
+@module(entry="composed_mesh_pipeline", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 4), Topology("thread", 8),))
 class TypePrinterSugar:
     @func(mesh=Mesh((Topology("thread", 8),), layout=(8,), names=("lane",)))
     def nested_loop_tuple(

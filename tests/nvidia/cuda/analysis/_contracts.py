@@ -6,43 +6,31 @@ from dataclasses import dataclass
 
 import isl
 
-from tilefoundry.analysis import (
-    AnalysisPrecision,
-    AnalysisResult,
-    ComputeCostMetadata,
-    MemoryMetadata,
-    PerformanceMetadata,
-)
-from tilefoundry.analysis.access import Access, eliminate_parameters
-from tilefoundry.analysis.compute_cost import inflight_bytes, local_duration_ns
-from tilefoundry.analysis.iteration_scope import IterationScope
-from tilefoundry.ir.core import Call, describe_expr, get_metadata
-from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
-from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.target import PerformanceServiceFacts, ThroughputFacts, TopologyFacts
-from tilefoundry.visitor_registry.contexts import ValuationContext
+from tilefoundry import analysis, target
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import core, expr
+from tilefoundry.ir.hir import tensor
 
 
 @dataclass(frozen=True)
 class PersistentSchedule:
     loop_trips: tuple[tuple[str, int], ...]
     store_loop: str
-    store_precision: AnalysisPrecision
+    store_precision: analysis.Precision
     compared_units: tuple[tuple[int, ...], tuple[int, ...]]
 
 
-def _loop_scopes(scopes: tuple[IterationScope, ...]) -> dict[str, IterationScope]:
+def _loop_scopes(scopes: tuple[analysis.IterationScope, ...]) -> dict[str, analysis.IterationScope]:
     return {
         scope.owner.induction_var.name: scope
         for scope in scopes
-        if isinstance(scope.owner, LoopRegion)
+        if isinstance(scope.owner, core.LoopRegion)
     }
 
 
-def _insert_slice_output(scope: IterationScope) -> Access:
+def _insert_slice_output(scope: analysis.IterationScope) -> analysis.Access:
     for call, accesses in scope.access.outputs.get("narrow", {}).values():
-        if isinstance(call.target, InsertSlice):
+        if isinstance(call.target, tensor.InsertSlice):
             assert len(accesses) == 1
             return accesses[0]
     raise AssertionError("loop has no InsertSlice output")
@@ -56,7 +44,7 @@ def _at_unit(image: isl.set, coordinates: tuple[int, ...]) -> isl.set:
 
 
 def _assert_persistent_schedule(
-    scopes: tuple[IterationScope, ...],
+    scopes: tuple[analysis.IterationScope, ...],
     expected: PersistentSchedule,
 ) -> None:
     loops = _loop_scopes(scopes)
@@ -65,7 +53,7 @@ def _assert_persistent_schedule(
 
     store = _insert_slice_output(loops[expected.store_loop])
     scope = loops[expected.store_loop]
-    relation, precision = eliminate_parameters(
+    relation, precision = analysis.eliminate_parameters(
         store.relation, scope, store.target.leaf(), narrow=True
     )
     assert precision is expected.store_precision
@@ -134,7 +122,7 @@ def assert_reported_contract(report: dict) -> None:
         assert "<buffer " not in lifetime["binding"]
 
 
-def assert_internal_contract(result: AnalysisResult, scopes: tuple[IterationScope, ...]) -> None:
+def assert_internal_contract(result: analysis.Result, scopes: tuple[analysis.IterationScope, ...]) -> None:
     """Each duration matches its priced work and divides the enclosing loop trips.
 
     A definition-local duration is its own compute-cost record priced at the
@@ -142,49 +130,49 @@ def assert_internal_contract(result: AnalysisResult, scopes: tuple[IterationScop
     written once, so its interval is that many of its own durations.
     """
     module_target = result.module.resolve_target()
-    throughput = module_target.get_facts(ThroughputFacts)
-    physical = module_target.get_facts(TopologyFacts).level(result.level).max_physical_units
-    for function, expr in (
-        (function, expr) for function in result.functions for expr in collect_exprs(function.body)
+    throughput = module_target.get_facts(target.ThroughputFacts)
+    physical = module_target.get_facts(target.TopologyFacts).level(result.topology_level).max_physical_units
+    for function, node in (
+        (function, node2) for function in result.functions for node2 in core.collect_exprs(function.body)
     ):
         if (
-            not isinstance(expr, Call)
-            or ValuationContext(result.module, function)._callee_context(expr) is not None
+            not isinstance(node, expr.Call)
+            or valuation.Context(result.module, function).callee_context(node) is not None
         ):
             continue
-        cost = get_metadata(expr, ComputeCostMetadata)
+        cost = expr.get_metadata(node, analysis.ComputeCostMetadata)
         assert cost is not None
         owner = next(
-            scope.snapshot.definition.locations[id(expr)]
+            scope.snapshot.definition.locations[id(node)]
             for scope in scopes
-            if id(expr) in scope.snapshot.definition.locations
+            if id(node) in scope.snapshot.definition.locations
         )
-        active = min(owner.root.active_positions(result.level), physical)
-        inflight = inflight_bytes(expr, owner, module_target, throughput.bandwidth_level)
-        duration = local_duration_ns(
+        active = min(owner.root.active_positions(result.topology_level), physical)
+        inflight = analysis.inflight_bytes(node, owner, module_target, throughput.bandwidth_level)
+        duration = analysis.local_duration_ns(
             cost,
             throughput,
-            module_target.get_facts(PerformanceServiceFacts, (result.level, active, inflight)),
-            moved=get_metadata(expr, MemoryMetadata),
-            level=result.level,
-            positions=min(owner.mesh_positions(result.level), active),
+            module_target.get_facts(target.PerformanceServiceFacts, (result.topology_level, active, inflight)),
+            moved=expr.get_metadata(node, analysis.MemoryMetadata),
+            level=result.topology_level,
+            positions=min(owner.mesh_positions(result.topology_level), active),
         )
-        record = get_metadata(expr, PerformanceMetadata)
+        record = expr.get_metadata(node, analysis.PerformanceMetadata)
         if not duration:
             assert record is None
             continue
         assert record is not None
         span = record.timeline.end_ns - record.timeline.start_ns
-        assert span % duration == 0, describe_expr(expr)
+        assert span % duration == 0, expr.describe_value(node)
         runs = span // duration
         available = 1
         cursor = owner
         while cursor.parent is not None:
             available *= cursor.trips()
             cursor = cursor.parent
-        assert 1 <= runs <= available and available % runs == 0, describe_expr(expr)
+        assert 1 <= runs <= available and available % runs == 0, expr.describe_value(node)
         trips = record.timeline.trips
-        assert 1 <= trips <= available and available % trips == 0, describe_expr(expr)
+        assert 1 <= trips <= available and available % trips == 0, expr.describe_value(node)
 
 
 def _footprint_bytes(memory: dict, name: str) -> int:

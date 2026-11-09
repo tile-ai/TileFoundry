@@ -1,12 +1,12 @@
 """Reduce two CTA partial sums into a global destination the caller zeroes and passes in."""
 
 from tilefoundry.dsl import *
-from tilefoundry_nvidia import CudaTarget
+from tilefoundry_nvidia import cuda
 
 
 @module(
     entry="gemm",
-    target=CudaTarget("nvidia.h200_sxm"),
+    target=cuda.Target("nvidia.h200_sxm"),
     topologies=(Topology("cta", 2), Topology("thread", 32)),
 )
 class BulkReduceIntoInput:

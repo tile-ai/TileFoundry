@@ -1,7 +1,7 @@
 """SM90 operand ownership and shared-memory atom addresses compared with CuTe."""
 
 from tilefoundry.dsl import T
-from tilefoundry.ir.types import ComposedLayout, Layout, Swizzle
+from tilefoundry.ir import types
 from tilefoundry_nvidia.cuda.ir.tir.nn import wgmma
 
 from ._cute_reference import (
@@ -43,15 +43,15 @@ def _atom_slices(dtype, major, swizzle, role, raw):
         shape = ((extent // 8, 8), issue_k)
         strides = ((leading, width), 1)
     major_mode = wgmma.Major.MN if major == "MN" else wgmma.Major.K
-    pattern = wgmma._smem_pattern(eb, major_mode, b_operand=role == "B")
+    pattern = wgmma.smem_pattern(eb, major_mode, b_operand=role == "B")
     ref_shape = tuple(raw["layout"]["shape"])
     ref_strides = tuple(raw["layout"]["strides"])
     offsets = range(0, ref_shape[1], issue_k) if suffix == "k_major_sliced" else (0,)
     for offset in offsets:
-        ours = ComposedLayout(
-            Swizzle(swizzle, 4, 3),
+        ours = types.ComposedLayout(
+            types.Swizzle(swizzle, 4, 3),
             offset,
-            Layout(
+            types.Layout(
                 shape if role == "A" else shape[::-1], strides if role == "A" else strides[::-1]
             ),
         )
@@ -65,10 +65,10 @@ def _atom_slices(dtype, major, swizzle, role, raw):
             ours,
         )
         region = (ref_shape[0], min(issue_k, ref_shape[1]))
-        theirs = ComposedLayout(
-            Swizzle(*raw["swizzle"]),
+        theirs = types.ComposedLayout(
+            types.Swizzle(*raw["swizzle"]),
             offset * ref_strides[1],
-            Layout(
+            types.Layout(
                 region if role == "A" else region[::-1],
                 ref_strides if role == "A" else ref_strides[::-1],
             ),

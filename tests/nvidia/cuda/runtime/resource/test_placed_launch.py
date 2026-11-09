@@ -17,9 +17,8 @@ import pytest
 import torch
 
 import tilefoundry
-from tilefoundry.cli.source import load_authored_ir, load_namespace
-from tilefoundry.ir.types import Placement
-from tilefoundry.runtime.resource import DictResource
+from tilefoundry import cli, runtime
+from tilefoundry.ir import types
 
 
 def test_placed_kernel_writes_own_rows() -> None:
@@ -31,11 +30,11 @@ def test_placed_kernel_writes_own_rows() -> None:
     was loaded rather than because it asks the process.
     """
     gpu_placed_rows = Path(__file__).parents[2] / "fixtures/placed/gpu_placed_rows.py"
-    constants = load_namespace(str(gpu_placed_rows))[0]
+    constants = cli.load_namespace(str(gpu_placed_rows))[0]
     COLS, GPUS, ROWS, ROWS_PER_CARD = (
         constants[name] for name in ("COLS", "GPUS", "ROWS", "ROWS_PER_CARD")
     )
-    GpuPlacedRows = load_authored_ir(f"{gpu_placed_rows}:GpuPlacedRows")
+    GpuPlacedRows = cli.load_authored_ir(f"{gpu_placed_rows}:GpuPlacedRows")
     if torch.cuda.device_count() < GPUS:
         pytest.fail(
             "a placed launch is a claim about two cards; with one there is "
@@ -50,7 +49,7 @@ def test_placed_kernel_writes_own_rows() -> None:
         try:
             torch.cuda.set_device(card)
             compiled = tilefoundry.compile(GpuPlacedRows)
-            compiled.load(DictResource({}), placement=Placement({"gpu": card}))
+            compiled.load(runtime.DictResource({}), placement=types.Placement({"gpu": card}))
 
             source = torch.arange(ROWS * COLS, dtype=torch.float32, device=card).reshape(ROWS, COLS)
             written = torch.zeros_like(source)
@@ -63,7 +62,7 @@ def test_placed_kernel_writes_own_rows() -> None:
             elsewhere = torch.ones(ROWS, dtype=torch.bool, device=card)
             elsewhere[mine] = False
             assert not written[elsewhere].any(), "wrote rows another card holds"
-        except BaseException as error:  # noqa: BLE001 -- reported on the main thread
+        except BaseException as error:
             failures.append(error)
 
     threads = [Thread(target=run, args=(card,)) for card in range(GPUS)]

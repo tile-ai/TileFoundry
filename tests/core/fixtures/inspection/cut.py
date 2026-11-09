@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from tilefoundry.dsl import *
-from tilefoundry.target import CpuTarget
+from tilefoundry.target import cpu
 
 
-@module(entry="cut", target=CpuTarget())
+@module(entry="cut", target=cpu.Target())
 class Cut:
     @func
     def cut(x: Tensor[(8, 4), "f32"], start: Tensor[(), "i64"]):

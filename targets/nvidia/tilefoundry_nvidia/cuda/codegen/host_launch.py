@@ -3,92 +3,79 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import MappingProxyType
 
-from tilefoundry.codegen.cpu.context import CpuCodegenContext
-from tilefoundry.codegen.signature import (
-    CallableSignature,
-    LaunchSignature,
-    tensor_signature_of,
-)
-from tilefoundry.ir.core import Call, Constant, Var
-from tilefoundry.ir.tir.launch import Launch
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.shape import ShapeOf
-from tilefoundry.ir.tir.stmts import Evaluate
-from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMax, DimMin, DimMod, DimMul, DimSub
-from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.types.utils import static_dim_value
-from tilefoundry.ir.visitor import ExprVisitor
-from tilefoundry.target import CpuTarget
-from tilefoundry.visitor_registry.registries import Role, codegen_registry, register_codegen
-from tilefoundry_nvidia.cuda import CudaTarget
+from tilefoundry import codegen
+from tilefoundry.codegen import cpu as codegen_cpu
+from tilefoundry.ir import core, expr, tir
+from tilefoundry_nvidia.cuda import target
 
-_STORAGE_DEVICE_TYPE = {
-    StorageKind.GMEM: "kDLCUDA",
-    StorageKind.HOST: "kDLCPU",
-}
+STORAGE_DEVICE_TYPE = MappingProxyType({
+    expr.StorageKind.GMEM: "kDLCUDA",
+    expr.StorageKind.HOST: "kDLCPU",
+})
 
-_DIM_BINOP_CXX = {
-    DimAdd: "+",
-    DimSub: "-",
-    DimMul: "*",
-    DimFloorDiv: "/",
-    DimMod: "%",
-}
+DIM_BINOP_CXX = MappingProxyType({
+    expr.DimAdd: "+",
+    expr.DimSub: "-",
+    expr.DimMul: "*",
+    expr.DimFloorDiv: "/",
+    expr.DimMod: "%",
+})
 
 
-class _HostIntExprVisitor(ExprVisitor[str]):
-    def visit_Constant(self, expr: Constant, ctx=None) -> str:
-        value = static_dim_value(expr)
+class HostIntExprVisitor(core.ExprVisitor[str]):
+    def visit_Constant(self, node: expr.Constant, ctx=None) -> str:
+        value = expr.static_dim_value(node)
         if value is None:
             raise ValueError(
-                f"emit_host_module: unsupported launch-extent node {type(expr).__name__}"
+                f"emit_host_module: unsupported launch-extent node {type(node).__name__}"
             )
         return str(value)
 
-    def visit_ShapeOf(self, expr: ShapeOf, ctx=None) -> str:
-        return f"{expr.param.name}.shape()[{expr.axis}]"
+    def visit_ShapeOf(self, node: core.ShapeOf, ctx=None) -> str:
+        return f"{node.param.name}.shape()[{node.axis}]"
 
-    def visit_Call(self, expr: Call, ctx=None) -> str:
-        target = expr.target
-        sym = next((s for op, s in _DIM_BINOP_CXX.items() if isinstance(target, op)), None)
+    def visit_Call(self, node: expr.Call, ctx=None) -> str:
+        tgt = node.target
+        sym = next((s for op, s in DIM_BINOP_CXX.items() if isinstance(tgt, op)), None)
         if sym is not None:
-            a, b = expr.args
+            a, b = node.args
             return f"({self.visit(a, ctx)} {sym} {self.visit(b, ctx)})"
-        if isinstance(target, (DimMin, DimMax)):
-            a, b = expr.args
+        if isinstance(tgt, (expr.DimMin, expr.DimMax)):
+            a, b = node.args
             ca = self.visit(a, ctx)
             cb = self.visit(b, ctx)
-            cmp = "<" if isinstance(target, DimMin) else ">"
+            cmp = "<" if isinstance(tgt, expr.DimMin) else ">"
             return f"(({ca}) {cmp} ({cb}) ? ({ca}) : ({cb}))"
-        raise ValueError(f"emit_host_module: unsupported launch-extent op {type(target).__name__}")
+        raise ValueError(f"emit_host_module: unsupported launch-extent op {type(tgt).__name__}")
 
-    def default_visit(self, expr, ctx=None) -> str:
-        raise ValueError(f"emit_host_module: unsupported launch-extent node {type(expr).__name__}")
+    def default_visit(self, node, ctx=None) -> str:
+        raise ValueError(f"emit_host_module: unsupported launch-extent node {type(node).__name__}")
 
 
-def _extent(expr) -> str:
+def extent(node) -> str:
     """One grid or block extent as a host C++ int expression.
 
     An ``int`` or integer ``Constant`` is written as a literal, a ``ShapeOf``
     reads the forwarded tensor's shape, and dim arithmetic over those composes.
     Anything else raises -- there is no silent zero.
     """
-    value = static_dim_value(expr)
+    value = expr.static_dim_value(node)
     if value is not None:
         return str(value)
-    if not isinstance(expr, (ShapeOf, Call, Constant)):
-        raise ValueError(f"emit_host_module: unsupported launch-extent node {type(expr).__name__}")
-    return f"static_cast<int>({_HostIntExprVisitor().visit(expr)})"
+    if not isinstance(node, (core.ShapeOf, expr.Call, expr.Constant)):
+        raise ValueError(f"emit_host_module: unsupported launch-extent node {type(node).__name__}")
+    return f"static_cast<int>({HostIntExprVisitor().visit(node)})"
 
 
-def _static_smem(value) -> int:
+def static_smem(value) -> int:
     """The dynamic shared-memory size, which the host states as a constant.
 
     Host index-expr codegen covers grid and block extents only; a shared-memory
     size that is decided at run time has nowhere to be decided.
     """
-    static = static_dim_value(value)
+    static = expr.static_dim_value(value)
     if static is None:
         raise ValueError(
             "emit_host_module: dynamic_smem must be a static int/Constant; a "
@@ -98,7 +85,7 @@ def _static_smem(value) -> int:
     return static
 
 
-def _reject_unsupported_config(cfg: Launch) -> None:
+def reject_unsupported_config(cfg: tir.launch.Launch) -> None:
     if cfg.cluster is not None:
         raise NotImplementedError("emit_host_module: launch `cluster` is not supported yet")
     if cfg.stream is not None:
@@ -107,9 +94,9 @@ def _reject_unsupported_config(cfg: Launch) -> None:
         raise NotImplementedError("emit_host_module: launch `attrs` are not supported yet")
 
 
-def _placement_line(name: str, storage) -> str:
+def placement_line(name: str, storage) -> str:
     """Refuse a tensor that is not where the parameter's storage says it is."""
-    device_type = _STORAGE_DEVICE_TYPE.get(storage)
+    device_type = STORAGE_DEVICE_TYPE.get(storage)
     if device_type is None:
         raise ValueError(
             f"emit_host_module: parameter {name!r} storage {storage!r} cannot "
@@ -122,9 +109,9 @@ def _placement_line(name: str, storage) -> str:
     )
 
 
-def _as_this_scope_names_it(
-    launcher: CallableSignature, forwarded: tuple[Var, ...], launch: Evaluate
-) -> CallableSignature:
+def as_this_scope_names_it(
+    launcher: codegen.CallableSignature, forwarded: tuple[expr.Var, ...], launch: core.Evaluate
+) -> codegen.CallableSignature:
     """*launcher*'s parameters rewritten as the values this launch passes for them.
 
     Order and kind are the callee's and do not change; every name does, because
@@ -132,21 +119,21 @@ def _as_this_scope_names_it(
     states keep their names: the entry was told them under exactly those.
     """
     geometry = (
-        _extent(launch.args[1]),
-        _extent(launch.args[4]),
-        str(_static_smem(launch.callable.dynamic_smem)),
+        extent(launch.args[1]),
+        extent(launch.args[4]),
+        str(static_smem(launch.callable.dynamic_smem)),
     )
     return replace(
         launcher,
-        params=tuple(tensor_signature_of(var) for var in forwarded),
+        params=tuple(codegen.tensor_signature_of(var) for var in forwarded),
         trailing=tuple(
-            LaunchSignature(name=value, ctype=signature.ctype)
+            codegen.LaunchSignature(name=value, ctype=signature.ctype)
             for signature, value in zip(launcher.trailing, geometry)
         ),
     )
 
 
-def _forwarded(entry: PrimFunction, launch: Evaluate, signature: CallableSignature) -> tuple[Var, ...]:
+def forwarded_params(entry: core.PrimFunction, launch: core.Evaluate, signature: codegen.CallableSignature) -> tuple[expr.Var, ...]:
     """The entry parameters this launch hands the callee, in the callee's order."""
     args = launch.args[7:]
     if len(args) != len(signature.params):
@@ -156,7 +143,7 @@ def _forwarded(entry: PrimFunction, launch: Evaluate, signature: CallableSignatu
         )
     held = {param.name: param for param in entry.params}
     for arg in args:
-        if not isinstance(arg, Var):
+        if not isinstance(arg, expr.Var):
             raise ValueError(
                 "emit_host_module: launch args must be host entry parameters (Var); "
                 "expressions are not accepted"
@@ -169,22 +156,22 @@ def _forwarded(entry: PrimFunction, launch: Evaluate, signature: CallableSignatu
     return tuple(held[arg.name] for arg in args)
 
 
-def _one_launch(
-    entry: PrimFunction, launch: Evaluate, callee: PrimFunction, ctx: CpuCodegenContext
+def one_launch(
+    entry: core.PrimFunction, launch: core.Evaluate, callee: core.PrimFunction, ctx: codegen_cpu.Context
 ) -> list[str]:
     """The lines one ``Launch`` becomes: the checks it owes, then the call.
 
     The launcher returns the CUDA error text of a launch the device refused, and the call raises it.
     """
-    _reject_unsupported_config(launch.callable)
+    reject_unsupported_config(launch.callable)
     launcher = ctx.signature_of(callee)
-    forwarded = _forwarded(entry, launch, launcher)
-    bound = _as_this_scope_names_it(launcher, forwarded, launch)
+    forwarded = forwarded_params(entry, launch, launcher)
+    bound = as_this_scope_names_it(launcher, forwarded, launch)
     lines = [
-        _placement_line(var.name, param.type.storage)
+        placement_line(var.name, param.type.storage)
         for var, param in zip(forwarded, launcher.params)
     ]
-    call = f"{launcher.name}({_arguments(bound, ctx)})"
+    call = f"{launcher.name}({arguments(bound, ctx)})"
     lines.append(f"if (const char* error = {call}) {{")
     lines.append(
         f'  TVM_FFI_THROW(RuntimeError) << "tilefoundry: launch of {callee.name} failed: "'
@@ -194,35 +181,27 @@ def _one_launch(
     return lines
 
 
-def _declare_callee(callee: PrimFunction, ctx: CpuCodegenContext) -> str:
+def declare_callee(callee: core.PrimFunction, ctx: codegen_cpu.Context) -> str:
     """The forward declaration of a symbol another unit defines.
 
     Written by the callee's own target, so this unit and the one that defines
     it cannot come to disagree about what the symbol takes.
     """
     launcher = ctx.signature_of(callee)
-    return f'extern "C" const char* {launcher.name}({_parameters(launcher, ctx)});'
+    return f'extern "C" const char* {launcher.name}({ctx.parameters(launcher, exported=True, by=target.Target)});'
 
 
-def _parameters(signature: CallableSignature, ctx: CpuCodegenContext) -> str:
-    outer, ctx.exported = ctx.exported, True
-    try:
-        return ", ".join(
-            token for param in signature.all_params
-            for token in codegen_registry.lookup((CudaTarget, Role.CALLEE, type(param)))(param, ctx)
-        )
-    finally:
-        ctx.exported = outer
-
-
-def _arguments(signature: CallableSignature, ctx: CpuCodegenContext) -> str:
+def arguments(signature: codegen.CallableSignature, ctx: codegen_cpu.Context) -> str:
     return ", ".join(
         token for param in signature.all_params
-        for token in codegen_registry.lookup((CudaTarget, Role.CALLER, type(param)))(param, ctx)
+        for token in codegen.registry.require((target.Target, codegen.Role.CALLER, type(param)))(param, ctx)
     )
 
 
-@register_codegen(CpuTarget, Role.EMIT, Launch)
+@codegen.register(target.Target, codegen.Role.LAUNCH, tir.launch.Launch)
 def emit_host_launch(entry, stmt, ctx):
     callee = ctx.callee_of(stmt)
-    return _declare_callee(callee, ctx), _one_launch(entry, stmt, callee, ctx)
+    return declare_callee(callee, ctx), one_launch(entry, stmt, callee, ctx)
+
+
+__all__: list[str] = []

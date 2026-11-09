@@ -4,73 +4,57 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from functools import partial
 
-from tilefoundry.ir.core.inspection import Printable, PrinterBase
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.register import get_registered_name, register_type
-from tilefoundry.ir.pattern import (
-    ComposedLayoutPattern,
-    LayoutPattern,
-    MeshPattern,
-    Pattern,
-    ShardLayoutPattern,
-    StarPattern,
-    SwitchPattern,
-    TensorPattern,
-    WildcardPattern,
-    matched,
-)
-from tilefoundry.ir.pattern import (
-    predicates as P,
-)
-from tilefoundry.ir.pattern.utils import declared_shape, selected_pattern
-from tilefoundry.ir.types import ComposedLayout, DType, Layout, Mesh, ShardLayout, TensorType
-from tilefoundry.ir.types.layout_algebra import coalesce
-from tilefoundry.ir.types.mesh import levels, starts
-from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir import core, expr, pattern, types
+from tilefoundry.ir.types import layout_algebra
 
-_MISS = object()
+MISS = object()
 
 
-def execution_mesh_pattern(execution_mesh: Mesh, *, groups=False) -> MeshPattern:
+def held_text(held: dict) -> str:
+    return "" if not held else f" where {held!r}"
+
+
+def execution_mesh_pattern(execution_mesh: types.Mesh, *, groups=False) -> pattern.Mesh:
     """Any aligned run matching an instruction's execution mesh."""
     (topology,) = execution_mesh.topologies
-    per_mode = (P.Forward(per_mode=True), P.Injective(per_mode=True))
-    outer = LayoutPattern.from_layout(execution_mesh.layout, predicates=per_mode)
+    per_mode = (pattern.Forward(per_mode=True), pattern.Injective(per_mode=True))
+    outer = pattern.Layout.from_layout(execution_mesh.layout, predicates=per_mode)
     if groups:
-        outer = LayoutPattern(
-            ((StarPattern(WildcardPattern("g")), *outer.shape[0]),),
-            ((StarPattern(WildcardPattern("gs")), *outer.strides[0]),),
+        outer = pattern.Layout(
+            ((pattern.Star(pattern.Wildcard("g")), *outer.shape[0]),),
+            ((pattern.Star(pattern.Wildcard("gs")), *outer.strides[0]),),
         )
-    layout = ComposedLayoutPattern(
+    layout = pattern.ComposedLayout(
         inner=None,
-        offset=WildcardPattern("p0"),
+        offset=pattern.Wildcard("p0"),
         outer=outer,
-        predicates=(WildcardPattern("p0") % topology.size == 0,)
-        + ((P.Forward(), P.Injective()) if groups else ()),
+        predicates=(pattern.Wildcard("p0") % topology.size == 0,)
+        + ((pattern.Forward(), pattern.Injective()) if groups else ()),
     )
-    return MeshPattern((topology.name,), layout)
+    return pattern.Mesh((topology.name,), layout)
 
 
-def rmem_fragment(shape: tuple, dtype: DType, held: ShardLayout) -> TensorPattern:
+def rmem_fragment(shape: tuple, dtype: expr.DType, held: types.ShardLayout) -> pattern.Tensor:
     """A warp MMA operand held in registers as *held* lays it out over its mesh."""
-    return TensorPattern(
+    return pattern.Tensor(
         shape=shape,
         dtype=dtype,
-        storage=StorageKind.RMEM,
-        layout=ShardLayoutPattern(
-            layout=LayoutPattern.from_layout(held.layout),
+        storage=expr.StorageKind.RMEM,
+        layout=pattern.ShardLayout(
+            layout=pattern.Layout.from_layout(held.layout),
             attrs=held.attrs,
             mesh=execution_mesh_pattern(held.mesh),
         ),
     )
 
 
-class MmaAtom(Printable):
+class MmaAtom(core.Printable):
     """One instruction declaration; an instance binds its authored parameters."""
 
     namespace: str
-    execution_mesh: Mesh
+    execution_mesh: types.Mesh
     capability: str
     resource: str
     C: object
@@ -78,81 +62,73 @@ class MmaAtom(Printable):
     B: object
 
     roles = ("C", "A", "B")
-    parameters: tuple[ParamDef, ...] = ()
+
+    parameters: tuple[expr.ParamDef, ...] = ()
 
     def __init_subclass__(cls, **kwargs):
+        """Collect the parameters, and let a declared mesh state the pattern that matches it."""
         super().__init_subclass__(**kwargs)
-        cls.parameters = tuple(value for value in vars(cls).values() if isinstance(value, ParamDef))
-        register_type(dialect="T", namespace=cls.namespace.removeprefix("T."))(cls)
+        if "execution_mesh" in vars(cls):
+            cls.required_execution_mesh = cls.execution_mesh
+            cls.execution_mesh_pattern = staticmethod(partial(execution_mesh_pattern, cls.execution_mesh))
+        cls.parameters = tuple(value for value in vars(cls).values() if isinstance(value, expr.ParamDef))
+        expr.register_type(dialect="T", namespace=cls.namespace.removeprefix("T."))(cls)
 
-    def __init__(self, *, mesh: Mesh | None = None, **bindings):
+    def __init__(self, *, mesh: types.Mesh | None = None, **bindings):
         unknown = set(bindings) - {param.name for param in self.parameters}
         if unknown:
             raise ValueError(
-                f"{get_registered_name(self)} takes no parameter {', '.join(sorted(unknown))}"
+                f"{expr.get_registered_name(self)} takes no parameter {', '.join(sorted(unknown))}"
             )
         held = {}
         for param in self.parameters:
-            value = bindings[param.name] if param.name in bindings else self._implied(param, held)
-            if param.annotation is DType and isinstance(value, str):
-                value = DType.from_name(value)
-            if matched(param.pattern, value, held) is None:
-                shown = value.name if isinstance(value, DType) else repr(value)
+            value = bindings[param.name] if param.name in bindings else self.implied(param, held)
+            if param.annotation is expr.DType and isinstance(value, str):
+                value = expr.DType.from_name(value)
+            if pattern.matched(param.pattern, value, held) is None:
+                shown = value.name if isinstance(value, expr.DType) else repr(value)
                 raise ValueError(
-                    f"{get_registered_name(self)}: {param.name}={shown} is not one "
-                    f"it takes{self._where(held)}; it takes {param.name} "
+                    f"{expr.get_registered_name(self)}: {param.name}={shown} is not one "
+                    f"it takes{held_text(held)}; it takes {param.name} "
                     f"{param.pattern!r}"
                 )
             held[param.name] = value
         self.bindings = held
         self.mesh = mesh
 
-    @classmethod
-    def _implied(cls, param: ParamDef, held: dict):
-        pattern = param.pattern
-        while isinstance(pattern, SwitchPattern) and pattern.param in held:
-            pattern = dict(pattern.branches).get(held[pattern.param], _MISS)
-            if pattern is _MISS:
+    def implied(self, param: expr.ParamDef, held: dict):
+        declared = param.pattern
+        while isinstance(declared, pattern.Switch) and declared.param in held:
+            declared = dict(declared.branches).get(held[declared.param], MISS)
+            if declared is MISS:
                 break
-        if pattern is not _MISS and not isinstance(pattern, Pattern):
-            return pattern
+        if declared is not MISS and not isinstance(declared, pattern.Pattern):
+            return declared
         if param.has_default:
             return param.default
-        raise ValueError(f"{get_registered_name(cls)} needs {param.name}")
-
-    @staticmethod
-    def _where(held: dict) -> str:
-        return "" if not held else f" where {held!r}"
+        raise ValueError(f"{expr.get_registered_name(self)} needs {param.name}")
 
     def role(self, role: str):
         return getattr(type(self), role)
 
-    def match_view(self, param_name: str, type_: TensorType) -> TensorType:
+    def match_view(self, param_name: str, type_: types.TensorType) -> types.TensorType:
         """Return a temporary pattern view; projection and emission keep the original type."""
         return type_
 
     def operand_shapes(self) -> tuple[tuple[int, ...], ...]:
         """Return the declared C, A, and B shapes for one atom issue."""
         shapes = tuple(
-            declared_shape(selected_pattern(self.role(role), self.bindings), self.bindings)
+            pattern.declared_shape(pattern.selected(self.role(role), self.bindings), self.bindings)
             for role in self.roles
         )
         if any(shape is None for shape in shapes):
-            raise ValueError(f"{get_registered_name(self)} does not declare fixed operand shapes")
+            raise ValueError(f"{expr.get_registered_name(self)} does not declare fixed operand shapes")
         return shapes
 
-    @property
-    def required_execution_mesh(self) -> Mesh:
-        return self.execution_mesh
-
-    @classmethod
-    def execution_mesh_pattern(cls, *, groups=False) -> MeshPattern:
-        return execution_mesh_pattern(cls.execution_mesh, groups=groups)
-
-    def on(self, mesh: Mesh) -> MmaAtom:
+    def on(self, mesh: types.Mesh) -> MmaAtom:
         return type(self)(mesh=mesh, **self.bindings)
 
-    def print(self, printer: PrinterBase, ctx=None) -> str:
+    def print(self, printer: core.PrinterBase, ctx=None) -> str:
         """This atom as importable DSL source, written with *printer*.
 
         The atom states its own name, every binding in parameter order and an
@@ -160,16 +136,16 @@ class MmaAtom(Printable):
         printed by *printer* in the same import context.
         """
         stated = [
-            f"{name}={self._printed_value(value, printer, ctx)}"
+            f"{name}={self.printed_value(value, printer, ctx)}"
             for name, value in self.bindings.items()
         ]
         if self.mesh is not None:
             stated.append(f"mesh={printer.print(self.mesh, ctx)}")
-        return f"{get_registered_name(self)}({', '.join(stated)})"
+        return f"{expr.get_registered_name(self)}({', '.join(stated)})"
 
-    def _printed_value(self, value, printer: PrinterBase, ctx) -> str:
+    def printed_value(self, value, printer: core.PrinterBase, ctx) -> str:
         if isinstance(value, Enum):
-            return f"{get_registered_name(value)}.{value.name}"
+            return f"{expr.get_registered_name(value)}.{value.name}"
         return printer.print(value, ctx)
 
     def __eq__(self, other):
@@ -183,21 +159,21 @@ class MmaAtom(Printable):
         return hash((type(self), tuple(self.bindings.items()), self.mesh))
 
     def __repr__(self):
-        stated = [f"{name}={self._repr_value(value)}" for name, value in self.bindings.items()]
+        stated = [f"{name}={self.repr_value(value)}" for name, value in self.bindings.items()]
         if self.mesh is not None:
             stated.append(f"mesh={self.mesh!r}")
-        return f"{get_registered_name(self)}({', '.join(stated)})"
+        return f"{expr.get_registered_name(self)}({', '.join(stated)})"
 
-    def _repr_value(self, value) -> str:
+    def repr_value(self, value) -> str:
         if isinstance(value, Enum):
-            return f"{get_registered_name(value)}.{value.name}"
-        if isinstance(value, DType):
+            return f"{expr.get_registered_name(value)}.{value.name}"
+        if isinstance(value, expr.DType):
             return repr(value.name)
         return repr(value)
 
 
 @dataclass(frozen=True, init=False)
-class AtomPattern(Pattern):
+class AtomPattern(pattern.Pattern):
     """An instance of any declared atom class."""
 
     declarations: tuple[type[MmaAtom], ...]
@@ -208,7 +184,7 @@ class AtomPattern(Pattern):
 
 
 @dataclass(frozen=True)
-class FromAtom(Pattern):
+class FromAtom(pattern.Pattern):
     """An operand pattern read from one role of the call's atom."""
 
     role: str
@@ -222,35 +198,35 @@ class FromAtom(Pattern):
         return getattr(declaration, self.role)
 
 
-def _reversed_modes(modes):
+def reversed_modes(modes):
     if isinstance(modes, tuple):
-        return tuple(_reversed_modes(mode) for mode in reversed(modes))
+        return tuple(reversed_modes(mode) for mode in reversed(modes))
     return modes
 
 
-def _reverse(layout: Layout) -> Layout:
-    return Layout(
-        _reversed_modes(tuple(layout.shape)),
-        _reversed_modes(tuple(layout.strides)),
+def reverse(layout: types.Layout) -> types.Layout:
+    return types.Layout(
+        reversed_modes(tuple(layout.shape)),
+        reversed_modes(tuple(layout.strides)),
     )
 
 
-def physical_frames_match(left: Mesh, right: Mesh) -> bool:
+def participant_frame(mesh):
+    if isinstance(mesh.layout, types.ComposedLayout) and mesh.layout.inner is not None:
+        return None
+
+    try:
+        arranged = types.levels(mesh)
+    except (IndexError, TypeError, ValueError):
+        return None
+    return types.starts(mesh), tuple(layout_algebra.coalesce(reverse(layout)) for layout in arranged)
+
+
+def physical_frames_match(left: types.Mesh, right: types.Mesh) -> bool:
     """Compare affine offsets and ordered participant lanes."""
     if left.topologies != right.topologies:
         return False
-
-    def frame(mesh):
-        if isinstance(mesh.layout, ComposedLayout) and mesh.layout.inner is not None:
-            return None
-
-        try:
-            arranged = levels(mesh)
-        except (IndexError, TypeError, ValueError):
-            return None
-        return starts(mesh), tuple(coalesce(_reverse(layout)) for layout in arranged)
-
-    a, b = frame(left), frame(right)
+    a, b = participant_frame(left), participant_frame(right)
     return a is not None and b is not None and a == b
 
 

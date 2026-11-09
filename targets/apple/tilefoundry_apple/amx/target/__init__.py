@@ -1,7 +1,6 @@
 """AMX target facts."""
 
-from .architecture import AppleAmx
+from . import spec
+from .architecture import Architecture
 from .device import AppleM2Pro
-from .target import AmxTarget
-
-__all__ = ["AmxTarget", "AppleAmx", "AppleM2Pro"]
+from .target import Target
