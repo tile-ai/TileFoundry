@@ -35,10 +35,10 @@ def evaluate(
 
 The keyword-only `context` supplies the Module that declares a `Function`
 target, so the calls in its body resolve
-([core-ir §1.4](./core-ir.md#14-function-references)). A `Module` target gives
-itself, and a `LoadedModule` target gives its `module` and itself as the
-reading; either one replaces those two fields of `context`. A `Function` whose
-body calls no function needs no `context`.
+([core-ir §1.4](./core-ir.md#14-function-references)). A `Module` target
+replaces only `context.module` with itself; a `LoadedModule` target replaces
+`context.module` with its `module` and `context.loaded_module` with itself. A
+`Function` whose body calls no function needs no `context`.
 
 `evaluate` binds `inputs` to the selected `Function`'s parameters in
 order, walks the body, and returns the logical tensor for a single
@@ -230,8 +230,10 @@ class Visitor(ExprVisitor):
   loop's induction variable is one — folds the values its operands evaluated to.
   It performs the arithmetic `resolve_dim` performs in a shape position; only the
   leaves differ, being operands rather than `DimVar` sizes.
-- A `Call` whose `target` is a `FunctionRef` resolves it from the context's
-  `module`; a reference with no `module` raises `EvalError`. A direct
+- A `Call` whose `target` is a `FunctionRef` resolves the called definition
+  from the context's `module` by `core.resolve`; a failure, a missing `module`
+  included, raises `EvalError`. The path of an instance call selects only the
+  reading that supplies resources; it never selects the definition. A direct
   reference `FunctionRef((), name)` passes every parameter, `ConstTensor` ones
   included, and keeps the current Module and reading. The call binds the
   evaluated arguments to the callee's parameters in a fresh environment

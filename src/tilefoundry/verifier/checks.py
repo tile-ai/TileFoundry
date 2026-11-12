@@ -579,8 +579,8 @@ def verify_function_call(stmt: core.Evaluate, fn, ctx):
     except ValueError as error:
         raise expr.VerifyError(str(error)) from error
     callee, frame = callee_frame(ref, ctx)
-    if ref.name is None and not isinstance(callee, core.PrimFunction):
-        raise expr.VerifyError(f"TIR instance entry {callee.name!r} is not a PrimFunction")
+    if not isinstance(callee, core.PrimFunction):
+        raise expr.VerifyError(f"{label}: callee {callee.name!r} is not a PrimFunction")
     assert_no_path_back(
         callee, fn, visited=set(), frame=frame, recursion=f"{label}: recursion not allowed"
     )
@@ -713,7 +713,12 @@ def verify_launch(stmt: core.Evaluate, fn, ctx):
 
 
 def assert_no_path_back(callee, root, visited, frame=None, recursion=None):
-    if callee is root:
+    """Refuse a path from *callee* back to *root*.
+
+    A reference names a prototype, so reaching the prototype of a variant
+    *root* is a path back to *root*.
+    """
+    if callee is root or any(variant is root for variant in callee.variants):
         raise expr.VerifyError(
             recursion or f"call DAG violation: {callee.name!r} calls back into {root.name!r}"
         )
@@ -744,12 +749,9 @@ def function_references(function):
                 elif isinstance(stmt.callable, tir.launch.Launch):
                     yield stmt.args[0]
             continue
-        stack = [body]
-        while stack:
-            node = stack.pop()
+        for node in core.collect_exprs(body):
             if isinstance(node, expr.Call) and isinstance(node.target, core.FunctionRef):
                 yield node.target
-            stack.extend(core.expr_children(node))
 
 
 def iter_all_stmts(body):

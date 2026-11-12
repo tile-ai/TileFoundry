@@ -4783,6 +4783,15 @@ class LaunchPattern(ElementPattern):
         module_entry = isinstance(callee, runtime.Module)
         if module_entry:
             callee = callee.entry_function()
+        elif isinstance(match.node.args[0], ast.Name) and context.function.module is not None:
+            callee = next(
+                (
+                    prototype
+                    for prototype in context.function.module.functions
+                    if any(callee is variant for variant in prototype.variants)
+                ),
+                callee,
+            )
         options = {
             name: children[name]
             for name in ("cluster", "dynamic_smem", "stream", "attrs")

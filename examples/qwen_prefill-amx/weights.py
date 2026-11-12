@@ -9,13 +9,21 @@ from gguf import GGUFReader, GGMLQuantizationType
 def explicit_weights(root):
     """Keep model weights on the root and pass them through shared definitions."""
     from dataclasses import replace
+    from tilefoundry.ir import core
     from tilefoundry.ir.expr import Call, Var
-    from tilefoundry.ir.core.module import ModuleList
     from tilefoundry.ir.core.function import Function
     from tilefoundry.ir.core.visitor import BindingSubstitutionCloner, collect_exprs
-    from tilefoundry.interfaces import valuation
 
     cache = {}
+
+    def weight_prefix(ref):
+        """The resource prefix of the instance a static reference path names."""
+        if None in ref.path:
+            raise ValueError(
+                f"explicit_weights: {ref.qualified_name!r} selects an instance at run time; "
+                "only a constant instance index has a static weight prefix"
+            )
+        return "".join(f"{segment}__" for segment in ref.path)
 
     def lift(mod):
         if id(mod) in cache:
@@ -27,33 +35,24 @@ def explicit_weights(root):
                 specs[name] = (specs[name][0], converter, ())
         for key, slot in mod.children.items():
             definitions = []
-            for i, child in enumerate(slot.elements):
+            for i, child in enumerate(core.instances(slot)):
                 definition, child_specs, _ = lift(child)
                 definitions.append(definition)
-                prefix = f"{key}__{i}__" if slot.indexed else f"{key}__"
+                prefix = f"{key}__{i}__" if isinstance(slot, tuple) else f"{key}__"
                 for name, (ty, converter, path) in child_specs.items():
                     specs[prefix + name] = (ty, converter, (prefix, *path))
-            children[key] = ModuleList(
-                tuple(definitions) if slot.indexed else definitions[0]
-            )
+            children[key] = tuple(definitions) if isinstance(slot, tuple) else definitions[0]
         needs, functions = {}, {}
 
         def callee(call):
-            frame = valuation.Context(module=mod).callee_context(call)
-            if frame is None:
+            if not isinstance(call.target, core.FunctionRef):
                 return None
-            if isinstance(call.target, Function):
-                return call.target, ""
-            slot = (
-                call.target
-                if isinstance(call.target, ModuleList)
-                else call.target.args[0]
-            )
-            index = (
-                0 if isinstance(call.target, ModuleList) else call.target.args[1].value
-            )
-            prefix = f"{slot.key}__{index}__" if slot.indexed else f"{slot.key}__"
-            return frame.function, prefix
+            owner, target = core.resolve(mod, call.target)
+            return target, weight_prefix(call.target), owner
+
+        def callee_needs(item):
+            target, prefix, owner = item
+            return needed(target) if not prefix else lift(owner)[2][id(target)]
 
         def needed(fn):
             if id(fn) not in needs:
@@ -61,15 +60,7 @@ def explicit_weights(root):
                 for call in collect_exprs(fn.body):
                     if not isinstance(call, Call) or (item := callee(call)) is None:
                         continue
-                    target, prefix = item
-                    target_needs = (
-                        needed(target)
-                        if not prefix
-                        else lift(
-                            valuation.Context(module=mod, function=fn).callee_context(call).module
-                        )[2][id(target)]
-                    )
-                    names.extend(prefix + name for name in target_needs)
+                    names.extend(item[1] + name for name in callee_needs(item))
                 needs[id(fn)] = tuple(dict.fromkeys(names))
             return needs[id(fn)]
 
@@ -87,31 +78,26 @@ def explicit_weights(root):
             }
 
             class Rewrite(BindingSubstitutionCloner):
-                def visit_ModuleList(self, slot, ctx=None):
-                    return children[slot.key]
-
                 def visit_Call(self, call, ctx=None):
                     args = tuple(self.visit(arg, ctx) for arg in call.args)
                     item = callee(call)
                     if item is None:
                         return replace(call, args=args)
-                    target, prefix = item
-                    if prefix:
-                        child = valuation.Context(module=mod, function=fn).callee_context(call).module
-                        child_needs = lift(child)[2][id(target)]
-                        target = self.visit(call.target, ctx)
-                    else:
-                        args = tuple(
+                    ref, (target, prefix, _) = call.target, item
+                    arguments = ref.arguments(args)
+                    if ref.name is not None:
+                        arguments = tuple(
                             arg
-                            for param, arg in zip(target.params, args)
+                            for param, arg in zip(target.params, arguments)
                             if not param.is_const
                         )
-                        child_needs = needed(target)
-                        target = rewrite(target)
                     return replace(
                         call,
-                        target=target,
-                        args=(*args, *(weights[prefix + name] for name in child_needs)),
+                        args=(
+                            *ref.indices(args),
+                            *arguments,
+                            *(weights[prefix + name] for name in callee_needs(item)),
+                        ),
                     )
 
             result = Function.from_parts(

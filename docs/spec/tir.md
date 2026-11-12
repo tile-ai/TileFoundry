@@ -209,9 +209,11 @@ requires module context):
   Verification requires strictly equal argument types/counts and rejects recursion.
 - **`Evaluate.callable`**. When `callable` is a `FunctionRef`
   ([§2.1](#21-functionref)), resolution from the caller's `Module` MUST find
-  exactly one function, and `args` MUST match the resolved callee's `params`
+  exactly one function, that function MUST be a `PrimFunction` (an HIR
+  callee is accepted only as a `Launch` callee), and `args` MUST match the resolved callee's `params`
   in count and type. Recursion is checked over every reference the reached
-  functions and their variants state, `Launch` callees included. When `callable` is
+  functions and their variants state, `Launch` callees included; reaching the
+  prototype of a variant being verified is a path back to it. When `callable` is
   an `Op`, it MUST pass the same `check_call` used by ScheduleOp type inference,
   candidate admission, and lowering. Its declared execution mesh MUST match
   the enclosing mesh and its operands MUST be reachable from that scope.

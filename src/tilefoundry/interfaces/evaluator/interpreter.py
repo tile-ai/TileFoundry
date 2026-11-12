@@ -109,14 +109,13 @@ class Visitor(ir_core.ExprVisitor):
     def visit_leaf_Call(self, call: expr.Call, args, ctx: EvaluateContext) -> Value:
         target = call.target
         if isinstance(target, ir_core.FunctionRef):
-            reading, module = ctx.loaded_module, ctx.module
+            reading = ctx.loaded_module
             if target.path and reading is None:
                 raise EvalError("evaluator: instance call requires a loaded module")
-            if module is None:
-                raise EvalError(
-                    f"evaluator: call to {target.qualified_name!r} requires the Module that "
-                    "declares the caller; pass context=EvaluateContext(module=...)"
-                )
+            try:
+                module, function = ir_core.resolve(ctx.module, target)
+            except ValueError as error:
+                raise EvalError(f"evaluator: {error}") from error
             indices = iter(target.indices(args))
             key = None
             for segment in target.path:
@@ -129,9 +128,6 @@ class Visitor(ir_core.ExprVisitor):
                         f"evaluator: ModuleList slot {key!r}: index {taken!r} out of range for N={len(reading)}"
                     )
                 reading = reading[taken]
-            if target.path:
-                module = reading.module
-            function = module.entry_function() if target.name is None else module.lookup(target.name)
             inner = replace(ctx, module=module, loaded_module=reading)
             return call_function(function, target.arguments(args), inner, omit_weights=target.name is None)
         try:
