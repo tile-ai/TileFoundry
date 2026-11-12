@@ -177,8 +177,9 @@ parameters; omitting it means one output.
     each variant with the rules below.
 
 `verifier.verify_prim_function(fn, *, frame=None)` enforces (`frame` is the
-`valuation.Context` of the Module that declares `fn`; without it the rules that
-resolve a callee are skipped):
+`valuation.Context` of the Module that declares `fn`; without it a `Launch`
+callee is not resolved, and an `Evaluate(FunctionRef)` is rejected because it
+requires module context):
 
 - **Param homogeneity**. All parameters' layouts MUST be uniformly
   `ShardLayout` or uniformly non-`ShardLayout`; mixing is rejected.

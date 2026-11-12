@@ -258,8 +258,9 @@ def verify_prim_function(fn: core.PrimFunction, *, frame: valuation.Context | No
     """Per [tir §1.3](docs/spec/tir.md#13-primfunction)'s rule list.
 
     *frame* is the Module, target and topologies that declare *fn*; a variant
-    is checked in the frame of its prototype. With no frame, the checks that
-    need a Module are not run.
+    is checked in the frame of its prototype. With no frame, a ``Launch``
+    callee is not resolved, and an ``Evaluate(FunctionRef)`` is rejected
+    because it requires module context.
     """
     for param in fn.params:
         verify_value_layouts(param)
@@ -794,7 +795,10 @@ def verify_module(fns) -> None:
     never an HIR variant and remains callable when it has no body.
     See [hir §1.1](docs/spec/hir.md#11-function).
     """
-    root = fns if isinstance(fns, core.Module) else core.Module("<functions>", tuple(fns))
+    root = fns
+    if not isinstance(fns, core.Module):
+        root = core.Module("<functions>", ())
+        root.replace_functions(fns)
     frames = valuation.collect_functions(root)
     owners = {id(root): root, **{id(frame.module): frame.module for frame in frames.values()}}
     groups = tuple(node.functions for node in owners.values())

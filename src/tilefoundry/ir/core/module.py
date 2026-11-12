@@ -454,7 +454,10 @@ def resolve(scope, ref: FunctionRef) -> tuple[Module, ModuleFunction]:
     for module in descend(scope, ref):
         pass
     if ref.name is None:
-        return module, module.entry_function()
+        try:
+            return module, module.entry_function()
+        except ValueError as error:
+            raise ValueError(f"symbol {path!r}: {error}") from error
     matches = tuple(function for function in module.functions if function.name == ref.name)
     if not matches:
         matches = tuple(

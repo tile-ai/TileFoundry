@@ -32,8 +32,12 @@ class FunctionRef(expr.Expr):
 
     @property
     def qualified_name(self) -> str:
-        """The dotted spelling, such as ``layers.0.run``, used by C symbols and runtime names."""
-        return ".".join(str(part) for part in (*self.path, self.name) if part is not None)
+        """The dotted spelling, such as ``layers.0.run``, used by C symbols and runtime names.
+
+        A run-time index prints as ``*``; an entry reference ends at its path.
+        """
+        parts = ("*" if part is None else str(part) for part in self.path)
+        return ".".join((*parts, *(() if self.name is None else (self.name,))))
 
 
 __all__ = ["FunctionRef"]
