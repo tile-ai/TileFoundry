@@ -385,24 +385,25 @@ class IndexedLaunch(ParserCase):
 
 
 @pytest.mark.parametrize(
-    ("source", "old", "new", "refused"),
+    ("source", "old", "new", "refused", "stage"),
     [
         (INDEXED_LAUNCH, "host(x: Tensor[(8,), \"f32\"]):\n        launch(layers[0].run",
          "host(x: Tensor[(8,), \"f32\"], i: Tensor[(), \"i32\"]):\n        launch(layers[i].run",
-         "a launch index must be a constant"),
-        (INDEXED_CALLS, "a.mixed[1].run(x)", "a.mixed[i].run(x)", "variable index requires the same definition"),
-        (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[True].run(x)", "index must be an integer scalar"),
-        (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[0.5].run(x)", "index must be an integer scalar"),
-        (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[-1].run(x)", "index -1 out of range for N=3"),
-        (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[3].run(x)", r"'a\.layers\.3\.run'.*index 3 out of range for N=3"),
-        (INDEXED_LAUNCH, "launch(layers[0].run", "launch(layers[2].run", r"'layers\.2\.run'.*index 2 out of range for N=2"),
-        (INDEXED_LAUNCH, "launch(layers[0].run", "launch(layers[0].step", r"'layers\.0\.step' must resolve to exactly one function"),
-        (INDEXED_LAUNCH, "launch(layers[0].run", "launch(layers", r"'layers': name the function to call"),
+         "a launch index must be a constant", "parse"),
+        (INDEXED_CALLS, "a.mixed[1].run(x)", "a.mixed[i].run(x)", "variable index requires the same definition", "parse"),
+        (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[True].run(x)", "index must be an integer scalar", "parse"),
+        (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[0.5].run(x)", "index must be an integer scalar", "parse"),
+        (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[-1].run(x)", "index -1 out of range for N=3", "parse"),
+        (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[3].run(x)", r"'a\.layers\.3\.run'.*index 3 out of range for N=3", "parse"),
+        (INDEXED_LAUNCH, "launch(layers[0].run", "launch(layers[2].run", r"'layers\.2\.run'.*index 2 out of range for N=2", "parse"),
+        (INDEXED_LAUNCH, "launch(layers[0].run", "launch(layers[0].step", r"'layers\.0\.step' must resolve to exactly one function", "parse"),
+        (INDEXED_LAUNCH, "launch(layers[0].run", "launch(layers", r"'layers': name the function to call", "parse"),
         (
             INDEXED_CALLS,
             "mixed = ModuleList((Leaf, Other))\n\n    @prim_func(target=CUDA)\n    def run(x: Tensor[(8,), \"f32\"]):\n        pass",
             "mixed = ModuleList((Leaf, Other))\n\n    @prim_func(target=CUDA)\n    def run(x: Tensor[(8,), \"f32\"]):\n        layers(x)",
             "ModuleList slot 'layers' must be indexed before calling",
+            "verify",
         ),
         (
             INDEXED_CALLS,
@@ -412,6 +413,7 @@ class IndexedLaunch(ParserCase):
                 "        later(x)\n\n    @prim_func(target=CUDA)\n    def later(x: Tensor[(8,), \"f32\"]):\n        pass",
             ),
             "'later' is declared later in @module 'Root'; declare it before use",
+            "parse",
         ),
     ],
     ids=[
@@ -419,7 +421,8 @@ class IndexedLaunch(ParserCase):
         "launch-missing", "launch-bare-slot", "unindexed-slot", "later-declaration",
     ],
 )
-def test_indexed_reference_refusals(tmp_path, source, old, new, refused):
+def test_indexed_reference_refusals(tmp_path, source, old, new, refused, stage):
+    """Each refusal comes from its owning stage: the parser, or verifying what it built."""
     olds, news = (old, new) if isinstance(old, tuple) else ((old,), (new,))
     text = source.read_text()
     for before, after in zip(olds, news, strict=True):
@@ -427,8 +430,13 @@ def test_indexed_reference_refusals(tmp_path, source, old, new, refused):
         text = text.replace(before, after)
     path = tmp_path / source.name
     path.write_text(text)
-    with pytest.raises((parser.ParseError, expr.VerifyError), match=refused):
+    if stage == "parse":
+        with pytest.raises(parser.ParseError, match=refused):
+            cli.load_authored_ir(f"{path}:Root")
+        return
+    with pytest.raises(expr.VerifyError, match=refused) as refusal:
         verifier.verify_module(cli.load_authored_ir(f"{path}:Root"))
+    assert not isinstance(refusal.value, parser.ParseError)
 
 
 EXPECTED = {
