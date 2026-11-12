@@ -2,21 +2,11 @@
 
 from __future__ import annotations
 
-from types import MappingProxyType
-
 from tilefoundry import codegen
 from tilefoundry.ir import expr
 from tilefoundry.ir.hir import tensor
 from tilefoundry_nvidia.cuda import target
 from tilefoundry_nvidia.cuda.codegen import context
-
-DIM_SYMBOLS = MappingProxyType({
-    expr.DimAdd: "+",
-    expr.DimSub: "-",
-    expr.DimMul: "*",
-    expr.DimFloorDiv: "/",
-    expr.DimMod: "%",
-})
 
 
 def value(node, ctx: context.Context) -> str:
@@ -37,10 +27,9 @@ def scalar_index(node, ctx: context.Context) -> str:
             return ctx.name_for(node)
         return context.scalar_read(node, ctx)
     if isinstance(node, expr.Call):
-        for op_type, symbol in DIM_SYMBOLS.items():
-            if isinstance(node.target, op_type):
-                lhs, rhs = node.args
-                return f"({scalar_index(lhs, ctx)} {symbol} {scalar_index(rhs, ctx)})"
+        rendered = codegen.render_dim_call(node, lambda arg: scalar_index(arg, ctx))
+        if rendered is not None:
+            return rendered
     raise NotImplementedError(
         f"CUDA TupleGetItem index {type(node).__name__} is not scalar dimension arithmetic"
     )

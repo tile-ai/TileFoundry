@@ -9,7 +9,6 @@ from __future__ import annotations
 from dataclasses import replace
 from functools import reduce
 from operator import mul
-from types import MappingProxyType
 
 from tilefoundry import codegen
 from tilefoundry.ir import core, dim, expr, tir, types, utils
@@ -303,18 +302,14 @@ def render_shard_layout_value(var_name: str, sl: types.ShardLayout, dynamic_exte
     return preamble, value_expr
 
 
-COORD_OPERATORS = MappingProxyType({expr.DimAdd: "+", expr.DimSub: "-", expr.DimMul: "*", expr.DimFloorDiv: "/", expr.DimMod: "%"})
-
-
 class CoordinateVisitor(core.ExprVisitor[str]):
     def visit_Constant(self, node: expr.Constant, ctx: context.Context) -> str:
         return str(int(node.value))
 
     def visit_Call(self, node: expr.Call, ctx: context.Context) -> str:
-        operator = COORD_OPERATORS.get(type(node.target))
-        if operator is not None:
-            lhs, rhs = (self.visit(arg, ctx) for arg in node.args)
-            return f"({lhs} {operator} {rhs})"
+        rendered = codegen.render_dim_call(node, lambda arg: self.visit(arg, ctx))
+        if rendered is not None:
+            return rendered
         if isinstance(node.target, dim.MeshCoord):
             return mesh_coord_value(node, ctx)
         raise NotImplementedError(

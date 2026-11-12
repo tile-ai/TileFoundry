@@ -11,7 +11,7 @@ from .linkable_function import LinkableFunction
 from .linkable_module import LinkableModule
 from .options import Options
 from .registry import Role, register, registry
-from .scalar_expr import render_scalar_expr
+from .scalar_expr import render_dim_call, render_scalar_expr
 from .signature import (
     CallableSignature,
     LaunchSignature,

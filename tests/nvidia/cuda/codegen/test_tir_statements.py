@@ -25,6 +25,33 @@ def test_loop_bounds_emit_variables() -> None:
     assert "i_1 < n_2" in context.source()
 
 
+def test_loop_bounds_emit_dimension_arithmetic() -> None:
+    """A bound computed from a dimension, as a CTA's own row range is, is written as C arithmetic."""
+    scalar = types.TensorType.from_scalar(expr.DType.i64)
+
+    def constant(value):
+        return expr.Constant(type=scalar, value=value)
+
+    def dim(op, *args):
+        return expr.Call(type=scalar, target=op(), args=args)
+
+    row, index = expr.Var(type=scalar, name="row"), expr.Var(type=scalar, name="i")
+    start = dim(expr.DimMul, row, constant(32))
+    loop = core.For(
+        induction_var=index,
+        start=start,
+        stop=dim(expr.DimMin, dim(expr.DimAdd, start, constant(32)), constant(100)),
+        step=constant(1),
+        body=core.Sequential(()),
+    )
+    context = codegen.Context(target=cuda.Target("nvidia.h200_sxm"))
+    context.emit_node(loop)
+    i, first = context.name_for(index), f"({context.name_for(row)} * 32)"
+    last = f"({first} + 32)"
+    header = context.source().splitlines()[0].strip()
+    assert header == f"for (int {i} = {first}; {i} < (({last}) < (100) ? ({last}) : (100)); {i} += 1) {{"
+
+
 def test_long_sequence_emits_statements() -> None:
     type_ = types.TensorType.from_scalar(expr.DType.f32, storage=expr.StorageKind.RMEM)
     statements = tuple(

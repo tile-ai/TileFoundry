@@ -15,14 +15,6 @@ STORAGE_DEVICE_TYPE = MappingProxyType({
     expr.StorageKind.HOST: "kDLCPU",
 })
 
-DIM_BINOP_CXX = MappingProxyType({
-    expr.DimAdd: "+",
-    expr.DimSub: "-",
-    expr.DimMul: "*",
-    expr.DimFloorDiv: "/",
-    expr.DimMod: "%",
-})
-
 
 class HostIntExprVisitor(core.ExprVisitor[str]):
     def visit_Constant(self, node: expr.Constant, ctx=None) -> str:
@@ -37,18 +29,10 @@ class HostIntExprVisitor(core.ExprVisitor[str]):
         return f"{node.param.name}.shape()[{node.axis}]"
 
     def visit_Call(self, node: expr.Call, ctx=None) -> str:
-        tgt = node.target
-        sym = next((s for op, s in DIM_BINOP_CXX.items() if isinstance(tgt, op)), None)
-        if sym is not None:
-            a, b = node.args
-            return f"({self.visit(a, ctx)} {sym} {self.visit(b, ctx)})"
-        if isinstance(tgt, (expr.DimMin, expr.DimMax)):
-            a, b = node.args
-            ca = self.visit(a, ctx)
-            cb = self.visit(b, ctx)
-            cmp = "<" if isinstance(tgt, expr.DimMin) else ">"
-            return f"(({ca}) {cmp} ({cb}) ? ({ca}) : ({cb}))"
-        raise ValueError(f"emit_host_module: unsupported launch-extent op {type(tgt).__name__}")
+        rendered = codegen.render_dim_call(node, lambda arg: self.visit(arg, ctx))
+        if rendered is None:
+            raise ValueError(f"emit_host_module: unsupported launch-extent op {type(node.target).__name__}")
+        return rendered
 
     def default_visit(self, node, ctx=None) -> str:
         raise ValueError(f"emit_host_module: unsupported launch-extent node {type(node).__name__}")
