@@ -20,7 +20,7 @@ def _launch_entry_with_grid_x(extent):
     a = expr.Var(type=t, name="a")
     i64 = TensorType.from_scalar(DType.i64, storage=StorageKind.RMEM)
     one = expr.Constant(type=i64, value=1)
-    ref = core.SymbolRef(name="dev", type=CallableType(return_type=UnitType(), parameters=(t,)))
+    ref = core.FunctionRef((), "dev")
     args = (ref, extent, one, one, one, one, one, a)
     body = core.Sequential(body=(core.Evaluate(callable=tir.launch.Launch(), args=args),))
     return core.PrimFunction(name="host", params=(a,), body=body, target=cpu.Target())

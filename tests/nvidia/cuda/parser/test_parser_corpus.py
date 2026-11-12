@@ -170,8 +170,8 @@ class ContextTree(ParserCase):
         inherits = _child(rebuilt, "inherits")
         assert inherits.target is None
         assert inherits.topologies is None
-        assert valuation.list_call_paths(rebuilt)["inherits.step"].target == cuda.Target("nvidia.h200_sxm")
-        assert valuation.list_call_paths(rebuilt)["inherits.step"].topologies == (
+        assert valuation.collect_functions(rebuilt)[core.FunctionRef(("inherits",), "step")].target == cuda.Target("nvidia.h200_sxm")
+        assert valuation.collect_functions(rebuilt)[core.FunctionRef(("inherits",), "step")].topologies == (
             context["CONTEXT_CTA"],
             context["CONTEXT_WARP"],
         )

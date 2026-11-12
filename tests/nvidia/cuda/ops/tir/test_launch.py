@@ -30,7 +30,7 @@ def test_launch_rejects_forwarded_type_mismatch() -> None:
     host_arg = expr.Var(type=host_type, name="host_arg")
     extent_type = Tensor[(), "i64", None, "rmem"]
     one = expr.Constant(type=extent_type, value=1)
-    ref = core.SymbolRef(name=device.name, type=types.callable_type_for_prim_function(device))
+    ref = core.FunctionRef((), device.name)
     launch = core.Evaluate(callable=tir.launch.Launch(), args=(ref, one, one, one, one, one, one, host_arg))
     host = core.PrimFunction(
         name="host",

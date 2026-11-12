@@ -23,7 +23,6 @@ from tilefoundry.interfaces import access, schedule, typeinfer, valuation
 from tilefoundry.ir import core, expr, hir, tir, types
 from tilefoundry.ir import dim as ir_dim
 from tilefoundry.ir import utils as ir_utils
-from tilefoundry.ir.core import symbol_ref
 from tilefoundry.ir.hir import math, tensor
 from tilefoundry.ir.tir import memory
 from tilefoundry.ir.types import layout_algebra
@@ -1464,8 +1463,8 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
         )
 
 
-def relaunch(fn, launches):
-    """Retype host launches and forward the scratch parameters lowering appended."""
+def relaunch(fn, module, lowered):
+    """Forward the scratch parameters lowering appended to each callee *fn* launches."""
     if not isinstance(fn, core.PrimFunction):
         return fn
     params = list(fn.params)
@@ -1475,8 +1474,7 @@ def relaunch(fn, launches):
         def visit_Evaluate(self, stmt):
             if not isinstance(stmt.callable, tir.launch.Launch):
                 return stmt
-            ref = stmt.args[0]
-            lowering = launches.get(".".join((*ref.nested, ref.name)))
+            lowering = lowered.get(id(core.resolve(module, stmt.args[0])[1]))
             if lowering is None:
                 return stmt
             scratch = tuple(
@@ -1489,8 +1487,7 @@ def relaunch(fn, launches):
             return replace(
                 stmt,
                 args=(
-                    symbol_ref(lowering.lowered, ".".join((*ref.nested, ref.name))),
-                    *stmt.args[1:7 + inputs],
+                    *stmt.args[:7 + inputs],
                     *scratch,
                     *stmt.args[7 + inputs:],
                 ),
@@ -1504,7 +1501,7 @@ def device_root(module):
     function = module.entry_function()
     if isinstance(function, core.PrimFunction) and isinstance(function.target, cpu.Target):
         callees = (
-            core.resolve_symbol(module, stmt.args[0].name, nested=stmt.args[0].nested)
+            core.resolve(module, stmt.args[0])[1]
             for stmt in function.body
             if isinstance(stmt, core.Evaluate) and isinstance(stmt.callable, tir.launch.Launch)
         )
@@ -1535,7 +1532,7 @@ class ConvertHIRToTIR(pass_base.ModulePass):
 
     def run(self, module: core.Module) -> core.Module:
         if not self.options.lower or not any(
-            isinstance(frame.function, core.Function) for frame in valuation.list_call_paths(module).values()
+            isinstance(frame.function, core.Function) for frame in valuation.collect_functions(module).values()
         ):
             return module
         function = device_root(module)
@@ -1552,12 +1549,8 @@ class ConvertHIRToTIR(pass_base.ModulePass):
         )
         lowering.run()
         lowered[id(function)] = lowering
-        launches = {
-            path: lowered[id(frame.function)]
-            for path, frame in valuation.list_call_paths(module).items()
-            if id(frame.function) in lowered
-        }
         modules = set()
+        updates = []
 
         def lower_module(node):
             if id(node) in modules:
@@ -1566,12 +1559,14 @@ class ConvertHIRToTIR(pass_base.ModulePass):
             for slot in node.children.values():
                 for child in slot.elements:
                     lower_module(child)
-            node.replace_functions(
-                relaunch(lowered[id(fn)].lowered if id(fn) in lowered else fn, launches)
+            updates.append((node, tuple(
+                relaunch(lowered[id(fn)].lowered if id(fn) in lowered else fn, node, lowered)
                 for fn in node.functions
-            )
+            )))
 
         lower_module(module)
+        for node, functions in updates:
+            node.replace_functions(functions)
         return module
 
 

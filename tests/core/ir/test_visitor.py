@@ -304,13 +304,13 @@ def test_stmt_walk_stays_in_the_stmt_tree_and_shares_unchanged_siblings() -> Non
     assert out.body.body[1] is s.body.body[1]
 
 
-def test_stmt_expr_mutator_rewrites_expr_fields_tuples_and_symbolref_leaf() -> None:
-    """Test stmt expr mutator rewrites expr fields tuples and symbolref leaf.
+def test_stmt_expr_mutator_rewrites_expr_fields_tuples_and_function_ref_leaf() -> None:
+    """Test stmt expr mutator rewrites expr fields tuples and FunctionRef leaf.
 
     Rewrites scalar Expr fields (``For.stop``) and tuple Expr fields
     (``Evaluate.args``) with partial-share semantics, and visits an ``Evaluate``
-    whose callable is a ``SymbolRef`` (an Expr leaf) without error — guarding
-    against a missing SymbolRef branch in the Expr child/rebuild tables.
+    whose callable is a ``FunctionRef`` (an Expr leaf) without error — guarding
+    against a missing FunctionRef branch in the Expr child/rebuild tables.
     """
     s = _simple_for_body()
 
@@ -323,8 +323,7 @@ def test_stmt_expr_mutator_rewrites_expr_fields_tuples_and_symbolref_leaf() -> N
     assert out.start is s.start and out.step is s.step
 
     a, b, c = _var("a"), _var("b"), _var("c")
-    ct = types.CallableType(return_type=types.UnitType(), parameters=(a.type, b.type, c.type))
-    ref = core.SymbolRef(name="callee", type=ct)
+    ref = core.FunctionRef((), "callee")
     call_stmt = core.Evaluate(callable=ref, args=(a, b, c))
 
     assert core.StmtExprMutator().visit_stmt(call_stmt) is call_stmt

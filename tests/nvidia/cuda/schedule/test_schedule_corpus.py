@@ -248,7 +248,7 @@ def _memory_report(case, program, report):
 
 
 def _tir_checks(lowered, source):
-    functions = tuple(frame.function for frame in valuation.list_call_paths(lowered).values())
+    functions = tuple(frame.function for frame in valuation.collect_functions(lowered).values())
     found = []
     for function in functions:
         _assert_live_smem_views_do_not_overlap(function, source)
@@ -335,7 +335,7 @@ def _host_launch(case, lowered, function):
             launches.extend(
                 stmt for stmt in statements.statements
                 if isinstance(stmt.callable, tir.launch.Launch)
-                and not stmt.args[0].nested
+                and not stmt.args[0].path
                 and stmt.args[0].name == function.name
             )
     if launchable(return_type):
@@ -721,7 +721,7 @@ class ModuleInstances(ScheduleCase):
 
     def retained_shapes(self, lowered):
         verifier.verify_module(lowered)
-        frames = valuation.list_call_paths(lowered)
+        frames = valuation.collect_functions(lowered)
         assert len(frames) == 4
         assert all(isinstance(frame.function, core.PrimFunction) for frame in frames.values())
         layers, mm = lowered.children["layers"], lowered.children["mm"]

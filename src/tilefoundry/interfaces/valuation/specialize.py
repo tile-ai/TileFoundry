@@ -466,7 +466,7 @@ class DimVarCollector(core.ExprVisitor[None]):
     def visit_Constant(self, node: expr.Constant, ctx=None) -> None:
         self.collect_expr(node, ctx)
 
-    def visit_SymbolRef(self, node: expr.Expr, ctx=None) -> None:
+    def visit_FunctionRef(self, node: expr.Expr, ctx=None) -> None:
         self.collect_expr(node, ctx)
 
     def visit_ModuleList(self, node, ctx=None) -> None:

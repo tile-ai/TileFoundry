@@ -42,7 +42,7 @@ def register_pass(tgt: type[target.Target], point: PassPoint) -> Callable[[type[
 def for_target(module: core.Module, point: PassPoint) -> list[ModulePass]:
     """Instantiate the module targets' passes, ordered by target name."""
     targets = set()
-    for frame in valuation.list_call_paths(module).values():
+    for frame in valuation.collect_functions(module).values():
         tgt = frame.function.target if isinstance(frame.function, core.PrimFunction) else frame.target
         if tgt is not None:
             targets.add(type(tgt))
@@ -63,7 +63,7 @@ class PassManager:
         self.check_requires()
         for seq, p in enumerate(self.passes):
             prev = module
-            previous = {id(frame.function) for frame in valuation.list_call_paths(prev).values()}
+            previous = {id(frame.function) for frame in valuation.collect_functions(prev).values()}
             with dump.Scope(f"{seq:02d}_{p.name}"):
                 dump.dump("before.txt", lambda: repr(prev), dump.Flags.PASS_IR)
                 module = p.run(module)
@@ -78,7 +78,7 @@ class PassManager:
         object identity is absent from the pre-pass ``previous`` set. Whole-
         function fallback per [passes §7](docs/spec/passes.md#7-implemented-passes).
         """
-        for frame in valuation.list_call_paths(curr).values():
+        for frame in valuation.collect_functions(curr).values():
             fn = frame.function
             if id(fn) in previous:
                 continue
@@ -90,7 +90,7 @@ class PassManager:
                     ranges=True,
                 )
             elif isinstance(fn, core.PrimFunction):
-                verifier.verify_prim_function(fn, module_fns=curr)
+                verifier.verify_prim_function(fn, frame=frame)
 
     def check_requires(self) -> None:
         seen: set[str] = set()

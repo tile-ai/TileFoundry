@@ -438,7 +438,7 @@ def for_target(module: core.Module, point: PassPoint) -> list[ModulePass]: ...
 
 - constraints:
   - `passes.for_target` MUST collect PrimFunction targets from each function and
-    HIR targets from the corresponding `list_call_paths` frame. A frame with
+    HIR targets from the corresponding `collect_functions` frame. A frame with
     no Target MUST contribute no target. It MUST order
     targets by registered name and preserve registration order within a target.
   - A pass class MUST be registered at most once per point; a duplicate MUST

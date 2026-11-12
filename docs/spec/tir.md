@@ -176,8 +176,9 @@ parameters; omitting it means one output.
     MUST be derivable from the base parameters; `verify_prim_function` checks
     each variant with the rules below.
 
-`verifier.verify_prim_function(fn, *, module_fns=())` enforces (`module_fns` is
-the sibling `PrimFunction`s, or the enclosing `core.Module`):
+`verifier.verify_prim_function(fn, *, frame=None)` enforces (`frame` is the
+`valuation.Context` of the Module that declares `fn`; without it the rules that
+resolve a callee are skipped):
 
 - **Param homogeneity**. All parameters' layouts MUST be uniformly
   `ShardLayout` or uniformly non-`ShardLayout`; mixing is rejected.
@@ -190,7 +191,7 @@ the sibling `PrimFunction`s, or the enclosing `core.Module`):
   enclosing `Sequential`; branch, loop, and mesh bindings do not escape.
   Every variant uses its own parameters.
   Expression fields, including intrinsic statements and Return, MUST contain
-  IR nodes; lowering recipes are rejected. Op, PrimFunction, and SymbolRef
+  IR nodes; lowering recipes are rejected. Op, PrimFunction, and FunctionRef
   callables are permitted.
 - **`LetStmt` typing**. `LetStmt.var.type` MUST equal the typeinfer
   of `LetStmt.value`.
@@ -205,11 +206,10 @@ the sibling `PrimFunction`s, or the enclosing `core.Module`):
   `MeshScope`.
 - **Retained function calls** follow [core-ir §2.1](./core-ir.md#21-call).
   Verification requires strictly equal argument types/counts and rejects recursion.
-- **`Evaluate.callable`**. When `callable` is a `SymbolRef`
-  ([§2.1](#21-symbolref)), module-level resolution MUST find exactly one
-  `PrimFunction` of that name in the enclosing `Module`, `args` length
-  MUST match the resolved callee's `params`, and the `SymbolRef.type`
-  MUST equal the resolved callee's `CallableType`. When `callable` is
+- **`Evaluate.callable`**. When `callable` is a `FunctionRef`
+  ([§2.1](#21-functionref)), resolution from the caller's `Module` MUST find
+  exactly one function, and `args` MUST match the resolved callee's `params`
+  in count and type. When `callable` is
   an `Op`, it MUST pass the same `check_call` used by ScheduleOp type inference,
   candidate admission, and lowering. Its declared execution mesh MUST match
   the enclosing mesh and its operands MUST be reachable from that scope.
@@ -224,7 +224,7 @@ the sibling `PrimFunction`s, or the enclosing `core.Module`):
 
 ```python
 class Evaluate(Stmt):
-    callable: Op | SymbolRef | PrimFunction | ModuleList | Call
+    callable: Op | FunctionRef | PrimFunction | ModuleList | Call
     args: tuple[Expr, ...]      # the callable's operands in ParamDef / parameter order
 ```
 
@@ -242,8 +242,8 @@ The `callable` is one of:
   leaf verifier. A context-dependent operand pattern MAY resolve itself against
   the callable before matching. Host `Launch` instead checks its target,
   arguments, and launch extents as a function invocation.
-- a `SymbolRef` ([§2.1](#21-symbolref)) — a reference to a callee
-  `PrimFunction` in the enclosing `Module`. `args` follow the callee's
+- a `FunctionRef` ([§2.1](#21-functionref)) — a reference to a callee
+  `PrimFunction` in the caller's `Module` tree. `args` follow the callee's
   parameter order, the final `output_count` positions binding output
   buffers; the callee is resolved uniquely at module level
   ([§1.3](#13-primfunction)).
@@ -251,7 +251,7 @@ The `callable` is one of:
 - a retained `PrimFunction`, single-slot `ModuleList`, or computed
   `Call(TupleGetItem, (ModuleList, index))` target, following the same instance
   resolution as HIR ([core-ir §2.1](./core-ir.md#21-call)). These device calls
-  remain in one Module tree; they MUST NOT become `SymbolRef` or launches.
+  remain in one Module tree; they MUST NOT become `FunctionRef` or launches.
   Printers MUST emit `helper(...)`, `child(...)`, and `layers[i](...)` respectively.
 
 Scheduled lowering follows [passes §7.1](./passes.md#71-converthirtotir).
@@ -263,7 +263,7 @@ and is anchored by `LetStmt`; `Evaluate` is the unit-typed Stmt-position form
 and the only Stmt-position invocation wrapper.
 
 **Effect Op vs. control Stmt.** A single unconditional invocation — an effect
-`Op` or a function `SymbolRef` — is `Evaluate(callable, args)`. A construct that
+`Op` or a `FunctionRef` — is `Evaluate(callable, args)`. A construct that
 carries its own control flow stays a first-class `Stmt`.
 
 ### 1.5 `Sync`
@@ -355,66 +355,52 @@ def <name>(<param>: Expr, ...) -> None: ...    # decorated function's signature 
 
 ## 2. TIR Expr and callable constructs
 
-### 2.1 `SymbolRef`
+### 2.1 `FunctionRef`
 
 ```python
-class SymbolRef(Expr):
-    """Name a primitive-function callee.
+class FunctionRef(Expr):
+    """Name a callee by its slot path and function name.
 
     Attributes:
-        name: attribute; Canonical callee name.
-        nested: attribute; Child module slot path from the current Module.
+        path: attribute; Child slot path from the caller's Module.
+        name: attribute; Function name in the reached Module; None names its entry.
     """
 
-    name: str
-    nested: tuple[str, ...] = ()
+    path: tuple[str | int | None, ...] = ()
+    name: str | None = None
 ```
 
 - constraints:
-  - a leaf `Expr` naming a callee as an `Evaluate` / `Launch` target; resolution
-    is module-level and unique. Per-field rules below.
+  - a leaf `Expr` naming a callee as an `Evaluate` / `Launch` target. It holds
+    names only: no Module, no callee object and no type. Per-field rules below.
 
-`SymbolRef` is a leaf `Expr` naming a callee `PrimFunction` as a call
-target: the `callable` of an `Evaluate(SymbolRef, args)`
-([§1.4](#14-evaluate)) function invocation and `args[0]` of a `Launch`
-([§2.3](#23-tir-ops)).
+`FunctionRef` is a leaf `Expr` naming a callee as a call target: the
+`callable` of an `Evaluate(FunctionRef, args)` ([§1.4](#14-evaluate))
+function invocation and `args[0]` of a `Launch` ([§2.3](#23-tir-ops)).
+
+#### `path`
+- MUST name child slots relative to the Module that contains the caller. A
+  `str` segment enters a child slot; an `int` segment selects one instance of
+  an indexed slot; a `None` segment marks an index the call gives as a leading
+  operand. An empty path selects the caller's own Module.
 
 #### `name`
-- MUST be the canonical name of a `PrimFunction` in the enclosing
-  `Module` ([core-ir.md §1](./core-ir.md#1-module)), exactly as stored
-  in `PrimFunction.name`. It MAY be a generated / mangled
-  specialization name.
-
-#### `nested`
-- MUST name child module slots relative to the caller's current `Module`.
-  An empty path selects the current module's own functions. Resolution MUST
-  traverse those slots and find one function named `name` in the reached
-  module; it MUST NOT search descendants by an unqualified name. Missing slots
-  or functions MUST report the full requested path. Verify and codegen MUST
-  use the same slot-path resolver.
+- MUST be the canonical name of a function in the reached Module
+  ([core-ir.md §1](./core-ir.md#1-module)), exactly as stored in its `name`.
+  It MAY be a generated specialization name. `None` names the reached
+  Module's entry.
 
 #### `type`
-- MUST be the resolved callee's IR-level `CallableType`
-  ([types §7](./types.md#7-callabletype)): `parameters` are the callee
-  `params` types in order; `return_type` is `UnitType`
-  ([types §6](./types.md#6-unittype)) — a TIR `PrimFunction` returns
-  no value, its outputs are trailing params ([§1.4](#14-evaluate)).
-- MUST be set at construction from the callee in hand; a `SymbolRef`
-  with a deferred or unresolved type MUST NOT enter constructed IR.
-  `Expr` is frozen and verify MUST NOT mutate IR, so verify only
-  checks `type` against the resolved callee ([§1.3](#13-primfunction)) —
-  it never back-fills.
+- Always `None`. The callee's signature is read from the resolved callee;
+  a reference never carries a copy that can go stale.
 
-Resolution starts in the caller's `Module` and traverses `nested` child slots.
-A unique lookup in the reached `Module`
-([core-ir.md §1](./core-ir.md#1-module)) MUST map `name` to exactly
-one `PrimFunction`; zero or more than one match is an error. Functions with
-that name in other modules do not participate in this lookup.
-Specialization variants each carry a distinct canonical
-`PrimFunction.name`, so a `SymbolRef` to a variant resolves
-unambiguously; the unmangled dispatcher is represented by its prototype and
-`variants`, not by a `SymbolRef`. Local typeinfer does not resolve a `SymbolRef`; it
-carries its `type` directly.
+Resolution uses `core.resolve(scope, ref)` ([core-ir.md §1.4](./core-ir.md#14-function-references))
+from the caller's Module. It traverses `path` and MUST map `name` to exactly
+one function; zero or more than one match is an error. Functions with that
+name in other modules do not participate in this lookup. Specialization
+variants each carry a distinct canonical `PrimFunction.name`, so a
+`FunctionRef` to a variant resolves unambiguously. Verify and codegen MUST use
+the same resolver. Local typeinfer does not resolve a `FunctionRef`.
 
 ### 2.2 `ShapeOf`
 
@@ -822,7 +808,7 @@ class Unary(Op):
 #### `Launch`
 
 Effect Op for a host-side launch of a device kernel (CPU entry only, no value);
-the callee `SymbolRef` and grid/block extents flow through the `Evaluate` args,
+the callee `FunctionRef` and grid/block extents flow through the `Evaluate` args,
 the non-grid/block launch config through the Op attributes.
 
 The shared `LaunchAttrs` descriptor carries target-owned selector values:
@@ -859,7 +845,7 @@ class Launch(Op):
     stream: object | None = None
     attrs: LaunchAttrs = LaunchAttrs()
 
-# Evaluate(Launch(...), (SymbolRef(callee), grid_x, grid_y, grid_z, block_x, block_y, block_z, *forwarded_args))
+# Evaluate(Launch(...), (FunctionRef(callee), grid_x, grid_y, grid_z, block_x, block_y, block_z, *forwarded_args))
 ```
 
 - constraints:
@@ -867,10 +853,10 @@ class Launch(Op):
     not kernel parameters. Per-arg / per-attribute rules below.
 
 `Launch` appears only in a CPU (host) entry body, as `Evaluate(Launch(...),
-args)` with `args = (SymbolRef(callee), grid_x, grid_y, grid_z, block_x,
+args)` with `args = (FunctionRef(callee), grid_x, grid_y, grid_z, block_x,
 block_y, block_z, *forwarded_args)`:
 
-- **callee**: `args[0]` MUST be a `SymbolRef` ([§2.1](#21-symbolref)) resolving to
+- **callee**: `args[0]` MUST be a `FunctionRef` ([§2.1](#21-functionref)) resolving to
   a device `PrimFunction` whose target is not CPU, or a HIR `Function` by its
   root-relative selector ([core-ir §1](./core-ir.md#1-module)).
   The host-entry pass writes and checks a HIR callee's forwarded args

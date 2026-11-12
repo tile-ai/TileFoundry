@@ -7,7 +7,7 @@ import sys
 
 from tilefoundry import target as tilefoundry_target
 from tilefoundry import verifier
-from tilefoundry.interfaces import typeinfer
+from tilefoundry.interfaces import typeinfer, valuation
 from tilefoundry.ir import core, types
 
 from .ast_pattern import consume_module_context, create_module_context
@@ -153,7 +153,7 @@ def module(
                     )
                     verifier.verify_function(function, module=result)
                 elif isinstance(function, core.PrimFunction):
-                    verifier.verify_prim_function(function, module_fns=result)
+                    verifier.verify_prim_function(function, frame=valuation.Context(result, function))
             return result
         except Exception:
             consume_module_context(context)

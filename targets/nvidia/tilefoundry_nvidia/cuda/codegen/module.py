@@ -40,8 +40,8 @@ DEFAULT_DYNAMIC_SMEM = 48 * 1024
 
 def reject_omitted_child_weights(module: core.Module) -> None:
     """Reject device calls that depend on implicit child-owner weight injection."""
-    frames = valuation.list_call_paths(module)
-    selectors = {id(frame.function): path for path, frame in frames.items()}
+    frames = valuation.collect_functions(module)
+    selectors = {id(frame.function): ref.qualified_name for ref, frame in frames.items()}
 
     class Check(core.ExprVisitor[None]):
         def default_visit_leaf(self, node, operands, frame):

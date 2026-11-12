@@ -18,8 +18,8 @@ from .signature import LAUNCH_ABI, CallableSignature, called_as, program_id_para
 
 def function_paths(module: core.Module, prefix: tuple[str, ...] = ()):
     """Root-relative paths for every declared function, using instance slot keys."""
-    for call_path, frame in valuation.list_call_paths(module).items():
-        yield (*prefix, *call_path.split(".")), frame.function
+    for ref, frame in valuation.collect_functions(module).items():
+        yield (*prefix, *ref.path, ref.name), frame.function
 
 
 def function_path(root: core.Module, fn) -> tuple[str, ...]:
@@ -40,17 +40,17 @@ def mangle(root: core.Module, fn) -> str:
     """Encode identifiers by length and decimal indices with a distinct I tag."""
     path = function_path(root, fn)
     for segment in path:
-        if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*|[0-9]+", segment) is None:
-            raise ValueError(f"codegen: invalid path segment {segment!r} in {'.'.join(path)!r}")
+        if isinstance(segment, str) and re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", segment) is None:
+            raise ValueError(f"codegen: invalid path segment {segment!r} in {'.'.join(map(str, path))!r}")
     return "tilefoundry_" + "".join(
-        f"I{len(segment)}_{segment}" if segment.isdecimal() else f"{len(segment)}{segment}"
+        f"I{len(str(segment))}_{segment}" if isinstance(segment, int) else f"{len(segment)}{segment}"
         for segment in path
     )
 
 
 def export_name(root: core.Module, fn) -> str:
     """The dotted TVM FFI registration name corresponding to a call path."""
-    return ".".join(function_path(root, fn))
+    return ".".join(map(str, function_path(root, fn)))
 
 
 @dataclass(frozen=True)
@@ -160,7 +160,7 @@ class Context:
 def domains(root: core.Module):
     """Group definitions by their first call path's effective topology declaration."""
     rows = {}
-    for frame in valuation.list_call_paths(root).values():
+    for frame in valuation.collect_functions(root).values():
         key = (id(frame.topologies), frame.target)
         row = rows.setdefault(key, (frame, []))
         row[1].append(frame.function)
@@ -221,22 +221,22 @@ def build_context(
     An HIR function enters codegen only as the callee a Launch names, and takes
     the arguments that Launch binds; Python wraps any other one.
     """
-    functions = tuple(frame.function for frame in valuation.list_call_paths(module).values())
+    functions = tuple(frame.function for frame in valuation.collect_functions(module).values())
     for function in functions:
         if isinstance(function, core.Function) and options.emit != "skeleton":
             raise ValueError(
                 f"codegen: HIR function {export_name(module, function)!r} requires "
                 'emit="skeleton" or lowering to TIR first'
             )
-    selected = tuple((path, frame.function) for path, frame in valuation.list_call_paths(module).items() if isinstance(frame.function, core.Function))
+    selected = tuple((path, frame.function) for path, frame in valuation.collect_functions(module).items() if isinstance(frame.function, core.Function))
     contexts = {
         id(each): (path, frame)
-        for path, frame in valuation.list_call_paths(module).items()
+        for path, frame in valuation.collect_functions(module).items()
         for each in (frame.function, *frame.function.variants)
     }
     launched = {
         id(
-            core.resolve_symbol(contexts[id(caller)][1].module, stmt.args[0].name, nested=stmt.args[0].nested)
+            core.resolve(contexts[id(caller)][1].module, stmt.args[0])[1]
         ): stmt.args[7:]
         for caller in functions
         for stmt in launch_statements(caller)
@@ -292,10 +292,8 @@ def build_context(
     for function in (*device_functions, *cpu_functions):
         launches = launch_statements(function)
         launched = (
-            by_function.get(id(core.resolve_symbol(
-                ownership[id(function)], launches[0].args[0].name,
-                nested=launches[0].args[0].nested,
-            ))) if len(launches) == 1 else None
+            by_function.get(id(core.resolve(ownership[id(function)], launches[0].args[0])[1]))
+            if len(launches) == 1 else None
         )
         if launched is not None and isinstance(launched.function, core.Function):
             mangled = launched.symbol
@@ -327,8 +325,7 @@ def build_context(
     launch_callables: dict[int, CallableSignature] = {}
     for caller in functions:
         for stmt in launch_statements(caller):
-            reference = stmt.args[0]
-            callee = core.resolve_symbol(contexts[id(caller)][1].module, reference.name, nested=reference.nested)
+            callee = core.resolve(contexts[id(caller)][1].module, stmt.args[0])[1]
             symbol = by_function[id(callee)]
             grid_x, block_x = launch_extents(contexts[id(callee)][1])
             callable_signature = replace(symbol.callable, trailing=LAUNCH_ABI)

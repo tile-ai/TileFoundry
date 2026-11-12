@@ -19,6 +19,7 @@ from tilefoundry.ir import expr
 from .evaluate import Evaluate
 from .for_stmt import For
 from .function import Function
+from .function_ref import FunctionRef
 from .if_stmt import If
 from .let_stmt import LetStmt
 from .loop_region import LoopRegion
@@ -30,7 +31,6 @@ from .return_stmt import Return
 from .sequential import Sequential
 from .shape_of import ShapeOf
 from .stmt import Stmt
-from .symbol_ref import SymbolRef
 from .while_stmt import While
 
 __all__ = [
@@ -62,7 +62,7 @@ def expr_children(node: expr.Expr) -> tuple[expr.Expr, ...]:
     explicitly.
     """
     match node:
-        case expr.Var() | expr.Constant() | SymbolRef() | ShapeOf() | ModuleList():
+        case expr.Var() | expr.Constant() | FunctionRef() | ShapeOf() | ModuleList():
             return ()
         case expr.Call(target=target, args=args):
             return (target, *args) if isinstance(target, expr.Call) else args
@@ -84,7 +84,7 @@ def rebuild_expr(node: expr.Expr, new_children: tuple[expr.Expr, ...]) -> expr.E
     Binding-site fields are carried over untouched.
     """
     match node:
-        case expr.Var() | expr.Constant() | SymbolRef() | ModuleList():
+        case expr.Var() | expr.Constant() | FunctionRef() | ModuleList():
             return node
         case expr.Call(target=expr.Call()):
             return replace(node, target=new_children[0], args=new_children[1:])
@@ -177,7 +177,7 @@ def stmt_expr_fields(stmt: Stmt) -> tuple[str, ...]:
             return ("start", "stop", "step")
         case While() | If():
             return ("cond",)
-        case Evaluate(callable=SymbolRef() | expr.Call() | ModuleList()):
+        case Evaluate(callable=FunctionRef() | expr.Call() | ModuleList()):
             return ("callable", "args")
         case Evaluate():
             return ("args",)

@@ -41,7 +41,7 @@ def test_target_declaration_defines_domain() -> None:
     _Root, *_ = _context()
     target = _Root.resolve_target()
     assert target == cuda.Target("nvidia.h200_sxm")
-    assert all(frame.target is target for frame in valuation.list_call_paths(_Root).values())
+    assert all(frame.target is target for frame in valuation.collect_functions(_Root).values())
     forward = _Root.lookup("forward")
     child = core.Module("child", (forward,), "forward", target=cpu.Target())
     root = core.Module("root", (forward,), "forward", children={"child": ModuleList(child)}, target=target)
@@ -63,7 +63,7 @@ def test_topology_tuple_inherits_or_replaces() -> None:
     _Root, _CTA, _WARP, _THREAD = _context()
     assert _Root.inherits.topologies is None
     inherits = _Root.inherits
-    frame = next(frame for frame in valuation.list_call_paths(_Root).values() if frame.module is inherits)
+    frame = next(frame for frame in valuation.collect_functions(_Root).values() if frame.module is inherits)
     assert frame.topologies == (_CTA, _WARP)
     assert frame.topologies[1] is _WARP
 
@@ -146,7 +146,7 @@ class MemberContext(ModuleContextCase):
         assert [function.name for function in state.functions] == ["attention"]
         assert list(state.children) == ["softmax"]
         assert state.children["softmax"].elements[0].topologies == (Topology("thread", 4),)
-        assert valuation.list_call_paths(state)["softmax.softmax"].target == cuda.Target("nvidia.h200_sxm")
+        assert valuation.collect_functions(state)[core.FunctionRef(("softmax",), "softmax")].target == cuda.Target("nvidia.h200_sxm")
 
 
 CASES = special(ModuleContextCase)

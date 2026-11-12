@@ -32,7 +32,7 @@ def test_verifier_rejects_malformed_tir_calls(wrong, refused):
     if wrong == "recursion":
         caller.body = core.Sequential((core.Evaluate(caller, ()),))
     with pytest.raises(expr.VerifyError, match=refused):
-        verifier.verify_prim_function(caller, module_fns=(caller, callee))
+        verifier.verify_prim_function(caller)
 
 
 def test_verifier_rejects_noninteger_slot_index():

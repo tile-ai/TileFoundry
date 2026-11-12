@@ -16,7 +16,6 @@ from types import MappingProxyType
 from typing import Any, ClassVar, Literal, get_args, get_origin
 
 from tilefoundry.ir import clause, dim, expr, pattern, tir, types, utils
-from tilefoundry.ir.core import symbol_ref
 from tilefoundry.ir.hir import nn
 from tilefoundry.ir.types import layout_algebra
 
@@ -2582,7 +2581,7 @@ class CallTypeInferenceRule:
         infer_context = context.lexical_scope.lookup(TYPE_INFER_CONTEXT)
         if not isinstance(infer_context, runtime.TypeInferContext):
             infer_context = runtime.TypeInferContext()
-        if isinstance(value.target, runtime.SymbolRef) or (
+        if isinstance(value.target, runtime.FunctionRef) or (
             context.function.dialect == "tir" and match.branch_id == "function_call"
         ):
             return value
@@ -3095,12 +3094,12 @@ def enter_call(
     ):
         if node.keywords:
             return PatternFailure(
-                "symbol_call", node, "a symbol call takes positional arguments only"
+                "function_ref_call", node, "a symbol call takes positional arguments only"
             )
         return dataclasses.replace(
             matched,
             pattern_id="call.symbol",
-            branch_id="symbol_call",
+            branch_id="function_ref_call",
             captures={**matched.captures, "callee": callee, "module_entry": False},
             children=tuple(
                 AstChild(f"arg_{index}", ExpressionPattern(), argument, "call_argument", "argument")
@@ -3264,14 +3263,13 @@ class CallPattern(ElementPattern):
                 target=operation,
                 args=inputs,
             )
-        elif match.branch_id == "symbol_call":
+        elif match.branch_id == "function_ref_call":
             callee = match.captures["callee"]
-            symbol = callee_symbol(
+            reference = callee_ref(
                 match.node.func, callee, module_entry=match.captures["module_entry"]
             )
-            reference = symbol_ref(callee, symbol)
             return runtime.Call(
-                type=reference.type.return_type, target=reference, args=tuple(children.values())
+                type=runtime.UnitType(), target=reference, args=tuple(children.values())
             )
         elif match.branch_id == "function_call":
             callee = match.captures["callee"]
@@ -4653,8 +4651,8 @@ class WithPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
-def callee_symbol(node, callee, *, module_entry=False):
-    """Retain authored child slots while using the resolved function's name."""
+def callee_ref(node, callee, *, module_entry=False):
+    """Name *callee* by the authored child slots and the resolved function's name."""
     parts = []
     while isinstance(node, ast.Attribute):
         parts.append(node.attr)
@@ -4664,8 +4662,7 @@ def callee_symbol(node, callee, *, module_entry=False):
     else:
         raise ValueError("symbol callee must be a name or child-slot attribute path")
     parts.reverse()
-    slots = parts if module_entry else parts[:-1]
-    return ".".join((*slots, callee.name))
+    return runtime.FunctionRef(tuple(parts if module_entry else parts[:-1]), callee.name)
 
 
 def enter_launch(node: object, context: MatchContext, matched: AstMatch[Any]):
@@ -4737,7 +4734,7 @@ class LaunchPattern(ElementPattern):
             tuple(children[f"arg_{index}"] for index in range(match.captures["arg_count"])),
             children["grid"],
             children["block"],
-            symbol=callee_symbol(match.node.args[0], callee, module_entry=module_entry),
+            ref=callee_ref(match.node.args[0], callee, module_entry=module_entry),
             **options,
         )
 

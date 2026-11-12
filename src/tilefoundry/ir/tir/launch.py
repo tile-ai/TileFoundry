@@ -87,7 +87,7 @@ def launch_call(
     grid,
     block,
     *,
-    symbol=None,
+    ref=None,
     cluster=None,
     dynamic_smem=0,
     stream=None,
@@ -136,7 +136,7 @@ def launch_call(
     grid_e = tuple(canon(d) for d in grid)
     block_e = tuple(canon(d) for d in block)
 
-    ref = core.symbol_ref(callee, symbol)
+    ref = core.FunctionRef((), callee.name) if ref is None else ref
     op = Launch(
         cluster=cluster,
         dynamic_smem=dynamic_smem,

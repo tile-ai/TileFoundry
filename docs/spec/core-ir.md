@@ -189,7 +189,7 @@ shape-specialization variants live inside that entry's `Function.variants`
 - constraints:
   - `mod.lookup(name)` returns the function named `name`; it raises unless
   exactly one function matches. This is the canonical name-resolution
-  contract (e.g. for a `SymbolRef` callee), searches only this Module's own
+  contract (e.g. for a `FunctionRef` callee), searches only this Module's own
   `functions`, and always returns the `Function`
   / `PrimFunction` node itself.
   - `mod.entry_function()` returns the function named by `entry`.
@@ -210,10 +210,11 @@ shape-specialization variants live inside that entry's `Function.variants`
 
 ### 1.2 Definition call paths
 
-`tilefoundry.interfaces.valuation.list_call_paths(root)` enumerates each declared
+`tilefoundry.interfaces.valuation.collect_functions(root)` enumerates each declared
 function once by identity, in DFS first-instance order. It returns a
-`dict[call_path, valuation.Context]`, including HIR Functions and PrimFunctions. A
-call path is a dot-separated string. The frame records the current Module,
+`dict[FunctionRef, valuation.Context]`, including HIR Functions and PrimFunctions,
+keyed by the root-relative reference ([tir §2.1](./tir.md#21-functionref)). Its
+`qualified_name` is the dot-separated spelling C symbols and runtime names use. The frame records the current Module,
 function, effective target, and effective topologies; shared definitions use the first
 path for generated names, including indexed segments such as `layers.0.run`.
 
@@ -256,11 +257,16 @@ class ModuleList(Expr):
   - A single slot MUST NOT be indexed; an indexed slot MUST NOT be called
     without an index. Only the instance entry may be called, not other methods.
 
-TIR symbol resolution uses `resolve_symbol(module, name, nested=...)`: each
-`nested` component MUST select a child slot of the current node, and `name`
-MUST select exactly one function in the reached node. Empty `nested` stays in
-the current module. Failures MUST include the complete path; same-named
-functions in different child modules are distinct symbols.
+### 1.4 Function references
+
+`core.resolve(scope, ref)` returns the Module and the function a `FunctionRef`
+names, starting at the caller's Module `scope`. Each `str` segment of
+`ref.path` MUST select a child slot of the current node; an indexed slot MUST be
+followed by an `int` or `None` index, and a single slot MUST NOT be indexed.
+`name` MUST select exactly one function in the reached node; `None` selects its
+entry. An empty path stays in the current module. Failures MUST include the
+complete path; same-named functions in different child modules are distinct
+functions. The reference holds no Module; the reader supplies the scope.
 
 ## 2. `Expr`
 
@@ -382,7 +388,7 @@ class Annotated:
 Dialect-specific `Expr` subclasses are owned by their dialect specs, not
 here: HIR owns `Function`, `LoopRegion`, and `MeshRegion`
 ([hir §1](./hir.md#1-hir-expr-constructs)),
-and TIR owns `SymbolRef` and other TIR-specific `Expr` constructs
+and TIR owns `FunctionRef` and other TIR-specific `Expr` constructs
 ([tir](./tir.md)). The similarly-shaped TIR statement keeps the name
 `MeshScope` ([tir §1.2](./tir.md#12-structural-stmts-ircore)) on purpose,
 not by oversight: it binds a `Var` over a `Sequential` body, whereas

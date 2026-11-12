@@ -236,11 +236,11 @@ have names. Name allocation MUST reserve later authored identifiers before
 assigning generated names or collision suffixes.
 Constant tensor parameters MUST retain `ConstTensor` annotations.
 
-A TIR `SymbolRef` MUST print its nested child-slot path followed by its function
+A TIR `FunctionRef` MUST print its child-slot path followed by its function
 name, with each component rendered as a Python identifier. The printer reads
 that path from the IR and MUST NOT infer it by searching the module tree.
 On import, a local `helper(...)` remains a retained `PrimFunction` call;
-`child.run(...)` and launch targets retain their slot paths in `SymbolRef`.
+`child.run(...)` and launch targets retain their slot paths in `FunctionRef`.
 
 The DSL surface MUST be imported with `from tilefoundry.dsl import *`, which
 re-exports `ir.types` and the `func`, `module`, and `prim_func` decorators.

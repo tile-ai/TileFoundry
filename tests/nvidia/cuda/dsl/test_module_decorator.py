@@ -76,7 +76,7 @@ def test_held_child_takes_owner_target():
     for child in held:
         assert child.target is None
         assert storages(child) == [StorageKind.UMAT] * 3
-    assert valuation.list_call_paths(cuda_root)["direct.direct"].target is cuda_root.target
+    assert valuation.collect_functions(cuda_root)[core.FunctionRef(("direct",), "direct")].target is cuda_root.target
     assert call_storage(cuda_root, "gemm_on_chip") is StorageKind.RMEM
     before = [stored_types(child) for child in held]
 
@@ -101,7 +101,7 @@ def test_held_child_takes_owner_target():
         child = slot.elements[0]
         assert child.target is None
         assert storages(child) == [StorageKind.UMAT] * 3
-    assert valuation.list_call_paths(imported)["direct.direct"].target == cuda_root.target
+    assert valuation.collect_functions(imported)[core.FunctionRef(("direct",), "direct")].target == cuda_root.target
     assert call_storage(imported, "gemm_on_chip") is StorageKind.RMEM
 
     _Refused = cli.load_authored_ir(str(DSL / "refused_child_matmul.py"))

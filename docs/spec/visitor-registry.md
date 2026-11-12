@@ -16,7 +16,7 @@ The split:
   TensorView}`) and the unit-typed TIR effect Ops. It
   fills / refreshes `Expr.type`.
 - **`verify`** dispatches on TIR `Stmt` (control-flow / binding /
-  `Evaluate`) plus cross-function invariants (`Evaluate(SymbolRef)`
+  `Evaluate`) plus cross-function invariants (`Evaluate(FunctionRef)`
   callee resolution, mesh scope, layout homogeneity). A Stmt verify
   rule MAY recursively retrigger `typeinfer` on embedded Expr fields.
 

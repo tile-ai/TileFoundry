@@ -227,7 +227,7 @@ class MoEMegaKernelBranches(CrossModuleCase):
         expected = {"routed_expert": ((120,), 0), "shared_expert": ((12,), 120)}
         reached = {
             fn.name: _placed_primitives(fn)
-            for frame in valuation.list_call_paths(analysis.check_program(state, state.entry_function())[0]).values()
+            for frame in valuation.collect_functions(analysis.check_program(state, state.entry_function())[0]).values()
             for fn in (frame.function,)
         }
 
@@ -355,7 +355,7 @@ def test_derived_size_ignores_instance_count():
     for count in (3, 28):
         root = _stacked_program(count)
         checked, function = analysis.check_program(root, root.entry_function())
-        functions = tuple(frame.function for frame in valuation.list_call_paths(checked).values())
+        functions = tuple(frame.function for frame in valuation.collect_functions(checked).values())
         sizes.append((sum(len(core.collect_exprs(body.body)) for body in functions), len(functions)))
         assert sum(isinstance(node, core.LoopRegion) for node in core.collect_exprs(function.body)) == 1
         with pytest.raises(analysis.Error, match="derived body nodes.*node budget"):
@@ -371,7 +371,7 @@ def test_qwen_stack_shares_layer_definition():
     root = QWEN_CASE.build()
     checked, _function = analysis.check_program(root, root.lookup("decoder_layer"), dims={"ctx_len": 128})
     assert (
-        sum(len(core.collect_exprs(frame.function.body)) for frame in valuation.list_call_paths(checked).values())
+        sum(len(core.collect_exprs(frame.function.body)) for frame in valuation.collect_functions(checked).values())
         <= 10_000
     )
 

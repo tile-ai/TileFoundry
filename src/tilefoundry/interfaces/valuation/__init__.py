@@ -1,6 +1,6 @@
 """Valuation: the lexical environment and the visitor every analysis builds on."""
 
-from .call_paths import list_call_paths
+from .call_paths import collect_functions
 from .context import Context, module_slot
 from .isolation import verify_region_isolated
 from .specialize import (

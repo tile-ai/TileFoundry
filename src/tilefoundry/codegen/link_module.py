@@ -128,7 +128,7 @@ def link_program(
     """Generate code for the whole Module tree and link it into one library."""
     codegen = build_context(mod, options)
     entries = tuple(sorted(
-        (frame.function for frame in valuation.list_call_paths(mod).values()
+        (frame.function for frame in valuation.collect_functions(mod).values()
          if isinstance(frame.function, core.PrimFunction) and isinstance(frame.function.target, cpu.Target)),
         key=lambda fn: fn.name != mod.entry,
     ))

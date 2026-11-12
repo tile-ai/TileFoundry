@@ -15,6 +15,7 @@ from tilefoundry.ir import dim, expr
 from tilefoundry.ir import types as ir_types
 
 from .function import Function
+from .function_ref import FunctionRef
 from .prim_function import PrimFunction
 
 ModuleFunction = Union[Function, PrimFunction]
@@ -408,37 +409,61 @@ class LoadedModule:
         return self.module.entry_function(), self
 
 
-def resolve_symbol(module, name: str, *, nested: tuple[str, ...] = ()) -> ModuleFunction:
-    """Resolve one function in the current module or a child-slot path.
+def descend(scope, ref: FunctionRef):
+    """Yield each Module the path of *ref* enters from *scope*, in order."""
+    path = ref.qualified_name
+    if scope is None:
+        raise ValueError(f"symbol {path!r}: instance call requires a module context")
+    module, slot, key = scope, None, None
+    for segment in ref.path:
+        if isinstance(segment, str):
+            if slot is not None:
+                break
+            key, slot = segment, module.children.get(segment)
+            if slot is None:
+                raise ValueError(f"symbol {path!r}: child slot {key!r} does not exist")
+            if slot.indexed:
+                continue
+            module = slot.elements[0]
+        elif slot is None:
+            raise ValueError(f"symbol {path!r}: single slot {key!r} cannot be indexed")
+        elif segment is None:
+            if any(element is not slot.elements[0] for element in slot.elements[1:]):
+                raise ValueError(f"symbol {path!r}: variable index requires the same definition")
+            module = slot.elements[0]
+        elif not 0 <= segment < len(slot):
+            raise ValueError(f"symbol {path!r}: index {segment!r} out of range for N={len(slot)}")
+        else:
+            module = slot.elements[segment]
+        slot = None
+        yield module
+    if slot is not None:
+        raise ValueError(f"symbol {path!r}: child slot {key!r} requires an instance index")
 
-    An iterable is the legacy flat function scope; it cannot contain child slots.
-    Every failure names the complete requested path, with no subtree name search.
+
+def resolve(scope, ref: FunctionRef) -> tuple[Module, ModuleFunction]:
+    """The Module and the function *ref* names, starting at *scope*.
+
+    A ``str`` segment enters a child slot, an ``int`` segment selects one
+    instance of an indexed slot, and a ``None`` segment selects instance 0 of
+    an indexed slot whose instances share one definition. Every failure names
+    the complete requested path, with no subtree name search.
     """
-    path = ".".join((*nested, name))
-    if isinstance(module, Module):
-        selected = module
-        for slot in nested:
-            child = selected.children.get(slot)
-            if child is None:
-                raise ValueError(f"symbol {path!r}: child slot {slot!r} does not exist")
-            if child.indexed:
-                raise ValueError(f"symbol {path!r}: child slot {slot!r} requires an instance index")
-            selected = child.elements[0]
-        functions = selected.functions
-    else:
-        if nested:
-            raise ValueError(f"symbol {path!r}: child slots require a Module tree")
-        functions = module
-    functions = tuple(functions)
-    matches = tuple(function for function in functions if function.name == name)
+    path = ref.qualified_name
+    module = scope
+    for module in descend(scope, ref):
+        pass
+    if ref.name is None:
+        return module, module.entry_function()
+    matches = tuple(function for function in module.functions if function.name == ref.name)
     if not matches:
         matches = tuple(
-            variant for function in functions for variant in function.variants
-            if variant.name == name
+            variant for function in module.functions for variant in function.variants
+            if variant.name == ref.name
         )
     if len(matches) != 1:
         raise ValueError(f"symbol {path!r} must resolve to exactly one function, found {len(matches)}")
-    return matches[0]
+    return module, matches[0]
 
 
-__all__ = ["LoadedModule", "Module", "ModuleFunction", "ModuleList", "resolve_symbol"]
+__all__ = ["LoadedModule", "Module", "ModuleFunction", "ModuleList", "descend", "resolve"]

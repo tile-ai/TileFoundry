@@ -32,7 +32,7 @@ from typing import Literal
 import pytest
 
 from tilefoundry.ir.core import Module
-from tilefoundry.interfaces.valuation import list_call_paths
+from tilefoundry.interfaces.valuation import collect_functions
 from tilefoundry.ir.core import Function
 from tilefoundry.ir.types import Topology
 from tilefoundry.target import Target
@@ -297,7 +297,7 @@ class ModelCase:
                 f"{type(self.prototype).__name__}, not a Module"
             )
         shared = {}
-        for node in (self.prototype, *(frame.module for frame in list_call_paths(self.prototype).values())):
+        for node in (self.prototype, *(frame.module for frame in collect_functions(self.prototype).values())):
             if node.target is not None:
                 shared[id(node.target)] = node.target
             if node.topologies is not None:
@@ -332,7 +332,7 @@ class ModelCase:
         instead of dropping out of the report along with it.
         """
         built = self.build() if module is None else module
-        return tuple(path for path, frame in list_call_paths(built).items() if frame.module is built and isinstance(frame.function, Function))
+        return tuple(ref.qualified_name for ref, frame in collect_functions(built).items() if frame.module is built and isinstance(frame.function, Function))
 
     def selected(self, kind: Literal["analyze"]) -> tuple[str, ...]:
         cases = self.analyze

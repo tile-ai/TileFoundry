@@ -88,8 +88,8 @@ class TirPrinter(PythonPrinter, core.StmtVisitor[list[str]], core.ExprVisitor[st
         elements = "\n".join(f"{child.indent}{child.visit(item, ctx)}," for item in node.elements)
         return f"(\n{elements}\n{self.indent})"
 
-    def visit_SymbolRef(self, node: core.SymbolRef, ctx=None) -> str:
-        return ".".join(identifier(part) for part in (*node.nested, node.name))
+    def visit_FunctionRef(self, node: core.FunctionRef, ctx=None) -> str:
+        return ".".join(identifier(part) for part in (*node.path, node.name))
 
     def visit_ShapeOf(self, node: core.ShapeOf, ctx=None) -> str:
         return f"shape_of({self.visit(node.param, ctx)}, axis={node.axis})"
@@ -304,8 +304,8 @@ def print_launch(stmt: core.Evaluate, printer: TirPrinter) -> list[str]:
     ]
 
 
-@register_tir_printer(core.SymbolRef)
-def print_symbol_call(stmt: core.Evaluate, printer: TirPrinter) -> list[str]:
+@register_tir_printer(core.FunctionRef)
+def print_function_call(stmt: core.Evaluate, printer: TirPrinter) -> list[str]:
     rendered = f"{printer.visit(stmt.callable)}({printer.join_args(stmt.args)})"
     if len(printer.indent + rendered) + 4 <= LINE_LENGTH:
         return [printer.indent + rendered]
