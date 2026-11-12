@@ -126,7 +126,10 @@ class InstantiateDimensionCloner(core.ExprCloner):
         self.modules = {}
 
     def function(self, fn: core.Function) -> core.Function:
-        """Clone the chosen implementation and its same-module callees once.
+        """Clone the chosen implementation once.
+
+        Calls keep their references, because a name does not change; the
+        functions they reach are cloned from the collector's frames.
 
         The clone records its origin and the extents it was rebuilt at. Neither takes part in
         equality, so two functions specialised from different origins are equal when they are
@@ -194,9 +197,7 @@ class InstantiateDimensionCloner(core.ExprCloner):
 
     def visit_Call(self, call, ctx=None):
         target = call.target
-        if isinstance(target, core.Function):
-            target = self.function(target)
-        elif not isinstance(target, core.FunctionRef):
+        if not isinstance(target, core.FunctionRef):
             target = substitute_op_dims(target, self.dims)
         args = tuple(self.visit(arg) for arg in call.args)
         return dataclasses.replace(
@@ -281,7 +282,7 @@ def instantiate(
 
 def substitute_op_dims(target: object, dims: Mapping[str, int]) -> object:
     """Substitute bindings in an operation's shape-valued attributes."""
-    if isinstance(target, core.Function) or not isinstance(target, expr.Op):
+    if not isinstance(target, expr.Op):
         return target
 
     changed: dict[str, object] = {}
@@ -425,10 +426,9 @@ class DimVarCollector(core.ExprVisitor[None]):
         self.collect_bounds(node)
         self.visit_children(node, frame)
         target = node.target
-        inner = None if frame is None else frame.callee_context(node)
-        callee = inner.function if inner is not None else target
-        if isinstance(callee, core.Function):
-            self.visit_function(callee, inner)
+        if isinstance(target, core.FunctionRef):
+            inner = (Context() if frame is None else frame).callee_context(node)
+            self.visit_function(inner.function, inner)
         else:
             staging: dict[str, object] = {}
             for attribute in getattr(type(target), "params", lambda: ())():

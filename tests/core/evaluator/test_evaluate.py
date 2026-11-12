@@ -37,8 +37,9 @@ class CallBindsCalleeParams(CoreEvalCase):
 
     def guard(self, state, problems):
         caller = state.entry_function()
+        context = evaluator.EvaluateContext(module=state)
         a, b = torch.randn(4), torch.randn(4)
-        assert torch.allclose(evaluator.evaluate(caller, a, b), (a + b) * b)
+        assert torch.allclose(evaluator.evaluate(caller, a, b, context=context), (a + b) * b)
 
 
 def test_equal_params_keep_distinct_bindings():

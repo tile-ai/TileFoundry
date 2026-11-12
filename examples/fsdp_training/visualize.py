@@ -14,7 +14,8 @@ from tilefoundry.analysis.check import check_program
 from tilefoundry.core import ShardTensor, local_type
 from tilefoundry.ir.expr import Call, Constant, Tuple, Var
 from tilefoundry.ir.expr import binding_name
-from tilefoundry.ir.core.function import Function
+from tilefoundry.ir.core.function_ref import FunctionRef
+from tilefoundry.ir.core.module import resolve
 from tilefoundry.ir.core.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import Placement, TensorType
@@ -79,7 +80,7 @@ def describe_tensor(held):
     return result
 
 
-def trace_function(function):
+def trace_function(module, function):
     """Expand reached calls and tuple leaves by identity, retaining dependencies.
 
     Each call occurrence has fresh bindings and a memo. Scope labels include
@@ -127,8 +128,8 @@ def trace_function(function):
             result = [value for element in expr.elements for value in walk(element, bindings, memo, scope)]
         elif isinstance(expr, (Call, MeshRegion)):
             args = [walk(arg, bindings, memo, scope) for arg in expr.args]
-            if isinstance(expr, MeshRegion) or isinstance(expr.target, Function):
-                target = expr if isinstance(expr, MeshRegion) else expr.target
+            if isinstance(expr, MeshRegion) or isinstance(expr.target, FunctionRef):
+                target = expr if isinstance(expr, MeshRegion) else resolve(module, expr.target)[1]
                 nested = {id(param): value for param, value in zip(target.params, args, strict=True)}
                 name = "mesh" if isinstance(expr, MeshRegion) else target.name
                 result = walk(target.body, nested, {}, f"{scope}/{name}@{len(nodes)}")
@@ -155,8 +156,8 @@ def trace_function(function):
 def training_trace(participants=16, *, replicas=4, retain=False):
     """Add model-specific parameter/output labels to the reusable HIR trace."""
     program = training_program(participants, replicas=replicas, retain=retain)
-    _, function = check_program(program, program.entry_function())
-    report = trace_function(function)
+    module, function = check_program(program, program.entry_function())
+    report = trace_function(module, function)
     nodes, views = report["nodes"], report["views"]
     count = len(PARAMETER_NAMES)
     if len(report["inputs"]) != 4 + 2 * count or len(report["outputs"]) != 2 + 3 * count:

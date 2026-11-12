@@ -91,8 +91,9 @@ def prepare_into(
             value = fetch(weight_name)
         else:
             value = evaluator.run_bound(
-                conv, [fetch(param.name) for param in conv.params],
-                device=device, reading=reading,
+                conv,
+                [fetch(param.name) for param in conv.params],
+                context=evaluator.EvaluateContext(module=module, loaded_module=reading, device=device),
             )
         actual = evaluator.tensor_type_of(value, like=decl_type)
         if actual.shape != decl_type.shape:

@@ -87,7 +87,7 @@ class CppEmitter(core.StmtVisitor[None]):
 
     def visit_Evaluate(self, node: core.Evaluate) -> None:
         op = node.callable
-        if isinstance(op, (core.PrimFunction, core.FunctionRef)):
+        if isinstance(op, core.FunctionRef):
             raise RuntimeError(f"no codegen handler for Op {type(op).__name__} on {target.summary(self.context.target)}")
         self.emit_evaluate_op(expr.Call(type=types.UnitType(), target=op, args=node.args))
 

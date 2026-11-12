@@ -523,12 +523,13 @@ def test_inplace_output_reuses_or_refuses(read_old, reshape):
     assert call.args[0] is not call.args[-1]
     assert visitor.storage(call.args[0]) is function.params[0]
     assert visitor.storage(call.args[-1]) is function.params[-1]
+    retained = core.resolve(lowered, call.callable)[1]
     callee = _RetainedStatements()
-    callee.visit(call.callable.body)
+    callee.visit(retained.body)
     copies = [stmt for stmt in callee.statements if isinstance(stmt.callable, memory.Copy)]
     assert len(copies) == 2
-    assert callee.storage(copies[0].args[0]) is call.callable.params[0 if read_old else 1]
-    assert callee.storage(copies[-1].args[-1]) is call.callable.params[-1]
+    assert callee.storage(copies[0].args[0]) is retained.params[0 if read_old else 1]
+    assert callee.storage(copies[-1].args[-1]) is retained.params[-1]
     assert not any(stmt.args[0].type.shape == (2, 4) for stmt in copies)
 
 
@@ -541,7 +542,7 @@ class ReadBeforeUpdate(LoweringCase):
         verifier.verify_module(lowered)
         visitor = _RetainedStatements()
         visitor.visit(lowered.lookup("gemm").body)
-        update = visitor.calls[0].callable
+        update = core.resolve(lowered, visitor.calls[0].callable)[1]
         body = _RetainedStatements()
         body.visit(update.body)
         assert len(body.calls) == 1
@@ -582,19 +583,20 @@ def test_retained_insert_keeps_parameter_storage(later_use, nested):
         ("caller", True): VARIANTS / "retained_caller_returns_output_via_relay.py",
     }[later_use, nested]
     module = cli.load_authored_ir(str(path))
-    result = analysis.analyze(*analysis.check_program(module, module.entry_function()), analysis=("memory", "sync"))
+    checked, root = analysis.check_program(module, module.entry_function())
+    result = analysis.analyze(checked, root, analysis=("memory", "sync"))
     call = next(
         value
         for value in core.collect_exprs(result.function.body)
-        if isinstance(value, expr.Call) and isinstance(value.target, core.Function)
+        if isinstance(value, expr.Call) and isinstance(value.target, core.FunctionRef)
     )
-    callee = call.target
+    callee = core.resolve(checked, call.target)[1]
     if nested:
-        callee = next(
+        callee = core.resolve(checked, next(
             value.target
             for value in core.collect_exprs(callee.body)
-            if isinstance(value, expr.Call) and isinstance(value.target, core.Function)
-        )
+            if isinstance(value, expr.Call) and isinstance(value.target, core.FunctionRef)
+        ))[1]
     insert = next(
         value
         for value in core.collect_exprs(callee.body)
@@ -653,7 +655,7 @@ class RetainedWindow(LoweringCase):
         call = next(
             value
             for value in core.collect_exprs(result.function.body)
-            if isinstance(value, expr.Call) and isinstance(value.target, core.Function)
+            if isinstance(value, expr.Call) and isinstance(value.target, core.FunctionRef)
         )
         mem = expr.get_metadata(call, analysis.MemoryMetadata)
         values = {
@@ -678,7 +680,7 @@ class ReadOnlyReturn(LoweringCase):
         call = next(
             value
             for value in core.collect_exprs(result.function.body)
-            if isinstance(value, expr.Call) and isinstance(value.target, core.Function)
+            if isinstance(value, expr.Call) and isinstance(value.target, core.FunctionRef)
         )
         mem = expr.get_metadata(call, analysis.MemoryMetadata)
         values = {

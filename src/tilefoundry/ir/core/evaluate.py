@@ -13,7 +13,7 @@ from .stmt import Stmt
 class Evaluate(Stmt):
     """Place a value-less effect Op or retained function invocation in statement position."""
 
-    callable: "Op | FunctionRef | PrimFunction"
+    callable: "Op | FunctionRef"
     args: tuple[expr.Expr, ...]
 
 __all__ = ['Evaluate']

@@ -69,13 +69,10 @@ class AnalyzeContext(typeinfer.TypeInferContext):
     def call_bindings(self, frame):
         """Prepare arguments and instance coordinates for the visitor's explicit attach."""
         target = self.call_site.target
-        reference = isinstance(target, core.FunctionRef)
-        formals = tuple(
-            p for p in frame.function.params if not (reference and target.name is None and p.is_const)
-        )
-        actuals = target.arguments(self.call_site.args) if reference else self.call_site.args
+        formals = tuple(p for p in frame.function.params if not (target.name is None and p.is_const))
+        actuals = target.arguments(self.call_site.args)
         arguments = {id(p): arg for p, arg in zip(formals, actuals, strict=True)}
-        if not reference:
+        if not target.path:
             return arguments, None
         key = target.path[0]
         slot = self.module.children[key]

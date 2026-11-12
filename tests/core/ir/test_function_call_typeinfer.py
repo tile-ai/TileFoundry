@@ -12,7 +12,6 @@ from dataclasses import replace
 
 import pytest
 
-from tests.core.ops.ir.op_case import infer_call
 from tilefoundry import services
 from tilefoundry.interfaces import typeinfer
 from tilefoundry.ir import core, expr, types, utils
@@ -22,6 +21,22 @@ _F = expr.DType.f32
 _M = types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",))
 _PLAIN = types.TensorType.from_shape((4, 8), _F)
 _SPLIT0 = utils.make_shard_tensor_type((4, 8), mesh=_M, attrs=(types.Split(0),))
+
+
+def call_in_module(callee, args, return_type, metadata=()):
+    """A call naming *callee* by reference, and the context of a Module that declares it."""
+    call = expr.Call(
+        type=return_type, target=core.FunctionRef((), callee.name), args=args, metadata=metadata
+    )
+    module = core.Module(name="Calls", functions=(callee,))
+    return call, typeinfer.TypeInferContext(module=module)
+
+
+def infer_call(callee, *input_types):
+    """Infer one call of *callee* over typed variables."""
+    args = tuple(expr.Var(type=t, name=f"x{i}") for i, t in enumerate(input_types))
+    call, context = call_in_module(callee, args, input_types[0])
+    return typeinfer.TypeInferVisitor().visit(call, context)
 
 
 def _add_callee(param_type):
@@ -172,9 +187,9 @@ def test_broadcast_formal_accepts_reshaped_slice():
     reshaped = expr.Call(type=formal, target=tensor.Reshape(new_shape=(8, 16)), args=(sliced,))
     w = expr.Var(type=formal, name="w")
     callee = core.Function.from_parts(name="consume", params=(w,), body=w, return_type=formal)
-    call = expr.Call(type=formal, target=callee, args=(reshaped,))
+    call, context = call_in_module(callee, (reshaped,), formal)
 
-    assert typeinfer.TypeInferVisitor().visit(call, typeinfer.TypeInferContext()) == formal
+    assert typeinfer.TypeInferVisitor().visit(call, context) == formal
 
 
 def test_symbolic_signature_matches_argument():
@@ -189,11 +204,11 @@ def test_symbolic_signature_matches_argument():
         return_type=authored_type,
     )
     y = expr.Var(type=authored_type, name="y")
-    call = expr.Call(type=authored_type, target=stage, args=(y,))
+    call, context = call_in_module(stage, (y,), authored_type)
     expected_dim = services.simplify_dim("mul", (2, seq))
 
     assert stage.params[0].type.shape == (expected_dim, 8)
-    assert typeinfer.TypeInferVisitor().visit(call, typeinfer.TypeInferContext()) == stage.return_type
+    assert typeinfer.TypeInferVisitor().visit(call, context) == stage.return_type
 
 
 def test_plain_formal_rejects_mismatch():
@@ -215,9 +230,9 @@ def test_call_preserves_partial_tuple_return():
         name="partial_pair", params=(param,), body=body, return_type=return_type
     )
     arg = expr.Var(type=partial, name="arg")
-    call = expr.Call(type=return_type, target=callee, args=(arg,))
+    call, context = call_in_module(callee, (arg,), return_type)
 
-    result = typeinfer.TypeInferVisitor().visit(call, typeinfer.TypeInferContext())
+    result = typeinfer.TypeInferVisitor().visit(call, context)
 
     assert result == types.TupleType(fields=(partial, partial))
     assert result.fields[0].layout.mesh == mesh_ab
@@ -228,11 +243,6 @@ def test_bind_error_names_call_binding():
 
     f = _add_callee(_SPLIT0)
     arg = expr.Var(type=_PLAIN, name="x_arg")
-    call = expr.Call(
-        type=f.return_type,
-        target=f,
-        args=(arg,),
-        metadata=(expr.BindingMetadata("y"),),
-    )
+    call, context = call_in_module(f, (arg,), f.return_type, (expr.BindingMetadata("y"),))
     with pytest.raises(expr.VerifyError, match="at y"):
-        typeinfer.TypeInferVisitor().visit(call, typeinfer.TypeInferContext())
+        typeinfer.TypeInferVisitor().visit(call, context)

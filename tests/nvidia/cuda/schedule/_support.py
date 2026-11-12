@@ -182,7 +182,7 @@ class _RetainedStatements(core.StmtVisitor[None]):
     def visit_Evaluate(self, stmt, ctx=None):
         self.operations.append(stmt.callable)
         self.statements.append(stmt)
-        if isinstance(stmt.callable, (core.PrimFunction, core.FunctionRef)):
+        if isinstance(stmt.callable, core.FunctionRef):
             self.calls.append(stmt)
 
 

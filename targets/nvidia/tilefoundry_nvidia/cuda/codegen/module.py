@@ -50,7 +50,7 @@ def reject_omitted_child_weights(module: core.Module) -> None:
         def visit_Call(self, call, frame):
             self.visit_operands(call, frame)
             inner = frame.callee_context(call) if frame is not None else None
-            if inner is None or isinstance(call.target, core.Function):
+            if inner is None or call.target.name is not None:
                 return
             callee = inner.function
             weights = [param.name for param in callee.params if param.is_const]

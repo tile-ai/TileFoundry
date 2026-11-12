@@ -29,6 +29,24 @@ registry = dispatch.Registry("passes")
 """Target module passes keyed by ``(target class, pipeline point, pass class)``."""
 
 
+def reaches(frame, changed: set[int], visited: set[tuple[int, int]]) -> bool:
+    """Whether the function of *frame* calls or launches a function in *changed*, at any depth.
+
+    Each reference resolves from the frame of the function that states it; a
+    reference that does not resolve raises rather than counting as no call.
+    """
+    for ref in verifier.function_references(frame.function):
+        inner = frame.enter_reference(ref)
+        if id(inner.function) in changed:
+            return True
+        key = (id(inner.function), id(inner.module))
+        if key not in visited:
+            visited.add(key)
+            if reaches(inner, changed, visited):
+                return True
+    return False
+
+
 def register_pass(tgt: type[target.Target], point: PassPoint) -> Callable[[type[ModulePass]], type[ModulePass]]:
     """Register a target's module pass at a fixed pipeline point."""
     def register(pass_type: type[ModulePass]) -> type[ModulePass]:
@@ -75,12 +93,15 @@ class PassManager:
         """Post pass recheck.
 
         Re-run typeinfer (HIR) / verify (TIR) on every function whose
-        object identity is absent from the pre-pass ``previous`` set. Whole-
+        object identity is absent from the pre-pass ``previous`` set, and on
+        every function that reaches one of them by a call or a launch. Whole-
         function fallback per [passes §7](docs/spec/passes.md#7-implemented-passes).
         """
-        for frame in valuation.collect_functions(curr).values():
+        frames = tuple(valuation.collect_functions(curr).values())
+        changed = {id(frame.function) for frame in frames if id(frame.function) not in previous}
+        for frame in frames:
             fn = frame.function
-            if id(fn) in previous:
+            if id(fn) in previous and not reaches(frame, changed, set()):
                 continue
             if isinstance(fn, core.Function):
                 verifier.verify_function(fn)

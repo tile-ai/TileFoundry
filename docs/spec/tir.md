@@ -192,8 +192,8 @@ requires module context):
   enclosing `Sequential`; branch, loop, and mesh bindings do not escape.
   Every variant uses its own parameters.
   Expression fields, including intrinsic statements and Return, MUST contain
-  IR nodes; lowering recipes are rejected. Op, PrimFunction, and FunctionRef
-  callables are permitted.
+  IR nodes; lowering recipes are rejected. Op and FunctionRef callables are
+  permitted.
 - **`LetStmt` typing**. `LetStmt.var.type` MUST equal the typeinfer
   of `LetStmt.value`.
 - **`AllocTensor` placement**. `Call(AllocTensor, ...)` MAY only
@@ -210,7 +210,8 @@ requires module context):
 - **`Evaluate.callable`**. When `callable` is a `FunctionRef`
   ([§2.1](#21-functionref)), resolution from the caller's `Module` MUST find
   exactly one function, and `args` MUST match the resolved callee's `params`
-  in count and type. When `callable` is
+  in count and type. Recursion is checked over every reference the reached
+  functions and their variants state, `Launch` callees included. When `callable` is
   an `Op`, it MUST pass the same `check_call` used by ScheduleOp type inference,
   candidate admission, and lowering. Its declared execution mesh MUST match
   the enclosing mesh and its operands MUST be reachable from that scope.
@@ -225,7 +226,7 @@ requires module context):
 
 ```python
 class Evaluate(Stmt):
-    callable: Op | FunctionRef | PrimFunction
+    callable: Op | FunctionRef
     args: tuple[Expr, ...]      # the callable's operands in ParamDef / parameter order
 ```
 
@@ -249,7 +250,8 @@ The `callable` is one of:
   buffers; the callee is resolved uniquely at module level
   ([§1.3](#13-primfunction)).
 
-- a retained `PrimFunction`, or a `FunctionRef` with `name=None` naming a child
+- a `FunctionRef((), name)` naming a retained prototype of the caller's Module,
+  or a `FunctionRef` with `name=None` naming a child
   instance's entry (a run-time index is a leading operand), following the same instance
   resolution as HIR ([core-ir §2.1](./core-ir.md#21-call)). These device calls
   remain in one Module tree; they MUST NOT become launches. Printers MUST emit
@@ -399,9 +401,9 @@ function invocation and `args[0]` of a `Launch` ([§2.3](#23-tir-ops)).
 Resolution uses `core.resolve(scope, ref)` ([core-ir.md §1.4](./core-ir.md#14-function-references))
 from the caller's Module. It traverses `path` and MUST map `name` to exactly
 one function; zero or more than one match is an error. Functions with that
-name in other modules do not participate in this lookup. Specialization
-variants each carry a distinct canonical `PrimFunction.name`, so a
-`FunctionRef` to a variant resolves unambiguously. Verify and codegen MUST use
+name in other modules do not participate in this lookup. A name matches a
+prototype only; a variant's canonical `PrimFunction.name` is not a reference
+target, and dispatch picks the variant. Verify and codegen MUST use
 the same resolver. Local typeinfer does not resolve a `FunctionRef`.
 
 ### 2.2 `ShapeOf`

@@ -758,10 +758,7 @@ class ModuleInstances(ScheduleCase):
         assert len(dynamic) == 1 and isinstance(dynamic[0].args[0], expr.Var)
         assert any(call.callable.path == ("layers", 0) for call in indexed)
         for call in visitor.calls:
-            if isinstance(call.callable, core.PrimFunction):
-                assert len(call.args) == 3
-            else:
-                assert len(call.callable.arguments(call.args)) == 2
+            assert len(call.callable.arguments(call.args)) == (2 if call.callable.name is None else 3)
             with pytest.raises(RuntimeError, match="no codegen handler for Op"):
                 codegen.CppEmitter(context=cuda_codegen.Context(target=lowered.target)).visit_Evaluate(call)
 

@@ -257,9 +257,6 @@ class TirPrinter(PythonPrinter, core.StmtVisitor[list[str]], core.ExprVisitor[st
         return ", ".join(self.visit(arg) for arg in args)
 
     def emit_evaluate(self, stmt):
-        target = stmt.callable
-        if isinstance(target, core.PrimFunction):
-            return [f"{self.indent}{target.name}({', '.join(self.visit(arg) for arg in stmt.args)})"]
         handler = registry.get(type(stmt.callable), None) or (
             registry.get(expr.Op, None) if isinstance(stmt.callable, expr.Op) else None
         )

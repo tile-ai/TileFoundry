@@ -11,6 +11,7 @@ from tests.nvidia.cuda.schedule._support import (
     _finalized,
 )
 from tilefoundry import cli, verifier
+from tilefoundry.interfaces import valuation
 from tilefoundry.ir import core, expr, types
 from tilefoundry_nvidia import cuda
 
@@ -27,11 +28,12 @@ def test_verifier_rejects_malformed_tir_calls(wrong, refused):
     param = expr.Var("x", type=types.TensorType.from_scalar(expr.DType.f32))
     callee = core.PrimFunction("callee", (param,), core.Sequential(()), target=cuda.Target("nvidia.h200_sxm"))
     args = () if wrong == "count" else (expr.Constant(0, type=types.TensorType.from_scalar(expr.DType.i32)),)
-    caller = core.PrimFunction("caller", (), core.Sequential((core.Evaluate(callee, args),)), target=callee.target)
-    if wrong == "recursion":
-        caller.body = core.Sequential((core.Evaluate(caller, ()),))
+    named = "caller" if wrong == "recursion" else "callee"
+    call = core.Evaluate(core.FunctionRef((), named), () if wrong == "recursion" else args)
+    caller = core.PrimFunction("caller", (), core.Sequential((call,)), target=callee.target)
+    module = core.Module("Calls", (callee, caller))
     with pytest.raises(expr.VerifyError, match=refused):
-        verifier.verify_prim_function(caller)
+        verifier.verify_prim_function(caller, frame=valuation.Context(module, caller))
 
 
 def test_verifier_rejects_noninteger_slot_index():

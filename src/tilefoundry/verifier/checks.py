@@ -314,7 +314,7 @@ class Binders:
         if isinstance(value, expr.Var):
             if id(value) not in self.visible:
                 raise expr.VerifyError(f"{value.name} is used outside the scope that binds it")
-        elif isinstance(value, (expr.Op, core.PrimFunction, core.FunctionRef)):
+        elif isinstance(value, (expr.Op, core.FunctionRef)):
             return
         elif isinstance(value, expr.Call):
             self.uses((value.target, value.args), stmt)
@@ -415,8 +415,6 @@ def walk_stmt(stmt, ctx, scope, fn, binders: Binders):
                 verify_launch(stmt, fn, ctx)
             elif isinstance(stmt.callable, core.FunctionRef):
                 verify_function_call(stmt, fn, ctx)
-            elif isinstance(stmt.callable, core.PrimFunction):
-                verify_retained_call(stmt, fn, ctx)
             else:
                 op = stmt.callable
                 ctx.enter_scope(scope)
@@ -561,7 +559,7 @@ def callee_frame(ref, frame):
     """The function *ref* names from *frame*, and the frame of the Module that declares it."""
     try:
         if frame is None:
-            raise ValueError(f"symbol {ref.qualified_name!r}: instance call requires a module context")
+            raise ValueError(f"symbol {ref.qualified_name!r}: a function reference requires a module context")
         inner = frame.enter_reference(ref)
     except ValueError as error:
         raise expr.VerifyError(str(error)) from error
@@ -605,16 +603,6 @@ def verify_call_arguments(args, params, label, ctx):
             raise expr.VerifyError(
                 f"{label}: arg[{i}] type {arg_ty} != param {param.name!r} type {param_ty}"
             )
-
-
-def verify_retained_call(stmt, fn, ctx):
-    callee = stmt.callable
-    frame = None if ctx is None else ctx.callee_context(expr.Call(callee, (), type=types.UnitType()))
-    label = f"Evaluate({callee.name})"
-    assert_no_path_back(
-        callee, fn, visited=set(), frame=frame, recursion=f"{label}: recursion not allowed"
-    )
-    verify_call_arguments(stmt.args, callee.params, label, ctx)
 
 
 LAUNCH_EXTENT_OPS = (expr.DimAdd, expr.DimSub, expr.DimMul, expr.DimFloorDiv, expr.DimMod, expr.DimMin, expr.DimMax)
@@ -733,18 +721,35 @@ def assert_no_path_back(callee, root, visited, frame=None, recursion=None):
     if key in visited:
         return
     visited.add(key)
-    for stmt in iter_all_stmts(callee.body):
-        if not isinstance(stmt, core.Evaluate):
-            continue
-        target = stmt.callable
-        if isinstance(target, core.FunctionRef):
-            reached, inner = callee_frame(target, frame)
-        elif isinstance(target, core.PrimFunction):
-            reached = target
-            inner = None if frame is None else frame.callee_context(expr.Call(target, (), type=types.UnitType()))
-        else:
-            continue
+    for ref in function_references(callee):
+        reached, inner = callee_frame(ref, frame)
         assert_no_path_back(reached, root, visited, inner, recursion)
+
+
+def function_references(function):
+    """Every reference the bodies of *function* and of its variants name.
+
+    An HIR body names a callee as a Call target; a TIR body as an Evaluate
+    callable, or as the first operand of a Launch.
+    """
+    for body in (function.body, *(variant.body for variant in function.variants)):
+        if body is None:
+            continue
+        if isinstance(function, core.PrimFunction):
+            for stmt in iter_all_stmts(body):
+                if not isinstance(stmt, core.Evaluate):
+                    continue
+                if isinstance(stmt.callable, core.FunctionRef):
+                    yield stmt.callable
+                elif isinstance(stmt.callable, tir.launch.Launch):
+                    yield stmt.args[0]
+            continue
+        stack = [body]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, expr.Call) and isinstance(node.target, core.FunctionRef):
+                yield node.target
+            stack.extend(core.expr_children(node))
 
 
 def iter_all_stmts(body):
@@ -811,6 +816,7 @@ def verify_module(fns) -> None:
 
 
 __all__ = [
+    "function_references",
     "input_params",
     "verify_function",
     "verify_module",

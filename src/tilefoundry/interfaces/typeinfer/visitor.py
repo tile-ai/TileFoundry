@@ -42,13 +42,12 @@ def target_rule(op_cls: type, ctx: TypeInferContext):
 
 def call_function(
     call: expr.Call,
-    callee: core.Function,
     arg_types: tuple[types.Type, ...],
     ctx: TypeInferContext,
-    *,
-    child_frame: valuation.Context | None = None,
+    child_frame: valuation.Context,
 ) -> types.Type:
-    child = isinstance(call.target, core.FunctionRef) and call.target.name is None
+    callee = child_frame.function
+    child = call.target.name is None
     supplied = tuple(param for param in callee.params if not (child and param.is_const))
     if len(arg_types) != len(supplied):
         kind = "activation(s)" if child else "parameter(s)"
@@ -77,7 +76,7 @@ def call_function(
     if callee.body is None or callee.variants:
         return callee.return_type
 
-    inner = replace(child_frame or ctx, function=callee, owner=callee, parent=None, call_site=None, memo={})
+    inner = replace(child_frame, function=callee, owner=callee, parent=None, call_site=None, memo={})
     context = (
         None
         if inner.module is None
@@ -153,21 +152,19 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
 
     def visit_leaf_Call(self, call: expr.Call, arg_types, ctx: TypeInferContext) -> types.Type:
         target = call.target
-        try:
-            if isinstance(target, core.FunctionRef):
+        if isinstance(target, core.FunctionRef):
+            try:
                 target.check_indices(target.indices(arg_types))
                 arg_types = target.arguments(arg_types)
-            child_frame = ctx.callee_context(call)
-            if child_frame is not None:
-                target = child_frame.function
-        except (KeyError, ValueError) as error:
-            ctx.error(call, str(error))
+                child_frame = ctx.callee_context(call)
+                check_input_reachability(child_frame.function, arg_types, ctx.current_mesh)
+            except (KeyError, ValueError) as error:
+                ctx.error(call, str(error))
+            return call_function(call, arg_types, ctx, child_frame)
         try:
             check_input_reachability(target, arg_types, ctx.current_mesh)
         except ValueError as error:
             ctx.error(call, str(error))
-        if isinstance(target, core.Function):
-            return call_function(call, target, arg_types, ctx, child_frame=child_frame)
         op_cls = type(target)
         fn = target_rule(op_cls, ctx) or registry.get(op_cls, None)
         if fn is None:

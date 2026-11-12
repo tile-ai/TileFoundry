@@ -1390,15 +1390,12 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
             ctx.scratch.append(forwarded)
             scratch.append(forwarded)
         target = call.target
-        reference = isinstance(target, core.FunctionRef)
-        indices = target.indices(operands) if reference else ()
-        arguments = target.arguments(operands) if reference else operands
-        if isinstance(target, core.Function):
-            target = lowering.lowered
+        indices = target.indices(operands)
+        arguments = target.arguments(operands)
         params = tuple(
             param
             for param in lowering.lowered.params
-            if isinstance(call.target, core.Function) or not param.is_const
+            if target.name is not None or not param.is_const
         )
         passed = []
         for value, param in zip((*arguments, *scratch, destination), params, strict=True):

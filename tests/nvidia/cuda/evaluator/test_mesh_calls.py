@@ -12,6 +12,7 @@ FIXTURE = Path(__file__).parents[1] / "fixtures" / "evaluator" / "nested_tuple_c
 
 def test_nested_tuple_argument_preserves_participant_values():
     program = cli.load_authored_ir(f"{FIXTURE}:TupleCall")
-    _, function = analysis.check_program(program, program.entry_function())
+    module, function = analysis.check_program(program, program.entry_function())
     x = torch.arange(8).float().reshape(4, 2)
-    torch.testing.assert_close(evaluator.evaluate(function, x), 3 * x)
+    context = evaluator.EvaluateContext(module=module)
+    torch.testing.assert_close(evaluator.evaluate(function, x, context=context), 3 * x)

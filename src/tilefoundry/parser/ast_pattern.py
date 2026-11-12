@@ -950,6 +950,11 @@ class ModuleBuildContext:
     )
     FINALIZATION_RULES: ClassVar[tuple[object, ...]] = (ModuleFinalizationRule(),)
 
+    @property
+    def functions(self) -> tuple[object, ...]:
+        """The prototypes parsed so far, which a function body may reference by name."""
+        return tuple(self.roots)
+
     def name_owner(self, name: str) -> None:
         self.owner_name = name
 

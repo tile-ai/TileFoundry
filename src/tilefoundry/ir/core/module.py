@@ -297,7 +297,11 @@ class Module:
 
     def __call__(self, *args):
         """Evaluate the declared entry with every parameter supplied."""
-        return services.evaluate(self.entry_function(), *args)
+        return services.evaluate(self, *args)
+
+    def evaluation_target(self):
+        """Run my declared entry, with one argument per declared parameter and no reading."""
+        return self.entry_function(), None
 
     def load(self, resource) -> "LoadedModule":
         """Remember *resource* for this Module and its children.
@@ -393,7 +397,7 @@ def descend(scope, ref: FunctionRef):
     """Yield each Module the path of *ref* enters from *scope*, in order."""
     path = ref.qualified_name
     if scope is None:
-        raise ValueError(f"symbol {path!r}: instance call requires a module context")
+        raise ValueError(f"symbol {path!r}: a function reference requires a module context")
     module, slot, key = scope, None, None
     for segment in ref.path:
         if isinstance(segment, str):
@@ -430,7 +434,8 @@ def resolve(scope, ref: FunctionRef) -> tuple[Module, ModuleFunction]:
 
     A ``str`` segment enters a child slot, an ``int`` segment selects one
     instance of an indexed slot, and a ``None`` segment selects instance 0 of
-    an indexed slot whose instances share one definition. Every failure names
+    an indexed slot whose instances share one definition. A name matches a
+    declared prototype only; dispatch picks its variant. Every failure names
     the complete requested path, with no subtree name search.
     """
     path = ref.qualified_name
@@ -443,11 +448,6 @@ def resolve(scope, ref: FunctionRef) -> tuple[Module, ModuleFunction]:
         except ValueError as error:
             raise ValueError(f"symbol {path!r}: {error}") from error
     matches = tuple(function for function in module.functions if function.name == ref.name)
-    if not matches:
-        matches = tuple(
-            variant for function in module.functions for variant in function.variants
-            if variant.name == ref.name
-        )
     if len(matches) != 1:
         raise ValueError(f"symbol {path!r} must resolve to exactly one function, found {len(matches)}")
     return module, matches[0]

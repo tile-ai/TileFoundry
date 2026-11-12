@@ -26,11 +26,19 @@ flowchart TB
 
 ```python
 def evaluate(
-    target: "core.Function | core.LoadedModule",
+    target: "core.Function | core.Module | core.LoadedModule",
     *inputs: "torch.Tensor",
+    context: "EvaluateContext | None" = None,
 ) -> "torch.Tensor | tuple[torch.Tensor, ...]":
     ...
 ```
+
+The keyword-only `context` supplies the Module that declares a `Function`
+target, so the calls in its body resolve
+([core-ir §1.4](./core-ir.md#14-function-references)). A `Module` target gives
+itself, and a `LoadedModule` target gives its `module` and itself as the
+reading; either one replaces those two fields of `context`. A `Function` whose
+body calls no function needs no `context`.
 
 `evaluate` binds `inputs` to the selected `Function`'s parameters in
 order, walks the body, and returns the logical tensor for a single
@@ -111,8 +119,8 @@ corresponding positional input:
   agree with the first binding.
 
 - constraints:
-  - A `Function` entry takes no resource context and requires one input per
-    declared parameter. A `LoadedModule` entry runs its declared `entry`, takes
+  - A `Function` or `Module` entry takes no resource context and requires one
+    input per declared parameter. A `LoadedModule` entry runs its declared `entry`, takes
     activation inputs only, and reads each `ConstTensor` from that reading by
     name at first use; a loaded module without an `entry` is refused as having
     no default step. Another function or child is selected on the
@@ -158,6 +166,8 @@ class EvaluateContext:
         op: attribute; Operation instance.
         args: attribute; Evaluated operands in Call-argument order.
         result_type: attribute; Call result type.
+        module: attribute; Module that declares the running function and
+            resolves the references it calls.
         loaded_module: attribute; Runtime module reading, when one is active.
         device: attribute; Where the inputs are, or None to leave it to torch.
         dim_bindings: attribute; concrete values for symbolic ShapeDims.
@@ -166,6 +176,7 @@ class EvaluateContext:
     op: Any = None
     args: tuple[Any, ...] = ()
     result_type: Any = None
+    module: Any | None = None
     loaded_module: Any | None = None
     device: str | None = None
     dim_bindings: Mapping[str, int] = field(default_factory=dict)
@@ -219,7 +230,10 @@ class Visitor(ExprVisitor):
   loop's induction variable is one — folds the values its operands evaluated to.
   It performs the arithmetic `resolve_dim` performs in a shape position; only the
   leaves differ, being operands rather than `DimVar` sizes.
-- A `Call` whose `target` is a `Function` ([hir §1.1](./hir.md#11-function)) binds the
+- A `Call` whose `target` is a `FunctionRef` resolves it from the context's
+  `module`; a reference with no `module` raises `EvalError`. A direct
+  reference `FunctionRef((), name)` passes every parameter, `ConstTensor` ones
+  included, and keeps the current Module and reading. The call binds the
   evaluated arguments to the callee's parameters in a fresh environment
   and evaluates the callee `body` — the same value semantics a call site
   has under type inference. A callee with variants evaluates the one variant
@@ -229,8 +243,9 @@ class Visitor(ExprVisitor):
   incompatible value raises `EvalError` before the callee body is evaluated.
 - A `MeshRegion` evaluates its boundary `args` in the enclosing scope, then its
   body in a fresh environment that binds only its `params`.
-- A call through a child slot of a loaded module takes that child's own
-  resources for its `ConstTensor` parameters and requires an active
+- A call through a child slot of a loaded module enters that child's Module
+  and reading; an instance entry call (`name` is `None`) takes the child's own
+  resources for its `ConstTensor` parameters. It requires an active
   `LoadedModule`; an out-of-range `ModuleList` index raises `EvalError`.
 
 ## 5. `LoopRegion`

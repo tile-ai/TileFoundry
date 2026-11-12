@@ -61,17 +61,6 @@ class Context:
         call = self.call_site if call is None else call
         if call is None:
             return None
-        if isinstance(call.target, (core.Function, core.PrimFunction)):
-            if self.module is None:
-                return None
-            return replace(
-                self,
-                function=call.target,
-                owner=call.target,
-                call_site=None,
-                parent=None,
-                caller_context=self,
-            )
         if not isinstance(call.target, core.FunctionRef):
             return None
         return self.enter_reference(call.target)

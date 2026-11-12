@@ -202,7 +202,7 @@ def _placed_primitives(fn) -> list[tuple[str, object]]:
     """Each costed primitive result in *fn* that a sliced Mesh reached."""
     found: list[tuple[str, object]] = []
     for node in core.collect_exprs(fn.body):
-        if not isinstance(node, expr.Call) or isinstance(node.target, core.Function):
+        if not isinstance(node, expr.Call) or isinstance(node.target, core.FunctionRef):
             continue
         for leaf in utils.tensor_types(node.type):
             if isinstance(leaf.layout, types.ShardLayout) and isinstance(
@@ -391,8 +391,8 @@ def test_callee_rejects_different_signatures(difference):
     right = expr.Var("right", type=changed)
     held = expr.Var("x", type=type_)
     callee = core.Function.from_parts(name="helper", params=(held,), body=held, return_type=type_)
-    first = expr.Call(callee, (left,), type=type_)
-    second = expr.Call(callee, (right,), type=changed)
+    first = expr.Call(core.FunctionRef((), "helper"), (left,), type=type_)
+    second = expr.Call(core.FunctionRef((), "helper"), (right,), type=changed)
     if difference == "mesh":
         first = core.MeshRegion(types.Mesh(_CTA, types.Layout((1,), (1,)), ("first",)), first, type=type_)
         second = core.MeshRegion(types.Mesh(_CTA, types.Layout((1,), (1,)), ("second",)), second, type=changed)
@@ -407,10 +407,10 @@ def test_bodiless_and_recursive_callees_rejected():
     type_ = types.TensorType((4,), expr.DType.f32, None, StorageKind.UMAT)
     param = expr.Var("x", type=type_)
     callee = core.Function.from_parts(name="helper", params=(param,), body=None, return_type=type_)
-    root = _direct_program(callee, (param,), (expr.Call(callee, (param,), type=type_),))
+    root = _direct_program(callee, (param,), (expr.Call(core.FunctionRef((), "helper"), (param,), type=type_),))
     with pytest.raises(expr.VerifyError, match="cannot analyze Function 'helper' without a body"):
         analysis.check_program(root, root.entry_function())
-    callee.body = expr.Call(callee, (param,), type=type_)
+    callee.body = expr.Call(core.FunctionRef((), "helper"), (param,), type=type_)
     with pytest.raises(expr.VerifyError, match="recursive call path through 'root/helper/helper'"):
         analysis.check_program(root, root.entry_function())
 
@@ -460,8 +460,8 @@ def test_repeated_callee_shares_placement():
     )
     root_x, root_w = expr.Var("root_x", type=type_), expr.Var("root_w", type=type_, is_const=True)
     cap_x, cap_w = expr.Var("cap_x", type=type_), expr.Var("cap_w", type=type_)
-    first = expr.Call(helper, (cap_x, cap_w), type=type_)
-    second = expr.Call(helper, (cap_x, cap_w), type=type_)
+    first = expr.Call(core.FunctionRef((), "helper"), (cap_x, cap_w), type=type_)
+    second = expr.Call(core.FunctionRef((), "helper"), (cap_x, cap_w), type=type_)
     result = write_back(expr.Call(math.Binary(kind=BinaryKind.ADD), (copy(first), copy(second)), type=type_))
     topologies = (Topology("cta", 1), Topology("thread", 32))
     body = core.MeshRegion(
@@ -551,7 +551,7 @@ def test_callee_alias_placement_agrees():
     root_x, root_y = expr.Var("root_x", type=type_), expr.Var("root_y", type=short)
     cap_x, cap_y = expr.Var("cap_x", type=type_), expr.Var("cap_y", type=short)
     calls = tuple(
-        expr.Call(helper, (cap_x, cap_y, expr.Constant(i, type=scalar)), type=type_) for i in (1, 2)
+        expr.Call(core.FunctionRef((), "helper"), (cap_x, cap_y, expr.Constant(i, type=scalar)), type=type_) for i in (1, 2)
     )
     values = expr.Tuple(calls, type=types.TupleType((type_, type_)))
     topologies = (Topology("cta", 1), Topology("thread", 32))

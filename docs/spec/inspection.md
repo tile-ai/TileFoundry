@@ -243,9 +243,10 @@ operand), and only `ref.arguments(args)` appear inside the call parentheses,
 e.g. `child(x)`, `layers[2](x)`, `layers[i](x)`, `child.run(x)`. The printer
 reads that path from the IR and MUST NOT infer it by searching the module tree;
 the dotted `qualified_name` is for C symbols and runtime names, not DSL text.
-On import, a local `helper(...)` remains a retained `PrimFunction` call;
+On import, a local `helper(...)` becomes `FunctionRef((), "helper")`;
 instance calls, `child.run(...)`, and launch targets retain their slot paths in
-`FunctionRef`.
+`FunctionRef`. A direct call prints the referenced name, and generated value
+names avoid it.
 
 The DSL surface MUST be imported with `from tilefoundry.dsl import *`, which
 re-exports `ir.types` and the `func`, `module`, and `prim_func` decorators.
@@ -513,11 +514,14 @@ d3-zoom pan/zoom · click → detail + highlight · search · collapse toggle
   follows `open_browser` — an interactive call (`open_browser=True`)
   blocks until interrupted so the page stays reachable; a programmatic
   call returns.
-- **Builder.** `viewer.Builder` walks the HIR `Function` / `Module`
-  directly into a `graphviz.Digraph`; there is no intermediate model. A
-  `Call(target=core.Function)` and a top-level `Function` share one
-  unified emitter — a collapsed region renders as a stand-in node, an
-  expanded one as a `subgraph cluster_<region_visual_id>`.
+- **Builder.** `viewer.Builder` walks the HIR `Module` (or a `Function`
+  that calls no function) directly into a `graphviz.Digraph`; there is no
+  intermediate model. A direct call `FunctionRef((), name)` and a top-level
+  `Function` share one unified emitter — a collapsed region renders as a
+  stand-in node, an expanded one as a `subgraph cluster_<region_visual_id>`.
+  Each region carries the frame of its function: a callee resolves from the
+  caller's frame, its body is drawn in its own frame, and a detail entry for
+  a call keeps the frame its reference resolves from.
 - **Frontend** is `static/index.html` + `static/viewer.js` (first-party,
   committed). On load it fetches `/api/palette`, then renders `/api/dot`;
   each collapse toggle re-fetches `/api/dot?collapsed=...` and re-renders.

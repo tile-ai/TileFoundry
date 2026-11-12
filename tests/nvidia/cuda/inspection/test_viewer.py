@@ -16,7 +16,7 @@ class ViewerCase(Case):
     """A program whose entry function the viewer draws."""
 
     def guard(self, state, problems):
-        graph = viewer.Builder(state.entry_function(), collapsed=set()).build()
+        graph = viewer.Builder(state, collapsed=set()).build()
 
         assert graph.source.strip()
 

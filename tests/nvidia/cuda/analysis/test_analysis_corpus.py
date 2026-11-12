@@ -193,6 +193,7 @@ class FsdpTraining(AnalysisCase):
         w2 = torch.nn.Parameter(torch.randn(8, 4, generator=generator) / 4)
         optimizer = torch.optim.SGD((w1, w2), lr=0.01, momentum=0.9)
         held = (w1.detach().clone(), w2.detach().clone(), torch.zeros_like(w1), torch.zeros_like(w2))
+        context = evaluator.EvaluateContext(module=state.result.module)
         for step in range(2):
             x = (torch.randn(8, 8, generator=generator) / 4 + step / 10).requires_grad_()
             tgt = torch.randn(8, 4, generator=generator) / 4
@@ -202,7 +203,7 @@ class FsdpTraining(AnalysisCase):
             loss.backward()
             expected = (expected_y.detach(), loss.detach(), x.grad, w1.grad.clone(), w2.grad.clone())
             before = tuple(item.clone() for item in held)
-            actual = evaluator.evaluate(state.result.function, x.detach(), tgt, *held)
+            actual = evaluator.evaluate(state.result.function, x.detach(), tgt, *held, context=context)
             for item, saved in zip(held, before, strict=True):
                 assert torch.equal(item, saved), f"step {step}: an input was written"
             normalized = (*actual[:2], actual[2] / participants, *actual[3:5])

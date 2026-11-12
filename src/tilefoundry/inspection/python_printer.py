@@ -34,7 +34,6 @@ class HirPrinter(PythonPrinter):
         self.function: core.Function | None = None
         self.statements: dict[int, PrintedStatement] = {}
         self.param_alias: dict[int, expr.Expr] = {}
-        self.child_entries: dict[int, str] = {}
         self.moved_window = lambda start, size, stride: None
 
     def print(self, value, ctx=None, indent: str = "", *, options=None) -> str:
@@ -63,13 +62,11 @@ class HirPrinter(PythonPrinter):
         self,
         names: dict[int, str],
         param_alias: dict[int, expr.Expr],
-        child_entries: dict[int, str],
         moved_window,
     ) -> None:
         """Install the value-naming environment for one function definition."""
         self.names = names
         self.param_alias = param_alias
-        self.child_entries = child_entries
         self.moved_window = moved_window
 
     def define(self, printer: HirPrinter, fn: core.Function, names: dict[int, str]) -> None:
@@ -138,10 +135,6 @@ class HirPrinter(PythonPrinter):
         if isinstance(target, core.FunctionRef):
             head = call_head(target, target.indices(node.args), lambda index: self.visit(index, ctx))
             return f"{head}({', '.join(self.reference(arg) for arg in target.arguments(node.args))})"
-        args_text = ", ".join(self.reference(arg) for arg in node.args)
-        if isinstance(target, core.Function):
-            binding = module_callee_binding(target, self.child_entries)
-            return f"{binding or target.name}({args_text})"
         if isinstance(target, tensor.Slice):
             starts = node.args[1]
             if not isinstance(starts, expr.Tuple):
@@ -423,24 +416,6 @@ def projection_index(node: expr.Call) -> int:
     return index.value
 
 
-def module_callee_binding(target: core.Function, child_entries: dict[int, str]) -> str | None:
-    """The attribute a call on *target* was written through, if a child's entry.
-
-    Follows the whole chain a rebuilt function records, so a target elaborated
-    for its call site is still recognised. The table is keyed by the attached
-    entry's identity, never by a name, which is what keeps two attached copies
-    of one source Module apart.
-    """
-    candidate: object = target
-    seen: set[int] = set()
-    while isinstance(candidate, core.Function) and id(candidate) not in seen:
-        seen.add(id(candidate))
-        if id(candidate) in child_entries:
-            return child_entries[id(candidate)]
-        candidate = valuation.origin_of(candidate)
-    return None
-
-
 def capture_root(value, param_alias):
     while id(value) in param_alias:
         value = param_alias[id(value)]
@@ -479,7 +454,6 @@ def emit_def(
     ctx: HirPrintContext,
     indent: str,
     options: PythonPrintOptions,
-    child_entries: dict[int, str] | None = None,
     *,
     line_offset: int = 0,
     statements: dict[int, PrintedStatement] | None = None,
@@ -489,9 +463,7 @@ def emit_def(
     Render one function ``def`` block: signature + body (or ``pass`` for a
     prototype). The caller prepends the decorator line(s). Each call builds its
     own SSA name scope, so a base and its variants do not share names.
-    *child_entries* names the attached children this body may call.
     """
-    child_entries = {} if child_entries is None else child_entries
     lines: list[str] = []
     printer = HirPrinter()
     root_mesh = fn.body.mesh if isinstance(fn.body, core.MeshRegion) and not fn.specializations else None
@@ -518,7 +490,7 @@ def emit_def(
     for node2 in order:
         if isinstance(node2, expr.Call):
             target = node2.target
-            if isinstance(target, core.Function):
+            if isinstance(target, core.FunctionRef) and target.name is not None:
                 op_names_set.add(target.name)
             elif isinstance(target, expr.Op) and not expr.is_dim_op_call(node2):
                 op_names_set.add(expr.get_registered_name(target).split(".")[-1])
@@ -693,7 +665,7 @@ def emit_def(
     for node2 in order:
         if isinstance(node2, core.LoopRegion):
             assign_name(node2.induction_var)
-    printer.bind_def(names, param_alias, child_entries, moved_window)
+    printer.bind_def(names, param_alias, moved_window)
     shared = getattr(ctx, "value_printer", None) or printer
     shared.define(printer, fn, names)
     printer.share(fn, shared)
@@ -949,7 +921,6 @@ def emit_decorated_defs(
     ctx: HirPrintContext,
     indent: str,
     options: PythonPrintOptions,
-    child_entries: dict[int, str] | None = None,
     *,
     line_offset: int = 0,
     statements: dict[int, PrintedStatement] | None = None,
@@ -977,7 +948,6 @@ def emit_decorated_defs(
             ctx,
             indent,
             options,
-            child_entries,
             line_offset=line_offset + physical_line_count(lines),
             statements=statements,
         )
@@ -995,7 +965,6 @@ def emit_decorated_defs(
                 ctx,
                 indent,
                 options,
-                child_entries,
                 line_offset=line_offset + physical_line_count(lines),
                 statements=statements,
             )
@@ -1128,12 +1097,11 @@ def emit_module_class(
     previous = ctx.enter_module(mod.target, mod.topologies)
     lines = [module_decorator_line(mod, mod.entry, ctx), f"class {module_name}:"]
     ordered = emission_order(mod)
-    child_entries = {}
     bindings = [slot_binding(key, slot, names_by_id) for key, slot in mod.children.items()]
     blocks: list[list[str]] = [bindings] if bindings else []
     for fn in ordered:
         if isinstance(fn, core.Function):
-            blocks.append(emit_decorated_defs(fn, ctx, indent, options, child_entries))
+            blocks.append(emit_decorated_defs(fn, ctx, indent, options))
         elif isinstance(fn, core.PrimFunction):
             tir_block = function_block(fn, frame=valuation.Context(mod, fn))
             ctx.imports.update(tir_block.imports)

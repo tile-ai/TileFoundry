@@ -3091,6 +3091,27 @@ def is_slot_value(value) -> bool:
     )
 
 
+def declared_prototype(callee, node, context: MatchContext):
+    """The prototype of this Module that *callee* is or specializes, already parsed.
+
+    A function call names a sibling by its prototype; dispatch picks the
+    variant. A bare function has no Module to name a sibling in.
+    """
+    module = context.function.module
+    if module is None:
+        return PatternFailure(
+            "op_call", node, f"a bare function cannot call function {callee.name!r}; declare both in a @module"
+        )
+    for prototype in module.functions:
+        if callee is prototype or any(callee is variant for variant in prototype.variants):
+            return prototype
+    return PatternFailure(
+        "op_call",
+        node,
+        f"function {callee.name!r} is not declared before this call in @module {module.owner_name!r}",
+    )
+
+
 def enter_call(
     node: object, context: MatchContext, matched: AstMatch[Any]
 ) -> AstMatch[Any] | MatchFailure | None:
@@ -3143,6 +3164,10 @@ def enter_call(
             return PatternFailure(
                 "op_call", node, "a function call takes positional arguments only"
             )
+        if slot is None:
+            callee = declared_prototype(callee, node.func, context)
+            if isinstance(callee, MatchFailure):
+                return callee
         return dataclasses.replace(
             matched,
             pattern_id="call.function",
@@ -3318,7 +3343,7 @@ class CallPattern(ElementPattern):
                 )
             return runtime.Call(
                 type=runtime.UnitType() if context.function.dialect == "tir" else callee.return_type,
-                target=callee,
+                target=runtime.FunctionRef((), callee.name),
                 args=args,
             )
         raise RuntimeError(f"no constructor branch for {match.branch_id!r}")

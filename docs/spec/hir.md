@@ -125,8 +125,8 @@ the concrete return type once; calls read that type without filling defaults.
 `return_type`. The projection is fixed at construction and stays
 consistent across construction sites.
 
-**Call typing — visitor-scoped inference.** A same-module `Call` keeps its authored
-`Function` template as `target`; an instance call keeps its `FunctionRef`
+**Call typing — visitor-scoped inference.** A same-module `Call` names its
+callee's prototype by `FunctionRef((), name)`; an instance call keeps its `FunctionRef`
 target, with any run-time index as a leading operand ([core-ir §2.1](./core-ir.md#21-call)). Its result type is inferred by seeding a new
 visitor memo with the actual argument types bound to the callee's formal
 parameters, then walking the callee body in a child context that retains the
@@ -1782,9 +1782,10 @@ def dim_vars_reached(fn: Function, frame: valuation.Context | None = None) -> di
     an unstated dimension used by a pattern MUST raise `SpecializationError`.
   - `InstantiateDimensionCloner` MUST select variants by `variant_for` and
     substitute dimensions in types, Op attributes, loop bounds, and meshes.
-    It MUST replace Function targets with clones deduplicated by identity;
-    one shared definition MUST be cloned once. It MUST preserve `FunctionRef`
-    instance targets; a run-time index operand is rebuilt like any operand. It MUST NOT perform type inference while cloning.
+    It MUST clone every function the collector reaches from its frame, with
+    one clone per shared definition, and MUST preserve every `FunctionRef`
+    target, because a name does not change; a run-time index operand is
+    rebuilt like any operand. It MUST NOT perform type inference while cloning.
   - Each cloned function MUST retain its original name and record the chosen
     implementation and sorted bindings, recoverable through `origin_of` and
     `bound_dims_of`. Provenance and bound-dimension records MUST NOT participate

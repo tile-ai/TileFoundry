@@ -162,8 +162,8 @@ class CheckCalls(valuation.Visitor[None]):
         if inner is None:
             return
         callee = inner.function
-        implicit = isinstance(call.target, core.FunctionRef) and call.target.name is None
-        given = iter(call.target.arguments(call.args) if isinstance(call.target, core.FunctionRef) else call.args)
+        implicit = call.target.name is None
+        given = iter(call.target.arguments(call.args))
         type_list = tuple(
             param.type if implicit and param.is_const else next(given).type
             for param in callee.params

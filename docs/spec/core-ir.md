@@ -99,8 +99,10 @@ class Module:
 - `parse_module` (see [parser §2](./parser.md#2-syntax-and-rules)) returns a `Module`.
 - A bare `@func` / `@prim_func` becomes an implicit single-function `Module`
   whose `entry` names that function.
-- Same-module `@prim_func` calls resolve through the module's symbol
-  table, not Python closures.
+- Same-module `@func` / `@prim_func` calls resolve through the module's
+  declared prototypes, not Python closures. The parser accepts a call only to
+  a prototype declared earlier in the same `@module`; a call from a bare
+  function's body to another function is a parse error.
 - `topologies` is the execution domain's complete ordered hierarchy.
   `with Mesh(("cta",), layout=...)` inside a function body names one of the
   effective levels and creates a lexical mesh binding.
@@ -260,8 +262,9 @@ class ModuleList:
 names, starting at the caller's Module `scope`. Each `str` segment of
 `ref.path` MUST select a child slot of the current node; an indexed slot MUST be
 followed by an `int` or `None` index, and a single slot MUST NOT be indexed.
-`name` MUST select exactly one function in the reached node; `None` selects its
-entry. An empty path stays in the current module. Failures MUST include the
+`name` MUST select exactly one declared function in the reached node; `None`
+selects its entry. A name matches a prototype only, never a variant: dispatch
+picks the variant. An empty path stays in the current module. Failures MUST include the
 complete path; same-named functions in different child modules are distinct
 functions. The reference holds no Module; the reader supplies the scope.
 
@@ -398,16 +401,19 @@ class Call(Expr):
     """Represent an Op invocation.
 
     Attributes:
-        target: attribute; Op, Function, or FunctionRef naming a child instance.
+        target: attribute; Op, or FunctionRef naming the called function.
         args: attribute; Input expressions in parameter order.
     """
 
-    target: Op | core.Function | FunctionRef
+    target: Op | FunctionRef
     args: tuple[Expr, ...]
 ```
 
 - constraints:
-  - `Call(target=Function)` supplies every parameter in the current instance.
+  - A call names every function by a `FunctionRef`, never by the `Function`
+    object. A direct call `helper(x)` is `FunctionRef((), "helper")`: it names
+    a prototype of the caller's own Module and supplies every parameter in the
+    current instance; dispatch picks the variant.
     An instance call's target is a `FunctionRef` ([tir §2.1](./tir.md#21-functionref))
     whose `name` is `None`: `child(x)` is `FunctionRef(("child",), None)`,
     `layers[2](x)` is `FunctionRef(("layers", 2), None)`, and `layers[i](x)` is
@@ -416,11 +422,11 @@ class Call(Expr):
     the remaining operands (`ref.arguments(args)`) supply only the entry's
     non-ConstTensor parameters. Implicit constants come from that instance's
     resource path.
-  - Generic traversal visits `args` only; it MUST NOT traverse Function
-    targets or the definitions a `FunctionRef` names.
-  - Entering an instance call MUST resolve the reference from the current
-    frame's Module ([§1.4](#14-function-references)), so rebuilt module trees
-    remain authoritative.
+  - Generic traversal visits `args` only; it MUST NOT traverse the definitions
+    a `FunctionRef` names.
+  - Entering a call MUST resolve the reference from the current frame's Module
+    ([§1.4](#14-function-references)), so rebuilt module trees remain
+    authoritative.
   - a value-form `Call` is anchored by `LetStmt` in TIR; a Stmt-position effect
     invocation is `Evaluate(op, args)`.
   - A `Call` MUST NOT appear as a top-level Stmt directly.

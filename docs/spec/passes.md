@@ -189,14 +189,18 @@ are owned by [runtime §1.6](./runtime.md#16-compiler).
 ([parser](./parser.md)), so a `Module` entering the pipeline has `Expr.type`
 filled. After each pass, `PassManager` rechecks the pass's **dirty scope**: every
 function on the Module's call paths whose object identity was not on them before
-the pass. Rechecking is per whole function.
+the pass, and every function that reaches one of those by a call or a launch at
+any depth, through its variants too. Each reference resolves from the frame of
+the function that states it; a reference that does not resolve raises.
+Rechecking is per whole function.
 
 - HIR: `verify_function`, then type inference with ranges, which refreshes
   `RangeMetadata` over the complete function.
 - TIR: `verify_prim_function`, which retriggers `typeinfer` on the embedded Expr
   fields and refreshes their `.type`.
 
-A rewrite that keeps a function's identity is therefore not rechecked.
+A rewrite that keeps a function's identity, and changes no function it reaches,
+is therefore not rechecked.
 
 ## 7. Implemented passes
 

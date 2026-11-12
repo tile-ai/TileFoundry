@@ -12,7 +12,8 @@ from tilefoundry.analysis.allocation import AllocationSummaryMetadata
 from tilefoundry.analysis.check import check_program
 from tilefoundry.ir.expr import Call, Tuple, Var, get_metadata
 from tilefoundry.ir.core.ssa_value import SSAValue
-from tilefoundry.ir.core.function import Function
+from tilefoundry.ir.core.function_ref import FunctionRef
+from tilefoundry.ir.core.module import resolve
 from tilefoundry.ir.core.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
@@ -56,7 +57,7 @@ def _local_bytes(held):
     return prod(local_type(held).shape) * held.dtype.bit_width // 8
 
 
-def _gathered_leaf(value, bindings=None):
+def _gathered_leaf(value, module, bindings=None):
     """Follow call and tuple results to each parameter-gather source.
 
     Allocation's accepted roots and windows provide storage identity,
@@ -66,26 +67,27 @@ def _gathered_leaf(value, bindings=None):
     expr, index = value.expr, value.index
     if isinstance(expr, Var) and id(expr) in bindings:
         arg, outer = bindings[id(expr)]
-        return _gathered_leaf(SSAValue(arg, index), outer)
+        return _gathered_leaf(SSAValue(arg, index), module, outer)
     if isinstance(expr, Tuple):
         for element in expr.elements:
             count = len(leaves_of(element.type))
             if index < count:
-                return _gathered_leaf(SSAValue(element, index), bindings)
+                return _gathered_leaf(SSAValue(element, index), module, bindings)
             index -= count
     if isinstance(expr, MeshRegion):
         nested = {id(param): (arg, bindings) for param, arg in zip(expr.params, expr.args, strict=True)}
-        return _gathered_leaf(SSAValue(expr.body, index), nested)
+        return _gathered_leaf(SSAValue(expr.body, index), module, nested)
     if isinstance(expr, Call):
         transition = _transition(expr)
         if transition and transition[0] == "all_gather":
             return True
-        if isinstance(expr.target, Function):
-            nested = {id(param): (arg, bindings) for param, arg in zip(expr.target.params, expr.args, strict=True)}
-            return _gathered_leaf(SSAValue(expr.target.body, index), nested)
+        if isinstance(expr.target, FunctionRef):
+            callee = resolve(module, expr.target)[1]
+            nested = {id(param): (arg, bindings) for param, arg in zip(callee.params, expr.args, strict=True)}
+            return _gathered_leaf(SSAValue(callee.body, index), module, nested)
         if isinstance(expr.target, TupleGetItem):
             start, _ = leaf_span(expr.args[0].type, expr.args[1].value)
-            return _gathered_leaf(SSAValue(expr.args[0], start + index), bindings)
+            return _gathered_leaf(SSAValue(expr.args[0], start + index), module, bindings)
     return False
 
 
@@ -93,8 +95,8 @@ def summarize_training(result):
     """Read collective occurrences and gathered-parameter windows from HIR."""
     def occurrences(function):
         for value in collect_exprs(function.body):
-            if isinstance(value, Call) and isinstance(value.target, Function):
-                yield from occurrences(value.target)
+            if isinstance(value, Call) and isinstance(value.target, FunctionRef):
+                yield from occurrences(resolve(result.module, value.target)[1])
             elif _transition(value):
                 yield value
 
@@ -115,7 +117,7 @@ def summarize_training(result):
             groups[kind] = group
     allocation = get_metadata(result.function, AllocationSummaryMetadata)
     memory = get_metadata(result.function, RegionMemoryMetadata)
-    roots = {allocation.root(value) for value in allocation.values if _gathered_leaf(value.value)}
+    roots = {allocation.root(value) for value in allocation.values if _gathered_leaf(value.value, result.module)}
     windows = [(allocation.root(window.value), window) for window in memory.lifetimes]
     windows = [(root, window) for root, window in windows if root in roots]
     events = {point for _, window in windows for point in (window.defined_at, window.last_used_at)}
@@ -144,7 +146,7 @@ def summarize_training(result):
 def study(participants, retain, *, replicas=1):
     program = training_program(participants, retain=retain, replicas=replicas)
     checked = check_program(program, program.entry_function())
-    errors = check_training(checked[1])
+    errors = check_training(*checked)
     result = analyze(*checked, analysis="memory")
     return {"policy": "retain" if retain else "release", "replicas": replicas, "max_absolute_error": errors,
             **summarize_training(result)}
