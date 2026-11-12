@@ -1,12 +1,15 @@
 """NCCL realization of the example's authored communication primitives."""
 
+import ctypes
+import os
+from pathlib import Path
+
 import torch
 import torch.distributed as dist
-
-from tilefoundry.ir import types
-from tilefoundry.ir.hir import sharding
-
 from model import collective_function
+
+from tilefoundry.ir import expr, types
+from tilefoundry.ir.hir import sharding
 
 
 class Runtime:
@@ -87,3 +90,40 @@ class Runtime:
         self.trace.append(dict(context=op.context, kind=op.kind, participants=ranks, root=root,
                                communicator_rank=local, output_valid=output is not None, dtype=str(dtype)))
         return output, shape
+
+
+def variable(name, shape, dtype=expr.DType.f32, storage=expr.StorageKind.GMEM):
+    return expr.Var(name=name, type=types.TensorType.from_shape(shape, dtype=dtype, storage=storage))
+
+
+def handle(name, kind, mesh=None, context=None):
+    return expr.Var(name=name, type=types.CommunicationHandleType(kind, context or name, mesh))
+
+
+class Communicator:
+    """Bootstrap only; all data-plane operations come from TileFoundry's binary."""
+
+    def __init__(self, ranks, rank):
+        self.lib = ctypes.CDLL(str(Path(os.environ["NCCL_HOME"]) / "lib/libnccl.so.2"))
+        self.lib.ncclGetErrorString.restype = ctypes.c_char_p
+        class unique_type(ctypes.Structure):
+            _fields_ = [("internal", ctypes.c_byte * 128)]
+        unique = unique_type()
+        if rank == 0:
+            self.check(self.lib.ncclGetUniqueId(ctypes.byref(unique)))
+        data = [bytes(unique)]
+        dist.broadcast_object_list(data, src=0)
+        unique = unique_type.from_buffer_copy(data[0])
+        self.value = ctypes.c_void_p()
+        if rank in ranks:
+            self.lib.ncclCommInitRank.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, unique_type, ctypes.c_int]
+            self.check(self.lib.ncclCommInitRank(ctypes.byref(self.value), len(ranks), unique, ranks.index(rank)))
+        dist.barrier()
+
+    def check(self, status):
+        if status:
+            raise RuntimeError(self.lib.ncclGetErrorString(status).decode())
+
+    def close(self):
+        if self.value:
+            self.check(self.lib.ncclCommDestroy(self.value))

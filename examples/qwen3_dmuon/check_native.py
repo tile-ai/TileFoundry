@@ -1,7 +1,6 @@
 """Check generated NCCL calls, runtime counts and stream protocols against HIR."""
 
 import argparse
-import ctypes
 import json
 import math
 import os
@@ -10,6 +9,9 @@ from pathlib import Path
 import torch
 import torch.distributed as dist
 import tvm_ffi
+from check_primitives import cases
+from model import collective_function
+from runtime import Communicator, handle, variable
 
 from tilefoundry import codegen, core, runtime
 from tilefoundry.interfaces import evaluator, typeinfer
@@ -18,17 +20,6 @@ from tilefoundry.ir import expr, types
 from tilefoundry.ir.hir import sharding
 from tilefoundry.ir.tir import communication as C
 from tilefoundry_nvidia import cuda
-
-from check_primitives import cases
-from model import collective_function
-
-
-def variable(name, shape, dtype=expr.DType.f32, storage=expr.StorageKind.GMEM):
-    return expr.Var(name=name, type=types.TensorType.from_shape(shape, dtype=dtype, storage=storage))
-
-
-def handle(name, kind, mesh=None, context=None):
-    return expr.Var(name=name, type=types.CommunicationHandleType(kind, context or name, mesh))
 
 
 def effect(op, *args):
@@ -106,35 +97,6 @@ def counted_exchange(mesh, storage, dtype):
     params = (src, dst, comm, stream, counts)
     body = ir.Sequential((effect(C.CommEnqueue(operation=op), *params), effect(C.StreamSynchronize(), stream)))
     return ir.PrimFunction(name, params, body, output_count=0)
-
-
-class Communicator:
-    """Bootstrap only; all data-plane operations come from TileFoundry's binary."""
-
-    def __init__(self, ranks, rank):
-        self.lib = ctypes.CDLL(str(Path(os.environ["NCCL_HOME"]) / "lib/libnccl.so.2"))
-        self.lib.ncclGetErrorString.restype = ctypes.c_char_p
-        class unique_type(ctypes.Structure):
-            _fields_ = [("internal", ctypes.c_byte * 128)]
-        unique = unique_type()
-        if rank == 0:
-            self.check(self.lib.ncclGetUniqueId(ctypes.byref(unique)))
-        data = [bytes(unique)]
-        dist.broadcast_object_list(data, src=0)
-        unique = unique_type.from_buffer_copy(data[0])
-        self.value = ctypes.c_void_p()
-        if rank in ranks:
-            self.lib.ncclCommInitRank.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, unique_type, ctypes.c_int]
-            self.check(self.lib.ncclCommInitRank(ctypes.byref(self.value), len(ranks), unique, ranks.index(rank)))
-        dist.barrier()
-
-    def check(self, status):
-        if status:
-            raise RuntimeError(self.lib.ncclGetErrorString(status).decode())
-
-    def close(self):
-        if self.value:
-            self.check(self.lib.ncclCommDestroy(self.value))
 
 
 def oracle_exchange(mesh, counts, sources, capacity):
