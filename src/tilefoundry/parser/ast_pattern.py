@@ -1425,6 +1425,14 @@ class ParseError(expr.VerifyError):
         return cls(node=node, context=context, detail=detail)
 
 
+class DeclarationOrderError(ParseError):
+    """A name a function body uses before the @module declaration that binds it.
+
+    It is not a failed alternative: a call pattern does not fall back to
+    another reading of the name.
+    """
+
+
 def resolve_mesh_topologies_at(topologies, declared, node, context):
     """Resolve mesh levels and anchor declaration errors to *node*."""
     try:
@@ -1511,6 +1519,31 @@ def decorator_name(node: ast.AST) -> str | None:
     return None
 
 
+def declared_function(node: ast.Name, context: MatchContext) -> object | None:
+    """The parsed function of this @module that *node* names, if one is declared by that name.
+
+    A function or variant the class body declares by this name shadows any
+    global or closure value. One not parsed yet is declared later, which the
+    language refuses (declare before use).
+    """
+    function = context.function
+    module = None if function is None else function.module
+    for declaration in getattr(module, "declarations", ()):
+        if declaration.binding_name != node.id or declaration.role not in (
+            FunctionRole.ROOT,
+            FunctionRole.VARIANT,
+        ):
+            continue
+        if declaration.parsed is None:
+            raise DeclarationOrderError.from_node(
+                node,
+                context,
+                f"{node.id!r} is declared later in @module {module.owner_name!r}; declare it before use",
+            )
+        return declaration.parsed
+    return None
+
+
 def resolve_reference(node: ast.AST, context: MatchContext) -> object:
     def external_value(value):
         for rule in ReferencePattern.REFERENCE_RULES:
@@ -1541,6 +1574,9 @@ def resolve_reference(node: ast.AST, context: MatchContext) -> object:
             else:
                 if value is not None:
                     return external_value(value)
+        declared = declared_function(node, context)
+        if declared is not None:
+            return external_value(declared)
         closure = (
             function.closure
             if function is not None
@@ -1721,6 +1757,7 @@ __all__ = [
     "ModuleBuildContext",
     "ModuleContexts",
     "OptionalPattern",
+    "DeclarationOrderError",
     "ParseError",
     "PatternFailure",
     "PredicatePattern",

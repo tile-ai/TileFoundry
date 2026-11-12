@@ -521,7 +521,12 @@ d3-zoom pan/zoom · click → detail + highlight · search · collapse toggle
   stand-in node, an expanded one as a `subgraph cluster_<region_visual_id>`.
   Each region carries the frame of its function: a callee resolves from the
   caller's frame, its body is drawn in its own frame, and a detail entry for
-  a call keeps the frame its reference resolves from.
+  a call keeps the frame its reference resolves from. An instance call
+  (`child(x)`, `layers[i](x)`) is a call node titled by the reference's dotted
+  path; it is not expanded, since the instance may be chosen at run time. Its
+  ports and its detail parameters share one naming: one `index` port per
+  run-time index, then the names of the parameters its arguments bind, with
+  the ConstTensor parameters an instance entry omits left out.
 - **Frontend** is `static/index.html` + `static/viewer.js` (first-party,
   committed). On load it fetches `/api/palette`, then renders `/api/dot`;
   each collapse toggle re-fetches `/api/dot?collapsed=...` and re-renders.

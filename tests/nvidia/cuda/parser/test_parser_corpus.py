@@ -397,16 +397,38 @@ class IndexedLaunch(ParserCase):
         (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[3].run(x)", r"'a\.layers\.3\.run'.*index 3 out of range for N=3"),
         (INDEXED_LAUNCH, "launch(layers[0].run", "launch(layers[2].run", r"'layers\.2\.run'.*index 2 out of range for N=2"),
         (INDEXED_LAUNCH, "launch(layers[0].run", "launch(layers[0].step", r"'layers\.0\.step' must resolve to exactly one function"),
+        (INDEXED_LAUNCH, "launch(layers[0].run", "launch(layers", r"'layers': name the function to call"),
+        (
+            INDEXED_CALLS,
+            "mixed = ModuleList((Leaf, Other))\n\n    @prim_func(target=CUDA)\n    def run(x: Tensor[(8,), \"f32\"]):\n        pass",
+            "mixed = ModuleList((Leaf, Other))\n\n    @prim_func(target=CUDA)\n    def run(x: Tensor[(8,), \"f32\"]):\n        layers(x)",
+            "ModuleList slot 'layers' must be indexed before calling",
+        ),
+        (
+            INDEXED_CALLS,
+            ("CUDA = cuda.Target(\"nvidia.h200_sxm\")\n", "        a.mixed[1].run(x)"),
+            (
+                "CUDA = cuda.Target(\"nvidia.h200_sxm\")\nlater = T.copy\n",
+                "        later(x)\n\n    @prim_func(target=CUDA)\n    def later(x: Tensor[(8,), \"f32\"]):\n        pass",
+            ),
+            "'later' is declared later in @module 'Root'; declare it before use",
+        ),
     ],
-    ids=["dynamic-launch", "mixed-dynamic", "bool", "float", "negative", "past-end", "launch-past-end", "launch-missing"],
+    ids=[
+        "dynamic-launch", "mixed-dynamic", "bool", "float", "negative", "past-end", "launch-past-end",
+        "launch-missing", "launch-bare-slot", "unindexed-slot", "later-declaration",
+    ],
 )
 def test_indexed_reference_refusals(tmp_path, source, old, new, refused):
+    olds, news = (old, new) if isinstance(old, tuple) else ((old,), (new,))
     text = source.read_text()
-    assert old in text
+    for before, after in zip(olds, news, strict=True):
+        assert text.count(before) == 1
+        text = text.replace(before, after)
     path = tmp_path / source.name
-    path.write_text(text.replace(old, new))
-    with pytest.raises(parser.ParseError, match=refused):
-        cli.load_authored_ir(f"{path}:Root")
+    path.write_text(text)
+    with pytest.raises((parser.ParseError, expr.VerifyError), match=refused):
+        verifier.verify_module(cli.load_authored_ir(f"{path}:Root"))
 
 
 EXPECTED = {

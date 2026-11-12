@@ -97,8 +97,10 @@ class Module:
     same-name functions from another Module MUST remain unowned.
 
 - `parse_module` (see [parser §2](./parser.md#2-syntax-and-rules)) returns a `Module`.
-- A bare `@func` / `@prim_func` becomes an implicit single-function `Module`
-  whose `entry` names that function.
+- A bare `@func` / `@prim_func` decorator returns a `Function` /
+  `PrimFunction`, not a Module. Only the compile entry (`normalize_to_module`)
+  wraps it into an implicit single-function `Module` whose `entry` names that
+  function.
 - Same-module `@func` / `@prim_func` calls resolve through the module's
   declared prototypes, not Python closures. The parser accepts a call only to
   a prototype declared earlier in the same `@module`; a call from a bare

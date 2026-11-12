@@ -9,5 +9,5 @@ Rendering happens entirely client-side (``@hpcc-js/wasm`` layout +
 """
 
 from . import assets
-from .builder import Builder
+from .builder import Builder, format_detail
 from .serve import Viewer, view

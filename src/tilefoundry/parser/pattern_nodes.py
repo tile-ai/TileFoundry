@@ -36,6 +36,7 @@ from .ast_pattern import (
     ChildPattern,
     ChoicePattern,
     ConditionPattern,
+    DeclarationOrderError,
     ElementPattern,
     FieldPattern,
     FuncContext,
@@ -3119,9 +3120,8 @@ def build_slot_reference(match, children, context, *, launch=False):
 
     Integer scalar constants fold into the path; any other index stays a
     leading operand that must be an integer scalar. The steps end at a function
-    name; a launch of a bare slot names its entry, and a launch refuses a
-    run-time index. The function comes from ``core.resolve`` in the declaring
-    Module, given the complete reference.
+    name, and a launch refuses a run-time index. The function comes from
+    ``core.resolve`` in the declaring Module, given the complete reference.
     """
     root, steps = match.captures["reference"]
     path, operands, given = [root], [], iter(children[f"ref_index_{k}"] for k in range(len(steps)))
@@ -3137,11 +3137,11 @@ def build_slot_reference(match, children, context, *, launch=False):
     try:
         if launch and operands:
             raise ValueError(f"launch {runtime.FunctionRef(tuple(path), None).qualified_name!r}: a launch index must be a constant")
-        if steps and steps[-1][0] == "index":
+        if not steps or steps[-1][0] == "index":
             raise ValueError(
                 f"{runtime.FunctionRef(tuple(path), None).qualified_name!r}: name the function to call"
             )
-        ref = runtime.FunctionRef(tuple(path), None) if not steps else runtime.FunctionRef(tuple(path[:-1]), path[-1])
+        ref = runtime.FunctionRef(tuple(path[:-1]), path[-1])
         ref.check_indices(tuple(getattr(operand, "type", None) for operand in operands))
         _, function = core.resolve(context.function.module, ref)
     except ValueError as error:
@@ -3202,6 +3202,8 @@ def enter_call(
     if slot is None:
         try:
             callee = resolve_reference(node.func if subscript is None else subscript.value, context)
+        except DeclarationOrderError:
+            raise
         except ParseError:
             return None
         if is_slot_value(callee):

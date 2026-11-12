@@ -12,7 +12,7 @@ from tests.nvidia.cuda.schedule._support import (
 )
 from tilefoundry import cli, verifier
 from tilefoundry.interfaces import valuation
-from tilefoundry.ir import core, expr, types
+from tilefoundry.ir import core, expr, tir, types
 from tilefoundry_nvidia import cuda
 
 
@@ -22,6 +22,7 @@ from tilefoundry_nvidia import cuda
         ("count", "arg count"),
         ("type", r"arg\[0\] type"),
         ("recursion", "recursion not allowed"),
+        ("device-launch", "a launch must be in a CPU function"),
     ],
 )
 def test_verifier_rejects_malformed_tir_calls(wrong, refused):
@@ -30,10 +31,15 @@ def test_verifier_rejects_malformed_tir_calls(wrong, refused):
     args = () if wrong == "count" else (expr.Constant(0, type=types.TensorType.from_scalar(expr.DType.i32)),)
     named = "caller" if wrong == "recursion" else "callee"
     call = core.Evaluate(core.FunctionRef((), named), () if wrong == "recursion" else args)
-    caller = core.PrimFunction("caller", (), core.Sequential((call,)), target=callee.target)
+    if wrong == "device-launch":
+        one = expr.Constant(1, type=types.TensorType.from_scalar(expr.DType.i64))
+        call = core.Evaluate(tir.launch.Launch(), (core.FunctionRef((), "callee"), *(one,) * 6, param))
+    caller_params = (param,) if wrong == "device-launch" else ()
+    caller = core.PrimFunction("caller", caller_params, core.Sequential((call,)), target=callee.target)
     module = core.Module("Calls", (callee, caller))
+    frame = None if wrong == "device-launch" else valuation.Context(module, caller)
     with pytest.raises(expr.VerifyError, match=refused):
-        verifier.verify_prim_function(caller, frame=valuation.Context(module, caller))
+        verifier.verify_prim_function(caller, frame=frame)
 
 
 def test_verifier_rejects_noninteger_slot_index():

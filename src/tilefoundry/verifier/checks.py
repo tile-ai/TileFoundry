@@ -671,6 +671,8 @@ def verify_launch(stmt: core.Evaluate, fn, ctx):
     ([passes §7.3](docs/spec/passes.md#73-inserthostentrypass)), so only
     its selector is resolved here.
     """
+    if not isinstance(fn.target, cpu.Target):
+        raise expr.VerifyError(f"Launch in {fn.name!r}: a launch must be in a CPU function")
     ref = stmt.args[0]
     if not isinstance(ref, core.FunctionRef):
         raise expr.VerifyError(f"Launch: args[0] must be a FunctionRef callee, got {type(ref).__name__}")

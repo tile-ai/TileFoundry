@@ -44,6 +44,33 @@ def renderable_functions(root) -> list[tuple[str, "core.Function"]]:
     return out
 
 
+def call_label(call: expr.Call) -> str:
+    """The title of a call node: a reference's dotted path, or the Op's registered name."""
+    target = call.target
+    return target.qualified_name if isinstance(target, core.FunctionRef) else expr.get_registered_name(target)
+
+
+def operand_names(call: expr.Call, frame) -> list[str]:
+    """One port name per operand of *call*, in operand order.
+
+    A reference's run-time indices come first as ``index`` ports; its
+    remaining operands take the names of the parameters they bind, the
+    ConstTensor ones left out for an instance entry, which reads them from
+    the instance. An Op operand takes its input name.
+    """
+    target = call.target
+    if isinstance(target, core.FunctionRef):
+        callee = frame.callee_context(call).function
+        count = len(target.indices(call.args))
+        indices = ["index" if count == 1 else f"index{k}" for k in range(count)]
+        return [*indices, *(p.name for p in callee.params if target.name is not None or not p.is_const)]
+    try:
+        names = [p.name for p in expr.parameters_of(type(target)) if p.kind == "input"]
+    except (AttributeError, TypeError):
+        names = []
+    return [names[i] if i < len(names) else f"in{i}" for i in range(len(call.args))]
+
+
 def expanded(call: expr.Call) -> bool:
     """Whether the viewer draws *call* as the region of the function it calls directly."""
     return isinstance(call.target, core.FunctionRef) and not call.target.path
@@ -190,21 +217,11 @@ def format_detail(
         params = [{"name": f"e{i}", "type": type_text(item.type, context)} for i, item in enumerate(node.elements)]
         returns = returns_of(node.type, context)
     elif isinstance(node, expr.Call):
-        target = node.target
-        if isinstance(target, core.FunctionRef):
-            name = target.qualified_name
-            callee = ref.frame.callee_context(node).function
-            pnames = [p.name for p in callee.params if target.name is not None or not p.is_const]
-        else:
-            name = expr.get_registered_name(target)
-            try:
-                pnames = [p.name for p in expr.parameters_of(type(target)) if p.kind == "input"]
-            except (AttributeError, TypeError):
-                pnames = []
-            attrs = [{"key": key, "value": value} for key, value in op_attributes(target, context=context)]
+        name = call_label(node)
+        attrs = [{"key": key, "value": value} for key, value in op_attributes(node.target, context=context)]
         params = [
-            {"name": pnames[i] if i < len(pnames) else f"in{i}", "type": type_text(arg.type, context)}
-            for i, arg in enumerate(node.args)
+            {"name": operand, "type": type_text(arg.type, context)}
+            for operand, arg in zip(operand_names(node, ref.frame), node.args, strict=True)
         ]
         returns = returns_of(node.type, context)
     else:
@@ -616,7 +633,7 @@ class Builder:
         local = f"c{local_counter[0]}"
         local_counter[0] += 1
         vid = self.visual_id(call_path, local)
-        op_label = expr.get_registered_name(call.target)
+        op_label = call_label(call)
         self.index.add(vid, DetailRef(hir_expr=call, kind=op_label, call_path=call_path, frame=frame))
 
         tbl = Table(cellpadding=6, bgcolor=PAPER, color=HAIR)
@@ -634,12 +651,7 @@ class Builder:
 
 
 
-        try:
-            input_param_names = [p.name for p in expr.parameters_of(type(call.target)) if p.kind == "input"]
-        except (AttributeError, TypeError):
-            input_param_names = []
-        for i in range(len(call.args)):
-            label = input_param_names[i] if i < len(input_param_names) else f"in{i}"
+        for i, label in enumerate(operand_names(call, frame)):
             cells.append(
                 Cell(
                     text=label,

@@ -882,7 +882,10 @@ block_y, block_z, *forwarded_args)`:
 
 - **callee**: `args[0]` MUST be a `FunctionRef` ([§2.1](#21-functionref)) resolving to
   a device `PrimFunction` whose target is not CPU, or a HIR `Function` by its
-  root-relative selector ([core-ir §1](./core-ir.md#1-module)).
+  path relative to the Module of the calling host function
+  ([core-ir §1.4](./core-ir.md#14-function-references)), like every other
+  reference. A launch names a function: a bare slot (`launch(child, ...)`) is
+  refused by the parser.
   The host-entry pass writes and checks a HIR callee's forwarded args
   ([passes §7.3](./passes.md#73-inserthostentrypass)); verification
   resolves the selector and checks only that each forwarded arg is a tensor.
