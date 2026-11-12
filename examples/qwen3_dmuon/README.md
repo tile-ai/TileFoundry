@@ -72,6 +72,46 @@ Static loops are checked across iterations; dynamic host control flow and unknow
 kernel effects in the same host entry are rejected. Communication-only modules
 compile without a dummy kernel or CUTLASS dependency.
 
+## Checked compute/communication overlap
+
+`overlap.py` authors a bounded producer kernel, all-reduce and consumer kernel
+for each chunk. Serial and pipelined variants use the same computation. Their
+dependencies and buffer accesses come from the mixed host TIR checker. Workspace
+placement reuses TileFoundry's allocation solver with completion-derived
+interference; the example does not maintain a second memory model.
+
+```bash
+python examples/qwen3_dmuon/overlap.py --output .tmp/qwen-overlap
+python examples/qwen3_dmuon/overlap.py --capacity-bytes 256 \
+  --output .tmp/qwen-overlap-limited
+python -m torch.distributed.run --standalone --nproc-per-node=2 \
+  examples/qwen3_dmuon/overlap.py --run-native --steps 3 \
+  --output .tmp/qwen-overlap-native
+```
+
+At the default two chunks of 32 FP32 elements, serial execution uses 256 bytes
+of scratch. Pipelining exposes two independent compute/communication pairs and
+uses 384 bytes. A 256-byte capacity accepts the serial plan and rejects the
+pipelined plan. Native execution compiles both kernels and communication, checks
+every repeated result against an independent arithmetic oracle, and checks that
+incorrect arena bindings are rejected before issue. The small scalar kernel is
+compiled for the executing CUDA architecture; this does not calibrate device
+performance facts.
+
+No timing is assumed by default. Supplying both `--kernel-us` and
+`--communication-us` runs the existing event engine on the checked dependency
+graph. The report labels these as user-supplied, uncontended estimates. For
+example, costs of 10 and 20 microseconds give estimates of 80 and 60 microseconds;
+these are illustrative values, not measured speedups. Legal overlap does not
+establish useful concurrent progress or a profitable fused kernel.
+
+The core summary currently covers verified local kernels with compact whole
+parameter views and explicit streams. Partial kernel views, unknown effects and
+dynamic control flow are rejected. This example does not yet implement device
+communication, remote-consumer release, fused kernels or a checkpoint scheduler.
+The full training simulator below still uses its separate coarse phase model;
+it is not yet derived from a complete authored training program.
+
 ## Pipeline training
 
 Full-width mode retains hidden size 2048, 32 query heads, 4 KV heads, head dimension

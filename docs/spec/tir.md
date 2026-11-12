@@ -995,6 +995,8 @@ expresses a communicator barrier without adding a new tensor primitive.
 The host checker ([analysis §5](./analysis.md#5-host-communication-ordering))
 checks explicit sequences and static loops, including reuse across iterations.
 Operands MUST be declared parameters; dynamic control flow and unmodeled host
-effects are rejected. This surface does not yet infer CUDA kernel-to-collective
-dependencies from ordinary `Launch` statements. Native NCCL realization is owned
+effects are rejected. Device `Launch` statements on explicit declared streams
+participate in the same completion graph when their local parameter effects can
+be summarized. Kernel and collective dependencies come from stream/event edges;
+host issue order alone does not establish cross-stream readiness. Native NCCL realization is owned
 by the [CUDA runtime spec](../../targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/runtime.md#3-nccl-host-communication).

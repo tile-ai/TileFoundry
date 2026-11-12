@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 
 from tilefoundry import inspection, runtime
+from tilefoundry.analysis import communication
+from tilefoundry.interfaces import valuation
 from tilefoundry.ir import core
 
 from .compilation import compile, normalize_to_module, resolve_options
@@ -18,6 +20,10 @@ def canonical_module_text(mod: core.Module) -> str:
     execution domains without attaching parent context to shared definitions.
     """
     fn_text = inspection.as_script(mod.entry_function())
+    for path, frame in valuation.list_call_paths(mod).items():
+        bindings = communication.buffer_regions(frame.function)
+        if bindings:
+            fn_text += "\n" + path + ": " + repr(tuple(sorted(bindings.items())))
 
     topologies = mod.effective_topologies()
     if topologies:

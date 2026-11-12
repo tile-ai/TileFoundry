@@ -4,5 +4,6 @@ from __future__ import annotations
 
 from . import abi, communication, context, hir, host_launch, module, tir
 from .abi import launcher_symbol
+from .communication import NCCL
 from .context import Context
 from .module import CudaLinkableModule

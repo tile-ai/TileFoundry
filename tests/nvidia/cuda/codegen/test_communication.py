@@ -3,6 +3,7 @@
 import pytest
 
 from tilefoundry import cli, codegen, inspection, verifier
+from tilefoundry.codegen import link_module
 from tilefoundry.ir import core, expr, types
 from tilefoundry.ir.hir import sharding
 from tilefoundry.ir.tir import communication as C
@@ -24,8 +25,8 @@ def module(synchronize=True):
                        topologies=(types.Topology("gpu", 8),))
 
 
-def source(mod):
-    root = codegen.build_context(mod)
+def source(mod, provider=cuda.codegen.NCCL):
+    root = codegen.build_context(mod, codegen.Options(communication=provider))
     group = next(g for g in root.groups if g.functions)
     ctx = group.target.resolve(codegen.EmitContext, root.for_group(group))
     return group.target.resolve(codegen.LinkableModule, mod, group.functions, ctx).source
@@ -75,3 +76,62 @@ def test_communication_statement_cannot_be_authored_inside_a_kernel():
     fn.target = mod.target
     with pytest.raises(expr.VerifyError, match="host scope"):
         verifier.verify_prim_function(fn, module_fns=mod)
+
+
+class Alternate(codegen.Communication):
+    """Probe provider isolation without claiming a second native implementation."""
+
+    def emit_resources(self, entry, ctx):
+        return "// alternate resources", []
+
+    def emit_statement(self, entry, stmt, ctx):
+        return "", [f"// alternate {type(stmt.callable).__name__}"]
+
+    def link(self, project):
+        project.append("# alternate dependency\n")
+
+
+def test_provider_selection_is_explicit_and_compile_local():
+    mod = module()
+    with pytest.raises(ValueError, match="requires codegen.Options"):
+        source(mod, None)
+    first = source(mod)
+    alternate = source(mod, Alternate)
+    assert "alternate CommEnqueue" in alternate
+    assert "nccl" not in alternate.lower() and "cudaStreamSynchronize" not in alternate
+    assert source(mod) == first
+    assert "tilefoundry_nvidia.cuda.codegen.communication.NCCL" in repr(
+        codegen.Options(communication=cuda.codegen.NCCL)
+    )
+
+
+def test_alternate_provider_cannot_bypass_completion_checking():
+    with pytest.raises(ValueError, match="pending communication"):
+        source(module(synchronize=False), Alternate)
+
+
+@pytest.mark.parametrize("provider", (cuda.codegen.NCCL, Alternate))
+def test_only_selected_provider_contributes_build_dependencies(tmp_path, provider):
+    mod = module()
+    root = codegen.build_context(mod, codegen.Options(communication=provider))
+    project = link_module.CMakeProject(tmp_path, "provider")
+    for group in root.groups:
+        ctx = group.target.resolve(codegen.EmitContext, root.for_group(group))
+        emitted = group.target.resolve(codegen.LinkableModule, mod, group.functions, ctx)
+        emitted.link(project)
+    commands = "".join(project.appended)
+    assert tuple(project.sources) == ("host.cpp",)
+    assert not project.languages
+    if provider is cuda.codegen.NCCL:
+        assert commands.count("find_library(NCCL_LIBRARY") == 1
+        assert "alternate" not in commands
+        assert any(path.endswith("cuda/codegen/include") for path in project.includes)
+    else:
+        assert commands == "# alternate dependency\n"
+        assert not project.includes
+
+
+@pytest.mark.parametrize("provider", ("nccl", object, Alternate()))
+def test_options_reject_non_provider_classes(provider):
+    with pytest.raises(TypeError, match="provider class"):
+        codegen.Options(communication=provider)

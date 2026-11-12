@@ -2036,7 +2036,7 @@ Missing nodes, cycles and nontransitive relations are rejected.
 
 ## 5. Host communication ordering
 
-`check_communication(function, regions=None)` derives the happens-before graph
+`check_communication(function, regions=None, *, module=None)` derives the happens-before graph
 for the host statements in [tir §2.4](./tir.md#24-host-communication). It uses
 `check_buffer_lifetimes` for read readiness and overwrite hazards instead of
 introducing a second storage checker or a guessed timing model.
@@ -2055,3 +2055,43 @@ Static loop expansion checks carries across all iterations; it does not infer a
 proof for dynamic host branches or loops. Code generation refuses reported
 hazards. Matching collective issue order across processes remains a distributed
 caller contract, as does every required event edge from external compute.
+
+With an owning `module`, the same analysis accepts device `Launch` statements on
+explicit declared streams. `kernel_effects.summarize` derives an
+`interfaces.execution.Summary` from instruction operand effects and known
+pointer/view provenance. Parameter views must cover their compact base tensor;
+partial or strided kernel views require a more precise summary and are rejected.
+It conservatively retains the whole base parameter
+through kernel completion. The kernel's local memory accesses and internal
+synchronization remain its own verified contract. Conditional aliases, dynamic
+kernel control flow, unknown instruction effects, implicit launch streams and
+launches inside open communication groups are rejected. This summary does not
+establish intra-kernel readiness, remote visibility or remote-consumer completion.
+
+`CommunicationReport.operations` records each expanded launch or enqueue
+occurrence, its stream, parameter access modes and dependency endpoints. Read
+and write nodes are analysis milestones; only whole-operation completion is
+observable by the current event model. Separate occurrences of a static loop
+retain separate identities even when the statement and event parameters recur.
+Unordered occurrences identify possible overlap, not a performance prediction.
+Distinct overlapping operands of one operation are rejected when either writes;
+an explicit in-place operation still follows its operation-specific contract.
+
+`plan_workspace(function, parameters, *, module=None, capacity_bytes=None,
+options=None)` places explicitly named disposable scratch parameters. Caller
+inputs and declared outputs are not implicitly reclaimed. Selected buffers
+have static byte-addressable tensor shapes, share one storage space, and need
+no initial value. The planner derives interference from the same lifetime
+predicate as the checker, including outstanding reads and simultaneous operands,
+then passes these conflicts and an optional byte capacity to the existing
+allocation solver. It rechecks the selected offsets with the physical checker.
+Solver failure retains the distinction between proven infeasibility and an
+unknown result; timing estimates cannot authorize reuse.
+
+`WorkspacePlan.bindings` is `BufferBindings` analysis metadata for the host
+function. When `regions` is omitted, checking uses these selected bindings;
+an explicit empty mapping checks disjoint parameters instead. Native emission
+enforces the selected address relationships, and JIT identity includes them.
+Canonical authored IR text does not serialize this analysis metadata: reloaded
+programs require a new placement selection. Placement alone does not change
+execution order, select checkpoint regions or allocate the caller's arena.

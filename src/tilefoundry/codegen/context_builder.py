@@ -202,15 +202,21 @@ def launch_extents(frame: valuation.Context) -> tuple[object, object]:
     return product_of(ctas), product_of(threads)
 
 
+class LaunchCollector(core.StmtVisitor):
+    def __init__(self):
+        self.launches = []
+
+    def visit_Evaluate(self, stmt):
+        if isinstance(stmt.callable, tir.launch.Launch):
+            self.launches.append(stmt)
+
+
 def launch_statements(function: core.PrimFunction | core.Function) -> tuple[core.Evaluate, ...]:
-    body = function.body
-    if not isinstance(body, core.Sequential):
+    if not isinstance(function, core.PrimFunction):
         return ()
-    return tuple(
-        stmt
-        for stmt in body.body
-        if isinstance(stmt, core.Evaluate) and isinstance(stmt.callable, tir.launch.Launch)
-    )
+    collector = LaunchCollector()
+    collector.visit(function.body)
+    return tuple(collector.launches)
 
 
 def build_context(

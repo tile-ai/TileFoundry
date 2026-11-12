@@ -19,7 +19,7 @@ from pathlib import Path
 
 from tilefoundry import codegen, target
 from tilefoundry.interfaces import valuation
-from tilefoundry.ir import core, expr, types
+from tilefoundry.ir import core, expr
 from tilefoundry_nvidia.cuda import target as cuda_target
 
 from .abi import (
@@ -127,7 +127,7 @@ def define_launcher(
     ctx.emit(f'extern "C" const char* {launcher.name}({ctx.parameters(launcher, exported=True)}) {{')
     ctx.indent()
     tell_the_block(launcher, ctx)
-    grid_x, block_x, smem = (signature.name for signature in launcher.trailing)
+    grid_x, block_x, smem, stream = (signature.name for signature in launcher.trailing)
     ctx.emit(f"dim3 grid({grid_x}, 1, 1);")
     ctx.emit(f"dim3 block({block_x}, 1, 1);")
     ctx.emit(f"if ({smem} > {DEFAULT_DYNAMIC_SMEM}) {{")
@@ -139,7 +139,7 @@ def define_launcher(
     ctx.emit("if (raised != cudaSuccess) return cudaGetErrorString(raised);")
     ctx.dedent()
     ctx.emit("}")
-    ctx.emit(f"{kernel.name}<<<grid, block, {smem}, nullptr>>>({kernel_arguments(kernel, ctx)});")
+    ctx.emit(f"{kernel.name}<<<grid, block, {smem}, reinterpret_cast<cudaStream_t>({stream})>>>({kernel_arguments(kernel, ctx)});")
     ctx.emit("cudaError_t status = cudaGetLastError();")
     ctx.emit("return status == cudaSuccess ? nullptr : cudaGetErrorString(status);")
     ctx.dedent()
@@ -236,7 +236,6 @@ class CudaLinkableModule(codegen.LinkableModule):
 
     gpu_architecture: str
     gpu_code: tuple[str, ...]
-    uses_nccl: bool = False
 
     emits = frozenset({"full", "skeleton"})
 
@@ -261,14 +260,10 @@ class CudaLinkableModule(codegen.LinkableModule):
         if emit == "skeleton":
             reject_omitted_child_weights(module)
         kernels = tuple(fn for fn in functions if ctx.codegen_context.targets[id(fn)] == tgt)
-        uses_nccl = any(isinstance(param.type, types.CommunicationHandleType)
-                        for fn in ctx.codegen_context.functions for param in fn.params)
         if not kernels:
-            if not uses_nccl:
-                raise ValueError(f"emit_cuda_module: module {module.name!r} has no CUDA device kernels")
             return cls(target="cuda", language="cu", preamble="", functions=(),
                        gpu_architecture=tgt.architecture.gpu_architecture,
-                       gpu_code=tgt.architecture.gpu_code, uses_nccl=True)
+                       gpu_code=tgt.architecture.gpu_code)
         functions = (
             *device_functions(kernels, ctx),
             *(emit_function(fn, ctx) for fn in kernels),
@@ -292,22 +287,13 @@ class CudaLinkableModule(codegen.LinkableModule):
             functions=functions,
             gpu_architecture=tgt.architecture.gpu_architecture,
             gpu_code=tgt.architecture.gpu_code,
-            uses_nccl=uses_nccl,
         )
 
     def link(self, project: "CMakeProject") -> None:
         """Add CUDA source, compiler settings, and package-owned include paths."""
-        project.include(files(__package__).joinpath("include"))
-        if self.uses_nccl:
-            project.append(
-                "find_package(CUDAToolkit REQUIRED)\n"
-                "find_path(NCCL_INCLUDE_DIR nccl.h HINTS ENV NCCL_HOME ENV NCCL_ROOT PATH_SUFFIXES include REQUIRED)\n"
-                "find_library(NCCL_LIBRARY NAMES nccl libnccl.so.2 HINTS ENV NCCL_HOME ENV NCCL_ROOT PATH_SUFFIXES lib lib64 REQUIRED)\n"
-                "target_include_directories(${PROJECT_NAME} PRIVATE ${NCCL_INCLUDE_DIR})\n"
-                "target_link_libraries(${PROJECT_NAME} PRIVATE CUDA::cudart ${NCCL_LIBRARY})\n"
-            )
         if not self.functions:
             return
+        project.include(files(__package__).joinpath("include"))
         if shutil.which("nvcc") is None:
             raise RuntimeError("link_modules: 'nvcc' not on PATH")
         index = sum(name.startswith("device_") for name in project.sources)

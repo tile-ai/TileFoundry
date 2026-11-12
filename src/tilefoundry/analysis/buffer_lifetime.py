@@ -5,7 +5,7 @@ from itertools import combinations
 from math import isfinite
 from numbers import Real
 
-__all__ = ["BufferAccess", "BufferHazard", "BufferLifetime", "check_buffer_lifetimes"]
+__all__ = ["BufferAccess", "BufferHazard", "BufferLifetime", "check_buffer_lifetimes", "interfere"]
 
 
 @dataclass(frozen=True)
@@ -49,6 +49,23 @@ class BufferHazard:
     operations: tuple[str, ...]
 
 
+def before(earlier, later, predecessors):
+    return (earlier.end <= later.start if predecessors is None
+            else earlier.operation in predecessors.get(later.operation, frozenset()))
+
+
+def interfere(first: BufferLifetime, second: BufferLifetime, *, predecessors=None) -> bool:
+    """Whether two lifetimes lack a proven nonoverlapping execution order.
+
+    Allocation uses this before choosing addresses; checking uses the same
+    completion relation after physical slices have been assigned.
+    """
+    return not (
+        all(before(use, second.producer, predecessors) for use in (first.producer, *first.consumers))
+        or all(before(use, first.producer, predecessors) for use in (second.producer, *second.consumers))
+    )
+
+
 def check_buffer_lifetimes(
     lifetimes: tuple[BufferLifetime, ...], *, predecessors: dict[str, frozenset[str]] | None = None
 ) -> tuple[BufferHazard, ...]:
@@ -64,9 +81,6 @@ def check_buffer_lifetimes(
         for operation, prior in predecessors.items():
             if operation in prior or any(parent not in predecessors or not predecessors[parent] <= prior for parent in prior):
                 raise ValueError("predecessors must define a strict transitive happens-before relation")
-    def before(earlier, later):
-        return (earlier.end <= later.start if predecessors is None
-                else earlier.operation in predecessors.get(later.operation, frozenset()))
     for value in lifetimes:
         if not value.value or value.value in names or not value.allocation:
             raise ValueError("values must be uniquely named and identify an allocation")
@@ -93,7 +107,7 @@ def check_buffer_lifetimes(
             ):
                 raise ValueError("access intervals must be named, finite and nonnegative")
         for use in value.consumers:
-            if not before(value.producer, use):
+            if not before(value.producer, use, predecessors):
                 hazards.append(
                     BufferHazard(
                         "read_before_ready",
@@ -109,11 +123,11 @@ def check_buffer_lifetimes(
         byte_overlap = max(old.offset, new.offset) < min(
             old.offset + old.nbytes, new.offset + new.nbytes
         )
-        if byte_overlap and any(not before(use, new.producer) for use in (old.producer, *old.consumers)):
+        if byte_overlap and interfere(old, new, predecessors=predecessors):
             blockers = tuple(
                 use.operation
                 for use in (old.producer, *old.consumers)
-                if not before(use, new.producer)
+                if not before(use, new.producer, predecessors)
             )
             hazards.append(
                 BufferHazard(

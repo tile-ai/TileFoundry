@@ -1193,13 +1193,16 @@ def calculate_starts(
 
 def solve_allocation(
     summary: AllocationSummaryMetadata,
-    ctx: AnalyzeContext,
+    ctx: AnalyzeContext | None,
     options: SolverOptions,
     *,
     memory_level: str,
+    completion_conflicts: frozenset[tuple[core.SSAValue, core.SSAValue]] | None = None,
+    capacity_bytes: int | None = None,
 ) -> AllocationResult:
     """Return the first feasible whole-function placement for one level."""
-    summary = summary.resolve(ctx)
+    if ctx is not None:
+        summary = summary.resolve(ctx)
     groups = defaultdict(list)
     for value in summary.values:
         groups[summary.root(value)].append(value)
@@ -1218,6 +1221,10 @@ def solve_allocation(
     )
     model = cp_model.CpModel()
     peak = model.new_int_var(largest, limit, f"{memory_level}_peak")
+    if capacity_bytes is not None:
+        if not isinstance(capacity_bytes, int) or isinstance(capacity_bytes, bool) or capacity_bytes < 0:
+            raise ValueError("allocation capacity must be a nonnegative byte count")
+        model.add(peak <= capacity_bytes)
     addresses = tuple(model.new_int_var(0, limit, f"address_{i}") for i in range(len(values)))
     for index, (address, item, alignment) in enumerate(
         zip(addresses, values, alignments, strict=True)
@@ -1241,7 +1248,16 @@ def solve_allocation(
         if item not in persistent:
             model.add(address >= persistent_end)
 
-    interference = build_interference_graph(values, summary.windows, summary.by_value)
+    if completion_conflicts is None:
+        interference = build_interference_graph(values, summary.windows, summary.by_value)
+    else:
+        indices = {value: index for index, value in enumerate(values)}
+        interference = set()
+        for first, second in completion_conflicts:
+            left, right = summary.root(first), summary.root(second)
+            if left is right:
+                raise Error("allocation: conflicting execution values share an alias root")
+            interference.add(tuple(sorted((indices[left], indices[right]))))
     order_choices: dict[tuple[int, int], tuple[cp_model.IntVar, cp_model.IntVar]] = {}
     for left, right in sorted(interference):
         if values[left] in persistent or values[right] in persistent:

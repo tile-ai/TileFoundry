@@ -1,14 +1,18 @@
 """Check host communication ordering with the shared physical lifetime checker."""
 
 from dataclasses import dataclass, replace
+from itertools import combinations
 from math import prod
 
 from tilefoundry.ir import core, expr, types
 from tilefoundry.ir.tir import communication as comm
+from tilefoundry.ir.tir import launch
+from tilefoundry.target import cpu
 
 from .buffer_lifetime import BufferAccess, BufferHazard, BufferLifetime, check_buffer_lifetimes
+from .kernel_effects import summarize
 
-__all__ = ["BufferRegion", "CommunicationReport", "check_communication", "host_statements"]
+__all__ = ["BufferBindings", "BufferRegion", "CommunicationReport", "Operation", "buffer_regions", "check_communication", "host_statements"]
 
 
 @dataclass(frozen=True)
@@ -20,6 +24,36 @@ class BufferRegion:
 
 
 @dataclass(frozen=True)
+class BufferBindings(expr.IRMetadata):
+    """Selected host parameter aliases checked again against native addresses."""
+
+    regions: tuple[tuple[str, BufferRegion], ...]
+
+
+def buffer_regions(function):
+    """The explicit physical bindings selected for one host entry."""
+    bindings = expr.get_metadata(function, BufferBindings)
+    if bindings is None:
+        return {}
+    regions = dict(bindings.regions)
+    if len(regions) != len(bindings.regions):
+        raise ValueError("buffer bindings must name each parameter only once")
+    return regions
+
+
+@dataclass(frozen=True)
+class Operation:
+    """One atomic execution occurrence and its dependency endpoints."""
+
+    name: str
+    statement: core.Evaluate
+    stream: str
+    read: str
+    complete: str
+    accesses: tuple[tuple[str, expr.MemoryEffect], ...]
+
+
+@dataclass(frozen=True)
 class CommunicationReport:
     """Ordering proof, physical hazards, and obligations at an asynchronous return."""
 
@@ -27,6 +61,7 @@ class CommunicationReport:
     predecessors: dict[str, frozenset[str]]
     hazards: tuple[BufferHazard, ...]
     exported: tuple[str, ...]
+    operations: tuple[Operation, ...] = ()
 
 
 def host_statements(body):
@@ -50,19 +85,20 @@ def host_statements(body):
         raise ValueError(f"unsupported communication host control flow: {type(body).__name__}")
 
 
-def check_communication(function, regions=None) -> CommunicationReport:
+def check_communication(function, regions=None, *, module=None) -> CommunicationReport:
     """Prove stream/event ordering and buffer reuse, including repeated protocols.
 
     Parameters are disjoint unless regions declares aliases. All device work must
     complete or be covered by an exported event; exporting obligates the caller to
     retain buffers. Unknown host effects are refused, never assumed synchronous.
     """
-    regions = regions or {}
+    regions = buffer_regions(function) if regions is None else regions
     statements = tuple(host_statements(function.body))
     parameters = {id(value): value for value in function.params}
     names = [value.name for value in function.params]
-    if len(set(names)) != len(names) or set(regions) - set(names):
-        raise ValueError("communication parameters must be unique and regions must name parameters")
+    tensor_names = {value.name for value in function.params if isinstance(value.type, types.TensorType)}
+    if len(set(names)) != len(names) or set(regions) - tensor_names:
+        raise ValueError("communication parameters must be unique and regions must name tensor parameters")
     resources = [(value.type.kind, value.type.name) for value in function.params
                  if isinstance(value.type, types.CommunicationHandleType)]
     if len(set(resources)) != len(resources):
@@ -72,6 +108,11 @@ def check_communication(function, regions=None) -> CommunicationReport:
         if not isinstance(value.type, types.TensorType):
             continue
         region = regions.get(value.name, BufferRegion(value.name))
+        if not expr.is_literal_shape(value.type.shape) or value.type.dtype.bit_width % 8:
+            raise ValueError("execution buffers require static shapes and byte-addressable elements")
+        layout = value.type.layout.layout if isinstance(value.type.layout, types.ShardLayout) else value.type.layout
+        if layout != types.Layout(value.type.shape):
+            raise ValueError("execution buffers require compact parameter layouts")
         size = prod(value.type.shape) * value.type.dtype.bit_width // 8
         if not isinstance(region.offset, int) or isinstance(region.offset, bool) or region.offset < 0 or not region.allocation:
             raise ValueError("buffer regions require an allocation and nonnegative byte offset")
@@ -85,6 +126,7 @@ def check_communication(function, regions=None) -> CommunicationReport:
     current = dict(zip(segments, range(len(values))))
     predecessors = {"entry": frozenset()}
     streams, events = {}, {}
+    operations, operand_hazards = [], []
     completed, exported, jobs = {"entry"}, {}, set()
     depth, pending = 0, []
 
@@ -100,34 +142,76 @@ def check_communication(function, regions=None) -> CommunicationReport:
         return tuple(segment for segment in segments
                      if segment[0] == allocation and start <= segment[1] and segment[2] <= end)
 
+    def descriptor(index, stmt):
+        if isinstance(stmt.callable, comm.CommEnqueue):
+            accesses = [(stmt.args[0], expr.MemoryEffect.READ), (stmt.args[1], expr.MemoryEffect.WRITE)]
+            accesses.extend((arg, expr.MemoryEffect.READ) for arg in stmt.args[4:])
+            return f"comm.{index}", stmt.args[3], tuple(accesses)
+        if module is None:
+            raise ValueError("kernel completion checking requires the owning module")
+        stream = stmt.callable.stream
+        if not isinstance(stream, expr.Var) or id(stream) not in parameters:
+            raise ValueError("mixed protocols require an explicit declared launch stream")
+        comm.handle_type(stream, "stream")
+        ref = stmt.args[0]
+        if not isinstance(ref, core.SymbolRef):
+            raise ValueError("kernel launch requires a symbolic callee")
+        callee = core.resolve_symbol(module, ref.name, nested=ref.nested)
+        if (not isinstance(callee, core.PrimFunction) or isinstance(callee.target, cpu.Target)
+                or len(stmt.args[7:]) != len(callee.params)):
+            raise ValueError("kernel launch requires a concrete kernel and matching operands")
+        if any(arg.type != param.type for arg, param in zip(stmt.args[7:], callee.params, strict=True)):
+            raise ValueError("kernel launch operand types must match its parameter types")
+        summary = summarize(callee)
+        forwarded = [(stmt.args[7 + i], mode) for i, mode in summary.accesses]
+        for (a, left), (b, right) in combinations(forwarded, 2):
+            if a is b and (left | right) & expr.MemoryEffect.WRITE:
+                raise ValueError("kernel launch aliases distinct parameters with a write")
+        return f"kernel.{index}", stream, tuple(forwarded)
+
     def issue(items, grouped=False):
-        incoming = set().union(*(frontier(stmt.args[3].name) for _, stmt in items))
+        descriptions = tuple((stmt, descriptor(index, stmt)) for index, stmt in items)
+        incoming = set().union(*(frontier(stream.name) for _, (_, stream, _) in descriptions))
         finished = set()
-        for index, stmt in items:
-            stream = stmt.args[3].name
+        for stmt, (name, handle, accesses) in descriptions:
+            for (a, left), (b, right) in combinations(accesses, 2):
+                if a is b or not (left | right) & expr.MemoryEffect.WRITE:
+                    continue
+                allocation, start, end = buffers[id(a)]
+                other, low, high = buffers[id(b)]
+                if allocation == other and max(start, low) < min(end, high):
+                    operand_hazards.append(BufferHazard("overlapping_operands", allocation, (a.name, b.name), (name,)))
+            stream = handle.name
             parents = incoming if grouped else frontier(stream)
-            read = node(f"comm.{index}.read", parents)
-            write = node(f"comm.{index}.write", {read})
+            read = node(f"{name}.read", parents)
+            write = node(f"{name}.write", {read})
             ordinal = len(predecessors)
             reader = BufferAccess(read, ordinal, ordinal + 1)
             writer = BufferAccess(write, ordinal + 1, ordinal + 2)
-            for source in (stmt.args[0], *stmt.args[4:]):
+            for source, mode in accesses:
+                if not mode & expr.MemoryEffect.READ:
+                    continue
                 for segment in touched(source):
                     position = current[segment]
                     values[position] = replace(values[position], consumers=(*values[position].consumers, reader))
-            for segment in touched(stmt.args[1]):
-                allocation, start, end = segment
-                current[segment] = len(values)
-                values.append(BufferLifetime(f"comm.{index}.{len(values)}", allocation, start, end - start, writer))
+            for destination, mode in accesses:
+                if not mode & expr.MemoryEffect.WRITE:
+                    continue
+                for segment in touched(destination):
+                    allocation, start, end = segment
+                    current[segment] = len(values)
+                    values.append(BufferLifetime(f"{name}.{len(values)}", allocation, start, end - start, writer))
+            operations.append(Operation(name, stmt, stream, read, write, tuple((value.name, mode) for value, mode in accesses)))
             streams[stream] = {write}
             finished.add(write)
             jobs.add(write)
         if grouped:
-            for _, stmt in items:
-                streams[stmt.args[3].name] = set(finished)
+            for _, (_, stream, _) in descriptions:
+                streams[stream.name] = set(finished)
 
     for index, stmt in enumerate(statements):
-        if any(id(arg) not in parameters for arg in stmt.args):
+        arguments = stmt.args[7:] if isinstance(stmt.callable, launch.Launch) else stmt.args
+        if any(id(arg) not in parameters for arg in arguments):
             raise ValueError("communication operands must be declared host parameters")
         op = stmt.callable
         if isinstance(op, comm.CommEnqueue):
@@ -138,6 +222,10 @@ def check_communication(function, regions=None) -> CommunicationReport:
                 pending.append((index, stmt))
             else:
                 issue(((index, stmt),))
+        elif isinstance(op, launch.Launch):
+            if depth:
+                raise ValueError("kernel launches are invalid before the outermost group end")
+            issue(((index, stmt),))
         elif isinstance(op, comm.CommGroupStart):
             if stmt.args:
                 raise ValueError("group start takes no operands")
@@ -181,4 +269,5 @@ def check_communication(function, regions=None) -> CommunicationReport:
     if jobs - covered:
         raise ValueError("pending communication at return requires synchronization or an exported completion event")
     lifetimes = tuple(values)
-    return CommunicationReport(lifetimes, predecessors, check_buffer_lifetimes(lifetimes, predecessors=predecessors), tuple(exported))
+    hazards = (*operand_hazards, *check_buffer_lifetimes(lifetimes, predecessors=predecessors))
+    return CommunicationReport(lifetimes, predecessors, hazards, tuple(exported), tuple(operations))

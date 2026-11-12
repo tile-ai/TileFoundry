@@ -1,15 +1,16 @@
 """Lower generic host communication statements to NCCL and CUDA runtime calls."""
 
+from importlib.resources import files
 from math import prod
 from types import MappingProxyType
 
 from tilefoundry import codegen
+from tilefoundry.analysis import communication
 from tilefoundry.ir import expr, types
 from tilefoundry.ir.hir import sharding
 from tilefoundry.ir.tir import communication as comm
-from tilefoundry.target import cpu
 
-__all__ = ["emit_communication", "emit_resources"]
+__all__ = ["NCCL"]
 
 HEADER = '#include <tilefoundry/runtime/cuda/nccl.h>'
 PREFIX = "tilefoundry::nccl::"
@@ -19,11 +20,11 @@ DTYPES = MappingProxyType({"f16": "ncclFloat16", "bf16": "ncclBfloat16", "f32": 
 KINDS = MappingProxyType({name: i for i, name in enumerate(("broadcast", "reduce", "all_reduce", "gather", "scatter", "all_gather", "reduce_scatter", "exchange"))})
 
 
-@codegen.register(cpu.Target, codegen.Role.EMIT, types.CommunicationHandleType)
-def emit_resources(entry, statement, ctx):
+def emit_resources(entry, ctx):
     """Validate ABI tensors and reject undeclared runtime aliases before issuing work."""
     lines = [f"{PREFIX}Session tilefoundry_comm;"]
     tensors = [param for param in entry.params if isinstance(param.type, types.TensorType)]
+    regions = communication.buffer_regions(entry)
     for param in tensors:
         ty = param.type
         if ty.storage not in {expr.StorageKind.GMEM, expr.StorageKind.HOST}:
@@ -38,7 +39,18 @@ def emit_resources(entry, statement, ctx):
         lines.append(f"{PREFIX}tensor({param.name}, {{{shape}}}, {code}, {ty.dtype.bit_width}, {device});")
     for i, first in enumerate(tensors):
         for second in tensors[i + 1:]:
-            lines.append(f"{PREFIX}disjoint({first.name}, {second.name});")
+            a = regions.get(first.name, communication.BufferRegion(first.name))
+            b = regions.get(second.name, communication.BufferRegion(second.name))
+            if a.allocation == b.allocation:
+                lines.append(
+                    f"if ({first.name}.device().device_type != {second.name}.device().device_type || "
+                    f"{first.name}.device().device_id != {second.name}.device().device_id || "
+                    f"reinterpret_cast<uintptr_t>({first.name}.data_ptr()) + {b.offset} != "
+                    f"reinterpret_cast<uintptr_t>({second.name}.data_ptr()) + {a.offset}) "
+                    'throw std::runtime_error("communication allocation binding mismatch");'
+                )
+            else:
+                lines.append(f"{PREFIX}disjoint({first.name}, {second.name});")
     handles = [param for param in entry.params if isinstance(param.type, types.CommunicationHandleType)]
     for i, first in enumerate(handles):
         if first.type.kind != "stream":
@@ -112,5 +124,24 @@ def emit_communication(entry, stmt, ctx):
     return HEADER, [f"{PREFIX}check({call});"]
 
 
-for operation in (comm.CommEnqueue, *comm.HANDLES):
-    codegen.register(cpu.Target, codegen.Role.EMIT, operation)(emit_communication)
+class NCCL(codegen.Communication):
+    """NCCL transfers with CUDA stream/event completion and native resources."""
+
+    def emit_resources(self, entry, ctx):
+        """Validate tensors and native resource identities before issuing work."""
+        return emit_resources(entry, ctx)
+
+    def emit_statement(self, entry, stmt, ctx):
+        """Emit NCCL issue or CUDA completion for a checked generic statement."""
+        return emit_communication(entry, stmt, ctx)
+
+    def link(self, project):
+        """Link NCCL only when this provider emitted a host protocol."""
+        project.include(files(__package__).joinpath("include"))
+        project.append(
+            "find_package(CUDAToolkit REQUIRED)\n"
+            "find_path(NCCL_INCLUDE_DIR nccl.h HINTS ENV NCCL_HOME ENV NCCL_ROOT PATH_SUFFIXES include REQUIRED)\n"
+            "find_library(NCCL_LIBRARY NAMES nccl libnccl.so.2 HINTS ENV NCCL_HOME ENV NCCL_ROOT PATH_SUFFIXES lib lib64 REQUIRED)\n"
+            "target_include_directories(${PROJECT_NAME} PRIVATE ${NCCL_INCLUDE_DIR})\n"
+            "target_link_libraries(${PROJECT_NAME} PRIVATE CUDA::cudart ${NCCL_LIBRARY})\n"
+        )

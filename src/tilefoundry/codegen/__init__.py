@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-from . import context, cpu, linkable_function, linkable_module, signature
+from . import (
+    communication,
+    context,
+    cpu,
+    link_module,
+    linkable_function,
+    linkable_module,
+    signature,
+)
+from .communication import Communication
 from .context import EmitContext
 from .context_builder import Context, build_context, mangle
 from .emitter import CppEmitter

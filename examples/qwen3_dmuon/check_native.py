@@ -173,7 +173,8 @@ def main():
     module = ir.Module(name="NativeChecks", functions=tuple(functions), entry=functions[0].name,
                        target=cuda.Target("nvidia.h200_sxm", device_count=8), topologies=mesh.topologies)
     if rank == 0:
-        linked = codegen.link_program(module, workdir=args.output / "build")
+        linked = codegen.link_program(module, workdir=args.output / "build",
+                                      options=codegen.Options(communication=cuda.codegen.NCCL))
         (args.output / "library.txt").write_text(str(linked.library_path))
     dist.barrier()
     loaded = tvm_ffi.load_module((args.output / "library.txt").read_text())
