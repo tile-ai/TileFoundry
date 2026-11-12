@@ -30,7 +30,7 @@ def called_as_entry(
     """
     return signature.CallableSignature(
         name=symbol,
-        params=tuple(signature.tensor_signature_of(var) for var in fn.params),
+        params=tuple(signature.parameter_signature_of(var) for var in fn.params),
         output_count=fn.output_count,
         leading=program_ids,
     )
@@ -43,6 +43,7 @@ def declare_tensor(sig: signature.TensorSignature, ctx: context.EmitContext) -> 
 
 
 @registry.register(cpu.Target, registry.Role.CALLEE, signature.ProgramIdSignature)
+@registry.register(cpu.Target, registry.Role.CALLEE, signature.HandleSignature)
 def declare_program_id(sig: signature.ProgramIdSignature, ctx: context.EmitContext) -> tuple[str, ...]:
     """The id of a level no device register answers for, passed in by value."""
     return (f"{PROGRAM_ID_CTYPE} {sig.name}",)

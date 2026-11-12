@@ -61,6 +61,21 @@ class ProgramIdSignature(Signature):
 
 
 @dataclass(frozen=True)
+class HandleSignature(Signature):
+    """An opaque caller-owned communication resource passed through the host ABI."""
+
+    name: str
+    type: types.CommunicationHandleType
+
+
+def parameter_signature_of(var) -> Signature:
+    """Select a declared host parameter without treating handles as tensor pointers."""
+    if isinstance(var.type, types.CommunicationHandleType):
+        return HandleSignature(var.name, var.type)
+    return tensor_signature_of(var)
+
+
+@dataclass(frozen=True)
 class ProgramMetaSignature(Signature):
     """The block of ids a kernel hands to the runtime it was compiled against."""
 
@@ -194,6 +209,8 @@ def called_as(
 
 
 __all__ = [
+    "HandleSignature",
+    "parameter_signature_of",
     "LAUNCH_ABI",
     "CallableSignature",
     "LaunchSignature",

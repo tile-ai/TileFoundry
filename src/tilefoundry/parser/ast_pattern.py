@@ -175,6 +175,7 @@ runtime = SimpleNamespace(
     Broadcast=types.Broadcast,
     Partial=types.Partial,
     PointerType=types.PointerType,
+    CommunicationHandleType=types.CommunicationHandleType,
     Binary=math.Binary,
     BinaryKind=expr.BinaryKind,
     Constant=expr.Constant,

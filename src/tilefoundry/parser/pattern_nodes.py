@@ -1502,7 +1502,7 @@ class ScalarTypePattern(ElementPattern):
         )
         if not isinstance(
             value,
-            (runtime.TensorType, runtime.TupleType, runtime.UnitType, runtime.PointerType),
+            (runtime.TensorType, runtime.TupleType, runtime.UnitType, runtime.PointerType, runtime.CommunicationHandleType),
         ):
             raise ParseError.from_node(match.node, context, "annotation did not resolve to IR Type")
         return value

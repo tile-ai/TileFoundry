@@ -19,7 +19,7 @@ from itertools import product
 
 from .int_tuple import product as int_tuple_product
 from .layout import apply
-from .mesh import Mesh, levels, topology_names
+from .mesh import Mesh, levels, starts, topology_names
 from .topology import Topology
 
 __all__ = ["Placement"]
@@ -64,7 +64,11 @@ class Placement:
         """Every placement of *mesh*: each level's program ids are its arrangement's values."""
         arrangements = levels(mesh)
         names = topology_names(mesh)
+        offsets = starts(mesh)
         return tuple(
-            cls(dict(zip(names, map(apply, arrangements, at), strict=True)))
+            cls(dict(zip(names, (
+                offset + apply(level, coord)
+                for offset, level, coord in zip(offsets, arrangements, at, strict=True)
+            ), strict=True)))
             for at in product(*(range(int_tuple_product(level.shape)) for level in arrangements))
         )

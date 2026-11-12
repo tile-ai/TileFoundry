@@ -2004,3 +2004,54 @@ class Target:
     removal alike: deleting another analysis's record changes the IR as much as
     overwriting it. An equal-valued overwrite of another analysis's record MUST
     also count as a violation.
+
+## 4. Explicit execution buffer lifetimes
+
+`check_buffer_lifetimes(lifetimes)` checks physical storage reuse on a supplied
+execution trace. `BufferLifetime` identifies a uniquely named produced value,
+an allocation, a byte offset and size, one producer `BufferAccess`, and all its
+consumer accesses. Allocation identifiers include the owning device; different
+identifiers denote disjoint storage. Each access names an operation and its
+half-open start/end interval in a common caller-selected time unit. An initially
+available input may have a zero-duration producer.
+
+The returned `BufferHazard` records distinguish `read_before_ready`, where a
+consumer starts before its producer completes, from `overwrite_live_value`,
+where a new value's producer overlaps the byte range of an earlier live value.
+The earlier value remains live through the end of every consumer, including
+asynchronous transfers and deferred weight gradients. Reuse at exactly that
+completion time is legal. Malformed ranges, intervals and duplicate value names
+raise `ValueError`.
+
+These records describe explicit execution intervals independently of the HIR
+SSA event lifetimes. The caller supplies complete accesses on an ordered time
+base, including synchronization needed for visibility. The checker does not
+derive memory accesses, select a schedule or verify device synchronization.
+
+With `predecessors=`, the same checker accepts a strict transitive
+happens-before relation keyed by operation name. Numeric start/end values only
+order value versions in this mode. Producer readiness and reuse require a
+completion edge before the next access; incomparable accesses may overlap.
+Missing nodes, cycles and nontransitive relations are rejected.
+
+## 5. Host communication ordering
+
+`check_communication(function, regions=None)` derives the happens-before graph
+for the host statements in [tir §2.4](./tir.md#24-host-communication). It uses
+`check_buffer_lifetimes` for read readiness and overwrite hazards instead of
+introducing a second storage checker or a guessed timing model.
+
+`BufferRegion(allocation, offset=0)` optionally maps parameter names to physical
+byte ranges. Unmapped parameters denote disjoint allocations. The analysis
+partitions overlapping ranges, tracks writes and all readers, and retains each
+read through its device completion. Stream FIFO, group joins, event generations
+and host synchronizations supply the dependency edges. Initial parameters are
+available at entry; readiness from external producers remains a caller obligation.
+
+`CommunicationReport` contains the physical lifetimes, transitive predecessors,
+hazards, and exported event parameter names. Malformed protocols, unknown effects,
+unclosed groups, unrecorded events and uncovered pending work raise `ValueError`.
+Static loop expansion checks carries across all iterations; it does not infer a
+proof for dynamic host branches or loops. Code generation refuses reported
+hazards. Matching collective issue order across processes remains a distributed
+caller contract, as does every required event edge from external compute.

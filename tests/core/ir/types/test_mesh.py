@@ -54,6 +54,24 @@ def test_mesh_slice_keeps_the_parent_topologies() -> None:
     assert sliced.layout.shape == ((1, 32),)
 
 
+def test_placements_keep_each_sliced_level_origin():
+    mesh = types.Mesh(
+        (types.Topology("node", 3), types.Topology("gpu", 4)),
+        types.Layout((3, 4)), ("replica", "local"),
+    )
+    assert types.Placement.from_mesh(mesh[1:3, 2:4]) == tuple(
+        types.Placement({"node": node, "gpu": gpu})
+        for node in (1, 2) for gpu in (2, 3)
+    )
+
+
+def test_mesh_coordinates_keep_zero_stride_singleton_axes():
+    mesh = types.Mesh((types.Topology("gpu", 8),), types.Layout((1, 2, 1, 4)),
+                      ("data", "ep", "replica", "cp"))
+    for rank in range(8):
+        assert types.mesh_coords(mesh, (rank,)) == (0, rank // 4, 0, rank % 4)
+
+
 def test_check_topology_rejects_positions_beyond_a_declared_extent() -> None:
     oversized = types.Mesh((types.Topology("cta", 128),), types.Layout((256,), (1,)), ("cta",))
 

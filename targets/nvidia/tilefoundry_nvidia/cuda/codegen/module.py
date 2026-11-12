@@ -19,7 +19,7 @@ from pathlib import Path
 
 from tilefoundry import codegen, target
 from tilefoundry.interfaces import valuation
-from tilefoundry.ir import core, expr
+from tilefoundry.ir import core, expr, types
 from tilefoundry_nvidia.cuda import target as cuda_target
 
 from .abi import (
@@ -236,6 +236,7 @@ class CudaLinkableModule(codegen.LinkableModule):
 
     gpu_architecture: str
     gpu_code: tuple[str, ...]
+    uses_nccl: bool = False
 
     emits = frozenset({"full", "skeleton"})
 
@@ -260,8 +261,14 @@ class CudaLinkableModule(codegen.LinkableModule):
         if emit == "skeleton":
             reject_omitted_child_weights(module)
         kernels = tuple(fn for fn in functions if ctx.codegen_context.targets[id(fn)] == tgt)
+        uses_nccl = any(isinstance(param.type, types.CommunicationHandleType)
+                        for fn in ctx.codegen_context.functions for param in fn.params)
         if not kernels:
-            raise ValueError(f"emit_cuda_module: module {module.name!r} has no CUDA device kernels")
+            if not uses_nccl:
+                raise ValueError(f"emit_cuda_module: module {module.name!r} has no CUDA device kernels")
+            return cls(target="cuda", language="cu", preamble="", functions=(),
+                       gpu_architecture=tgt.architecture.gpu_architecture,
+                       gpu_code=tgt.architecture.gpu_code, uses_nccl=True)
         functions = (
             *device_functions(kernels, ctx),
             *(emit_function(fn, ctx) for fn in kernels),
@@ -285,17 +292,29 @@ class CudaLinkableModule(codegen.LinkableModule):
             functions=functions,
             gpu_architecture=tgt.architecture.gpu_architecture,
             gpu_code=tgt.architecture.gpu_code,
+            uses_nccl=uses_nccl,
         )
 
     def link(self, project: "CMakeProject") -> None:
         """Add CUDA source, compiler settings, and package-owned include paths."""
+        project.include(files(__package__).joinpath("include"))
+        if self.uses_nccl:
+            project.append(
+                "find_package(CUDAToolkit REQUIRED)\n"
+                "find_path(NCCL_INCLUDE_DIR nccl.h HINTS ENV NCCL_HOME ENV NCCL_ROOT PATH_SUFFIXES include REQUIRED)\n"
+                "find_library(NCCL_LIBRARY NAMES nccl libnccl.so.2 HINTS ENV NCCL_HOME ENV NCCL_ROOT PATH_SUFFIXES lib lib64 REQUIRED)\n"
+                "target_include_directories(${PROJECT_NAME} PRIVATE ${NCCL_INCLUDE_DIR})\n"
+                "target_link_libraries(${PROJECT_NAME} PRIVATE CUDA::cudart ${NCCL_LIBRARY})\n"
+            )
+        if not self.functions:
+            return
         if shutil.which("nvcc") is None:
             raise RuntimeError("link_modules: 'nvcc' not on PATH")
         index = sum(name.startswith("device_") for name in project.sources)
         source = f"device_{index}.cu"
         project.add_source(source, self.source)
         project.enable_language("CUDA")
-        project.include(files(__package__).joinpath("include"), cutlass_include())
+        project.include(cutlass_include())
         project.append(
             "set_target_properties(${PROJECT_NAME} PROPERTIES\n"
             "  CUDA_ARCHITECTURES OFF\n"

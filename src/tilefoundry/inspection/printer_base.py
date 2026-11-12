@@ -551,6 +551,9 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
     def visit_PointerType(self, value: types.PointerType, ctx=None) -> str:
         return f"PointerType(DType.{value.dtype.name}, StorageKind.{value.storage.name})"
 
+    def visit_CommunicationHandleType(self, value: types.CommunicationHandleType, ctx=None) -> str:
+        return f"CommunicationHandleType({value.kind!r}, {value.name!r}, {self.visit(value.participants, ctx)})"
+
     def visit_UnitType(self, value: types.UnitType, ctx=None) -> str:
         return "None"
 
@@ -728,7 +731,7 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
         """
         if isinstance(value, expr.DType):
             return json.dumps(value.name)
-        if isinstance(value, (types.TensorType, types.PointerType, types.Mesh, types.LayoutBase)):
+        if isinstance(value, (types.TensorType, types.PointerType, types.CommunicationHandleType, types.Mesh, types.LayoutBase)):
             with self.type_surface(indent=indent):
                 return self.visit(value, ctx)
         if not isinstance(value, enum.Enum) and dim.is_dimension(value):

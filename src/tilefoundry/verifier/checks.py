@@ -292,6 +292,8 @@ def check_param_homogeneity(fn: core.PrimFunction) -> None:
     Param homogeneity ([tir §1.3](docs/spec/tir.md#13-primfunction)): all params' layouts must be
     consistently ShardLayout or all non-ShardLayout. Mixed is error.
     """
+    if isinstance(fn.target, cpu.Target) and any(isinstance(p.type, types.CommunicationHandleType) for p in fn.params):
+        return
     kinds = []
     for p in fn.params:
         ty = p.type
@@ -413,6 +415,11 @@ def walk_stmt(stmt, ctx, scope, fn, binders: Binders):
             binders.uses((stmt.callable, stmt.args), stmt)
             if isinstance(stmt.callable, tir.launch.Launch):
                 verify_launch(stmt, fn, ctx)
+            elif isinstance(stmt.callable, tir.communication.CommunicationStatement):
+                if not isinstance(fn.target, cpu.Target) or scope:
+                    raise expr.VerifyError("communication statements require host scope")
+                call = expr.Call(stmt.callable, stmt.args, type=types.UnitType())
+                verify.registry.require(type(stmt.callable))(call, ctx)
             elif isinstance(stmt.callable, core.FunctionRef):
                 verify_function_call(stmt, fn, ctx)
             else:
@@ -682,6 +689,15 @@ def verify_launch(stmt: core.Evaluate, fn, ctx):
             f"grid/block extents), got {len(stmt.args)}"
         )
     forwarded = stmt.args[7:]
+
+    stream = stmt.callable.stream
+    if stream is not None and (
+        not isinstance(stream, expr.Var)
+        or not any(stream is param for param in fn.params)
+        or not isinstance(stream.type, types.CommunicationHandleType)
+        or stream.type.kind != "stream"
+    ):
+        raise expr.VerifyError("Launch stream must be a declared typed stream parameter")
 
     extent_params = {id(p): p for p in fn.params}
     for a in forwarded:

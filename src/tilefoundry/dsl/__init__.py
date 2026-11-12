@@ -30,6 +30,7 @@ from tilefoundry.ir.types import (
     B,
     Broadcast,
     CallableType,
+    CommunicationHandleType,
     ComposedLayout,
     IntTuple,
     Layout,
@@ -66,6 +67,7 @@ from . import T, namespace, tf
 from .tensor import ConstTensor, Tensor
 
 __all__ = [
+    "CommunicationHandleType",
     "Varying",
     "V",
     "tf",

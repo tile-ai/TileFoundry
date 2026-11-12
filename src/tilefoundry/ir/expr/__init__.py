@@ -7,6 +7,7 @@ extend it. See [core-ir](docs/spec/core-ir.md).
 from __future__ import annotations
 
 from . import op_registry
+from .communication import CommunicationOp
 from .dim import (
     DIM_OP_TYPES,
     DimAdd,

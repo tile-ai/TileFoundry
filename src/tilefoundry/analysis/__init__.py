@@ -1,6 +1,6 @@
 """Direct public Analysis fact contract."""
 
-from . import allocation, footprint, reach, registry
+from . import allocation, communication, footprint, reach, registry
 from .access import (
     Access,
     AliasKind,
@@ -17,7 +17,9 @@ from .allocation import (
     storage_bytes,
 )
 from .api import Result, analyze, build_context
+from .buffer_lifetime import BufferAccess, BufferHazard, BufferLifetime, check_buffer_lifetimes
 from .check import check_program, program_dim_vars
+from .communication import BufferRegion, CommunicationReport, check_communication
 from .compute_cost import inflight_bytes, local_duration_ns
 from .errors import Error
 from .iteration_scope import IterationScope, build_scopes

@@ -14,7 +14,9 @@ the work, structural Stmts carry control flow.
 - **Value Ops** (`AllocTensor`, `Span`, `PtrOf`, `TensorView`)
   are anchored by `LetStmt` so their result `Var` has stable
   identity.
-- **No HIR Ops** reach TIR. A program is TIR before the pass pipeline
+- **No HIR expressions** reach TIR. A host communication statement may retain a
+  semantic operation descriptor for its buffer contract ([§2.4](#24-host-communication)).
+  A program is TIR before the pass pipeline
   ([passes](./passes.md)) reads it.
 
 ## 1. TIR Stmt hierarchy
@@ -181,7 +183,9 @@ parameters; omitting it means one output.
 resolved and an `Evaluate(FunctionRef)` is rejected):
 
 - **Param homogeneity**. All parameters' layouts MUST be uniformly
-  `ShardLayout` or uniformly non-`ShardLayout`; mixing is rejected.
+  `ShardLayout` or uniformly non-`ShardLayout`; mixing is rejected. CPU host
+  entries declaring communication handles are exempt: their buffers may have
+  different logical participant domains, checked by each communication contract.
 - **Fresh `Var` identity**. The same `Var` object MUST NOT be bound
   by more than one `LetStmt` / `For` / `MeshScope` across the
   function. Parameters seed the bound set.
@@ -941,3 +945,56 @@ class CpAsyncWait(Op):
 - constraints:
   - `n` is a non-negative compile-time count.
   - `n = 0` drains every outstanding committed group.
+
+### 2.4 Host communication
+
+`tir.communication` supplies effect-only host statements. They are authored as
+`Evaluate(operation, operands)` inside a CPU `PrimFunction`. Tensor payloads
+remain explicit parameters. `CommunicationHandleType(kind, name, participants)`
+types opaque caller-owned resources: `kind` is `communicator`, `stream`, or
+`event`; only a communicator has a participant Mesh. A communicator's `name`
+is its semantic context, and the ordered Mesh fixes communicator-local ranks.
+Handle ownership and bootstrap remain with the caller.
+The canonical printer and DSL retain these handle annotations and operation
+descriptors. Host communication effects are verified directly; they are not
+projected into device instruction tiles or admitted inside a device mesh scope.
+
+| Statement | Operands | Effect |
+| --- | --- | --- |
+| `CommEnqueue(operation=semantic)` | source, destination, communicator, stream, optional count matrix | Enqueue the semantic transfer into declared buffers |
+| `CommGroupStart()` / `CommGroupEnd()` | none | Batch issue until the outermost end |
+| `EventRecord()` | event, stream | Capture the current stream frontier in a new event generation |
+| `StreamWaitEvent()` | stream, event | Order subsequent stream work after the captured frontier |
+| `StreamSynchronize()` | stream | Establish host completion of that stream's frontier |
+| `EventSynchronize()` | event | Establish host completion of the recorded frontier |
+| `ExportEvent()` | event | Transfer the completion and buffer-retention obligation to the caller |
+
+`CommEnqueue.operation` is a `CommunicationOp` descriptor such as
+`Collective` or `Exchange` ([hir §1.3](./hir.md#13-op)). Its existing inference
+determines destination shape and dtype; the communicator MUST match its context
+and ordered participant mesh. The descriptor does not execute an HIR expression
+inside TIR. Source and count buffers are read and the destination is written.
+Logical ownership remains in the semantic contract; native pointers, aliases,
+and pending accesses belong to the host execution contract.
+
+Enqueue return and group end MUST NOT establish host completion. Stream order
+provides FIFO dependencies; work on different streams requires an event edge
+or a completed host synchronization. A group joins all participating stream
+frontiers before issue and after completion. Group members MUST NOT depend on
+each other's outputs. Events, synchronization, and runtime count readback MUST
+occur outside open groups. Runtime counts are consumed only after their producer
+is ordered before the exchange; fixed capacities still bound all allocations.
+
+Every pending operation at function return MUST be synchronized or covered by
+an exported event. The caller MUST retain its buffers, communicator, streams,
+and event until completion; export neither synchronizes nor retains Python
+objects automatically. Re-recording an exported event with a different frontier
+is invalid. An all-reduce on an initialized scalar followed by synchronization
+expresses a communicator barrier without adding a new tensor primitive.
+
+The host checker ([analysis §5](./analysis.md#5-host-communication-ordering))
+checks explicit sequences and static loops, including reuse across iterations.
+Operands MUST be declared parameters; dynamic control flow and unmodeled host
+effects are rejected. This surface does not yet infer CUDA kernel-to-collective
+dependencies from ordinary `Launch` statements. Native NCCL realization is owned
+by the [CUDA runtime spec](../../targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/runtime.md#3-nccl-host-communication).

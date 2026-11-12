@@ -279,6 +279,8 @@ def build_context(
             if not isinstance(targets[id(function)], cpu.Target)
         )
     )
+    if not device_targets and module.target is not None and not isinstance(module.target, cpu.Target):
+        device_targets = (module.target,)
     if len(device_targets) != 1:
         raise ValueError(f"codegen: expected one device Target, found {len(device_targets)}")
     program_ids = program_id_params(module, device_targets[0])
@@ -363,6 +365,9 @@ def build_context(
                 missing = ", ".join(function.name for function in grouped)
                 raise ValueError(f"codegen: no Launch states geometry for {missing}")
             groups.append(EmissionGroup(frame.module, tgt, tuple(grouped)))
+
+    if not device_functions:
+        groups.append(EmissionGroup(module, device_targets[0], ()))
 
     return Context(
         module=module,

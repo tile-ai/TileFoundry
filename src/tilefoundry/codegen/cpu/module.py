@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from tilefoundry import target
+from tilefoundry.analysis import communication
 from tilefoundry.codegen import linkable_function, linkable_module, signature
-from tilefoundry.ir import core
+from tilefoundry.ir import core, types
 from tilefoundry.target import cpu
 
 from .context import Context
@@ -55,7 +56,16 @@ class HostLinkableModule(linkable_module.LinkableModule):
             body_lines: list[str] = []
             if not isinstance(entry.body, core.Sequential) or not entry.body.body:
                 raise ValueError(f"emit_host_module: entry {entry.name!r} body must contain statements")
-            for stmt in entry.body.body:
+            statements = entry.body.body
+            if any(isinstance(param.type, types.CommunicationHandleType) for param in entry.params):
+                report = communication.check_communication(entry)
+                if report.hazards:
+                    raise ValueError(f"unsafe communication buffer lifetimes: {report.hazards}")
+                statements = tuple(communication.host_statements(entry.body))
+                declaration, lines = ctx.handler_for(types.CommunicationHandleType)(entry, None, ctx)
+                declarations[declaration] = declaration
+                body_lines += lines
+            for stmt in statements:
                 if not isinstance(stmt, core.Evaluate):
                     raise ValueError(f"emit_host_module: expected Evaluate, got {type(stmt).__name__}")
                 declaration, lines = ctx.handler_for(type(stmt.callable))(entry, stmt, ctx)

@@ -355,7 +355,7 @@ def definition_lines(fn: core.PrimFunction, name: str, ctx: TirPrintContext) -> 
         for param in fn.params:
             type_ = (
                 printer.visit(param.annotation, ctx)
-                if isinstance(param.annotation, (types.TensorType, types.PointerType))
+                if isinstance(param.annotation, (types.TensorType, types.PointerType, types.CommunicationHandleType))
                 else repr(param.annotation)
             )
             if param.is_const and isinstance(param.type, types.TensorType):

@@ -12,6 +12,7 @@ from . import (
     async_copy,
     cast,
     clamp,
+    communication,
     dot,
     intrinsic,
     launch,

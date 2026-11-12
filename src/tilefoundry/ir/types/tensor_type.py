@@ -123,4 +123,4 @@ class UnitType:
     """
 
 
-Type = Union[TensorType, TupleType, UnitType, "CallableType", "PointerType"]
+Type = Union[TensorType, TupleType, UnitType, "CallableType", "PointerType", "CommunicationHandleType"]
