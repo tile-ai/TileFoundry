@@ -28,4 +28,4 @@ class Root:
     @prim_func(target=cpu.Target())
     def host(x: Tensor[(8,), "f32"]):
         launch(layers[0].run, x, grid=(1, 1, 1), block=(32, 1, 1))
-        launch(layers[1], x, grid=(1, 1, 1), block=(64, 1, 1))
+        launch(layers[1].run, x, grid=(1, 1, 1), block=(64, 1, 1))

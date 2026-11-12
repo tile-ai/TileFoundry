@@ -362,16 +362,16 @@ class IndexedLaunch(ParserCase):
 
     path: Path = INDEXED_LAUNCH
     name: str | None = "Root"
-    prints: tuple[str, ...] = ("launch(layers[0].run, x", "launch(layers[1], x")
+    prints: tuple[str, ...] = ("launch(layers[0].run, x", "launch(layers[1].run, x")
 
     def guard(self, state, problems):
-        module = state.rebuilt
-        refs = [stmt.args[0] for stmt in _evaluates(module.entry_function())]
-        assert refs == [core.FunctionRef(("layers", 0), "run"), core.FunctionRef(("layers", 1), None)]
-        scale, shift = module.children["layers"]
-        chosen = [core.resolve(module, ref)[1] for ref in refs]
-        assert chosen == [scale.lookup("run"), shift.entry_function()]
-        assert chosen[0] is not chosen[1]
+        for module in (state.ir, state.rebuilt):
+            refs = [stmt.args[0] for stmt in _evaluates(module.entry_function())]
+            assert refs == [core.FunctionRef(("layers", 0), "run"), core.FunctionRef(("layers", 1), "run")]
+            scale, shift = module.children["layers"]
+            chosen = [core.resolve(module, ref)[1] for ref in refs]
+            assert chosen == [scale.lookup("run"), shift.lookup("run")]
+            assert chosen[0] is not chosen[1]
         edges = codegen.build_context(module).launch_edges
         assert [edge.callee for edge in edges] == chosen
         host = module.entry_function()
@@ -394,9 +394,11 @@ class IndexedLaunch(ParserCase):
         (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[True].run(x)", "index must be an integer scalar"),
         (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[0.5].run(x)", "index must be an integer scalar"),
         (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[-1].run(x)", "index -1 out of range for N=3"),
-        (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[3].run(x)", "index 3 out of range for N=3"),
+        (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[3].run(x)", r"'a\.layers\.3\.run'.*index 3 out of range for N=3"),
+        (INDEXED_LAUNCH, "launch(layers[0].run", "launch(layers[2].run", r"'layers\.2\.run'.*index 2 out of range for N=2"),
+        (INDEXED_LAUNCH, "launch(layers[0].run", "launch(layers[0].step", r"'layers\.0\.step' must resolve to exactly one function"),
     ],
-    ids=["dynamic-launch", "mixed-dynamic", "bool", "float", "negative", "past-end"],
+    ids=["dynamic-launch", "mixed-dynamic", "bool", "float", "negative", "past-end", "launch-past-end", "launch-missing"],
 )
 def test_indexed_reference_refusals(tmp_path, source, old, new, refused):
     text = source.read_text()

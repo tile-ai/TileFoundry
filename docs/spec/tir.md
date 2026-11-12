@@ -400,7 +400,6 @@ function invocation and `args[0]` of a `Launch` ([§2.3](#23-tir-ops)).
   a.layers[2].run(x)          -> Evaluate(FunctionRef(("a", "layers", 2), "run"), (x,))
   a.layers[i].run(x)          -> Evaluate(FunctionRef(("a", "layers", None), "run"), (i, x))
   launch(layers[0].run, ...)  -> Evaluate(Launch, (FunctionRef(("layers", 0), "run"), ...))
-  launch(layers[1], ...)      -> Evaluate(Launch, (FunctionRef(("layers", 1), None), ...))
   ```
 
   A run-time index requires every instance of the slot to share one
