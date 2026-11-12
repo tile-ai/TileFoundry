@@ -164,7 +164,7 @@ class PrimFuncSiblingLaunch(ModuleDecoratorCase):
         ("mixed_definitions", "same definition"),
         ("non_entry_call", "only calling an instance entry"),
         ("extra_activation", "arity mismatch.*1 activation.*passed 2"),
-        ("missing_weight", "arity mismatch.*2 parameter.*passed 1"),
+        ("missing_weight", "function 'run' is not declared before this call"),
         ("missing_entry", "declares no entry"),
         ("unbound_slot", "instance calls must use a slot name"),
     ],

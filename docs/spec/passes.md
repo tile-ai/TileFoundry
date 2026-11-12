@@ -401,7 +401,14 @@ class ConvertHIRToTIR(ModulePass):
     pass never emits a partial `PrimFunction` or silently preserves HIR.
 
 Scheduled lowering MUST retain loops and produce one `PrimFunction` per reached
-definition, preserving shared child definitions. Tensor parameters retain their
+definition, preserving shared child definitions. Each lowered function's
+parameters are its inputs, its scratch, then its outputs. The scratch list is
+decided from memory analysis before emission (`scratch_buffers`): one `gmem`
+buffer per allocation root the function owns that is neither an input nor an
+output nor an alias, then, per call site, the parameters that call forwards to
+its callee's scratch; two calls of one definition forward separate buffers.
+Emission only reads this list and MUST NOT append scratch. Lowering MUST NOT
+rewrite a host function after it lowers the device functions. Tensor parameters retain their
 HIR types, and output parameters follow the return-leaf rule above, including
 `ShardLayout`. Default and explicit compact row-major layouts denote the same
 physical layout. A returned retained call MUST receive the caller's output
@@ -478,6 +485,11 @@ entry is rejected by compile.
   - An existing CPU entry MUST pass through unchanged.
   - A synthesized `Launch` MUST state the analyzed shared-memory peak as
     `dynamic_smem`, and 0 when the Module carries no memory analysis.
+  - A synthesized entry's parameters are the launched function's inputs, the
+    scratch `scratch_buffers` gives for it, then one destination per tensor
+    result leaf; the `Launch` forwards all of them. Without memory analysis
+    there is no scratch. `output_count` counts the destinations only. Names
+    avoid each other in that order.
   - Normalization MUST preserve each authored function's Target.
   - A synthesized `Launch` MUST carry its settled geometry so downstream
     codegen reads it without deriving it again.
