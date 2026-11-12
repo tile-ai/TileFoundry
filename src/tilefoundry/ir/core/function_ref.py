@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from tilefoundry.ir import expr
+from tilefoundry.ir import expr, types
 
 
 @dataclass(unsafe_hash=True)
@@ -29,6 +29,22 @@ class FunctionRef(expr.Expr):
     def arguments(self, args):
         """The operands of a call that align with the callee's parameters."""
         return args[self.path.count(None) :]
+
+    def check_indices(self, index_types) -> None:
+        """Require one integer scalar for each run-time index of the path."""
+        slots = tuple(self.path[k - 1] for k, segment in enumerate(self.path) if segment is None)
+        if len(index_types) != len(slots):
+            raise ValueError(
+                f"symbol {self.qualified_name!r}: expected {len(slots)} index operand(s), "
+                f"got {len(index_types)}"
+            )
+        for slot, index_type in zip(slots, index_types):
+            if not (
+                isinstance(index_type, types.TensorType)
+                and index_type.shape == ()
+                and isinstance(index_type.dtype, expr.IntegerDType)
+            ):
+                raise ValueError(f"ModuleList slot {slot!r}: index must be an integer scalar")
 
     @property
     def qualified_name(self) -> str:

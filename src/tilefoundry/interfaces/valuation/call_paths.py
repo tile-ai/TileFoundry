@@ -22,8 +22,8 @@ def collect_functions(root) -> dict[core.FunctionRef, Context]:
                 functions.add(id(function))
                 found[core.FunctionRef(path, function.name)] = Context(node, function, target, topologies)
         for key, slot in node.children.items():
-            for index, child in enumerate(slot.elements):
-                visit(child, (*path, key, index) if slot.indexed else (*path, key), target, topologies)
+            for index, child in enumerate(core.instances(slot)):
+                visit(child, (*path, key, index) if isinstance(slot, tuple) else (*path, key), target, topologies)
 
     visit(root, (), root.target, root.effective_topologies())
     return found

@@ -19,6 +19,7 @@ from tests.nvidia.cuda.models.deepseek_v4_flash.reference import small
 from tests.nvidia.cuda.models.deepseek_v4_flash.runtime import build_runtime_causal_lm
 from tilefoundry import runtime
 from tilefoundry.interfaces.evaluator import to_torch_dtype
+from tilefoundry.ir import core
 from tilefoundry.ir.core import Module
 from tilefoundry.orchestrator.causal_lm import generation
 from tilefoundry.runtime import (
@@ -123,8 +124,8 @@ def _fabricate_checkpoint(mod, alias, generator, path=(), out=None):
             else:
                 out[key] = _fabricate_one(shape, ty.dtype, name, generator)
     for key, slot in mod.children.items():
-        for index, child in enumerate(slot.elements):
-            child_path = (*path, key, str(index)) if slot.indexed else (*path, key)
+        for index, child in enumerate(core.instances(slot)):
+            child_path = (*path, key, str(index)) if isinstance(slot, tuple) else (*path, key)
             _fabricate_checkpoint(child, alias, generator, child_path, out)
     return out
 

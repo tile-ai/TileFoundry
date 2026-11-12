@@ -248,18 +248,13 @@ def _stacked_program(count, trips=None):
 
 
 def _call_program(definition, *, count=1, indexed=False, name="run"):
-    slot = ModuleList(definition, count) if indexed else ModuleList(definition)
+    key = "layers" if indexed else "mm"
+    slot = (definition,) * count if indexed else definition
     param = replace(definition.entry_function().params[0], is_const=False)
     calls = []
     value = param
     for index in range(count):
-        tgt = slot
-        if indexed:
-            tgt = expr.Call(
-                tensor.TupleGetItem(),
-                (slot, expr.Constant(index, type=types.TensorType.from_scalar(expr.DType.i32))),
-                type=slot.type.fields[index],
-            )
+        tgt = core.FunctionRef((key, index) if indexed else (key,), None)
         value = expr.Call(tgt, (value,), type=param.type)
         calls.append(value)
     if name == "twice":
@@ -267,7 +262,7 @@ def _call_program(definition, *, count=1, indexed=False, name="run"):
         value = expr.Call(math.Binary(kind=BinaryKind.ADD), tuple(calls), type=param.type)
     if name == "looped":
         carry = replace(param, name="carry")
-        iteration = expr.Call(slot, (carry,), type=param.type)
+        iteration = expr.Call(core.FunctionRef((key,), None), (carry,), type=param.type)
         body = expr.Tuple((iteration,), type=types.TupleType((param.type,)))
         loop = core.LoopRegion(
             induction_var=expr.Var("i", type=types.TensorType.from_scalar(expr.DType.i32)),
@@ -286,7 +281,7 @@ def _call_program(definition, *, count=1, indexed=False, name="run"):
         name,
         (function,),
         name,
-        children={"layers" if indexed else "mm": slot},
+        children={key: slot},
         target=cuda.Target(_H200),
         topologies=_CTA,
     )
@@ -365,7 +360,7 @@ def test_derived_size_ignores_instance_count():
 
 
 def test_qwen_stack_shares_layer_definition():
-    elements = Qwen3_1_7B.children["layers"].elements
+    elements = Qwen3_1_7B.children["layers"]
     assert len(elements) == 28
     assert all(element is elements[0] for element in elements)
     root = QWEN_CASE.build()

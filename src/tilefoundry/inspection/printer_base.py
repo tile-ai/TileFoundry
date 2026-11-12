@@ -44,6 +44,25 @@ DIM_FUNC_OPS = MappingProxyType({
 })
 
 
+def call_head(ref, indices, render, spell=str) -> str:
+    """The DSL spelling of a ``FunctionRef`` callee.
+
+    Slot names join with dots, an instance index is a subscript (a run-time
+    index renders its operand from *indices*), and the function name, when
+    the reference names one, comes last.
+    """
+    indices = iter(indices)
+    head = ""
+    for segment in ref.path:
+        if isinstance(segment, str):
+            head = f"{head}.{spell(segment)}" if head else spell(segment)
+        else:
+            head += f"[{render(next(indices)) if segment is None else segment}]"
+    if ref.name is None:
+        return head
+    return f"{head}.{spell(ref.name)}" if head else spell(ref.name)
+
+
 def empty_without_default(value):
     if isinstance(value, Mapping | tuple | list):
         return not value
@@ -768,4 +787,5 @@ __all__ = [
     "PER_UNIT",
     "PythonPrinter",
     "TRIPS",
+    "call_head",
 ]

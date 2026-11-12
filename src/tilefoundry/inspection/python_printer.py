@@ -20,7 +20,7 @@ from tilefoundry.ir.hir import tensor
 
 from .module_names import definition_names, module_definition_order, slot_binding
 from .print_context import HirPrintContext
-from .printer_base import PARTS, PythonPrinter
+from .printer_base import PARTS, PythonPrinter, call_head
 from .tir_printer import function_block, tir_function_to_python, tir_module_to_python
 
 
@@ -100,14 +100,6 @@ class HirPrinter(PythonPrinter):
 
     def reference(self, node: expr.Expr, ctx=None) -> str:
         """Return the binding that denotes one value in the current definition."""
-        if isinstance(node, core.ModuleList):
-            return node.key
-        if (
-            isinstance(node, expr.Call)
-            and isinstance(node.target, tensor.TupleGetItem)
-            and isinstance(node.args[0], core.ModuleList)
-        ):
-            return self.tuple_get_item_text(node)
         if isinstance(node, expr.Tuple):
             return self.tuple_reference(node.elements, ctx)
         if id(node) in self.param_alias:
@@ -143,11 +135,10 @@ class HirPrinter(PythonPrinter):
     def visit_program_call(self, node: expr.Call, ctx=None) -> str:
         """Render one HIR call after expression-level dispatch selected it."""
         target = node.target
+        if isinstance(target, core.FunctionRef):
+            head = call_head(target, target.indices(node.args), lambda index: self.visit(index, ctx))
+            return f"{head}({', '.join(self.reference(arg) for arg in target.arguments(node.args))})"
         args_text = ", ".join(self.reference(arg) for arg in node.args)
-        if isinstance(target, core.ModuleList):
-            return f"{target.key}({args_text})"
-        if isinstance(target, expr.Call):
-            return f"{self.reference(target)}({args_text})"
         if isinstance(target, core.Function):
             binding = module_callee_binding(target, self.child_entries)
             return f"{binding or target.name}({args_text})"
@@ -523,11 +514,6 @@ def emit_def(
         for param, arg in scope.captures()
     }
 
-    instance_targets = {
-        id(node.target)
-        for node in order
-        if isinstance(node, expr.Call) and isinstance(node.target, expr.Call)
-    }
     op_names_set: set[str] = set()
     for node2 in order:
         if isinstance(node2, expr.Call):
@@ -763,11 +749,6 @@ def emit_def(
         key = id(node)
         if key in printed:
             return
-        if key in instance_targets:
-            for operand in core.expr_children(node):
-                emit_expr(operand, level)
-            printed.add(key)
-            return
         if key in inlined_start_ids:
             printed.add(key)
             return
@@ -884,8 +865,7 @@ def emit_def(
 
     for node2 in order:
         if (
-            isinstance(node2, (expr.Var, core.ModuleList))
-            or id(node2) in instance_targets
+            isinstance(node2, expr.Var)
             or id(node2) in grid_internal_ids
             or id(node2) in mesh_region_internal_ids
         ):

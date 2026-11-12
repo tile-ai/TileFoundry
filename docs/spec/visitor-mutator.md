@@ -109,8 +109,7 @@ single table that grows whenever a new Expr subclass appears:
 | `FunctionRef` | `()` |
 | `ShapeOf` | `()` |
 | `Tuple` | `elements` |
-| `ModuleList` | `()` |
-| `Call` | `(target, *args)` when target is a Call, otherwise `args` |
+| `Call` | `args` |
 | `MeshRegion` | `args`, `body` |
 | `LoopRegion` | `args`, `body`, `yield_values` (binding-site Vars are excluded) |
 | `core.Function` | `body` (parameter binding-site Vars are excluded) |
@@ -235,7 +234,7 @@ when needed:
 | `While` | `cond` |
 | `If` | `cond` |
 | `Return` | (none — `@prim_func` has no value return) |
-| `Evaluate` | `args` (and `callable` when it is a `FunctionRef`, `Call` or `ModuleList`) |
+| `Evaluate` | `args` (and `callable` when it is a `FunctionRef`) |
 | `MeshScope` / `Sequential` | (none) |
 
 `α-renaming` and similar `Var`-rewriting passes use `StmtMutator` directly.
@@ -249,7 +248,7 @@ and dispatch on `type(callable)`: a `visit_Evaluate(self, stmt)` override
 branches on `type(stmt.callable)` (e.g. `Copy`).
 
 `stmt_children(Evaluate)` is empty. `StmtExprMutator` exposes `Evaluate.args`
-(and `callable` when it is a `FunctionRef`, `Call` or `ModuleList`) as Expr
+(and `callable` when it is a `FunctionRef`) as Expr
 fields. A value-form `Call` to a TIR effect-form Op in Stmt
 position, instead of `Evaluate(op, args)`, is malformed IR
 ([tir §1.4](./tir.md#14-evaluate)).

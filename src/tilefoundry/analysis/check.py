@@ -138,9 +138,8 @@ class ClearDerived(valuation.Visitor[None]):
     """Drop the derived records from every value it reaches."""
 
     def default_visit_leaf(self, node, operands, ctx):
-        if not isinstance(node, core.ModuleList):
-            for record_type in DERIVED_METADATA:
-                node.detach_metadata(record_type)
+        for record_type in DERIVED_METADATA:
+            node.detach_metadata(record_type)
 
 
 def prepare_function(function):
@@ -163,8 +162,8 @@ class CheckCalls(valuation.Visitor[None]):
         if inner is None:
             return
         callee = inner.function
-        implicit = not isinstance(call.target, core.Function)
-        given = iter(call.args)
+        implicit = isinstance(call.target, core.FunctionRef) and call.target.name is None
+        given = iter(call.target.arguments(call.args) if isinstance(call.target, core.FunctionRef) else call.args)
         type_list = tuple(
             param.type if implicit and param.is_const else next(given).type
             for param in callee.params
@@ -215,7 +214,7 @@ def check_program(
     owners = [bound_module]
     for owner in owners:
         residual.update(dim.vars_by_name(owner.topologies))
-        owners.extend(child for slot in owner.children.values() for child in slot.elements)
+        owners.extend(child for slot in owner.children.values() for child in core.instances(slot))
     if residual:
         raise valuation.SpecializationError(
             f"{function.name!r} still states {sorted(residual)} as ranges after binding {sorted(dims or ())}; every dimension has to be given an extent"

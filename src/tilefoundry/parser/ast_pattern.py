@@ -141,8 +141,6 @@ def unsourced_calls(value: expr.Call) -> tuple[expr.Call, ...]:
                 continue
             found.append(node)
             pending.extend(reversed(node.args))
-            if isinstance(node.target, expr.Call):
-                pending.append(node.target)
         elif isinstance(node, expr.Tuple):
             pending.extend(reversed(node.elements))
     return tuple(found)
@@ -944,6 +942,7 @@ class ModuleBuildContext:
     variant_keys: dict[int, set[object]] = field(default_factory=dict)
     converter_keys: dict[int, set[str]] = field(default_factory=dict)
     declarations: list[object] = field(default_factory=list)
+    children: dict[str, object] = field(default_factory=dict)
     consumed: bool = False
     FUNCTION_RULES: ClassVar[tuple[object, ...]] = (
         ModuleFunctionValidationRule(),
@@ -1069,10 +1068,6 @@ class ModuleBuildContext:
             value = rule.apply(value, module=self)
         return value
 
-    @property
-    def children(self):
-        return {name: value for name, value in self.module_scope.items() if isinstance(value, core.ModuleList)}
-
     def build_module(self, cls: type) -> object:
         if self.consumed:
             raise RuntimeError(
@@ -1081,8 +1076,8 @@ class ModuleBuildContext:
         self.consumed = True
         consume_module_context(self)
         functions: list[object] = []
-        children: dict[str, core.ModuleList] = {}
-        module_bindings: dict[str, object] = {}
+        children = self.children
+        wrappers: dict[int, str] = {}
         methods: dict[str, object] = {}
         for name, value in vars(cls).items():
             if name == "__call__":
@@ -1093,10 +1088,7 @@ class ModuleBuildContext:
             if name.startswith("__") and name.endswith("__"):
                 continue
             if isinstance(value, (runtime.Module, runtime.ModuleList)):
-                slot = runtime.ModuleList(value) if isinstance(value, runtime.Module) else value
-                slot.bind(name)
-                children[name] = slot
-                module_bindings[name] = slot
+                children[name] = child_slot(name, value, wrappers)
             elif (
                 isinstance(value, (tuple, list))
                 and value
@@ -1129,7 +1121,7 @@ class ModuleBuildContext:
                     f"@module {cls.__name__!r}: registered {role.value} {binding!r} "
                     "was overwritten or aliased"
                 )
-        for name, child in module_bindings.items():
+        for name, child in children.items():
             self.module_scope.define(name, child)
         for declaration in self.declarations:
             parsed = declaration.parse()
@@ -1194,6 +1186,22 @@ class ModuleContexts:
 
 
 MODULE_CONTEXTS = ModuleContexts()
+
+
+def child_slot(name: str, value, wrappers: dict[int, str]):
+    """The ``Module.children`` value a class-body member *name* declares.
+
+    One ``ModuleList`` wrapper names one slot; *wrappers* records the slot
+    each wrapper already took.
+    """
+    if isinstance(value, core.Module):
+        return value
+    if id(value) in wrappers:
+        raise ValueError(
+            f"ModuleList is already in slot {wrappers[id(value)]!r}; cannot also use slot {name!r}"
+        )
+    wrappers[id(value)] = name
+    return value.slot
 
 
 def register_module_context(context: ModuleBuildContext) -> None:
@@ -1540,14 +1548,14 @@ def resolve_reference(node: ast.AST, context: MatchContext) -> object:
         raise ParseError.from_node(node, context, f"undefined static name {node.id!r}")
     if isinstance(node, ast.Attribute):
         owner = resolve_reference(node.value, context)
-        if isinstance(owner, core.ModuleList):
-            if owner.indexed:
-                raise ParseError.from_node(
-                    node, context, "indexed ModuleList static function references are unsupported"
-                )
+        if isinstance(owner, tuple) and owner and all(isinstance(m, core.Module) for m in owner):
+            raise ParseError.from_node(
+                node, context, "indexed ModuleList static function references are unsupported"
+            )
+        if isinstance(owner, core.Module):
             try:
-                child = owner.elements[0].children.get(node.attr)
-                return child if child is not None else owner.elements[0].lookup(node.attr)
+                child = owner.children.get(node.attr)
+                return child if child is not None else owner.lookup(node.attr)
             except ValueError as error:
                 raise ParseError.from_node(node, context, str(error)) from error
         try:
@@ -1727,6 +1735,7 @@ __all__ = [
     "UNARY_OPERATORS",
     "attach_authored_metadata",
     "authored_source_range",
+    "child_slot",
     "constant",
     "consume_module_context",
     "create_module_context",

@@ -105,30 +105,25 @@ class Visitor(ir_core.ExprVisitor):
     def visit_leaf_Tuple(self, tup: expr.Tuple, operands, ctx: EvaluateContext) -> TupleValue:
         return TupleValue(operands)
 
-    def visit_leaf_ModuleList(self, slot, operands, ctx: EvaluateContext):
-        if ctx.loaded_module is None:
-            raise EvalError("evaluator: instance call requires a loaded module")
-        return ctx.loaded_module.children[slot.key]
-
     def visit_leaf_Call(self, call: expr.Call, args, ctx: EvaluateContext) -> Value:
         target = call.target
-        if call.args and isinstance(call.args[0], ir_core.ModuleList):
-            slot = ctx.loaded_module.module.children[call.args[0].key]
-            index = args[1]
-            taken = int(index.data.item())
-            if not 0 <= taken < len(args[0]):
-                raise EvalError(
-                    f"evaluator: ModuleList slot {slot.key!r}: index {taken!r} out of range for N={len(args[0])}"
-                )
-            return args[0][taken]
-        if isinstance(target, (ir_core.ModuleList, expr.Call)):
-            if isinstance(target, expr.Call):
-                child, *args = args
-            else:
-                if ctx.loaded_module is None:
-                    raise EvalError("evaluator: instance call requires a loaded module")
-                child = ctx.loaded_module.children[target.key]
-            return call_function(child.module.entry_function(), args, ctx, child=child)
+        if isinstance(target, ir_core.FunctionRef):
+            if ctx.loaded_module is None:
+                raise EvalError("evaluator: instance call requires a loaded module")
+            indices = iter(target.indices(args))
+            child, key = ctx.loaded_module, None
+            for segment in target.path:
+                if isinstance(segment, str):
+                    key, child = segment, child.children[segment]
+                    continue
+                taken = segment if segment is not None else int(next(indices).data.item())
+                if not 0 <= taken < len(child):
+                    raise EvalError(
+                        f"evaluator: ModuleList slot {key!r}: index {taken!r} out of range for N={len(child)}"
+                    )
+                child = child[taken]
+            function = child.module.entry_function() if target.name is None else child.module.lookup(target.name)
+            return call_function(function, target.arguments(args), ctx, child=child)
         if isinstance(target, ir_core.Function):
             return call_function(target, args, ctx)
         try:

@@ -12,7 +12,6 @@ from tests.nvidia.cuda.schedule._support import (
 )
 from tilefoundry import cli, verifier
 from tilefoundry.ir import core, expr, types
-from tilefoundry.ir.hir import tensor
 from tilefoundry_nvidia import cuda
 
 
@@ -38,13 +37,9 @@ def test_verifier_rejects_malformed_tir_calls(wrong, refused):
 def test_verifier_rejects_noninteger_slot_index():
     source = Path(__file__).parents[1] / "fixtures/schedule/hir/module_instances.py"
     lowered = _finalized(cli.load_authored_ir(str(source)))
-    slot = lowered.children["layers"]
-    target = expr.Call(
-        tensor.TupleGetItem(),
-        (slot, expr.Constant(0.5, type=types.TensorType.from_scalar(expr.DType.f32))),
-        type=slot.type.fields[0],
-    )
-    root = replace(lowered.lookup("gemm"), body=core.Sequential((core.Evaluate(target, ()),)))
+    index = expr.Constant(0.5, type=types.TensorType.from_scalar(expr.DType.f32))
+    target = core.FunctionRef(("layers", None), None)
+    root = replace(lowered.lookup("gemm"), body=core.Sequential((core.Evaluate(target, (index,)),)))
     functions = tuple(
         root if function is lowered.lookup("gemm") else function for function in lowered.functions
     )

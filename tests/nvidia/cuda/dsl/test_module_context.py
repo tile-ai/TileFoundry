@@ -44,7 +44,7 @@ def test_target_declaration_defines_domain() -> None:
     assert all(frame.target is target for frame in valuation.collect_functions(_Root).values())
     forward = _Root.lookup("forward")
     child = core.Module("child", (forward,), "forward", target=cpu.Target())
-    root = core.Module("root", (forward,), "forward", children={"child": ModuleList(child)}, target=target)
+    root = core.Module("root", (forward,), "forward", children={"child": child}, target=target)
     assert root.resolve_target() is target
     assert child.resolve_target() is child.target
 
@@ -145,7 +145,7 @@ class MemberContext(ModuleContextCase):
     def guard(self, state, problems):
         assert [function.name for function in state.functions] == ["attention"]
         assert list(state.children) == ["softmax"]
-        assert state.children["softmax"].elements[0].topologies == (Topology("thread", 4),)
+        assert state.children["softmax"].topologies == (Topology("thread", 4),)
         assert valuation.collect_functions(state)[core.FunctionRef(("softmax",), "softmax")].target == cuda.Target("nvidia.h200_sxm")
 
 

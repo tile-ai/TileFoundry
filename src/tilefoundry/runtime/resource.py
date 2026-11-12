@@ -312,7 +312,7 @@ class DrawnResource:
 
     def __init__(
         self,
-        module: core.Module | core.ModuleList,
+        module: core.Module | tuple[core.Module, ...],
         generator: utils.torch.Generator,
         device: str,
         drawn: dict[str, utils.torch.Tensor] | None = None,
@@ -335,15 +335,14 @@ class DrawnResource:
         return None
 
     def subtree(self, seg: str) -> "DrawnResource":
-        if isinstance(self.module, core.ModuleList):
+        if isinstance(self.module, tuple):
             try:
                 index = int(seg)
             except ValueError:
                 raise KeyError(seg) from None
-            child = self.module.elements[index]
+            child = self.module[index]
         else:
-            slot = self.module.children[seg]
-            child = slot if slot.indexed else slot.elements[0]
+            child = self.module.children[seg]
         return DrawnResource(
             child, self.generator, self.device, drawn=self.drawn,
             prefix=f"{self.prefix}{seg}.",

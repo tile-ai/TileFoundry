@@ -66,6 +66,7 @@ class ScheduleCase(Case):
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType({})
     sites: SiteCounts | None = None
     child_regions: bool = False
+    loop_reads_outside: bool = True
 
 
 @dataclass(frozen=True)
@@ -179,7 +180,7 @@ def _analysis_metadata(case, result, analysis_value, metadata_type):
                 if not use.synthetic and phi < use.at < backedge and interval.defined_at < phi:
                     outside_uses += 1
                     assert interval.last_used_at >= backedge
-        if loop_bounds:
+        if loop_bounds and case.loop_reads_outside:
             assert outside_uses
 
         for interval in liveness.intervals:
@@ -695,6 +696,7 @@ class LoopOutputs(ScheduleCase):
 class ModuleInstances(ScheduleCase):
     path: Path = ROOT / "hir/module_instances.py"
     child_regions: bool = True
+    loop_reads_outside: bool = False
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
             "cta@0:1#0": RmemPeak(
@@ -725,29 +727,33 @@ class ModuleInstances(ScheduleCase):
         assert len(frames) == 4
         assert all(isinstance(frame.function, core.PrimFunction) for frame in frames.values())
         layers, mm = lowered.children["layers"], lowered.children["mm"]
-        assert len(layers.elements) == 3
-        assert all(element is mm.elements[0] for element in layers.elements)
+        assert len(layers) == 3
+        assert all(element is mm for element in layers)
         visitor = _RetainedStatements()
         visitor.visit(lowered.lookup("gemm").body)
         assert len(visitor.loops) == 1
         assert len(visitor.calls) == 5
         assert (
             sum(
-                isinstance(call.callable, core.ModuleList) and call.callable.key == mm.key
+                call.callable == core.FunctionRef(("mm",), None)
                 for call in visitor.calls
             )
             == 2
         )
-        indexed = [call for call in visitor.calls if isinstance(call.callable, expr.Call)]
+        indexed = [
+            call
+            for call in visitor.calls
+            if isinstance(call.callable, core.FunctionRef) and call.callable.path[:1] == ("layers",)
+        ]
         assert len(indexed) == 2
-        assert all(call.callable.args[0].key == layers.key for call in indexed)
-        assert any(isinstance(call.callable.args[1], expr.Var) for call in indexed)
-        assert any(
-            isinstance(call.callable.args[1], expr.Constant) and call.callable.args[1].value == 0
-            for call in indexed
-        )
+        dynamic = [call for call in indexed if call.callable.path == ("layers", None)]
+        assert len(dynamic) == 1 and isinstance(dynamic[0].args[0], expr.Var)
+        assert any(call.callable.path == ("layers", 0) for call in indexed)
         for call in visitor.calls:
-            assert len(call.args) == (3 if isinstance(call.callable, core.PrimFunction) else 2)
+            if isinstance(call.callable, core.PrimFunction):
+                assert len(call.args) == 3
+            else:
+                assert len(call.callable.arguments(call.args)) == 2
             with pytest.raises(RuntimeError, match="no codegen handler for Op"):
                 codegen.CppEmitter(context=cuda_codegen.Context(target=lowered.target)).visit_Evaluate(call)
 

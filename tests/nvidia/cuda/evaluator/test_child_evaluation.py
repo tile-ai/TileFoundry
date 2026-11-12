@@ -18,6 +18,7 @@ import torch
 
 from tests.core._corpus import Case, case, check_case, special
 from tilefoundry.interfaces import evaluator
+from tilefoundry.ir import core
 
 _DEV = "cpu"
 SCALED_MODULES = Path(__file__).parents[1] / "fixtures" / "shapes" / "scaled_modules.py"
@@ -102,11 +103,10 @@ class DispatchVariantChildCall(ChildReadingCase):
     name: str | None = "_Dispatch"
 
     def guard(self, state, problems):
-        child = state.children["scaled"]
         (variant,) = state.entry_function().variants
-        assert variant.body.target is child
+        assert variant.body.target == core.FunctionRef(("scaled",), None)
         assert len(variant.body.args) == 1
-        assert [p.is_const for p in variant.body.target.elements[0].entry_function().params] == [
+        assert [p.is_const for p in core.resolve(state, variant.body.target)[1].params] == [
             False,
             True,
         ]

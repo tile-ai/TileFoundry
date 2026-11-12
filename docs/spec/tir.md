@@ -225,7 +225,7 @@ requires module context):
 
 ```python
 class Evaluate(Stmt):
-    callable: Op | FunctionRef | PrimFunction | ModuleList | Call
+    callable: Op | FunctionRef | PrimFunction
     args: tuple[Expr, ...]      # the callable's operands in ParamDef / parameter order
 ```
 
@@ -249,11 +249,12 @@ The `callable` is one of:
   buffers; the callee is resolved uniquely at module level
   ([§1.3](#13-primfunction)).
 
-- a retained `PrimFunction`, single-slot `ModuleList`, or computed
-  `Call(TupleGetItem, (ModuleList, index))` target, following the same instance
+- a retained `PrimFunction`, or a `FunctionRef` with `name=None` naming a child
+  instance's entry (a run-time index is a leading operand), following the same instance
   resolution as HIR ([core-ir §2.1](./core-ir.md#21-call)). These device calls
-  remain in one Module tree; they MUST NOT become `FunctionRef` or launches.
-  Printers MUST emit `helper(...)`, `child(...)`, and `layers[i](...)` respectively.
+  remain in one Module tree; they MUST NOT become launches. Printers MUST emit
+  `helper(...)`, `child(...)`, `layers[2](...)`, and `layers[i](...)`; only
+  `ref.arguments(args)` appear inside the parentheses.
 
 Scheduled lowering follows [passes §7.1](./passes.md#71-converthirtotir).
 

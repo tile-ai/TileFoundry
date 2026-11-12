@@ -10,7 +10,7 @@ import dataclasses
 from contextlib import ExitStack, contextmanager
 
 from tilefoundry import services, utils
-from tilefoundry.interfaces import typeinfer, valuation, verify
+from tilefoundry.interfaces import valuation, verify
 from tilefoundry.ir import core, dim, expr, pattern, tir, types
 from tilefoundry.ir.tir import memory
 from tilefoundry.target import cpu
@@ -314,7 +314,7 @@ class Binders:
         if isinstance(value, expr.Var):
             if id(value) not in self.visible:
                 raise expr.VerifyError(f"{value.name} is used outside the scope that binds it")
-        elif isinstance(value, (expr.Op, core.PrimFunction, core.FunctionRef, core.ModuleList)):
+        elif isinstance(value, (expr.Op, core.PrimFunction, core.FunctionRef)):
             return
         elif isinstance(value, expr.Call):
             self.uses((value.target, value.args), stmt)
@@ -415,7 +415,7 @@ def walk_stmt(stmt, ctx, scope, fn, binders: Binders):
                 verify_launch(stmt, fn, ctx)
             elif isinstance(stmt.callable, core.FunctionRef):
                 verify_function_call(stmt, fn, ctx)
-            elif isinstance(stmt.callable, (core.PrimFunction, core.ModuleList, expr.Call)):
+            elif isinstance(stmt.callable, core.PrimFunction):
                 verify_retained_call(stmt, fn, ctx)
             else:
                 op = stmt.callable
@@ -559,38 +559,41 @@ def verify_shape_of(node: core.ShapeOf) -> None:
 
 def callee_frame(ref, frame):
     """The function *ref* names from *frame*, and the frame of the Module that declares it."""
-    scope = None if frame is None else frame.module
     try:
-        module, callee = core.resolve(scope, ref)
+        if frame is None:
+            raise ValueError(f"symbol {ref.qualified_name!r}: instance call requires a module context")
+        inner = frame.enter_reference(ref)
     except ValueError as error:
         raise expr.VerifyError(str(error)) from error
-    target, topologies = frame.target, frame.topologies
-    for node in core.descend(scope, ref):
-        target = node.target if node.target is not None else target
-        topologies = node.topologies if node.topologies is not None else topologies
-    return callee, dataclasses.replace(
-        frame, module=module, function=callee, target=target, topologies=topologies
-    )
+    return inner.function, inner
 
 
 def verify_function_call(stmt: core.Evaluate, fn, ctx):
     ref = stmt.callable
+    label = f"Evaluate({ref.qualified_name})"
     if ctx.module is None:
         raise expr.VerifyError(
-            f"Evaluate(FunctionRef {ref.name!r}) requires module context; "
+            f"{label} requires module context; "
             f"call verify_prim_function(fn, frame=...) or verify_module(...)"
         )
+    try:
+        ref.check_indices(tuple(ctx.type_of(index) for index in ref.indices(stmt.args)))
+    except ValueError as error:
+        raise expr.VerifyError(str(error)) from error
     callee, frame = callee_frame(ref, ctx)
-    if callee is fn:
-        raise expr.VerifyError("Evaluate(FunctionRef): recursion not allowed")
-    assert_no_path_back(callee, fn, visited=set(), frame=frame)
-    verify_call_arguments(stmt, callee.params, f"Evaluate(FunctionRef {ref.name!r})", ctx)
+    if ref.name is None and not isinstance(callee, core.PrimFunction):
+        raise expr.VerifyError(f"TIR instance entry {callee.name!r} is not a PrimFunction")
+    assert_no_path_back(
+        callee, fn, visited=set(), frame=frame, recursion=f"{label}: recursion not allowed"
+    )
+    params = tuple(param for param in callee.params if ref.name is not None or not param.is_const)
+    verify_call_arguments(ref.arguments(stmt.args), params, label, ctx)
 
 
-def verify_call_arguments(stmt, params, label, ctx):
-    if len(stmt.args) != len(params):
-        raise expr.VerifyError(f"{label}: arg count {len(stmt.args)} != param count {len(params)}")
-    for i, (arg, param) in enumerate(zip(stmt.args, params)):
+def verify_call_arguments(args, params, label, ctx):
+    if len(args) != len(params):
+        raise expr.VerifyError(f"{label}: arg count {len(args)} != param count {len(params)}")
+    for i, (arg, param) in enumerate(zip(args, params)):
         arg_ty = ctx.type_of(arg)
         param_ty = param.type
         if type(arg_ty) is not type(param_ty):
@@ -604,43 +607,14 @@ def verify_call_arguments(stmt, params, label, ctx):
             )
 
 
-def retained_callee(target, frame):
-    if not isinstance(target, (core.PrimFunction, core.ModuleList, expr.Call)):
-        raise expr.VerifyError(f"unsupported TIR call target {type(target).__name__}")
-    if not isinstance(target, core.PrimFunction):
-        if frame is None:
-            raise expr.VerifyError("instance TIR call requires module context")
-        typeinfer.inference_type(target, typeinfer.TypeInferContext(module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies))
-    inner = None if frame is None else frame.callee_context(expr.Call(target, (), type=types.UnitType()))
-    callee = inner.function if inner is not None else target
-    if not isinstance(callee, core.PrimFunction):
-        raise expr.VerifyError(f"TIR instance entry {callee.name!r} is not a PrimFunction")
-    return callee, inner
-
-
 def verify_retained_call(stmt, fn, ctx):
-    target = stmt.callable
-    callee, frame = retained_callee(target, ctx)
-    direct = isinstance(target, core.PrimFunction)
-    label = (
-        target.name
-        if direct
-        else (
-            target.key
-            if isinstance(target, core.ModuleList)
-            else f"{target.args[0].key}[{services.render(target.args[1])}]"
-        )
-    )
-    prefix = f"Evaluate({label})"
+    callee = stmt.callable
+    frame = None if ctx is None else ctx.callee_context(expr.Call(callee, (), type=types.UnitType()))
+    label = f"Evaluate({callee.name})"
     assert_no_path_back(
-        callee,
-        fn,
-        visited=set(),
-        frame=frame,
-        recursion=f"{prefix}: recursion not allowed",
+        callee, fn, visited=set(), frame=frame, recursion=f"{label}: recursion not allowed"
     )
-    params = tuple(param for param in callee.params if direct or not param.is_const)
-    verify_call_arguments(stmt, params, prefix, ctx)
+    verify_call_arguments(stmt.args, callee.params, label, ctx)
 
 
 LAUNCH_EXTENT_OPS = (expr.DimAdd, expr.DimSub, expr.DimMul, expr.DimFloorDiv, expr.DimMod, expr.DimMin, expr.DimMax)
@@ -765,8 +739,9 @@ def assert_no_path_back(callee, root, visited, frame=None, recursion=None):
         target = stmt.callable
         if isinstance(target, core.FunctionRef):
             reached, inner = callee_frame(target, frame)
-        elif isinstance(target, (core.PrimFunction, core.ModuleList, expr.Call)):
-            reached, inner = retained_callee(target, frame)
+        elif isinstance(target, core.PrimFunction):
+            reached = target
+            inner = None if frame is None else frame.callee_context(expr.Call(target, (), type=types.UnitType()))
         else:
             continue
         assert_no_path_back(reached, root, visited, inner, recursion)

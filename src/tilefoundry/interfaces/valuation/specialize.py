@@ -166,8 +166,8 @@ class InstantiateDimensionCloner(core.ExprCloner):
             return self.modules[id(node)]
         children = {}
         for key, slot in node.children.items():
-            elements = tuple(self.module(child) for child in slot.elements)
-            children[key] = core.ModuleList(elements if slot.indexed else elements[0])
+            elements = tuple(self.module(child) for child in core.instances(slot))
+            children[key] = elements if isinstance(slot, tuple) else elements[0]
         topologies = (
             None
             if node.topologies is None
@@ -192,16 +192,11 @@ class InstantiateDimensionCloner(core.ExprCloner):
     def visit_Constant(self, value, ctx=None):
         return dataclasses.replace(value, type=dim.substitute_dims(value.type, self.dims))
 
-    def visit_ModuleList(self, slot, ctx=None):
-        return slot
-
     def visit_Call(self, call, ctx=None):
         target = call.target
         if isinstance(target, core.Function):
             target = self.function(target)
-        elif isinstance(target, expr.Call):
-            target = self.visit(target)
-        else:
+        elif not isinstance(target, core.FunctionRef):
             target = substitute_op_dims(target, self.dims)
         args = tuple(self.visit(arg) for arg in call.args)
         return dataclasses.replace(
@@ -370,13 +365,8 @@ class DimVarCollector(core.ExprVisitor[None]):
         self.found.update(found)
 
     def collect_expr(self, node: expr.Expr, ctx=None) -> None:
-        current = (
-            ctx.module.children[node.key]
-            if isinstance(node, core.ModuleList) and ctx is not None
-            else node
-        )
         staging: dict[str, object] = {}
-        dim.collect_vars(current.type, staging)
+        dim.collect_vars(node.type, staging)
         self.record(staging)
 
     def collect_bounds(self, node: expr.Expr) -> None:
@@ -386,8 +376,6 @@ class DimVarCollector(core.ExprVisitor[None]):
         self.record(staging)
 
     def visit_children(self, node: expr.Expr, ctx=None) -> None:
-        if isinstance(node, expr.Call) and isinstance(node.target, expr.Call):
-            self.visit(node.target, ctx)
         for child in (
             getattr(node, "args", ())
             + (node.elements if isinstance(node, expr.Tuple) else ())
@@ -467,9 +455,6 @@ class DimVarCollector(core.ExprVisitor[None]):
         self.collect_expr(node, ctx)
 
     def visit_FunctionRef(self, node: expr.Expr, ctx=None) -> None:
-        self.collect_expr(node, ctx)
-
-    def visit_ModuleList(self, node, ctx=None) -> None:
         self.collect_expr(node, ctx)
 
     def visit_ShapeOf(self, node: expr.Expr, ctx=None) -> None:

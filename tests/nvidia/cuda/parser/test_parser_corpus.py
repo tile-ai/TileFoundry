@@ -18,7 +18,7 @@ FIXTURES = Path(__file__).parents[1] / "fixtures"
 
 
 def _child(mod: core.Module, name: str) -> core.Module:
-    return mod.children[name].elements[0]
+    return mod.children[name]
 
 
 def _structural_equal(a, b) -> bool:
@@ -101,15 +101,15 @@ class Composed(ParserCase):
         assert "first = Expert" in printed and "second = Expert" in printed
         left, right = rebuilt.entry_function().body.args
         assert len(left.args) == 1
-        assert [param.is_const for param in left.target.elements[0].entry_function().params] == [
+        assert [param.is_const for param in core.resolve(rebuilt, left.target)[1].params] == [
             False,
             True,
         ]
         first, second = rebuilt.children.values()
         assert tuple(rebuilt.children) == ("first", "second")
-        assert first.elements[0] is second.elements[0]
-        assert left.target is first
-        assert right.target is second
+        assert first is second
+        assert left.target == core.FunctionRef(("first",), None)
+        assert right.target == core.FunctionRef(("second",), None)
         assert printed.index("first = Expert") < printed.index("def fused(")
         assert printed.index("second = Expert") < printed.index("def fused(")
 
@@ -124,14 +124,14 @@ class Dispatching(ParserCase):
         block = printed[printed.index("@dispatch.specialize(") :]
         assert "leaf(x)" in block
 
-        (rebuilt_child,) = rebuilt.children.values()
+        (key,) = rebuilt.children
         (variant,) = rebuilt.entry_function().variants
         assert rebuilt.entry_function().body is None
         assert variant.specializations == (pattern.Range("n_print", 1, 8),)
-        assert variant.body.target is rebuilt_child
+        assert variant.body.target == core.FunctionRef((key,), None)
         assert len(variant.body.args) == 1
         assert [
-            param.is_const for param in variant.body.target.elements[0].entry_function().params
+            param.is_const for param in core.resolve(rebuilt, variant.body.target)[1].params
         ] == [False, True]
 
 
@@ -281,10 +281,9 @@ class ScaledParent(ParserCase):
         assert tuple(rebuilt.children) == tuple(ir.children)
         slots = tuple(rebuilt.children.values())
         for key, slot in rebuilt.children.items():
-            assert slot.key == key
-            assert slot.indexed == ir.children[key].indexed
-            assert len(slot.elements) == len(ir.children[key].elements)
-            assert all(element is slots[0].elements[0] for element in slot.elements)
+            assert isinstance(slot, tuple) == isinstance(ir.children[key], tuple)
+            assert len(core.instances(slot)) == len(core.instances(ir.children[key]))
+            assert all(element is core.instances(slots[0])[0] for element in core.instances(slot))
         original_calls = [
             node for node in core.collect_exprs(ir.entry_function().body) if isinstance(node, expr.Call)
         ]
@@ -303,8 +302,8 @@ class PairedScaledParent(ScaledParent):
         restored_calls = [
             node for node in core.collect_exprs(rebuilt.entry_function().body) if isinstance(node, expr.Call)
         ]
-        targets = [node.target for node in restored_calls if isinstance(node.target, core.ModuleList)]
-        assert targets == list(rebuilt.children.values())
+        targets = [node.target for node in restored_calls if isinstance(node.target, core.FunctionRef)]
+        assert targets == [core.FunctionRef((key,), None) for key in rebuilt.children]
 
 
 @case
@@ -316,9 +315,8 @@ class StackedScaledParent(ScaledParent):
         restored_calls = [
             node for node in core.collect_exprs(rebuilt.entry_function().body) if isinstance(node, expr.Call)
         ]
-        (index,) = (node for node in restored_calls if isinstance(node.target, tensor.TupleGetItem))
-        assert index.args[0] is rebuilt.children["layers"]
-        assert any(node.target is index for node in restored_calls)
+        (call,) = (node for node in restored_calls if isinstance(node.target, core.FunctionRef))
+        assert call.target.path[0] == "layers" and isinstance(rebuilt.children["layers"], tuple)
 
 
 EXPECTED = {

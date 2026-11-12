@@ -39,16 +39,16 @@ def test_the_stack_is_the_published_order_and_shares_each_layer_definition():
     shape = reference.CONFIG
     stack = Qwen3_5_35B_A3B
     assert len(stack.layers) == shape.num_hidden_layers
-    assert [child.name for child in stack.layers.elements[:3]] == [
+    assert [child.name for child in stack.layers[:3]] == [
         LAYER_TYPE[kind].name for kind in shape.layer_types[:3]
     ]
 
     for index, kind in enumerate(shape.layer_types):
-        mixer = stack.layers.elements[index].mixer
+        mixer = stack.layers[index].mixer
         entry = LAYER_TYPE[kind].mixer.entry
         assert mixer.entry == entry, f"layer{index} is not a {kind} layer"
 
-    first, second = stack.layers.elements[:2]
+    first, second = stack.layers[:2]
     assert first.lookup("residual_add") is second.lookup("residual_add")
     assert first.mixer.lookup("conv_step") is second.mixer.lookup("conv_step")
 

@@ -64,7 +64,7 @@ def _returned_view(storage, chain=False):
     param = expr.Var("x", type=type_)
     function = core.Function.from_parts(name="run", params=(param,), body=param, return_type=type_)
     leaf = core.Module("View", (function,), "run")
-    slot = core.ModuleList(leaf)
+    slot = core.FunctionRef(("child",), None)
     activation = replace(param)
     call = expr.Call(slot, (activation,), type=type_)
     if chain:
@@ -74,7 +74,7 @@ def _returned_view(storage, chain=False):
         "ViewCaller",
         (root,),
         "root",
-        children={"child": slot},
+        children={"child": leaf},
         target=cuda.Target("nvidia.h200_sxm"),
         topologies=(types.Topology("cta", 1), types.Topology("thread", 32)),
     )
@@ -494,7 +494,7 @@ def test_returned_view_passes_storage(storage, chain):
     assert visitor.storage(call.args[-1]) is function.params[-1]
     assert not any(isinstance(op, memory.Copy) for op in visitor.operations)
     callee = _RetainedStatements()
-    callee.visit(lowered.children[call.callable.key].elements[0].entry_function().body)
+    callee.visit(core.resolve(lowered, call.callable)[1].body)
     assert not callee.operations
 
 

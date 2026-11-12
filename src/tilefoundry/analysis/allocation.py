@@ -765,7 +765,7 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
         )
         aliases = tuple(value.aliases for value in borrowed)
         for path, (_, accesses) in context.scope.access.accesses.get("unit", {}).items():
-            if not any(valuation.module_slot(site.expr)[0] is not None for site in path[:-1]):
+            if not any(isinstance(site.expr.target, core.FunctionRef) for site in path[:-1]):
                 continue
             for acc in accesses:
                 if not getattr(acc.target.expr, "is_const", False):

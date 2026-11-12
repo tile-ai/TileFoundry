@@ -126,8 +126,8 @@ the concrete return type once; calls read that type without filling defaults.
 consistent across construction sites.
 
 **Call typing — visitor-scoped inference.** A same-module `Call` keeps its authored
-`Function` template as `target`; an instance call keeps its ModuleList slot or
-`TupleGetItem(ModuleList, index)` target ([core-ir §2.1](./core-ir.md#21-call)). Its result type is inferred by seeding a new
+`Function` template as `target`; an instance call keeps its `FunctionRef`
+target, with any run-time index as a leading operand ([core-ir §2.1](./core-ir.md#21-call)). Its result type is inferred by seeding a new
 visitor memo with the actual argument types bound to the callee's formal
 parameters, then walking the callee body in a child context that retains the
 call site's mesh. A callee without a mesh declaration runs in that scope;
@@ -1783,9 +1783,8 @@ def dim_vars_reached(fn: Function, frame: valuation.Context | None = None) -> di
   - `InstantiateDimensionCloner` MUST select variants by `variant_for` and
     substitute dimensions in types, Op attributes, loop bounds, and meshes.
     It MUST replace Function targets with clones deduplicated by identity;
-    one shared definition MUST be cloned once. It MUST preserve ModuleList
-    and TupleGetItem instance targets, except for rebuilding their computed
-    index operand. It MUST NOT perform type inference while cloning.
+    one shared definition MUST be cloned once. It MUST preserve `FunctionRef`
+    instance targets; a run-time index operand is rebuilt like any operand. It MUST NOT perform type inference while cloning.
   - Each cloned function MUST retain its original name and record the chosen
     implementation and sorted bindings, recoverable through `origin_of` and
     `bound_dims_of`. Provenance and bound-dimension records MUST NOT participate
@@ -1798,5 +1797,5 @@ def dim_vars_reached(fn: Function, frame: valuation.Context | None = None) -> di
     and called functions, including return types. Runtime values without a
     `DimVar` are rejected later by their consumer.
   - Instance dimension scans MUST receive a `valuation.Context` and recurse through
-    element entries using the current frame's children ([core-ir §2.1](./core-ir.md#21-call)).
+    the entries the current frame's Module resolves ([core-ir §2.1](./core-ir.md#21-call)).
     Function-only graphs retain the frame-free query API.

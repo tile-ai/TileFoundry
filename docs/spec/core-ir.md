@@ -40,7 +40,7 @@ class Module:
         name: attribute; Definition name, independent of instance slot keys.
         functions: attribute; Heterogeneous HIR and TIR function container.
         entry: attribute; Optional public entry-function name.
-        children: attribute; Slot keys mapped to shared ModuleList objects.
+        children: attribute; Slot keys mapped to a shared Module or a tuple of them.
         target: attribute; Declared hardware target, or None to inherit.
         topologies: attribute; Declared hierarchy, None to inherit, or an empty tuple.
         metadata: attribute; Target and compiler-option metadata.
@@ -50,7 +50,7 @@ class Module:
     name: str
     functions: tuple[core.Function | core.PrimFunction, ...]
     entry: str | None = None
-    children: dict[str, "ModuleList"] = field(default_factory=dict)
+    children: dict[str, Module | tuple[Module, ...]] = field(default_factory=dict)
     target: Target | None = None
     topologies: tuple[Topology, ...] | None = None
     metadata: dict[str, object] = field(default_factory=dict)
@@ -79,10 +79,11 @@ class Module:
     definition, not an invocation: owning a `Function`, attaching a child, or
     declaring a `Target` or hierarchy never begins or counts one (Python-to-HIR
     entry and HIR-to-HIR device calls: [hir §1.1](./hir.md#11-function)).
-  - `children` maps instance slot keys to `ModuleList` objects. Definitions and
-    function bodies remain shared; placing a definition creates no copy and no
-    parent backlink. A class-body `Module` becomes a single-element,
-    non-indexed slot; a class-body `ModuleList` is held as authored.
+  - `children` maps instance slot keys to a `Module` (a single slot) or a
+    non-empty tuple of `Module`s (an indexed slot). Definitions and function
+    bodies remain shared; placing a definition creates no copy and no parent
+    backlink. A class-body `Module` becomes a single slot; a class-body
+    `ModuleList` becomes the definition or the tuple it declares.
   - a child MAY declare its own Target; holding it does not type its bodies
     again. A call of a child function is typed from the callee body under the
     callee's effective Target with the call's own argument types
@@ -121,9 +122,9 @@ shared definitions or Functions.
   - A `children` key is the class-body attribute name. `Module.name` remains
     the definition name. Instance resource paths append that key, followed by
     the element index for an indexed slot, e.g. `layers.3.input_norm.w`.
-  - Each slot has its own object identity; a definition may occupy several
-    single slots or occur repeatedly in a `ModuleList`, sharing Functions.
-    A `ModuleList` object MUST NOT be attached under two different keys.
+  - A definition may occupy several single slots or occur repeatedly in an
+    indexed slot, sharing Functions. One class-body `ModuleList` wrapper
+    MUST NOT be bound to two different keys.
     Rebuilding a Module with the same slot key MUST remain valid.
   - Lists and tuples of Modules in a class body MUST be refused with guidance
     to use `ModuleList(definition, N)`.
@@ -200,8 +201,7 @@ shape-specialization variants live inside that entry's `Function.variants`
   like `lookup`; an HIR `Function` is callable as one
   `interfaces.evaluator.evaluate` step. A `Module` is likewise callable when it declares
   an `entry`, with one argument for every declared parameter. A **child module** name resolves to that child
-  `Module` for a non-indexed slot or its `ModuleList` for an indexed slot.
-  `ModuleList` supports Python iteration and indexing over its shared definitions.
+  `Module` for a non-indexed slot or its tuple of `Module`s for an indexed slot.
   A **method** name
   resolves to the class-body function bound like an instance method
   (`m.forward(...)`). Names beginning with `_` are never functions, modules, or
@@ -221,16 +221,14 @@ path for generated names, including indexed segments such as `layers.0.run`.
 ### 1.3 `ModuleList`
 
 ```python
-class ModuleList(Expr):
-    """Hold one instance slot without copying its definitions.
+class ModuleList:
+    """Declare one instance slot in a class body.
 
     Attributes:
-        key: attribute; Attachment key assigned by the containing Module.
         elements: attribute; Shared definitions in instance order.
         indexed: attribute; Whether source calls require an element index.
     """
 
-    key: str | None
     elements: tuple[Module | type[runtime.Module], ...]
     indexed: bool
 
@@ -238,20 +236,19 @@ class ModuleList(Expr):
 ```
 
 - constraints:
-  - A `ModuleList` is an Expr leaf carrying `key`, `elements`, and `indexed`.
-    Its key is assigned on attachment; its elements MUST be non-empty.
-    Semantic Module slots MUST contain only Module definitions. Runtime twin
+  - A `ModuleList` is the class-body spelling of a slot. It is not an `Expr`
+    and never appears in a function body or in `Module.children`; the
+    `@module` decorator stores its definition (single slot) or its tuple of
+    definitions (indexed slot). Its elements MUST be non-empty. Semantic
+    Module slots MUST contain only Module definitions. Runtime twin
     declarations use runtime.Module subclasses through the same list surface
     ([runtime §1.3](./runtime.md#13-runtimedecoratorpy)).
     A supplied count MUST be a positive integer, excluding bool.
     One Module without a count creates a non-indexed slot; a count or a tuple
     creates an indexed slot, preserving element order and repeated references.
   - Construction and attachment MUST NOT resolve element entries. A container
-    without an entry MAY occupy a slot. Reading `.type` or type inference
-    projects each entry's signature with ConstTensor parameters omitted:
-    `CallableType` for a single slot, `TupleType(CallableType, ...)` for an
-    indexed slot. Calling a container without an entry MUST report the usual
-    no-entry error.
+    without an entry MAY occupy a slot. Calling a container without an entry
+    MUST report the usual no-entry error.
   - A constant index MUST be in `[0, N)`. A variable index MUST be an integer
     scalar and all elements MUST reference the same definition by identity.
   - A single slot MUST NOT be indexed; an indexed slot MUST NOT be called
@@ -401,25 +398,29 @@ class Call(Expr):
     """Represent an Op invocation.
 
     Attributes:
-        target: attribute; Op, Function, instance slot, or computed instance target.
+        target: attribute; Op, Function, or FunctionRef naming a child instance.
         args: attribute; Input expressions in parameter order.
     """
 
-    target: Op | core.Function | ModuleList | Call
+    target: Op | core.Function | FunctionRef
     args: tuple[Expr, ...]
 ```
 
 - constraints:
   - `Call(target=Function)` supplies every parameter in the current instance.
-    A single-slot target is a `ModuleList`; an indexed instance target is
-    `Call(TupleGetItem, (ModuleList, index))`. Instance calls supply only the
-    entry's non-ConstTensor parameters. Implicit constants come from that
-    instance's resource path.
-  - Generic traversal MUST visit a Call-valued target before its args; it MUST
-    NOT traverse Function targets or the definitions held by ModuleList leaves.
-  - Entering an instance call MUST read the definition from the current
-    module's `children[key].elements[index]`. The target supplies only the key
-    and index, so rebuilt module trees remain authoritative.
+    An instance call's target is a `FunctionRef` ([tir §2.1](./tir.md#21-functionref))
+    whose `name` is `None`: `child(x)` is `FunctionRef(("child",), None)`,
+    `layers[2](x)` is `FunctionRef(("layers", 2), None)`, and `layers[i](x)` is
+    `FunctionRef(("layers", None), None)` with `i` as the first operand. The
+    run-time indices (`ref.indices(args)`) come first, one per `None` segment;
+    the remaining operands (`ref.arguments(args)`) supply only the entry's
+    non-ConstTensor parameters. Implicit constants come from that instance's
+    resource path.
+  - Generic traversal visits `args` only; it MUST NOT traverse Function
+    targets or the definitions a `FunctionRef` names.
+  - Entering an instance call MUST resolve the reference from the current
+    frame's Module ([§1.4](#14-function-references)), so rebuilt module trees
+    remain authoritative.
   - a value-form `Call` is anchored by `LetStmt` in TIR; a Stmt-position effect
     invocation is `Evaluate(op, args)`.
   - A `Call` MUST NOT appear as a top-level Stmt directly.

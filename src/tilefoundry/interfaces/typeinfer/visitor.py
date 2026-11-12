@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import typing
-from dataclasses import MISSING, replace
+from dataclasses import replace
 
 from tilefoundry import services
 from tilefoundry.interfaces import valuation
@@ -13,43 +13,6 @@ from tilefoundry.ir.types import int_tuple
 from .context import TypeInferContext, TypeInferResults
 from .reachability import check_input_reachability
 from .registry import registry
-
-
-def check_module_index(slot: core.ModuleList, index=MISSING, *, index_type=None):
-    """Validate one entry call or subscript, returning its normalized index.
-
-    Validate the slot from the current valuation.Context's module. A dynamic index
-    remains an expression; runtime bounds are checked when it is evaluated.
-    """
-    if index is MISSING:
-        if slot.indexed:
-            raise ValueError(f"ModuleList slot {slot.key!r} must be indexed before calling")
-        return None
-    if not slot.indexed:
-        raise ValueError(f"single slot {slot.key!r} cannot be indexed")
-    if isinstance(index, expr.Expr) or index_type is not None:
-        index_type = index.type if index_type is None else index_type
-
-        if (
-            not isinstance(index_type, types.TensorType)
-            or index_type.shape != ()
-            or not isinstance(index_type.dtype, expr.IntegerDType)
-        ):
-            raise ValueError(f"ModuleList slot {slot.key!r}: index must be an integer scalar")
-    if isinstance(index, expr.Constant):
-        index = index.value
-    if isinstance(index, bool) or not isinstance(index, (int, expr.Expr)):
-        raise ValueError(f"ModuleList slot {slot.key!r}: index must be an integer scalar")
-    if isinstance(index, int):
-        if not 0 <= index < len(slot):
-            raise ValueError(
-                f"ModuleList slot {slot.key!r}: index {index!r} out of range for N={len(slot)}"
-            )
-    elif any(element is not slot.elements[0] for element in slot.elements[1:]):
-        raise ValueError(
-            f"ModuleList slot {slot.key!r}: variable index requires the same definition"
-        )
-    return index
 
 
 def require_axis_groups(node, type_, ctx):
@@ -85,7 +48,7 @@ def call_function(
     *,
     child_frame: valuation.Context | None = None,
 ) -> types.Type:
-    child = child_frame is not None and not isinstance(call.target, core.Function)
+    child = isinstance(call.target, core.FunctionRef) and call.target.name is None
     supplied = tuple(param for param in callee.params if not (child and param.is_const))
     if len(arg_types) != len(supplied):
         kind = "activation(s)" if child else "parameter(s)"
@@ -190,20 +153,10 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
 
     def visit_leaf_Call(self, call: expr.Call, arg_types, ctx: TypeInferContext) -> types.Type:
         target = call.target
-        if call.args and isinstance(call.args[0], core.ModuleList):
-            slot = call.args[0]
-            if ctx.module is not None:
-                slot = ctx.module.children[slot.key]
-            try:
-                index = check_module_index(slot, call.args[1], index_type=arg_types[1])
-            except ValueError as error:
-                ctx.error(call, str(error))
-            return arg_types[0].fields[index if isinstance(index, int) else 0]
-        if isinstance(target, expr.Call):
-            arg_types = arg_types[1:]
         try:
-            if isinstance(target, core.ModuleList) and ctx.module is not None:
-                check_module_index(ctx.module.children[target.key])
+            if isinstance(target, core.FunctionRef):
+                target.check_indices(target.indices(arg_types))
+                arg_types = target.arguments(arg_types)
             child_frame = ctx.callee_context(call)
             if child_frame is not None:
                 target = child_frame.function
@@ -225,13 +178,6 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
             raise
         except ValueError as error:
             ctx.error(call, str(error))
-
-    def visit_leaf_ModuleList(self, slot, operands, ctx: TypeInferContext) -> types.Type:
-        try:
-            current = ctx.module.children[slot.key] if ctx.module is not None else slot
-            return current.type
-        except (KeyError, ValueError) as error:
-            ctx.error(slot, str(error))
 
     def visit_leaf_Tuple(self, tup: expr.Tuple, operands, ctx: TypeInferContext) -> types.Type:
         """Visit Tuple.

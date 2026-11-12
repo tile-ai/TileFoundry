@@ -11,7 +11,7 @@ from tilefoundry.ir.tir import memory
 
 from .module_names import definition_names, module_definition_order, slot_binding
 from .print_context import TirPrintContext, identifier
-from .printer_base import PythonPrinter
+from .printer_base import PythonPrinter, call_head
 
 LINE_LENGTH = 100
 
@@ -89,7 +89,7 @@ class TirPrinter(PythonPrinter, core.StmtVisitor[list[str]], core.ExprVisitor[st
         return f"(\n{elements}\n{self.indent})"
 
     def visit_FunctionRef(self, node: core.FunctionRef, ctx=None) -> str:
-        return ".".join(identifier(part) for part in (*node.path, node.name))
+        return call_head(node, (), self.visit, identifier)
 
     def visit_ShapeOf(self, node: core.ShapeOf, ctx=None) -> str:
         return f"shape_of({self.visit(node.param, ctx)}, axis={node.axis})"
@@ -258,22 +258,8 @@ class TirPrinter(PythonPrinter, core.StmtVisitor[list[str]], core.ExprVisitor[st
 
     def emit_evaluate(self, stmt):
         target = stmt.callable
-        if isinstance(target, (core.PrimFunction, core.ModuleList, expr.Call)):
-            frame = self.context.valuation
-            frame = (
-                frame.callee_context(expr.Call(target, stmt.args, type=types.UnitType()))
-                if frame is not None
-                else None
-            )
-            callee = target if frame is None else frame.function
-            head = (
-                callee.name
-                if isinstance(target, core.PrimFunction)
-                else (target.key if isinstance(target, core.ModuleList) else target.args[0].key)
-            )
-            if isinstance(target, expr.Call):
-                head += f"[{self.visit(target.args[1])}]"
-            return [f"{self.indent}{head}({', '.join(self.visit(arg) for arg in stmt.args)})"]
+        if isinstance(target, core.PrimFunction):
+            return [f"{self.indent}{target.name}({', '.join(self.visit(arg) for arg in stmt.args)})"]
         handler = registry.get(type(stmt.callable), None) or (
             registry.get(expr.Op, None) if isinstance(stmt.callable, expr.Op) else None
         )
@@ -306,8 +292,10 @@ def print_launch(stmt: core.Evaluate, printer: TirPrinter) -> list[str]:
 
 @register_tir_printer(core.FunctionRef)
 def print_function_call(stmt: core.Evaluate, printer: TirPrinter) -> list[str]:
-    rendered = f"{printer.visit(stmt.callable)}({printer.join_args(stmt.args)})"
-    if len(printer.indent + rendered) + 4 <= LINE_LENGTH:
+    ref = stmt.callable
+    head = call_head(ref, ref.indices(stmt.args), printer.visit, identifier)
+    rendered = f"{head}({printer.join_args(ref.arguments(stmt.args))})"
+    if ref.name is None or len(printer.indent + rendered) + 4 <= LINE_LENGTH:
         return [printer.indent + rendered]
     return printer.wrapped_call("", rendered)
 

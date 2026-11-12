@@ -12,7 +12,7 @@ from .let_stmt import LetStmt
 from .loop_region import LoopRegion
 from .mesh_region import MeshRegion
 from .mesh_scope import MeshScope
-from .module import LoadedModule, Module, ModuleFunction, ModuleList, descend, resolve
+from .module import LoadedModule, Module, ModuleFunction, ModuleList, descend, instances, resolve
 from .prim_function import PrimFunction
 from .return_stmt import Return
 from .sequential import Sequential

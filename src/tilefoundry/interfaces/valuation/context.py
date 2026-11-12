@@ -72,22 +72,28 @@ class Context:
                 parent=None,
                 caller_context=self,
             )
-        slot, index = module_slot(call)
-        if slot is None:
+        if not isinstance(call.target, core.FunctionRef):
             return None
-        if self.module is None:
-            raise ValueError("instance call requires a module context")
-        slot = self.module.children[slot.key]
-        index = index.value if isinstance(index, expr.Constant) else 0
-        module = slot.elements[index]
-        function = module.entry_function()
+        return self.enter_reference(call.target)
+
+    def enter_reference(self, ref):
+        """The environment of the function *ref* names from this frame's Module.
+
+        Each Module the path passes through may declare its own target and
+        topologies; undeclared ones inherit from the Module before it.
+        """
+        module, function = core.resolve(self.module, ref)
+        target, topologies = self.target, self.topologies
+        for node in core.descend(self.module, ref):
+            target = node.target if node.target is not None else target
+            topologies = node.topologies if node.topologies is not None else topologies
         return replace(
             self,
             module=module,
             function=function,
             owner=function,
-            target=module.target if module.target is not None else self.target,
-            topologies=module.topologies if module.topologies is not None else self.topologies,
+            target=target,
+            topologies=topologies,
             call_site=None,
             parent=None,
             caller_context=self,
@@ -122,18 +128,4 @@ class Context:
         return self.target
 
 
-def module_slot(call):
-    """The instance slot a call reaches, with its index, or ``(None, None)`` for any other call."""
-    target = call.target
-    if isinstance(target, core.ModuleList):
-        return target, 0
-    if (
-        isinstance(target, expr.Call)
-        and target.args
-        and isinstance(target.args[0], core.ModuleList)
-    ):
-        return target.args[0], target.args[1]
-    return None, None
-
-
-__all__ = ["Context", "module_slot"]
+__all__ = ["Context"]

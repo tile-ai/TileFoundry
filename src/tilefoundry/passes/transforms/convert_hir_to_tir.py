@@ -1346,7 +1346,13 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
             if (refusal := ctx.storage.answers[core.SSAValue(call)].refusal) is not None:
                 raise LoweringError(refusal)
             self.runtime_values(call, ctx)
-        operands = tuple(self.visit(arg, ctx=ctx) for arg in call.args)
+        target = call.target
+        if isinstance(target, core.FunctionRef):
+            operands = tuple(
+                self.visit(arg, ctx=ctx, dimension=True) for arg in target.indices(call.args)
+            ) + tuple(self.visit(arg, ctx=ctx) for arg in target.arguments(call.args))
+        else:
+            operands = tuple(self.visit(arg, ctx=ctx) for arg in call.args)
         if ctx.callee_context(call) is not None:
             return self.visit_callee(call, operands, ctx)
         return getattr(self, f"visit_{type(call.target).__name__}", self.visit_T)(
@@ -1384,19 +1390,18 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
             ctx.scratch.append(forwarded)
             scratch.append(forwarded)
         target = call.target
+        reference = isinstance(target, core.FunctionRef)
+        indices = target.indices(operands) if reference else ()
+        arguments = target.arguments(operands) if reference else operands
         if isinstance(target, core.Function):
             target = lowering.lowered
-        elif isinstance(target, expr.Call):
-            target = replace(
-                target, args=(target.args[0], self.visit(target.args[1], ctx=ctx, dimension=True))
-            )
         params = tuple(
             param
             for param in lowering.lowered.params
             if isinstance(call.target, core.Function) or not param.is_const
         )
         passed = []
-        for value, param in zip((*operands, *scratch, destination), params, strict=True):
+        for value, param in zip((*arguments, *scratch, destination), params, strict=True):
             passed.append(
                 ctx.builder.value(
                     ctx.storage.operand(value, param.type, whole_tensor=True, stem="argument"),
@@ -1405,7 +1410,7 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
                 if isinstance(param.type, types.TensorType)
                 else ctx.builder.value(value, ctx=ctx)
             )
-        ctx.builder.add(core.Evaluate(target, tuple(passed)))
+        ctx.builder.add(core.Evaluate(target, (*indices, *passed)))
         return destination
 
     def visit_TupleGetItem(self, call: expr.Call, operands, ctx) -> expr.Expr:
@@ -1557,7 +1562,7 @@ class ConvertHIRToTIR(pass_base.ModulePass):
                 return
             modules.add(id(node))
             for slot in node.children.values():
-                for child in slot.elements:
+                for child in core.instances(slot):
                     lower_module(child)
             updates.append((node, tuple(
                 relaunch(lowered[id(fn)].lowered if id(fn) in lowered else fn, node, lowered)
