@@ -2,14 +2,13 @@
 
 import torch
 import torch.distributed as dist
+from model import collective_function
 from torch.distributed.pipelining import PipelineStage
 
 from tilefoundry import core
 from tilefoundry.interfaces import evaluator
 from tilefoundry.ir import types
 from tilefoundry.ir.hir import sharding
-
-from model import collective_function
 
 
 def exchange_contracts(mesh, shape, tokens, dtype, contexts):

@@ -4,8 +4,8 @@ import copy
 
 import torch
 from torch import nn
-from transformers.masking_utils import create_causal_mask
 from transformers.loss.loss_utils import ForCausalLMLoss
+from transformers.masking_utils import create_causal_mask
 from transformers.models.qwen3_moe.modeling_qwen3_moe import load_balancing_loss_func
 
 

@@ -4,8 +4,7 @@ import gzip
 import json
 
 import pytest
-
-from timeline import duration, intersection, read_rank, union
+from timeline import duration, intersection, launch_contexts, operation_label, read_rank, union
 
 
 def test_concurrent_streams_are_not_double_counted():
@@ -52,3 +51,18 @@ def test_launch_window_excludes_reference_but_keeps_async_completion(tmp_path):
     write_trace(tmp_path, events)
     with pytest.raises(ValueError, match="uncorrelated"):
         read_rank(tmp_path, 0)
+
+
+def test_named_operations_follow_issue_thread_and_recompute_scope():
+    events = [dict(cat="user_annotation", name="qwen/layer/0", ts=0, dur=50, tid=1),
+              dict(cat="user_annotation", name="communication/cp_kv", ts=2, dur=4, tid=1),
+              dict(cat="user_annotation", name="dmuon.stage1_shard_reduce", ts=0, dur=20, tid=2),
+              dict(cat="user_annotation", name="communication/ep_dispatch", ts=10, dur=2, tid=1),
+              dict(cat="user_annotation", name="communication/ep_return", ts=30, dur=2, tid=1)]
+    scopes = launch_contexts(list(reversed(events)), {1: dict(ts=3, tid=1), 2: dict(ts=15, tid=1)})
+    assert operation_label("ncclAllGather", "", scopes[1], "forward") == ("CP K/V all-gather", "0")
+    assert operation_label("sgemm", "aten::mm", scopes[2], "forward") == ("Expert gate/up/down GEMMs", "0")
+    attention = ("autograd::engine::evaluate_function: MmBackward0", "qwen/layer/0", "aten::scaled_dot_product_attention")
+    assert operation_label("flash_fwd", "", attention, "backward") == ("Recompute: SDPA attention", "0")
+    assert operation_label("flash_bwd", "", (), "backward") == ("Attention backward", None)
+    assert "scope unassigned" in operation_label("ncclAllGather", "", (), "forward")[0]

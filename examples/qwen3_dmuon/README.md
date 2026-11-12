@@ -25,6 +25,63 @@ run. `--transport native` uses NCCL's configured selection. `--transport socket`
 forces the Socket path with P2P, SHM, NVLS and MNNVL disabled for protocol checks.
 Transport details and software versions are recorded with each run's outputs.
 
+## End-to-end comparison
+
+Start with the [complete-training experiment](evidence/training.md): real Qwen
+forward/backward, checkpoint recomputation, gradient communication and DMuon
+updates. The default keeps the Qwen layer widths, 128 experts and vocabulary,
+uses four layers and 8,192-position packed sequences, and compares these cases:
+
+| Case | Pipeline | Context | Experts | DMuon shard/replica groups |
+| --- | ---: | ---: | ---: | --- |
+| `cp` | 2 | 2 | 1 | Four shard ranks per stage |
+| `cp_ep` | 2 | 2 | 2 | Four dense shard ranks; two ranks per expert domain |
+| `cp_hsdp` | 2 | 2 | 1 | Two shard ranks × two replica ranks per stage |
+
+Each has two independent data lanes and four microbatches per lane. Paired
+candidates use identical inputs, checkpointing and optimizer math. Only DMuon's
+prefetch/asynchronous execution switches differ; "off" still allows ordinary
+pipeline and backward communication overlap. Every run checks loss and all owner gradients against the reference before timing.
+Final hashes and fixed weight samples diagnose drift between independent runs;
+they do not establish full-weight equivalence.
+Across configurations, ownership and reduction structure differ, so the report
+shows paired comparisons rather than declaring one sharding scheme fastest.
+
+```bash
+python examples/qwen3_dmuon/benchmark_training.py --output .tmp/qwen-training --repeat-baseline
+python examples/qwen3_dmuon/training_plot.py .tmp/qwen-training/training.json \
+  --output .tmp/qwen-training/figures --interactive
+```
+
+The benchmark calls `pipeline.py` for every candidate. Two reference checks and
+two warmup steps precede three four-step timing windows, then a separate two-step
+CUDA capture. It measures actual optimizer updates on fresh batches. There are
+no synthetic compute delays or assumed communication rates. Shapes are full
+width with reduced depth; the reference workload currently uses FP32. Results
+are not a full 48-layer or mixed-precision production throughput claim.
+
+The report preserves all timing windows, valid-target throughput, training-only
+peak allocation, numerical errors and device timelines. The operation guide
+shows tensor sizes and checked CP/EP/PP boundaries. A measured layer view and
+`training_operations.html` name GEMMs, attention, routing, checkpoint
+recomputation, individual collectives and optimizer work. Both compute-overlap
+and NCCL-overlap fractions are shown. NCCL kernel time includes peer waits.
+Use `--width tiny --tokens 256` for a quick workflow check, or `--cases cp_ep`
+to run one pair. Existing results can be rendered without CUDA.
+
+Code responsibilities:
+
+- `config.py` holds dimensions and training arguments; `pipeline.py` wires the
+  reference checks and the shared training step.
+- `pipeline_model.py` defines a stage; `packed.py` supplies packing, CP and EP;
+  `parallel.py` constructs stage-local data/shard/replica groups.
+- `dedicated.py` owns DMuon policy. `parallel_optimizer.py` separates dense and
+  expert domains only when EP makes their ownership different.
+- `profiling.py` measures training; `timeline.py` attributes device kernels;
+  the benchmark and plot scripts assemble their results.
+- `runtime.py` owns reusable communication/bootstrap helpers. Executing examples
+  do not import their setup from validation scripts.
+
 ## Communication contracts
 
 The pinned dmuon FSDP2/DDP backends, Gram helpers, clipping and checkpoint paths
@@ -71,46 +128,6 @@ obligate the caller to retain buffers and native resources until completion.
 Static loops are checked across iterations; dynamic host control flow and unknown
 kernel effects in the same host entry are rejected. Communication-only modules
 compile without a dummy kernel or CUTLASS dependency.
-
-## Checked compute/communication overlap
-
-`overlap.py` authors a bounded producer kernel, all-reduce and consumer kernel
-for each chunk. Serial and pipelined variants use the same computation. Their
-dependencies and buffer accesses come from the mixed host TIR checker. Workspace
-placement reuses TileFoundry's allocation solver with completion-derived
-interference; the example does not maintain a second memory model.
-
-```bash
-python examples/qwen3_dmuon/overlap.py --output .tmp/qwen-overlap
-python examples/qwen3_dmuon/overlap.py --capacity-bytes 256 \
-  --output .tmp/qwen-overlap-limited
-python -m torch.distributed.run --standalone --nproc-per-node=2 \
-  examples/qwen3_dmuon/overlap.py --run-native --steps 3 \
-  --output .tmp/qwen-overlap-native
-```
-
-At the default two chunks of 32 FP32 elements, serial execution uses 256 bytes
-of scratch. Pipelining exposes two independent compute/communication pairs and
-uses 384 bytes. A 256-byte capacity accepts the serial plan and rejects the
-pipelined plan. Native execution compiles both kernels and communication, checks
-every repeated result against an independent arithmetic oracle, and checks that
-incorrect arena bindings are rejected before issue. The small scalar kernel is
-compiled for the executing CUDA architecture; this does not calibrate device
-performance facts.
-
-No timing is assumed by default. Supplying both `--kernel-us` and
-`--communication-us` runs the existing event engine on the checked dependency
-graph. The report labels these as user-supplied, uncontended estimates. For
-example, costs of 10 and 20 microseconds give estimates of 80 and 60 microseconds;
-these are illustrative values, not measured speedups. Legal overlap does not
-establish useful concurrent progress or a profitable fused kernel.
-
-The core summary currently covers verified local kernels with compact whole
-parameter views and explicit streams. Partial kernel views, unknown effects and
-dynamic control flow are rejected. This example does not yet implement device
-communication, remote-consumer release, fused kernels or a checkpoint scheduler.
-The full training simulator below still uses its separate coarse phase model;
-it is not yet derived from a complete authored training program.
 
 ## Pipeline training
 
@@ -190,8 +207,9 @@ Primitive dtype coverage is separate from full-model mixed-precision training.
 ## Overlap and optimizer variants
 
 `--overlap on` enables asynchronous optimizer updates and layer prefetch.
-`--profile-steps N` adds N unprofiled timing steps and N captured steps after
-validation and warmup; the reference is released before these windows. Compare
+`--profile-steps N` captures N diagnostic steps after validation, warmup and
+unprofiled timing. `--timing-steps M --timing-rounds R` measures R consecutive
+M-step windows first; the reference is released before these windows. Compare
 otherwise identical runs with overlap on/off. Timing uses the slowest rank.
 
 ```bash
@@ -213,8 +231,49 @@ explicit expert layouts retain owner broadcast.
 
 The pinned HSDP path disables optimizer-tail prefetch because of its interaction
 with model-state export, and rejects all-gather publication because exported
-replica-row weights diverge. Packed CP/EP currently requires layer boundaries,
-no HSDP replicas and no global Muon clipping across its optimizer views.
+replica-row weights diverge. Packed CP works with the HSDP broadcast path. EP with HSDP replicas remains
+unsupported because the expert domains need their own replica/shard mapping.
+Packed training requires layer boundaries and excludes global Muon clipping
+across its optimizer views.
+
+## Gradient fusion and measured overlap
+
+[The recorded experiment](evidence/README.md) compares four realizations of the
+same gradient boundary: `mean_rank(microbatch_a + microbatch_b)`. It separates
+chunk pipelining from fusing normalization into the collective. The largest
+recorded bucket improved from 381 to 272 microseconds; these are isolated bucket
+measurements, not a full training throughput result.
+
+The example has three entry points:
+
+- [overlap.py](overlap.py) authors the two local kernels and the serial/pipelined
+  host program. One flag replaces sum plus normalization with average.
+- [benchmark_overlap.py](benchmark_overlap.py) checks fresh inputs against an
+  independent FP64 CPU reference, measures all candidates, then captures CUDA
+  traces. Core analyses supply dependencies, workspace and fusion boundaries.
+- [overlap_plot.py](overlap_plot.py) renders the saved data without running CUDA.
+
+```bash
+python -m torch.distributed.run --standalone --nproc-per-node=8 \
+  examples/qwen3_dmuon/benchmark_overlap.py --output .tmp/qwen-gradient
+python examples/qwen3_dmuon/overlap_plot.py .tmp/qwen-gradient/evidence.json \
+  --output .tmp/qwen-gradient/figures --interactive
+```
+
+Or reproduce the checked-in figures directly:
+
+```bash
+python examples/qwen3_dmuon/overlap_plot.py \
+  examples/qwen3_dmuon/evidence/gradient_overlap.json \
+  --output .tmp/qwen-gradient-figures --interactive
+```
+
+The report includes latency distributions, explicit workspace, local kernel
+accesses, and measured timelines. More overlap is not always better: removing
+normalization reduced both latency and the compute/NCCL overlap percentage.
+The built-in NCCL average operation supplies this fusion; no device-side
+communication extension is required. The complete-training experiment above exercises the existing checkpoint policy;
+arbitrary fused communication kernels remain separate work.
 
 ## Isolated HSDP/TP boundary
 
@@ -268,8 +327,9 @@ multi-host performance. Outputs retain calibration provenance and assumptions.
 
 ## Remaining integration
 
-- Mixed compute/communication scheduling and a concrete core communication-cost
-  realization. Current host compilation handles explicit communication protocols.
+- Lower the executing training schedule into full mixed compute/communication
+  HIR, with a concrete communication-cost realization. The native gradient
+  experiment already exercises explicit mixed host programs.
 - Full training HIR and TP composition with the executing PP/CP/EP path.
 - Scoped optimizer checkpoint/resume, HSDP sharded-publication consistency and
   sharded explicit expert layouts; uncheckpointed drain needs a dmuon fix.

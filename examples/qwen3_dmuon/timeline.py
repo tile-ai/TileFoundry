@@ -1,10 +1,10 @@
 """Summarize measured CUDA overlap and export a shared-clock training timeline."""
 
 import argparse
-from bisect import bisect_right
-from collections import Counter, defaultdict
 import gzip
 import json
+from bisect import bisect_right
+from collections import Counter, defaultdict
 from math import ceil, floor, isfinite
 from pathlib import Path
 
@@ -46,6 +46,91 @@ def display_intervals(intervals, shift):
                  for start, end in intervals)
 
 
+def launch_contexts(events, launches):
+    """Resolve thread-local ranges at issue time, including autograd and CP/EP scopes."""
+    import heapq
+
+    threads = defaultdict(list)
+    dispatch = defaultdict(list)
+    for event in events:
+        name, category = event.get("name", ""), event.get("cat")
+        keep = category == "user_annotation" and name.startswith(("qwen/", "communication/", "dmuon.", "FSDP", "nccl:"))
+        keep |= category == "cpu_op" and (name.startswith(("autograd::engine", "c10d::")) or "scaled_dot_product" in name)
+        if keep:
+            threads[event.get("tid")].append((event["ts"], 0, len(threads[event.get("tid")]), event))
+        if name in ("communication/ep_dispatch", "communication/ep_return"):
+            dispatch[event.get("tid")].append(event)
+    for thread, boundaries in dispatch.items():
+        start = None
+        for event in sorted(boundaries, key=lambda e: e["ts"]):
+            if event["name"] == "communication/ep_dispatch":
+                start = event["ts"] + event["dur"]
+            elif start is not None and start < event["ts"]:
+                scope = dict(name="experts/local_compute", ts=start, dur=event["ts"]-start)
+                threads[thread].append((start, 0, len(threads[thread]), scope))
+                start = None
+    for correlation, event in launches.items():
+        threads[event.get("tid")].append((event["ts"], 1, correlation, event))
+    contexts = {}
+    for points in threads.values():
+        active, ends = {}, []
+        for when, kind, identity, event in sorted(points, key=lambda item: item[:3]):
+            while ends and ends[0][0] <= when:
+                _, ended = heapq.heappop(ends)
+                active.pop(ended, None)
+            if kind == 0:
+                active[identity] = event
+                heapq.heappush(ends, (when + event["dur"], identity))
+            else:
+                contexts[identity] = tuple(e["name"] for e in sorted(active.values(), key=lambda e: e["ts"]))
+    return contexts
+
+
+def operation_label(kernel, operator, scopes, phase):
+    """Name observed operations; unassigned communication is kept explicit."""
+    context = " ".join(scopes)
+    nccl = "nccl" in kernel.lower()
+    layer = next((name.rsplit("/", 1)[1] for name in reversed(scopes) if name.startswith("qwen/layer/")), None)
+    if nccl:
+        for scope, label in (("communication/cp_kv", "CP K/V all-gather"),
+                             ("communication/ep_counts", "EP count all-gather"),
+                             ("communication/ep_dispatch", "EP token/ID dispatch"),
+                             ("communication/ep_return", "EP output return"),
+                             ("_AllGatherBackward", "CP gradient reduce-scatter"),
+                             ("_AlltoAllSingleBackward", "EP gradient all-to-all"),
+                             ("dmuon.stage1_shard_reduce", "DMuon owner-gradient reduction"),
+                             ("dmuon.replicate_broadcast", "HSDP parameter publication")):
+            if scope in context:
+                return label, layer
+        if "nccl:coalesced" in context and "SendRecv" in kernel:
+            return "Grouped P2P send/recv", layer
+        if any(name.startswith("dmuon.") for name in scopes):
+            return "DMuon parameter publication" if "Broadcast" in kernel or "Gather" in kernel else "DMuon gradient communication", layer
+        if any(name.startswith(("c10d::send", "c10d::recv", "c10d::isend", "c10d::irecv")) for name in scopes):
+            return "PP activation/gradient transfer", layer
+        family = next((word for word in ("ReduceScatter", "AllGather", "AllReduce", "Broadcast", "Reduce", "SendRecv") if word in kernel), "collective")
+        return f"NCCL {family} (scope unassigned)", layer
+    if "scaled_dot_product" in context.lower() or any(word in kernel.lower() for word in ("flash_fwd", "flash_bwd", "attention")):
+        backward = any(("scaled_dot_product" in name.lower() or "scaleddotproduct" in name.lower()) and "backward" in name.lower() for name in scopes)
+        label = "Attention backward" if backward or "bwd" in kernel.lower() else "SDPA attention"
+    elif operator in ("aten::mm", "aten::bmm", "aten::addmm") or "gemm" in kernel.lower():
+        label = ("Muon update GEMMs" if phase == "optimizer" else "Expert gate/up/down GEMMs" if "experts/local_compute" in context
+                 else "Backward GEMMs" if phase == "backward" and layer is None else "Projection GEMMs")
+    elif "embedding" in operator or "embedding" in kernel.lower():
+        label = "Embedding lookup/gradient"
+    elif "softmax" in operator.lower() or "softmax" in kernel.lower() or "nll_loss" in operator:
+        label = "Router/loss softmax"
+    elif any(word in operator for word in ("index", "scatter", "gather", "sort", "bincount")):
+        label = "Token routing/indexing"
+    elif phase == "optimizer":
+        label = "Momentum/AdamW/pointwise update"
+    else:
+        label = "Pointwise/normalization/packing"
+    if phase == "backward" and layer is not None:
+        label = "Recompute: " + label
+    return label, layer
+
+
 def read_rank(folder, rank):
     """Correlate kernels, including CUDA graph replay, to host launch ranges."""
     manifest = json.loads((folder / f"rank{rank}.json").read_text())
@@ -59,8 +144,12 @@ def read_rank(folder, rank):
     phases = sorted((e for e in annotations if e["name"].startswith("pipeline/")
                      or e["name"] == "training/optimizer"), key=lambda e: e["ts"])
     starts = [e["ts"] for e in phases]
+    steps = sorted((e for e in annotations if e["name"].startswith("training/step/")), key=lambda e: e["ts"])
+    step_starts = [e["ts"] for e in steps]
     launches = {e.get("args", {}).get("correlation"): e for e in events
                 if e.get("cat") in {"cuda_runtime", "cuda_driver"} and "correlation" in e.get("args", {})}
+    contexts = launch_contexts(events, launches)
+    operators = {e.get("args", {}).get("External id"): e["name"] for e in events if e.get("cat") == "cpu_op"}
     kernels, missing = [], 0
     for event in events:
         if event.get("cat") != "kernel":
@@ -77,7 +166,13 @@ def read_rank(folder, rank):
             name = phases[index]["name"]
             phase = "optimizer" if name == "training/optimizer" else name.split("/")[1]
         kind = "nccl" if "nccl" in event["name"].lower() else phase
-        kernels.append(dict(event, kind=kind, phase=phase))
+        step_index = bisect_right(step_starts, launch["ts"]) - 1
+        step = int(steps[step_index]["name"].rsplit("/", 1)[1]) if step_index >= 0 else None
+        operator = operators.get(launch.get("args", {}).get("External id"), "")
+        operation, layer = operation_label(event["name"], operator, contexts.get(event.get("args", {}).get("correlation"), ()), phase)
+        microbatch = phases[index]["name"].rsplit("/", 1)[-1] if index >= 0 and phases[index]["name"].startswith("pipeline/") else None
+        kernels.append(dict(event, kind=kind, phase=phase, step=step, operation=operation, layer=layer,
+                            operator=operator, microbatch=microbatch))
     if missing or not kernels:
         raise ValueError(f"incomplete CUDA trace: {missing} uncorrelated kernels, {len(kernels)} attributed")
     by_kind = defaultdict(list)
@@ -95,6 +190,11 @@ def read_rank(folder, rank):
                    overlap_by_phase_us={kind: intersection(intervals, communication)
                                         for kind, intervals in by_kind.items() if kind != "nccl"},
                    nccl_kernels=dict(Counter(e["name"] for e in kernels if e["kind"] == "nccl")),
+                   compute_by_phase_us={kind: duration(intervals) for kind, intervals in by_kind.items() if kind != "nccl"},
+                   device_span_us=max(e["ts"] + e["dur"] for e in kernels) - min(e["ts"] for e in kernels),
+                   operations={name: dict(kernel_count=len(selected), gpu_us=duration((e["ts"], e["ts"]+e["dur"]) for e in selected))
+                               for name in sorted({e["operation"] for e in kernels})
+                               if (selected := [e for e in kernels if e["operation"] == name])},
                    kernel_count=len(kernels))
     return dict(manifest=manifest, base=trace["baseTimeNanoseconds"], host=trace["host_name"],
                 metrics=metrics, kernels=kernels, phases=phases, intervals=by_kind,
@@ -104,8 +204,8 @@ def read_rank(folder, rank):
 
 def write_timeline(folder, ranks):
     """Write an interactive GPU interval plot and a detailed Perfetto-compatible trace."""
-    import plotly.graph_objects as go
     import matplotlib
+    import plotly.graph_objects as go
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt

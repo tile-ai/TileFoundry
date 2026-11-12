@@ -1,80 +1,12 @@
 """Validate full-width Qwen models under real NCCL 1F1B training."""
 
-import argparse
+import json
+import os
 from dataclasses import asdict, replace
 from datetime import timedelta
 from functools import partial
-import json
-import os
-from pathlib import Path
 
-from config import FULL, SOURCES, TINY
-
-
-def arguments():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--width", choices=("full", "tiny"), default="full")
-    parser.add_argument("--layers", type=int, default=2)
-    parser.add_argument("--stages", type=int, default=2)
-    parser.add_argument("--microbatches", type=int, default=4)
-    parser.add_argument("--tokens", type=int, default=8)
-    parser.add_argument("--cp", type=int, default=1)
-    parser.add_argument("--ep", type=int, default=1, help="expert partition of the data axis")
-    parser.add_argument("--packed", action="store_true", help="multiple documents with unequal padding per data lane")
-    parser.add_argument("--routing-check", choices=("strict", "replay-near-ties"), default="strict",
-                        help="validation only: optionally replay oracle choices after verifying near-tie margins")
-    parser.add_argument("--steps", type=int, default=2)
-    parser.add_argument("--optimizer", choices=("sgd", "dmuon"), default="sgd")
-    parser.add_argument("--checkpoint", choices=("auto", "stage", "none"), default="auto")
-    parser.add_argument("--boundary", choices=("stage", "layer"), default="layer")
-    parser.add_argument("--overlap", choices=("off", "on"), default="off")
-    parser.add_argument("--ns-backend", choices=("direct", "gram"), default="direct")
-    parser.add_argument("--forward-unshard", choices=("broadcast", "all_gather"), default="broadcast",
-                        help="attention matrix publication; explicit expert layouts require broadcast in the pin")
-    parser.add_argument("--muon-max-norm", type=float,
-                        help="clip the global Muon-only norm; AdamW parameters are excluded")
-    parser.add_argument("--replicas", type=int, default=1, help="HSDP replica dimension inside each stage's DP group")
-    parser.add_argument("--profile-steps", type=int, default=0,
-                        help="run this many unprofiled timing steps, then this many profiled steps")
-    parser.add_argument("--warmup-steps", type=int, default=1)
-    parser.add_argument("--reference-offload", action="store_true",
-                        help="keep only stage-owned reference gradients and offload the reference between checks")
-    parser.add_argument("--compare-final", type=Path,
-                        help="require bitwise final weights matching a prior run with the same data steps")
-    parser.add_argument("--transport", choices=("native", "socket"), default="native")
-    parser.add_argument("--output", type=Path, default=Path(".tmp/qwen3-dmuon/pipeline"))
-    args = parser.parse_args()
-    world = int(os.environ.get("WORLD_SIZE", 0))
-    if args.stages < 2 or args.layers < args.stages or args.layers % args.stages:
-        parser.error("layers must be a positive multiple of at least two pipeline stages")
-    if not world or world % args.stages:
-        parser.error("launch with torchrun; world size must be a multiple of stages")
-    if min(args.cp, args.ep) < 1 or (world // args.stages) % (args.cp * args.ep):
-        parser.error("CP times EP must divide ranks per pipeline stage")
-    args.packed = args.packed or args.cp > 1 or args.ep > 1
-    if args.packed and (args.tokens < 32 or args.tokens % args.cp):
-        parser.error("packed sequences need >= 32 tokens divisible by CP")
-    if args.packed and (args.optimizer != "dmuon" or args.replicas != 1 or args.muon_max_norm is not None
-                        or args.boundary != "layer"):
-        parser.error("packed CP/EP currently requires dmuon, layer boundaries, no HSDP replicas or norm clipping")
-    if args.replicas < 1 or (world // args.stages) % args.replicas:
-        parser.error("HSDP replicas must divide the DP group size")
-    if args.replicas > 1 and args.forward_unshard == "all_gather":
-        parser.error("pinned dmuon exports stale replica-row weights after HSDP all-gather publication; use broadcast")
-    if args.profile_steps < 0 or args.warmup_steps < 0:
-        parser.error("profile and warmup step counts must be nonnegative")
-    if args.muon_max_norm is not None and not 0 < args.muon_max_norm < float("inf"):
-        parser.error("Muon max norm must be finite and positive")
-    if args.optimizer != "dmuon" and (args.overlap == "on" or args.replicas > 1):
-        parser.error("HSDP and optimizer overlap require --optimizer dmuon")
-    if args.optimizer != "dmuon" and (args.muon_max_norm is not None or args.ns_backend != "direct"
-                                     or args.forward_unshard != "broadcast"):
-        parser.error("Muon options require --optimizer dmuon")
-    if args.compare_final and (args.optimizer != "dmuon" or args.compare_final.resolve() == args.output.resolve()):
-        parser.error("final-state comparison needs dmuon and a different baseline output directory")
-    if args.microbatches < args.stages or args.tokens < 2 or args.steps < 1:
-        parser.error("require microbatches >= stages, tokens >= 2, and steps >= 1")
-    return args
+from config import FULL, SOURCES, TINY, arguments
 
 
 def main():
@@ -91,44 +23,25 @@ def main():
                       NCCL_TOPO_DUMP_FILE=str(args.output.resolve() / f"topology-rank{rank}.xml"))
     import torch
     import torch.distributed as dist
-    from torch.distributed.pipelining import Schedule1F1B
-    from transformers import Qwen3MoeForCausalLM
     import transformers
-
-    from tilefoundry.ir import types
     from pipeline_model import QwenStage, pipeline_loss
     from pipeline_trace import TracedStage, check_endpoints
+    from torch.distributed.pipelining import Schedule1F1B
+    from transformers import Qwen3MoeForCausalLM
+
+    from tilefoundry.ir import types
 
     torch.set_num_threads(1)
     torch.backends.cuda.matmul.allow_tf32 = False
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
     dist.init_process_group("nccl", device_id=device, timeout=timedelta(seconds=300))
-    replicas = world // args.stages
-    index, replica = divmod(rank, replicas)
-    pp_group = dp_group = None
-    for data_rank in range(replicas):
-        group = dist.new_group([stage * replicas + data_rank for stage in range(args.stages)])
-        if data_rank == replica:
-            pp_group = group
-    for stage in range(args.stages):
-        group = dist.new_group(list(range(stage * replicas, (stage + 1) * replicas)))
-        if stage == index:
-            dp_group = group
-    replica_group = shard_group = None
-    shards = replicas // args.replicas
-    if args.replicas > 1:
-        for stage_index in range(args.stages):
-            for row in range(args.replicas):
-                ranks = [stage_index * replicas + row * shards + column for column in range(shards)]
-                group = dist.new_group(ranks)
-                if rank in ranks:
-                    shard_group = group
-            for column in range(shards):
-                ranks = [stage_index * replicas + row * shards + column for row in range(args.replicas)]
-                group = dist.new_group(ranks)
-                if rank in ranks:
-                    replica_group = group
+    from parallel import training_groups
+
+    groups = training_groups(args.stages, args.replicas)
+    index, replica, replicas = groups.stage, groups.local_rank, groups.size
+    pp_group, dp_group = groups.pipeline, groups.data
+    replica_group, shard_group, shards = groups.replicate, groups.shard, groups.shards
     shape = replace(FULL if args.width == "full" else TINY, layers=args.layers)
     if shape.experts % args.ep:
         raise ValueError("EP must divide the expert count")
@@ -158,10 +71,11 @@ def main():
     if args.optimizer == "dmuon":
         import dedicated
 
-        ranks = torch.arange(index * replicas, (index + 1) * replicas).reshape(args.replicas, shards)
+        ranks = groups.ranks
         if parallel:
             optimizer = ParallelOptimizer(local_model, parallel, dp_group, shape, overlap=args.overlap == "on",
-                                           ns_backend=args.ns_backend, forward_unshard=args.forward_unshard)
+                                           ns_backend=args.ns_backend, forward_unshard=args.forward_unshard,
+                                           replicate_group=replica_group, shard_group=shard_group, ranks=ranks)
         else:
             optimizer = dedicated.configure(local_model, dp_group, shape, overlap=args.overlap == "on",
                                              boundary=args.boundary, replicate_group=replica_group,
@@ -210,6 +124,12 @@ def main():
     def snapshot():
         return optimizer.snapshot() if parallel else dedicated.snapshot(local_model, dp_group)
 
+    def backward(tokens, targets):
+        losses = []
+        schedule.step(*(tokens,) if index == 0 else (), target=targets if local_model.last else None,
+                      losses=losses if local_model.last else None, return_outputs=False)
+        return losses
+
     reports = []
     for step in range(args.steps):
         published = None
@@ -244,9 +164,7 @@ def main():
             reference.cpu()
             reference_params = dict(reference.named_parameters())
             torch.cuda.empty_cache()
-        losses = []
-        schedule.step(*(tokens,) if index == 0 else (), target=targets if local_model.last else None,
-                      losses=losses if local_model.last else None, return_outputs=False)
+        losses = backward(tokens, targets)
         max_gradient_error = 0.0
         checked = 0
         for name, parameter in owned.items() if args.optimizer == "sgd" else ():
@@ -317,9 +235,7 @@ def main():
             stage.iteration = step
             _, tokens, targets = batch(step)
             optimizer.zero_grad(set_to_none=True)
-            losses = []
-            schedule.step(*(tokens,) if index == 0 else (), target=targets if local_model.last else None,
-                          losses=losses if local_model.last else None, return_outputs=False)
+            losses = backward(tokens, targets)
             if args.optimizer == "sgd" and replicas > 1:
                 for parameter in local_model.parameters():
                     if parameter.grad is not None:
@@ -332,14 +248,23 @@ def main():
                 training_losses.append(torch.stack(losses).mean().detach() * args.microbatches)
 
         profile = capture(training_step, first=args.steps, warmup=args.warmup_steps, steps=args.profile_steps,
-                          output=args.output, rank=rank)
+                          output=args.output, rank=rank, rounds=args.timing_rounds, timing_steps=args.timing_steps)
+        measured_packs = [pack for pack in packs if profile["first_timed_step"] <= pack["step"] < profile["first_profiled_step"]]
+        if measured_packs:
+            valid_targets = sum(pack["valid_targets"] for pack in measured_packs) * args.microbatches
+            denominator = torch.tensor(valid_targets, dtype=torch.int64, device=device)
+            dist.all_reduce(denominator, group=dp_group)
+            profile["valid_targets_per_step"] = denominator.item() / (args.cp * profile["measured_steps"])
+        else:
+            profile["valid_targets_per_step"] = (args.tokens - 1) * args.microbatches * replicas
+        profile["valid_targets_per_second"] = profile["valid_targets_per_step"] / profile["unprofiled_seconds_per_step"]
         if training_losses:
             values = torch.stack(training_losses)
             assert torch.isfinite(values).all(), "nonfinite training loss"
             profile["losses"] = values.tolist()
         if args.optimizer == "dmuon":
             published = snapshot()
-        total_steps += args.warmup_steps + 2 * args.profile_steps
+        total_steps = profile["next_step"]
     final_weights = None
     if args.optimizer == "dmuon":
         final_weights = dedicated.fingerprints(published)
@@ -376,6 +301,7 @@ def main():
                   cp_ep_contracts=list(parallel.contracts.values()) if parallel else [],
                   microbatches=args.microbatches, tokens=args.tokens, steps=reports,
                   total_training_steps=total_steps, final_weight_sha256=final_weights,
+                  final_weight_samples=dedicated.weight_samples(published) if args.optimizer == "dmuon" else None,
                   compared_final=str(args.compare_final) if args.compare_final else None,
                   optimizer=args.optimizer, activation_checkpointing=checkpoint,
                   ns_backend=args.ns_backend, forward_unshard=args.forward_unshard,
@@ -411,7 +337,7 @@ def main():
     dist.destroy_process_group()
     if rank == 0:
         print(json.dumps({k: v for k, v in result.items()
-                          if k not in {"execution", "transfers", "final_weight_sha256", "cp_ep_contracts",
+                          if k not in {"execution", "transfers", "final_weight_sha256", "final_weight_samples", "cp_ep_contracts",
                                        "routing_comparisons"}}, indent=2))
 
 

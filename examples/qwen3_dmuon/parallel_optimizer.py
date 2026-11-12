@@ -1,10 +1,9 @@
 """Apply dmuon's public API to disjoint dense and expert parameter domains."""
 
+import dedicated
 import torch
 import torch.distributed as dist
 from torch import nn
-
-import dedicated
 
 
 def views(stage):
@@ -32,15 +31,17 @@ def views(stage):
 
 
 class ParallelOptimizer:
-    def __init__(self, stage, parallel, dense_group, shape, *, overlap, ns_backend, forward_unshard):
-        self.models, boundaries = views(stage)
+    def __init__(self, stage, parallel, dense_group, shape, *, overlap, ns_backend, forward_unshard,
+                 replicate_group=None, shard_group=None, ranks=None):
+        self.models, boundaries = views(stage) if parallel.ep > 1 else ((stage,), (None,))
         self.names = [tuple(dict(model.named_parameters())) for model in self.models]
-        self.groups = dense_group, parallel.expert_group
+        self.groups = (dense_group, parallel.expert_group) if parallel.ep > 1 else (dense_group,)
         self.parallel, self.dense_group = parallel, dense_group
         count = shape.experts // parallel.ep
         self.expert_slice = slice(parallel.ep_rank * count, (parallel.ep_rank + 1) * count)
         self.optimizers = [dedicated.configure(model, group, shape, overlap=overlap, ns_backend=ns_backend,
-                                               forward_unshard=forward_unshard, boundaries=boundary)
+                                               forward_unshard=forward_unshard, boundaries=boundary,
+                                               replicate_group=replicate_group, shard_group=shard_group, ranks=ranks)
                            for model, group, boundary in zip(self.models, self.groups, boundaries)]
 
     def zero_grad(self, **kwargs):
@@ -59,6 +60,8 @@ class ParallelOptimizer:
 
     def snapshot(self):
         result = dedicated.snapshot(self.models[0], self.groups[0])
+        if len(self.models) == 1:
+            return result
         for name, weight in dedicated.snapshot(self.models[1], self.groups[1]).items():
             parts = [torch.empty_like(weight) for _ in range(self.parallel.ep)]
             dist.all_gather(parts, weight.contiguous(), group=self.parallel.ep_group)

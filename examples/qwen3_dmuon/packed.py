@@ -4,6 +4,7 @@ import copy
 
 import torch
 import torch.distributed as dist
+from model import collective_function
 from torch import nn
 from torch.distributed.nn import functional as distributed
 from torch.nn import functional as F
@@ -13,8 +14,6 @@ from transformers.models.qwen3_moe.modeling_qwen3_moe import load_balancing_loss
 
 from tilefoundry.ir import types
 from tilefoundry.ir.hir.sharding import Collective, Exchange
-
-from model import collective_function
 
 
 class Parallel:

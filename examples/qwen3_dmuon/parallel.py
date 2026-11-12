@@ -36,3 +36,33 @@ def topology():
         "rank_coordinates": [dict(rank=i, replica=i // 4, shard=(i // 2) % 2, tp=i % 2) for i in range(8)],
         "scope": "HSDP and TP at the optimizer boundary; forward/backward reference remains replicated",
     }
+
+
+def training_groups(stages, hsdp_replicas):
+    """Construct PP and orthogonal data/shard/replica groups in one rank order."""
+    from types import SimpleNamespace
+
+    import torch
+    import torch.distributed as dist
+
+    rank, world = dist.get_rank(), dist.get_world_size()
+    size = world // stages
+    stage, local = divmod(rank, size)
+    shards = size // hsdp_replicas
+    result = SimpleNamespace(stage=stage, local_rank=local, size=size, shards=shards,
+                             replicate=None, shard=None,
+                             ranks=torch.arange(stage * size, (stage + 1) * size).reshape(hsdp_replicas, shards))
+    memberships = [("pipeline", list(range(lane, world, size))) for lane in range(size)]
+    for index in range(stages):
+        base = index * size
+        memberships.append(("data", list(range(base, base + size))))
+        if hsdp_replicas > 1:
+            memberships.extend(("shard", list(range(base + row * shards, base + (row + 1) * shards)))
+                               for row in range(hsdp_replicas))
+            memberships.extend(("replicate", [base + row * shards + column for row in range(hsdp_replicas)])
+                               for column in range(shards))
+    for name, ranks in memberships:
+        group = dist.new_group(ranks)
+        if rank in ranks:
+            setattr(result, name, group)
+    return result

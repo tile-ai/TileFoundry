@@ -102,6 +102,16 @@ def fingerprints(weights):
             for name, weight in weights.items()}
 
 
+def weight_samples(weights):
+    """Small deterministic diagnostics; gradient checks still cover all owner values."""
+    result = {}
+    for name, weight in weights.items():
+        if not torch.isfinite(weight).all():
+            raise ValueError(f"nonfinite final weights: {name}")
+        result[name] = weight.detach().flatten()[::max(1, weight.numel() // 256)][:256].cpu().tolist()
+    return result
+
+
 def check_clipping(optimizer, reference, names, pp_group, max_norm):
     """Check dmuon's Muon-only global norm against one copy of each stage's matrices."""
     matrices = [reference[name].grad for name in names
