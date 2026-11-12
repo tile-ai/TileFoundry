@@ -694,6 +694,14 @@ class LoopOutputs(ScheduleCase):
 
 @case
 class ModuleInstances(ScheduleCase):
+    """Retained instance calls through single and indexed slots.
+
+    The loop body reads only its carried value and induction variable, so it
+    has no value defined outside the loop to keep alive across it
+    (``loop_reads_outside``). An instance call names its slot statically; the
+    slot is not an IR value.
+    """
+
     path: Path = ROOT / "hir/module_instances.py"
     child_regions: bool = True
     loop_reads_outside: bool = False

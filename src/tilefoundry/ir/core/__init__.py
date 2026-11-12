@@ -5,7 +5,7 @@ from __future__ import annotations
 from .evaluate import Evaluate
 from .for_stmt import For
 from .function import Function
-from .function_ref import FunctionRef
+from .function_ref import FunctionRef, is_index_type
 from .if_stmt import If
 from .inspection import Printable, PrinterBase
 from .let_stmt import LetStmt

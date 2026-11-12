@@ -140,6 +140,8 @@ class Module:
                     f"one name must map to one level of the ordered hierarchy"
                 )
         for key, slot in self.children.items():
+            if slot == ():
+                raise TypeError(f"Module {self.name!r}: indexed slot {key!r} requires at least one Module")
             for child in instances(slot):
                 if not isinstance(child, Module):
                     raise TypeError(f"Module {self.name!r}: slot {key!r} requires Module definitions")

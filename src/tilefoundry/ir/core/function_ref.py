@@ -7,6 +7,15 @@ from dataclasses import dataclass, field
 from tilefoundry.ir import expr, types
 
 
+def is_index_type(index_type) -> bool:
+    """Whether a run-time instance index of this type is admitted: an integer scalar."""
+    return (
+        isinstance(index_type, types.TensorType)
+        and index_type.shape == ()
+        and isinstance(index_type.dtype, expr.IntegerDType)
+    )
+
+
 @dataclass(unsafe_hash=True)
 class FunctionRef(expr.Expr):
     """Leaf ``Expr`` naming a callee by its slot path and function name.
@@ -39,11 +48,7 @@ class FunctionRef(expr.Expr):
                 f"got {len(index_types)}"
             )
         for slot, index_type in zip(slots, index_types):
-            if not (
-                isinstance(index_type, types.TensorType)
-                and index_type.shape == ()
-                and isinstance(index_type.dtype, expr.IntegerDType)
-            ):
+            if not is_index_type(index_type):
                 raise ValueError(f"ModuleList slot {slot!r}: index must be an integer scalar")
 
     @property
@@ -56,4 +61,4 @@ class FunctionRef(expr.Expr):
         return ".".join((*parts, *(() if self.name is None else (self.name,))))
 
 
-__all__ = ["FunctionRef"]
+__all__ = ["FunctionRef", "is_index_type"]

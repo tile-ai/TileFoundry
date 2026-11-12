@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, ClassVar, Literal, get_args, get_origin
 
-from tilefoundry.ir import clause, dim, expr, pattern, tir, types, utils
+from tilefoundry.ir import clause, core, dim, expr, pattern, tir, types, utils
 from tilefoundry.ir.hir import nn
 from tilefoundry.ir.types import layout_algebra
 
@@ -3045,9 +3045,16 @@ def schema_children(
 
 
 def folded_index(index) -> int | None:
-    """An authored slot subscript as an integer path segment, when it is a constant integer."""
-    value = index.value if isinstance(index, runtime.Constant) else index
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
+    """An authored slot subscript as an integer path segment, when it is a constant integer.
+
+    A ``Constant`` folds only when its type is an integer scalar; any other one
+    stays a run-time operand for the index check to refuse.
+    """
+    if isinstance(index, runtime.Constant):
+        if not core.is_index_type(index.type):
+            return None
+        index = index.value
+    return index if isinstance(index, int) and not isinstance(index, bool) else None
 
 
 def instance_index(children) -> tuple[int | None, ...]:
