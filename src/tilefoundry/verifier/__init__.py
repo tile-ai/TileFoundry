@@ -1,8 +1,8 @@
 """Whole-program verification of Functions, PrimFunctions and Modules."""
 
 from .checks import (
-    function_references,
     input_params,
+    reached_frames,
     verify_function,
     verify_module,
     verify_prim_function,

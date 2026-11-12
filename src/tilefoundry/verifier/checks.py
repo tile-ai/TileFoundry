@@ -581,9 +581,7 @@ def verify_function_call(stmt: core.Evaluate, fn, ctx):
     callee, frame = callee_frame(ref, ctx)
     if not isinstance(callee, core.PrimFunction):
         raise expr.VerifyError(f"{label}: callee {callee.name!r} is not a PrimFunction")
-    assert_no_path_back(
-        callee, fn, visited=set(), frame=frame, recursion=f"{label}: recursion not allowed"
-    )
+    assert_no_path_back(frame, fn, f"{label}: recursion not allowed")
     params = tuple(param for param in callee.params if ref.name is not None or not param.is_const)
     verify_call_arguments(ref.arguments(stmt.args), params, label, ctx)
 
@@ -716,23 +714,35 @@ def verify_launch(stmt: core.Evaluate, fn, ctx):
             )
 
 
-def assert_no_path_back(callee, root, visited, frame=None, recursion=None):
-    """Refuse a path from *callee* back to *root*.
+def assert_no_path_back(frame, root, recursion):
+    """Refuse a path from the function of *frame* back to *root*.
 
     A reference names a prototype, so reaching the prototype of a variant
     *root* is a path back to *root*.
     """
-    if callee is root or any(variant is root for variant in callee.variants):
-        raise expr.VerifyError(
-            recursion or f"call DAG violation: {callee.name!r} calls back into {root.name!r}"
-        )
-    key = (id(callee), id(frame.module) if frame is not None else None)
-    if key in visited:
-        return
-    visited.add(key)
-    for ref in function_references(callee):
-        reached, inner = callee_frame(ref, frame)
-        assert_no_path_back(reached, root, visited, inner, recursion)
+    try:
+        reached = (frame.function, *(inner.function for inner in reached_frames(frame)))
+    except ValueError as error:
+        raise expr.VerifyError(str(error)) from error
+    if any(function is root or any(variant is root for variant in function.variants) for function in reached):
+        raise expr.VerifyError(recursion)
+
+
+def reached_frames(frame):
+    """Every frame the function of *frame* reaches by calls and launches, at any depth, once each.
+
+    Each reference resolves from the frame of the function that states it; a
+    reference that does not resolve raises.
+    """
+    visited, pending = set(), [frame]
+    while pending:
+        current = pending.pop()
+        for ref in function_references(current.function):
+            inner = current.enter_reference(ref)
+            if (id(inner.function), id(inner.module)) not in visited:
+                visited.add((id(inner.function), id(inner.module)))
+                pending.append(inner)
+                yield inner
 
 
 def function_references(function):
@@ -822,8 +832,8 @@ def verify_module(fns) -> None:
 
 
 __all__ = [
-    "function_references",
     "input_params",
+    "reached_frames",
     "verify_function",
     "verify_module",
     "verify_prim_function",
