@@ -3091,6 +3091,69 @@ def is_slot_value(value) -> bool:
     )
 
 
+def slot_reference(node, context: MatchContext):
+    """Split a callee written from a slot of this Module into its root slot and steps.
+
+    The steps are ``("attr", name)`` and ``("index", slice)`` from left to right.
+    Anything not rooted at a slot of this Module is not a slot reference.
+    """
+    steps = []
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        steps.append(("attr", node.attr) if isinstance(node, ast.Attribute) else ("index", node.slice))
+        node = node.value
+    root = slot_binding(node, context)
+    return None if root is None else (root, tuple(reversed(steps)))
+
+
+def reference_index_children(steps) -> tuple[AstChild, ...]:
+    """One subscript-index child per index step of a slot reference."""
+    indices = [value for kind, value in steps if kind == "index"]
+    return tuple(
+        AstChild(f"ref_index_{k}", SubscriptIndexPattern(), index, "subscript_index", "subscript_index")
+        for k, index in enumerate(indices)
+    )
+
+
+def build_slot_reference(match, children, context, *, launch=False):
+    """The reference a slot reference spells, its run-time index operands, and its function.
+
+    Integer scalar constants fold into the path; any other index stays a
+    leading operand that must be an integer scalar. A call always ends at a
+    function name; a launch may end at an instance and names its entry, and
+    refuses a run-time index. The function comes from ``core.resolve`` in the
+    declaring Module.
+    """
+    root, steps = match.captures["reference"]
+    path, operands, given = [root], [], iter(children[f"ref_index_{k}"] for k in range(len(steps)))
+    for kind, value in steps:
+        if kind == "attr":
+            path.append(value)
+            continue
+        index = next(given)
+        folded = folded_index(index) if isinstance(index, (int, float, runtime.Expr)) else None
+        path.append(folded)
+        if folded is None:
+            operands.append(constant(index) if isinstance(index, (int, float)) else index)
+    try:
+        if launch and operands:
+            raise ValueError(f"launch {runtime.FunctionRef(tuple(path), None).qualified_name!r}: a launch index must be a constant")
+        entry = launch and (not steps or steps[-1][0] == "index" or path[-1] in reached(context, path[:-1]).children)
+        ref = runtime.FunctionRef(tuple(path), None) if entry else runtime.FunctionRef(tuple(path[:-1]), path[-1])
+        ref.check_indices(tuple(getattr(operand, "type", None) for operand in operands))
+        _, function = core.resolve(context.function.module, ref)
+    except ValueError as error:
+        raise ParseError.from_node(match.node, context, str(error)) from error
+    return ref, tuple(operands), function
+
+
+def reached(context, path):
+    """The Module a slot path reaches from the declaring Module."""
+    owner = context.function.module
+    for owner in core.descend(owner, runtime.FunctionRef(tuple(path), None)):
+        pass
+    return owner
+
+
 def declared_prototype(callee, node, context: MatchContext):
     """The prototype of this Module that *callee* is or specializes, already parsed.
 
@@ -3116,14 +3179,28 @@ def enter_call(
     node: object, context: MatchContext, matched: AstMatch[Any]
 ) -> AstMatch[Any] | MatchFailure | None:
     assert isinstance(node, ast.Call)
-    if isinstance(node.func, ast.Attribute):
-        reference = (
-            node.func.value.value if isinstance(node.func.value, ast.Subscript) else node.func.value
-        )
-        if context.function.dialect != "tir" and slot_binding(reference, context) is not None:
+    if isinstance(node.func, ast.Attribute) and (reference := slot_reference(node.func, context)):
+        if context.function.dialect != "tir":
             return PatternFailure(
                 "op_call", node.func, "only calling an instance entry is supported"
             )
+        if node.keywords:
+            return PatternFailure(
+                "function_ref_call", node, "a symbol call takes positional arguments only"
+            )
+        return dataclasses.replace(
+            matched,
+            pattern_id="call.symbol",
+            branch_id="function_ref_call",
+            captures={**matched.captures, "reference": reference},
+            children=(
+                *reference_index_children(reference[1]),
+                *(
+                    AstChild(f"arg_{index}", ExpressionPattern(), argument, "call_argument", "argument")
+                    for index, argument in enumerate(node.args)
+                ),
+            ),
+        )
     subscript = node.func if isinstance(node.func, ast.Subscript) else None
     slot = slot_binding(node.func if subscript is None else subscript.value, context)
     callee = None
@@ -3140,25 +3217,6 @@ def enter_call(
             )
         if subscript is not None:
             return None
-    if (
-        isinstance(callee, runtime.PrimFunction)
-        and context.function.dialect == "tir"
-        and isinstance(node.func, ast.Attribute)
-    ):
-        if node.keywords:
-            return PatternFailure(
-                "function_ref_call", node, "a symbol call takes positional arguments only"
-            )
-        return dataclasses.replace(
-            matched,
-            pattern_id="call.symbol",
-            branch_id="function_ref_call",
-            captures={**matched.captures, "callee": callee, "module_entry": False},
-            children=tuple(
-                AstChild(f"arg_{index}", ExpressionPattern(), argument, "call_argument", "argument")
-                for index, argument in enumerate(node.args)
-            ),
-        )
     if slot is not None or isinstance(callee, (runtime.Function, runtime.PrimFunction)):
         if node.keywords:
             return PatternFailure(
@@ -3320,13 +3378,9 @@ class CallPattern(ElementPattern):
                 args=inputs,
             )
         elif match.branch_id == "function_ref_call":
-            callee = match.captures["callee"]
-            reference = callee_ref(
-                match.node.func, callee, module_entry=match.captures["module_entry"]
-            )
-            return runtime.Call(
-                type=runtime.UnitType(), target=reference, args=tuple(children.values())
-            )
+            reference, operands, _ = build_slot_reference(match, children, context)
+            args = tuple(value for name, value in children.items() if name.startswith("arg_"))
+            return runtime.Call(type=runtime.UnitType(), target=reference, args=(*operands, *args))
         elif match.branch_id == "function_call":
             callee = match.captures["callee"]
             slot = match.captures["slot"]
@@ -4710,20 +4764,6 @@ class WithPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
-def callee_ref(node, callee, *, module_entry=False):
-    """Name *callee* by the authored child slots and the resolved function's name."""
-    parts = []
-    while isinstance(node, ast.Attribute):
-        parts.append(node.attr)
-        node = node.value
-    if isinstance(node, ast.Name):
-        parts.append(node.id)
-    else:
-        raise ValueError("symbol callee must be a name or child-slot attribute path")
-    parts.reverse()
-    return runtime.FunctionRef(tuple(parts if module_entry else parts[:-1]), callee.name)
-
-
 def enter_launch(node: object, context: MatchContext, matched: AstMatch[Any]):
     assert isinstance(node, ast.Call)
     if not isinstance(node.func, ast.Name) or node.func.id != "launch":
@@ -4751,8 +4791,13 @@ def enter_launch(node: object, context: MatchContext, matched: AstMatch[Any]):
             f"launch(...) has no option {sorted(unknown)!r}; it takes grid, block, "
             f"cluster, dynamic_smem, stream, attrs",
         )
+    reference = slot_reference(node.args[0], context)
     children = [
-        AstChild("callee", StaticValuePattern(), node.args[0], "launch_callee"),
+        *(
+            reference_index_children(reference[1])
+            if reference
+            else (AstChild("callee", StaticValuePattern(), node.args[0], "launch_callee"),)
+        ),
         *(
             AstChild(f"arg_{index}", ExpressionPattern(), argument, "launch_argument")
             for index, argument in enumerate(node.args[1:])
@@ -4767,7 +4812,7 @@ def enter_launch(node: object, context: MatchContext, matched: AstMatch[Any]):
         matched,
         pattern_id="statement.launch",
         branch_id="launch",
-        captures={"arg_count": len(node.args) - 1},
+        captures={"arg_count": len(node.args) - 1, "reference": reference},
         children=tuple(children),
     )
 
@@ -4779,19 +4824,24 @@ class LaunchPattern(ElementPattern):
     syntax = LazyPattern(lambda: BindPattern(AstNodePattern(ast.Call), enter_launch))
 
     def construct(self, match, children, context):
-        callee = children["callee"]
-        module_entry = isinstance(callee, runtime.Module)
-        if module_entry:
-            callee = callee.entry_function()
-        elif isinstance(match.node.args[0], ast.Name) and context.function.module is not None:
-            callee = next(
-                (
-                    prototype
-                    for prototype in context.function.module.functions
-                    if any(callee is variant for variant in prototype.variants)
-                ),
-                callee,
-            )
+        if match.captures["reference"]:
+            ref, _, callee = build_slot_reference(match, children, context, launch=True)
+        else:
+            callee = children["callee"]
+            if isinstance(callee, runtime.Module):
+                raise ParseError.from_node(
+                    match.node.args[0], context, "a launched Module must be a slot of this @module"
+                )
+            if context.function.module is not None:
+                callee = next(
+                    (
+                        prototype
+                        for prototype in context.function.module.functions
+                        if any(callee is variant for variant in prototype.variants)
+                    ),
+                    callee,
+                )
+            ref = runtime.FunctionRef((), callee.name)
         options = {
             name: children[name]
             for name in ("cluster", "dynamic_smem", "stream", "attrs")
@@ -4802,7 +4852,7 @@ class LaunchPattern(ElementPattern):
             tuple(children[f"arg_{index}"] for index in range(match.captures["arg_count"])),
             children["grid"],
             children["block"],
-            ref=callee_ref(match.node.args[0], callee, module_entry=module_entry),
+            ref=ref,
             **options,
         )
 

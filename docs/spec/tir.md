@@ -389,12 +389,31 @@ function invocation and `args[0]` of a `Launch` ([§2.3](#23-tir-ops)).
   `str` segment enters a child slot; an `int` segment selects one instance of
   an indexed slot; a `None` segment marks an index the call gives as a leading
   operand. An empty path selects the caller's own Module.
+- The parser builds the path from the authored slot names and subscripts, left
+  to right. An integer scalar constant subscript folds into an `int` segment;
+  any other subscript is a `None` segment whose index is a leading operand and
+  MUST be an integer scalar. A negative or past-the-end constant is out of
+  range, not wrapped. The function the path and name select comes from
+  `core.resolve` only:
+
+  ```text
+  a.layers[2].run(x)          -> Evaluate(FunctionRef(("a", "layers", 2), "run"), (x,))
+  a.layers[i].run(x)          -> Evaluate(FunctionRef(("a", "layers", None), "run"), (i, x))
+  launch(layers[0].run, ...)  -> Evaluate(Launch, (FunctionRef(("layers", 0), "run"), ...))
+  launch(layers[1], ...)      -> Evaluate(Launch, (FunctionRef(("layers", 1), None), ...))
+  ```
+
+  A run-time index requires every instance of the slot to share one
+  definition. A launch index MUST be a constant: the parser refuses a
+  run-time one, and verification refuses a `Launch` whose path has a `None`
+  segment even without a Module context. HIR calls a slot only through its
+  entry.
 
 #### `name`
 - MUST be the canonical name of a function in the reached Module
   ([core-ir.md §1](./core-ir.md#1-module)), exactly as stored in its `name`.
-  It MAY be a generated specialization name. `None` names the reached
-  Module's entry.
+  It names a prototype, never a specialization variant. `None` names the
+  reached Module's entry.
 
 #### `type`
 - Always `None`. The callee's signature is read from the resolved callee;

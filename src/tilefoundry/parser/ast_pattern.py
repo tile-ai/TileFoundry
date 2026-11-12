@@ -1553,10 +1553,6 @@ def resolve_reference(node: ast.AST, context: MatchContext) -> object:
         raise ParseError.from_node(node, context, f"undefined static name {node.id!r}")
     if isinstance(node, ast.Attribute):
         owner = resolve_reference(node.value, context)
-        if isinstance(owner, tuple) and owner and all(isinstance(m, core.Module) for m in owner):
-            raise ParseError.from_node(
-                node, context, "indexed ModuleList static function references are unsupported"
-            )
         if isinstance(owner, core.Module):
             try:
                 child = owner.children.get(node.attr)

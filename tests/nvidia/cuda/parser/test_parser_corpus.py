@@ -8,9 +8,9 @@ import pytest
 
 from tests.core._corpus import case, cases
 from tests.core.parser._parser_case import ParserCase, check_parser_case, unique_parser_cases
-from tilefoundry import cli
+from tilefoundry import cli, codegen, parser, verifier
 from tilefoundry.interfaces import valuation
-from tilefoundry.ir import core, expr, pattern, types
+from tilefoundry.ir import core, expr, pattern, tir, types
 from tilefoundry.ir.hir import tensor
 from tilefoundry_nvidia import cuda
 
@@ -319,6 +319,94 @@ class StackedScaledParent(ScaledParent):
         assert call.target.path[0] == "layers" and isinstance(rebuilt.children["layers"], tuple)
 
 
+INDEXED_CALLS = FIXTURES / "scaffold/tir_indexed_calls.py"
+INDEXED_LAUNCH = FIXTURES / "scaffold/tir_indexed_launch.py"
+
+
+def _evaluates(function):
+    """The top-level Evaluate statements of *function*, in source order."""
+    return [stmt for stmt in function.body.body if isinstance(stmt, core.Evaluate)]
+
+
+@case
+class IndexedCalls(ParserCase):
+    """Named TIR calls pick instances by constant index, or by run-time index on one definition."""
+
+    path: Path = INDEXED_CALLS
+    name: str | None = "Root"
+    prints: tuple[str, ...] = ("a.layers[2].run(x)", "a.layers[i].run(x)", "a.mixed[1].run(x)")
+
+    def guard(self, state, problems):
+        for module in (state.ir, state.rebuilt):
+            main = module.entry_function()
+            x, i = main.params
+            calls = {stmt.callable.path: stmt for stmt in _evaluates(main)}
+            assert set(calls) == {("a", "layers", 2), ("a", "layers", None), ("a", "mixed", 1)}
+            assert all(stmt.callable.name == "run" for stmt in calls.values())
+            dynamic = calls["a", "layers", None]
+            assert dynamic.callable.indices(dynamic.args) == (i,)
+            assert dynamic.callable.arguments(dynamic.args) == (x,)
+            for path in (("a", "layers", 2), ("a", "mixed", 1)):
+                assert calls[path].callable.indices(calls[path].args) == ()
+                assert calls[path].callable.arguments(calls[path].args) == (x,)
+            stack = module.children["a"]
+            assert core.resolve(module, calls["a", "layers", 2].callable)[1] is stack.children["layers"][2].lookup("run")
+            assert core.resolve(module, dynamic.callable)[1] is stack.children["layers"][0].lookup("run")
+            other = core.resolve(module, calls["a", "mixed", 1].callable)
+            assert other[0] is stack.children["mixed"][1] and other[0] is not stack.children["mixed"][0]
+
+
+@case
+class IndexedLaunch(ParserCase):
+    """Constant-index launches resolve to the definitions of the chosen instances."""
+
+    path: Path = INDEXED_LAUNCH
+    name: str | None = "Root"
+    prints: tuple[str, ...] = ("launch(layers[0].run, x", "launch(layers[1], x")
+
+    def guard(self, state, problems):
+        module = state.rebuilt
+        refs = [stmt.args[0] for stmt in _evaluates(module.entry_function())]
+        assert refs == [core.FunctionRef(("layers", 0), "run"), core.FunctionRef(("layers", 1), None)]
+        scale, shift = module.children["layers"]
+        chosen = [core.resolve(module, ref)[1] for ref in refs]
+        assert chosen == [scale.lookup("run"), shift.entry_function()]
+        assert chosen[0] is not chosen[1]
+        edges = codegen.build_context(module).launch_edges
+        assert [edge.callee for edge in edges] == chosen
+        host = module.entry_function()
+        dynamic = core.Evaluate(
+            tir.launch.Launch(), (core.FunctionRef(("layers", None), "run"), *_evaluates(host)[0].args[1:])
+        )
+        with pytest.raises(expr.VerifyError, match="a launch index must be a constant"):
+            verifier.verify_prim_function(core.PrimFunction(
+                "host", host.params, core.Sequential((dynamic,)), target=host.target
+            ))
+
+
+@pytest.mark.parametrize(
+    ("source", "old", "new", "refused"),
+    [
+        (INDEXED_LAUNCH, "host(x: Tensor[(8,), \"f32\"]):\n        launch(layers[0].run",
+         "host(x: Tensor[(8,), \"f32\"], i: Tensor[(), \"i32\"]):\n        launch(layers[i].run",
+         "a launch index must be a constant"),
+        (INDEXED_CALLS, "a.mixed[1].run(x)", "a.mixed[i].run(x)", "variable index requires the same definition"),
+        (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[True].run(x)", "index must be an integer scalar"),
+        (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[0.5].run(x)", "index must be an integer scalar"),
+        (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[-1].run(x)", "index -1 out of range for N=3"),
+        (INDEXED_CALLS, "a.layers[2].run(x)", "a.layers[3].run(x)", "index 3 out of range for N=3"),
+    ],
+    ids=["dynamic-launch", "mixed-dynamic", "bool", "float", "negative", "past-end"],
+)
+def test_indexed_reference_refusals(tmp_path, source, old, new, refused):
+    text = source.read_text()
+    assert old in text
+    path = tmp_path / source.name
+    path.write_text(text.replace(old, new))
+    with pytest.raises(parser.ParseError, match=refused):
+        cli.load_authored_ir(f"{path}:Root")
+
+
 EXPECTED = {
     "inspection/type_printer_sugar": dict(
         golden=FIXTURES / "inspection/type_printer_sugar.printed.txt"
@@ -348,6 +436,8 @@ NAMED = (
         name="Root",
         prints=("launch(child.run,",),
     ),
+    IndexedCalls(),
+    IndexedLaunch(),
 )
 CASES = (
     cases(FIXTURES / "inspection", FIXTURES / "tir", case_type=ParserCase, expected=EXPECTED)

@@ -674,6 +674,8 @@ def verify_launch(stmt: core.Evaluate, fn, ctx):
     ref = stmt.args[0]
     if not isinstance(ref, core.FunctionRef):
         raise expr.VerifyError(f"Launch: args[0] must be a FunctionRef callee, got {type(ref).__name__}")
+    if None in ref.path:
+        raise expr.VerifyError(f"Launch of {ref.qualified_name!r}: a launch index must be a constant")
     if len(stmt.args) < 7:
         raise expr.VerifyError(
             f"Launch of {ref.name!r}: expected at least 7 args (callee + six "
