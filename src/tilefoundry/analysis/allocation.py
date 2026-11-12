@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from functools import cached_property
 from itertools import combinations
@@ -1197,7 +1198,7 @@ def solve_allocation(
     options: SolverOptions,
     *,
     memory_level: str,
-    completion_conflicts: frozenset[tuple[core.SSAValue, core.SSAValue]] | None = None,
+    completion_conflicts: Mapping[tuple[core.SSAValue, core.SSAValue], tuple[tuple[int, int], ...]] | None = None,
     capacity_bytes: int | None = None,
 ) -> AllocationResult:
     """Return the first feasible whole-function placement for one level."""
@@ -1250,28 +1251,31 @@ def solve_allocation(
 
     if completion_conflicts is None:
         interference = build_interference_graph(values, summary.windows, summary.by_value)
+        forbidden = {pair: ((1 - sizes[values[pair[1]]], sizes[values[pair[0]]] - 1),) for pair in interference}
     else:
         indices = {value: index for index, value in enumerate(values)}
-        interference = set()
-        for first, second in completion_conflicts:
+        forbidden = {}
+        for (first, second), intervals in completion_conflicts.items():
             left, right = summary.root(first), summary.root(second)
             if left is right:
                 raise Error("allocation: conflicting execution values share an alias root")
-            interference.add(tuple(sorted((indices[left], indices[right]))))
-    order_choices: dict[tuple[int, int], tuple[cp_model.IntVar, cp_model.IntVar]] = {}
-    for left, right in sorted(interference):
+            a, b = indices[left], indices[right]
+            pair = min(a, b), max(a, b)
+            intervals = intervals if a < b else tuple((-high, -low) for low, high in intervals)
+            forbidden[pair] = (*forbidden.get(pair, ()), *intervals)
+        interference = {pair for pair, intervals in forbidden.items() if any(low <= 0 <= high for low, high in intervals)}
+    order_choices = {}
+    for (left, right), intervals in sorted(forbidden.items()):
         if values[left] in persistent or values[right] in persistent:
             continue
-        left_before = model.new_bool_var(f"before_{left}_{right}")
-        right_before = model.new_bool_var(f"before_{right}_{left}")
-        order_choices[(left, right)] = (left_before, right_before)
-        model.add(addresses[left] + sizes[values[left]] <= addresses[right]).only_enforce_if(
-            left_before
-        )
-        model.add(addresses[right] + sizes[values[right]] <= addresses[left]).only_enforce_if(
-            right_before
-        )
-        model.add_bool_or(left_before, right_before)
+        difference = addresses[right] - addresses[left]
+        for index, (low, high) in enumerate(intervals):
+            below = model.new_bool_var(f"below_{left}_{right}_{index}")
+            above = model.new_bool_var(f"above_{left}_{right}_{index}")
+            order_choices[left, right, low, high] = below, above
+            model.add(difference < low).only_enforce_if(below)
+            model.add(difference > high).only_enforce_if(above)
+            model.add_bool_or(below, above)
 
     seed = calculate_starts(
         values,
@@ -1290,16 +1294,18 @@ def solve_allocation(
             for value in values
         },
     )
+    if seed is not None and any(low <= seed[0][right] - seed[0][left] <= high
+                                for (left, right), intervals in forbidden.items() for low, high in intervals):
+        seed = None
     if seed is not None:
         address_hints, peak_hint = seed
         model.add(peak <= peak_hint)
         for address, suggested in zip(addresses, address_hints, strict=True):
             model.add_hint(address, suggested)
-        for (left, right), (left_before, right_before) in order_choices.items():
-            left_end = address_hints[left] + sizes[values[left]]
-            right_end = address_hints[right] + sizes[values[right]]
-            model.add_hint(left_before, int(left_end <= address_hints[right]))
-            model.add_hint(right_before, int(right_end <= address_hints[left]))
+        for (left, right, low, high), (below, above) in order_choices.items():
+            difference = address_hints[right] - address_hints[left]
+            model.add_hint(below, int(difference < low))
+            model.add_hint(above, int(difference > high))
         model.add_hint(peak, peak_hint)
 
     solver = cp_model.CpSolver()
@@ -1315,17 +1321,14 @@ def solve_allocation(
         raise Error(
             f"allocation: no feasible {memory_level} placement was found "
             f"({status_name}); {len(values)} roots conflict with "
-            f"{len(interference)} interference constraints"
+            f"{len(forbidden)} interference constraints"
         )
     actual_peak = max(
         solver.value(address) + sizes[item] for address, item in zip(addresses, values, strict=True)
     )
-    for left, right in interference:
+    for (left, right), intervals in forbidden.items():
         left_offset, right_offset = solver.value(addresses[left]), solver.value(addresses[right])
-        if not (
-            left_offset + sizes[values[left]] <= right_offset
-            or right_offset + sizes[values[right]] <= left_offset
-        ):
+        if any(low <= right_offset - left_offset <= high for low, high in intervals):
             a, b = values[left].lifetime, values[right].lifetime
             raise Error(
                 f"allocation: overlapping {memory_level} roots: {expr.value_label(a.value.expr)} [{a.defined_at},{a.last_used_at}] at {left_offset}; {expr.value_label(b.value.expr)} [{b.defined_at},{b.last_used_at}] at {right_offset}"

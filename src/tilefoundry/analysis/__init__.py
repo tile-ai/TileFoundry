@@ -22,7 +22,13 @@ from .check import check_program, program_dim_vars
 from .communication import BufferBindings, BufferRegion, CommunicationReport, check_communication
 from .compute_cost import inflight_bytes, local_duration_ns
 from .errors import Error
-from .execution import WorkspacePlan, plan_workspace
+from .execution import (
+    RegionBoundary,
+    WorkspacePlan,
+    overlap_candidates,
+    plan_workspace,
+    region_boundary,
+)
 from .iteration_scope import IterationScope, build_scopes
 from .liveness import LivenessMetadata, result_copies
 from .loop_domain import iteration_domain

@@ -17,6 +17,7 @@ from .builders import (
 )
 from .iteration import iterating, iteration_geometry
 from .loop_domain import loop_domain
+from .physical import byte_relation
 from .projection import (
     affine_term,
     factored_image,

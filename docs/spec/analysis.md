@@ -2015,6 +2015,12 @@ identifiers denote disjoint storage. Each access names an operation and its
 half-open start/end interval in a common caller-selected time unit. An initially
 available input may have a zero-duration producer.
 
+An optional `BufferLifetime.region` is a fixed one-dimensional ISL byte set
+relative to `offset`, contained in `[0, nbytes)`. It preserves holes within that
+storage envelope; overlap checks intersect the translated sets. Omitting it
+selects the entire envelope. Initially available views with the same zero-duration
+producer may alias. A later write still conflicts with every live logical view.
+
 The returned `BufferHazard` records distinguish `read_before_ready`, where a
 consumer starts before its producer completes, from `overwrite_live_value`,
 where a new value's producer overlaps the byte range of an earlier live value.
@@ -2036,17 +2042,25 @@ Missing nodes, cycles and nontransitive relations are rejected.
 
 ## 5. Host communication ordering
 
-`check_communication(function, regions=None, *, module=None)` derives the happens-before graph
+`check_communication(function, regions=None, *, module=None, uninitialized=None)` derives the happens-before graph
 for the host statements in [tir §2.4](./tir.md#24-host-communication). It uses
 `check_buffer_lifetimes` for read readiness and overwrite hazards instead of
 introducing a second storage checker or a guessed timing model.
 
 `BufferRegion(allocation, offset=0)` optionally maps parameter names to physical
 byte ranges. Unmapped parameters denote disjoint allocations. The analysis
-partitions overlapping ranges, tracks writes and all readers, and retains each
-read through its device completion. Stream FIFO, group joins, event generations
+partitions each logical parameter by its accessed byte sets, tracks value
+versions and all readers, and retains each read through device completion.
+Physical aliases do not change which logical version a consumer reads.
+Stream FIFO, group joins, event generations
 and host synchronizations supply the dependency edges. Initial parameters are
 available at entry; readiness from external producers remains a caller obligation.
+Parameters named in `uninitialized` instead require a definite write to every
+byte subsequently read. Possible writes protect storage but cannot establish
+initialization. A possible write also retains the prior version for bytes it
+may leave unchanged. Root-only results do not initialize destination scratch
+on every participant. Missing initialization produces an `uninitialized_read`
+hazard.
 
 `CommunicationReport` contains the physical lifetimes, transitive predecessors,
 hazards, and exported event parameter names. Malformed protocols, unknown effects,
@@ -2055,21 +2069,34 @@ Static loop expansion checks carries across all iterations; it does not infer a
 proof for dynamic host branches or loops. Code generation refuses reported
 hazards. Matching collective issue order across processes remains a distributed
 caller contract, as does every required event edge from external compute.
+Declared outputs remain live at the completed execution boundary, including
+work covered by exported events. This retention obligation does not insert a
+host synchronization; an asynchronous caller still waits before using outputs.
 
 With an owning `module`, the same analysis accepts device `Launch` statements on
 explicit declared streams. `kernel_effects.summarize` derives an
-`interfaces.execution.Summary` from instruction operand effects and known
-pointer/view provenance. Parameter views must cover their compact base tensor;
-partial or strided kernel views require a more precise summary and are rejected.
-It conservatively retains the whole base parameter
-through kernel completion. The kernel's local memory accesses and internal
-synchronization remain its own verified contract. Conditional aliases, dynamic
+`interfaces.execution.Summary` from the existing instruction access relations,
+operand effects, registered aliases and pointer/view provenance. Each
+`execution.Effect` names a parameter, a byte relation and a read/write mode.
+Declared operand effects and registered access relations establish this memory
+contract; hardware instruction capabilities are a separate admission check.
+Partial and strided views retain their actual byte sets; out-of-bounds accesses
+are rejected. Reconstructing a pointer view requires a unique known base
+address; a bounded dynamic slice alone supplies only possible coverage.
+Static kernel iterations bind their coordinates separately.
+Reads satisfied by earlier definite writes within the kernel need no initial
+caller value. A relation with possible coverage cannot establish a definite
+write. Summaries describe access sets, not a count of instruction invocations.
+Every external access remains retained through kernel completion. The kernel's
+local memory accesses and internal synchronization remain its own verified
+contract. Conditional aliases, dynamic
 kernel control flow, unknown instruction effects, implicit launch streams and
 launches inside open communication groups are rejected. This summary does not
 establish intra-kernel readiness, remote visibility or remote-consumer completion.
 
 `CommunicationReport.operations` records each expanded launch or enqueue
-occurrence, its stream, parameter access modes and dependency endpoints. Read
+occurrence, its stream, bound region effects and dependency endpoints. Its
+`accesses` property supplies the conservative whole-parameter projection. Read
 and write nodes are analysis milestones; only whole-operation completion is
 observable by the current event model. Separate occurrences of a static loop
 retain separate identities even when the statement and event parameters recur.
@@ -2082,16 +2109,45 @@ options=None)` places explicitly named disposable scratch parameters. Caller
 inputs and declared outputs are not implicitly reclaimed. Selected buffers
 have static byte-addressable tensor shapes, share one storage space, and need
 no initial value. The planner derives interference from the same lifetime
-predicate as the checker, including outstanding reads and simultaneous operands,
-then passes these conflicts and an optional byte capacity to the existing
-allocation solver. It rechecks the selected offsets with the physical checker.
-Solver failure retains the distinction between proven infeasibility and an
-unknown result; timing estimates cannot authorize reuse.
+predicate as the checker, including outstanding reads and simultaneous operands.
+For conflicting byte sets, their pairwise address differences constrain relative
+root offsets in the existing allocation solver. Disjoint live regions can share
+an arena even when their complete buffer envelopes overlap. A feasible aligned
+layout is rechecked by the physical checker; it is not necessarily optimal.
+`constraint_precision` distinguishes exact offset intervals from conservative
+interval bounds for nonconvex difference sets. Failure under conservative
+constraints does not prove that every physical layout is infeasible. Solver
+infeasibility and unknown results remain distinct; timing estimates cannot
+authorize reuse.
 
 `WorkspacePlan.bindings` is `BufferBindings` analysis metadata for the host
 function. When `regions` is omitted, checking uses these selected bindings;
-an explicit empty mapping checks disjoint parameters instead. Native emission
-enforces the selected address relationships, and JIT identity includes them.
+an explicit empty mapping checks disjoint parameters instead. Bindings also
+retain the selected scratch parameters' initialization requirements, used when
+`uninitialized` is omitted. Native emission rechecks those requirements and
+enforces the selected address relationships. JIT identity includes all emitted
+function definitions, physical bindings and initialization requirements, so a
+changed callee cannot reuse an artifact checked against different effects.
 Canonical authored IR text does not serialize this analysis metadata: reloaded
 programs require a new placement selection. Placement alone does not change
 execution order, select checkpoint regions or allocate the caller's arena.
+
+## 6. Execution region boundaries
+
+`overlap_candidates(report)` returns occurrence pairs unordered by a checked
+execution's completion graph. It rejects reports with buffer hazards and uses
+no nominal timing. Independence does not establish simultaneous hardware
+progress or a speedup.
+
+`region_boundary(report, operations)` extracts a candidate atomic region from
+the same report. It returns its operation identities, external input and output
+value lifetimes, prerequisites and dependents. Final logical value versions
+remain conservatively observable at the caller boundary. An external operation
+ordered between selected members prevents contraction. An exported event that
+exposes only an intermediate selected completion also prevents contraction.
+
+This query identifies the values and ordering a replacement must preserve. It
+does not choose a fused kernel, rewrite the program, assign costs, or prove
+backend capabilities and distributed progress. Repeated and recomputed work
+uses distinct occurrence identities; no forward/backward phase convention is
+part of this analysis.

@@ -5,6 +5,8 @@ from itertools import combinations
 from math import isfinite
 from numbers import Real
 
+import isl
+
 __all__ = ["BufferAccess", "BufferHazard", "BufferLifetime", "check_buffer_lifetimes", "interfere"]
 
 
@@ -32,6 +34,13 @@ class BufferLifetime:
     nbytes: int
     producer: BufferAccess
     consumers: tuple[BufferAccess, ...] = ()
+    region: isl.set | None = None
+
+    @property
+    def addresses(self):
+        """The exact byte set, translated into the backing allocation."""
+        region = self.region if self.region is not None else isl.set(f"{{ [b] : 0 <= b < {self.nbytes} }}")
+        return region.apply(isl.map(f"{{ [b] -> [c] : c = b + {self.offset} }}"))
 
     @property
     def end(self) -> float:
@@ -94,6 +103,11 @@ def check_buffer_lifetimes(
             or value.nbytes <= 0
         ):
             raise ValueError("buffer ranges require a nonnegative offset and positive byte count")
+        if value.region is not None and (
+            value.region.dim(isl.dim_type.SET) != 1 or value.region.dim(isl.dim_type.PARAM)
+            or not value.region.is_subset(isl.set(f"{{ [b] : 0 <= b < {value.nbytes} }}"))
+        ):
+            raise ValueError("buffer byte regions must be fixed subsets of their declared range")
         for use in (value.producer, *value.consumers):
             if predecessors is not None and use.operation not in predecessors:
                 raise ValueError("every buffer access must appear in the happens-before relation")
@@ -120,9 +134,9 @@ def check_buffer_lifetimes(
     for old, new in combinations(ordered, 2):
         if old.allocation != new.allocation:
             continue
-        byte_overlap = max(old.offset, new.offset) < min(
-            old.offset + old.nbytes, new.offset + new.nbytes
-        )
+        if old.producer == new.producer and old.producer.start == old.producer.end:
+            continue
+        byte_overlap = not old.addresses.intersect(new.addresses).is_empty()
         if byte_overlap and interfere(old, new, predecessors=predecessors):
             blockers = tuple(
                 use.operation

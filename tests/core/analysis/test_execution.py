@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 
+import isl
 import pytest
 
 from tilefoundry import analysis, jit, target
@@ -100,6 +101,15 @@ def test_unknown_effects_and_implicit_streams_are_rejected():
         analysis.kernel_effects.summarize(unknown)
 
 
+def test_declared_fill_effect_does_not_require_an_instruction_capability():
+    destination = model().functions[0].params[1]
+    value = expr.Constant(0.5, type=types.TensorType.from_scalar(expr.DType.f32))
+    kernel = core.PrimFunction("fill", (destination,), core.Sequential((core.Evaluate(memory.Fill(), (destination, value)),)))
+    summary = analysis.kernel_effects.summarize(kernel)
+    assert summary.accesses == ((0, expr.MemoryEffect.WRITE),)
+    assert summary.effects[0].region.relation.range().is_equal(isl.set("{ [b] : 0 <= b < 16 }"))
+
+
 def test_partial_parameter_views_cannot_be_treated_as_full_definitions():
     mod = model()
     kernel = mod.functions[0]
@@ -109,8 +119,9 @@ def test_partial_parameter_views_cannot_be_treated_as_full_definitions():
     pointer = expr.Call(memory.PtrOf(), (destination,), type=types.PointerType(destination.type.dtype, destination.type.storage))
     view = expr.Call(memory.TensorView(layout=view_type.layout, shape=view_type.shape), (pointer,), type=view_type)
     partial = replace(kernel, params=(source, destination), body=core.Sequential((core.Evaluate(memory.Copy(), (source, view)),)))
-    with pytest.raises(ValueError, match="full compact parameter views"):
-        analysis.kernel_effects.summarize(partial)
+    summary = analysis.kernel_effects.summarize(partial)
+    written = next(effect for effect in summary.effects if effect.mode & expr.MemoryEffect.WRITE)
+    assert written.region.relation.range().is_equal(isl.set("{ [b] : 0 <= b < 8 }"))
 
 
 def test_concurrent_readers_and_exported_kernel_completion():
@@ -160,4 +171,16 @@ def test_jit_does_not_reuse_an_artifact_with_different_physical_bindings(monkeyp
     changed = analysis.BufferBindings(tuple((name, replace(region, offset=region.offset * 2))
                                             for name, region in plan.bindings.regions))
     mod.replace_functions((mod.functions[0], replace(fn, metadata=(changed,))))
+    assert jit(mod) is not first
+
+
+def test_jit_tracks_changed_callee_effects_even_when_host_code_is_identical(monkeypatch):
+    mod = model()
+    monkeypatch.setattr("tilefoundry.compiler.jit_cache.compile", lambda *args, **kwargs: object())
+    monkeypatch.setattr(jit, "cache", {})
+    first = jit(mod)
+    kernel = mod.functions[0]
+    source, destination = kernel.params
+    changed = replace(kernel, body=core.Sequential((core.Evaluate(memory.Copy(), (destination, source)),)))
+    mod.replace_functions((changed, mod.entry_function()))
     assert jit(mod) is not first
