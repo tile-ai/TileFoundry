@@ -26,7 +26,7 @@ def test_loop_bounds_emit_variables() -> None:
 
 
 def test_loop_bounds_emit_dimension_arithmetic() -> None:
-    """A bound computed from a dimension, as a CTA's own row range is, is written as C arithmetic."""
+    """A bound computed from a dimension, like a CTA's own row range, is written as C arithmetic."""
     scalar = types.TensorType.from_scalar(expr.DType.i64)
 
     def constant(value):

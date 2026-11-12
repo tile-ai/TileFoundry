@@ -26,7 +26,7 @@ DIM_OPERATORS = MappingProxyType({
 
 
 def render_dim_call(node: expr.Call, operand) -> str | None:
-    """C for dimension arithmetic *node*, each operand written by *operand*; None for any other call.
+    """C for dimension arithmetic *node*, each operand written by *operand*; else None.
 
     Every emitter of scalar dimensions shares this one rendering and supplies
     only how it writes a leaf.
