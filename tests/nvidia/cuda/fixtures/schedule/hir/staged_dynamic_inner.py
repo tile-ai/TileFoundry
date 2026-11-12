@@ -20,7 +20,8 @@ class StagedDynamicInner:
                         ring = tf.empty(
                             Tensor[(1, 8), "bf16", Layout((1, 8), (8, 1)), "smem"], buffers=2
                         )
-                        row = tf.schedule((x, ring), op=T.copy_async())
+                        with threads[0:1] as _writer:
+                            row = tf.schedule((x, ring), op=T.copy_async())
                         held = tf.schedule(
                             (row, tf.empty(Tensor[(1, 8), "bf16", (1, 8), "rmem"])), op=T.copy()
                         )

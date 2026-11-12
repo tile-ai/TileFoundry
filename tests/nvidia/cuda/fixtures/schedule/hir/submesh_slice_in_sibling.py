@@ -10,7 +10,7 @@ class SubmeshSliceInSibling:
     def gemm(x: Tensor[(8,), "f32"]) -> Tensor[(4,), "f32"]:
         with Mesh(("cta",), layout=(1,), names=("b",)) as _cta:
             with Mesh(("thread",), layout=(64,), names=("t",)) as threads:
-                with threads[:32] as _producer:
+                with threads[:1] as _producer:
                     shared = tf.schedule((x, tf.empty(Tensor[(8,), "f32", (8,), "smem"])), op=T.copy())
                     tile = shared[:4]
                 with threads[32:] as _consumer:

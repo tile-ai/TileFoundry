@@ -7,7 +7,7 @@ relations; the visitor writes the resulting declarations and statements.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
 from functools import cached_property
 from itertools import product
@@ -122,6 +122,58 @@ def participants(layouts) -> types.Mesh | None:
 def copy_mesh(type_list) -> types.Mesh | None:
     """The mesh a copy between operands of *types* runs on, None for the enclosing one."""
     return participants(type_.layout for type_ in type_list)
+
+
+def first_thread(enclosing: types.Mesh | None, topologies) -> types.Mesh | None:
+    """A slice holding the first thread of *enclosing*, or of the CTA when there is none.
+
+    None when that level holds one thread already, or when the first thread has
+    no constant position: *enclosing* is a slice whose start is not a number, or
+    one over several levels whose sizes are not all numbers, so its start cannot
+    be split into the start of each level.
+    """
+    if enclosing is not None and "thread" not in types.topology_names(enclosing):
+        enclosing = None
+    if enclosing is None:
+        topology = next((one for one in topologies or () if one.name == "thread"), None)
+        if topology is None or topology.size == 1:
+            return None
+        start = 0
+    else:
+        if isinstance(enclosing.layout, types.ComposedLayout):
+            sizes = [topology.size for topology in enclosing.topologies]
+            if not isinstance(enclosing.layout.offset, int):
+                return None
+            if len(sizes) > 1 and not all(isinstance(size, int) for size in sizes):
+                return None
+        level = next(part for part in types.separate(enclosing) if part.topologies[0].name == "thread")
+        topology = level.topologies[0]
+        if types.size(ir_utils.device_layout(level)) == 1:
+            return None
+        start = level.layout.offset if isinstance(level.layout, types.ComposedLayout) else 0
+    return types.Mesh((topology,), types.ComposedLayout(None, start, types.Layout((1,), (1,))), ("writer",))
+
+
+def transfer_meshes(type_list, destination, around, topologies) -> tuple[types.Mesh, ...]:
+    """The meshes of the regions lowering opens around a copy or fill it adds, outermost first.
+
+    *around* holds the meshes of the regions around it, innermost first. A
+    sharded operand gives the mesh that holds it. Unless that mesh splits the
+    threads, every thread of the innermost of *around* that names threads would
+    write the whole of its share of *destination*. In shared memory, which
+    those threads share, the first of them writes it alone.
+    """
+    mesh = copy_mesh(type_list)
+    held = () if mesh is None else (mesh,)
+    if getattr(destination, "storage", None) is not expr.StorageKind.SMEM:
+        return held
+    if mesh is not None and "thread" in types.topology_names(mesh):
+        return held
+    enclosing = next(
+        (one for one in around if one is not None and "thread" in types.topology_names(one)), None
+    )
+    writer = first_thread(enclosing, topologies)
+    return held if writer is None else (*held, writer)
 
 
 def issue_owner(type_list) -> types.Mesh | None:
@@ -383,14 +435,23 @@ class TirBuilder:
         source_type = source.type if source_type is None else source_type
         if not isinstance(source_type, types.TensorType) or not isinstance(target.type, types.TensorType):
             raise LoweringError("copy lowering requires tensor operands")
-        mesh = copy_mesh((source_type, target.type))
-        with self.region(mesh=mesh, binding=expr.Var(ctx.names.fresh("threads"), type=BINDING)):
+        sharded = copy_mesh((source_type, target.type))
+        meshes = transfer_meshes(
+            (source_type, target.type),
+            target.type,
+            [block.mesh for block in reversed(self.blocks)],
+            ctx.topologies,
+        )
+        with ExitStack() as regions:
+            for mesh in meshes or (None,):
+                binding = expr.Var(ctx.names.fresh("threads"), type=BINDING)
+                regions.enter_context(self.region(mesh=mesh, binding=binding))
             if isinstance(op, memory.Fill):
                 self.add(core.Evaluate(op, (self.value(target, ctx=ctx), source)))
                 return
             read = (
                 self.value(source, ctx=ctx)
-                if mesh is None
+                if sharded is None
                 else self.value(ctx.storage.operand(source, source_type), ctx=ctx)
             )
             written = self.value(target, ctx=ctx)
@@ -1588,4 +1649,5 @@ __all__ = [
     "operand_types",
     "scratch_buffers",
     "selected_op",
+    "transfer_meshes",
 ]
