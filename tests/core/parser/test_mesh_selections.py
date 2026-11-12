@@ -1,4 +1,4 @@
-"""A mesh selection given a new layout stays the slice it selects, unless it holds the whole level."""
+"""A relabelled mesh selection stays the slice it selects, unless it holds the whole level."""
 
 from __future__ import annotations
 
