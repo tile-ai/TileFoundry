@@ -164,9 +164,7 @@ as `ceildiv`, so importing restores the same expression tree.
   - The decorator MUST print in its called form, `@module()` included. A bare
     decorator has not run while the class body is evaluated, so a body naming a
     child call could not resolve it ([parser §2.1](./parser.md#21-syntax)).
-  - Child definitions MUST precede their slot bindings. Instance calls print
-    the slot key and optional index, with exactly `Call.args`, following
-    [core-ir §2.1](./core-ir.md#21-call).
+  - Child definitions MUST precede their slot bindings.
 
 The printer MUST import the concrete Target class from its provider module and
 embed `repr(target)` as the constructor expression. That representation MUST
@@ -240,13 +238,10 @@ A `FunctionRef` MUST print its child-slot path followed by its function name,
 with each component rendered as a Python identifier: slot names join with dots,
 an instance index is a subscript (a run-time index renders its leading
 operand), and only `ref.arguments(args)` appear inside the call parentheses,
-e.g. `child(x)`, `layers[2](x)`, `layers[i](x)`, `child.run(x)`. The printer
-reads that path from the IR and MUST NOT infer it by searching the module tree;
-the dotted `qualified_name` is for C symbols and runtime names, not DSL text.
-On import, a local `helper(...)` becomes `FunctionRef((), "helper")`;
-instance calls, `child.run(...)`, and launch targets retain their slot paths in
-`FunctionRef`. A direct call prints the referenced name, and generated value
-names avoid it.
+e.g. `helper(x)`, `child(x)`, `layers[i](x)`, `child.run(x)`. The printer reads
+that path from the IR and MUST NOT infer it by searching the module tree;
+importing the text rebuilds the same `FunctionRef`. Generated value names avoid
+every referenced name.
 
 The DSL surface MUST be imported with `from tilefoundry.dsl import *`, which
 re-exports `ir.types` and the `func`, `module`, and `prim_func` decorators.
@@ -519,9 +514,8 @@ d3-zoom pan/zoom · click → detail + highlight · search · collapse toggle
   intermediate model. A direct call `FunctionRef((), name)` and a top-level
   `Function` share one unified emitter — a collapsed region renders as a
   stand-in node, an expanded one as a `subgraph cluster_<region_visual_id>`.
-  Each region carries the frame of its function: a callee resolves from the
-  caller's frame, its body is drawn in its own frame, and a detail entry for
-  a call keeps the frame its reference resolves from. An instance call
+  Each region and call detail carries the frame its references resolve
+  from. An instance call
   (`child(x)`, `layers[i](x)`) is a call node titled by the reference's dotted
   path; it is not expanded, since the instance may be chosen at run time. Its
   ports and its detail parameters share one naming: one `index` port per

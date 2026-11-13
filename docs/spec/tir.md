@@ -177,9 +177,8 @@ parameters; omitting it means one output.
     each variant with the rules below.
 
 `verifier.verify_prim_function(fn, *, frame=None)` enforces (`frame` is the
-`valuation.Context` of the Module that declares `fn`; without it a `Launch`
-callee is not resolved, and an `Evaluate(FunctionRef)` is rejected because it
-requires module context):
+`valuation.Context` of the Module declaring `fn`; without it no reference is
+resolved and an `Evaluate(FunctionRef)` is rejected):
 
 - **Param homogeneity**. All parameters' layouts MUST be uniformly
   `ShardLayout` or uniformly non-`ShardLayout`; mixing is rejected.
@@ -205,24 +204,25 @@ requires module context):
 - **`For` bound coordinates**. A `MeshCoord` read by `For.start` / `.stop` /
   `.step` MUST name a literal in-range axis of a mesh bound by an enclosing
   `MeshScope`.
-- **Retained function calls** follow [core-ir §2.1](./core-ir.md#21-call).
-  Verification requires strictly equal argument types/counts and rejects recursion.
 - **`Evaluate.callable`**. When `callable` is a `FunctionRef`
-  ([§2.1](#21-functionref)), resolution from the caller's `Module` MUST find
-  exactly one function, that function MUST be a `PrimFunction` (an HIR
-  callee is accepted only as a `Launch` callee), and `args` MUST match the resolved callee's `params`
-  in count and type. Recursion is checked over every reference the reached
-  functions and their variants state, `Launch` callees included; reaching the
-  prototype of a variant being verified is a path back to it. When `callable` is
+  ([§2.1](#21-functionref)), its callee MUST be a `PrimFunction` (an HIR
+  callee is accepted only as a `Launch` callee). `args` follow
+  [core-ir §2.1](./core-ir.md#21-call), and `ref.arguments(args)` MUST strictly
+  equal, in count and type, the parameters the call supplies.
+  Recursion is rejected over every reference the reached functions and their
+  variants state, `Launch` callees included; reaching the prototype of a
+  variant being verified is a path back to it. When `callable` is
   an `Op`, it MUST pass the same `check_call` used by ScheduleOp type inference,
   candidate admission, and lowering. Its declared execution mesh MUST match
   the enclosing mesh and its operands MUST be reachable from that scope.
   For atom calls, operand patterns apply to the shared projected issue tiles.
-  Every input operand MUST match its `ParamDef.pattern` and every
+  A context-dependent operand pattern MAY resolve itself against the callable
+  before matching. Every input operand MUST match its `ParamDef.pattern` and every
   declared `between` relation MUST hold. A per-Op verifier registered via
   `verify.register(Op)` MAY impose additional rules that the declaration
   does not express. An effect Op with neither an input pattern nor a `between`
   relation MUST register such a verifier; an Op stating no contract is rejected.
+  Host `Launch` is checked instead as a function invocation ([§2.3](#23-tir-ops)).
 
 ### 1.4 `Evaluate`
 
@@ -240,37 +240,16 @@ The `callable` is one of:
 
 - an effect-form `Op` (e.g. `tir.memory.Copy`,
   `tir.reduce.Reduce`, `tir.launch.Launch` [§2.3](#23-tir-ops)). `args` are
-  the Op's operands in `ParamDef` order. Device-instruction verification uses the shared
-  `check_call`: match the execution mesh, project instruction tiles, check
-  operand patterns and declared `between` relations, then invoke the optional
-  leaf verifier. A context-dependent operand pattern MAY resolve itself against
-  the callable before matching. Host `Launch` instead checks its target,
-  arguments, and launch extents as a function invocation.
-- a `FunctionRef` ([§2.1](#21-functionref)) — a reference to a callee
-  `PrimFunction` in the caller's `Module` tree. `args` follow the callee's
-  parameter order, the final `output_count` positions binding output
-  buffers; the callee is resolved uniquely at module level
-  ([§1.3](#13-primfunction)).
-
-- a `FunctionRef((), name)` naming a retained prototype of the caller's Module,
-  or a `FunctionRef` with `name=None` naming a child
-  instance's entry (a run-time index is a leading operand), following the same instance
-  resolution as HIR ([core-ir §2.1](./core-ir.md#21-call)). These device calls
-  remain in one Module tree; they MUST NOT become launches. Printers MUST emit
-  `helper(...)`, `child(...)`, `layers[2](...)`, and `layers[i](...)`; only
-  `ref.arguments(args)` appear inside the parentheses.
+  the Op's operands in `ParamDef` order; verification follows
+  [§1.3](#13-primfunction).
+- a `FunctionRef` ([§2.1](#21-functionref)) naming a callee `PrimFunction`
+  in the caller's `Module` tree ([§1.3](#13-primfunction)). `args` follow
+  [core-ir §2.1](./core-ir.md#21-call), the final `output_count` positions
+  binding output buffers. These device calls remain in one Module tree; they
+  MUST NOT become launches. Printing follows
+  [inspection §2.5](./inspection.md#25-mesh-bindings-and-file-header).
 
 Scheduled lowering follows [passes §7.1](./passes.md#71-converthirtotir).
-
-Per-Op verify and codegen handlers, when present, are keyed by `Op` type. The
-value-producing counterpart is the `Call(Op, args)` Expr
-([core-ir.md §2.1](./core-ir.md#21-call)), which has a non-`Unit` result type
-and is anchored by `LetStmt`; `Evaluate` is the unit-typed Stmt-position form
-and the only Stmt-position invocation wrapper.
-
-**Effect Op vs. control Stmt.** A single unconditional invocation — an effect
-`Op` or a `FunctionRef` — is `Evaluate(callable, args)`. A construct that
-carries its own control flow stays a first-class `Stmt`.
 
 ### 1.5 `Sync`
 
@@ -363,68 +342,16 @@ def <name>(<param>: Expr, ...) -> None: ...    # decorated function's signature 
 
 ### 2.1 `FunctionRef`
 
-```python
-class FunctionRef(Expr):
-    """Name a callee by its slot path and function name.
+TIR names a callee by the shared `FunctionRef`
+([core-ir §1.4](./core-ir.md#14-function-references)). Where HIR calls a slot
+only through its entry, TIR MAY also name a declared
+function of the reached Module:
 
-    Attributes:
-        path: attribute; Child slot path from the caller's Module.
-        name: attribute; Function name in the reached Module; None names its entry.
-    """
-
-    path: tuple[str | int | None, ...] = ()
-    name: str | None = None
+```text
+a.layers[2].run(x)          -> Evaluate(FunctionRef(("a", "layers", 2), "run"), (x,))
+a.layers[i].run(x)          -> Evaluate(FunctionRef(("a", "layers", None), "run"), (i, x))
+launch(layers[0].run, ...)  -> Evaluate(Launch, (FunctionRef(("layers", 0), "run"), ...))
 ```
-
-- constraints:
-  - a leaf `Expr` naming a callee as an `Evaluate` / `Launch` target. It holds
-    names only: no Module, no callee object and no type. Per-field rules below.
-
-`FunctionRef` is a leaf `Expr` naming a callee as a call target: the
-`callable` of an `Evaluate(FunctionRef, args)` ([§1.4](#14-evaluate))
-function invocation and `args[0]` of a `Launch` ([§2.3](#23-tir-ops)).
-
-#### `path`
-- MUST name child slots relative to the Module that contains the caller. A
-  `str` segment enters a child slot; an `int` segment selects one instance of
-  an indexed slot; a `None` segment marks an index the call gives as a leading
-  operand. An empty path selects the caller's own Module.
-- The parser builds the path from the authored slot names and subscripts, left
-  to right. An integer scalar constant subscript folds into an `int` segment;
-  any other subscript is a `None` segment whose index is a leading operand and
-  MUST be an integer scalar. A negative or past-the-end constant is out of
-  range, not wrapped. The function the path and name select comes from
-  `core.resolve` only:
-
-  ```text
-  a.layers[2].run(x)          -> Evaluate(FunctionRef(("a", "layers", 2), "run"), (x,))
-  a.layers[i].run(x)          -> Evaluate(FunctionRef(("a", "layers", None), "run"), (i, x))
-  launch(layers[0].run, ...)  -> Evaluate(Launch, (FunctionRef(("layers", 0), "run"), ...))
-  ```
-
-  A run-time index requires every instance of the slot to share one
-  definition. A launch index MUST be a constant: the parser refuses a
-  run-time one, and verification refuses a `Launch` whose path has a `None`
-  segment even without a Module context. HIR calls a slot only through its
-  entry.
-
-#### `name`
-- MUST be the canonical name of a function in the reached Module
-  ([core-ir.md §1](./core-ir.md#1-module)), exactly as stored in its `name`.
-  It names a prototype, never a specialization variant. `None` names the
-  reached Module's entry.
-
-#### `type`
-- Always `None`. The callee's signature is read from the resolved callee;
-  a reference never carries a copy that can go stale.
-
-Resolution uses `core.resolve(scope, ref)` ([core-ir.md §1.4](./core-ir.md#14-function-references))
-from the caller's Module. It traverses `path` and MUST map `name` to exactly
-one function; zero or more than one match is an error. Functions with that
-name in other modules do not participate in this lookup. A name matches a
-prototype only; a variant's canonical `PrimFunction.name` is not a reference
-target, and dispatch picks the variant. Verify and codegen MUST use
-the same resolver. Local typeinfer does not resolve a `FunctionRef`.
 
 ### 2.2 `ShapeOf`
 
@@ -881,11 +808,11 @@ args)` with `args = (FunctionRef(callee), grid_x, grid_y, grid_z, block_x,
 block_y, block_z, *forwarded_args)`:
 
 - **callee**: `args[0]` MUST be a `FunctionRef` ([§2.1](#21-functionref)) resolving to
-  a device `PrimFunction` whose target is not CPU, or a HIR `Function` by its
-  path relative to the Module of the calling host function
-  ([core-ir §1.4](./core-ir.md#14-function-references)), like every other
-  reference. A launch names a function: a bare slot (`launch(child, ...)`) is
-  refused by the parser.
+  a device `PrimFunction` whose target is not CPU, or a HIR `Function`, from
+  the Module of the calling host function. A launch names a function with
+  constant indices: the parser refuses a bare slot (`launch(child, ...)`) and a
+  run-time index, and verification refuses a `Launch` whose path has a `None`
+  segment even without a Module context.
   The host-entry pass writes and checks a HIR callee's forwarded args
   ([passes §7.3](./passes.md#73-inserthostentrypass)); verification
   resolves the selector and checks only that each forwarded arg is a tensor.

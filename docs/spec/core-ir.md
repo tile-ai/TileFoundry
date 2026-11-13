@@ -82,8 +82,7 @@ class Module:
   - `children` maps instance slot keys to a `Module` (a single slot) or a
     non-empty tuple of `Module`s (an indexed slot). Definitions and function
     bodies remain shared; placing a definition creates no copy and no parent
-    backlink. A class-body `Module` becomes a single slot; a class-body
-    `ModuleList` becomes the definition or the tuple it declares.
+    backlink ([§1.3](#13-modulelist)).
   - a child MAY declare its own Target; holding it does not type its bodies
     again. A call of a child function is typed from the callee body under the
     callee's effective Target with the call's own argument types
@@ -97,14 +96,12 @@ class Module:
     same-name functions from another Module MUST remain unowned.
 
 - `parse_module` (see [parser §2](./parser.md#2-syntax-and-rules)) returns a `Module`.
-- A bare `@func` / `@prim_func` decorator returns a `Function` /
-  `PrimFunction`, not a Module. Only the compile entry (`normalize_to_module`)
-  wraps it into an implicit single-function `Module` whose `entry` names that
-  function.
-- Same-module `@func` / `@prim_func` calls resolve through the module's
-  declared prototypes, not Python closures. The parser accepts a call only to
-  a prototype declared earlier in the same `@module`; a call from a bare
-  function's body to another function is a parse error.
+- A bare `@func` / `@prim_func` returns a `Function` / `PrimFunction`; only the
+  compile entry (`normalize_to_module`) wraps it in an implicit single-function
+  `Module` whose `entry` names that function.
+- Same-module calls resolve through the Module's declared prototypes, not Python
+  closures: a call MUST name a prototype declared earlier in the same `@module`,
+  and a bare function's body MUST NOT call another function.
 - `topologies` is the execution domain's complete ordered hierarchy.
   `with Mesh(("cta",), layout=...)` inside a function body names one of the
   effective levels and creates a lexical mesh binding.
@@ -193,10 +190,9 @@ shape-specialization variants live inside that entry's `Function.variants`
 
 - constraints:
   - `mod.lookup(name)` returns the function named `name`; it raises unless
-  exactly one function matches. This is the canonical name-resolution
-  contract (e.g. for a `FunctionRef` callee), searches only this Module's own
-  `functions`, and always returns the `Function`
-  / `PrimFunction` node itself.
+  exactly one function matches, searches only this Module's own `functions`,
+  and returns the `Function` / `PrimFunction` node itself. A `FunctionRef`
+  resolves by [§1.4](#14-function-references).
   - `mod.entry_function()` returns the function named by `entry`.
   - Python attribute access `mod.<name>` resolves, in order, a function, a
   child module, or a method named `<name>`, and MUST raise `AttributeError`
@@ -217,8 +213,7 @@ shape-specialization variants live inside that entry's `Function.variants`
 `tilefoundry.interfaces.valuation.collect_functions(root)` enumerates each declared
 function once by identity, in DFS first-instance order. It returns a
 `dict[FunctionRef, valuation.Context]`, including HIR Functions and PrimFunctions,
-keyed by the root-relative reference ([tir §2.1](./tir.md#21-functionref)). Its
-`qualified_name` is the dot-separated spelling C symbols and runtime names use. The frame records the current Module,
+keyed by the root-relative reference ([§1.4](#14-function-references)). The frame records the current Module,
 function, effective target, and effective topologies; shared definitions use the first
 path for generated names, including indexed segments such as `layers.0.run`.
 
@@ -240,10 +235,9 @@ class ModuleList:
 ```
 
 - constraints:
-  - A `ModuleList` is the class-body spelling of a slot. It is not an `Expr`
-    and never appears in a function body or in `Module.children`; the
-    `@module` decorator stores its definition (single slot) or its tuple of
-    definitions (indexed slot). Its elements MUST be non-empty. Semantic
+  - A `ModuleList` is the class-body spelling of a slot, not an `Expr`;
+    `@module` stores its definition or tuple of definitions in `children`.
+    Its elements MUST be non-empty. Semantic
     Module slots MUST contain only Module definitions. Runtime twin
     declarations use runtime.Module subclasses through the same list surface
     ([runtime §1.3](./runtime.md#13-runtimedecoratorpy)).
@@ -253,22 +247,50 @@ class ModuleList:
   - Construction and attachment MUST NOT resolve element entries. A container
     without an entry MAY occupy a slot. Calling a container without an entry
     MUST report the usual no-entry error.
-  - A constant index MUST be in `[0, N)`. A variable index MUST be an integer
+  - A constant index MUST be in `[0, N)`, not wrapped. A variable index MUST be an integer
     scalar and all elements MUST reference the same definition by identity.
   - A single slot MUST NOT be indexed; an indexed slot MUST NOT be called
-    without an index. Only the instance entry may be called, not other methods.
+    without an index. HIR calls only the instance entry, not other methods.
 
 ### 1.4 Function references
 
-`core.resolve(scope, ref)` returns the Module and the function a `FunctionRef`
-names, starting at the caller's Module `scope`. Each `str` segment of
-`ref.path` MUST select a child slot of the current node; an indexed slot MUST be
-followed by an `int` or `None` index, and a single slot MUST NOT be indexed.
-`name` MUST select exactly one declared function in the reached node; `None`
-selects its entry. A name matches a prototype only, never a variant: dispatch
-picks the variant. An empty path stays in the current module. Failures MUST include the
-complete path; same-named functions in different child modules are distinct
-functions. The reference holds no Module; the reader supplies the scope.
+```python
+class FunctionRef(Expr):
+    """Name a callee by its slot path and function name.
+
+    Attributes:
+        path: attribute; Child slot path from the caller's Module.
+        name: attribute; Function name in the reached Module; None names its entry.
+    """
+
+    path: tuple[str | int | None, ...] = ()
+    name: str | None = None
+```
+
+- constraints:
+  - It is the one leaf that names a callee: HIR `Call.target`
+    ([§2.1](#21-call)), TIR `Evaluate.callable` and the TIR `Launch` callee
+    ([tir §2.1](./tir.md#21-functionref)). It holds names only: no Module, no
+    callee object and no type (`type` is always `None`).
+  - `path` is relative to the caller's Module; an empty path stays in it. A
+    `str` segment enters a child slot; an `int` segment selects one instance;
+    a `None` segment marks a run-time index the call gives as a leading
+    operand. The parser builds the path from the authored slot
+    names and subscripts, left to right, folding an integer scalar constant
+    subscript into an `int` segment; index rules are in [§1.3](#13-modulelist).
+  - `name` is the canonical `name` of a function in the reached Module; `None`
+    names that Module's entry. It names a prototype, never a variant: dispatch
+    picks the variant.
+  - `core.resolve(scope, ref)` is the only resolver; verify, the evaluator and
+    codegen use it from the current frame's Module `scope`, so rebuilt module
+    trees remain authoritative. Each `str` segment MUST
+    select a child slot, and `name` MUST select exactly one function in the
+    reached Module; it MUST NOT search descendants by an unqualified name.
+    Failures MUST include the complete path; same-named functions in different
+    child modules are distinct functions.
+  - `qualified_name` is the dotted spelling (`layers.0.run`, `*` for a
+    run-time index) that C symbols and runtime names use; DSL printing is owned
+    by [inspection](./inspection.md).
 
 ## 2. `Expr`
 
@@ -390,8 +412,7 @@ class Annotated:
 Dialect-specific `Expr` subclasses are owned by their dialect specs, not
 here: HIR owns `Function`, `LoopRegion`, and `MeshRegion`
 ([hir §1](./hir.md#1-hir-expr-constructs)),
-and TIR owns `FunctionRef` and other TIR-specific `Expr` constructs
-([tir](./tir.md)). The similarly-shaped TIR statement keeps the name
+and TIR owns its TIR-specific `Expr` constructs ([tir](./tir.md)). The similarly-shaped TIR statement keeps the name
 `MeshScope` ([tir §1.2](./tir.md#12-structural-stmts-ircore)) on purpose,
 not by oversight: it binds a `Var` over a `Sequential` body, whereas
 `MeshRegion` folds a region into one value.
@@ -412,24 +433,19 @@ class Call(Expr):
 ```
 
 - constraints:
-  - A call names every function by a `FunctionRef`, never by the `Function`
-    object. A direct call `helper(x)` is `FunctionRef((), "helper")`: it names
-    a prototype of the caller's own Module and supplies every parameter in the
-    current instance; dispatch picks the variant.
-    An instance call's target is a `FunctionRef` ([tir §2.1](./tir.md#21-functionref))
-    whose `name` is `None`: `child(x)` is `FunctionRef(("child",), None)`,
-    `layers[2](x)` is `FunctionRef(("layers", 2), None)`, and `layers[i](x)` is
-    `FunctionRef(("layers", None), None)` with `i` as the first operand. The
-    run-time indices (`ref.indices(args)`) come first, one per `None` segment;
-    the remaining operands (`ref.arguments(args)`) supply only the entry's
-    non-ConstTensor parameters. Implicit constants come from that instance's
-    resource path.
+  - A `FunctionRef` target ([§1.4](#14-function-references)) takes its run-time
+    indices (`ref.indices(args)`), one per `None` segment, first; the rest
+    (`ref.arguments(args)`) bind the callee's parameters.
+  - A named reference supplies every parameter in the current instance: the
+    direct call `helper(x)` is `FunctionRef((), "helper")`. An instance entry
+    call (`name` is `None`) supplies only the entry's non-ConstTensor
+    parameters; implicit constants come from that instance's resource path:
+    `child(x)` is `FunctionRef(("child",), None)`, `layers[2](x)` is
+    `FunctionRef(("layers", 2), None)`, and `layers[i](x)` is
+    `FunctionRef(("layers", None), None)` with `i` as the first operand.
   - Generic traversal visits `args` only; it MUST NOT traverse the definitions
     a `FunctionRef` names.
-  - Entering a call MUST resolve the reference from the current frame's Module
-    ([§1.4](#14-function-references)), so rebuilt module trees remain
-    authoritative.
-  - a value-form `Call` is anchored by `LetStmt` in TIR; a Stmt-position effect
+  - a value-form `Call` has a non-`Unit` result type and is anchored by `LetStmt` in TIR; a Stmt-position effect
     invocation is `Evaluate(op, args)`.
   - A `Call` MUST NOT appear as a top-level Stmt directly.
   - Normally, `len(args)` MUST equal the number of `kind="input"` ParamDefs on

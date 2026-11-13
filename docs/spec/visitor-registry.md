@@ -334,8 +334,8 @@ inherited execution context ([core-ir §1](./core-ir.md#1-module)).
   - `callee` identifies the called function and `callee_context()` its environment;
     `call_site` identifies the Call.
     Shared call resolution MUST implement [core-ir §2.1](./core-ir.md#21-call).
-    Direct Function/PrimFunction calls without a module environment and Op
-    calls have no resolved called environment; instance calls require a module.
+    An Op call has no called environment; a `FunctionRef` call requires the
+    frame's Module ([core-ir §1.4](./core-ir.md#14-function-references)).
     `valuation.definitions(context, postorder=False)` visits reached HIR
     definitions once through the shared dispatch; postorder visits dependencies
     before callers. Ordinary Call visits do not enter the called body.

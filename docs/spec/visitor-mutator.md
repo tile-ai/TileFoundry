@@ -234,7 +234,8 @@ when needed:
 | `While` | `cond` |
 | `If` | `cond` |
 | `Return` | (none — `@prim_func` has no value return) |
-| `Evaluate` | `args` (and `callable` when it is a `FunctionRef`) |
+| `Evaluate` with `callable` a `FunctionRef` | `callable`, `args` |
+| `Evaluate` with `callable` an `Op` (not an Expr) | `args` |
 | `MeshScope` / `Sequential` | (none) |
 
 `α-renaming` and similar `Var`-rewriting passes use `StmtMutator` directly.
@@ -247,9 +248,8 @@ subclasses, not `Stmt` subclasses; in Stmt position they appear as
 and dispatch on `type(callable)`: a `visit_Evaluate(self, stmt)` override
 branches on `type(stmt.callable)` (e.g. `Copy`).
 
-`stmt_children(Evaluate)` is empty. `StmtExprMutator` exposes `Evaluate.args`
-(and `callable` when it is a `FunctionRef`) as Expr
-fields. A value-form `Call` to a TIR effect-form Op in Stmt
+`stmt_children(Evaluate)` is empty; its Expr fields are listed in
+[§6](#6-stmtexprmutator). A value-form `Call` to a TIR effect-form Op in Stmt
 position, instead of `Evaluate(op, args)`, is malformed IR
 ([tir §1.4](./tir.md#14-evaluate)).
 

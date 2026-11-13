@@ -189,9 +189,8 @@ are owned by [runtime §1.6](./runtime.md#16-compiler).
 ([parser](./parser.md)), so a `Module` entering the pipeline has `Expr.type`
 filled. After each pass, `PassManager` rechecks the pass's **dirty scope**: every
 function on the Module's call paths whose object identity was not on them before
-the pass, and every function that reaches one of those by a call or a launch at
-any depth, through its variants too. Each reference resolves from the frame of
-the function that states it; a reference that does not resolve raises.
+the pass, and every function reaching one of those by calls or launches at any
+depth, variants included; a reference that does not resolve raises.
 Rechecking is per whole function.
 
 - HIR: `verify_function`, then type inference with ranges, which refreshes
@@ -485,11 +484,10 @@ entry is rejected by compile.
   - An existing CPU entry MUST pass through unchanged.
   - A synthesized `Launch` MUST state the analyzed shared-memory peak as
     `dynamic_smem`, and 0 when the Module carries no memory analysis.
-  - A synthesized entry's parameters are the launched function's inputs, the
-    scratch `scratch_buffers` gives for it, then one destination per tensor
-    result leaf; the `Launch` forwards all of them. Without memory analysis
-    there is no scratch. `output_count` counts the destinations only. Names
-    avoid each other in that order.
+  - A synthesized entry declares the parameters [§7.1](#71-converthirtotir)
+    gives the launched function, with no scratch without memory analysis, and
+    its `Launch` forwards all of them. Their names avoid each other.
+    `output_count` counts the destinations only.
   - Normalization MUST preserve each authored function's Target.
   - A synthesized `Launch` MUST carry its settled geometry so downstream
     codegen reads it without deriving it again.
