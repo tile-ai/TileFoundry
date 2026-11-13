@@ -4034,19 +4034,20 @@ class SelectionStrideRule:
 @dataclass(frozen=True)
 class SelectionConstructionRule:
     STATEMENT: ClassVar[str] = (
-        "A checked selection constructs a Mesh with its topology and offset, "
-        "enters its execution scope, and defines its lexical binding."
+        "A checked selection constructs a Mesh with its topology, sliced at its offset "
+        "unless it holds its whole level, enters its execution scope, and defines its "
+        "lexical binding."
     )
 
     def apply(self, value, *, match, context):
         if not isinstance(value, MeshSelection):
             return value
         assert value.outer is not None
+        start = types.starts(value.selection)[0]
+        whole = start == 0 and types.size(value.outer) == value.selection.topologies[0].size
         mesh = runtime.Mesh(
             value.selection.topologies,
-            value.outer
-            if types.starts(value.selection)[0] == 0
-            else types.ComposedLayout(None, types.starts(value.selection)[0], value.outer),
+            value.outer if whole else types.ComposedLayout(None, start, value.outer),
             value.names,
         )
         return finish_mesh_context(mesh, match, context)
