@@ -35,8 +35,9 @@ class WgmmaGroupLoop:
                       4 @ threads.lane4, 2),
                      (16, 8, 1, 4096, 512, 128, 64)), "rmem",
                 ])
-                lhs = tf.schedule((a, tf.empty(Tensor[(64, 16), "bf16", A, "smem"])), op=T.copy())
-                rhs = tf.schedule((b, tf.empty(Tensor[(16, 128), "bf16", B, "smem"])), op=T.copy())
+                with threads[0, 0, 0, 0] as _writer:
+                    lhs = tf.schedule((a, tf.empty(Tensor[(64, 16), "bf16", A, "smem"])), op=T.copy())
+                    rhs = tf.schedule((b, tf.empty(Tensor[(16, 128), "bf16", B, "smem"])), op=T.copy())
                 wgmma = T.cuda.sm90.Wgmma(
                     n=64, dtype="bf16", form=T.cuda.sm90.Form.SS,
                     a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN,

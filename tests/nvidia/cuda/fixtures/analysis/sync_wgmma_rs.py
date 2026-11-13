@@ -29,9 +29,10 @@ class WgmmaRs:
                     (p, tf.empty(Tensor[(64, 64), "bf16", a_fragment, "rmem"])), op=T.copy()
                 )
                 kept = tf.zeros(Tensor[(64, 64), "bf16", a_fragment, "rmem"])
-                vs = tf.schedule(
-                    (v, tf.empty(Tensor[(64, 64), "bf16", V_SMEM, "smem"])), op=T.copy()
-                )
+                with m[0, 0, 0] as _writer:
+                    vs = tf.schedule(
+                        (v, tf.empty(Tensor[(64, 64), "bf16", V_SMEM, "smem"])), op=T.copy()
+                    )
                 o = tf.zeros(Tensor[
                     (64, 64), "f32",
                     ((4 @ m.warp, 2, 8 @ m.lane8, 8, 4 @ m.lane4, 2,), (16, 8, 1, 512, 128, 64)),

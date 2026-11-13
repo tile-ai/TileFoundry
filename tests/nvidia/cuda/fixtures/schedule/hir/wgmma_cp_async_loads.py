@@ -42,7 +42,7 @@ class WGMMA_CP_ASYNC_LOADS:
                     acc = tf.zeros(Tensor[(M, N), "f32", ((4 @ _compute.warp, 2, 8 @ _compute.lane8, 4, 4 @ _compute.lane4, 2,), (16, 8, 1, 512, 128, 64)), "rmem"])
 
                 for k in tf.tile(K, BK):
-                    with threads[0, :32] as _loader:
+                    with threads[0, :1] as _loader:
                         lhs_ring = tf.empty(
                             Tensor[
                                 (64, 16), "bf16",

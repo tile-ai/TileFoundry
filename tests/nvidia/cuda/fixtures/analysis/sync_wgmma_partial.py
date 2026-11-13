@@ -26,7 +26,7 @@ class WgmmaPartial:
                         "rmem",
                     ])
                 for k in tf.tile(32, 16):
-                    with threads[4, :] as _loader:
+                    with threads[4, 0:1] as _loader:
                         lhs = tf.schedule(
                             (a[:, k], tf.empty(Tensor[
                                 (64, 16), "bf16",

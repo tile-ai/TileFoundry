@@ -471,13 +471,13 @@ class PhysicalSlots(ScheduleCase):
                     held = slot.type
                     offset = slot.args[0].value
                     assert offset % 16 == 0
-                    slots.append(
-                        {
-                            offset + (types.apply(held.layout, index) * held.dtype.bit_width + bit) // 8
-                            for index in range(prod(types.flatten(held.layout).shape))
-                            for bit in range(held.dtype.bit_width)
-                        }
-                    )
+                    placed = {
+                        offset + (types.apply(held.layout, index) * held.dtype.bit_width + bit) // 8
+                        for index in range(prod(types.flatten(held.layout).shape))
+                        for bit in range(held.dtype.bit_width)
+                    }
+                    if placed not in slots:
+                        slots.append(placed)
         assert len(slots) == 2
         assert slots[0].isdisjoint(slots[1])
         assert all(min(slot) >= 0 and max(slot) < peak for slot in slots)
@@ -1071,7 +1071,11 @@ class Sm89E4m3Gemm(ScheduleCase):
     smem_peak: int = 512
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType(
         {
-            "thread@0:32#0": RmemPeak(
+            "thread@0:32#0": RmemPeak(512, "the 512-byte f32 accumulator across the copy of A"),
+            "thread@0:32#1": RmemPeak(
+                1_024, "the accumulator and the 512-byte lhs fragment across the copy of B"
+            ),
+            "thread@0:32#2": RmemPeak(
                 1_280,
                 "512-byte f32 accumulator plus 512-byte lhs and 256-byte rhs e4m3 fragments",
             ),
@@ -1289,6 +1293,11 @@ EXPECTED = {
             "thread@128:128#0": RmemPeak(33_024, "attention intermediates and row reductions"),
             "thread@0:256#0": RmemPeak(33_024, "parent envelope of attention compute"),
         },
+    ),
+    "hir/split_copy_fewer_threads": dict(
+        sync_refusal="two threads that issue Copy dst write one shared memory element",
+        smem_peak=512,
+        candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/staged_dynamic_inner": dict(
         sync_refusal="a barrier is needed inside loop 'j'",

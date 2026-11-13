@@ -33,11 +33,13 @@ class Overlap(Enum):
 
 @dataclass(frozen=True)
 class Reach:
-    """One read or write of an action on a global memory root.
+    """One read or write of an action on a global memory root or on shared memory.
 
     ``reached`` is None when the relation is unknown: a retained call, or a value
-    with no device coordinates. ``slices`` are the sliced CTA meshes around it,
-    the only meshes that keep a CTA from running it.
+    with no device coordinates. ``slices`` are the sliced meshes of the checked
+    level around it, CTAs or threads, the only meshes that keep a unit of that
+    level from running it. ``split`` is the mesh whose positions the layout of
+    the operand gives its bytes to, one position each, None when it gives none.
     """
 
     name: str
@@ -48,6 +50,7 @@ class Reach:
     reached: analysis.Access | None
     loops: tuple = ()
     slices: tuple = ()
+    split: types.Mesh | None = None
 
 
 def storage_of(value: core.SSAValue):
@@ -56,10 +59,19 @@ def storage_of(value: core.SSAValue):
 
 
 class Reaches:
-    """The global memory reads and writes of a planner's actions, with their device relations."""
+    """The reads and writes of a planner's actions on *storage*, with their device relations.
 
-    def __init__(self, planner):
+    *storage* is global memory, whose reaches carry their allocation roots, or
+    shared memory. *level* names the units whose sliced meshes each reach keeps:
+    CTAs, or the threads of one CTA.
+    """
+
+    def __init__(
+        self, planner, storage: expr.StorageKind = expr.StorageKind.GMEM, level: str = "cta"
+    ):
         self.planner = planner
+        self.storage = storage
+        self.level = level
         self.scope = planner.root
         self.summary = planner.summary
 
@@ -86,7 +98,7 @@ class Reaches:
         """Every element of *value*'s first leaf, through its own device coordinates."""
         leaf = core.SSAValue(value, 0)
         leaves = utils.leaves_of(value.type)
-        if not leaves or getattr(leaves[0], "storage", None) is not expr.StorageKind.GMEM:
+        if not leaves or getattr(leaves[0], "storage", None) is not self.storage:
             return None
         entry = node.provenance.lookup(leaf)
         if entry.device is None:
@@ -101,9 +113,9 @@ class Reaches:
         )
 
     def of(self, action) -> list[Reach]:
-        """Each global memory read and write of *action*, as the planner dispatched it."""
+        """Each read and write of *action* on the storage, as the planner dispatched it."""
         owner, tag = action.owner, action.tag
-        if not self.gmem(action):
+        if not self.touched(action):
             return []
         if isinstance(owner, core.LoopRegion):
             return self.carry(action, owner, tag)
@@ -117,9 +129,15 @@ class Reaches:
             action, owner, transforms.selected_op(owner, self.planner.context.target)
         )
 
-    def gmem(self, action):
-        """The uses of *action* on global memory roots."""
-        return [use for use in action.uses if use.global_roots]
+    def touched(self, action):
+        """The uses of *action* on the storage: global memory roots, or shared memory bytes."""
+        if self.storage is expr.StorageKind.GMEM:
+            return [use for use in action.uses if use.global_roots]
+        return [use for use in action.uses if use.spans]
+
+    def roots_of(self, use) -> tuple:
+        """The global memory roots of *use*; shared memory has one unknown root."""
+        return use.global_roots if self.storage is expr.StorageKind.GMEM else (None,)
 
     def root(self, target: core.SSAValue):
         """The allocation root the planner gives *target*, None when it has none."""
@@ -131,28 +149,49 @@ class Reaches:
         """A retained call's reaches, whose relations stay unknown."""
         return [
             Reach(action.name, use.effect.write, use.effect.proxy is Proxy.ASYNC, None, root, None)
-            for use in self.gmem(action)
-            for root in use.global_roots
+            for use in self.touched(action)
+            for root in self.roots_of(use)
         ]
 
     def slices(self, node) -> tuple:
-        """The sliced CTA meshes of the regions around *node*; only these guard who runs it."""
+        """The sliced meshes of the level's regions around *node*; only these guard who runs it.
+
+        Lowering guards a region by its mesh only when that mesh is a slice
+        (``mesh_scope.emit_mesh_scope``); any other mesh repeats over the level.
+        """
         return tuple(
             scope.owner.mesh
             for scope in node.ancestors()
             if isinstance(scope.owner, core.MeshRegion)
             and isinstance(scope.owner.mesh.layout, types.ComposedLayout)
-            and any(topology.name == "cta" for topology in scope.owner.mesh.topologies)
+            and any(topology.name == self.level for topology in scope.owner.mesh.topologies)
         )
 
-    def bound(self, action, call: expr.Call, recorded, reads, writes) -> list[Reach]:
-        """Reaches for *action*'s global uses, from *call*'s ``(path, write, reached)`` records."""
+    def added(self, action) -> tuple:
+        """The sliced mesh of the level that lowering guards a copy or fill it adds with.
+
+        Lowering runs each copy and fill it adds inside the regions
+        ``transfer_meshes`` gives, the innermost being the action's mesh; it
+        opens no region for an instruction's mesh.
+        """
+        mesh = action.mesh
+        sliced = mesh is not None and isinstance(mesh.layout, types.ComposedLayout)
+        if sliced and any(topology.name == self.level for topology in mesh.topologies):
+            return (mesh,)
+        return ()
+
+    def bound(self, action, call: expr.Call, recorded, reads, writes, slices=()) -> list[Reach]:
+        """Reaches for *action*'s uses, from *call*'s ``(path, write, reached)`` records.
+
+        *slices* are sliced meshes around the action besides those of the regions around *call*.
+        """
         node = self.planner.locations[id(call)]
-        loops, slices = node.loop_scopes, self.slices(node)
+        loops, slices = node.loop_scopes, self.slices(node) + slices
         found = []
-        for use in self.gmem(action):
+        for use in self.touched(action):
             param = use.effect.param
             async_proxy = use.effect.proxy is Proxy.ASYNC
+            split = None if use.threads is None else use.threads.mesh
             chosen = [
                 item for item in recorded if not item[1] and item[2].input_index == reads.get(param)
             ]
@@ -160,7 +199,7 @@ class Reaches:
                 chosen = [item for item in recorded if item[1]]
             for *_, reached in chosen:
                 reached = self.physical(reached)
-                if storage_of(reached.target) is not expr.StorageKind.GMEM:
+                if storage_of(reached.target) is not self.storage:
                     continue
                 found.append(
                     Reach(
@@ -172,12 +211,14 @@ class Reaches:
                         reached,
                         loops,
                         slices,
+                        split,
                     )
                 )
             if not chosen:
                 name, write = f"{action.name} {param}", use.effect.write
                 found.extend(
-                    Reach(name, write, async_proxy, None, root, None) for root in use.global_roots
+                    Reach(name, write, async_proxy, None, root, None, split=split)
+                    for root in self.roots_of(use)
                 )
         return found
 
@@ -192,26 +233,42 @@ class Reaches:
 
     def fill(self, action, call: expr.Call) -> list[Reach]:
         recorded = [item for item in self.records(call) if item[1]]
-        writes = {use.effect.param for use in self.gmem(action) if use.effect.write}
-        return self.bound(action, call, recorded, {}, writes)
+        writes = {use.effect.param for use in self.touched(action) if use.effect.write}
+        return self.bound(action, call, recorded, {}, writes, self.added(action))
 
     def copied(self, action, node, sides) -> list[Reach]:
         """Reaches of a Copy lowering adds at *node*, from its ``(write, reached)`` pairs."""
-        loops, slices = node.loop_scopes, self.slices(node)
+        loops, slices = node.loop_scopes, self.slices(node) + self.added(action)
+        split = {
+            use.effect.write: None if use.threads is None else use.threads.mesh
+            for use in self.touched(action)
+        }
         found = []
         for write, reached in sides:
             if reached is None:
                 found.extend(
                     Reach(action.name, use.effect.write, False, None, root, None)
-                    for use in self.gmem(action)
+                    for use in self.touched(action)
                     if use.effect.write == write
-                    for root in use.global_roots
+                    for root in self.roots_of(use)
                 )
                 continue
             reached = self.physical(reached)
-            if storage_of(reached.target) is expr.StorageKind.GMEM:
+            if storage_of(reached.target) is self.storage:
                 root = self.root(reached.target)
-                found.append(Reach(action.name, write, False, None, root, reached, loops, slices))
+                found.append(
+                    Reach(
+                        action.name,
+                        write,
+                        False,
+                        None,
+                        root,
+                        reached,
+                        loops,
+                        slices,
+                        split.get(write),
+                    )
+                )
         return found
 
     def insert_slice(self, action, call: expr.Call, tag) -> list[Reach]:
@@ -262,10 +319,12 @@ def axis_numbering(mesh: types.Mesh, axis: int):
     return start, extents, strides, axis - first
 
 
-def cta_read(name: str, coordinate: expr.Call, unit: str) -> str | None:
-    """The condition that CTA *unit* reads *name* as *coordinate*; None when it has no statement.
+def unit_read(name: str, coordinate: expr.Call, unit: str) -> str | None:
+    """The condition that *unit* reads *name* as *coordinate*; None when it has no statement.
 
-    Every CTA of the launch reads it: a mesh smaller than its topology repeats.
+    *unit* numbers a CTA of the launch or a thread of a CTA, on the level that
+    holds the coordinate's axis. Every unit reads it: a mesh smaller than its
+    topology repeats.
     """
     axis = expr.static_dim_value(coordinate.args[0])
     numbering = None if axis is None else axis_numbering(coordinate.target.mesh, axis)
@@ -279,13 +338,13 @@ def cta_read(name: str, coordinate: expr.Call, unit: str) -> str | None:
     return f"{name} = floor(({unit} - {start}) / {strides[index]}) mod {extents[index]}"
 
 
-def cta_guard(mesh: types.Mesh, unit: str) -> str | None:
-    """The condition that CTA *unit* runs inside the sliced *mesh*; None when it has no statement.
+def unit_guard(mesh: types.Mesh, unit: str, name: str = "cta") -> str | None:
+    """The condition that *unit* runs inside *mesh*'s level *name*; None when it has no statement.
 
-    It is the runtime's ``contains``: a CTA position the slice's layout reaches.
+    It is the runtime's ``contains``: a position of that level the mesh's layout reaches.
     """
     level = next(
-        (level for level in types.separate(mesh) if level.topologies[0].name == "cta"), None
+        (level for level in types.separate(mesh) if level.topologies[0].name == name), None
     )
     if level is None:
         return None
@@ -300,12 +359,14 @@ def cta_guard(mesh: types.Mesh, unit: str) -> str | None:
     return f"exists ({', '.join(steps)} : {' and '.join(held)})"
 
 
-def instance(reach: Reach, suffix: str, shared):
-    """The elements one execution in CTA ``__cta`` + *suffix* reaches, its own names renamed.
+def instance(reach: Reach, suffix: str, shared, level: str = "cta"):
+    """The elements one execution by unit ``__<level>`` + *suffix* reaches, its own names renamed.
 
-    Returns the set, the conditions on that CTA (None when a coordinate cannot be
-    bound to it), and the names whose source the renaming loses. A slice whose
-    positions cannot be stated adds no condition, which only widens the CTAs.
+    *level* is ``"cta"`` or ``"thread"``. Returns the set, the conditions on that
+    unit (None when a coordinate cannot be bound to it), and the names whose
+    source the renaming loses. A unit runs the reach only inside the sliced meshes
+    of its level around it; a slice whose positions cannot be stated adds no
+    condition, which only widens the units.
     """
     relation = reach.reached.relation
     if reach.loops:
@@ -322,9 +383,9 @@ def instance(reach: Reach, suffix: str, shared):
             axis = expr.static_dim_value(value.args[0])
             extent = types.flatten(value.target.mesh.layout).shape[axis]
             bounds.append((f"{name}{suffix}", extent))
-            if types.axis_keys(value.target.mesh)[axis][0] == "cta":
+            if types.axis_keys(value.target.mesh)[axis][0] == level:
                 renamed = f"{name}{suffix}"
-                bindings.append((renamed, cta_read(renamed, value, f"__cta{suffix}")))
+                bindings.append((renamed, unit_read(renamed, value, f"__{level}{suffix}")))
         elif not (
             isinstance(value, expr.Var) and any(s.owner.induction_var is value for s in reach.loops)
         ):
@@ -334,18 +395,20 @@ def instance(reach: Reach, suffix: str, shared):
         rel = rel.intersect_params(isl.set(f"[{name}] -> {{ : 0 <= {name} < {extent} }}"))
     if any(condition is None for _, condition in bindings):
         return rel.range(), None, free
-    guards = (cta_guard(mesh, f"__cta{suffix}") for mesh in reach.slices)
+    guards = (unit_guard(mesh, f"__{level}{suffix}", level) for mesh in reach.slices)
     bindings += [(None, guard) for guard in guards if guard is not None]
     return rel.range(), bindings, free
 
 
-def overlap(first: Reach, second: Reach, shared, launch: int | None) -> Overlap | None:
-    """Why executions of *first* and *second* in two different CTAs may reach one element.
+def overlap(
+    first: Reach, second: Reach, shared, launch: int | None, level: str = "cta"
+) -> Overlap | None:
+    """Why executions of *first* and *second* by two different units may reach one element.
 
     None when they are the same reduction or provably reach no common element.
-    Each execution runs in one physical CTA, ``__cta`` and ``__cta_y``, below
-    *launch* and inside the slices around it; every CTA coordinate a relation
-    names is the coordinate that CTA reads, and the two CTAs differ.
+    Each execution runs in one unit of *level*, ``__<level>`` and ``__<level>_y``,
+    below *launch* and inside the runs it keeps to; every coordinate of that level
+    a relation names is the coordinate that unit reads, and the two units differ.
     """
     if first.reduction is not None and first.reduction == second.reduction:
         return None
@@ -355,22 +418,23 @@ def overlap(first: Reach, second: Reach, shared, launch: int | None) -> Overlap 
         return Overlap.UNPROVEN
     if first.reached.relation.may_access or second.reached.relation.may_access:
         return Overlap.UNPROVEN
-    left, bound_x, free_x = instance(first, "", shared)
-    right, bound_y, free_y = instance(second, "_y", shared)
+    left, bound_x, free_x = instance(first, "", shared, level)
+    right, bound_y, free_y = instance(second, "_y", shared, level)
     if bound_x is None or bound_y is None:
         return Overlap.UNPROVEN
     left = left.align_params(right.get_space())
     right = right.align_params(left.get_space())
     both = left.intersect(right)
     limit = "" if launch is None else f" < {launch}"
+    unit, other = f"__{level}", f"__{level}_y"
     conditions = [
-        f"0 <= __cta{limit}",
-        f"0 <= __cta_y{limit}",
-        "(__cta < __cta_y or __cta > __cta_y)",
+        f"0 <= {unit}{limit}",
+        f"0 <= {other}{limit}",
+        f"({unit} < {other} or {unit} > {other})",
         *(condition for _, condition in (*bound_x, *bound_y)),
     ]
     named = (name for name, _ in (*bound_x, *bound_y) if name is not None)
-    names = ", ".join(["__cta", "__cta_y", *named])
+    names = ", ".join([unit, other, *named])
     apart = isl.set(f"[{names}] -> {{ : {' and '.join(conditions)} }}")
     hit = both.align_params(apart.get_space()).intersect_params(
         apart.align_params(both.get_space())
@@ -414,4 +478,4 @@ def refuse_cta_overlaps(planner) -> None:
                 )
 
 
-__all__ = ["axis_numbering", "refuse_cta_overlaps"]
+__all__ = ["Overlap", "Reaches", "axis_numbering", "overlap", "refuse_cta_overlaps"]

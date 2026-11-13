@@ -64,6 +64,7 @@ def _poisoned(param):
         ("passes/sync_lane_rows.py", _identity),
         ("passes/destination_order.py:Sibling", _evaluated),
         ("passes/destination_order.py:KeptAcross", _evaluated),
+        ("analysis/sync_one_thread_cp_async.py", _identity),
     ],
     ids=lambda value: Path(value).name.replace(".py", "") if isinstance(value, str) else None,
 )

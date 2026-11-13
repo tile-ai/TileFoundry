@@ -20,5 +20,6 @@ from .convert_hir_to_tir import (
     operand_types,
     scratch_buffers,
     selected_op,
+    transfer_meshes,
 )
 from .host_entry import InsertHostEntryPass
