@@ -557,7 +557,7 @@ class SafetensorsResource:
 class DrawnResource:
     def __init__(
         self,
-        module: core.Module | core.ModuleList,
+        module: core.Module | tuple[core.Module, ...],
         generator: utils.torch.Generator,
         device: str,
         drawn: dict[str, utils.torch.Tensor] | None = None,

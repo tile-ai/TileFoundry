@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from tilefoundry.inspection import as_script
 from tilefoundry.ir import clause
-from tilefoundry.ir.core import Function
+from tilefoundry.ir.core import FunctionRef
 from tilefoundry.ir.expr import Call, Tuple
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
@@ -51,7 +51,7 @@ def test_moe_root_keeps_model_shapes() -> None:
     routed_call = next(
         call
         for call in _calls(deepseek_v4_flash_moe)
-        if isinstance(call.target, Function) and call.target.name == "moe_topk"
+        if isinstance(call.target, FunctionRef) and call.target.name == "moe_topk"
     )
     routed = clause.metadata(routed_call).constraints[0]
     assert isinstance(routed, clause.Layout)
@@ -63,7 +63,7 @@ def test_moe_root_keeps_model_shapes() -> None:
     combined_call = next(
         call
         for call in _calls(deepseek_v4_flash_moe)
-        if isinstance(call.target, Function) and call.target.name == "combine_expert_outputs"
+        if isinstance(call.target, FunctionRef) and call.target.name == "combine_expert_outputs"
     )
     combined = clause.metadata(combined_call).constraints[0]
     assert isinstance(combined, clause.Layout)

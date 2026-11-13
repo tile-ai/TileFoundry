@@ -5,20 +5,20 @@ from __future__ import annotations
 from .evaluate import Evaluate
 from .for_stmt import For
 from .function import Function
+from .function_ref import FunctionRef, is_index_type
 from .if_stmt import If
 from .inspection import Printable, PrinterBase
 from .let_stmt import LetStmt
 from .loop_region import LoopRegion
 from .mesh_region import MeshRegion
 from .mesh_scope import MeshScope
-from .module import LoadedModule, Module, ModuleFunction, ModuleList, resolve_symbol
+from .module import LoadedModule, Module, ModuleFunction, ModuleList, descend, instances, resolve
 from .prim_function import PrimFunction
 from .return_stmt import Return
 from .sequential import Sequential
 from .shape_of import ShapeOf, shape_of
 from .ssa_value import SSAValue, ssa_leaves
 from .stmt import Stmt
-from .symbol_ref import SymbolRef, symbol_call, symbol_ref
 from .values import TotalAndPerUnit, TripInterval
 from .visitor import (
     BindingSubstitutionCloner,

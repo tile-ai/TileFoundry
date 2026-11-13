@@ -129,9 +129,9 @@ class Twin(Module):
             definitions = child_impl.elements if isinstance(child_impl, ir_core.ModuleList) else (child_impl,)
             instances = tuple(
                 child_cls(ir=child_ir)
-                for child_cls, child_ir in zip(definitions, slot.elements, strict=True)
+                for child_cls, child_ir in zip(definitions, ir_core.instances(slot), strict=True)
             )
-            child = instances if slot.indexed else instances[0]
+            child = instances if isinstance(slot, tuple) else instances[0]
             setattr(self, key, child)
             children[key] = child
         Module.__init__(self, name=ir.name, entry=ir.entry, children=children)
@@ -308,7 +308,7 @@ def module(sem: ir_core.Module) -> Callable[[type], type]:
             cls_inner.__name__, "@runtime.func names", kernel_names,
             "semantic function names", {fn.name for fn in sem.functions},
         )
-        semantic_counts = {key: len(slot) for key, slot in sem.children.items()}
+        semantic_counts = {key: len(ir_core.instances(slot)) for key, slot in sem.children.items()}
         runtime_counts = {
             key: len(raw[key]) if isinstance(raw[key], ir_core.ModuleList) else 1
             for key in child_names
@@ -327,10 +327,11 @@ def module(sem: ir_core.Module) -> Callable[[type], type]:
                 for element in runtime_slot.elements
             ):
                 raise TypeError("ModuleList requires Modules or runtime module classes")
-            if runtime_slot.indexed != slot.indexed or len(runtime_slot) != len(slot):
+            indexed, count = isinstance(slot, tuple), len(ir_core.instances(slot))
+            if runtime_slot.indexed != indexed or len(runtime_slot) != count:
                 raise TypeError(
                     f"@runtime.module {cls_inner.__name__!r}: slot {key!r}: "
-                    f"semantic N={len(slot)}, indexed={slot.indexed}; "
+                    f"semantic N={count}, indexed={indexed}; "
                     f"runtime N={len(runtime_slot)}, indexed={runtime_slot.indexed}"
                 )
 

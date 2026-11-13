@@ -16,7 +16,7 @@ The split:
   TensorView}`) and the unit-typed TIR effect Ops. It
   fills / refreshes `Expr.type`.
 - **`verify`** dispatches on TIR `Stmt` (control-flow / binding /
-  `Evaluate`) plus cross-function invariants (`Evaluate(SymbolRef)`
+  `Evaluate`) plus cross-function invariants (`Evaluate(FunctionRef)`
   callee resolution, mesh scope, layout homogeneity). A Stmt verify
   rule MAY recursively retrigger `typeinfer` on embedded Expr fields.
 
@@ -224,7 +224,7 @@ bottom of the layer order and imports no IR; the implementing package registers
 its implementation at import, keyed by the function itself.
 
 ```python
-def evaluate(target: object, *args: object) -> object: ...
+def evaluate(target: object, *args: object, context: object | None = None) -> object: ...
 def prepare(module: object, raw: object, out_dir: str, *, device: str = "cpu") -> None: ...
 def render(expr: object) -> str: ...
 def report_json(result: object) -> str: ...
@@ -334,8 +334,8 @@ inherited execution context ([core-ir §1](./core-ir.md#1-module)).
   - `callee` identifies the called function and `callee_context()` its environment;
     `call_site` identifies the Call.
     Shared call resolution MUST implement [core-ir §2.1](./core-ir.md#21-call).
-    Direct Function/PrimFunction calls without a module environment and Op
-    calls have no resolved called environment; instance calls require a module.
+    An Op call has no called environment; a `FunctionRef` call requires the
+    frame's Module ([core-ir §1.4](./core-ir.md#14-function-references)).
     `valuation.definitions(context, postorder=False)` visits reached HIR
     definitions once through the shared dispatch; postorder visits dependencies
     before callers. Ordinary Call visits do not enter the called body.

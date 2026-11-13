@@ -19,18 +19,17 @@ from tilefoundry.ir import expr
 from .evaluate import Evaluate
 from .for_stmt import For
 from .function import Function
+from .function_ref import FunctionRef
 from .if_stmt import If
 from .let_stmt import LetStmt
 from .loop_region import LoopRegion
 from .mesh_region import MeshRegion
 from .mesh_scope import MeshScope
-from .module import ModuleList
 from .prim_function import PrimFunction
 from .return_stmt import Return
 from .sequential import Sequential
 from .shape_of import ShapeOf
 from .stmt import Stmt
-from .symbol_ref import SymbolRef
 from .while_stmt import While
 
 __all__ = [
@@ -62,10 +61,10 @@ def expr_children(node: expr.Expr) -> tuple[expr.Expr, ...]:
     explicitly.
     """
     match node:
-        case expr.Var() | expr.Constant() | SymbolRef() | ShapeOf() | ModuleList():
+        case expr.Var() | expr.Constant() | FunctionRef() | ShapeOf():
             return ()
-        case expr.Call(target=target, args=args):
-            return (target, *args) if isinstance(target, expr.Call) else args
+        case expr.Call(args=args):
+            return args
         case MeshRegion(args=args, body=body):
             return (*args, body)
         case LoopRegion(args=args, body=body, yield_values=yield_values):
@@ -84,10 +83,8 @@ def rebuild_expr(node: expr.Expr, new_children: tuple[expr.Expr, ...]) -> expr.E
     Binding-site fields are carried over untouched.
     """
     match node:
-        case expr.Var() | expr.Constant() | SymbolRef() | ModuleList():
+        case expr.Var() | expr.Constant() | FunctionRef():
             return node
-        case expr.Call(target=expr.Call()):
-            return replace(node, target=new_children[0], args=new_children[1:])
         case expr.Call():
             return replace(node, args=new_children)
         case MeshRegion(args=args):
@@ -177,7 +174,7 @@ def stmt_expr_fields(stmt: Stmt) -> tuple[str, ...]:
             return ("start", "stop", "step")
         case While() | If():
             return ("cond",)
-        case Evaluate(callable=SymbolRef() | expr.Call() | ModuleList()):
+        case Evaluate(callable=FunctionRef()):
             return ("callable", "args")
         case Evaluate():
             return ("args",)
@@ -393,7 +390,6 @@ class BindingSubstitutionCloner(ExprCloner):
     def visit_Call(self, node: expr.Call, ctx: Mapping[int, expr.Expr]) -> expr.Expr:
         return replace(
             node,
-            target=self.visit(node.target, ctx) if isinstance(node.target, expr.Call) else node.target,
             args=tuple(
                 self.visit(arg, ctx) if isinstance(arg, expr.Expr) else arg for arg in node.args
             ),

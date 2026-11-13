@@ -51,16 +51,16 @@ def prepare_into(
     for key, slot in module.children.items():
         base = raw.subtree(key)
         child_path = f"{path}.{key}" if path else key
-        if slot.indexed:
+        if isinstance(slot, tuple):
             children[key] = tuple(
                 prepare_into(child,
                     base.subtree(str(i)), f"{prefix}{key}.{i}.", flat, device,
                     target=target, topologies=topologies, path=f"{child_path}.{i}",
                 )
-                for i, child in enumerate(slot.elements)
+                for i, child in enumerate(slot)
             )
         else:
-            children[key] = prepare_into(slot.elements[0],
+            children[key] = prepare_into(slot,
                 base, f"{prefix}{key}.", flat, device,
                 target=target, topologies=topologies, path=child_path,
             )
@@ -91,8 +91,9 @@ def prepare_into(
             value = fetch(weight_name)
         else:
             value = evaluator.run_bound(
-                conv, [fetch(param.name) for param in conv.params],
-                device=device, reading=reading,
+                conv,
+                [fetch(param.name) for param in conv.params],
+                context=evaluator.EvaluateContext(module=module, loaded_module=reading, device=device),
             )
         actual = evaluator.tensor_type_of(value, like=decl_type)
         if actual.shape != decl_type.shape:

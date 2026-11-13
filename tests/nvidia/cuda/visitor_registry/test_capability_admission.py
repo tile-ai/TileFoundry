@@ -11,7 +11,7 @@ import pytest
 
 from tests.nvidia.cuda.ops.tir.targets import retarget
 from tilefoundry import cli, target, verifier
-from tilefoundry.interfaces import schedule, verify
+from tilefoundry.interfaces import schedule, valuation, verify
 from tilefoundry.ir import core, expr, hir, types
 from tilefoundry_nvidia import cuda
 from tilefoundry_nvidia.cuda.ir.tir import memory, nn, sync
@@ -52,7 +52,7 @@ def _verify(function: core.PrimFunction, tgt: target.Target) -> None:
     module = core.Module(
         name="admission", functions=(function,), entry=function.name, target=tgt
     )
-    verifier.verify_prim_function(function, module_fns=module)
+    verifier.verify_prim_function(function, frame=valuation.Context(module, function))
 
 
 _REFUSED = [
@@ -96,7 +96,7 @@ def test_selected_atom_only_checked() -> None:
     """The SM80 atom is admitted on sm_89, although the same op also declares WGMMA."""
     module = retarget(cli.load_authored_ir(MM_HANDWRITTEN), SM89)
     for function in module.functions:
-        verifier.verify_prim_function(function, module_fns=module)
+        verifier.verify_prim_function(function, frame=valuation.Context(module, function))
 
 
 class _MmaSite(core.StmtVisitor[None]):

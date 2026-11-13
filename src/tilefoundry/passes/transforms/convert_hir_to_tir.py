@@ -23,7 +23,6 @@ from tilefoundry.interfaces import access, schedule, typeinfer, valuation
 from tilefoundry.ir import core, expr, hir, tir, types
 from tilefoundry.ir import dim as ir_dim
 from tilefoundry.ir import utils as ir_utils
-from tilefoundry.ir.core import symbol_ref
 from tilefoundry.ir.hir import math, tensor
 from tilefoundry.ir.tir import memory
 from tilefoundry.ir.types import layout_algebra
@@ -284,16 +283,7 @@ class TirBuilder:
                 if buffers != 1:
                     raise LoweringError(f"{label(node)} uses staged internal gmem")
                 elements = prod(tuple(storage_type.shape))
-                scratch = expr.Var(
-                    ctx.names.fresh("scratch"),
-                    type=types.TensorType(
-                        (elements,),
-                        storage_type.dtype,
-                        types.Layout((elements,)),
-                        expr.StorageKind.GMEM,
-                    ),
-                )
-                ctx.scratch.append(scratch)
+                scratch = ctx.storage.scratch[1][leaf]
                 storage_type = replace(
                     storage_type,
                     layout=types.Layout(tuple(storage_type.shape)),
@@ -660,6 +650,46 @@ class StoragePlan:
             )
             for leaf, answer in answers.items()
         }
+
+    @cached_property
+    def scratch(self):
+        """The GMEM scratch this function declares, decided before emission.
+
+        Returns ``(params, roots, calls)``: every scratch parameter in order, the
+        parameter of each GMEM allocation root this function owns, and the
+        parameters each call forwards to its callee's scratch. A root is an
+        allocation leaf with no storage partner that is neither a parameter nor
+        an output; each call is handled once, and two calls of one definition
+        forward separate parameters. Without memory analysis there is none.
+        """
+        if expr.get_metadata(self.function, analysis.AllocationSummaryMetadata) is None:
+            return (), {}, {}
+        names = Names({param.name for param in self.function.params})
+        params, roots, calls = [], {}, {}
+        for leaf, answer in self.answers.items():
+            held = ir_utils.leaves_of(leaf.expr.type)[leaf.index]
+            if (
+                answer.partner is not None
+                or held.storage is not expr.StorageKind.GMEM
+                or any(leaf.expr is param for param in self.function.params)
+            ):
+                continue
+            elements = prod(tuple(held.shape))
+            roots[leaf] = expr.Var(
+                names.fresh("scratch"),
+                type=types.TensorType(
+                    (elements,), held.dtype, types.Layout((elements,)), expr.StorageKind.GMEM
+                ),
+            )
+            params.append(roots[leaf])
+        for node in core.collect_exprs(self.function.body):
+            if not (isinstance(node, expr.Call) and isinstance(node.target, core.FunctionRef)):
+                continue
+            frame = self.regions[id(node)].callee_context(node)
+            child = StoragePlan(frame.function, frame, frame.current_mesh).scratch[0]
+            calls[id(node)] = tuple(expr.Var(names.fresh(param.name), type=param.type) for param in child)
+            params.extend(calls[id(node)])
+        return tuple(params), roots, calls
 
     def aliases_of(self, leaf):
         return self.answers[leaf].aliases
@@ -1106,7 +1136,6 @@ class LoweringContext(typeinfer.TypeInferContext):
     builder: TirBuilder
     names: Names
     outputs: list[tuple[tuple[int, ...], expr.Var]] = field(default_factory=list)
-    scratch: list[expr.Var] = field(default_factory=list)
     allocations: dict = field(default_factory=dict)
     parameters: dict = field(default_factory=dict)
 
@@ -1266,14 +1295,15 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
             id(param): expr.Var(param.name, type=param.type, is_const=param.is_const)
             for param in self.context.function.params
         }
+        storage = StoragePlan(self.context.function, self.context, self.context.current_mesh)
         self.context = LoweringContext(
             **{**vars(self.context), "memo": self.memo},
             parameters=physical,
-            storage=StoragePlan(
-                self.context.function, self.context, self.context.current_mesh
-            ),
+            storage=storage,
             builder=TirBuilder([TirScope(region=self.context.function)]),
-            names=Names({param.name for param in self.context.function.params}),
+            names=Names(
+                {param.name for param in (*self.context.function.params, *storage.scratch[0])}
+            ),
             issues=IssuePlan(),
         )
         ctx = self.context
@@ -1320,7 +1350,7 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
         params = tuple(ctx.parameters[id(param)] for param in ctx.function.params)
         self.lowered = core.PrimFunction(
             ctx.function.name,
-            (*params, *ctx.scratch, *(output for _, output in ctx.outputs)),
+            (*params, *ctx.storage.scratch[0], *(output for _, output in ctx.outputs)),
             statements,
             output_count=len(ctx.outputs),
             target=self.context.target,
@@ -1347,7 +1377,13 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
             if (refusal := ctx.storage.answers[core.SSAValue(call)].refusal) is not None:
                 raise LoweringError(refusal)
             self.runtime_values(call, ctx)
-        operands = tuple(self.visit(arg, ctx=ctx) for arg in call.args)
+        target = call.target
+        if isinstance(target, core.FunctionRef):
+            operands = tuple(
+                self.visit(arg, ctx=ctx, dimension=True) for arg in target.indices(call.args)
+            ) + tuple(self.visit(arg, ctx=ctx) for arg in target.arguments(call.args))
+        else:
+            operands = tuple(self.visit(arg, ctx=ctx) for arg in call.args)
         if ctx.callee_context(call) is not None:
             return self.visit_callee(call, operands, ctx)
         return getattr(self, f"visit_{type(call.target).__name__}", self.visit_T)(
@@ -1379,25 +1415,17 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
             lowering.run()
             self.callees[id(frame.function)] = lowering
         destination = ctx.result(call)
-        scratch = []
-        for param in lowering.context.scratch:
-            forwarded = expr.Var(ctx.names.fresh(param.name), type=param.type)
-            ctx.scratch.append(forwarded)
-            scratch.append(forwarded)
+        scratch = ctx.storage.scratch[2][id(call)]
         target = call.target
-        if isinstance(target, core.Function):
-            target = lowering.lowered
-        elif isinstance(target, expr.Call):
-            target = replace(
-                target, args=(target.args[0], self.visit(target.args[1], ctx=ctx, dimension=True))
-            )
+        indices = target.indices(operands)
+        arguments = target.arguments(operands)
         params = tuple(
             param
             for param in lowering.lowered.params
-            if isinstance(call.target, core.Function) or not param.is_const
+            if target.name is not None or not param.is_const
         )
         passed = []
-        for value, param in zip((*operands, *scratch, destination), params, strict=True):
+        for value, param in zip((*arguments, *scratch, destination), params, strict=True):
             passed.append(
                 ctx.builder.value(
                     ctx.storage.operand(value, param.type, whole_tensor=True, stem="argument"),
@@ -1406,7 +1434,7 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
                 if isinstance(param.type, types.TensorType)
                 else ctx.builder.value(value, ctx=ctx)
             )
-        ctx.builder.add(core.Evaluate(target, tuple(passed)))
+        ctx.builder.add(core.Evaluate(target, (*indices, *passed)))
         return destination
 
     def visit_TupleGetItem(self, call: expr.Call, operands, ctx) -> expr.Expr:
@@ -1464,47 +1492,20 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
         )
 
 
-def relaunch(fn, launches):
-    """Retype host launches and forward the scratch parameters lowering appended."""
-    if not isinstance(fn, core.PrimFunction):
-        return fn
-    params = list(fn.params)
-    names = Names({param.name for param in params})
+def scratch_buffers(frame) -> tuple[expr.Var, ...]:
+    """The scratch parameters the lowered *frame* function declares, in order.
 
-    class Relaunch(core.StmtMutator):
-        def visit_Evaluate(self, stmt):
-            if not isinstance(stmt.callable, tir.launch.Launch):
-                return stmt
-            ref = stmt.args[0]
-            lowering = launches.get(".".join((*ref.nested, ref.name)))
-            if lowering is None:
-                return stmt
-            scratch = tuple(
-                expr.Var(names.fresh(param.name), type=param.type)
-                for param in lowering.context.scratch
-            )
-            inputs = len(lowering.context.function.params)
-            outputs = len(params) - fn.output_count
-            params[outputs:outputs] = scratch
-            return replace(
-                stmt,
-                args=(
-                    symbol_ref(lowering.lowered, ".".join((*ref.nested, ref.name))),
-                    *stmt.args[1:7 + inputs],
-                    *scratch,
-                    *stmt.args[7 + inputs:],
-                ),
-            )
-
-    body = Relaunch().visit(fn.body)
-    return replace(fn, params=tuple(params), body=body) if body is not fn.body else fn
+    A synthesized host entry declares and forwards the same list, so it never
+    has to be rewritten after lowering.
+    """
+    return StoragePlan(frame.function, frame).scratch[0]
 
 
 def device_root(module):
     function = module.entry_function()
     if isinstance(function, core.PrimFunction) and isinstance(function.target, cpu.Target):
         callees = (
-            core.resolve_symbol(module, stmt.args[0].name, nested=stmt.args[0].nested)
+            core.resolve(module, stmt.args[0])[1]
             for stmt in function.body
             if isinstance(stmt, core.Evaluate) and isinstance(stmt.callable, tir.launch.Launch)
         )
@@ -1535,7 +1536,7 @@ class ConvertHIRToTIR(pass_base.ModulePass):
 
     def run(self, module: core.Module) -> core.Module:
         if not self.options.lower or not any(
-            isinstance(frame.function, core.Function) for frame in valuation.list_call_paths(module).values()
+            isinstance(frame.function, core.Function) for frame in valuation.collect_functions(module).values()
         ):
             return module
         function = device_root(module)
@@ -1552,11 +1553,6 @@ class ConvertHIRToTIR(pass_base.ModulePass):
         )
         lowering.run()
         lowered[id(function)] = lowering
-        launches = {
-            path: lowered[id(frame.function)]
-            for path, frame in valuation.list_call_paths(module).items()
-            if id(frame.function) in lowered
-        }
         modules = set()
 
         def lower_module(node):
@@ -1564,11 +1560,10 @@ class ConvertHIRToTIR(pass_base.ModulePass):
                 return
             modules.add(id(node))
             for slot in node.children.values():
-                for child in slot.elements:
+                for child in core.instances(slot):
                     lower_module(child)
             node.replace_functions(
-                relaunch(lowered[id(fn)].lowered if id(fn) in lowered else fn, launches)
-                for fn in node.functions
+                lowered[id(fn)].lowered if id(fn) in lowered else fn for fn in node.functions
             )
 
         lower_module(module)
@@ -1591,5 +1586,6 @@ __all__ = [
     "label",
     "lowers_to_dim",
     "operand_types",
+    "scratch_buffers",
     "selected_op",
 ]

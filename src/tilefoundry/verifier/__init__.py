@@ -2,6 +2,7 @@
 
 from .checks import (
     input_params,
+    reached_frames,
     verify_function,
     verify_module,
     verify_prim_function,

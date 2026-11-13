@@ -40,10 +40,7 @@ def _device(name: str) -> core.PrimFunction:
 
 
 def _launch(device: core.PrimFunction, *args: expr.Var, block: int = 32) -> core.Evaluate:
-    ref = core.SymbolRef(
-        name=device.name,
-        type=CallableType(return_type=UnitType(), parameters=tuple(p.type for p in device.params)),
-    )
+    ref = core.FunctionRef((), device.name)
     i64 = TensorType.from_scalar(DType.i64, storage=StorageKind.RMEM)
     one = expr.Constant(type=i64, value=1)
     block_expr = expr.Constant(type=i64, value=block)

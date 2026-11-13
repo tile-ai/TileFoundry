@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tilefoundry.ir import core
+
 
 def module_definition_order(root, *, before_children=False):
     """Definitions once, children before the slots that reference them."""
@@ -15,7 +17,7 @@ def module_definition_order(root, *, before_children=False):
         if before_children:
             ordered.append(node)
         for slot in node.children.values():
-            for child in slot.elements:
+            for child in core.instances(slot):
                 visit(child)
         if not before_children:
             ordered.append(node)
@@ -41,10 +43,10 @@ def definition_names(root, root_name):
 
 
 def slot_binding(key, slot, names):
-    definitions = [names[id(element)] for element in slot.elements]
-    if not slot.indexed:
+    definitions = [names[id(element)] for element in core.instances(slot)]
+    if not isinstance(slot, tuple):
         value = definitions[0]
-    elif all(element is slot.elements[0] for element in slot.elements):
+    elif all(element is slot[0] for element in slot):
         value = f"ModuleList({definitions[0]}, {len(slot)})"
     else:
         value = f"ModuleList(({', '.join(definitions)},))"

@@ -26,19 +26,17 @@ flowchart TB
 
 ```python
 def evaluate(
-    target: "core.Function | core.LoadedModule",
+    target: "core.Function | core.Module | core.LoadedModule",
     *inputs: "torch.Tensor",
+    context: "EvaluateContext | None" = None,
 ) -> "torch.Tensor | tuple[torch.Tensor, ...]":
     ...
 ```
 
-`evaluate` binds `inputs` to the selected `Function`'s parameters in
-order, walks the body, and returns the logical tensor for a single
-output or a tuple for a `TupleType` result; an output in a local view is
-returned as its `ShardTensor`. The evaluator selects no tensor engine and no
-device: it computes where its inputs already are, and a run whose inputs carry
-no tensor leaves the device to torch's own default. Parameter binding, the
-`LoadedModule` entry and the device rule are in [§2](#2-parameters-and-inputs).
+`evaluate` walks the selected `Function`'s body and returns the logical tensor
+for a single output or a tuple for a `TupleType` result; an output in a local
+view is returned as its `ShardTensor`. Parameter binding, the `LoadedModule`
+entry and the device rule are in [§2](#2-parameters-and-inputs).
 
 ## 1. `Value`
 
@@ -111,8 +109,13 @@ corresponding positional input:
   agree with the first binding.
 
 - constraints:
-  - A `Function` entry takes no resource context and requires one input per
-    declared parameter. A `LoadedModule` entry runs its declared `entry`, takes
+  - The keyword-only `context` supplies the Module a `Function` entry's calls
+    resolve from; a body that calls no function needs none. A `Module` entry
+    sets `context.module` to itself; a `LoadedModule` entry sets it to its
+    `module` and `context.loaded_module` to itself.
+  - A `Function` or `Module` entry requires one input per declared parameter,
+    `ConstTensor` ones included, even when `context` carries a reading. A
+    `LoadedModule` entry runs its declared `entry`, takes
     activation inputs only, and reads each `ConstTensor` from that reading by
     name at first use; a loaded module without an `entry` is refused as having
     no default step. Another function or child is selected on the
@@ -122,8 +125,9 @@ corresponding positional input:
     MUST be refused, naming which input is where. For a loaded reading, a weight
     on another device MUST be refused at its first use, naming the weight; a
     weight whose dtype or shape differs from its declaration is refused too.
-    Evaluation moves no tensor and never picks a device the caller did not
-    express.
+    Evaluation moves no tensor, selects no tensor engine, and never picks a
+    device the caller did not express; a run whose inputs carry no tensor
+    leaves the device to torch's own default.
 
 ## 3. The evaluator registry and the eval context
 
@@ -158,6 +162,8 @@ class EvaluateContext:
         op: attribute; Operation instance.
         args: attribute; Evaluated operands in Call-argument order.
         result_type: attribute; Call result type.
+        module: attribute; Module that declares the running function and
+            resolves the references it calls.
         loaded_module: attribute; Runtime module reading, when one is active.
         device: attribute; Where the inputs are, or None to leave it to torch.
         dim_bindings: attribute; concrete values for symbolic ShapeDims.
@@ -166,6 +172,7 @@ class EvaluateContext:
     op: Any = None
     args: tuple[Any, ...] = ()
     result_type: Any = None
+    module: Any | None = None
     loaded_module: Any | None = None
     device: str | None = None
     dim_bindings: Mapping[str, int] = field(default_factory=dict)
@@ -219,7 +226,12 @@ class Visitor(ExprVisitor):
   loop's induction variable is one — folds the values its operands evaluated to.
   It performs the arithmetic `resolve_dim` performs in a shape position; only the
   leaves differ, being operands rather than `DimVar` sizes.
-- A `Call` whose `target` is a `Function` ([hir §1.1](./hir.md#11-function)) binds the
+- A `Call` whose `target` is a `FunctionRef` resolves the called definition
+  from the context's `module` by `core.resolve`; a failure, a missing `module`
+  included, raises `EvalError`. A non-empty path requires an active
+  `LoadedModule` and enters the reached child's reading, which supplies an
+  instance entry call's `ConstTensor` parameters; the reading never selects the
+  definition. An empty path keeps the current Module and reading. The call binds the
   evaluated arguments to the callee's parameters in a fresh environment
   and evaluates the callee `body` — the same value semantics a call site
   has under type inference. A callee with variants evaluates the one variant
@@ -229,9 +241,7 @@ class Visitor(ExprVisitor):
   incompatible value raises `EvalError` before the callee body is evaluated.
 - A `MeshRegion` evaluates its boundary `args` in the enclosing scope, then its
   body in a fresh environment that binds only its `params`.
-- A call through a child slot of a loaded module takes that child's own
-  resources for its `ConstTensor` parameters and requires an active
-  `LoadedModule`; an out-of-range `ModuleList` index raises `EvalError`.
+- An out-of-range run-time instance index raises `EvalError`.
 
 ## 5. `LoopRegion`
 

@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 from transformers import AutoTokenizer
 
-from tilefoundry.ir.core import Module
+from tilefoundry.ir.core import Module, instances
 from tilefoundry.runtime import SafetensorsResource
 
 
@@ -22,7 +22,7 @@ def _root(namespace: dict[str, object]) -> Module:
 
     def visit(module):
         for slot in module.children.values():
-            for child in slot.elements:
+            for child in instances(slot):
                 if id(child) not in held:
                     held.add(id(child))
                     visit(child)

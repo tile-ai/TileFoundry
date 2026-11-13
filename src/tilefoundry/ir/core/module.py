@@ -11,29 +11,24 @@ from dataclasses import MISSING, dataclass, field, replace
 from typing import Mapping, Union
 
 from tilefoundry import services, target
-from tilefoundry.ir import dim, expr
+from tilefoundry.ir import dim
 from tilefoundry.ir import types as ir_types
 
 from .function import Function
+from .function_ref import FunctionRef
 from .prim_function import PrimFunction
 
 ModuleFunction = Union[Function, PrimFunction]
 
 
-@dataclass(eq=False, init=False)
-class ModuleList(expr.Expr):
-    """An instance slot holding shared definitions, with a lazily projected type.
+class ModuleList:
+    """The class-body spelling of an instance slot.
 
     ``ModuleList(definition)`` is a single slot; a count or a tuple makes an
-    indexed slot. Its key is assigned when the slot enters ``Module.children``.
+    indexed slot. It is not an ``Expr`` and never enters ``Module.children``:
+    the ``@module`` decorator stores the definition, or the tuple of
+    definitions, in its place.
     """
-
-    key: str | None
-    elements: tuple[Module | type, ...]
-    indexed: bool
-
-    __hash__ = object.__hash__
-    __eq__ = object.__eq__
 
     def __init__(self, definition, count=MISSING):
         if count is not MISSING:
@@ -51,13 +46,11 @@ class ModuleList(expr.Expr):
             raise TypeError("ModuleList requires a Module or a non-empty tuple of Modules")
         if not all(isinstance(element, (Module, type)) for element in elements):
             raise TypeError("ModuleList requires Modules or runtime module classes")
-        self.key = None
         self.elements = elements
         self.indexed = indexed
-        self.metadata = ()
 
     def __repr__(self) -> str:
-        """Describe the slot without projecting types or expanding definitions."""
+        """Describe the slot without expanding definitions."""
         names = []
         start = 0
         while start < len(self.elements):
@@ -70,30 +63,12 @@ class ModuleList(expr.Expr):
             names.append(f"{name}*{count}" if count > 1 else name)
             start = stop
         elements = ", ".join(names) + ("," if len(names) == 1 else "")
-        return f"ModuleList(key={self.key!r}, indexed={self.indexed}, elements=({elements}))"
+        return f"ModuleList(indexed={self.indexed}, elements=({elements}))"
 
     @property
-    def type(self):
-        signatures = tuple(
-            ir_types.callable_type_for(
-                (param for param in entry.params if not param.is_const),
-                ir_types.UnitType() if isinstance(entry, PrimFunction) else entry.return_type
-            )
-            for entry in (element.entry_function() for element in self.elements)
-        )
-        return ir_types.TupleType(signatures) if self.indexed else signatures[0]
-
-    @type.setter
-    def type(self, value):
-        """Keep the definition-derived signature independent of inferred stamps."""
-        pass
-
-    def bind(self, key: str) -> None:
-        if self.key is not None and self.key != key:
-            raise ValueError(
-                f"ModuleList is already in slot {self.key!r}; cannot also use slot {key!r}"
-            )
-        self.key = key
+    def slot(self):
+        """The ``Module.children`` value: the definition, or the tuple of definitions."""
+        return self.elements if self.indexed else self.elements[0]
 
     def __len__(self):
         return len(self.elements)
@@ -119,7 +94,7 @@ class Module:
     functions: tuple[ModuleFunction, ...]
 
     entry: str | None = None
-    children: dict[str, ModuleList] = field(default_factory=dict, hash=False)
+    children: dict[str, Module | tuple[Module, ...]] = field(default_factory=dict, hash=False)
     target: target.Target | None = None
     topologies: tuple[ir_types.Topology, ...] | None = field(default=None, hash=False)
     metadata: dict[str, object] = field(default_factory=dict, hash=False)
@@ -130,7 +105,7 @@ class Module:
 
         Seal each function against further authoring mutation, reject a
         name shared by two of functions / modules / methods, validate the
-        declared execution context, and assign each instance slot its key.
+        declared execution context, and require Module definitions in every slot.
         """
         if self.target is not None:
             target.instance(self.target)
@@ -165,8 +140,9 @@ class Module:
                     f"one name must map to one level of the ordered hierarchy"
                 )
         for key, slot in self.children.items():
-            slot.bind(key)
-            for child in slot.elements:
+            if slot == ():
+                raise TypeError(f"Module {self.name!r}: indexed slot {key!r} requires at least one Module")
+            for child in instances(slot):
                 if not isinstance(child, Module):
                     raise TypeError(f"Module {self.name!r}: slot {key!r} requires Module definitions")
 
@@ -248,7 +224,7 @@ class Module:
             )
         slot = self.children.get(name)
         if slot is not None:
-            return slot if slot.indexed else slot.elements[0]
+            return slot
         method = self.methods.get(name)
         if method is not None:
             return types.MethodType(method, self)
@@ -321,7 +297,11 @@ class Module:
 
     def __call__(self, *args):
         """Evaluate the declared entry with every parameter supplied."""
-        return services.evaluate(self.entry_function(), *args)
+        return services.evaluate(self, *args)
+
+    def evaluation_target(self):
+        """Run my declared entry, with one argument per declared parameter and no reading."""
+        return self.entry_function(), None
 
     def load(self, resource) -> "LoadedModule":
         """Remember *resource* for this Module and its children.
@@ -340,13 +320,13 @@ class Module:
         for key, slot in self.children.items():
             base = resource.subtree(key)
             child_path = f"{path}.{key}" if path else key
-            if slot.indexed:
+            if isinstance(slot, tuple):
                 children[key] = tuple(
                     child.load_under(base.subtree(str(i)), tgt, topologies, f"{child_path}.{i}")
-                    for i, child in enumerate(slot.elements)
+                    for i, child in enumerate(slot)
                 )
             else:
-                children[key] = slot.elements[0].load_under(base, tgt, topologies, child_path)
+                children[key] = slot.load_under(base, tgt, topologies, child_path)
         return LoadedModule(
             module=self, resource=resource, children=children,
             target=tgt, topologies=topologies, path=path,
@@ -408,37 +388,69 @@ class LoadedModule:
         return self.module.entry_function(), self
 
 
-def resolve_symbol(module, name: str, *, nested: tuple[str, ...] = ()) -> ModuleFunction:
-    """Resolve one function in the current module or a child-slot path.
+def instances(slot) -> tuple[Module, ...]:
+    """The Module definitions of one ``Module.children`` value, in instance order."""
+    return slot if isinstance(slot, tuple) else (slot,)
 
-    An iterable is the legacy flat function scope; it cannot contain child slots.
-    Every failure names the complete requested path, with no subtree name search.
+
+def descend(scope, ref: FunctionRef):
+    """Yield each Module the path of *ref* enters from *scope*, in order."""
+    path = ref.qualified_name
+    if scope is None:
+        raise ValueError(f"symbol {path!r}: a function reference requires a module context")
+    module, slot, key = scope, None, None
+    for segment in ref.path:
+        if isinstance(segment, str):
+            if slot is not None:
+                break
+            key, slot = segment, module.children.get(segment)
+            if slot is None:
+                raise ValueError(f"symbol {path!r}: child slot {key!r} does not exist")
+            if isinstance(slot, tuple):
+                continue
+            module = slot
+        elif slot is None:
+            raise ValueError(f"symbol {path!r}: single slot {key!r} cannot be indexed")
+        elif segment is None:
+            if any(element is not slot[0] for element in slot[1:]):
+                raise ValueError(
+                    f"symbol {path!r}: ModuleList slot {key!r}: variable index requires the same definition"
+                )
+            module = slot[0]
+        elif not 0 <= segment < len(slot):
+            raise ValueError(
+                f"symbol {path!r}: ModuleList slot {key!r}: index {segment!r} out of range for N={len(slot)}"
+            )
+        else:
+            module = slot[segment]
+        slot = None
+        yield module
+    if slot is not None:
+        raise ValueError(f"symbol {path!r}: ModuleList slot {key!r} must be indexed before calling")
+
+
+def resolve(scope, ref: FunctionRef) -> tuple[Module, ModuleFunction]:
+    """The Module and the function *ref* names, starting at *scope*.
+
+    A ``str`` segment enters a child slot, an ``int`` segment selects one
+    instance of an indexed slot, and a ``None`` segment selects instance 0 of
+    an indexed slot whose instances share one definition. A name matches a
+    declared prototype only; dispatch picks its variant. Every failure names
+    the complete requested path, with no subtree name search.
     """
-    path = ".".join((*nested, name))
-    if isinstance(module, Module):
-        selected = module
-        for slot in nested:
-            child = selected.children.get(slot)
-            if child is None:
-                raise ValueError(f"symbol {path!r}: child slot {slot!r} does not exist")
-            if child.indexed:
-                raise ValueError(f"symbol {path!r}: child slot {slot!r} requires an instance index")
-            selected = child.elements[0]
-        functions = selected.functions
-    else:
-        if nested:
-            raise ValueError(f"symbol {path!r}: child slots require a Module tree")
-        functions = module
-    functions = tuple(functions)
-    matches = tuple(function for function in functions if function.name == name)
-    if not matches:
-        matches = tuple(
-            variant for function in functions for variant in function.variants
-            if variant.name == name
-        )
+    path = ref.qualified_name
+    module = scope
+    for module in descend(scope, ref):
+        pass
+    if ref.name is None:
+        try:
+            return module, module.entry_function()
+        except ValueError as error:
+            raise ValueError(f"symbol {path!r}: {error}") from error
+    matches = tuple(function for function in module.functions if function.name == ref.name)
     if len(matches) != 1:
         raise ValueError(f"symbol {path!r} must resolve to exactly one function, found {len(matches)}")
-    return matches[0]
+    return module, matches[0]
 
 
-__all__ = ["LoadedModule", "Module", "ModuleFunction", "ModuleList", "resolve_symbol"]
+__all__ = ["LoadedModule", "Module", "ModuleFunction", "ModuleList", "descend", "instances", "resolve"]

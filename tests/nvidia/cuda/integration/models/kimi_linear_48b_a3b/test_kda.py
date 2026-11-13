@@ -20,7 +20,8 @@ from tests.nvidia.cuda.models.kimi_linear_48b_a3b.reference import (
     KDA_PROJ,
     SHORT_CONV_KERNEL_SIZE,
 )
-from tilefoundry.interfaces.evaluator import evaluate
+from tilefoundry.interfaces.evaluator import EvaluateContext
+from tilefoundry.interfaces.evaluator import evaluate as evaluate_function
 from tilefoundry_nvidia.cuda.models.kimi_linear_48b_a3b.model import KimiLinear48BA3B
 
 DEV = "cpu"
@@ -67,6 +68,11 @@ def test_kda_reference_is_blocked_and_the_gate_holds_it():
             expect=AssertionError,
             label="kda",
         )
+
+
+def evaluate(function, *args):
+    """Evaluate one KDA function, its calls resolved in the KDA Module."""
+    return evaluate_function(function, *args, context=EvaluateContext(module=KimiLinear48BA3B.kda))
 
 
 def test_a_block_for_another_reason_would_not_be_accepted():

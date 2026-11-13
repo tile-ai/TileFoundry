@@ -30,9 +30,9 @@ __all__ = [
 registry = dispatch.Registry("services")
 
 
-def evaluate(target: object, *args: object) -> object:
+def evaluate(target: object, *args: object, context: object | None = None) -> object:
     """Evaluate a Function, Module or loaded Module on the reference interpreter."""
-    return registry.require(evaluate)(target, *args)
+    return registry.require(evaluate)(target, *args, context=context)
 
 
 def prepare(module: object, raw: object, out_dir: str, *, device: str = "cpu") -> None:

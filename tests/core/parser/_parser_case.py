@@ -27,7 +27,7 @@ class Parsed:
 
 
 def _functions(ir):
-    return tuple(frame.function for frame in valuation.list_call_paths(ir).values())
+    return tuple(frame.function for frame in valuation.collect_functions(ir).values())
 
 
 def require_call_spans(ir) -> None:

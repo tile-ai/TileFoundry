@@ -34,7 +34,7 @@ def insert_default_host_entry(module: core.Module) -> core.Module:
     runs_on = entry.target if isinstance(entry, core.PrimFunction) else module.resolve_target()
     if isinstance(runs_on, cpu.Target):
         return module
-    functions = tuple(frame.function for frame in valuation.list_call_paths(module).values())
+    functions = tuple(frame.function for frame in valuation.collect_functions(module).values())
     if all(isinstance(fn, core.PrimFunction) for fn in functions):
         return module
     if all(isinstance(fn, core.Function) for fn in functions):
@@ -74,13 +74,20 @@ def fresh_name(stem: str, taken: set[str]) -> str:
     return candidate
 
 
-def entry_params(fn: core.Function) -> tuple[expr.Var, ...]:
-    """*fn*'s declared inputs, then one GMEM destination per tensor result leaf.
+def entry_params(frame) -> tuple[tuple[expr.Var, ...], int]:
+    """The declared inputs, the lowered scratch, then one GMEM destination per tensor result leaf.
 
-    An HIR result has a type and no name, so each destination is named ``out``
-    with the declared parameter names reserved.
+    The scratch is the list lowering will declare for the function of
+    *frame*. An HIR result has a type and no name, so each destination is
+    named ``out``; every name avoids the ones before it. Also returns the
+    number of destinations.
     """
+    fn = frame.function
     taken = {param.name for param in fn.params}
+    scratch = tuple(
+        expr.Var(fresh_name(param.name, taken), type=param.type)
+        for param in transforms.scratch_buffers(frame)
+    )
 
     def destinations(ty):
         if isinstance(ty, types.TensorType):
@@ -99,22 +106,23 @@ def entry_params(fn: core.Function) -> tuple[expr.Var, ...]:
             )
 
     inputs = tuple(expr.Var(name=p.name, type=p.type, is_const=p.is_const) for p in fn.params)
-    return (*inputs, *destinations(fn.return_type))
+    outputs = tuple(destinations(fn.return_type))
+    return (*inputs, *scratch, *outputs), len(outputs)
 
 
-def host_entry_for(frame, selector: str, fn: core.Function, taken: set[str]) -> core.PrimFunction:
+def host_entry_for(frame, ref: core.FunctionRef, fn: core.Function, taken: set[str]) -> core.PrimFunction:
     """Launch one Module entry with its declared inputs and flattened destinations."""
-    params = entry_params(fn)
+    params, output_count = entry_params(frame)
     grid = (product(tuple(t.size for t in frame.topologies if t.name == "cta")), 1, 1)
     block = (product(tuple(t.size for t in frame.topologies if t.name == "thread")), 1, 1)
     launch = tir.launch.launch_call(
-        fn, params, grid, block, symbol=selector, dynamic_smem=smem_peak(fn)
+        fn, params, grid, block, ref=ref, dynamic_smem=smem_peak(fn)
     )
     return core.PrimFunction(
         name=fresh_name(f"{fn.name}_host", taken),
         params=params,
         body=core.Sequential(body=(launch,)),
-        output_count=len(params) - len(fn.params),
+        output_count=output_count,
         target=cpu.Target(),
     )
 
@@ -133,17 +141,17 @@ def entries_for_hir_functions(module: core.Module) -> core.Module:
     taken = {fn.name for fn in module.functions}
     entries = []
     root = None
-    for call_path, frame in valuation.list_call_paths(module).items():
+    for ref, frame in valuation.collect_functions(module).items():
         fn = frame.function
         if (
             isinstance(fn, core.Function)
             and frame.module.entry == fn.name
-            and not any(part.isdecimal() for part in call_path.split(".")[:-1])
+            and not any(isinstance(segment, int) for segment in ref.path)
             and launchable(fn.return_type)
         ):
-            entry = host_entry_for(frame, call_path, fn, taken)
+            entry = host_entry_for(frame, ref, fn, taken)
             entries.append(entry)
-            if call_path == module.entry:
+            if ref.path == () and ref.name == module.entry:
                 root = entry
     module.replace_functions((*module.functions, *entries), entry=None if root is None else root.name)
     return module

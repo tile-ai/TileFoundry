@@ -53,7 +53,8 @@ class CallThroughPrototype(SpecializeCase):
         run = state.entry_function()
 
         for extent, expected in ((64, "pick_small"), (512, "pick_big")):
-            rebuilt = analysis.check_program(replace(state, target=cuda.Target("nvidia.h200_sxm")), run, dims={"n": extent})[1].body.target
+            module, caller = analysis.check_program(replace(state, target=cuda.Target("nvidia.h200_sxm")), run, dims={"n": extent})
+            rebuilt = core.resolve(module, caller.body.target)[1]
             assert valuation.display_name(valuation.origin_of(rebuilt)) == expected
 
 
@@ -79,13 +80,13 @@ class NestedDispatch(SpecializeCase):
         run = state.entry_function()
 
         for extent, suffix in ((64, "small"), (512, "big")):
-            concrete = analysis.check_program(replace(state, target=cuda.Target("nvidia.h200_sxm")), run, dims={"nested_n": extent})[1]
-            middle = concrete.body.target
-            inner = middle.body.target
+            module, concrete = analysis.check_program(replace(state, target=cuda.Target("nvidia.h200_sxm")), run, dims={"nested_n": extent})
+            middle = core.resolve(module, concrete.body.target)[1]
+            inner = core.resolve(module, middle.body.target)[1]
 
             assert valuation.display_name(valuation.origin_of(middle)) == f"mid_{suffix}"
             assert valuation.display_name(valuation.origin_of(inner)) == f"inner_{suffix}"
-            assert valuation.residual_dims(concrete) == ()
+            assert valuation.residual_dims(concrete, valuation.Context(module, concrete)) == ()
 
 
 def test_specialize_leaves_no_ranges() -> None:
@@ -95,9 +96,7 @@ def test_specialize_leaves_no_ranges() -> None:
     shape-valued attributes their operations carry, which no signature shows.
     """
     GqaOnline, ENTRY, STEADY, _ = _gqa()
-    concrete = analysis.check_program(replace(GqaOnline, target=cuda.Target("nvidia.h200_sxm")), ENTRY, dims=STEADY)[1]
-
-    assert valuation.residual_dims(concrete) == ()
+    assert _residual(analysis.check_program(replace(GqaOnline, target=cuda.Target("nvidia.h200_sxm")), ENTRY, dims=STEADY)) == ()
 
 
 def test_specialising_only_substitutes_dimensions() -> None:
@@ -142,12 +141,13 @@ def test_specialize_is_deterministic() -> None:
     """
     GqaOnline, ENTRY, STEADY, _ = _gqa()
     first = analysis.check_program(replace(GqaOnline, target=cuda.Target("nvidia.h200_sxm")), ENTRY, dims=STEADY)[1]
-    others = [analysis.check_program(replace(GqaOnline, target=cuda.Target("nvidia.h200_sxm")), ENTRY, dims=STEADY)[1] for _ in range(4)]
+    others = [analysis.check_program(replace(GqaOnline, target=cuda.Target("nvidia.h200_sxm")), ENTRY, dims=STEADY) for _ in range(4)]
 
-    for other in others:
+    for checked in others:
+        other = checked[1]
         assert other.return_type == first.return_type
         assert [p.type for p in other.params] == [p.type for p in first.params]
-        assert valuation.residual_dims(other) == ()
+        assert _residual(checked) == ()
 
 
 def test_specialize_keeps_shared_callees_clean() -> None:
@@ -157,15 +157,20 @@ def test_specialize_keeps_shared_callees_clean() -> None:
     up here rather than where it was caused.
     """
     GqaOnline, ENTRY, STEADY, _ = _gqa()
-    partials = analysis.check_program(replace(GqaOnline, target=cuda.Target("nvidia.h200_sxm")), GqaOnline.lookup("_ctx_partials"), dims=STEADY)[1]
-    assert valuation.residual_dims(partials) == ()
+    assert _residual(analysis.check_program(replace(GqaOnline, target=cuda.Target("nvidia.h200_sxm")), GqaOnline.lookup("_ctx_partials"), dims=STEADY)) == ()
 
-    entry = analysis.check_program(replace(GqaOnline, target=cuda.Target("nvidia.h200_sxm")), ENTRY, dims=STEADY)[1]
-    assert entry.return_type.shape == (1, 1, 32, 128)
-    assert valuation.residual_dims(entry) == ()
+    checked = analysis.check_program(replace(GqaOnline, target=cuda.Target("nvidia.h200_sxm")), ENTRY, dims=STEADY)
+    assert checked[1].return_type.shape == (1, 1, 32, 128)
+    assert _residual(checked) == ()
 
 
-def _reshape_targets(fn) -> list[tuple]:
+def _residual(checked) -> tuple[str, ...]:
+    """The dimensions still ranged anywhere a checked function reaches in its Module."""
+    module, function = checked
+    return valuation.residual_dims(function, valuation.Context(module, function))
+
+
+def _reshape_targets(module, fn) -> list[tuple]:
     """Every `new_shape` an operation states anywhere *fn* reaches."""
     found: list[tuple] = []
     seen: set[int] = set()
@@ -177,8 +182,8 @@ def _reshape_targets(fn) -> list[tuple]:
         target = getattr(expr, "target", None)
         if target is not None and type(target).__name__ == "Reshape":
             found.append(tuple(target.new_shape))
-        if isinstance(target, core.Function):
-            walk(target.body, depth + 1)
+        if isinstance(target, core.FunctionRef):
+            walk(core.resolve(module, target)[1].body, depth + 1)
         for name in ("args", "elements", "yield_values"):
             for child in getattr(expr, name, ()) or ():
                 walk(child, depth + 1)
@@ -194,10 +199,10 @@ def test_derived_extent_reaches_reshape() -> None:
     Nothing supplies it, and it has to arrive inside the callee's own reshape.
     """
     GqaOnline, ENTRY, STEADY, NUM_SPLITS = _gqa()
-    concrete = analysis.check_program(replace(GqaOnline, target=cuda.Target("nvidia.h200_sxm")), ENTRY, dims=STEADY)[1]
+    module, concrete = analysis.check_program(replace(GqaOnline, target=cuda.Target("nvidia.h200_sxm")), ENTRY, dims=STEADY)
     block = STEADY["ctx_len"] // NUM_SPLITS
 
-    targets = _reshape_targets(concrete)
+    targets = _reshape_targets(module, concrete)
     assert targets, "no reshape reached; the walk found nothing to check"
     assert any(block in shape for shape in targets), (
         f"no reshape states the derived block length {block}: {targets}"

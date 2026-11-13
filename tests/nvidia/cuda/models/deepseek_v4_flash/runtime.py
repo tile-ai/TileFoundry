@@ -364,7 +364,7 @@ def build_runtime_causal_lm(config: DSV4Config, ir: Module) -> runtime.Module:
     root (its children/entry/functions drive the twin)."""
     if "layers" not in ir.children:
         raise ValueError("build_runtime_causal_lm: ir has no decoder layers")
-    layer0_ir = ir.children["layers"].elements[0]
+    layer0_ir = ir.children["layers"][0]
     attention_ir = layer0_ir.attention
     moe_ir = layer0_ir.moe
 

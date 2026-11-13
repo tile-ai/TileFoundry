@@ -60,7 +60,7 @@ class FreshReturn(AllocationCase):
         call = next(
             value
             for value in core.collect_exprs(result.function.body)
-            if isinstance(value, expr.Call) and isinstance(value.target, core.Function)
+            if isinstance(value, expr.Call) and isinstance(value.target, core.FunctionRef)
         )
         actual = expr.get_metadata(call.args[0], analysis.MemoryMetadata)
         returned = expr.get_metadata(call, analysis.MemoryMetadata)

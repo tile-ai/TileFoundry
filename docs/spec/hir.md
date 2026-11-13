@@ -35,7 +35,7 @@ class Function(Expr):
     """HIR's function container; its value type is the function signature.
 
     Attributes:
-        name: attribute; the function name; call sites resolve through Module's symbol table.
+        name: attribute; the function name; call sites resolve it by `core.resolve`.
         params: attribute; each Var carries a type annotation.
         body: attribute; a single Expr — typically a Call DAG; None for a dispatch prototype.
         return_type: attribute; concrete TensorType for single output, TupleType for multi.
@@ -125,9 +125,8 @@ the concrete return type once; calls read that type without filling defaults.
 `return_type`. The projection is fixed at construction and stays
 consistent across construction sites.
 
-**Call typing — visitor-scoped inference.** A same-module `Call` keeps its authored
-`Function` template as `target`; an instance call keeps its ModuleList slot or
-`TupleGetItem(ModuleList, index)` target ([core-ir §2.1](./core-ir.md#21-call)). Its result type is inferred by seeding a new
+**Call typing — visitor-scoped inference.** A `Call` to a `FunctionRef`
+([core-ir §2.1](./core-ir.md#21-call)) has its result type inferred by seeding a new
 visitor memo with the actual argument types bound to the callee's formal
 parameters, then walking the callee body in a child context that retains the
 call site's mesh. A callee without a mesh declaration runs in that scope;
@@ -146,8 +145,7 @@ previously inferred result type. The cache key uses callee identity, the
 argument-type tuple, call-site mesh, and current Module with its effective target and topologies; the cached value is
 only a `Type`, never a derived `Function` or a replacement `Call.target`.
 
-Argument types bind to supplied parameters in order, following the target and
-instance-resolution rules in [core-ir §2.1](./core-ir.md#21-call). For an omitted
+Argument types bind to supplied parameters in order ([core-ir §2.1](./core-ir.md#21-call)). For an omitted
 ConstTensor parameter, its declared type seeds the callee visitor memo; its
 value comes from the instance's resource
 ([runtime §1.3](./runtime.md#13-runtimedecoratorpy)).
@@ -1782,10 +1780,10 @@ def dim_vars_reached(fn: Function, frame: valuation.Context | None = None) -> di
     an unstated dimension used by a pattern MUST raise `SpecializationError`.
   - `InstantiateDimensionCloner` MUST select variants by `variant_for` and
     substitute dimensions in types, Op attributes, loop bounds, and meshes.
-    It MUST replace Function targets with clones deduplicated by identity;
-    one shared definition MUST be cloned once. It MUST preserve ModuleList
-    and TupleGetItem instance targets, except for rebuilding their computed
-    index operand. It MUST NOT perform type inference while cloning.
+    It MUST clone every function the collector reaches from its frame, with
+    one clone per shared definition, and MUST preserve every `FunctionRef`
+    target, because a name does not change; a run-time index operand is
+    rebuilt like any operand. It MUST NOT perform type inference while cloning.
   - Each cloned function MUST retain its original name and record the chosen
     implementation and sorted bindings, recoverable through `origin_of` and
     `bound_dims_of`. Provenance and bound-dimension records MUST NOT participate
@@ -1798,5 +1796,5 @@ def dim_vars_reached(fn: Function, frame: valuation.Context | None = None) -> di
     and called functions, including return types. Runtime values without a
     `DimVar` are rejected later by their consumer.
   - Instance dimension scans MUST receive a `valuation.Context` and recurse through
-    element entries using the current frame's children ([core-ir §2.1](./core-ir.md#21-call)).
+    the entries the current frame's Module resolves ([core-ir §2.1](./core-ir.md#21-call)).
     Function-only graphs retain the frame-free query API.

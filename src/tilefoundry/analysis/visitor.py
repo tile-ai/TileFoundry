@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 import isl
 
 from tilefoundry import utils
-from tilefoundry.interfaces import access, typeinfer, valuation
+from tilefoundry.interfaces import access, typeinfer
 from tilefoundry.ir import core
 from tilefoundry.ir import utils as ir_utils
 
@@ -68,38 +68,40 @@ class AnalyzeContext(typeinfer.TypeInferContext):
 
     def call_bindings(self, frame):
         """Prepare arguments and instance coordinates for the visitor's explicit attach."""
-        formals = tuple(
-            p
-            for p in frame.function.params
-            if isinstance(self.call_site.target, core.Function) or not p.is_const
-        )
-        arguments = {id(p): arg for p, arg in zip(formals, self.call_site.args, strict=True)}
-        instance = None
-        slot, index = valuation.module_slot(self.call_site)
-        if slot is not None:
-            values = {}
-            try:
-                relation = (
-                    access.affine_of(index, self.scope, values=values)
-                    .insert_domain(isl.set("{ [] }").get_space())
-                    .as_map()
-                )
-                instance = access.Relation(relation, values).constrain(self.scope.domain)
-                if utils.has_unbounded_param(instance.relation):
-                    raise ValueError("unbounded module index")
-            except (TypeError, ValueError, NotImplementedError, isl.Error):
-                count = len(self.module.children[slot.key].elements)
-                instance = access.Relation(
-                    isl.map(f"{{ [] -> [i] : 0 <= i < {count} }}"), may_access=True
-                )
-
-        if slot is not None:
-            offset = 0
-            for key, child in self.module.children.items():
-                if key == slot.key:
-                    break
-                offset += len(child.elements)
-            instance = instance.compose(access.Relation(isl.map(f"{{ [i] -> [i + {offset}] }}")))
+        target = self.call_site.target
+        formals = tuple(p for p in frame.function.params if not (target.name is None and p.is_const))
+        actuals = target.arguments(self.call_site.args)
+        arguments = {id(p): arg for p, arg in zip(formals, actuals, strict=True)}
+        if not target.path:
+            return arguments, None
+        key = target.path[0]
+        slot = self.module.children[key]
+        if not isinstance(slot, tuple):
+            index = 0
+        elif target.path[1] is None:
+            index = target.indices(self.call_site.args)[0]
+        else:
+            index = target.path[1]
+        values = {}
+        try:
+            relation = (
+                access.affine_of(index, self.scope, values=values)
+                .insert_domain(isl.set("{ [] }").get_space())
+                .as_map()
+            )
+            instance = access.Relation(relation, values).constrain(self.scope.domain)
+            if utils.has_unbounded_param(instance.relation):
+                raise ValueError("unbounded module index")
+        except (TypeError, ValueError, NotImplementedError, isl.Error):
+            instance = access.Relation(
+                isl.map(f"{{ [] -> [i] : 0 <= i < {len(slot)} }}"), may_access=True
+            )
+        offset = 0
+        for name, child in self.module.children.items():
+            if name == key:
+                break
+            offset += len(core.instances(child))
+        instance = instance.compose(access.Relation(isl.map(f"{{ [i] -> [i + {offset}] }}")))
 
         return arguments, instance
 

@@ -189,14 +189,17 @@ are owned by [runtime §1.6](./runtime.md#16-compiler).
 ([parser](./parser.md)), so a `Module` entering the pipeline has `Expr.type`
 filled. After each pass, `PassManager` rechecks the pass's **dirty scope**: every
 function on the Module's call paths whose object identity was not on them before
-the pass. Rechecking is per whole function.
+the pass, and every function reaching one of those by calls or launches at any
+depth, variants included; a reference that does not resolve raises.
+Rechecking is per whole function.
 
 - HIR: `verify_function`, then type inference with ranges, which refreshes
   `RangeMetadata` over the complete function.
 - TIR: `verify_prim_function`, which retriggers `typeinfer` on the embedded Expr
   fields and refreshes their `.type`.
 
-A rewrite that keeps a function's identity is therefore not rechecked.
+A rewrite that keeps a function's identity, and changes no function it reaches,
+is therefore not rechecked.
 
 ## 7. Implemented passes
 
@@ -397,7 +400,14 @@ class ConvertHIRToTIR(ModulePass):
     pass never emits a partial `PrimFunction` or silently preserves HIR.
 
 Scheduled lowering MUST retain loops and produce one `PrimFunction` per reached
-definition, preserving shared child definitions. Tensor parameters retain their
+definition, preserving shared child definitions. Each lowered function's
+parameters are its inputs, its scratch, then its outputs. The scratch list is
+decided from memory analysis before emission (`scratch_buffers`): one `gmem`
+buffer per allocation root the function owns that is neither an input nor an
+output nor an alias, then, per call site, the parameters that call forwards to
+its callee's scratch; two calls of one definition forward separate buffers.
+Emission only reads this list and MUST NOT append scratch. Lowering MUST NOT
+rewrite a host function after it lowers the device functions. Tensor parameters retain their
 HIR types, and output parameters follow the return-leaf rule above, including
 `ShardLayout`. Default and explicit compact row-major layouts denote the same
 physical layout. A returned retained call MUST receive the caller's output
@@ -438,7 +448,7 @@ def for_target(module: core.Module, point: PassPoint) -> list[ModulePass]: ...
 
 - constraints:
   - `passes.for_target` MUST collect PrimFunction targets from each function and
-    HIR targets from the corresponding `list_call_paths` frame. A frame with
+    HIR targets from the corresponding `collect_functions` frame. A frame with
     no Target MUST contribute no target. It MUST order
     targets by registered name and preserve registration order within a target.
   - A pass class MUST be registered at most once per point; a duplicate MUST
@@ -474,6 +484,10 @@ entry is rejected by compile.
   - An existing CPU entry MUST pass through unchanged.
   - A synthesized `Launch` MUST state the analyzed shared-memory peak as
     `dynamic_smem`, and 0 when the Module carries no memory analysis.
+  - A synthesized entry declares the parameters [§7.1](#71-converthirtotir)
+    gives the launched function, with no scratch without memory analysis, and
+    its `Launch` forwards all of them. Their names avoid each other.
+    `output_count` counts the destinations only.
   - Normalization MUST preserve each authored function's Target.
   - A synthesized `Launch` MUST carry its settled geometry so downstream
     codegen reads it without deriving it again.

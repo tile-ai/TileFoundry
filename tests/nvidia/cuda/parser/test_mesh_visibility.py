@@ -82,7 +82,7 @@ def test_region_boundary_captures_sibling_value() -> None:
         node
         for node in core.collect_exprs(body)
         if isinstance(node, expr.Call)
-        and isinstance(node.target, core.Function)
+        and isinstance(node.target, core.FunctionRef)
         and node.target.name == "helper"
     )
     assert any(

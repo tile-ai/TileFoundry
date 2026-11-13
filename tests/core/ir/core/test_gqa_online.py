@@ -30,10 +30,13 @@ def _heads():
     return _constants("NUM_Q_HEADS", "NUM_KV_HEADS", "HEAD_DIM", "GQA_GROUP")
 
 
-def _selected(name):
-    gqa_online_attend = cli.load_authored_ir(f"{GQA_DECODE}:GqaOnline").entry_function()
+def _evaluate_selected(name, *inputs):
+    """Run one implementation of the entry, its calls resolved in the declaring Module."""
+    module = cli.load_authored_ir(f"{GQA_DECODE}:GqaOnline")
+    gqa_online_attend = module.entry_function()
     head_variant, ctx_variant = gqa_online_attend.variants
-    return {"head": head_variant, "splitkv": ctx_variant, "prototype": gqa_online_attend}[name]
+    selected = {"head": head_variant, "splitkv": ctx_variant, "prototype": gqa_online_attend}[name]
+    return evaluator.evaluate(selected, *inputs, context=evaluator.EvaluateContext(module=module))
 
 
 def _ref(heads, q, k, v, k_new, v_new):
@@ -74,7 +77,7 @@ def test_selected_variant_matches_reference(selected, ctx):
     heads = _heads()
     Hq, _, D, _ = heads
     step = _inputs(heads, ctx)
-    out = evaluator.evaluate(_selected(selected), *step)
+    out = _evaluate_selected(selected, *step)
 
     assert out.shape == (1, 1, Hq, D)
     assert torch.allclose(out.float(), _ref(heads, *step), atol=2e-2, rtol=2e-2)
@@ -86,4 +89,4 @@ def test_splitkv_refuses_unaligned_ctx():
     assert ctx % NUM_SPLITS != 0
     step = _inputs(_heads(), ctx)
     with pytest.raises(evaluator.EvalError, match=r"op=Reshape: shape .*invalid for input of size"):
-        evaluator.evaluate(_selected("splitkv"), *step)
+        _evaluate_selected("splitkv", *step)

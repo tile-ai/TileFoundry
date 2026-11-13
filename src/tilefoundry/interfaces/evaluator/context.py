@@ -9,11 +9,16 @@ from typing import Any
 
 @dataclass(frozen=True)
 class EvaluateContext:
-    """Operands, Op-local values, and runtime state for one evaluation."""
+    """Operands, Op-local values, and runtime state for one evaluation.
+
+    *module* declares the running function and resolves the references it
+    calls; *loaded_module* is the reading its instance calls take weights from.
+    """
 
     op: Any = None
     args: tuple[Any, ...] = ()
     result_type: Any = None
+    module: Any | None = None
     loaded_module: Any | None = None
     device: str | None = None
     dim_bindings: Mapping[str, int] = field(default_factory=dict)

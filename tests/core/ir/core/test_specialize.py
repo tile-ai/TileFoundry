@@ -23,7 +23,9 @@ def test_ctx_len_sole_residual_dim() -> None:
     A derived extent is an expression, so it is not a second dimension the
     caller has to know how to compute.
     """
-    assert set(valuation.residual_dims(_entry())) == {"ctx_len"}
+    module = cli.load_authored_ir(f"{GQA_DECODE}:GqaOnline")
+    entry = module.entry_function()
+    assert set(valuation.residual_dims(entry, valuation.Context(module, entry))) == {"ctx_len"}
 
 
 def test_size_selects_covering_variant() -> None:

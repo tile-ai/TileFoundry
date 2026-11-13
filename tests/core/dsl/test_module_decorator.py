@@ -162,7 +162,7 @@ def test_shared_child_binds_per_owner():
         return node
 
     left, right = aliasing("left"), aliasing("right")
-    assert left.children["leaf"].elements[0] is right.children["leaf"].elements[0]
+    assert left.children["leaf"] is right.children["leaf"]
 
     ones = torch.ones(2, dtype=torch.float32)
     loaded_left = left.load(runtime.DictResource({"leaf.w": torch.full((2,), 3.0)}))

@@ -141,8 +141,6 @@ def unsourced_calls(value: expr.Call) -> tuple[expr.Call, ...]:
                 continue
             found.append(node)
             pending.extend(reversed(node.args))
-            if isinstance(node.target, expr.Call):
-                pending.append(node.target)
         elif isinstance(node, expr.Tuple):
             pending.extend(reversed(node.elements))
     return tuple(found)
@@ -191,6 +189,7 @@ runtime = SimpleNamespace(
     Range=ir_pattern.Range,
     Evaluate=core.Evaluate,
     For=core.For,
+    FunctionRef=core.FunctionRef,
     Expr=expr.Expr,
     Function=core.Function,
     LoopRegion=core.LoopRegion,
@@ -221,7 +220,6 @@ runtime = SimpleNamespace(
     Slice=tensor.Slice,
     Split=types.Split,
     StorageKind=expr.StorageKind,
-    SymbolRef=core.SymbolRef,
     TensorType=types.TensorType,
     TupleType=types.TupleType,
     TypeInferContext=typeinfer.TypeInferContext,
@@ -944,12 +942,18 @@ class ModuleBuildContext:
     variant_keys: dict[int, set[object]] = field(default_factory=dict)
     converter_keys: dict[int, set[str]] = field(default_factory=dict)
     declarations: list[object] = field(default_factory=list)
+    children: dict[str, object] = field(default_factory=dict)
     consumed: bool = False
     FUNCTION_RULES: ClassVar[tuple[object, ...]] = (
         ModuleFunctionValidationRule(),
         ModuleFunctionRegistrationRule(),
     )
     FINALIZATION_RULES: ClassVar[tuple[object, ...]] = (ModuleFinalizationRule(),)
+
+    @property
+    def functions(self) -> tuple[object, ...]:
+        """The prototypes parsed so far, which a function body may reference by name."""
+        return tuple(self.roots)
 
     def name_owner(self, name: str) -> None:
         self.owner_name = name
@@ -1069,10 +1073,6 @@ class ModuleBuildContext:
             value = rule.apply(value, module=self)
         return value
 
-    @property
-    def children(self):
-        return {name: value for name, value in self.module_scope.items() if isinstance(value, core.ModuleList)}
-
     def build_module(self, cls: type) -> object:
         if self.consumed:
             raise RuntimeError(
@@ -1081,8 +1081,8 @@ class ModuleBuildContext:
         self.consumed = True
         consume_module_context(self)
         functions: list[object] = []
-        children: dict[str, core.ModuleList] = {}
-        module_bindings: dict[str, object] = {}
+        children = self.children
+        wrappers: dict[int, str] = {}
         methods: dict[str, object] = {}
         for name, value in vars(cls).items():
             if name == "__call__":
@@ -1093,10 +1093,7 @@ class ModuleBuildContext:
             if name.startswith("__") and name.endswith("__"):
                 continue
             if isinstance(value, (runtime.Module, runtime.ModuleList)):
-                slot = runtime.ModuleList(value) if isinstance(value, runtime.Module) else value
-                slot.bind(name)
-                children[name] = slot
-                module_bindings[name] = slot
+                children[name] = child_slot(name, value, wrappers)
             elif (
                 isinstance(value, (tuple, list))
                 and value
@@ -1129,7 +1126,7 @@ class ModuleBuildContext:
                     f"@module {cls.__name__!r}: registered {role.value} {binding!r} "
                     "was overwritten or aliased"
                 )
-        for name, child in module_bindings.items():
+        for name, child in children.items():
             self.module_scope.define(name, child)
         for declaration in self.declarations:
             parsed = declaration.parse()
@@ -1194,6 +1191,22 @@ class ModuleContexts:
 
 
 MODULE_CONTEXTS = ModuleContexts()
+
+
+def child_slot(name: str, value, wrappers: dict[int, str]):
+    """The ``Module.children`` value a class-body member *name* declares.
+
+    One ``ModuleList`` wrapper names one slot; *wrappers* records the slot
+    each wrapper already took.
+    """
+    if isinstance(value, core.Module):
+        return value
+    if id(value) in wrappers:
+        raise ValueError(
+            f"ModuleList is already in slot {wrappers[id(value)]!r}; cannot also use slot {name!r}"
+        )
+    wrappers[id(value)] = name
+    return value.slot
 
 
 def register_module_context(context: ModuleBuildContext) -> None:
@@ -1412,6 +1425,14 @@ class ParseError(expr.VerifyError):
         return cls(node=node, context=context, detail=detail)
 
 
+class DeclarationOrderError(ParseError):
+    """A name a function body uses before the @module declaration that binds it.
+
+    It is not a failed alternative: a call pattern does not fall back to
+    another reading of the name.
+    """
+
+
 def resolve_mesh_topologies_at(topologies, declared, node, context):
     """Resolve mesh levels and anchor declaration errors to *node*."""
     try:
@@ -1498,6 +1519,28 @@ def decorator_name(node: ast.AST) -> str | None:
     return None
 
 
+def refuse_later_declaration(node: ast.Name, context: MatchContext) -> None:
+    """Refuse a name this @module declares by a function not parsed yet.
+
+    A parsed declaration is already in the module scope; one not parsed yet is
+    declared later, which the language refuses (declare before use) rather
+    than reading a global or closure value of the same name.
+    """
+    function = context.function
+    module = None if function is None else function.module
+    for declaration in getattr(module, "declarations", ()):
+        if (
+            declaration.binding_name == node.id
+            and declaration.role in (FunctionRole.ROOT, FunctionRole.VARIANT)
+            and declaration.parsed is None
+        ):
+            raise DeclarationOrderError.from_node(
+                node,
+                context,
+                f"{node.id!r} is declared later in @module {module.owner_name!r}; declare it before use",
+            )
+
+
 def resolve_reference(node: ast.AST, context: MatchContext) -> object:
     def external_value(value):
         for rule in ReferencePattern.REFERENCE_RULES:
@@ -1528,6 +1571,7 @@ def resolve_reference(node: ast.AST, context: MatchContext) -> object:
             else:
                 if value is not None:
                     return external_value(value)
+        refuse_later_declaration(node, context)
         closure = (
             function.closure
             if function is not None
@@ -1540,14 +1584,10 @@ def resolve_reference(node: ast.AST, context: MatchContext) -> object:
         raise ParseError.from_node(node, context, f"undefined static name {node.id!r}")
     if isinstance(node, ast.Attribute):
         owner = resolve_reference(node.value, context)
-        if isinstance(owner, core.ModuleList):
-            if owner.indexed:
-                raise ParseError.from_node(
-                    node, context, "indexed ModuleList static function references are unsupported"
-                )
+        if isinstance(owner, core.Module):
             try:
-                child = owner.elements[0].children.get(node.attr)
-                return child if child is not None else owner.elements[0].lookup(node.attr)
+                child = owner.children.get(node.attr)
+                return child if child is not None else owner.lookup(node.attr)
             except ValueError as error:
                 raise ParseError.from_node(node, context, str(error)) from error
         try:
@@ -1712,6 +1752,7 @@ __all__ = [
     "ModuleBuildContext",
     "ModuleContexts",
     "OptionalPattern",
+    "DeclarationOrderError",
     "ParseError",
     "PatternFailure",
     "PredicatePattern",
@@ -1727,6 +1768,7 @@ __all__ = [
     "UNARY_OPERATORS",
     "attach_authored_metadata",
     "authored_source_range",
+    "child_slot",
     "constant",
     "consume_module_context",
     "create_module_context",

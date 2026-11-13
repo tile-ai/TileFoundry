@@ -344,13 +344,17 @@ def run_kda_step(inputs: KdaStepInputs):
     recorded as an error in the harness instead of as this model's stated limit.
     """
     from tilefoundry_nvidia.cuda.models.kimi_linear_48b_a3b.model import KimiLinear48BA3B  # noqa: PLC0415
-    from tilefoundry.interfaces.evaluator import evaluate
+    from tilefoundry.interfaces.evaluator import EvaluateContext, evaluate
 
     # Evaluated on whichever device the arguments were drawn on, rather than the
     # evaluator's default: this boundary is small and CPU-sized, and inheriting a
     # default of "cuda" would make a blocked reference depend on a free GPU.
     device = inputs.args[0].device.type
-    out, state, *windows = evaluate(KimiLinear48BA3B.kda.lookup("kda_attention"), *inputs.args)
+    out, state, *windows = evaluate(
+        KimiLinear48BA3B.kda.lookup("kda_attention"),
+        *inputs.args,
+        context=EvaluateContext(module=KimiLinear48BA3B.kda),
+    )
     assert torch.isfinite(out).all(), "KDA produced non-finite output"
     assert torch.isfinite(state).all(), "KDA produced a non-finite state"
     for window in windows:

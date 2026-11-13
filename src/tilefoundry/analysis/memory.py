@@ -123,7 +123,7 @@ def movement(
             f"the call has {len(operands)}"
         )
     traffic = cost_value.traffic
-    if isinstance(call.target, core.Function):
+    if isinstance(call.target, core.FunctionRef):
         charged = [
             ir_utils.bytes_by_storage(
                 type_,

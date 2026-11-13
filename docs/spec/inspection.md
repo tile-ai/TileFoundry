@@ -164,9 +164,7 @@ as `ceildiv`, so importing restores the same expression tree.
   - The decorator MUST print in its called form, `@module()` included. A bare
     decorator has not run while the class body is evaluated, so a body naming a
     child call could not resolve it ([parser §2.1](./parser.md#21-syntax)).
-  - Child definitions MUST precede their slot bindings. Instance calls print
-    the slot key and optional index, with exactly `Call.args`, following
-    [core-ir §2.1](./core-ir.md#21-call).
+  - Child definitions MUST precede their slot bindings.
 
 The printer MUST import the concrete Target class from its provider module and
 embed `repr(target)` as the constructor expression. That representation MUST
@@ -236,11 +234,14 @@ have names. Name allocation MUST reserve later authored identifiers before
 assigning generated names or collision suffixes.
 Constant tensor parameters MUST retain `ConstTensor` annotations.
 
-A TIR `SymbolRef` MUST print its nested child-slot path followed by its function
-name, with each component rendered as a Python identifier. The printer reads
-that path from the IR and MUST NOT infer it by searching the module tree.
-On import, a local `helper(...)` remains a retained `PrimFunction` call;
-`child.run(...)` and launch targets retain their slot paths in `SymbolRef`.
+A `FunctionRef` MUST print its child-slot path followed by its function name,
+with each component rendered as a Python identifier: slot names join with dots,
+an instance index is a subscript (a run-time index renders its leading
+operand), and only `ref.arguments(args)` appear inside the call parentheses,
+e.g. `helper(x)`, `child(x)`, `layers[i](x)`, `child.run(x)`. The printer reads
+that path from the IR and MUST NOT infer it by searching the module tree;
+importing the text rebuilds the same `FunctionRef`. Generated value names avoid
+every referenced name.
 
 The DSL surface MUST be imported with `from tilefoundry.dsl import *`, which
 re-exports `ir.types` and the `func`, `module`, and `prim_func` decorators.
@@ -508,11 +509,18 @@ d3-zoom pan/zoom · click → detail + highlight · search · collapse toggle
   follows `open_browser` — an interactive call (`open_browser=True`)
   blocks until interrupted so the page stays reachable; a programmatic
   call returns.
-- **Builder.** `viewer.Builder` walks the HIR `Function` / `Module`
-  directly into a `graphviz.Digraph`; there is no intermediate model. A
-  `Call(target=core.Function)` and a top-level `Function` share one
-  unified emitter — a collapsed region renders as a stand-in node, an
-  expanded one as a `subgraph cluster_<region_visual_id>`.
+- **Builder.** `viewer.Builder` walks the HIR `Module` (or a `Function`
+  that calls no function) directly into a `graphviz.Digraph`; there is no
+  intermediate model. A direct call `FunctionRef((), name)` and a top-level
+  `Function` share one unified emitter — a collapsed region renders as a
+  stand-in node, an expanded one as a `subgraph cluster_<region_visual_id>`.
+  Each region and call detail carries the frame its references resolve
+  from. An instance call
+  (`child(x)`, `layers[i](x)`) is a call node titled by the reference's dotted
+  path; it is not expanded, since the instance may be chosen at run time. Its
+  ports and its detail parameters share one naming: one `index` port per
+  run-time index, then the names of the parameters its arguments bind, with
+  the ConstTensor parameters an instance entry omits left out.
 - **Frontend** is `static/index.html` + `static/viewer.js` (first-party,
   committed). On load it fetches `/api/palette`, then renders `/api/dot`;
   each collapse toggle re-fetches `/api/dot?collapsed=...` and re-renders.

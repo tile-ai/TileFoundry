@@ -72,16 +72,16 @@ def test_held_child_takes_owner_target():
         return function.body.type.storage
 
     cuda_root = namespace["ChildMatmulRoot"]
-    held = tuple(slot.elements[0] for slot in cuda_root.children.values())
+    held = tuple(cuda_root.children.values())
     for child in held:
         assert child.target is None
         assert storages(child) == [StorageKind.UMAT] * 3
-    assert valuation.list_call_paths(cuda_root)["direct.direct"].target is cuda_root.target
+    assert valuation.collect_functions(cuda_root)[core.FunctionRef(("direct",), "direct")].target is cuda_root.target
     assert call_storage(cuda_root, "gemm_on_chip") is StorageKind.RMEM
     before = [stored_types(child) for child in held]
 
     _CpuRoot = namespace["ChildMatmulCpuRoot"]
-    children = tuple(slot.elements[0] for slot in _CpuRoot.children.values())
+    children = tuple(_CpuRoot.children.values())
     for child, original, types in zip(children, held, before, strict=True):
         assert child is original and child.target is None
         assert storages(child) == [StorageKind.UMAT] * 3
@@ -94,14 +94,13 @@ def test_held_child_takes_owner_target():
         for node in core.collect_exprs(function.body)
         if isinstance(node, expr.Call)
     ]
-    assert all(any(target is slot for target in callees) for slot in _CpuRoot.children.values())
+    assert all(any(target == core.FunctionRef((key,), None) for target in callees) for key in _CpuRoot.children)
 
     imported = reload(inspection.as_script(cuda_root), "ChildMatmulRoot")
-    for slot in imported.children.values():
-        child = slot.elements[0]
+    for child in imported.children.values():
         assert child.target is None
         assert storages(child) == [StorageKind.UMAT] * 3
-    assert valuation.list_call_paths(imported)["direct.direct"].target == cuda_root.target
+    assert valuation.collect_functions(imported)[core.FunctionRef(("direct",), "direct")].target == cuda_root.target
     assert call_storage(imported, "gemm_on_chip") is StorageKind.RMEM
 
     _Refused = cli.load_authored_ir(str(DSL / "refused_child_matmul.py"))
@@ -179,10 +178,10 @@ def test_module_rejects_invalid_instances(fixture, refused):
 def test_entryless_module_occupies_slot():
     scaled_modules = Path(__file__).parents[1] / "fixtures/shapes/scaled_modules.py"
     ScaledChild = cli.load_authored_ir(f"{scaled_modules}:ScaledChild")
-    slot = ModuleList(dataclasses.replace(ScaledChild, entry=None))
+    slot = dataclasses.replace(ScaledChild, entry=None)
     root = core.Module("Container", (), None, children={"unused": slot})
     assert dataclasses.replace(root).children["unused"] is slot
-    assert slot.elements[0].entry is None
+    assert slot.entry is None
 
 
 CASES = special(ModuleDecoratorCase)

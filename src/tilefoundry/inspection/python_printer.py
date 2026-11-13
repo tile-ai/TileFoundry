@@ -20,7 +20,7 @@ from tilefoundry.ir.hir import tensor
 
 from .module_names import definition_names, module_definition_order, slot_binding
 from .print_context import HirPrintContext
-from .printer_base import PARTS, PythonPrinter
+from .printer_base import PARTS, PythonPrinter, call_head
 from .tir_printer import function_block, tir_function_to_python, tir_module_to_python
 
 
@@ -34,7 +34,6 @@ class HirPrinter(PythonPrinter):
         self.function: core.Function | None = None
         self.statements: dict[int, PrintedStatement] = {}
         self.param_alias: dict[int, expr.Expr] = {}
-        self.child_entries: dict[int, str] = {}
         self.moved_window = lambda start, size, stride: None
 
     def print(self, value, ctx=None, indent: str = "", *, options=None) -> str:
@@ -63,13 +62,11 @@ class HirPrinter(PythonPrinter):
         self,
         names: dict[int, str],
         param_alias: dict[int, expr.Expr],
-        child_entries: dict[int, str],
         moved_window,
     ) -> None:
         """Install the value-naming environment for one function definition."""
         self.names = names
         self.param_alias = param_alias
-        self.child_entries = child_entries
         self.moved_window = moved_window
 
     def define(self, printer: HirPrinter, fn: core.Function, names: dict[int, str]) -> None:
@@ -100,14 +97,6 @@ class HirPrinter(PythonPrinter):
 
     def reference(self, node: expr.Expr, ctx=None) -> str:
         """Return the binding that denotes one value in the current definition."""
-        if isinstance(node, core.ModuleList):
-            return node.key
-        if (
-            isinstance(node, expr.Call)
-            and isinstance(node.target, tensor.TupleGetItem)
-            and isinstance(node.args[0], core.ModuleList)
-        ):
-            return self.tuple_get_item_text(node)
         if isinstance(node, expr.Tuple):
             return self.tuple_reference(node.elements, ctx)
         if id(node) in self.param_alias:
@@ -143,14 +132,9 @@ class HirPrinter(PythonPrinter):
     def visit_program_call(self, node: expr.Call, ctx=None) -> str:
         """Render one HIR call after expression-level dispatch selected it."""
         target = node.target
-        args_text = ", ".join(self.reference(arg) for arg in node.args)
-        if isinstance(target, core.ModuleList):
-            return f"{target.key}({args_text})"
-        if isinstance(target, expr.Call):
-            return f"{self.reference(target)}({args_text})"
-        if isinstance(target, core.Function):
-            binding = module_callee_binding(target, self.child_entries)
-            return f"{binding or target.name}({args_text})"
+        if isinstance(target, core.FunctionRef):
+            head = call_head(target, target.indices(node.args), lambda index: self.visit(index, ctx))
+            return f"{head}({', '.join(self.reference(arg) for arg in target.arguments(node.args))})"
         if isinstance(target, tensor.Slice):
             starts = node.args[1]
             if not isinstance(starts, expr.Tuple):
@@ -432,24 +416,6 @@ def projection_index(node: expr.Call) -> int:
     return index.value
 
 
-def module_callee_binding(target: core.Function, child_entries: dict[int, str]) -> str | None:
-    """The attribute a call on *target* was written through, if a child's entry.
-
-    Follows the whole chain a rebuilt function records, so a target elaborated
-    for its call site is still recognised. The table is keyed by the attached
-    entry's identity, never by a name, which is what keeps two attached copies
-    of one source Module apart.
-    """
-    candidate: object = target
-    seen: set[int] = set()
-    while isinstance(candidate, core.Function) and id(candidate) not in seen:
-        seen.add(id(candidate))
-        if id(candidate) in child_entries:
-            return child_entries[id(candidate)]
-        candidate = valuation.origin_of(candidate)
-    return None
-
-
 def capture_root(value, param_alias):
     while id(value) in param_alias:
         value = param_alias[id(value)]
@@ -488,7 +454,6 @@ def emit_def(
     ctx: HirPrintContext,
     indent: str,
     options: PythonPrintOptions,
-    child_entries: dict[int, str] | None = None,
     *,
     line_offset: int = 0,
     statements: dict[int, PrintedStatement] | None = None,
@@ -498,9 +463,7 @@ def emit_def(
     Render one function ``def`` block: signature + body (or ``pass`` for a
     prototype). The caller prepends the decorator line(s). Each call builds its
     own SSA name scope, so a base and its variants do not share names.
-    *child_entries* names the attached children this body may call.
     """
-    child_entries = {} if child_entries is None else child_entries
     lines: list[str] = []
     printer = HirPrinter()
     root_mesh = fn.body.mesh if isinstance(fn.body, core.MeshRegion) and not fn.specializations else None
@@ -523,16 +486,11 @@ def emit_def(
         for param, arg in scope.captures()
     }
 
-    instance_targets = {
-        id(node.target)
-        for node in order
-        if isinstance(node, expr.Call) and isinstance(node.target, expr.Call)
-    }
     op_names_set: set[str] = set()
     for node2 in order:
         if isinstance(node2, expr.Call):
             target = node2.target
-            if isinstance(target, core.Function):
+            if isinstance(target, core.FunctionRef) and target.name is not None:
                 op_names_set.add(target.name)
             elif isinstance(target, expr.Op) and not expr.is_dim_op_call(node2):
                 op_names_set.add(expr.get_registered_name(target).split(".")[-1])
@@ -707,7 +665,7 @@ def emit_def(
     for node2 in order:
         if isinstance(node2, core.LoopRegion):
             assign_name(node2.induction_var)
-    printer.bind_def(names, param_alias, child_entries, moved_window)
+    printer.bind_def(names, param_alias, moved_window)
     shared = getattr(ctx, "value_printer", None) or printer
     shared.define(printer, fn, names)
     printer.share(fn, shared)
@@ -762,11 +720,6 @@ def emit_def(
     def emit_expr(node: expr.Expr, level: str) -> None:
         key = id(node)
         if key in printed:
-            return
-        if key in instance_targets:
-            for operand in core.expr_children(node):
-                emit_expr(operand, level)
-            printed.add(key)
             return
         if key in inlined_start_ids:
             printed.add(key)
@@ -884,8 +837,7 @@ def emit_def(
 
     for node2 in order:
         if (
-            isinstance(node2, (expr.Var, core.ModuleList))
-            or id(node2) in instance_targets
+            isinstance(node2, expr.Var)
             or id(node2) in grid_internal_ids
             or id(node2) in mesh_region_internal_ids
         ):
@@ -969,7 +921,6 @@ def emit_decorated_defs(
     ctx: HirPrintContext,
     indent: str,
     options: PythonPrintOptions,
-    child_entries: dict[int, str] | None = None,
     *,
     line_offset: int = 0,
     statements: dict[int, PrintedStatement] | None = None,
@@ -997,7 +948,6 @@ def emit_decorated_defs(
             ctx,
             indent,
             options,
-            child_entries,
             line_offset=line_offset + physical_line_count(lines),
             statements=statements,
         )
@@ -1015,7 +965,6 @@ def emit_decorated_defs(
                 ctx,
                 indent,
                 options,
-                child_entries,
                 line_offset=line_offset + physical_line_count(lines),
                 statements=statements,
             )
@@ -1148,12 +1097,11 @@ def emit_module_class(
     previous = ctx.enter_module(mod.target, mod.topologies)
     lines = [module_decorator_line(mod, mod.entry, ctx), f"class {module_name}:"]
     ordered = emission_order(mod)
-    child_entries = {}
     bindings = [slot_binding(key, slot, names_by_id) for key, slot in mod.children.items()]
     blocks: list[list[str]] = [bindings] if bindings else []
     for fn in ordered:
         if isinstance(fn, core.Function):
-            blocks.append(emit_decorated_defs(fn, ctx, indent, options, child_entries))
+            blocks.append(emit_decorated_defs(fn, ctx, indent, options))
         elif isinstance(fn, core.PrimFunction):
             tir_block = function_block(fn, frame=valuation.Context(mod, fn))
             ctx.imports.update(tir_block.imports)

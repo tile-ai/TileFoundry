@@ -7,10 +7,10 @@ import sys
 
 from tilefoundry import target as tilefoundry_target
 from tilefoundry import verifier
-from tilefoundry.interfaces import typeinfer
+from tilefoundry.interfaces import typeinfer, valuation
 from tilefoundry.ir import core, types
 
-from .ast_pattern import consume_module_context, create_module_context
+from .ast_pattern import child_slot, consume_module_context, create_module_context
 
 
 class Undeclared:
@@ -44,6 +44,7 @@ def collect_module(cls, *, entry, target, topologies) -> core.Module:
     """Collect the members of the class body *cls* into a ``Module``."""
     functions = []
     children = {}
+    wrappers = {}
     methods = {}
     for name, value in vars(cls).items():
         if name == "__call__":
@@ -56,9 +57,7 @@ def collect_module(cls, *, entry, target, topologies) -> core.Module:
         if name.startswith("__") and name.endswith("__"):
             continue
         if isinstance(value, (core.Module, core.ModuleList)):
-            slot = core.ModuleList(value) if isinstance(value, core.Module) else value
-            slot.bind(name)
-            children[name] = slot
+            children[name] = child_slot(name, value, wrappers)
             continue
         if isinstance(value, (tuple, list)) and value and all(
             isinstance(m, core.Module) for m in value
@@ -153,7 +152,7 @@ def module(
                     )
                     verifier.verify_function(function, module=result)
                 elif isinstance(function, core.PrimFunction):
-                    verifier.verify_prim_function(function, module_fns=result)
+                    verifier.verify_prim_function(function, frame=valuation.Context(result, function))
             return result
         except Exception:
             consume_module_context(context)

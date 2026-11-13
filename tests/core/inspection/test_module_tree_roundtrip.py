@@ -6,6 +6,7 @@ from pathlib import Path
 
 from tests.core._corpus import reload
 from tilefoundry import cli, inspection
+from tilefoundry.ir import core
 
 SIBLINGS = Path(__file__).parents[1] / "fixtures" / "logical" / "sibling_call.py"
 
@@ -21,7 +22,7 @@ def test_sibling_call_survives_roundtrip() -> None:
 
     assert [fn.name for fn in imported.functions] == ["callee", "caller"]
     callee, caller = imported.functions
-    assert caller.body.target is callee
+    assert core.resolve(imported, caller.body.target)[1] is callee
 
     once = inspection.as_script(imported)
     assert inspection.as_script(reload(once, "_Siblings")) == once

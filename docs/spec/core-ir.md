@@ -40,7 +40,7 @@ class Module:
         name: attribute; Definition name, independent of instance slot keys.
         functions: attribute; Heterogeneous HIR and TIR function container.
         entry: attribute; Optional public entry-function name.
-        children: attribute; Slot keys mapped to shared ModuleList objects.
+        children: attribute; Slot keys mapped to a shared Module or a tuple of them.
         target: attribute; Declared hardware target, or None to inherit.
         topologies: attribute; Declared hierarchy, None to inherit, or an empty tuple.
         metadata: attribute; Target and compiler-option metadata.
@@ -50,7 +50,7 @@ class Module:
     name: str
     functions: tuple[core.Function | core.PrimFunction, ...]
     entry: str | None = None
-    children: dict[str, "ModuleList"] = field(default_factory=dict)
+    children: dict[str, Module | tuple[Module, ...]] = field(default_factory=dict)
     target: Target | None = None
     topologies: tuple[Topology, ...] | None = None
     metadata: dict[str, object] = field(default_factory=dict)
@@ -79,10 +79,10 @@ class Module:
     definition, not an invocation: owning a `Function`, attaching a child, or
     declaring a `Target` or hierarchy never begins or counts one (Python-to-HIR
     entry and HIR-to-HIR device calls: [hir §1.1](./hir.md#11-function)).
-  - `children` maps instance slot keys to `ModuleList` objects. Definitions and
-    function bodies remain shared; placing a definition creates no copy and no
-    parent backlink. A class-body `Module` becomes a single-element,
-    non-indexed slot; a class-body `ModuleList` is held as authored.
+  - `children` maps instance slot keys to a `Module` (a single slot) or a
+    non-empty tuple of `Module`s (an indexed slot). Definitions and function
+    bodies remain shared; placing a definition creates no copy and no parent
+    backlink ([§1.3](#13-modulelist)).
   - a child MAY declare its own Target; holding it does not type its bodies
     again. A call of a child function is typed from the callee body under the
     callee's effective Target with the call's own argument types
@@ -96,10 +96,12 @@ class Module:
     same-name functions from another Module MUST remain unowned.
 
 - `parse_module` (see [parser §2](./parser.md#2-syntax-and-rules)) returns a `Module`.
-- A bare `@func` / `@prim_func` becomes an implicit single-function `Module`
-  whose `entry` names that function.
-- Same-module `@prim_func` calls resolve through the module's symbol
-  table, not Python closures.
+- A bare `@func` / `@prim_func` returns a `Function` / `PrimFunction`; only the
+  compile entry (`normalize_to_module`) wraps it in an implicit single-function
+  `Module` whose `entry` names that function.
+- Same-module calls resolve through the Module's declared prototypes, not Python
+  closures: a call MUST name a prototype declared earlier in the same `@module`,
+  and a bare function's body MUST NOT call another function.
 - `topologies` is the execution domain's complete ordered hierarchy.
   `with Mesh(("cta",), layout=...)` inside a function body names one of the
   effective levels and creates a lexical mesh binding.
@@ -121,9 +123,9 @@ shared definitions or Functions.
   - A `children` key is the class-body attribute name. `Module.name` remains
     the definition name. Instance resource paths append that key, followed by
     the element index for an indexed slot, e.g. `layers.3.input_norm.w`.
-  - Each slot has its own object identity; a definition may occupy several
-    single slots or occur repeatedly in a `ModuleList`, sharing Functions.
-    A `ModuleList` object MUST NOT be attached under two different keys.
+  - A definition may occupy several single slots or occur repeatedly in an
+    indexed slot, sharing Functions. One class-body `ModuleList` wrapper
+    MUST NOT be bound to two different keys.
     Rebuilding a Module with the same slot key MUST remain valid.
   - Lists and tuples of Modules in a class body MUST be refused with guidance
     to use `ModuleList(definition, N)`.
@@ -188,10 +190,9 @@ shape-specialization variants live inside that entry's `Function.variants`
 
 - constraints:
   - `mod.lookup(name)` returns the function named `name`; it raises unless
-  exactly one function matches. This is the canonical name-resolution
-  contract (e.g. for a `SymbolRef` callee), searches only this Module's own
-  `functions`, and always returns the `Function`
-  / `PrimFunction` node itself.
+  exactly one function matches, searches only this Module's own `functions`,
+  and returns the `Function` / `PrimFunction` node itself. A `FunctionRef`
+  resolves by [§1.4](#14-function-references).
   - `mod.entry_function()` returns the function named by `entry`.
   - Python attribute access `mod.<name>` resolves, in order, a function, a
   child module, or a method named `<name>`, and MUST raise `AttributeError`
@@ -200,8 +201,7 @@ shape-specialization variants live inside that entry's `Function.variants`
   like `lookup`; an HIR `Function` is callable as one
   `interfaces.evaluator.evaluate` step. A `Module` is likewise callable when it declares
   an `entry`, with one argument for every declared parameter. A **child module** name resolves to that child
-  `Module` for a non-indexed slot or its `ModuleList` for an indexed slot.
-  `ModuleList` supports Python iteration and indexing over its shared definitions.
+  `Module` for a non-indexed slot or its tuple of `Module`s for an indexed slot.
   A **method** name
   resolves to the class-body function bound like an instance method
   (`m.forward(...)`). Names beginning with `_` are never functions, modules, or
@@ -210,26 +210,24 @@ shape-specialization variants live inside that entry's `Function.variants`
 
 ### 1.2 Definition call paths
 
-`tilefoundry.interfaces.valuation.list_call_paths(root)` enumerates each declared
+`tilefoundry.interfaces.valuation.collect_functions(root)` enumerates each declared
 function once by identity, in DFS first-instance order. It returns a
-`dict[call_path, valuation.Context]`, including HIR Functions and PrimFunctions. A
-call path is a dot-separated string. The frame records the current Module,
+`dict[FunctionRef, valuation.Context]`, including HIR Functions and PrimFunctions,
+keyed by the root-relative reference ([§1.4](#14-function-references)). The frame records the current Module,
 function, effective target, and effective topologies; shared definitions use the first
 path for generated names, including indexed segments such as `layers.0.run`.
 
 ### 1.3 `ModuleList`
 
 ```python
-class ModuleList(Expr):
-    """Hold one instance slot without copying its definitions.
+class ModuleList:
+    """Declare one instance slot in a class body.
 
     Attributes:
-        key: attribute; Attachment key assigned by the containing Module.
         elements: attribute; Shared definitions in instance order.
         indexed: attribute; Whether source calls require an element index.
     """
 
-    key: str | None
     elements: tuple[Module | type[runtime.Module], ...]
     indexed: bool
 
@@ -237,30 +235,62 @@ class ModuleList(Expr):
 ```
 
 - constraints:
-  - A `ModuleList` is an Expr leaf carrying `key`, `elements`, and `indexed`.
-    Its key is assigned on attachment; its elements MUST be non-empty.
-    Semantic Module slots MUST contain only Module definitions. Runtime twin
+  - A `ModuleList` is the class-body spelling of a slot, not an `Expr`;
+    `@module` stores its definition or tuple of definitions in `children`.
+    Its elements MUST be non-empty. Semantic
+    Module slots MUST contain only Module definitions. Runtime twin
     declarations use runtime.Module subclasses through the same list surface
     ([runtime §1.3](./runtime.md#13-runtimedecoratorpy)).
     A supplied count MUST be a positive integer, excluding bool.
     One Module without a count creates a non-indexed slot; a count or a tuple
     creates an indexed slot, preserving element order and repeated references.
   - Construction and attachment MUST NOT resolve element entries. A container
-    without an entry MAY occupy a slot. Reading `.type` or type inference
-    projects each entry's signature with ConstTensor parameters omitted:
-    `CallableType` for a single slot, `TupleType(CallableType, ...)` for an
-    indexed slot. Calling a container without an entry MUST report the usual
-    no-entry error.
-  - A constant index MUST be in `[0, N)`. A variable index MUST be an integer
+    without an entry MAY occupy a slot. Calling a container without an entry
+    MUST report the usual no-entry error.
+  - A constant index MUST be in `[0, N)`, not wrapped. A variable index MUST be an integer
     scalar and all elements MUST reference the same definition by identity.
   - A single slot MUST NOT be indexed; an indexed slot MUST NOT be called
-    without an index. Only the instance entry may be called, not other methods.
+    without an index. HIR calls only the instance entry, not other methods.
 
-TIR symbol resolution uses `resolve_symbol(module, name, nested=...)`: each
-`nested` component MUST select a child slot of the current node, and `name`
-MUST select exactly one function in the reached node. Empty `nested` stays in
-the current module. Failures MUST include the complete path; same-named
-functions in different child modules are distinct symbols.
+### 1.4 Function references
+
+```python
+class FunctionRef(Expr):
+    """Name a callee by its slot path and function name.
+
+    Attributes:
+        path: attribute; Child slot path from the caller's Module.
+        name: attribute; Function name in the reached Module; None names its entry.
+    """
+
+    path: tuple[str | int | None, ...] = ()
+    name: str | None = None
+```
+
+- constraints:
+  - It is the one leaf that names a callee: HIR `Call.target`
+    ([§2.1](#21-call)), TIR `Evaluate.callable` and the TIR `Launch` callee
+    ([tir §2.1](./tir.md#21-functionref)). It holds names only: no Module, no
+    callee object and no type (`type` is always `None`).
+  - `path` is relative to the caller's Module; an empty path stays in it. A
+    `str` segment enters a child slot; an `int` segment selects one instance;
+    a `None` segment marks a run-time index the call gives as a leading
+    operand. The parser builds the path from the authored slot
+    names and subscripts, left to right, folding an integer scalar constant
+    subscript into an `int` segment; index rules are in [§1.3](#13-modulelist).
+  - `name` is the canonical `name` of a function in the reached Module; `None`
+    names that Module's entry. It names a prototype, never a variant: dispatch
+    picks the variant.
+  - `core.resolve(scope, ref)` is the only resolver; verify, the evaluator and
+    codegen use it from the current frame's Module `scope`, so rebuilt module
+    trees remain authoritative. Each `str` segment MUST
+    select a child slot, and `name` MUST select exactly one function in the
+    reached Module; it MUST NOT search descendants by an unqualified name.
+    Failures MUST include the complete path; same-named functions in different
+    child modules are distinct functions.
+  - `qualified_name` is the dotted spelling (`layers.0.run`, `*` for a
+    run-time index) that C symbols and runtime names use; DSL printing is owned
+    by [inspection](./inspection.md).
 
 ## 2. `Expr`
 
@@ -382,8 +412,7 @@ class Annotated:
 Dialect-specific `Expr` subclasses are owned by their dialect specs, not
 here: HIR owns `Function`, `LoopRegion`, and `MeshRegion`
 ([hir §1](./hir.md#1-hir-expr-constructs)),
-and TIR owns `SymbolRef` and other TIR-specific `Expr` constructs
-([tir](./tir.md)). The similarly-shaped TIR statement keeps the name
+and TIR owns its TIR-specific `Expr` constructs ([tir](./tir.md)). The similarly-shaped TIR statement keeps the name
 `MeshScope` ([tir §1.2](./tir.md#12-structural-stmts-ircore)) on purpose,
 not by oversight: it binds a `Var` over a `Sequential` body, whereas
 `MeshRegion` folds a region into one value.
@@ -395,26 +424,28 @@ class Call(Expr):
     """Represent an Op invocation.
 
     Attributes:
-        target: attribute; Op, Function, instance slot, or computed instance target.
+        target: attribute; Op, or FunctionRef naming the called function.
         args: attribute; Input expressions in parameter order.
     """
 
-    target: Op | core.Function | ModuleList | Call
+    target: Op | FunctionRef
     args: tuple[Expr, ...]
 ```
 
 - constraints:
-  - `Call(target=Function)` supplies every parameter in the current instance.
-    A single-slot target is a `ModuleList`; an indexed instance target is
-    `Call(TupleGetItem, (ModuleList, index))`. Instance calls supply only the
-    entry's non-ConstTensor parameters. Implicit constants come from that
-    instance's resource path.
-  - Generic traversal MUST visit a Call-valued target before its args; it MUST
-    NOT traverse Function targets or the definitions held by ModuleList leaves.
-  - Entering an instance call MUST read the definition from the current
-    module's `children[key].elements[index]`. The target supplies only the key
-    and index, so rebuilt module trees remain authoritative.
-  - a value-form `Call` is anchored by `LetStmt` in TIR; a Stmt-position effect
+  - A `FunctionRef` target ([§1.4](#14-function-references)) takes its run-time
+    indices (`ref.indices(args)`), one per `None` segment, first; the rest
+    (`ref.arguments(args)`) bind the callee's parameters.
+  - A named reference supplies every parameter in the current instance: the
+    direct call `helper(x)` is `FunctionRef((), "helper")`. An instance entry
+    call (`name` is `None`) supplies only the entry's non-ConstTensor
+    parameters; implicit constants come from that instance's resource path:
+    `child(x)` is `FunctionRef(("child",), None)`, `layers[2](x)` is
+    `FunctionRef(("layers", 2), None)`, and `layers[i](x)` is
+    `FunctionRef(("layers", None), None)` with `i` as the first operand.
+  - Generic traversal visits `args` only; it MUST NOT traverse the definitions
+    a `FunctionRef` names.
+  - a value-form `Call` has a non-`Unit` result type and is anchored by `LetStmt` in TIR; a Stmt-position effect
     invocation is `Evaluate(op, args)`.
   - A `Call` MUST NOT appear as a top-level Stmt directly.
   - Normally, `len(args)` MUST equal the number of `kind="input"` ParamDefs on

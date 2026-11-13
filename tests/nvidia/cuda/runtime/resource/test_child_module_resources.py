@@ -103,8 +103,8 @@ class NestedSameNameEntries(ChildResourceCase):
 
     def guard(self, state, problems):
         root = state
-        middle = root.children["middle"].elements[0]
-        leaf = middle.children["scaled"].elements[0]
+        middle = root.children["middle"]
+        leaf = middle.children["scaled"]
         for owner in (root, middle, leaf):
             assert owner.entry_function() is owner.lookup("run")
         assert len({id(owner.entry_function()) for owner in (root, middle, leaf)}) == 3

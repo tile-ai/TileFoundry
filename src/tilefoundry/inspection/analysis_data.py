@@ -178,7 +178,7 @@ def report_data(
     target = module.resolve_target()
     owners = {
         id(candidate): frame.module.name
-        for frame in valuation.list_call_paths(module).values()
+        for frame in valuation.collect_functions(module).values()
         for candidate in (frame.function, *getattr(frame.function, "variants", ()))
     }
     rows = []

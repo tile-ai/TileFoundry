@@ -70,10 +70,9 @@ recursive parse situation.
 
 Instance authoring and call contracts follow
 [core-ir §1.3](./core-ir.md#13-modulelist) and [§2.1](./core-ir.md#21-call).
-Numeric subscripts become Constant expressions; static index checks run only
-in type inference. Call construction MUST NOT project an indexed slot's return
-type before validation. Retained TIR calls produce unit-valued statements
-checked in the enclosing Module context.
+The parser builds every function callee as a `FunctionRef` and resolves it while
+parsing ([core-ir §1.4](./core-ir.md#14-function-references)); a failure is a
+`ParseError`. An Op callee stays an `Op`.
 
 ### 1.5 Mesh declarations and region captures
 

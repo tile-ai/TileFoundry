@@ -18,6 +18,7 @@ from .convert_hir_to_tir import (
     label,
     lowers_to_dim,
     operand_types,
+    scratch_buffers,
     selected_op,
 )
 from .host_entry import InsertHostEntryPass

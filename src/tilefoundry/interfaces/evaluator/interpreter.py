@@ -5,6 +5,7 @@ Walks a HIR ``Function`` body and returns concrete torch values.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from tilefoundry import core, services, utils
@@ -105,32 +106,30 @@ class Visitor(ir_core.ExprVisitor):
     def visit_leaf_Tuple(self, tup: expr.Tuple, operands, ctx: EvaluateContext) -> TupleValue:
         return TupleValue(operands)
 
-    def visit_leaf_ModuleList(self, slot, operands, ctx: EvaluateContext):
-        if ctx.loaded_module is None:
-            raise EvalError("evaluator: instance call requires a loaded module")
-        return ctx.loaded_module.children[slot.key]
-
     def visit_leaf_Call(self, call: expr.Call, args, ctx: EvaluateContext) -> Value:
         target = call.target
-        if call.args and isinstance(call.args[0], ir_core.ModuleList):
-            slot = ctx.loaded_module.module.children[call.args[0].key]
-            index = args[1]
-            taken = int(index.data.item())
-            if not 0 <= taken < len(args[0]):
-                raise EvalError(
-                    f"evaluator: ModuleList slot {slot.key!r}: index {taken!r} out of range for N={len(args[0])}"
-                )
-            return args[0][taken]
-        if isinstance(target, (ir_core.ModuleList, expr.Call)):
-            if isinstance(target, expr.Call):
-                child, *args = args
-            else:
-                if ctx.loaded_module is None:
-                    raise EvalError("evaluator: instance call requires a loaded module")
-                child = ctx.loaded_module.children[target.key]
-            return call_function(child.module.entry_function(), args, ctx, child=child)
-        if isinstance(target, ir_core.Function):
-            return call_function(target, args, ctx)
+        if isinstance(target, ir_core.FunctionRef):
+            reading = ctx.loaded_module
+            if target.path and reading is None:
+                raise EvalError("evaluator: instance call requires a loaded module")
+            try:
+                module, function = ir_core.resolve(ctx.module, target)
+            except ValueError as error:
+                raise EvalError(f"evaluator: {error}") from error
+            indices = iter(target.indices(args))
+            key = None
+            for segment in target.path:
+                if isinstance(segment, str):
+                    key, reading = segment, reading.children[segment]
+                    continue
+                taken = segment if segment is not None else int(next(indices).data.item())
+                if not 0 <= taken < len(reading):
+                    raise EvalError(
+                        f"evaluator: ModuleList slot {key!r}: index {taken!r} out of range for N={len(reading)}"
+                    )
+                reading = reading[taken]
+            inner = replace(ctx, module=module, loaded_module=reading)
+            return call_function(function, target.arguments(args), inner, omit_weights=target.name is None)
         try:
             handler = registry.get(type(target), None)
             if handler is None:
@@ -191,10 +190,17 @@ class Visitor(ir_core.ExprVisitor):
         return carried[0] if len(carried) == 1 else TupleValue(tuple(carried))
 
 
-def call_function(callee: ir_core.Function, arg_values, ctx: EvaluateContext, *, child=None) -> Value:
-    supplied = [param for param in callee.params if not (child is not None and param.is_const)]
+def call_function(
+    callee: ir_core.Function, arg_values, ctx: EvaluateContext, *, omit_weights: bool
+) -> Value:
+    """Run *callee* in the Module and reading of *ctx*.
+
+    An instance entry call omits its ``ConstTensor`` parameters, which come
+    from the reading; any other call passes all of them.
+    """
+    supplied = [param for param in callee.params if not (omit_weights and param.is_const)]
     if len(arg_values) != len(supplied):
-        kind = "activation(s)" if child is not None else "args"
+        kind = "activation(s)" if omit_weights else "args"
         raise EvalError(
             f"evaluator: call to {callee.name!r} expects "
             f"{len(supplied)} {kind}, got {len(arg_values)}"
@@ -204,10 +210,10 @@ def call_function(callee: ir_core.Function, arg_values, ctx: EvaluateContext, *,
         TensorValue(
             core.ShardTensor(
                 param.type,
-                read_weight(child, param, ctx.device, callee=callee),
+                read_weight(ctx.loaded_module, param, ctx.device, callee=callee),
             )
         )
-        if child is not None and param.is_const
+        if omit_weights and param.is_const
         else next(given)
         for param in callee.params
     ]
@@ -219,7 +225,8 @@ def call_function(callee: ir_core.Function, arg_values, ctx: EvaluateContext, *,
                 f"{param.name!r} expects {param.annotation!r}, got {value.type!r}"
             )
     function_context = EvaluateContext(
-        loaded_module=child if child is not None else ctx.loaded_module,
+        module=ctx.module,
+        loaded_module=ctx.loaded_module,
         device=ctx.device,
         dim_bindings=bind_dim_vars(target.params, args),
     )
@@ -284,11 +291,11 @@ def read_weight(loaded_module, param, device: str, *, callee: ir_core.Function |
     return value
 
 
-def run_selected(loaded_module, fn: ir_core.Function, *activations, device: str | None):
+def run_selected(fn: ir_core.Function, *activations, context: EvaluateContext):
     """Run one loaded function, reading constants lazily at first use.
 
-    *device* is where the activations already are; a weight somewhere else is
-    refused at its first use rather than moved.
+    The context's device is where the activations already are; a weight
+    somewhere else is refused at its first use rather than moved.
     """
     activation_params = tuple(param for param in fn.params if not param.is_const)
     if len(activations) != len(activation_params):
@@ -298,10 +305,10 @@ def run_selected(loaded_module, fn: ir_core.Function, *activations, device: str 
         )
     supplied = iter(activations)
     args = [
-        read_weight(loaded_module, param, device) if param.is_const else next(supplied)
+        read_weight(context.loaded_module, param, context.device) if param.is_const else next(supplied)
         for param in fn.params
     ]
-    return run_bound(fn, args, device=device, reading=loaded_module)
+    return run_bound(fn, args, context=context)
 
 
 def unwrap(value: Value) -> Any:
@@ -355,46 +362,45 @@ def bound_value(param, arg) -> TensorValue:
     return TensorValue(core.ShardTensor(param.type, data))
 
 
-def run_bound(fn: ir_core.Function, args, *, device: str | None = None, reading=None):
-    """Evaluate *fn* over fully bound *args*, with *reading* in hand.
+def run_bound(fn: ir_core.Function, args, *, context: EvaluateContext):
+    """Evaluate *fn* over fully bound *args* in the Module and reading of *context*.
 
     The entry a resource reading runs through: every child call reached from
     here fills its ``ConstTensor`` parameters from the instance named by the
-    call target. It is internal; *device* is the caller's, and ``None`` leaves it to torch.
+    call target. It is internal; the context's device is the caller's, and
+    ``None`` leaves it to torch.
     """
     values = bound_values(fn, args)
     target = select_variant(fn, values) if fn.variants else fn
     memo = {id(param): (param, value) for param, value in zip(target.params, values)}
     dim_env = bind_dim_vars(target.params, values)
-    return unwrap(
-        Visitor(memo=memo).visit(
-            target.body,
-            EvaluateContext(
-                loaded_module=reading,
-                device=device,
-                dim_bindings=dim_env,
-            ),
-        )
-    )
+    return unwrap(Visitor(memo=memo).visit(target.body, replace(context, dim_bindings=dim_env)))
 
 
-def evaluate(target, *inputs):
-    """Evaluate a HIR ``Function`` or a loaded module and return torch value(s).
+def evaluate(target, *inputs, context: EvaluateContext | None = None):
+    """Evaluate a HIR ``Function``, a Module or a loaded module and return torch value(s).
 
     *target* answers which function to run and which reading, if any, supplies
-    its ``ConstTensor`` parameters. The run happens where *inputs* already are:
-    the evaluator selects no device and no tensor engine of its own.
+    its ``ConstTensor`` parameters. A Module or a loading also gives the Module
+    that resolves the calls of that function; for a ``Function``, *context*
+    gives it. The run happens where *inputs* already are: the evaluator selects
+    no device and no tensor engine of its own.
     """
     fn, reading = target.evaluation_target()
-    device = device_of(inputs)
+    context = EvaluateContext() if context is None else context
     if reading is not None:
-        return run_selected(reading, fn, *inputs, device=device)
+        context = replace(context, module=reading.module, loaded_module=reading)
+    elif isinstance(target, ir_core.Module):
+        context = replace(context, module=target)
+    context = replace(context, device=device_of(inputs))
+    if reading is not None:
+        return run_selected(fn, *inputs, context=context)
 
     if len(inputs) != len(fn.params):
         raise EvalError(
             f"evaluator: {fn.name!r} expects {len(fn.params)} inputs, got {len(inputs)}"
         )
-    return run_bound(fn, inputs, device=device)
+    return run_bound(fn, inputs, context=context)
 
 
 __all__ = ["Visitor", "evaluate", "run_bound"]

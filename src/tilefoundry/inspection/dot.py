@@ -69,7 +69,7 @@ def hir_function_to_dot(fn: core.Function) -> str:
         def visit_Call(self, node: expr.Call, current=None) -> None:
             nid = node_id(node)
             target = node.target
-            op_label = target.name if isinstance(target, core.Function) else expr.get_registered_name(target)
+            op_label = target.qualified_name if isinstance(target, core.FunctionRef) else expr.get_registered_name(target)
             name = expr.binding_name(node)
             header = f"{name}\\n{op_label}" if name else op_label
             emit_node(nid, [header, *type_lines(node.type, printer, ctx)],
