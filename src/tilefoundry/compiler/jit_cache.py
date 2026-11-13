@@ -19,11 +19,11 @@ def canonical_module_text(mod: core.Module) -> str:
     Callee changes can alter buffer effects even when the entry is unchanged.
     """
     fn_text = inspection.as_script(mod)
-    for path, frame in valuation.list_call_paths(mod).items():
+    for path, frame in valuation.collect_functions(mod).items():
         bindings = communication.buffer_regions(frame.function)
         selected = expr.get_metadata(frame.function, communication.BufferBindings)
         if selected is not None:
-            fn_text += "\n" + path + ": " + repr((tuple(sorted(bindings.items())), tuple(sorted(selected.uninitialized))))
+            fn_text += "\n" + path.qualified_name + ": " + repr((tuple(sorted(bindings.items())), tuple(sorted(selected.uninitialized))))
 
     topologies = mod.effective_topologies()
     if topologies:

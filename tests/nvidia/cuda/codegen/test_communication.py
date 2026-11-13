@@ -4,6 +4,7 @@ import pytest
 
 from tilefoundry import cli, codegen, inspection, verifier
 from tilefoundry.codegen import link_module
+from tilefoundry.interfaces import valuation
 from tilefoundry.ir import core, expr, types
 from tilefoundry.ir.hir import sharding
 from tilefoundry.ir.tir import communication as C
@@ -84,7 +85,7 @@ def test_communication_statement_cannot_be_authored_inside_a_kernel():
     fn = mod.entry_function()
     fn.target = mod.target
     with pytest.raises(expr.VerifyError, match="host scope"):
-        verifier.verify_prim_function(fn, module_fns=mod)
+        verifier.verify_prim_function(fn, frame=valuation.Context(mod, fn))
 
 
 class Alternate(codegen.Communication):

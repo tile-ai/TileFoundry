@@ -173,9 +173,9 @@ def check_communication(function, regions=None, *, module=None, uninitialized=No
             raise ValueError("mixed protocols require an explicit declared launch stream")
         comm.handle_type(stream, "stream")
         ref = stmt.args[0]
-        if not isinstance(ref, core.SymbolRef):
+        if not isinstance(ref, core.FunctionRef):
             raise ValueError("kernel launch requires a symbolic callee")
-        callee = core.resolve_symbol(module, ref.name, nested=ref.nested)
+        _, callee = core.resolve(module, ref)
         if (not isinstance(callee, core.PrimFunction) or isinstance(callee.target, cpu.Target)
                 or len(stmt.args[7:]) != len(callee.params)):
             raise ValueError("kernel launch requires a concrete kernel and matching operands")
