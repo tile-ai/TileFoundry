@@ -27,6 +27,7 @@ from .visitor import (
     ExprVisitor,
     ExprWalker,
     StmtExprMutator,
+    StmtExprVisitor,
     StmtMutator,
     StmtVisitor,
     TypeFunctor,

@@ -106,15 +106,15 @@ class _MmaSite(core.StmtVisitor[None]):
         self.meshes: tuple = ()
         self.site = None
 
-    def visit_MeshScope(self, stmt: core.MeshScope) -> None:
+    def visit_MeshScope(self, stmt: core.MeshScope, ctx=None) -> None:
         previous = self.meshes
         self.meshes = (*previous, stmt.mesh)
         try:
-            self.visit(stmt.body)
+            self.visit(stmt.body, ctx)
         finally:
             self.meshes = previous
 
-    def visit_Evaluate(self, stmt: core.Evaluate) -> None:
+    def visit_Evaluate(self, stmt: core.Evaluate, ctx=None) -> None:
         if isinstance(stmt.callable, nn.TiledMma):
             self.site = (stmt.args, self.meshes)
 

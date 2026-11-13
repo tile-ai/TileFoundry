@@ -26,7 +26,7 @@ def test_operand_refusal_names_failed_pattern() -> None:
     rejected = None
 
     class RejectOne(core.StmtVisitor[None]):
-        def visit_Evaluate(self, stmt: core.Evaluate) -> None:
+        def visit_Evaluate(self, stmt: core.Evaluate, ctx=None) -> None:
             nonlocal rejected
             if rejected is not None or not isinstance(getattr(stmt.callable, "atom", None), nn.Wgmma):
                 return
@@ -58,7 +58,7 @@ def test_wgmma_stride_refusal_names_position(
     class RejectOne(_OperandMatchVisitor):
         rejected = False
 
-        def visit_Evaluate(self, stmt: core.Evaluate) -> None:
+        def visit_Evaluate(self, stmt: core.Evaluate, ctx=None) -> None:
             if self.rejected or not isinstance(getattr(stmt.callable, "atom", None), nn.Wgmma):
                 return
             lhs = stmt.args[1].type
@@ -69,7 +69,7 @@ def test_wgmma_stride_refusal_names_position(
             bad = replace(outer, strides=((row[0], row[1] * row_scale), column))
             operand = expr.Var("bad_lhs", type=replace(lhs, layout=replace(shard, layout=bad)))
             with pytest.raises(schedule.RefusalError, match=rf"lhs:.*{position}"):
-                super().visit_Evaluate(replace(stmt, args=(stmt.args[0], operand, stmt.args[2])))
+                super().visit_Evaluate(replace(stmt, args=(stmt.args[0], operand, stmt.args[2])), ctx)
             self.rejected = True
 
     visitor = RejectOne()

@@ -331,7 +331,7 @@ class BindingCollector(core.StmtVisitor):
     def __init__(self, params):
         self.bindings = list(params)
 
-    def generic_visit(self, stmt):
+    def generic_visit(self, stmt, ctx=None):
         binding = (
             stmt.var
             if isinstance(stmt, core.LetStmt)
@@ -343,7 +343,7 @@ class BindingCollector(core.StmtVisitor):
         )
         if binding is not None:
             self.bindings.append(binding)
-        super().generic_visit(stmt)
+        super().generic_visit(stmt, ctx)
 
 
 def definition_lines(fn: core.PrimFunction, name: str, ctx: TirPrintContext) -> list[str]:

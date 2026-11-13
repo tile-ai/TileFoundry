@@ -37,15 +37,15 @@ class _OperandMatchVisitor(core.StmtVisitor[None]):
     def __init__(self) -> None:
         self.matches: list[tuple[object, str, dict]] = []
 
-    def visit_MeshScope(self, stmt: core.MeshScope) -> None:
+    def visit_MeshScope(self, stmt: core.MeshScope, ctx=None) -> None:
         previous = getattr(self, "meshes", ())
         self.meshes = (*previous, stmt.mesh)
         try:
-            self.visit(stmt.body)
+            self.visit(stmt.body, ctx)
         finally:
             self.meshes = previous
 
-    def visit_Evaluate(self, stmt: core.Evaluate) -> None:
+    def visit_Evaluate(self, stmt: core.Evaluate, ctx=None) -> None:
         op = stmt.callable
         if expr.schema_of(type(op)) is None:
             return

@@ -3,8 +3,8 @@
 The IR traversal / rewrite framework: `expr.Functor[T]` /
 `expr.Visitor[T]` (in `ir/expr/visitor.py`) and `core.ExprVisitor[T]` /
 `core.ExprWalker[T]` / `core.ExprCloner` / `core.BindingSubstitutionCloner` /
-`core.StmtVisitor[T]` / `core.StmtMutator` / `core.StmtExprMutator`
-(in `ir/core/visitor.py`).
+`core.StmtVisitor[T]` / `core.StmtExprVisitor[T]` / `core.StmtMutator` /
+`core.StmtExprMutator` (in `ir/core/visitor.py`).
 A shared compiler facility, owned by neither analysis nor any
 specific pass.
 
@@ -16,6 +16,7 @@ flowchart TB
     ExprCloner["<b>ExprCloner</b><br/>memoized identity-preserving clone"]
     ExprCollector["<b>ExprCollector</b><br/>postorder collection"]
     StmtVisitor["<b>StmtVisitor[T]</b>"]
+    StmtExprVisitor["<b>StmtExprVisitor[T]</b><br/>Stmt + embedded Expr read"]
     StmtMutator["<b>StmtMutator</b>"]
     StmtExprMutator["<b>StmtExprMutator</b><br/>Stmt + embedded Expr rewrite"]
 
@@ -23,6 +24,7 @@ flowchart TB
     ExprWalker --> ExprVisitor
     ExprCloner --> ExprVisitor
     ExprCollector --> ExprWalker
+    StmtExprVisitor --> StmtVisitor
     StmtExprMutator --> StmtMutator
 ```
 
@@ -175,14 +177,19 @@ An Expr visitor `visit_Call` override that needs recursive children MUST call
 identity-preserving rebuild MUST call `default_visit(call, ctx)`; it may return
 the original node directly only after it has explicitly handled the children.
 
-## 5. `StmtVisitor[T]` / `StmtMutator`
+## 5. `StmtVisitor[T]` / `StmtExprVisitor[T]` / `StmtMutator`
 
 Same shape as the Expr family, but for the Stmt tree.
 
 ```python
-class StmtVisitor(Generic[T]):                     # read-only Stmt-tree traversal
-    def visit(self, stmt: Stmt) -> T: ...          # dispatch to visit_<Type> else generic_visit
-    def generic_visit(self, stmt: Stmt) -> T: ...  # recurse child Stmts
+class StmtVisitor(Generic[T]):                                 # read-only Stmt-tree traversal
+    def visit(self, stmt: Stmt, ctx: Any = None) -> T: ...         # dispatch to visit_<Type>(stmt, ctx) else generic_visit
+    def generic_visit(self, stmt: Stmt, ctx: Any = None) -> T: ... # recurse child Stmts with the same ctx
+
+class StmtExprVisitor(StmtVisitor[T]):                         # read Stmts, and the Exprs embedded in their Expr-typed fields
+    def visit_expr(self, expr: Expr, ctx: Any = None) -> T: ...          # dispatch to visit_<Type>(expr, ctx) else expr_generic_visit
+    def expr_generic_visit(self, expr: Expr, ctx: Any = None) -> T: ...  # recurse expr_children with the same ctx
+    def generic_visit(self, stmt: Stmt, ctx: Any = None) -> T: ...       # visit each Expr field, then StmtVisitor recurse
 
 class StmtMutator:                                    # identity-preserving Stmt rewrite
     def visit(self, stmt: Stmt) -> Stmt: ...          # dispatch to visit_<Type> else generic_visit
@@ -191,11 +198,18 @@ class StmtMutator:                                    # identity-preserving Stmt
 
 - constraints:
   - `StmtMutator`'s identity-preservation invariant is identical to `ExprCloner`.
+  - `StmtVisitor` and `StmtExprVisitor` pass `ctx` down unchanged; a subclass
+    that changes the context passes the new one when it recurses.
   - `StmtVisitor` / `StmtMutator` do not descend into Expr fields embedded in
-    Stmts; those are visited only through `StmtExprMutator` ([§6](#6-stmtexprmutator)).
+    Stmts; those are read through `StmtExprVisitor` and rewritten through
+    `StmtExprMutator` ([§6](#6-stmtexprmutator)).
+  - `StmtExprVisitor` visits a Stmt's Expr fields ([§6](#6-stmtexprmutator)) before its
+    child Stmts, so a `For`'s `start`, `stop`, `step` come before its body.
+  - `StmtExprVisitor` has no memo: every use of an Expr is visited, also when
+    the same object appears in several places.
 
 `stmt_children(stmt)` enumerates child Stmts only (Expr fields
-come back via `StmtExprMutator`):
+come back via `StmtExprVisitor` / `StmtExprMutator`):
 
 | Stmt | Child Stmts |
 |---|---|
@@ -245,7 +259,7 @@ when needed:
 TIR effect-form Ops (`Copy`, `Fill`, `TiledMma`, `ReLU`, `Reduce`, ...) are `Op`
 subclasses, not `Stmt` subclasses; in Stmt position they appear as
 `Evaluate(callable=op, args)`. Passes and visitors MUST match on `Evaluate`
-and dispatch on `type(callable)`: a `visit_Evaluate(self, stmt)` override
+and dispatch on `type(callable)`: a `visit_Evaluate(self, stmt, ctx)` override
 branches on `type(stmt.callable)` (e.g. `Copy`).
 
 `stmt_children(Evaluate)` is empty; its Expr fields are listed in
@@ -257,8 +271,9 @@ position, instead of `Evaluate(op, args)`, is malformed IR
 
 - Public exports of `ir.core`: `TypeFunctor`, `ExprVisitor`, `ExprWalker`,
   `ExprCollector`, `collect_exprs`, `ExprCloner`, `BindingSubstitutionCloner`,
-  `expr_children`, `function_values`, `StmtVisitor`, `StmtMutator`,
-  `StmtExprMutator`, `walk_prim_function`, `rewrite_prim_function`.
+  `expr_children`, `function_values`, `StmtVisitor`, `StmtExprVisitor`,
+  `StmtMutator`, `StmtExprMutator`, `walk_prim_function`,
+  `rewrite_prim_function`.
 - They live in `ir/core/visitor.py`; `expr.Functor` / `expr.Visitor` live in
   `ir/expr/visitor.py`. The child-enumeration / rebuild tables (`expr_children`,
   `rebuild_expr`, `stmt_children`, `rebuild_stmt_children`, `stmt_expr_fields`,

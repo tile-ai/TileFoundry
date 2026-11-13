@@ -276,14 +276,14 @@ def test_stmt_walk_stays_in_the_stmt_tree_and_shares_unchanged_siblings() -> Non
     visited_vars: list[str] = []
 
     class V(core.StmtVisitor[None]):
-        def visit_Evaluate(self, stmt):
+        def visit_Evaluate(self, stmt, ctx=None):
             seen.append(type(stmt.callable).__name__)
 
-        def visit_For(self, stmt):
+        def visit_For(self, stmt, ctx=None):
             seen.append("For")
-            self.generic_visit(stmt)
+            self.generic_visit(stmt, ctx)
 
-        def visit_Var(self, var):
+        def visit_Var(self, var, ctx=None):
             visited_vars.append(var.name)
 
     V().visit(_simple_for_body())
@@ -302,6 +302,50 @@ def test_stmt_walk_stays_in_the_stmt_tree_and_shares_unchanged_siblings() -> Non
     assert out is not s
     assert out.body.body[0] is not s.body.body[0]
     assert out.body.body[1] is s.body.body[1]
+
+
+def test_stmt_expr_visitor_reads_every_use_bounds_first_with_one_ctx() -> None:
+    """``StmtExprVisitor`` reads each use of an Expr, before child statements.
+
+    A statement's Expr fields are read before its child statements, so a
+    ``For``'s bounds come before its body; the same ``Var`` used by two
+    statements is read twice (no memo); and the caller's ctx reaches every
+    callback unchanged.
+    """
+    x = _var("x")
+    loop = core.For(
+        induction_var=_var("i", _i32()),
+        start=_const(0, _i32()),
+        stop=_const(16, _i32()),
+        step=_const(1, _i32()),
+        body=core.Sequential(
+            body=(
+                _eval_call(memory.Copy(), x, _var("y")),
+                _eval_call(memory.Fill(), x, _const(0.0)),
+            )
+        ),
+    )
+    ctx = object()
+    seen: list[object] = []
+    contexts: set[int] = set()
+
+    class V(core.StmtExprVisitor[None]):
+        def visit_Evaluate(self, stmt, ctx):
+            contexts.add(id(ctx))
+            seen.append(type(stmt.callable).__name__)
+            self.generic_visit(stmt, ctx)
+
+        def visit_Var(self, var, ctx):
+            contexts.add(id(ctx))
+            seen.append(var.name)
+
+        def visit_Constant(self, constant, ctx):
+            contexts.add(id(ctx))
+            seen.append(constant.value)
+
+    V().visit(loop, ctx)
+    assert seen == [0, 16, 1, "Copy", "x", "y", "Fill", "x", 0.0]
+    assert contexts == {id(ctx)}
 
 
 def test_stmt_expr_mutator_rewrites_expr_fields_tuples_and_function_ref_leaf() -> None:
@@ -349,7 +393,7 @@ def test_prim_function_walk_and_identity_preserving_rewrite() -> None:
     pf = core.PrimFunction(name="foo", params=(), body=core.Sequential(body=(s,)))
 
     class V(core.StmtVisitor[None]):
-        def visit_For(self, stmt):
+        def visit_For(self, stmt, ctx=None):
             seen.append("For")
 
     core.walk_prim_function(V(), pf)

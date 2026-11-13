@@ -29,19 +29,19 @@ class Visitor(core.StmtVisitor[None]):
         self.ctx = ctx
         self.registry = registry
 
-    def generic_visit(self, stmt: core.Stmt) -> None:
+    def generic_visit(self, stmt: core.Stmt, ctx=None) -> None:
         if isinstance(stmt, core.Evaluate):
             op = stmt.callable
             if isinstance(op, expr.Op):
                 services.verify_call(op, stmt.args, self.ctx.current_mesh, frame=self.ctx)
-            super().generic_visit(stmt)
+            super().generic_visit(stmt, ctx)
             return
         fn = self.registry.get(type(stmt), None)
         if fn is not None:
             fn(stmt, self.ctx)
-        super().generic_visit(stmt)
+        super().generic_visit(stmt, ctx)
 
-    def visit_MeshScope(self, stmt: core.MeshScope) -> None:
+    def visit_MeshScope(self, stmt: core.MeshScope, ctx=None) -> None:
         fn = self.registry.get(core.MeshScope, None)
         if fn is not None:
             fn(stmt, self.ctx)
@@ -54,7 +54,7 @@ class Visitor(core.StmtVisitor[None]):
             mesh_scope=(*outer.mesh_scope, stmt.mesh),
         )
         try:
-            self.visit(stmt.body)
+            self.visit(stmt.body, ctx)
         finally:
             self.ctx = outer
 
