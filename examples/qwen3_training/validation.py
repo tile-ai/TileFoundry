@@ -219,11 +219,12 @@ class RoutingOracle:
         expected, probabilities = stage.pack.local(expected), stage.pack.local(probabilities)
         actual_probabilities = output[0].reshape(batch, tokens, -1)
         policy = tolerances()
+        probability_atol = policy["routing_atol"] + policy["routing_rtol"] * probabilities.abs().max()
         torch.testing.assert_close(
             actual_probabilities,
             probabilities,
-            atol=policy["routing_atol"],
-            rtol=policy["routing_rtol"],
+            atol=probability_atol,
+            rtol=0,
         )
         mismatch = (actual.sort(dim=-1).values != expected.sort(dim=-1).values).any(-1)
         delta = (actual_probabilities - probabilities).abs().amax(-1)

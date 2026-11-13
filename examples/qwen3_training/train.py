@@ -18,6 +18,7 @@ from .model import FULL, SOURCES, TINY
 CASES = {
     "cp": dict(cp=2, ep=1, replicas=1),
     "cp_ep": dict(cp=2, ep=2, replicas=1),
+    "ep": dict(cp=1, ep=2, replicas=1),
     "cp_hsdp": dict(cp=2, ep=1, replicas=2),
     "ep_hsdp": dict(cp=1, ep=2, replicas=2),
 }

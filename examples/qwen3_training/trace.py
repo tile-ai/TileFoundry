@@ -58,7 +58,8 @@ class TracedStage(PipelineStage):
     def __init__(self, *args, mesh, shape, tokens, **kwargs):
         super().__init__(*args, **kwargs)
         contexts = {direction: f"nccl/{group.group_name}" for direction, group in (
-            ("fwd", self._downstream_group), ("bwd", self._upstream_group))}
+            ("fwd", getattr(self, "_downstream_group", self.group)),
+            ("bwd", getattr(self, "_upstream_group", self.group)))}
         self.contracts = exchange_contracts(mesh, shape, tokens, torch.float32, contexts)
         self.transfers = []
         self.execution = []
