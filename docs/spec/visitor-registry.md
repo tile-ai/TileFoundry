@@ -71,7 +71,7 @@ to find the per-class handler and call it). A walk follows one template:
 ### 1.1 Registry is not a property of `StmtVisitor` / `ExprVisitor`
 
 `StmtVisitor` / `ExprVisitor` are pure traversal scaffolds
-([visitor-mutator §5](./visitor-mutator.md#5-stmtvisitort--stmtmutator)) and
+([visitor-mutator §5](./visitor-mutator.md#5-stmtvisitort--stmtexprvisitort--stmtmutator)) and
 know nothing about any registry. "A `Stmt` subclass consults `verify.registry`"
 is wired into `verify.Visitor` ([§5](#5-instance-2--verify)) explicitly.
 
@@ -282,7 +282,7 @@ class Context:
     loops: tuple[tuple[Expr, object, object, object], ...] = ()
     loop_aliases: dict[int, Expr] = field(default_factory=dict)
     call_site: Call | None = None
-    owner: Expr | None = None
+    owner: Expr | Stmt | None = None
     parent: valuation.Context | None = None
 
     def with_captures(self, captures) -> valuation.Context: ...
@@ -292,6 +292,9 @@ class Context:
     def callee(self) -> Function | PrimFunction | None: ...
     def callee_context(self, call: Call | None = None) -> valuation.Context | None: ...
     def capture_root(self, expr: Expr) -> Expr: ...
+    def ancestors(self) -> Iterator[valuation.Context]: ...
+    def enclosing_meshes(self) -> tuple[Mesh, ...]: ...
+    def enclosing_mesh(self) -> Mesh | None: ...
     def resolve_target(self) -> Target | None: ...
 
 
@@ -325,6 +328,20 @@ A Call remains in its caller environment; visiting its operands does not enter
 the callee body. Type inference seeds fresh type bindings when it analyzes a
 called definition.
 Lexical parent links and caller links MUST remain distinct.
+
+- constraints:
+  - `enter_region` returns a context whose `owner` is the region and whose
+    `parent` is the outer context. An HIR `LoopRegion` or `MeshRegion` records
+    its captures; a `LoopRegion` appends to `loops`. A `MeshRegion` or TIR
+    `MeshScope` composes its mesh into `current_mesh`. A TIR `For` only enters
+    the lexical region chain: `loops`, `loop_aliases`, and `current_mesh` stay
+    unchanged.
+  - `ancestors()` yields contexts from the innermost to the definition root.
+    `enclosing_meshes()` returns the mesh of each `MeshRegion` or `MeshScope`
+    owner in that chain, outermost first. When the chain has none, it returns
+    `(current_mesh,)`, the definition's external mesh, or `()` when that is
+    `None`; an authored mesh is not prefixed with the external one.
+    `enclosing_mesh()` is the last element of `enclosing_meshes()`, or `None`.
 
 `valuation.Context` carries the current Module, function, effective target, and
 whole topology hierarchy directly. A shared definition carries no parent or

@@ -21,7 +21,7 @@ class Context:
     loop_aliases: dict[int, expr.Expr] = field(default_factory=dict, repr=False, compare=False)
 
     call_site: expr.Call | None = None
-    owner: expr.Expr | None = None
+    owner: expr.Expr | core.Stmt | None = None
     parent: Context | None = field(default=None, repr=False, compare=False)
 
     def with_captures(self, captures):
@@ -32,8 +32,10 @@ class Context:
         return replace(self, loop_aliases=aliases)
 
     def enter_region(self, region):
-        """Enter a region after its arguments have been visited outside it."""
-        inner = self.with_captures(region.captures())
+        """Enter an HIR region or a TIR scope after its arguments have been visited outside it."""
+        if isinstance(region, core.For):
+            return replace(self, owner=region, parent=self)
+        inner = self if isinstance(region, core.MeshScope) else self.with_captures(region.captures())
         if isinstance(region, core.LoopRegion):
             loop = (region.induction_var, region.start, region.extent, region.step)
             return replace(inner, loops=(*self.loops, loop), owner=region, parent=self)
@@ -105,12 +107,18 @@ class Context:
             reversed([ctx.owner for ctx in self.ancestors() if isinstance(ctx.owner, core.LoopRegion)])
         )
 
+    def enclosing_meshes(self):
+        """Each authored mesh in force, outermost first; else the definition's external mesh."""
+        meshes = [
+            ctx.owner.mesh for ctx in self.ancestors() if isinstance(ctx.owner, (core.MeshRegion, core.MeshScope))
+        ]
+        if meshes or self.current_mesh is None:
+            return tuple(reversed(meshes))
+        return (self.current_mesh,)
+
     def enclosing_mesh(self):
         """The nearest authored mesh, or the definition's external mesh."""
-        return next(
-            (ctx.owner.mesh for ctx in self.ancestors() if isinstance(ctx.owner, core.MeshRegion)),
-            self.current_mesh,
-        )
+        return next(iter(reversed(self.enclosing_meshes())), None)
 
     def resolve_target(self):
         """The target carried by this visitor's current environment."""
