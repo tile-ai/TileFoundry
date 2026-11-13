@@ -793,9 +793,14 @@ or importing the CUDA target does not select NCCL.
 Communication-only modules can declare a CUDA module target and CPU entry
 without manufacturing a device kernel. Host handles use the existing scalar
 ABI; the emitter calls CUDA stream/event functions and NCCL using caller-owned
-blocking communicators. `NCCL_HOME` or `NCCL_ROOT` may identify an installation
-containing `include/nccl.h` and `lib/libnccl.so`; a versioned `libnccl.so.2` also
-works. Ordinary CUDA modules do not acquire an NCCL link dependency.
+blocking communicators. CMake's required header and library discovery selects
+NCCL; missing dependencies fail at configuration. Custom environment variables
+and source-relative installation searches are not used. Ordinary CUDA modules
+do not acquire an NCCL link dependency. `cuda.nccl.Library(linked.library_path)`
+bootstraps communicators through that program's linked NCCL dependency. The
+caller exchanges the unique ID, selects the device and destroys each handle
+after completion; the helper neither resolves another installation nor manages
+process groups.
 
 Broadcast, reduce, all-reduce, all-gather and reduce-scatter lower to their NCCL
 counterparts. Gather, scatter and Exchange lower to grouped `ncclSend` /

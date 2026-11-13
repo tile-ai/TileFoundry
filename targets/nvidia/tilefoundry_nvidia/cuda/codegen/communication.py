@@ -140,8 +140,8 @@ class NCCL(codegen.Communication):
         project.include(files(__package__).joinpath("include"))
         project.append(
             "find_package(CUDAToolkit REQUIRED)\n"
-            "find_path(NCCL_INCLUDE_DIR nccl.h HINTS ENV NCCL_HOME ENV NCCL_ROOT PATH_SUFFIXES include REQUIRED)\n"
-            "find_library(NCCL_LIBRARY NAMES nccl libnccl.so.2 HINTS ENV NCCL_HOME ENV NCCL_ROOT PATH_SUFFIXES lib lib64 REQUIRED)\n"
+            "find_path(NCCL_INCLUDE_DIR nccl.h REQUIRED)\n"
+            "find_library(NCCL_LIBRARY NAMES nccl libnccl.so.2 PATH_SUFFIXES lib lib64 REQUIRED)\n"
             "target_include_directories(${PROJECT_NAME} PRIVATE ${NCCL_INCLUDE_DIR})\n"
             "target_link_libraries(${PROJECT_NAME} PRIVATE CUDA::cudart ${NCCL_LIBRARY})\n"
         )

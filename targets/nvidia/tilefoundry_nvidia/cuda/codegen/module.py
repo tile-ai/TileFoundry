@@ -11,11 +11,9 @@ assembled last.
 from __future__ import annotations
 
 import math
-import os
 import shutil
 from dataclasses import dataclass
 from importlib.resources import files
-from pathlib import Path
 
 from tilefoundry import codegen, target
 from tilefoundry.interfaces import valuation
@@ -210,25 +208,6 @@ def program_dimensions(geometry: Geometry) -> list[dict[str, str]]:
     return dims
 
 
-def cutlass_include() -> Path:
-    configured = os.environ.get("TILEFOUNDRY_CUTLASS_INCLUDE")
-    if configured is not None:
-        path = Path(configured).resolve()
-        if not path.is_dir():
-            raise RuntimeError(f"TILEFOUNDRY_CUTLASS_INCLUDE={configured!r} is not a directory")
-        return path
-    checked = tuple(
-        parent / "third_party/cutlass/include" for parent in Path(__file__).resolve().parents
-    )
-    for path in checked:
-        if path.is_dir():
-            return path
-    raise RuntimeError(
-        "TILEFOUNDRY_CUTLASS_INCLUDE is not set; no local CUTLASS directory found; checked: "
-        + ", ".join(map(str, checked))
-    )
-
-
 @target.bind(cuda_target.Target, codegen.LinkableModule)
 @dataclass(frozen=True, kw_only=True)
 class CudaLinkableModule(codegen.LinkableModule):
@@ -300,8 +279,9 @@ class CudaLinkableModule(codegen.LinkableModule):
         source = f"device_{index}.cu"
         project.add_source(source, self.source)
         project.enable_language("CUDA")
-        project.include(cutlass_include())
         project.append(
+            "find_path(CUTLASS_INCLUDE_DIR cute/tensor.hpp REQUIRED)\n"
+            "target_include_directories(${PROJECT_NAME} PRIVATE ${CUTLASS_INCLUDE_DIR})\n"
             "set_target_properties(${PROJECT_NAME} PROPERTIES\n"
             "  CUDA_ARCHITECTURES OFF\n"
             "  CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON CUDA_EXTENSIONS OFF)\n"

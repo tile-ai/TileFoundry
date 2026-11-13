@@ -62,6 +62,7 @@ jobs:
         run: |
           mkdir -p third_party/cutlass
           ln -sfnT /opt/cutlass/include third_party/cutlass/include
+          echo "CMAKE_INCLUDE_PATH=$PWD/third_party/cutlass/include" >> "$GITHUB_ENV"
       - name: Run tests
         env:
           COVERAGE_FILE: test_results/.coverage

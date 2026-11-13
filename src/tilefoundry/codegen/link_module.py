@@ -62,7 +62,7 @@ class CMakeProject:
 
     def build(self, functions: tuple[LinkedFunction, ...]) -> LinkedModule:
         """Configure and build this project once, returning its library and exports."""
-        for tool in ("cmake", self.host_cxx):
+        for tool in ("cmake", "ninja", self.host_cxx):
             if shutil.which(tool) is None:
                 raise RuntimeError(f"link_modules: {tool!r} not on PATH")
         self.include(

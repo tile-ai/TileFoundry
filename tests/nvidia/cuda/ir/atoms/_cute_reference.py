@@ -5,7 +5,6 @@ from __future__ import annotations
 import functools
 import itertools
 import json
-import os
 import shutil
 import subprocess
 import tempfile
@@ -53,20 +52,6 @@ def cute_reference():
     """Return JSON from precisely the configurations sent to the CuTe executable."""
     compiler = shutil.which("g++")
     assert compiler, "CuTe reference requires g++ in PATH"
-    root = Path(__file__).resolve().parents[5]
-    cutlass = root / "third_party/cutlass/include"
-    nvcc = shutil.which("nvcc")
-    cuda = (
-        Path(os.environ["CUDA_HOME"]) / "include"
-        if os.environ.get("CUDA_HOME")
-        else Path(nvcc).resolve().parent.parent / "include"
-        if nvcc
-        else None
-    )
-    assert (cutlass / "cute/tensor.hpp").is_file(), f"Missing CuTe headers: {cutlass}"
-    assert cuda and (cuda / "cuda_runtime_api.h").is_file(), (
-        f"Missing CUDA headers: searched CUDA_HOME/include and nvcc/../include ({cuda})"
-    )
     requests = {"mma-bf16": "mma bf16 - 0 - 0", "mma-fp8e4m3": "mma fp8e4m3 - 0 - 0", "stmatrix": "stmatrix bf16 - 0 - 0", "ldmatrix": "ldmatrix bf16 - 0 - 0"}
     requests.update(
         {
@@ -82,24 +67,26 @@ def cute_reference():
     )
     with tempfile.TemporaryDirectory(prefix="tilefoundry_cute_reference_") as directory:
         build = Path(directory)
-        obj, executable = build / "reference.o", build / "reference"
-        ccache = shutil.which("ccache")
-        _run(
-            [
-                *([ccache] if ccache else []),
-                compiler,
-                "-std=c++17",
-                "-DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED",
-                f"-I{cutlass}",
-                f"-I{cuda}",
-                f"-I{cuda}/cccl",
-                "-c",
-                str(Path(__file__).with_name("cute_reference.cpp")),
-                "-o",
-                str(obj),
-            ]
-        )
-        _run([compiler, str(obj), "-o", str(executable)])
+        shutil.copyfile(Path(__file__).with_name("cute_reference.cpp"), build / "reference.cpp")
+        (build / "CMakeLists.txt").write_text("""
+cmake_minimum_required(VERSION 3.18)
+project(cute_reference LANGUAGES CXX)
+find_package(CUDAToolkit REQUIRED)
+find_path(CUTLASS_INCLUDE_DIR cute/tensor.hpp REQUIRED)
+find_path(CCCL_INCLUDE_DIR cuda/std/cstddef HINTS ${CUDAToolkit_INCLUDE_DIRS} PATH_SUFFIXES cccl REQUIRED)
+find_program(CCACHE_EXECUTABLE ccache)
+add_executable(reference reference.cpp)
+target_compile_features(reference PRIVATE cxx_std_17)
+target_compile_definitions(reference PRIVATE CUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED)
+target_include_directories(reference PRIVATE ${CUTLASS_INCLUDE_DIR} ${CUDAToolkit_INCLUDE_DIRS} ${CCCL_INCLUDE_DIR})
+if(CCACHE_EXECUTABLE)
+  set_target_properties(reference PROPERTIES CXX_COMPILER_LAUNCHER "${CCACHE_EXECUTABLE}")
+endif()
+""")
+        _run(["cmake", "-G", "Ninja", "-S", str(build), "-B", str(build / "build"),
+              f"-DCMAKE_CXX_COMPILER={compiler}"])
+        _run(["cmake", "--build", str(build / "build")])
+        executable = build / "build/reference"
         output = _run([str(executable)], input="\n".join(f"{k} {v}" for k, v in requests.items()))
     try:
         reference = json.loads(output)

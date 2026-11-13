@@ -37,6 +37,21 @@ data and registration entry point. After this `import tilefoundry` resolves to
 **Do not set `PYTHONPATH`** — in particular `PYTHONPATH=tests:src`
 shadows stdlib `types` via `tests/types/__init__.py`.
 
+Native builds require `cmake`, `ninja`, the host compiler and (for CUDA kernels)
+`nvcc` on `PATH`. CMake discovers CUTLASS headers and, when selected, NCCL headers
+and libraries through its normal search configuration. Missing dependencies
+raise configuration errors; Python does not search parent directories or read
+`TILEFOUNDRY_CUTLASS_INCLUDE`, `NCCL_HOME` or `NCCL_ROOT` to repair an installation.
+For the explicitly initialized source submodule, configure CMake before testing:
+
+```sh
+export CMAKE_INCLUDE_PATH="$PWD/third_party/cutlass/include${CMAKE_INCLUDE_PATH:+:$CMAKE_INCLUDE_PATH}"
+```
+
+Use CMake's standard prefix/include/library search settings for a non-system
+installation. Native communicator bootstrap uses the generated program's linked
+NCCL dependency, so it does not locate a second copy of the library.
+
 ## 3. Tests
 
 `pytest tests/` runs the **entire** suite — unit, codegen, nvcc-compiled,
