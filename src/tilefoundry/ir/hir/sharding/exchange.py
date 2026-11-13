@@ -102,7 +102,9 @@ def eval_exchange(ctx):
     for piece in pieces:
         if piece is not None and (tuple(piece.shape) != tuple(source.type.shape) or piece.dtype != dtype):
             raise evaluator.EvalError("exchange payload shape or dtype differs from its declaration")
-    device = next((piece.device for piece in pieces if piece is not None), None)
+    available = (source.tensor,) if source.is_global else tuple(piece for _, piece in source.tensor)
+    fallback = next((piece.device for piece in available), ctx.device)
+    device = next((piece.device for piece in pieces if piece is not None), fallback)
     outputs = tuple(utils.torch.zeros(ctx.result_type.shape, dtype=dtype, device=device) for _ in members)
     offsets = [0] * len(members)
     for row, piece in zip(counts, pieces):

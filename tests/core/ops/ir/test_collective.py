@@ -106,6 +106,19 @@ def test_root_selection_in_sliced_mesh_with_unit_axes(kind, root):
                                torch.tensor([28.]) if kind == "reduce" else torch.arange(8, dtype=torch.float32))
 
 
+@pytest.mark.parametrize("kind", ("reduce", "gather"))
+@pytest.mark.parametrize("root", range(4))
+def test_root_placement_in_offset_range_matches_the_evaluated_recipient(kind, root):
+    mesh = types.Mesh((types.Topology("gpu", 8),), types.Layout((8,)))[2:6]
+    members = types.Placement.from_mesh(mesh)
+    payload = types.TensorType.from_shape((1,))
+    source = core.ShardTensor(payload, tuple((p, torch.tensor([float(i)])) for i, p in enumerate(members)))
+    operation = sharding.Collective(participants=mesh, context="range", kind=kind, root=root,
+                                    reduction="sum" if kind == "reduce" else None)
+    result, call = evaluate(operation, source)
+    assert types.Placement.from_mesh(call.type.layout.mesh) == result.placements == (members[root],)
+
+
 def test_gather_uses_participant_order_and_local_root():
     mesh = types.Mesh((types.Topology("gpu", 4),), types.Layout((2, 2), (2, 1)), ("a", "b"))
     members = types.Placement.from_mesh(mesh)

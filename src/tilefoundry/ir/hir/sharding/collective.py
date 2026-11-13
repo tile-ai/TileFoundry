@@ -39,7 +39,10 @@ class Collective(expr.CommunicationOp):
 def root_mesh(mesh: types.Mesh, root: int) -> types.Mesh:
     """Select the root while retaining the participant mesh's sliced offset."""
     placement = types.Placement.from_mesh(mesh)[root]
-    coordinates = types.mesh_coords(mesh, placement.program_ids(mesh.topologies))
+    ids = placement.program_ids(mesh.topologies)
+    coordinates = types.mesh_coords(mesh, tuple(
+        value - start for value, start in zip(ids, types.starts(mesh), strict=True)
+    ))
     layout = mesh.layout
     base = replace(mesh, layout=layout.outer) if isinstance(layout, types.ComposedLayout) else mesh
     selected = base[coordinates]

@@ -37,6 +37,19 @@ def test_send_only_rank_and_empty_exchange():
     assert all(x.numel() == 0 for _, x in result.tensor)
 
 
+@pytest.mark.parametrize("local", (False, True))
+def test_zero_traffic_preserves_source_device(local):
+    """Meta tensors expose accidental CPU fallback without requiring CUDA."""
+    type_ = types.TensorType.from_shape((4,))
+    tensor = torch.empty(4, device="meta")
+    held = tuple((member, tensor) for member in MEMBERS) if local else tensor
+    empty = sharding.Exchange(participants=MESH, context="empty", counts=((0, 0), (0, 0)))
+    result, _ = evaluate(empty, core.ShardTensor(type_, held))
+    for _, output in result.tensor:
+        assert output.device == tensor.device
+        assert torch.cat((output, tensor)).device == tensor.device
+
+
 @pytest.mark.parametrize("counts,shape,match", (
     (((1, 2),), (4,), "square"),
     (((1, -1), (0, 0)), (4,), "nonnegative"),
