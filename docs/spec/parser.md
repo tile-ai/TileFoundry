@@ -358,7 +358,7 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | mesh_axis | call_attribute, layout, mesh_layout, tensor_optional_slot, tensor_shape | MeshAxisBindingRule | A placement axis resolves to a lexical Mesh binding. | src/tilefoundry/parser/pattern_nodes.py |
 | mesh_axis | call_attribute, layout, mesh_layout, tensor_optional_slot, tensor_shape | MeshAxisNameRule | A named placement axis exists in its lexical Mesh. | src/tilefoundry/parser/pattern_nodes.py |
 | mesh_context | mesh_context | SelectionBindingRule | A mesh selection names a lexical Mesh binding or its constant slice. | src/tilefoundry/parser/pattern_nodes.py |
-| mesh_context | mesh_context | SelectionConstructionRule | A checked selection constructs a Mesh with its topology and offset, enters its execution scope, and defines its lexical binding. | src/tilefoundry/parser/pattern_nodes.py |
+| mesh_context | mesh_context | SelectionConstructionRule | A checked selection constructs a Mesh with its topology, sliced at its offset unless it holds its whole level, enters its execution scope, and defines its lexical binding. | src/tilefoundry/parser/pattern_nodes.py |
 | mesh_context | mesh_context | SelectionCoverRule | A mesh selection layout covers each selection-local index exactly once. | src/tilefoundry/parser/pattern_nodes.py |
 | mesh_context | mesh_context | SelectionLayoutFormRule | A mesh selection layout is a shape tuple or a shape/stride tuple pair. | src/tilefoundry/parser/pattern_nodes.py |
 | mesh_context | mesh_context | SelectionLevelRule | A mesh selection names exactly one topology level. | src/tilefoundry/parser/pattern_nodes.py |
