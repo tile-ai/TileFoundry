@@ -16,6 +16,31 @@ SCALAR_BINARY_OP = MappingProxyType({
     expr.BinaryKind.AND: "&&",
 })
 
+DIM_OPERATORS = MappingProxyType({
+    expr.DimAdd: "+",
+    expr.DimSub: "-",
+    expr.DimMul: "*",
+    expr.DimFloorDiv: "/",
+    expr.DimMod: "%",
+})
+
+
+def render_dim_call(node: expr.Call, operand) -> str | None:
+    """C for dimension arithmetic *node*, each operand written by *operand*; else None.
+
+    Every emitter of scalar dimensions shares this one rendering and supplies
+    only how it writes a leaf.
+    """
+    symbol = next((symbol for op, symbol in DIM_OPERATORS.items() if isinstance(node.target, op)), None)
+    if symbol is not None:
+        lhs, rhs = (operand(arg) for arg in node.args)
+        return f"({lhs} {symbol} {rhs})"
+    if isinstance(node.target, (expr.DimMin, expr.DimMax)):
+        lhs, rhs = (operand(arg) for arg in node.args)
+        compare = "<" if isinstance(node.target, expr.DimMin) else ">"
+        return f"(({lhs}) {compare} ({rhs}) ? ({lhs}) : ({rhs}))"
+    return None
+
 
 class PredicateVisitor(core.ExprVisitor[str]):
     def visit_Constant(self, node: expr.Constant, ctx: "EmitContext") -> str:
@@ -40,6 +65,9 @@ class PredicateVisitor(core.ExprVisitor[str]):
         )
 
     def visit_Call(self, node: expr.Call, ctx: "EmitContext") -> str:
+        rendered = render_dim_call(node, lambda arg: self.visit(arg, ctx))
+        if rendered is not None:
+            return rendered
         kind = getattr(node.target, "kind", None)
         if not isinstance(kind, expr.BinaryKind):
             return ctx.handler_for(type(node.target))(node, ctx)
@@ -66,4 +94,4 @@ def render_scalar_expr(node, ctx: "EmitContext") -> str:
     return PredicateVisitor().visit(node, ctx)
 
 
-__all__ = ["render_scalar_expr"]
+__all__ = ["render_dim_call", "render_scalar_expr"]
