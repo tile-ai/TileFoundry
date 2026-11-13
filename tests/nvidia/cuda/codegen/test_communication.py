@@ -41,6 +41,15 @@ def test_communication_only_module_emits_native_host_calls():
     assert "tilefoundry_gpu_program_id == 7" in emitted
 
 
+def test_unrelated_tensor_parameters_are_not_nccl_validated():
+    mod = module()
+    entry = mod.entry_function()
+    entry.params += (expr.Var("unrelated", type=types.TensorType.from_shape(
+        (1,), dtype=expr.DType.fp8e4m3, storage=expr.StorageKind.GMEM,
+    )),)
+    assert "ncclSum" in source(mod)
+
+
 def test_unsafe_asynchronous_return_is_rejected_before_codegen():
     with pytest.raises(ValueError, match="pending communication"):
         source(module(synchronize=False))

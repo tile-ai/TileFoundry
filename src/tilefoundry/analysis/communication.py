@@ -230,7 +230,7 @@ def check_communication(function, regions=None, *, module=None, uninitialized=No
                 if allocation == other and not physical(left).intersect(physical(right)).is_empty():
                     operand_hazards.append(BufferHazard("overlapping_operands", allocation, (left.parameter, right.parameter), (name,)))
             stream = handle.name
-            parents = incoming if grouped else frontier(stream)
+            parents = frontier(stream) | (incoming if grouped else set())
             read = node(f"{name}.read", parents)
             write = node(f"{name}.write", {read})
             ordinal = len(predecessors)

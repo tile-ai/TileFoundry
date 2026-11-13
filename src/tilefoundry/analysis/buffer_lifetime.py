@@ -69,6 +69,8 @@ def interfere(first: BufferLifetime, second: BufferLifetime, *, predecessors=Non
     Allocation uses this before choosing addresses; checking uses the same
     completion relation after physical slices have been assigned.
     """
+    if first.producer == second.producer and first.producer.operation != "entry":
+        return True
     return not (
         all(before(use, second.producer, predecessors) for use in (first.producer, *first.consumers))
         or all(before(use, first.producer, predecessors) for use in (second.producer, *second.consumers))
@@ -134,7 +136,7 @@ def check_buffer_lifetimes(
     for old, new in combinations(ordered, 2):
         if old.allocation != new.allocation:
             continue
-        if old.producer == new.producer and old.producer.start == old.producer.end:
+        if old.producer == new.producer and old.producer.operation == "entry":
             continue
         byte_overlap = not old.addresses.intersect(new.addresses).is_empty()
         if byte_overlap and interfere(old, new, predecessors=predecessors):

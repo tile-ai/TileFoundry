@@ -40,15 +40,12 @@ def root_mesh(mesh: types.Mesh, root: int) -> types.Mesh:
     """Select the root while retaining the participant mesh's sliced offset."""
     placement = types.Placement.from_mesh(mesh)[root]
     ids = placement.program_ids(mesh.topologies)
-    coordinates = types.mesh_coords(mesh, tuple(
-        value - start for value, start in zip(ids, types.starts(mesh), strict=True)
-    ))
-    layout = mesh.layout
-    base = replace(mesh, layout=layout.outer) if isinstance(layout, types.ComposedLayout) else mesh
-    selected = base[coordinates]
-    if isinstance(layout, types.ComposedLayout):
-        selected = replace(selected, layout=replace(selected.layout, offset=selected.layout.offset + layout.offset))
-    return selected
+    parts = []
+    for topology, (shape, _), position in zip(mesh.topologies, types.flattened_levels(mesh), ids, strict=True):
+        layout = types.ComposedLayout(None, position, types.Layout((1,) * len(shape)))
+        parts.append(types.Mesh((topology,), layout))
+    selected = types.Mesh.from_meshes(*parts)
+    return replace(selected, names=mesh.names)
 
 
 @typeinfer.register(Collective)

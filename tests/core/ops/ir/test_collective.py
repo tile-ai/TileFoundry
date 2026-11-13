@@ -119,6 +119,15 @@ def test_root_placement_in_offset_range_matches_the_evaluated_recipient(kind, ro
     assert types.Placement.from_mesh(call.type.layout.mesh) == result.placements == (members[root],)
 
 
+def test_root_selection_in_a_multidimensional_sliced_mesh():
+    mesh = types.Mesh((types.Topology("gpu", 6),), types.Layout((2, 3)))[:, 1:3]
+    members = types.Placement.from_mesh(mesh)
+    op = sharding.Collective(participants=mesh, context="sliced", kind="gather", root=1)
+    _, call = evaluate(op, core.ShardTensor(types.TensorType.from_shape((1,)),
+                                            tuple((p, torch.tensor([float(i)])) for i, p in enumerate(members))))
+    assert types.Placement.from_mesh(call.type.layout.mesh) == (members[1],)
+
+
 def test_gather_uses_participant_order_and_local_root():
     mesh = types.Mesh((types.Topology("gpu", 4),), types.Layout((2, 2), (2, 1)), ("a", "b"))
     members = types.Placement.from_mesh(mesh)

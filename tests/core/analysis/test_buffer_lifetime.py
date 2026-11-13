@@ -77,6 +77,16 @@ def test_multiple_readers_extend_liveness_and_input_order_does_not_matter():
     )
 
 
+def test_only_initial_inputs_share_a_zero_duration_producer_exemption():
+    first = analysis.BufferLifetime("first", "arena", 0, 4, analysis.BufferAccess("produce", 1, 1))
+    second = analysis.BufferLifetime("second", "arena", 0, 4, first.producer)
+    assert any(hazard.kind == "overwrite_live_value" for hazard in analysis.check_buffer_lifetimes((first, second)))
+    initial = analysis.BufferAccess("entry", 0, 0)
+    first = replace(first, producer=initial)
+    second = replace(second, producer=initial)
+    assert not analysis.check_buffer_lifetimes((first, second))
+
+
 def test_malformed_trace_is_not_reported_as_safe():
     value = analysis.BufferLifetime(
         "input", "slot", 0, 16, analysis.BufferAccess("available", 0, 0)

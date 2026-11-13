@@ -21,11 +21,19 @@ KINDS = MappingProxyType({name: i for i, name in enumerate(("broadcast", "reduce
 
 
 def emit_resources(entry, ctx):
-    """Validate ABI tensors and reject undeclared runtime aliases before issuing work."""
+    """Validate NCCL operands and reject undeclared runtime aliases before issuing work."""
     lines = [f"{PREFIX}Session tilefoundry_comm;"]
     tensors = [param for param in entry.params if isinstance(param.type, types.TensorType)]
     regions = communication.buffer_regions(entry)
+    operands = {
+        id(arg)
+        for stmt in communication.host_statements(entry.body)
+        if isinstance(stmt.callable, comm.CommEnqueue)
+        for arg in (stmt.args[0], stmt.args[1], *stmt.args[4:])
+    }
     for param in tensors:
+        if id(param) not in operands:
+            continue
         ty = param.type
         if ty.storage not in {expr.StorageKind.GMEM, expr.StorageKind.HOST}:
             raise ValueError("NCCL host operands must declare GMEM or HOST storage")

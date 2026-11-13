@@ -248,6 +248,7 @@ struct Task {
 
 class Session {
     int depth = 0;
+    bool failed = false;
     std::vector<Task> tasks;
 
     void join() {
@@ -270,42 +271,65 @@ class Session {
             check(cudaEventDestroy(e));
     }
 
-    void flush() {
+    void discard() noexcept {
         for (const auto &task : tasks)
-            task.validate();
-        join();
+            cudaStreamSynchronize(task.stream);
         for (auto &task : tasks)
-            task.prepare();
-        join();
-        check(ncclGroupStart());
-        try {
-            for (auto &task : tasks)
-                task.issue();
-        } catch (...) {
-            ncclGroupEnd();
-            throw;
-        }
-        check(ncclGroupEnd());
-        for (auto &task : tasks)
-            task.finish();
-        join();
+            if (task.scratch) {
+                cudaFreeAsync(task.scratch, task.stream);
+                task.scratch = nullptr;
+            }
         tasks.clear();
     }
 
-  public:
-    ~Session() {
-        for (auto &task : tasks)
-            if (task.scratch)
-                cudaFreeAsync(task.scratch, task.stream);
+    void flush() {
+        try {
+            for (const auto &task : tasks)
+                task.validate();
+            join();
+            for (auto &task : tasks)
+                task.prepare();
+            join();
+            check(ncclGroupStart());
+            try {
+                for (auto &task : tasks)
+                    task.issue();
+            } catch (...) {
+                ncclGroupEnd();
+                throw;
+            }
+            check(ncclGroupEnd());
+            for (auto &task : tasks)
+                task.finish();
+            join();
+            tasks.clear();
+        } catch (...) {
+            failed = true;
+            discard();
+            throw;
+        }
     }
-    void start() { ++depth; }
+
+    void require_usable() const {
+        if (failed)
+            throw std::runtime_error("communication session is poisoned");
+    }
+
+  public:
+    ~Session() { discard(); }
+    void start() {
+        require_usable();
+        ++depth;
+    }
     void end() {
+        require_usable();
         if (!depth)
             throw std::runtime_error("unmatched communication group end");
         if (!--depth)
             flush();
     }
     void enqueue(Task task) {
+        require_usable();
         tasks.push_back(std::move(task));
         if (!depth)
             flush();

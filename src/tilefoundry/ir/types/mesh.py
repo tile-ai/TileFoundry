@@ -381,8 +381,7 @@ def joined(
         if not all(isinstance(size, int) for size in sizes):
             raise ValueError("joining sliced meshes needs static topology extents")
         offset = crd2idx(starts, sizes, compact_major(sizes))
-        if offset != 0:
-            layout_value = ComposedLayout(None, offset, layout_value)
+        layout_value = ComposedLayout(None, offset, layout_value)
     return Mesh(topologies, layout_value, names)
 
 

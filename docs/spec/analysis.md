@@ -2018,8 +2018,9 @@ available input may have a zero-duration producer.
 An optional `BufferLifetime.region` is a fixed one-dimensional ISL byte set
 relative to `offset`, contained in `[0, nbytes)`. It preserves holes within that
 storage envelope; overlap checks intersect the translated sets. Omitting it
-selects the entire envelope. Initially available views with the same zero-duration
-producer may alias. A later write still conflicts with every live logical view.
+selects the entire envelope. Initially available views with the same `entry`
+producer may alias. Equal non-`entry` producers interfere, even at equal numeric
+timestamps. A later write still conflicts with every live logical view.
 
 The returned `BufferHazard` records distinguish `read_before_ready`, where a
 consumer starts before its producer completes, from `overwrite_live_value`,

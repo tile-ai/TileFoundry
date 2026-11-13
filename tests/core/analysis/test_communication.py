@@ -69,6 +69,25 @@ def test_nested_group_joins_streams_without_sequencing_group_members():
         check(params, [effect(C.CommGroupStart), effect(C.StreamSynchronize, s0)])
 
 
+def test_group_preserves_fifo_for_operations_on_the_same_stream():
+    params, enqueue = protocol()
+    a, b, c, s0, s1, *_ = params
+    d, e, f = (expr.Var(name=name, type=a.type) for name in ("d", "e", "f"))
+    operations = [enqueue(a, b, s0), enqueue(c, d, s0), enqueue(e, f, s0)]
+    report = check(params + (d, e, f), [
+        effect(C.CommGroupStart), *operations, effect(C.CommGroupEnd),
+        effect(C.StreamSynchronize, s0),
+    ])
+    assert analysis.overlap_candidates(report) == ()
+    with pytest.raises(ValueError, match="must execute between"):
+        analysis.region_boundary(report, ("comm.1", "comm.3"))
+    report = check(params + (d,), [
+        enqueue(a, b, s0), effect(C.CommGroupStart), enqueue(a, c, s0), enqueue(b, d, s1),
+        effect(C.CommGroupEnd), effect(C.StreamSynchronize, s0), effect(C.StreamSynchronize, s1),
+    ])
+    assert not report.hazards
+
+
 def test_exported_event_covers_only_its_generation():
     params, enqueue = protocol()
     a, b, _, s0, _, e0, *_ = params

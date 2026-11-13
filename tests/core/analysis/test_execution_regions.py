@@ -198,6 +198,39 @@ def test_static_replay_tracks_definitions_and_internal_reads():
     assert written.region.relation.range().is_equal(isl.set("{ [b] : 0 <= b < 16 }"))
 
 
+@pytest.mark.parametrize("factor", (1, 4))
+def test_static_compound_slice_offsets_resolve_during_pointer_reconstruction(factor):
+    kernel = partial_kernel(size=16, count=1)
+    source, destination = kernel.params
+    index = expr.Var(name="index", type=types.TensorType.from_scalar(expr.DType.i64))
+    offset = expr.Call(expr.DimMul(), (index, dim.i64_const(factor)), type=index.type)
+    starts = expr.Tuple(elements=(offset,), type=types.TupleType(fields=(offset.type,)))
+    sliced = expr.Call(tensor.Slice(sizes=(1,), strides=(1,)), (destination, starts), type=source.type)
+    pointer = expr.Call(memory.PtrOf(), (sliced,), type=types.PointerType(sliced.type.dtype, sliced.type.storage))
+    reconstructed = expr.Call(memory.TensorView(layout=types.Layout((1,)), shape=(1,)), (pointer,), type=sliced.type)
+    copied = core.Evaluate(memory.Copy(), (source, reconstructed))
+    loop = core.For(index, dim.i64_const(0), dim.i64_const(4), dim.i64_const(1), core.Sequential((copied,)))
+    summary = analysis.kernel_effects.summarize(replace(kernel, body=core.Sequential((loop,))))
+    written = next(effect for effect in summary.effects if effect.parameter == 1)
+    assert not written.region.may_access
+    actual = written.region.relation.range()
+    expected = None
+    for iteration in range(4):
+        start = iteration * factor * 4
+        region = isl.set(f"{{ [b] : {start} <= b < {start + 4} }}")
+        expected = region if expected is None else expected.union(region)
+    assert actual.is_equal(expected)
+
+
+def test_nested_pointer_view_retains_parent_offset():
+    kernel = partial_kernel(size=4, count=1)
+    source, destination = kernel.params
+    nested = view(view(destination, 1, offset=1), 1)
+    kernel = replace(kernel, body=core.Sequential((core.Evaluate(memory.Copy(), (source, nested)),)))
+    written = analysis.kernel_effects.summarize(kernel).effects[-1]
+    assert written.region.relation.range().is_equal(isl.set("{ [b] : 4 <= b < 8 }"))
+
+
 def test_dynamic_slice_does_not_become_a_fixed_pointer():
     kernel = partial_kernel(size=8, count=1)
     source, destination = kernel.params
@@ -206,12 +239,23 @@ def test_dynamic_slice_does_not_become_a_fixed_pointer():
     sliced = expr.Call(tensor.Slice(sizes=(1,), strides=(1,)), (destination, starts), type=source.type)
     kernel = replace(kernel, params=(*kernel.params, index),
                      body=core.Sequential((core.Evaluate(memory.Copy(), (source, sliced)),)))
-    effect = next(effect for effect in analysis.kernel_effects.summarize(kernel).effects if effect.parameter == 1)
+    summary = analysis.kernel_effects.summarize(kernel)
+    effect = next(effect for effect in summary.effects if effect.parameter == 1)
     assert effect.region.may_access
     assert effect.region.relation.range().is_equal(isl.set("{ [b] : 0 <= b < 32 }"))
+    assert any(effect.parameter == 2 and effect.mode & expr.MemoryEffect.READ for effect in summary.effects)
     reconstructed = replace(kernel, body=core.Sequential((core.Evaluate(memory.Copy(), (source, view(sliced, 1))),)))
     with pytest.raises(ValueError, match="unique known first byte"):
         analysis.kernel_effects.summarize(reconstructed)
+
+
+def test_only_terminal_return_is_accepted():
+    kernel = partial_kernel()
+    terminal = replace(kernel, body=core.Sequential((*kernel.body.body, core.Return())))
+    assert analysis.kernel_effects.summarize(terminal).accesses == analysis.kernel_effects.summarize(kernel).accesses
+    early = replace(kernel, body=core.Sequential((core.Return(), *kernel.body.body)))
+    with pytest.raises(ValueError, match="early returns"):
+        analysis.kernel_effects.summarize(early)
 
 
 def test_region_boundaries_preserve_external_values_and_intermediate_dependencies():

@@ -217,7 +217,7 @@ def stress_grid(grid, args, baseline, compute, native, remote):
                 contract("all_gather", members, kv, phase=f"{p}/cp_f")
                 contract("reduce_scatter", members, kv * cp, phase=f"{p}/cp_b")
                 if p == pp - 1:
-                    router = shape.layers * local * shape.experts
+                    router = (shape.layers // pp) * local * shape.experts
                     contract("all_gather", members, router, phase=f"{p}/aux_f")
                     contract("reduce_scatter", members, router * cp, phase=f"{p}/aux_b")
             for c in range(cp):

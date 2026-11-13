@@ -245,5 +245,5 @@ class RoutingOracle:
             )
         )
         indices = expected.reshape(-1, stage.config.num_experts_per_tok)
-        weights = output[0].gather(-1, indices)
+        weights = output[0].softmax(dim=-1).gather(-1, indices)
         return output[0], weights / weights.sum(-1, keepdim=True), indices

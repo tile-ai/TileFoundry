@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
 from tests.core.fixtures.meshes import CT, CTA, RUN, THR
+from tilefoundry import core
 from tilefoundry.ir import expr, types, utils
 from tilefoundry.ir.types import int_tuple
 
@@ -70,6 +72,27 @@ def test_mesh_coordinates_keep_zero_stride_singleton_axes():
                       ("data", "ep", "replica", "cp"))
     for rank in range(8):
         assert types.mesh_coords(mesh, (rank,)) == (0, rank // 4, 0, rank % 4)
+
+
+def test_sliced_mesh_coordinates_and_local_tensor_round_trip():
+    mesh = types.Mesh((types.Topology("gpu", 8),), types.Layout((8,)))[2:6]
+    for index, placement in enumerate(types.Placement.from_mesh(mesh)):
+        ids = placement.program_ids(mesh.topologies)
+        assert types.mesh_coords(mesh, ids) == (index,)
+        ty = types.TensorType.from_shape((8,), layout=types.ShardLayout(
+            types.Layout((8,)), (types.Split(0),), mesh,
+        ))
+        local = core.ShardTensor(ty, torch.arange(8.0)).to_local(placement)
+        assert local.tolist() == [2 * index, 2 * index + 1]
+
+
+def test_join_preserves_zero_origin_sliced_meshes():
+    outer = types.Mesh((types.Topology("node", 2),), types.Layout((2,)))[0:1]
+    inner = types.Mesh((types.Topology("gpu", 4),), types.Layout((4,)))[0:2]
+    joined = types.Mesh.from_meshes(outer, inner)
+    assert isinstance(joined.layout, types.ComposedLayout)
+    assert joined.layout.offset == 0
+    assert types.starts(joined) == (0, 0)
 
 
 def test_check_topology_rejects_positions_beyond_a_declared_extent() -> None:

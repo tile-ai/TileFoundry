@@ -18,7 +18,7 @@ from .layout import (
     unflatten,
 )
 from .layout_algebra import coalesce, slice_and_offset
-from .mesh import Mesh, levels, separate
+from .mesh import Mesh, levels, separate, starts
 from .stride import compact_row_major, crd2idx, idx2crd
 
 __all__ = [
@@ -434,13 +434,13 @@ def mesh_coords(mesh: Mesh, ids: tuple[int | None, ...]) -> tuple[int | None, ..
     The host side of the CUDA runtime's ``mesh_coords(mesh, program_ids())``.
     """
     coords = []
-    for index, arrangement in enumerate(levels(mesh)):
+    for index, (arrangement, start) in enumerate(zip(levels(mesh), starts(mesh), strict=True)):
         flat = flatten(arrangement)
         program_id = ids[index] if index < len(ids) else None
         coords.extend(
             (None,) * len(flat.shape)
             if program_id is None
-            else idx2crd(program_id, flat.shape, flat.strides)
+            else idx2crd(program_id - start, flat.shape, flat.strides)
         )
     return tuple(coords)
 
