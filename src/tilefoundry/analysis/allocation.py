@@ -1251,7 +1251,10 @@ def solve_allocation(
 
     if completion_conflicts is None:
         interference = build_interference_graph(values, summary.windows, summary.by_value)
-        forbidden = {pair: ((1 - sizes[values[pair[1]]], sizes[values[pair[0]]] - 1),) for pair in interference}
+        forbidden = {
+            pair: ((1 - sizes[values[pair[1]]], sizes[values[pair[0]]] - 1),)
+            for pair in interference
+        }
     else:
         indices = {value: index for index, value in enumerate(values)}
         forbidden = {}
@@ -1265,17 +1268,32 @@ def solve_allocation(
             forbidden[pair] = (*forbidden.get(pair, ()), *intervals)
         interference = {pair for pair, intervals in forbidden.items() if any(low <= 0 <= high for low, high in intervals)}
     order_choices = {}
-    for (left, right), intervals in sorted(forbidden.items()):
-        if values[left] in persistent or values[right] in persistent:
-            continue
-        difference = addresses[right] - addresses[left]
-        for index, (low, high) in enumerate(intervals):
-            below = model.new_bool_var(f"below_{left}_{right}_{index}")
-            above = model.new_bool_var(f"above_{left}_{right}_{index}")
-            order_choices[left, right, low, high] = below, above
-            model.add(difference < low).only_enforce_if(below)
-            model.add(difference > high).only_enforce_if(above)
-            model.add_bool_or(below, above)
+    if completion_conflicts is None:
+        for left, right in sorted(interference):
+            if values[left] in persistent or values[right] in persistent:
+                continue
+            left_before = model.new_bool_var(f"before_{left}_{right}")
+            right_before = model.new_bool_var(f"before_{right}_{left}")
+            order_choices[left, right] = left_before, right_before
+            model.add(addresses[left] + sizes[values[left]] <= addresses[right]).only_enforce_if(
+                left_before
+            )
+            model.add(addresses[right] + sizes[values[right]] <= addresses[left]).only_enforce_if(
+                right_before
+            )
+            model.add_bool_or(left_before, right_before)
+    else:
+        for (left, right), intervals in sorted(forbidden.items()):
+            if values[left] in persistent or values[right] in persistent:
+                continue
+            difference = addresses[right] - addresses[left]
+            for index, (low, high) in enumerate(intervals):
+                below = model.new_bool_var(f"below_{left}_{right}_{index}")
+                above = model.new_bool_var(f"above_{left}_{right}_{index}")
+                order_choices[left, right, low, high] = below, above
+                model.add(difference < low).only_enforce_if(below)
+                model.add(difference > high).only_enforce_if(above)
+                model.add_bool_or(below, above)
 
     seed = calculate_starts(
         values,
@@ -1294,18 +1312,28 @@ def solve_allocation(
             for value in values
         },
     )
-    if seed is not None and any(low <= seed[0][right] - seed[0][left] <= high
-                                for (left, right), intervals in forbidden.items() for low, high in intervals):
+    if seed is not None and any(
+        low <= seed[0][right] - seed[0][left] <= high
+        for (left, right), intervals in forbidden.items()
+        for low, high in intervals
+    ):
         seed = None
     if seed is not None:
         address_hints, peak_hint = seed
         model.add(peak <= peak_hint)
         for address, suggested in zip(addresses, address_hints, strict=True):
             model.add_hint(address, suggested)
-        for (left, right, low, high), (below, above) in order_choices.items():
-            difference = address_hints[right] - address_hints[left]
-            model.add_hint(below, int(difference < low))
-            model.add_hint(above, int(difference > high))
+        if completion_conflicts is None:
+            for (left, right), (left_before, right_before) in order_choices.items():
+                left_end = address_hints[left] + sizes[values[left]]
+                right_end = address_hints[right] + sizes[values[right]]
+                model.add_hint(left_before, int(left_end <= address_hints[right]))
+                model.add_hint(right_before, int(right_end <= address_hints[left]))
+        else:
+            for (left, right, low, high), (below, above) in order_choices.items():
+                difference = address_hints[right] - address_hints[left]
+                model.add_hint(below, int(difference < low))
+                model.add_hint(above, int(difference > high))
         model.add_hint(peak, peak_hint)
 
     solver = cp_model.CpSolver()
