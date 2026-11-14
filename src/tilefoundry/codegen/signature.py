@@ -61,6 +61,21 @@ class ProgramIdSignature(Signature):
 
 
 @dataclass(frozen=True)
+class HandleSignature(Signature):
+    """An opaque caller-owned communication resource passed through the host ABI."""
+
+    name: str
+    type: types.CommunicationHandleType
+
+
+def parameter_signature_of(var) -> Signature:
+    """Select a declared host parameter without treating handles as tensor pointers."""
+    if isinstance(var.type, types.CommunicationHandleType):
+        return HandleSignature(var.name, var.type)
+    return tensor_signature_of(var)
+
+
+@dataclass(frozen=True)
 class ProgramMetaSignature(Signature):
     """The block of ids a kernel hands to the runtime it was compiled against."""
 
@@ -69,7 +84,7 @@ class ProgramMetaSignature(Signature):
 
 @dataclass(frozen=True)
 class LaunchSignature(Signature):
-    """One of the geometry arguments a launch is told beyond the kernel's own."""
+    """A geometry or stream argument passed beyond the kernel's own parameters."""
 
     name: str
     ctype: str
@@ -127,11 +142,13 @@ LAUNCH_ABI = (
     LaunchSignature("grid_x", "int"),
     LaunchSignature("block_x", "int"),
     LaunchSignature("dynamic_smem", "int"),
+    LaunchSignature("stream", "long long"),
 )
 """Actual cross-translation-unit scalars on a CPU-to-device Launch edge.
 
 The topology is one-dimensional, so only grid_x and block_x are stated.
 Dynamic shared memory remains because its per-Launch value crosses the launcher ABI.
+The stream handle selects the caller's execution stream; zero preserves the default.
 """
 
 
@@ -194,6 +211,8 @@ def called_as(
 
 
 __all__ = [
+    "HandleSignature",
+    "parameter_signature_of",
     "LAUNCH_ABI",
     "CallableSignature",
     "LaunchSignature",

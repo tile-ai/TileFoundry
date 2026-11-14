@@ -91,7 +91,7 @@ def idx2crd(idx: int, shape: tuple, stride: tuple) -> tuple:
     function's.
     """
     return tuple(
-        idx2crd(idx, one, step) if isinstance(one, tuple) else (idx // step) % one
+        idx2crd(idx, one, step) if isinstance(one, tuple) else 0 if one == 1 else (idx // step) % one
         for one, step in zip(shape, stride)
     )
 

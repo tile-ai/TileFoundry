@@ -55,13 +55,17 @@ jobs:
           uv pip install --python .venv/bin/python \
             --no-deps --no-build-isolation "${editable[@]}"
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-          echo "LD_LIBRARY_PATH=$PWD/.venv/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          nccl=$(.venv/bin/python -c 'import nvidia.nccl; print(nvidia.nccl.__path__[0])')
+          echo "LD_LIBRARY_PATH=$PWD/.venv/lib:$nccl/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$nccl${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+          echo "CMAKE_LIBRARY_PATH=$nccl/lib${CMAKE_LIBRARY_PATH:+:$CMAKE_LIBRARY_PATH}" >> "$GITHUB_ENV"
       - name: Run pre-commit
         run: pre-commit run --all-files
       - name: Link CUTLASS headers
         run: |
           mkdir -p third_party/cutlass
           ln -sfnT /opt/cutlass/include third_party/cutlass/include
+          echo "CMAKE_INCLUDE_PATH=$PWD/third_party/cutlass/include" >> "$GITHUB_ENV"
       - name: Run tests
         env:
           COVERAGE_FILE: test_results/.coverage

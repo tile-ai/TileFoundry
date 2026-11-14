@@ -167,6 +167,8 @@ src = ["src", "targets/nvidia", "targets/apple"]
 "scripts/*" = ["S1", "S2", "S4", "S5", "S7", "S8", "S9", "S11", "C3", "C4", "C5", "C6"]
 "setup.py" = ["C3", "C4"]
 "targets/*/setup.py" = ["C3", "C4"]
+# ctypes requires the foreign structure descriptor to be named _fields_.
+"targets/nvidia/tilefoundry_nvidia/cuda/nccl.py" = ["C4"]
 # These tests import names from the shipped model sources, which follow no rule.
 "tests/nvidia/cuda/analysis/test_analyze_cross_module.py" = ["C11"]
 "tests/nvidia/cuda/fixtures/cli/nested_checkpoint.py" = ["C11"]

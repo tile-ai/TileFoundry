@@ -5,19 +5,25 @@ from __future__ import annotations
 import hashlib
 
 from tilefoundry import inspection, runtime
-from tilefoundry.ir import core
+from tilefoundry.analysis import communication
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import core, expr
 
 from .compilation import compile, normalize_to_module, resolve_options
 from .options import Options
 
 
 def canonical_module_text(mod: core.Module) -> str:
-    """Produce canonical text for cache-key: entry-function source + topologies.
+    """Include every emitted definition, physical binding and execution domain.
 
-    Entry source and declared topologies distinguish independently compiled
-    execution domains without attaching parent context to shared definitions.
+    Callee changes can alter buffer effects even when the entry is unchanged.
     """
-    fn_text = inspection.as_script(mod.entry_function())
+    fn_text = inspection.as_script(mod)
+    for path, frame in valuation.collect_functions(mod).items():
+        bindings = communication.buffer_regions(frame.function)
+        selected = expr.get_metadata(frame.function, communication.BufferBindings)
+        if selected is not None:
+            fn_text += "\n" + path.qualified_name + ": " + repr((tuple(sorted(bindings.items())), tuple(sorted(selected.uninitialized))))
 
     topologies = mod.effective_topologies()
     if topologies:

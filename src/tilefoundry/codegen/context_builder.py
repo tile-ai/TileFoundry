@@ -202,15 +202,21 @@ def launch_extents(frame: valuation.Context) -> tuple[object, object]:
     return product_of(ctas), product_of(threads)
 
 
+class LaunchCollector(core.StmtVisitor):
+    def __init__(self):
+        self.launches = []
+
+    def visit_Evaluate(self, stmt):
+        if isinstance(stmt.callable, tir.launch.Launch):
+            self.launches.append(stmt)
+
+
 def launch_statements(function: core.PrimFunction | core.Function) -> tuple[core.Evaluate, ...]:
-    body = function.body
-    if not isinstance(body, core.Sequential):
+    if not isinstance(function, core.PrimFunction):
         return ()
-    return tuple(
-        stmt
-        for stmt in body.body
-        if isinstance(stmt, core.Evaluate) and isinstance(stmt.callable, tir.launch.Launch)
-    )
+    collector = LaunchCollector()
+    collector.visit(function.body)
+    return tuple(collector.launches)
 
 
 def build_context(
@@ -279,6 +285,8 @@ def build_context(
             if not isinstance(targets[id(function)], cpu.Target)
         )
     )
+    if not device_targets and module.target is not None and not isinstance(module.target, cpu.Target):
+        device_targets = (module.target,)
     if len(device_targets) != 1:
         raise ValueError(f"codegen: expected one device Target, found {len(device_targets)}")
     program_ids = program_id_params(module, device_targets[0])
@@ -363,6 +371,9 @@ def build_context(
                 missing = ", ".join(function.name for function in grouped)
                 raise ValueError(f"codegen: no Launch states geometry for {missing}")
             groups.append(EmissionGroup(frame.module, tgt, tuple(grouped)))
+
+    if not device_functions:
+        groups.append(EmissionGroup(module, device_targets[0], ()))
 
     return Context(
         module=module,

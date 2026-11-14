@@ -94,10 +94,10 @@ there is no umbrella header or target-selection macro.
   - Device headers require C++20. Set per-source `-std=c++20` instead of
     `CUDA_STANDARD 20`: older CMake versions reject that dialect and nvcc uses
     the last `-std` option.
-  - CUTLASS lookup MUST first use `TILEFOUNDRY_CUTLASS_INCLUDE`. An invalid
-    explicit directory MUST fail naming the variable and value. Without the
-    variable, search source ancestors for `third_party/cutlass/include`, then
-    fail naming the variable and searched paths.
+  - CUTLASS lookup MUST use CMake's required `find_path` for `cute/tensor.hpp`.
+    Installation prefixes belong to the caller's CMake configuration. The
+    provider MUST NOT read custom environment variables or search source
+    ancestors for an installation; missing headers fail at configuration.
   - CUDA derives `_launch` and `_kernel` from the core's mangled symbol root;
     it MUST NOT rebuild function paths independently.
 

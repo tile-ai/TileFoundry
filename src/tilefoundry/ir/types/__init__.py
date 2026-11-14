@@ -15,6 +15,7 @@ from .callable_type import (
     callable_type_for,
     callable_type_for_prim_function,
 )
+from .communication import CommunicationHandleType
 from .int_tuple import IntTuple
 from .layout import (
     ComposedLayout,

@@ -8,6 +8,7 @@ flowchart TB
     UnitType["<b>UnitType</b>"]
     CallableType["<b>CallableType</b>"]
     PointerType["<b>PointerType</b>"]
+    CommunicationHandleType["<b>CommunicationHandleType</b>"]
 
     DType["<b>DType</b>"]
     dim["<b>dim ops</b>"]
@@ -18,6 +19,7 @@ flowchart TB
     UnitType -. member of .-> Type
     CallableType -. member of .-> Type
     PointerType -. member of .-> Type
+    CommunicationHandleType -. member of .-> Type
 
     DType -. dtype .-> TensorType
     dim -. shape elements .-> TensorType
@@ -31,8 +33,12 @@ flowchart TB
 ## 1. `Type`
 
 ```python
-Type = TensorType | TupleType | UnitType | CallableType | PointerType
+Type = TensorType | TupleType | UnitType | CallableType | PointerType | CommunicationHandleType
 ```
+
+`CommunicationHandleType` identifies caller-owned host communicators, streams
+and events. Its resource and lifetime contract is owned by
+[tir §2.4](./tir.md#24-host-communication).
 
 ---
 

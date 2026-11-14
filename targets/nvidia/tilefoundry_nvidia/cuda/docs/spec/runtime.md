@@ -781,3 +781,61 @@ __device__ inline T warp_reduce(T value);
     `ops::elementwise` and `ops::reduce` ([§2.6](#26-cudaops)) use, so a merge
     is defined once for all three and the op tags are valid `Combine` values as
     they stand.
+
+## 3. NCCL host communication
+
+`cuda/nccl.h` implements the host adapter for
+[TIR host communication](../../../../../../docs/spec/tir.md#24-host-communication).
+Select it with `codegen.Options(communication=cuda.codegen.NCCL)` when calling
+`codegen.link_program`, or through the `codegen` field of compiler options.
+The provider owns NCCL emission and linking; declaring a communication handle
+or importing the CUDA target does not select NCCL.
+Communication-only modules can declare a CUDA module target and CPU entry
+without manufacturing a device kernel. Host handles use the existing scalar
+ABI; the emitter calls CUDA stream/event functions and NCCL using caller-owned
+blocking communicators. CMake's required header and library discovery selects
+NCCL; missing dependencies fail at configuration. Custom environment variables
+and source-relative installation searches are not used. Ordinary CUDA modules
+do not acquire an NCCL link dependency. `cuda.nccl.Library(linked.library_path)`
+bootstraps communicators through that program's linked NCCL dependency. The
+caller exchanges the unique ID, selects the device and destroys each handle
+after completion; the helper neither resolves another installation nor manages
+process groups.
+
+Broadcast, reduce, all-reduce, all-gather and reduce-scatter lower to their NCCL
+counterparts. Gather, scatter and Exchange lower to grouped `ncclSend` /
+`ncclRecv` pairs, including self edges. Non-leading gather/scatter axes use
+stream-ordered scratch allocation and row copies to preserve tensor-axis
+semantics. Exchange zero-fills unused destination capacity. Supported native
+dtypes are FP16, BF16, FP32, FP64, INT8, UINT8, INT32, UINT32 and INT64; integer
+AVG remains invalid under the semantic contract.
+
+Runtime counts use INT32 or INT64 CPU or GPU metadata. GPU counts are copied
+to host on the exchange stream and synchronized before validating all row and
+column bounds and issuing the transfers. This is an explicit control-plane
+readback boundary. Count discovery can precede it on another stream through a
+record/wait event pair. Matching counts on every rank remain required; a count
+all-gather constructs that shared matrix without host object serialization.
+
+Nested groups defer issue until the outermost end. Preparation precedes the
+NCCL group and unpacking follows it. CUDA event joins include packing, padding,
+zero-traffic tasks and unpacking in the group completion frontier. Group end
+does not synchronize the host. Scratch is freed in stream order. Runtime tensor
+checks reject shape/dtype/device mismatches, noncontiguous tensors and undeclared
+storage aliases; communicator checks enforce size, local rank and device.
+Selected `BufferBindings` from
+[analysis §5](../../../../../../docs/spec/analysis.md#5-host-communication-ordering)
+permit checked reuse: native parameter addresses must have the declared byte
+offset differences within each arena and match its device. Unrelated allocations
+remain disjoint. Binding failures are rejected before work is issued.
+Distinct resource parameters cannot alias the same native handle. In-place
+broadcast, reduce and all-reduce may use the same IR buffer parameter; other
+operations require disjoint send/receive buffers.
+
+The host checker covers declared communication and summarized local kernel
+effects over fixed parameter buffers. Explicit kernel streams reach the CUDA
+launch ABI. Native calls require consistent process issue order and caller-supplied
+dependencies from external compute. Exported events obligate the caller to keep
+all buffers and native resources alive through completion. The adapter does not
+own rendezvous, process launch, Python-object metadata, autograd, or optimizer
+state. Those remain example or application responsibilities.

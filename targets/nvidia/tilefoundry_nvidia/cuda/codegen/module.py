@@ -11,11 +11,9 @@ assembled last.
 from __future__ import annotations
 
 import math
-import os
 import shutil
 from dataclasses import dataclass
 from importlib.resources import files
-from pathlib import Path
 
 from tilefoundry import codegen, target
 from tilefoundry.interfaces import valuation
@@ -127,7 +125,7 @@ def define_launcher(
     ctx.emit(f'extern "C" const char* {launcher.name}({ctx.parameters(launcher, exported=True)}) {{')
     ctx.indent()
     tell_the_block(launcher, ctx)
-    grid_x, block_x, smem = (signature.name for signature in launcher.trailing)
+    grid_x, block_x, smem, stream = (signature.name for signature in launcher.trailing)
     ctx.emit(f"dim3 grid({grid_x}, 1, 1);")
     ctx.emit(f"dim3 block({block_x}, 1, 1);")
     ctx.emit(f"if ({smem} > {DEFAULT_DYNAMIC_SMEM}) {{")
@@ -139,7 +137,7 @@ def define_launcher(
     ctx.emit("if (raised != cudaSuccess) return cudaGetErrorString(raised);")
     ctx.dedent()
     ctx.emit("}")
-    ctx.emit(f"{kernel.name}<<<grid, block, {smem}, nullptr>>>({kernel_arguments(kernel, ctx)});")
+    ctx.emit(f"{kernel.name}<<<grid, block, {smem}, reinterpret_cast<cudaStream_t>({stream})>>>({kernel_arguments(kernel, ctx)});")
     ctx.emit("cudaError_t status = cudaGetLastError();")
     ctx.emit("return status == cudaSuccess ? nullptr : cudaGetErrorString(status);")
     ctx.dedent()
@@ -210,25 +208,6 @@ def program_dimensions(geometry: Geometry) -> list[dict[str, str]]:
     return dims
 
 
-def cutlass_include() -> Path:
-    configured = os.environ.get("TILEFOUNDRY_CUTLASS_INCLUDE")
-    if configured is not None:
-        path = Path(configured).resolve()
-        if not path.is_dir():
-            raise RuntimeError(f"TILEFOUNDRY_CUTLASS_INCLUDE={configured!r} is not a directory")
-        return path
-    checked = tuple(
-        parent / "third_party/cutlass/include" for parent in Path(__file__).resolve().parents
-    )
-    for path in checked:
-        if path.is_dir():
-            return path
-    raise RuntimeError(
-        "TILEFOUNDRY_CUTLASS_INCLUDE is not set; no local CUTLASS directory found; checked: "
-        + ", ".join(map(str, checked))
-    )
-
-
 @target.bind(cuda_target.Target, codegen.LinkableModule)
 @dataclass(frozen=True, kw_only=True)
 class CudaLinkableModule(codegen.LinkableModule):
@@ -261,7 +240,9 @@ class CudaLinkableModule(codegen.LinkableModule):
             reject_omitted_child_weights(module)
         kernels = tuple(fn for fn in functions if ctx.codegen_context.targets[id(fn)] == tgt)
         if not kernels:
-            raise ValueError(f"emit_cuda_module: module {module.name!r} has no CUDA device kernels")
+            return cls(target="cuda", language="cu", preamble="", functions=(),
+                       gpu_architecture=tgt.architecture.gpu_architecture,
+                       gpu_code=tgt.architecture.gpu_code)
         functions = (
             *device_functions(kernels, ctx),
             *(emit_function(fn, ctx) for fn in kernels),
@@ -289,14 +270,18 @@ class CudaLinkableModule(codegen.LinkableModule):
 
     def link(self, project: "CMakeProject") -> None:
         """Add CUDA source, compiler settings, and package-owned include paths."""
+        if not self.functions:
+            return
+        project.include(files(__package__).joinpath("include"))
         if shutil.which("nvcc") is None:
             raise RuntimeError("link_modules: 'nvcc' not on PATH")
         index = sum(name.startswith("device_") for name in project.sources)
         source = f"device_{index}.cu"
         project.add_source(source, self.source)
         project.enable_language("CUDA")
-        project.include(files(__package__).joinpath("include"), cutlass_include())
         project.append(
+            "find_path(CUTLASS_INCLUDE_DIR cute/tensor.hpp REQUIRED)\n"
+            "target_include_directories(${PROJECT_NAME} PRIVATE ${CUTLASS_INCLUDE_DIR})\n"
             "set_target_properties(${PROJECT_NAME} PROPERTIES\n"
             "  CUDA_ARCHITECTURES OFF\n"
             "  CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON CUDA_EXTENSIONS OFF)\n"

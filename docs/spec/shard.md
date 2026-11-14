@@ -465,7 +465,8 @@ class Placement:
   - `ids` is keyed by level name; `program_ids(topologies)` answers one id per
     ordered `Topology` by lookup. A level the mapping does not name is unfixed.
   - `Placement.from_mesh(mesh)` lists every placement of a mesh: each level's ids
-    are the values of that level's arrangement. Its coordinates are
+    are the values of that level's arrangement plus that level's slice origin.
+    A sliced view retains absolute program ids. Its coordinates are
     `mesh_coords` of those ids ([§7.6](#76-local_layout)).
   - an unfixed level MUST be left undivided rather than read as `0`: the device
     chooses its own `cta` and `thread`.
@@ -905,6 +906,9 @@ normalizes each statically known extent-1 leaf to stride zero. Rank zero gives
 tensor layout, preserving every other stride, mode, offset, swizzle and mesh.
 The parser uses it for explicit tensor layouts; mesh layouts and algebra
 intermediates retain their own coordinate conventions.
+Coordinate readback through `idx2crd` or `mesh_coords` MUST return zero for a
+statically unit leaf, including a leaf whose stride is zero; it MUST NOT divide
+by that stride. Sliced mesh offsets remain part of physical placement.
 
 ```python
 class Layout:

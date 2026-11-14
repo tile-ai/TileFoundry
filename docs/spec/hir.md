@@ -1687,6 +1687,73 @@ class Local(Op):
   - `Local` only names the current topology position's existing view; it
     materializes no value and moves no bytes.
 
+##### Collective
+
+`tf.collective(x, *, participants, context, kind, root=None, reduction=None,
+axis=0)` performs synchronous communication on rank-local payloads.
+`participants` is an existing `Mesh`; its `Placement.from_mesh` order defines
+communicator-local ranks. `context` is a nonempty string identifying an isolated
+communication context. Equal participant meshes may use different contexts.
+
+The kinds are `broadcast`, `reduce`, `all_reduce`, `gather`, `scatter`,
+`all_gather`, and `reduce_scatter`. Rooted kinds require a communicator-local
+`root`. Reduction kinds require `sum`, `avg`, or `max`; AVG requires floating
+point payloads. Gather concatenates and scatter partitions along `axis`.
+Scatter partitions must be equal and statically divisible by the group size.
+
+`x.shape` describes one local payload. An input with Split or Partial annotations
+must first pass through `Local`; its original rank contributions must be present.
+An already reduced global Partial cannot supply those contributions. The
+reference evaluator reads actual `ShardTensor` pieces and never infers independent
+rank data from an ordinary global tensor. Broadcast and scatter read only the
+root's input. Gather and reduce return pieces only on the root's mesh view;
+other collective results are available across the participant mesh.
+
+All-reduce, all-gather and broadcast results are Broadcast over participants.
+Scatter and reduce-scatter results are Varying local payloads. These declarations
+state the resulting values' distribution; they do not assemble local payloads
+into a different global tensor shape. Reshard remains a separate layout/storage
+transition. The evaluator produces fresh results, with no input-buffer alias.
+
+Access analysis conservatively retains the complete payload for the synchronous
+call. Collective transport costs require a realization; asking the cost evaluator
+to price a Collective raises an explicit unsupported-cost diagnostic. No default
+zero cost or inferred ring/NVLS traffic is supplied. Asynchronous requests and
+backend launch ordering require their own completion contracts.
+
+##### Exchange
+
+`tf.exchange(x, *, participants, context, counts)` performs a synchronous set
+of matched transfers. It uses Collective's participant order, isolated context,
+and rank-local input requirements. `x` is a flat packed buffer. `counts` is a
+square tuple matrix of static nonnegative integers, indexed by communicator-local
+source and destination. Each row packs outgoing segments in destination order;
+each column defines a received prefix assembled in source order. A single
+nonzero edge represents a point-to-point transfer. Self edges are local copies.
+
+Row sums MUST fit the input capacity. The output capacity is the maximum column
+sum. Results are fresh Varying buffers on all participants, zero-filled beyond
+each rank's column sum. Zero counts transfer no elements and require no source
+piece from a rank whose entire row is zero. Padding is not part of the transferred
+payload. Counts are one matched contract; independently declared send/receive
+counts and arbitrary offset layouts are not supported.
+
+`tf.exchange(x, count_matrix, *, participants, context, receive_capacity)`
+selects runtime counts by omitting `counts`. `count_matrix` MUST be replicated
+INT32 or INT64 metadata of shape `(N, N)` or `(N*N,)`, with the same source and
+destination ordering as the static form. Every participant supplies a payload
+allocation; runtime row sums MUST fit its declared input capacity, and column
+sums MUST fit the fixed nonnegative `receive_capacity`. The evaluator rejects
+negative counts, capacity overflow and disagreeing replicated matrices. The
+result keeps that capacity across calls, including zero-traffic calls, and
+zero-fills padding. Discovery can use a preceding all-gather of count rows;
+the Exchange itself does not infer routes or serialize objects.
+
+Access analysis retains complete source and result storage for this synchronous
+event. Exchange costs require an explicit realization and otherwise raise an
+unsupported-cost diagnostic. Packing and a training schedule remain separate
+concerns. Host enqueue and completion use [tir §2.4](./tir.md#24-host-communication).
+
 ## 2. Function specialization API
 
 The names below are declared in `interfaces/valuation/specialize.py` and exported

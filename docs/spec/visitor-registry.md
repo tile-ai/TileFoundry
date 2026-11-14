@@ -484,6 +484,7 @@ def local_relations_of(call, ctx) -> tuple[access.Relation, ...]: ...
 def projected(relations, call, ctx, *, device=None) -> tuple[access.Relation, ...]: ...
 def iterating(extents, relations: tuple[access.Relation, ...]) -> tuple[access.Relation, ...]: ...
 def shape_from_relation(access: access.Relation, extents) -> tuple: ...
+def byte_relation(held: types.TensorType) -> access.Relation: ...
 ```
 
 Registry + registration function, both exported by `tilefoundry.interfaces.access`:
@@ -492,6 +493,13 @@ Registry + registration function, both exported by `tilefoundry.interfaces.acces
 access.relation_registry: Registry             # keyed by type[Op]
 def register_relation(op_cls: type) -> Callable[[Callable], Callable]: ...
 ```
+
+`byte_relation` composes logical coordinates, layout positions and element width
+into byte offsets. It preserves strided holes, negative strides and additive
+offsets; symbolic affine offsets retain their parameter bindings. Shapes and
+strides are static and elements are byte-addressable. Inner composed transforms
+and swizzles are rejected. This spatial helper introduces no stream or completion
+semantics; callers supply any topology restriction before using its addresses.
 
 - constraints:
   - A handler has the shape `(call, ctx) -> tuple[access.Relation, ...]`. It MUST NOT read

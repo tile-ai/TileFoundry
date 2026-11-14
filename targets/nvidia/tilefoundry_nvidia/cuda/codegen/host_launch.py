@@ -7,7 +7,7 @@ from types import MappingProxyType
 
 from tilefoundry import codegen
 from tilefoundry.codegen import cpu as codegen_cpu
-from tilefoundry.ir import core, expr, tir
+from tilefoundry.ir import core, expr, tir, types
 from tilefoundry_nvidia.cuda import target
 
 STORAGE_DEVICE_TYPE = MappingProxyType({
@@ -72,8 +72,12 @@ def static_smem(value) -> int:
 def reject_unsupported_config(cfg: tir.launch.Launch) -> None:
     if cfg.cluster is not None:
         raise NotImplementedError("emit_host_module: launch `cluster` is not supported yet")
-    if cfg.stream is not None:
-        raise NotImplementedError("emit_host_module: launch `stream` is not supported yet")
+    if cfg.stream is not None and (
+        not isinstance(cfg.stream, expr.Var)
+        or not isinstance(cfg.stream.type, types.CommunicationHandleType)
+        or cfg.stream.type.kind != "stream"
+    ):
+        raise ValueError("launch stream must be a typed stream handle")
     if cfg.attrs.entries:
         raise NotImplementedError("emit_host_module: launch `attrs` are not supported yet")
 
@@ -106,6 +110,7 @@ def as_this_scope_names_it(
         extent(launch.args[1]),
         extent(launch.args[4]),
         str(static_smem(launch.callable.dynamic_smem)),
+        "0" if launch.callable.stream is None else launch.callable.stream.name,
     )
     return replace(
         launcher,
@@ -148,6 +153,8 @@ def one_launch(
     The launcher returns the CUDA error text of a launch the device refused, and the call raises it.
     """
     reject_unsupported_config(launch.callable)
+    if launch.callable.stream is not None and not any(launch.callable.stream is param for param in entry.params):
+        raise ValueError("launch stream must be a declared host parameter")
     launcher = ctx.signature_of(callee)
     forwarded = forwarded_params(entry, launch, launcher)
     bound = as_this_scope_names_it(launcher, forwarded, launch)

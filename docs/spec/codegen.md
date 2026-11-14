@@ -29,6 +29,17 @@ flowchart LR
   `ctx.codegen_context.options`; a missing compile context is an error.
   Skeleton emission retains callable signatures and replaces body statements
   with editable placeholders; target packages own their wrapper conventions.
+- `codegen.Options.communication` explicitly selects a stateless
+  `codegen.Communication` provider class for host communication. Its default is
+  `None`; entries with communication handles MUST select a provider. Generic
+  ordering and buffer-lifetime checks run before provider emission. The provider
+  supplies resource setup, statement emission and build dependencies through
+  `emit_resources`, `emit_statement` and `link`. Only a host unit that uses the
+  provider contributes its dependencies. Importing a target package does not
+  select a provider or register native writers for generic communication ops.
+  The provider class's qualified identity appears in the compilation options
+  used by the JIT cache. This selection does not change tensor or transfer
+  semantics, and does not yet select device-initiated communication kernels.
 - A module's functions are grouped by equal Target values in source order. Each
   group is emitted by the exact Target's resolved implementation into one
   `LinkableModule`.
@@ -498,6 +509,14 @@ function with its `symbol`, `export_name`, `owner`, `target` and `callable`.
     callee is in the group, the launcher convention (`trailing=LAUNCH_ABI`) in place of the callee one; the
     kernel's own convention is not in the table. Each Launch statement's
     launcher signature is also kept in `Context.launch_callables`.
+
+`LAUNCH_ABI` appends `grid_x`, `block_x`, `dynamic_smem` and the caller's stream
+handle after kernel parameters. CUDA launchers forward the stream to the runtime
+launch; an omitted stream preserves the default stream for ordinary launches.
+Mixed communication protocols require an explicitly declared stream under
+[analysis §5](./analysis.md#5-host-communication-ordering). Launch discovery
+traverses nested statement scopes, so checked static repeated protocols retain
+their kernel dependencies during emission.
 
 ## 5. Specialization dispatch
 
