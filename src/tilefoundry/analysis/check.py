@@ -154,7 +154,7 @@ class CheckCalls(valuation.Visitor[None]):
         super().__init__()
         self.derive, self.label = derive, label
         calls = tuple(node for node in core.collect_exprs(function.body) if isinstance(node, expr.Call))
-        self.labels = dict(zip(calls, expr.value_labels(calls), strict=True))
+        self.labels = {id(call): label for call, label in zip(calls, expr.value_labels(calls), strict=True)}
 
     def visit_Call(self, call, ctx):
         self.visit_operands(call, ctx)
@@ -168,7 +168,7 @@ class CheckCalls(valuation.Visitor[None]):
             param.type if implicit and param.is_const else next(given).type
             for param in callee.params
         )
-        self.derive(inner, type_list, ctx.current_mesh, f"{self.label}/{self.labels[call]}")
+        self.derive(inner, type_list, ctx.current_mesh, f"{self.label}/{self.labels[id(call)]}")
 
 
 def check_program(
