@@ -443,8 +443,8 @@ class LexicalMeshReferenceRule:
     )
 
     def apply(self, value, *, node, context):
-        state = getattr(context.function, "state", None)
-        if getattr(state, "mesh_stack", ()) and (
+        infer = context.lexical_scope.lookup(TYPE_INFER_CONTEXT)
+        if infer is not None and infer.parent is not None and (
             isinstance(value, types.Mesh)
             or isinstance(value, types.ShardLayout) and value.mesh is not None
         ):
@@ -773,7 +773,6 @@ class FunctionRole(StrEnum):
 class ParserState:
     """Mutable state owned by one Function parse."""
 
-    mesh_stack: list[object] = field(default_factory=list)
     mesh_coordinates: dict[tuple[int, int], object] = field(default_factory=dict)
     opened_mesh: bool = False
     unscoped_call: ast.AST | None = None

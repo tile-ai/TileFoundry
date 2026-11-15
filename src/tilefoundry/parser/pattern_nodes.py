@@ -2171,7 +2171,7 @@ class InlineMeshCallRule:
             value["callee"] is runtime.Mesh
             and not context.values.get("shard_layout_mesh", False)
             and context.function is not None
-            and context.function.state.mesh_stack
+            and authored_infer_context(context).parent is not None
         ):
             raise ParseError.from_node(
                 match.node, context, "open meshes with `with Mesh(...) as name`"
@@ -4000,7 +4000,6 @@ def finish_mesh_context(mesh, match, context):
     enter_mesh_scope(context, mesh, match)
     if isinstance(binding, str):
         context.lexical_scope.define_mesh(binding, mesh)
-    context.function.state.mesh_stack.append(mesh)
     return mesh
 
 
@@ -4453,7 +4452,7 @@ def enter_mesh_scope(context, mesh, match):
     context.lexical_scope.push_frame()
     context.lexical_scope.define(
         TYPE_INFER_CONTEXT,
-        dataclasses.replace(infer, current_mesh=entered_mesh),
+        dataclasses.replace(infer, current_mesh=entered_mesh, parent=infer),
     )
 
 
@@ -4676,11 +4675,6 @@ class WithPattern(ElementPattern):
         mesh = children["mesh"]
         frame = context.lexical_scope.pop_frame()
         frame.pop(match.captures["binding"], None)
-        if not context.function.state.mesh_stack:
-            raise ParseError.from_node(match.node, context, "Mesh stack is unbalanced")
-        active_mesh = context.function.state.mesh_stack.pop()
-        if active_mesh is not mesh:
-            raise ParseError.from_node(match.node, context, "Mesh stack is unbalanced")
         if context.function.dialect == "hir":
             body = children["body"]
             params = match.captures.get("region_params", ())
