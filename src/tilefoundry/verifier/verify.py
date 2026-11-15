@@ -429,6 +429,8 @@ class Visitor(core.StmtExprVisitor[None]):
         return None
 
     def visit_Evaluate(self, stmt, ctx):
+        if not isinstance(stmt.callable, core.FunctionRef):
+            self.visit_expr(stmt.callable, ctx)
         super().generic_visit(stmt, ctx)
         if isinstance(stmt.callable, tir.launch.Launch):
             verify_launch(stmt, self.function, ctx)
