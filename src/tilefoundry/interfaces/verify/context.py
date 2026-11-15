@@ -13,21 +13,10 @@ from tilefoundry.ir import expr, types
 class Context(typeinfer.TypeInferContext):
     """The context a per-stmt verify handler is annotated against.
 
-    The enclosing scope a handler asks about is the TIR ``mesh_scope``
-    tuple, set by whoever walks the statements
+    The enclosing scopes a handler asks about are the TIR ``MeshScope``
+    regions on its region chain: ``enclosing_meshes()`` and ``current_mesh``
     (see [tir §1.3](docs/spec/tir.md#13-primfunction)).
     """
-
-    mesh_scope: tuple = ()
-
-    def enter_scope(self, scope: typing.Iterable[types.Mesh]) -> None:
-        """Take *scope* as the enclosing mesh scope; the current mesh is its composition."""
-        self.mesh_scope = tuple(scope)
-        self.current_mesh = None
-        for mesh in self.mesh_scope:
-            self.current_mesh = (
-                types.Mesh.from_meshes(self.current_mesh, mesh) if self.current_mesh else mesh
-            )
 
     @typing.override
     def type_of(self, node: expr.Expr) -> types.Type:

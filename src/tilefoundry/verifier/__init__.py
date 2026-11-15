@@ -1,6 +1,6 @@
 """Whole-program verification of Functions, PrimFunctions and Modules."""
 
-from .checks import (
+from .verify import (
     input_params,
     reached_frames,
     verify_function,

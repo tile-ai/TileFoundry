@@ -38,25 +38,13 @@ class _OperandMatchVisitor(core.StmtVisitor[None]):
         self.matches: list[tuple[object, str, dict]] = []
 
     def visit_MeshScope(self, stmt: core.MeshScope, ctx=None) -> None:
-        previous = getattr(self, "meshes", ())
-        self.meshes = (*previous, stmt.mesh)
-        try:
-            self.visit(stmt.body, ctx)
-        finally:
-            self.meshes = previous
+        self.visit(stmt.body, ctx.enter_region(stmt))
 
     def visit_Evaluate(self, stmt: core.Evaluate, ctx=None) -> None:
         op = stmt.callable
         if expr.schema_of(type(op)) is None:
             return
-        meshes = getattr(self, "meshes", ())
-        mesh = types.Mesh.from_meshes(*meshes) if meshes else None
-        bindings, projection = schedule.check_call(
-            op,
-            stmt.args,
-            mesh,
-            frame=verify.Context(current_mesh=mesh, mesh_scope=meshes),
-        )
+        bindings, projection = schedule.check_call(op, stmt.args, ctx.current_mesh, frame=ctx)
         for param, declared in zip(projection.params, projection.patterns, strict=True):
             if declared is not None:
                 self.matches.append((op, param.name, dict(bindings)))
@@ -64,7 +52,7 @@ class _OperandMatchVisitor(core.StmtVisitor[None]):
 
 def _direct_operand_matches(function: core.PrimFunction) -> list[tuple[object, str, dict]]:
     visitor = _OperandMatchVisitor()
-    visitor.visit(function.body)
+    visitor.visit(function.body, verify.Context())
     return visitor.matches
 
 

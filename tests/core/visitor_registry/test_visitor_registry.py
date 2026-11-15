@@ -5,21 +5,25 @@ when nothing is registered for it.
 
 Every model run dispatches thousands of registered visits, so the positive path
 needs no separate witness. What a model cannot show is the shape of the *miss*:
-an unregistered structural Stmt must pass through, while an unregistered Op must
-raise rather than return a zero.
+a structural Stmt is checked without a registered rule, while an unregistered Op
+must raise rather than return a zero.
 """
-
-from __future__ import annotations
 
 import pytest
 
-from tilefoundry.interfaces import cost, evaluator, typeinfer, verify
+from tilefoundry import parser, verifier
+from tilefoundry.interfaces import cost, evaluator, typeinfer
 from tilefoundry.ir import core, expr, types
 from tilefoundry.ir.tir import memory
+from tilefoundry.passes import transforms
 
 
 def _t() -> types.TensorType:
     return types.TensorType.from_scalar(expr.DType.f32)
+
+
+def _i64() -> types.TensorType:
+    return types.TensorType.from_scalar(expr.DType.i64)
 
 
 def _is_builtin_hir_op(op_class: type[expr.Op]) -> bool:
@@ -58,7 +62,10 @@ def _copied(shape: tuple, layout=None) -> types.TensorType:
 @pytest.mark.parametrize(
     ("src", "dst"),
     [
-        pytest.param(_copied((4,)), _copied((8,)), id="plain_shapes_differ"),
+        pytest.param(
+            _copied((4,), types.Layout((4,), (1,))), _copied((8,), types.Layout((8,), (1,))),
+            id="plain_shapes_differ",
+        ),
         pytest.param(
             _copied((2, 4), _BUFFER), _copied((8,), _BUFFER),
             id="one_buffer_rows_onto_a_line",
@@ -69,23 +76,57 @@ def _copied(shape: tuple, layout=None) -> types.TensorType:
         ),
     ],
 )
-def test_verify_visitor_copy_evaluate_dispatch_and_unregistered_passthrough(src, dst) -> None:
+def test_verify_copy_evaluate_dispatch_and_structural_statements(src, dst) -> None:
     """Copy's declared SameShape rejects reshapes, including one per-thread buffer.
 
     The execution scope is valid, so rejection must come from the declaration,
     rather than an absent leaf verifier or an access-relation projection error.
-    Structural Return and LetStmt still traverse without a custom verifier.
+    Structural Return and LetStmt are checked without a custom verifier.
     """
     src_var, dst_var = expr.Var(type=src, name="src"), expr.Var(type=dst, name="dst")
-    stmt = core.Evaluate(callable=memory.Copy(), args=(src_var, dst_var))
-    ctx = verify.Context(current_mesh=_BUFFER.mesh, mesh_scope=(_BUFFER.mesh,))
+    copy = core.Evaluate(callable=memory.Copy(), args=(src_var, dst_var))
+    scope = core.MeshScope(_BUFFER.mesh, expr.Var(type=_i64(), name="t"), core.Sequential((copy,)))
+    function = core.PrimFunction(name="copy", params=(src_var, dst_var), body=core.Sequential((scope,)))
     with pytest.raises(expr.VerifyError, match=r"reads src.shape = dst.shape"):
-        verify.Visitor(ctx).visit(stmt)
+        verifier.verify_prim_function(function)
 
-    verify.Visitor(verify.Context()).visit(core.Return())
-    verify.Visitor(verify.Context()).visit(
-        core.LetStmt(
-            var=expr.Var(type=_t(), name="x"),
-            value=expr.Constant(type=_t(), value=1.0),
-        )
+    let = core.LetStmt(var=expr.Var(type=_t(), name="x"), value=expr.Constant(type=_t(), value=1.0))
+    verifier.verify_prim_function(
+        core.PrimFunction(name="structural", params=(), body=core.Sequential((let, core.Return())))
     )
+
+
+@parser.intrinsic
+def verifier_probe(value: expr.Expr) -> None:
+    """An intrinsic whose one Expr field the verifier reads like any other use."""
+
+
+def _probe_field(case: str, param: expr.Var) -> object:
+    if case == "visible":
+        return param
+    if case == "unbound":
+        return expr.Var(type=_t(), name="stray")
+    if case == "recipe":
+        return transforms.View(base=param, starts=(), sizes=(), type=_t())
+    return expr.Call(type=_t(), target=memory.AllocTensor(tensor_type=_t()), args=())
+
+
+@pytest.mark.parametrize(
+    ("case", "refusal"),
+    [
+        ("visible", None),
+        ("unbound", r"stray is used outside the scope that binds it"),
+        ("recipe", r"non-IR node View in VerifierProbe"),
+        ("alloc", r"Call\(AllocTensor, \.\.\.\) may only appear as a direct LetStmt.value"),
+    ],
+)
+def test_intrinsic_fields_are_verified_as_uses(case, refusal) -> None:
+    """An intrinsic statement's Expr fields meet the same use rules as any statement's."""
+    param = expr.Var(type=_t(), name="x")
+    probe = verifier_probe(value=_probe_field(case, param))
+    function = core.PrimFunction(name="probe", params=(param,), body=core.Sequential((probe,)))
+    if refusal is None:
+        verifier.verify_prim_function(function)
+        return
+    with pytest.raises(expr.VerifyError, match=refusal):
+        verifier.verify_prim_function(function)

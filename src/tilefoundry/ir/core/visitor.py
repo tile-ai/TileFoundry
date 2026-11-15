@@ -9,6 +9,7 @@ See [tir §2](docs/spec/tir.md#2-tir-expr-and-callable-constructs).
 
 from __future__ import annotations
 
+import dataclasses
 import typing
 from collections.abc import Mapping
 from dataclasses import replace
@@ -41,6 +42,7 @@ __all__ = [
     "ExprCloner",
     "BindingSubstitutionCloner",
     "expr_children",
+    "stmt_expr_fields",
     "function_values",
     "StmtVisitor",
     "StmtExprVisitor",
@@ -165,8 +167,9 @@ def stmt_expr_fields(stmt: Stmt) -> tuple[str, ...]:
 
     Names of Expr-typed fields on `stmt`. StmtExprVisitor and StmtExprMutator
     use this to read or rewrite the Expr subtrees embedded inside a Stmt.
-    Var-binding fields (For.induction_var, LetStmt.var, MeshScope.binding) are intentionally
-    excluded — a rewrite must not turn a binding site into a non-Var.
+    Var-binding fields (For.induction_var, LetStmt.var, MeshScope.binding) are
+    intentionally excluded. Another Stmt, such as an intrinsic, names the fields
+    it declares as Expr, whatever value they hold.
     """
     match stmt:
         case LetStmt():
@@ -179,9 +182,15 @@ def stmt_expr_fields(stmt: Stmt) -> tuple[str, ...]:
             return ("callable", "args")
         case Evaluate():
             return ("args",)
-
-        case _:
+        case Sequential() | PrimFunction() | MeshScope() | Return():
             return ()
+        case _:
+            return tuple(
+                field.name
+                for field in dataclasses.fields(stmt)
+                if field.type in (expr.Expr, "Expr", "expr.Expr")
+                or isinstance(getattr(stmt, field.name), expr.Expr)
+            )
 
 
 class TypeFunctor[T]:

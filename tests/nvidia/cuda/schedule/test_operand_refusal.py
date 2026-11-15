@@ -12,7 +12,7 @@ from tests.nvidia.cuda.schedule._support import (
     entry_function,
 )
 from tilefoundry import cli, inspection
-from tilefoundry.interfaces import schedule
+from tilefoundry.interfaces import schedule, verify
 from tilefoundry.ir import core, expr, pattern
 from tilefoundry_nvidia.cuda.ir.tir import nn
 
@@ -73,5 +73,5 @@ def test_wgmma_stride_refusal_names_position(
             self.rejected = True
 
     visitor = RejectOne()
-    visitor.visit(function.body)
+    visitor.visit(function.body, verify.Context())
     assert visitor.rejected

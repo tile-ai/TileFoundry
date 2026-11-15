@@ -6,7 +6,6 @@ The checked rule set is defined by
 
 from __future__ import annotations
 
-import dataclasses
 from contextlib import ExitStack, contextmanager
 
 from tilefoundry import services, utils
@@ -188,7 +187,7 @@ def collect_param_dim_vars(fn: core.Function) -> dict[str, tuple[int, int]]:
     return bounds
 
 
-def check_signature_dim_var_consistency(fn: core.Function) -> None:
+def verify_signature_dim_var_consistency(fn: core.Function) -> None:
     """Scan params + return_type for same-name ``DimVar`` consistency.
 
     Recurses through ``TensorType`` and ``TupleType``. Raises on any
@@ -202,7 +201,7 @@ def check_signature_dim_var_consistency(fn: core.Function) -> None:
 
 def verify_signature_dim_vars(fn: core.Function) -> None:
 
-    check_signature_dim_var_consistency(fn)
+    verify_signature_dim_var_consistency(fn)
     param_bounds = collect_param_dim_vars(fn)
     for pat in fn.specializations:
         if not isinstance(pat, pattern.Range):
@@ -264,7 +263,7 @@ def verify_prim_function(fn: core.PrimFunction, *, frame: valuation.Context | No
     """
     for param in fn.params:
         verify_value_layouts(param)
-    check_param_homogeneity(fn)
+    verify_param_homogeneity(fn)
     for variant in fn.variants:
         if len(variant.specializations) != 1 or not isinstance(
             variant.specializations[0], pattern.Range
@@ -283,10 +282,10 @@ def verify_prim_function(fn: core.PrimFunction, *, frame: valuation.Context | No
         ctx = verify.Context(
             module=frame.module, function=fn, target=frame.target, topologies=frame.topologies
         )
-    walk_stmt(fn.body, ctx, [], fn, Binders(fn.params))
+    Visitor(fn).visit(fn.body, ctx)
 
 
-def check_param_homogeneity(fn: core.PrimFunction) -> None:
+def verify_param_homogeneity(fn: core.PrimFunction) -> None:
     """Param homogeneity ([tir §1.3](docs/spec/tir.md#13-primfunction)).
 
     Param homogeneity ([tir §1.3](docs/spec/tir.md#13-primfunction)): all params' layouts must be
@@ -305,191 +304,170 @@ def check_param_homogeneity(fn: core.PrimFunction) -> None:
         )
 
 
-class Binders:
-    def __init__(self, params):
-        self.visible = {id(param) for param in params}
-        self.ever_bound = set(self.visible)
+class Visitor(core.StmtExprVisitor[None]):
+    """The rules of one PrimFunction body ([tir §1.3](docs/spec/tir.md#13-primfunction)).
 
-    def uses(self, value, stmt):
-        if isinstance(value, expr.Var):
-            if id(value) not in self.visible:
-                raise expr.VerifyError(f"{value.name} is used outside the scope that binds it")
-        elif isinstance(value, (expr.Op, core.FunctionRef)):
-            return
-        elif isinstance(value, expr.Call):
-            self.uses((value.target, value.args), stmt)
-        elif isinstance(value, (expr.Expr, tuple, list)):
-            children = value if isinstance(value, (tuple, list)) else core.expr_children(value)
-            for child in children:
-                self.uses(child, stmt)
-        else:
-            raise expr.VerifyError(f"non-IR node {type(value).__name__} in {type(stmt).__name__}")
+    The ctx carries where a statement stands; this visitor carries which Vars
+    are visible, which were ever bound, and which value may be an AllocTensor.
+    """
+
+    def __init__(self, function: core.PrimFunction) -> None:
+        self.function = function
+        self.visible = {id(param) for param in function.params}
+        self.bound = set(self.visible)
+        self.stmt = None
+        self.let_value = None
+
+    def visit(self, stmt, ctx=None):
+        outer, self.stmt = self.stmt, stmt
+        try:
+            return super().visit(stmt, ctx)
+        finally:
+            self.stmt = outer
+
+    def visit_expr(self, node, ctx=None):
+        if isinstance(node, expr.Op):
+            return None
+        if not isinstance(node, expr.Expr):
+            raise expr.VerifyError(f"non-IR node {type(node).__name__} in {type(self.stmt).__name__}")
+        return super().visit_expr(node, ctx)
 
     @contextmanager
     def bind(self, var, stmt):
-        if id(var) in self.ever_bound:
+        if id(var) in self.bound:
             raise expr.VerifyError(
                 f"{type(stmt).__name__} binding {var.name!r}: "
                 f"{utils.spec_ref_render(PRIM_FUNCTION)} var must be a fresh Var; this Var "
                 "is already bound in an outer scope"
             )
-        self.ever_bound.add(id(var))
+        self.bound.add(id(var))
         self.visible.add(id(var))
         try:
             yield
         finally:
             self.visible.remove(id(var))
 
+    def generic_visit(self, stmt, ctx=None):
+        """A statement without a built-in method, such as an intrinsic, is a registered leaf.
 
-def walk_stmt(stmt, ctx, scope, fn, binders: Binders):
-    for _, value in iter_stmt_expr_fields(stmt):
-        if isinstance(value, expr.Expr):
+        Each of its Expr fields is visited as a use; an Op value is a permitted
+        leaf with no layout.
+        """
+        handler = verify.registry.get(type(stmt), None)
+        if handler is None:
+            raise expr.VerifyError(f"no verify_stmt registered for {type(stmt).__name__}")
+        handler(stmt, ctx)
+        for name in core.stmt_expr_fields(stmt):
+            value = getattr(stmt, name)
+            self.visit_expr(value, ctx)
+            if isinstance(value, expr.Expr):
+                verify_value_layouts(value)
+
+    def visit_Sequential(self, stmt, ctx):
+        with ExitStack() as bound:
+            for child in stmt.body:
+                self.visit(child, ctx)
+                if isinstance(child, core.LetStmt):
+                    bound.enter_context(self.bind(child.var, child))
+
+    def visit_LetStmt(self, stmt, ctx):
+        outer, self.let_value = self.let_value, stmt.value
+        try:
+            self.visit_expr(stmt.value, ctx)
+        finally:
+            self.let_value = outer
+        verify_value_layouts(stmt.var)
+        verify_value_layouts(stmt.value)
+        value_ty = ctx.type_of(stmt.value)
+        if stmt.var.type != value_ty:
+            raise expr.VerifyError(
+                f"LetStmt binding {stmt.var.name!r}: var.type {stmt.var.type} "
+                f"!= value.type {value_ty}"
+            )
+
+    def visit_For(self, stmt, ctx):
+        bounds = (("start", stmt.start), ("stop", stmt.stop), ("step", stmt.step))
+        for _, bound in bounds:
+            self.visit_expr(bound, ctx)
+        for value in (stmt.induction_var, stmt.start, stmt.stop, stmt.step):
             verify_value_layouts(value)
-    match stmt:
-        case core.Sequential():
-            with ExitStack() as bound:
-                for s in stmt.body:
-                    walk_stmt(s, ctx, scope, fn, binders)
-                    if isinstance(s, core.LetStmt):
-                        bound.enter_context(binders.bind(s.var, s))
-            return
-        case core.LetStmt():
-            binders.uses(stmt.value, stmt)
-            value_ty = ctx.type_of(stmt.value)
-            if stmt.var.type != value_ty:
-                raise expr.VerifyError(
-                    f"LetStmt binding {stmt.var.name!r}: var.type {stmt.var.type} "
-                    f"!= value.type {value_ty}"
-                )
+        for field, bound in bounds:
+            verify_rank0_int(ctx, stmt, bound, f"For.{field}")
+        for field, bound in bounds:
+            verify_bound_coordinates(field, bound, ctx)
+        if isinstance(stmt.step, expr.Constant) and stmt.step.value == 0:
+            raise expr.VerifyError("For.step must not be 0")
+        iv_ty = stmt.induction_var.type
+        if not (
+            isinstance(iv_ty, types.TensorType)
+            and iv_ty.shape == ()
+            and iv_ty.dtype in (expr.DType.i32, expr.DType.i64)
+        ):
+            raise expr.VerifyError("For.induction_var must be rank-0 integer")
+        with self.bind(stmt.induction_var, stmt):
+            self.visit(stmt.body, ctx.enter_region(stmt))
 
-            reject_nested_alloc_tensor(stmt.value, at_letstmt_value=True)
-            check_embedded_sharding(stmt.value, scope, fn)
-            return
-        case core.For():
-            binders.uses((stmt.start, stmt.stop, stmt.step), stmt)
-            check_rank0_int(ctx, stmt, stmt.start, "For.start")
-            check_rank0_int(ctx, stmt, stmt.stop, "For.stop")
-            check_rank0_int(ctx, stmt, stmt.step, "For.step")
-            for field, bound in (
-                ("start", stmt.start),
-                ("stop", stmt.stop),
-                ("step", stmt.step),
-            ):
-                check_bound_coordinates(field, bound, scope)
-            if isinstance(stmt.step, expr.Constant) and stmt.step.value == 0:
-                raise expr.VerifyError("For.step must not be 0")
-            iv_ty = stmt.induction_var.type
-            if not (
-                isinstance(iv_ty, types.TensorType)
-                and iv_ty.shape == ()
-                and iv_ty.dtype in (expr.DType.i32, expr.DType.i64)
-            ):
-                raise expr.VerifyError("For.induction_var must be rank-0 integer")
-            with binders.bind(stmt.induction_var, stmt):
-                walk_stmt(stmt.body, ctx, scope, fn, binders)
-            return
-        case core.While():
-            binders.uses(stmt.cond, stmt)
-            check_rank0_bool(ctx, stmt, stmt.cond)
-            walk_stmt(stmt.body, ctx, scope, fn, binders)
-            return
-        case core.If():
-            binders.uses(stmt.cond, stmt)
-            check_rank0_bool(ctx, stmt, stmt.cond)
-            walk_stmt(stmt.then_body, ctx, scope, fn, binders)
-            walk_stmt(stmt.else_body, ctx, scope, fn, binders)
-            return
-        case core.MeshScope():
-            scope.append(stmt.mesh)
-            with binders.bind(stmt.binding, stmt):
-                walk_stmt(stmt.body, ctx, scope, fn, binders)
-            scope.pop()
-            return
-        case core.Return():
-            for _, value in iter_stmt_expr_fields(stmt):
-                binders.uses(value, stmt)
-            return
-        case core.Evaluate():
-            binders.uses((stmt.callable, stmt.args), stmt)
-            if isinstance(stmt.callable, tir.launch.Launch):
-                verify_launch(stmt, fn, ctx)
-            elif isinstance(stmt.callable, core.FunctionRef):
-                verify_function_call(stmt, fn, ctx)
-            else:
-                op = stmt.callable
-                ctx.enter_scope(scope)
-                services.verify_call(op, stmt.args, ctx.current_mesh, frame=ctx)
+    def visit_While(self, stmt, ctx):
+        self.visit_expr(stmt.cond, ctx)
+        verify_value_layouts(stmt.cond)
+        verify_rank0_bool(ctx, stmt, stmt.cond)
+        self.visit(stmt.body, ctx)
 
-            for arg in stmt.args:
-                reject_nested_alloc_tensor(arg, at_letstmt_value=False)
-                check_embedded_sharding(arg, scope, fn)
-            return
+    def visit_If(self, stmt, ctx):
+        self.visit_expr(stmt.cond, ctx)
+        verify_value_layouts(stmt.cond)
+        verify_rank0_bool(ctx, stmt, stmt.cond)
+        self.visit(stmt.then_body, ctx)
+        self.visit(stmt.else_body, ctx)
 
-    fn_verify = verify.registry.get(type(stmt), None)
-    if fn_verify is None:
-        raise expr.VerifyError(f"no verify_stmt registered for {type(stmt).__name__}")
-    fn_verify(stmt, ctx)
-    for field_name, field_val in iter_stmt_expr_fields(stmt):
-        binders.uses(field_val, stmt)
-        reject_nested_alloc_tensor(field_val, at_letstmt_value=False)
-        check_embedded_sharding(field_val, scope, fn)
+    def visit_MeshScope(self, stmt, ctx):
+        verify_value_layouts(stmt.binding)
+        with self.bind(stmt.binding, stmt):
+            self.visit(stmt.body, ctx.enter_region(stmt))
+
+    def visit_Return(self, stmt, ctx):
+        return None
+
+    def visit_Evaluate(self, stmt, ctx):
+        super().generic_visit(stmt, ctx)
+        if isinstance(stmt.callable, tir.launch.Launch):
+            verify_launch(stmt, self.function, ctx)
+        elif isinstance(stmt.callable, core.FunctionRef):
+            verify_value_layouts(stmt.callable)
+            verify_function_call(stmt, self.function, ctx)
+        else:
+            services.verify_call(stmt.callable, stmt.args, ctx.current_mesh, frame=ctx)
+
+    def visit_Var(self, var, ctx):
+        if id(var) not in self.visible:
+            raise expr.VerifyError(f"{var.name} is used outside the scope that binds it")
+
+    def visit_Call(self, call, ctx):
+        if isinstance(call.target, memory.AllocTensor) and call is not self.let_value:
+            raise expr.VerifyError(
+                f"{utils.spec_ref_render(PRIM_FUNCTION)}: Call(AllocTensor, ...) may only appear "
+                f"as a direct LetStmt.value; found nested inside another Expr"
+            )
+        for _, attr in iter_op_attrs(call.target):
+            if isinstance(attr, types.ShardLayout):
+                assert_mesh_in_scope(attr.mesh, ctx, self.function)
+        self.visit_expr(call.target, ctx)
+        self.expr_generic_visit(call, ctx)
 
 
-def iter_stmt_expr_fields(stmt):
-    if not dataclasses.is_dataclass(stmt):
-        return
-    for f in dataclasses.fields(stmt):
-        val = getattr(stmt, f.name)
-        if f.type in (expr.Expr, "Expr") or isinstance(val, expr.Expr):
-            yield f.name, val
-
-
-def check_rank0_int(ctx, stmt, node, field: str):
+def verify_rank0_int(ctx, stmt, node, field: str):
     t = ctx.type_of(node)
     if not (isinstance(t, types.TensorType) and t.shape == () and t.dtype in (expr.DType.i32, expr.DType.i64)):
         raise expr.VerifyError(f"{field} must be rank-0 integer, got {t}")
 
 
-def check_rank0_bool(ctx, stmt, node):
+def verify_rank0_bool(ctx, stmt, node):
     t = ctx.type_of(node)
     if not (isinstance(t, types.TensorType) and t.shape == () and t.dtype == expr.DType.bool):
         raise expr.VerifyError(f"condition must be rank-0 bool, got {t}")
 
 
-class AllocTensorRejectingVisitor(core.ExprVisitor[None]):
-    def __init__(self, *, at_letstmt_value: bool) -> None:
-        super().__init__()
-        self.at_letstmt_value = at_letstmt_value
-
-    def visit_Call(self, node: expr.Call, ctx=None) -> None:
-        if isinstance(node.target, memory.AllocTensor):
-            if not self.at_letstmt_value:
-                raise expr.VerifyError(
-                    f"{utils.spec_ref_render(PRIM_FUNCTION)}: Call(AllocTensor, ...) may only appear "
-                    f"as a direct LetStmt.value; found nested inside another Expr"
-                )
-            self.at_letstmt_value = False
-            self.visit_operands(node, ctx)
-            return
-        self.at_letstmt_value = False
-        self.visit_operands(node, ctx)
-
-    def default_visit(self, node, ctx=None) -> None:
-        return None
-
-
-def reject_nested_alloc_tensor(node: expr.Expr, *, at_letstmt_value: bool) -> None:
-    """Reject an ``AllocTensor`` call nested outside a ``LetStmt`` value.
-
-    ``Call(AllocTensor, ...)`` may appear only as ``LetStmt.value``.
-
-    See [tir §1.3](docs/spec/tir.md#13-primfunction).
-    """
-    visitor = AllocTensorRejectingVisitor(at_letstmt_value=at_letstmt_value)
-    visitor.visit(node)
-
-
-def check_bound_coordinates(field: str, bound, scope) -> None:
+def verify_bound_coordinates(field: str, bound, ctx) -> None:
     """Hold a loop bound's mesh coordinates to the scopes around the loop.
 
     A coordinate is a coordinate of one scope, read through that scope's
@@ -504,26 +482,10 @@ def check_bound_coordinates(field: str, bound, scope) -> None:
         rank = len(types.flatten(mesh.layout).shape)
         if axes is None or not all(0 <= axis < rank for axis in axes):
             raise expr.VerifyError(f"For.{field} reads axes {axes!r} of a mesh of rank {rank}")
-        if not any(held is mesh or held == mesh for held in scope):
+        if not any(held is mesh or held == mesh for held in ctx.enclosing_meshes()):
             raise expr.VerifyError(
                 f"For.{field} reads a coordinate of {mesh!r}, which no enclosing MeshScope binds"
             )
-
-
-def check_embedded_sharding(node: expr.Expr, scope, fn):
-    """Require embedded shard layouts to use a scoped or parameter mesh.
-
-    See [tir §1.3](docs/spec/tir.md#13-primfunction).
-    """
-    to_visit = [node]
-    while to_visit:
-        e = to_visit.pop()
-        if isinstance(e, expr.Call):
-            op = e.target
-            for attr_name, attr_val in iter_op_attrs(op):
-                if isinstance(attr_val, types.ShardLayout):
-                    assert_mesh_in_scope(attr_val.mesh, scope, fn)
-            to_visit.extend(e.args)
 
 
 def iter_op_attrs(op):
@@ -532,7 +494,8 @@ def iter_op_attrs(op):
             yield info.name, getattr(op, info.name, None)
 
 
-def assert_mesh_in_scope(mesh: types.Mesh, scope, fn):
+def assert_mesh_in_scope(mesh: types.Mesh, ctx, fn):
+    scope = ctx.enclosing_meshes()
     if any(mesh == m for m in scope) or (scope and mesh == types.Mesh.from_meshes(*scope)):
         return
     for p in fn.params:
@@ -755,32 +718,31 @@ def function_references(function):
         if body is None:
             continue
         if isinstance(function, core.PrimFunction):
-            for stmt in iter_all_stmts(body):
-                if not isinstance(stmt, core.Evaluate):
-                    continue
-                if isinstance(stmt.callable, core.FunctionRef):
-                    yield stmt.callable
-                elif isinstance(stmt.callable, tir.launch.Launch):
-                    yield stmt.args[0]
+            found = References()
+            found.visit(body)
+            yield from found.refs
             continue
         for node in core.collect_exprs(body):
             if isinstance(node, expr.Call) and isinstance(node.target, core.FunctionRef):
                 yield node.target
 
 
-def iter_all_stmts(body):
-    """Yield every Stmt reachable from a Sequential / any Stmt tree."""
-    stack = [body]
-    while stack:
-        s = stack.pop()
-        yield s
-        if isinstance(s, core.Sequential):
-            stack.extend(s.body)
-        elif isinstance(s, (core.For, core.While, core.MeshScope)):
-            stack.append(s.body)
-        elif isinstance(s, core.If):
-            stack.append(s.then_body)
-            stack.append(s.else_body)
+class References(core.StmtVisitor[None]):
+    """Each TIR callee: the callable of an Evaluate, or the first operand of a Launch."""
+
+    def __init__(self):
+        self.refs = []
+
+    def generic_visit(self, stmt, ctx=None):
+        """Enter control flow only; a custom leaf, such as an intrinsic, names no callee."""
+        if isinstance(stmt, (core.Sequential, core.For, core.While, core.If, core.MeshScope)):
+            super().generic_visit(stmt, ctx)
+
+    def visit_Evaluate(self, stmt, ctx=None):
+        if isinstance(stmt.callable, core.FunctionRef):
+            self.refs.append(stmt.callable)
+        elif isinstance(stmt.callable, tir.launch.Launch):
+            self.refs.append(stmt.args[0])
 
 
 def verify_module(fns) -> None:

@@ -250,7 +250,8 @@ when needed:
 | `Return` | (none — `@prim_func` has no value return) |
 | `Evaluate` with `callable` a `FunctionRef` | `callable`, `args` |
 | `Evaluate` with `callable` an `Op` (not an Expr) | `args` |
-| `MeshScope` / `Sequential` | (none) |
+| `MeshScope` / `Sequential` / `PrimFunction` | (none) |
+| any other Stmt, such as an `@intrinsic` | each dataclass field declared `Expr`, or holding an `Expr`, whatever value it holds |
 
 `α-renaming` and similar `Var`-rewriting passes use `StmtMutator` directly.
 
@@ -271,14 +272,15 @@ position, instead of `Evaluate(op, args)`, is malformed IR
 
 - Public exports of `ir.core`: `TypeFunctor`, `ExprVisitor`, `ExprWalker`,
   `ExprCollector`, `collect_exprs`, `ExprCloner`, `BindingSubstitutionCloner`,
-  `expr_children`, `function_values`, `StmtVisitor`, `StmtExprVisitor`,
+  `expr_children`, `stmt_expr_fields`, `function_values`, `StmtVisitor`, `StmtExprVisitor`,
   `StmtMutator`, `StmtExprMutator`, `walk_prim_function`,
   `rewrite_prim_function`.
 - They live in `ir/core/visitor.py`; `expr.Functor` / `expr.Visitor` live in
   `ir/expr/visitor.py`. The child-enumeration / rebuild tables (`expr_children`,
   `rebuild_expr`, `stmt_children`, `rebuild_stmt_children`, `stmt_expr_fields`,
-  `rewrite_stmt_exprs`) are in `ir/core/visitor.py`; only `expr_children` is
-  exported. A new Expr or Stmt subclass extends those tables in this one file.
+  `rewrite_stmt_exprs`) are in `ir/core/visitor.py`; `expr_children` and
+  `stmt_expr_fields` are exported. `stmt_children` still rejects a Stmt it does
+  not list, so the generic Stmt traversals do not enter one. A new Expr or Stmt subclass extends those tables in this one file.
 
 ## 9. PrimFunction helpers
 
