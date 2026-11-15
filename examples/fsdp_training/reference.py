@@ -66,15 +66,16 @@ class Reference(nn.Module):
         return F.linear(F.rms_norm(x, (C,), eps=EPS), self.weights[-1])
 
 
-def check_training(function, *, steps=2, seed=183):
+def check_training(module, *, steps=2, seed=183):
     """Check gradients and state over changing batches against dense training.
 
     Require every reference parameter gradient to be nonzero on each update.
     Random nonzero projections expose each backward path from the first step.
     """
     from tilefoundry.interfaces.evaluator import evaluate
+    from tilefoundry.runtime import DictResource
 
-    token_count = int(function.params[0].type.shape[0])
+    token_count = int(module.entry_function().params[0].type.shape[0])
     batch = token_count // T
     model = Reference(seed)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
@@ -90,7 +91,7 @@ def check_training(function, *, steps=2, seed=183):
         loss = F.cross_entropy(logits.reshape(token_count, V), targets.reshape(token_count))
         loss.backward()
         before = tuple(p.clone() for p in (*weights, *momentum))
-        actual = evaluate(function, *fixed_inputs(tokens, targets), *weights, *momentum)
+        actual = evaluate(module.load(DictResource({})), *fixed_inputs(tokens, targets), *weights, *momentum)
         for old, current in zip(before, (*weights, *momentum), strict=True):
             assert torch.equal(old, current), "HIR evaluation mutated its inputs"
         expected_gradients = tuple(p.grad.clone() for p in model.weights)
