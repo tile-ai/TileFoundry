@@ -82,12 +82,12 @@ class WgmmaPartialWarpgroups(SyncCase):
         issuing = []
 
         class IssuingScopes(core.StmtVisitor):
-            def visit_MeshScope(self, stmt):
+            def visit_MeshScope(self, stmt, ctx=None):
                 if isinstance(stmt.body, core.Sequential):
                     kinds = [type(s.callable) for s in stmt.body.body if isinstance(s, core.Evaluate)]
                     if nn.TiledMma in kinds:
                         issuing.append(kinds)
-                self.generic_visit(stmt)
+                self.generic_visit(stmt, ctx)
 
         IssuingScopes().visit(finalize(result).lookup(result.function.name).body)
         (kinds,) = issuing

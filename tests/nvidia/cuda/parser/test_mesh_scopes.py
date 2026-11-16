@@ -69,6 +69,16 @@ class ValuefulRegionEscape(MeshScopeCase):
         assert isinstance(scoped.body.body, expr.Call)
 
 
+@case
+class RootMeshWithoutWith(MeshScopeCase):
+    """A function mesh opens no with: a Mesh value and an external layout stay legal."""
+
+    path: Path = PARSER / "root_mesh_without_with.py"
+
+    def guard(self, state, problems):
+        assert isinstance(state.entry_function().body, core.MeshRegion)
+
+
 CASES = special(MeshScopeCase)
 
 

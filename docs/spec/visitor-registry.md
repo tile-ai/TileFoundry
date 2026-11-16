@@ -29,12 +29,13 @@ flowchart LR
     subgraph framework["visitor-mutator"]
         ExprVis["<b>ExprVisitor[T]</b>"]
         StmtVis["<b>StmtVisitor[T]</b>"]
+        StmtExprVis["<b>StmtExprVisitor[T]</b>"]
     end
 
     subgraph registry["visitor-registry"]
         Reg["<b>Registry</b>"]
         TypeVis["<b>TypeInferVisitor</b>"]
-        VerifyVis["<b>verify.Visitor</b>"]
+        VerifyVis["<b>verifier Visitor</b>"]
         CodegenVis["<b>codegen.Visitor</b>"]
         CostVis["<b>cost.Visitor</b>"]
         TICtx["<b>TypeInferContext</b>"]
@@ -43,7 +44,7 @@ flowchart LR
     end
 
     ExprVis --> TypeVis
-    StmtVis --> VerifyVis
+    StmtExprVis --> VerifyVis
     StmtVis --> CodegenVis
     ExprVis --> CodegenVis
     ExprVis --> CostVis
@@ -71,17 +72,18 @@ to find the per-class handler and call it). A walk follows one template:
 ### 1.1 Registry is not a property of `StmtVisitor` / `ExprVisitor`
 
 `StmtVisitor` / `ExprVisitor` are pure traversal scaffolds
-([visitor-mutator §5](./visitor-mutator.md#5-stmtvisitort--stmtmutator)) and
+([visitor-mutator §5](./visitor-mutator.md#5-stmtvisitort--stmtexprvisitort--stmtmutator)) and
 know nothing about any registry. "A `Stmt` subclass consults `verify.registry`"
-is wired into `verify.Visitor` ([§5](#5-instance-2--verify)) explicitly.
+is wired into the verifier's program visitor ([§5](#5-instance-2--verify))
+explicitly.
 
 `verify.register(Fill)` writes an optional leaf handler into
-`verify.registry`. For effect Ops, `verify.Visitor.generic_visit` and the
-whole-function walker both delegate device instructions to the `verify_call`
-service, whose implementation (`check_call` in `interfaces/schedule`) reads
-`verify.registry` after checking the operation's declaration. The visitor's
-injected registry handles structural Stmts; it does not replace effect-call
-admission.
+`verify.registry`. For effect Ops, the verifier's `visit_Evaluate` delegates
+device instructions to the `verify_call` service, whose implementation
+(`check_call` in `interfaces/schedule`) reads `verify.registry` after checking
+the operation's declaration. A Stmt subclass without a dedicated method of that
+visitor is checked by its `verify.registry` entry; this does not replace
+effect-call admission.
 
 ### 1.2 Two ways to write a visitor
 
@@ -121,8 +123,9 @@ class alongside the other two things the answer depends on
 
 Generic control-flow / binding Stmts (`For` / `If` / `While` / `LetStmt` /
 `Sequential` / `MeshScope` / `Return`) are recursed by the visitor base's
-`generic_visit`; `verify.Visitor` additionally tries its registry and recurses on
-a miss ([§5](#5-instance-2--verify)). Their semantic rules are owned by
+`generic_visit`; the verifier's program visitor has a dedicated method for each
+of them and `Evaluate`, and requires a registry entry for any other Stmt
+([§5](#5-instance-2--verify)). Their semantic rules are owned by
 [tir](./tir.md) / [hir](./hir.md).
 
 ## 3. `Registry`
@@ -159,7 +162,7 @@ class Registry[Key, Value]:
     registry and the whole key; a caller for which a miss is an error MUST use
     it. `get` takes its default as a required argument, so a legal miss states
     its answer where it is asked. There is no implicit `None`:
-    `verify.Visitor` and `cost.Visitor` take `get`, and a typeinfer or evaluator
+    the verifier's visitor and `cost.Visitor` take `get`, and a typeinfer or evaluator
     miss reaches `ctx.error` or `EvalError` naming the Op.
 
 ### 3.1 Registry instances
@@ -282,7 +285,7 @@ class Context:
     loops: tuple[tuple[Expr, object, object, object], ...] = ()
     loop_aliases: dict[int, Expr] = field(default_factory=dict)
     call_site: Call | None = None
-    owner: Expr | None = None
+    owner: Expr | Stmt | None = None
     parent: valuation.Context | None = None
 
     def with_captures(self, captures) -> valuation.Context: ...
@@ -292,6 +295,9 @@ class Context:
     def callee(self) -> Function | PrimFunction | None: ...
     def callee_context(self, call: Call | None = None) -> valuation.Context | None: ...
     def capture_root(self, expr: Expr) -> Expr: ...
+    def ancestors(self) -> Iterator[valuation.Context]: ...
+    def enclosing_meshes(self) -> tuple[Mesh, ...]: ...
+    def enclosing_mesh(self) -> Mesh | None: ...
     def resolve_target(self) -> Target | None: ...
 
 
@@ -325,6 +331,20 @@ A Call remains in its caller environment; visiting its operands does not enter
 the callee body. Type inference seeds fresh type bindings when it analyzes a
 called definition.
 Lexical parent links and caller links MUST remain distinct.
+
+- constraints:
+  - `enter_region` returns a context whose `owner` is the region and whose
+    `parent` is the outer context. An HIR `LoopRegion` or `MeshRegion` records
+    its captures; a `LoopRegion` appends to `loops`. A `MeshRegion` or TIR
+    `MeshScope` composes its mesh into `current_mesh`. A TIR `For` only enters
+    the lexical region chain: `loops`, `loop_aliases`, and `current_mesh` stay
+    unchanged.
+  - `ancestors()` yields contexts from the innermost to the definition root.
+    `enclosing_meshes()` returns the mesh of each `MeshRegion` or `MeshScope`
+    owner in that chain, outermost first. When the chain has none, it returns
+    `(current_mesh,)`, the definition's external mesh, or `()` when that is
+    `None`; an authored mesh is not prefixed with the external one.
+    `enclosing_mesh()` is the last element of `enclosing_meshes()`, or `None`.
 
 `valuation.Context` carries the current Module, function, effective target, and
 whole topology hierarchy directly. A shared definition carries no parent or
@@ -388,12 +408,11 @@ Visitor:
 
 `TypeInferVisitor` and `inference_type` live in
 `tilefoundry.interfaces.typeinfer`, beside shard propagation. Each other
-visitor lives beside its registry: `verify.Visitor` in
-`tilefoundry.interfaces.verify`, `cost.Visitor` in
+visitor lives beside its registry: `cost.Visitor` in
 `tilefoundry.interfaces.cost`, and `codegen.Visitor` in
-`tilefoundry.codegen.visitor`. The HIR/TIR whole-program verification entry
-points are not an interface: they live in `tilefoundry.verifier`
-([§5](#5-instance-2--verify)).
+`tilefoundry.codegen.visitor`. The verifier's program visitor and the HIR/TIR
+whole-program verification entry points are not an interface: they live in
+`tilefoundry.verifier` ([§5](#5-instance-2--verify)).
 
 ```python
 class TypeInferVisitor(valuation.Visitor[Type]):
@@ -582,26 +601,23 @@ def aliased_operand(call: Call) -> int | None: ...
 
 ## 5. Instance 2 — `verify`
 
-Context, in `tilefoundry.interfaces.verify` (extends `TypeInferContext` with the TIR traversal scope cache):
+Context, in `tilefoundry.interfaces.verify` (extends `TypeInferContext`; adds no
+field):
 
 ```python
 # tilefoundry.interfaces.verify
 @dataclass
-class Context(TypeInferContext):   # inherits current_mesh
-    """TIR verification context with its statement-walk scope cache.
-
-    Attributes:
-        mesh_scope: attribute; active TIR mesh-scope tuple maintained during
-            the verification walk.
-    """
-
-    mesh_scope: tuple = ()
+class Context(TypeInferContext):   # inherits current_mesh and the region chain
+    """The context a per-stmt verify handler is annotated against."""
 ```
 
 - constraints:
-  - `current_mesh` is the HIR execution region used by type inference and is a
-    single composed `Mesh | None` value. TIR verification uses the independent
-    `mesh_scope` tuple as a traversal cache; it MUST NOT write the HIR field.
+  - Where a statement stands is the shared region chain
+    ([§4](#4-instance-1--typeinfer)): the verifier enters each TIR `MeshScope`
+    and `For` with `enter_region`. A handler reads the composed
+    `current_mesh`, each enclosing mesh through `enclosing_meshes()`, or the
+    innermost through `enclosing_mesh()`. A context built without a region
+    chain answers `(current_mesh,)`.
 
 Registry + registration function, both exported by `tilefoundry.interfaces.verify`:
 
@@ -619,13 +635,12 @@ verify.register: Callable[[type], Callable[[Callable], Callable]]   # the regist
 `TiledMma`) appear in
 Stmt position as `Evaluate(callable=op, args)`. The verify path keys
 on the Op class, not on `Evaluate` itself: `verify.register`
-takes the **Op class**. `verify.Visitor.generic_visit` and the whole-function
-walker in `tilefoundry.verifier` both pass device-instruction Ops to the
-`verify_call` service ([§3.2](#32-services)), which runs the same `check_call` used by
+takes the **Op class**. The verifier's `visit_Evaluate` passes
+device-instruction Ops to the `verify_call` service ([§3.2](#32-services)), which runs the same `check_call` used by
 ScheduleOp inference, candidate admission, and lowering.
 That check owns declaration matching and invokes any registered leaf verifier;
 a missing leaf handler MUST NOT bypass the declared constraints. Refusals from
-the common check are reported as `VerifyError` by both verification entries.
+the common check are reported as `VerifyError` by the verifier.
 The registry key is the Op class; the handler input shape is owned by the
 registry implementation. The stable IR shape is `Evaluate(op, args)`;
 the stable IR does not wrap a value-form `Call` inside `Evaluate`. See
@@ -648,29 +663,35 @@ Visitor:
 `verify_function`, `verify_prim_function`, `verify_module`,
 `verify_shape_of`, `verify_value_layouts` and `input_params` are the public whole-program entry
 points of `tilefoundry.verifier`. The package sits above `ir.hir` and `ir.tir`
-and reads both, so neither IR layer owns the driver. It runs the registry-derived visitors of `interfaces` over a complete
-`Function`, `PrimFunction` or `Module`.
+and reads both, so neither IR layer owns the driver. `verify_prim_function`
+runs one program visitor over a `PrimFunction` body; the visitor lives beside
+the rules and entry points in `verifier/verify.py` and is not exported by the
+package.
 
 ```python
-# tilefoundry.interfaces.verify
-class Visitor(StmtVisitor[None]):
-    def __init__(self, ctx: verify.Context, registry: Registry = verify.registry): ...   # ctx + injected verify registry
-    def generic_visit(self, stmt: Stmt) -> None: ...   # check_call for effect Ops; registry/recursion for structural Stmts
-    def visit_MeshScope(self, stmt): ...               # push/pop current_mesh and mesh_scope around recursion
+# tilefoundry.verifier.verify
+class Visitor(StmtExprVisitor[None]):
+    def __init__(self, function: PrimFunction): ...   # visible / ever-bound Vars of this function
+    def visit_Sequential(self, stmt, ctx): ...        # also LetStmt, For, While, If, MeshScope, Return, Evaluate
+    def generic_visit(self, stmt, ctx): ...           # any other Stmt: its verify.registry entry, then its Expr fields
+    def visit_Var(self, var, ctx): ...                # every use must be visible
+    def visit_Call(self, call, ctx): ...              # AllocTensor placement and embedded ShardLayout meshes
 ```
 
 - constraints:
-  - recurses `PrimFunction.body`; effect Ops go through `check_call`. Structural
-    Stmt subclasses try the injected registry and recurse on a miss. MeshScope
-    traversal MUST restore the enclosing context even when a nested call fails.
-    The structural registry is injected via `__init__`, not baked into `StmtVisitor` (see [§1.1](#11-registry-is-not-a-property-of-stmtvisitor--exprvisitor)).
+  - One visit covers a statement's own rules and every use in its Expr fields
+    ([visitor-mutator §5](./visitor-mutator.md#5-stmtvisitort--stmtexprvisitort--stmtmutator)).
+    Another Stmt, such as an intrinsic, is a leaf: after its registered rule,
+    each field `stmt_expr_fields` names goes through the same use rules, so a
+    non-IR value is refused by name;
+    `For` and `MeshScope` bodies are visited in `ctx.enter_region(stmt)`.
+    Effect Ops go through `check_call` with `ctx.current_mesh`.
 
-**Unregistered semantics.** A Stmt subclass without a
-`verify.register` entry does not error — `verify.Visitor` simply
-recurses through it. Generic control-flow / binding Stmts use this
-fallback; their semantic constraints (e.g. `For.step != 0`,
-`If.cond` is `bool`, `LetStmt` binding rules) are owned by
-[tir](./tir.md) and registered there, not in this spec.
+**Unregistered semantics.** The built-in control-flow / binding Stmts and
+`Evaluate` have dedicated methods; their semantic constraints (e.g.
+`For.step != 0`, `If.cond` is `bool`, `LetStmt` binding rules) are owned by
+[tir](./tir.md). Any other Stmt subclass without a `verify.register` entry is
+rejected with `no verify_stmt registered for <Stmt>`.
 
 ## 6. Instance 3 — `codegen`
 

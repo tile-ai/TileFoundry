@@ -66,7 +66,7 @@ class DefinitionSnapshot:
     accesses: dict = field(default_factory=dict)
     outputs: dict = field(default_factory=dict)
     relations: dict = field(default_factory=dict)
-    refused: dict = field(default_factory=dict)
+    refused: dict[str, dict[int, expr.Call]] = field(default_factory=dict)
 
     def add_child(self, child: IterationScope) -> None:
         """Record *child* as the last scope nested in this definition."""
@@ -251,8 +251,8 @@ class ScopeAccess:
         self.relations[id(call)] = (call, stated)
 
     def refuse(self, view, calls) -> None:
-        """Mark *calls* as refused in *view*."""
-        self.refused[view] = self.refused.get(view, frozenset()) | calls
+        """Mark *calls*, keyed by identity, as refused in *view*."""
+        self.refused[view] = self.refused.get(view, {}) | calls
 
     @property
     def instance(self):
@@ -292,8 +292,7 @@ class ScopeAccess:
                     if id(item.target.expr) in callee_scope.provenance.arguments:
                         upstream = getattr(source, view)
                         if upstream is None:
-                            refused = self.refused.get(view, frozenset())
-                            self.refused[view] = refused | {primitive}
+                            self.refuse(view, {id(primitive): primitive})
                             continue
                         relation = relation.compose(upstream)
                     if callee_scope.access.instance is not None and getattr(
@@ -753,7 +752,7 @@ class ScopeBuilder(valuation.Visitor[None]):
         except (NotImplementedError, TypeError, ValueError, isl.Error):
             self.record_node(call, ctx)
             for view in self.views:
-                acc.refuse(view, {call})
+                acc.refuse(view, {id(call): call})
                 acc.accesses.setdefault(view, {})[(core.SSAValue(call),)] = (call, ())
 
     def on_region_start(self, region, ctx):

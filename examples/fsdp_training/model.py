@@ -48,7 +48,7 @@ def training_program(participants=2, *, retain=False, replicas=1):
 
     def layout(shape, attr):
         if participants == 1:
-            attr = Broadcast()
+            return Layout(shape)
         attrs = attr if isinstance(attr, tuple) else ((attr,) if replicas == 1 else (Broadcast(), attr))
         return ShardLayout.from_logical(shape, mesh, attrs, storage="gmem", owners=target.storage_owners)
 
@@ -75,8 +75,8 @@ def training_program(participants=2, *, retain=False, replicas=1):
     HeadWeight = FullEmb if retain else Emb
     shard_e = Emb.layout
 
-    @module(entry="forward", target=target, topologies=(gpu,))
-    class Block:
+    @module(entry="gather", target=target, topologies=(gpu,))
+    class Gather:
         @func
         def gather(w: Sharded):
             return (tf.reshard(w[0], layout=fq, storage="gmem"),
@@ -86,6 +86,8 @@ def training_program(participants=2, *, retain=False, replicas=1):
                     tf.reshard(w[4], layout=fu, storage="gmem"),
                     tf.reshard(w[5], layout=fd, storage="gmem"))
 
+    @module(entry="forward", target=target, topologies=(gpu,))
+    class Block:
         @func
         def forward(x: A, w: Full, rotation: Rotation, mask: Mask):
             ix = tf.rsqrt(tf.reduce(x * x, axes=(-1,)) + EPS)
@@ -114,9 +116,7 @@ def training_program(participants=2, *, retain=False, replicas=1):
             y = residual + tf.matmul(relu * relu, w[5], b_layout="NK")
             return y, a, ix, qn, iq, kn, ik, q, k, v, probability, attended, r, ir, relu
 
-    block_forward = Block.forward
-    gather = Block.gather
-    Saved = block_forward.return_type
+    Saved = Block.forward.return_type
 
     @module(entry="backward", target=target, topologies=(gpu,))
     class Backward:
@@ -164,32 +164,35 @@ def training_program(participants=2, *, retain=False, replicas=1):
             dx = dresidual + ix * (da - a * tf.reduce(da * a, axes=(-1,)))
             return dx, gq, gk, gv, go, gu, gd
 
-    backward = Backward.backward
+    @module(entry="step", target=target, topologies=(gpu,))
+    class Training:
+        gather = Gather
+        block_forward = Block
+        backward = Backward
 
-    @module(entry="release_forward", target=target, topologies=(gpu,))
-    class Stages:
-        @func
-        def release_forward(x: A, w: Sharded, rotation: Rotation, mask: Mask):
-            full = gather(w)
-            y, a, ix, qn, iq, kn, ik, q, k, v, p, attended, r, ir, relu = block_forward(x, full, rotation, mask)
-            return (y, a, ix, qn, iq, kn, ik, q, k, v, p, attended, r, ir, relu,
-                    w[0], w[1], w[2], w[3], w[4], w[5])
+        if retain:
+            @func
+            def forward(x: A, w: Sharded, rotation: Rotation, mask: Mask):
+                full = gather(w)
+                y, a, ix, qn, iq, kn, ik, q, k, v, p, attended, r, ir, relu = block_forward(x, full, rotation, mask)
+                return (y, a, ix, qn, iq, kn, ik, q, k, v, p, attended, r, ir, relu,
+                        full[0], full[1], full[2], full[3], full[4], full[5])
 
-        @func
-        def retain_forward(x: A, w: Sharded, rotation: Rotation, mask: Mask):
-            full = gather(w)
-            y, a, ix, qn, iq, kn, ik, q, k, v, p, attended, r, ir, relu = block_forward(x, full, rotation, mask)
-            return (y, a, ix, qn, iq, kn, ik, q, k, v, p, attended, r, ir, relu,
-                    full[0], full[1], full[2], full[3], full[4], full[5])
+            @func
+            def backward_stage(dy: A, s: Saved, w: Full, rotation: Rotation):
+                return backward(dy, s, w, rotation)
+        else:
+            @func
+            def forward(x: A, w: Sharded, rotation: Rotation, mask: Mask):
+                full = gather(w)
+                y, a, ix, qn, iq, kn, ik, q, k, v, p, attended, r, ir, relu = block_forward(x, full, rotation, mask)
+                return (y, a, ix, qn, iq, kn, ik, q, k, v, p, attended, r, ir, relu,
+                        w[0], w[1], w[2], w[3], w[4], w[5])
 
-        @func
-        def release_backward(dy: A, s: Saved, w: Sharded, rotation: Rotation):
-            full = gather(w)
-            return backward(dy, s, full, rotation)
-
-        @func
-        def retain_backward(dy: A, s: Saved, w: Full, rotation: Rotation):
-            return backward(dy, s, w, rotation)
+            @func
+            def backward_stage(dy: A, s: Saved, w: Sharded, rotation: Rotation):
+                full = gather(w)
+                return backward(dy, s, full, rotation)
 
         @func
         def embedding(tokens: Tokens, w: Emb):
@@ -197,17 +200,22 @@ def training_program(participants=2, *, retain=False, replicas=1):
             return tf.matmul(tokens, full)
 
         @func
-        def head_forward(x: A, w: Emb):
+        def head(x: A, w: Emb):
             full = tf.reshard(w, layout=full_e, storage="gmem")
             inverse = tf.rsqrt(tf.reduce(x * x, axes=(-1,)) + EPS)
             z = x * inverse
             logits = tf.matmul(z, full, b_layout="NK")
             return logits, z, inverse, full
 
-        @func
-        def release_head(x: A, w: Emb):
-            logits, z, inverse, full = head_forward(x, w)
-            return logits, z, inverse, w
+        if retain:
+            @func
+            def head_forward(x: A, w: Emb):
+                return head(x, w)
+        else:
+            @func
+            def head_forward(x: A, w: Emb):
+                logits, z, inverse, full = head(x, w)
+                return logits, z, inverse, w
 
         @func
         def head_backward(dl: Tokens, z: A, inverse: Inverse, w: HeadWeight):
@@ -225,15 +233,7 @@ def training_program(participants=2, *, retain=False, replicas=1):
             reduced = tf.reshard(partial, layout=reduced_e, storage="gmem")
             return tf.reshard(reduced, layout=shard_e, storage="gmem") * inverse_p
 
-    forward = getattr(Stages, "retain_forward" if retain else "release_forward")
-    backward_stage = getattr(Stages, "retain_backward" if retain else "release_backward")
-    embedding = getattr(Stages, "embedding")
-    head_forward = getattr(Stages, "head_forward" if retain else "release_head")
-    head_backward = Stages.head_backward
-    embedding_backward = Stages.embedding_backward
 
-    @module(entry="step", target=target, topologies=(gpu,))
-    class Training:
         @func
         def step(tokens: Tokens, targets: Tokens, rotation: Rotation, mask: Mask,
                  we: Emb, q1: Tensor[(C, C), "f32", sq], k1: Tensor[(G * D, C), "f32", sk],
@@ -259,7 +259,7 @@ def training_program(participants=2, *, retain=False, replicas=1):
                 shifted = logits - maximum
                 log_z = tf.log(tf.reduce(tf.exp(shifted), axes=(-1,), kind=ReduceKind.SUM))
                 nll = -tf.reduce(targets * (shifted - log_z), axes=(-1,), kind=ReduceKind.SUM)
-                loss = tf.reduce(nll, axes=(0, 1), kind=ReduceKind.SUM, keepdim=False) * global_mean_scale
+                loss = tf.reduce(nll * global_mean_scale, axes=(0, 1), kind=ReduceKind.SUM, keepdim=False)
                 dl = (tf.softmax(logits, axis=-1) - targets) * local_mean_scale
                 dy, gh = head_backward(dl, z, inverse, held_head)
                 dx2, gq2, gk2, gv2, go2, gu2, gd2 = backward_stage(

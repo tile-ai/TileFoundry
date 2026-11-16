@@ -591,7 +591,7 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
             )
             if isinstance(frame, verify.Context)
             else verify.Context(
-                module=None if frame is None else frame.module, function=None if frame is None else frame.function, target=None if frame is None else frame.target, topologies=None if frame is None else frame.topologies, current_mesh=mesh, mesh_scope=() if mesh is None else (mesh,)
+                module=None if frame is None else frame.module, function=None if frame is None else frame.function, target=None if frame is None else frame.target, topologies=None if frame is None else frame.topologies, current_mesh=mesh
             )
         )
         try:

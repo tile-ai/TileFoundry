@@ -276,14 +276,14 @@ def test_stmt_walk_stays_in_the_stmt_tree_and_shares_unchanged_siblings() -> Non
     visited_vars: list[str] = []
 
     class V(core.StmtVisitor[None]):
-        def visit_Evaluate(self, stmt):
+        def visit_Evaluate(self, stmt, ctx=None):
             seen.append(type(stmt.callable).__name__)
 
-        def visit_For(self, stmt):
+        def visit_For(self, stmt, ctx=None):
             seen.append("For")
-            self.generic_visit(stmt)
+            self.generic_visit(stmt, ctx)
 
-        def visit_Var(self, var):
+        def visit_Var(self, var, ctx=None):
             visited_vars.append(var.name)
 
     V().visit(_simple_for_body())
@@ -349,7 +349,7 @@ def test_prim_function_walk_and_identity_preserving_rewrite() -> None:
     pf = core.PrimFunction(name="foo", params=(), body=core.Sequential(body=(s,)))
 
     class V(core.StmtVisitor[None]):
-        def visit_For(self, stmt):
+        def visit_For(self, stmt, ctx=None):
             seen.append("For")
 
     core.walk_prim_function(V(), pf)

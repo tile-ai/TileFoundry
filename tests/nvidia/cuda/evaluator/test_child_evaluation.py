@@ -16,7 +16,9 @@ from pathlib import Path
 import pytest
 import torch
 
+from examples.fsdp_training.reference import check_training
 from tests.core._corpus import Case, case, check_case, special
+from tilefoundry import analysis
 from tilefoundry.interfaces import evaluator
 from tilefoundry.ir import core
 
@@ -110,6 +112,39 @@ class DispatchVariantChildCall(ChildReadingCase):
             False,
             True,
         ]
+
+
+class FsdpTrainingExample(ChildReadingCase):
+    """The FSDP example's gather, block and backward slots train like dense PyTorch."""
+
+    def guard(self, state, problems):
+        module, _ = analysis.check_program(state, state.entry_function())
+        errors = check_training(module)
+        assert set(errors) == {"logits", "loss", "gradients", "parameters", "momentum"}
+
+
+@case
+class FsdpRelease1(FsdpTrainingExample):
+    path: Path = EVALUATOR / "fsdp_training_example.py"
+    name: str | None = "Release1"
+
+
+@case
+class FsdpRetain1(FsdpTrainingExample):
+    path: Path = EVALUATOR / "fsdp_training_example.py"
+    name: str | None = "Retain1"
+
+
+@case
+class FsdpRelease2(FsdpTrainingExample):
+    path: Path = EVALUATOR / "fsdp_training_example.py"
+    name: str | None = "Release2"
+
+
+@case
+class FsdpRetain2(FsdpTrainingExample):
+    path: Path = EVALUATOR / "fsdp_training_example.py"
+    name: str | None = "Retain2"
 
 
 CASES = special(ChildReadingCase)

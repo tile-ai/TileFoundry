@@ -100,23 +100,17 @@ def test_selected_atom_only_checked() -> None:
 
 
 class _MmaSite(core.StmtVisitor[None]):
-    """The one ``TiledMma`` call of a function, with the meshes enclosing it."""
+    """The one ``TiledMma`` call of a function, with the context enclosing it."""
 
     def __init__(self) -> None:
-        self.meshes: tuple = ()
         self.site = None
 
-    def visit_MeshScope(self, stmt: core.MeshScope) -> None:
-        previous = self.meshes
-        self.meshes = (*previous, stmt.mesh)
-        try:
-            self.visit(stmt.body)
-        finally:
-            self.meshes = previous
+    def visit_MeshScope(self, stmt: core.MeshScope, ctx=None) -> None:
+        self.visit(stmt.body, ctx.enter_region(stmt))
 
-    def visit_Evaluate(self, stmt: core.Evaluate) -> None:
+    def visit_Evaluate(self, stmt: core.Evaluate, ctx=None) -> None:
         if isinstance(stmt.callable, nn.TiledMma):
-            self.site = (stmt.args, self.meshes)
+            self.site = (stmt.args, ctx)
 
 
 def test_open_wgmma_refused_on_sm89() -> None:
@@ -125,10 +119,9 @@ def test_open_wgmma_refused_on_sm89() -> None:
         fn for fn in cli.load_authored_ir(MM_HANDWRITTEN).functions if fn.name == "mm_device"
     )
     site = _MmaSite()
-    site.visit(device.body)
-    args, meshes = site.site
-    mesh = types.Mesh.from_meshes(*meshes)
-    frame = verify.Context(current_mesh=mesh, mesh_scope=meshes, target=SM89)
+    site.visit(device.body, verify.Context(target=SM89))
+    args, frame = site.site
+    mesh = frame.current_mesh
     operands = tuple(arg.type for arg in args)
     with pytest.raises(
         schedule.RefusalError, match="needs wgmma.mma_async, which nvidia.rtx_6000_ada does not list"

@@ -9,6 +9,7 @@ See [tir §2](docs/spec/tir.md#2-tir-expr-and-callable-constructs).
 
 from __future__ import annotations
 
+import dataclasses
 import typing
 from collections.abc import Mapping
 from dataclasses import replace
@@ -41,8 +42,10 @@ __all__ = [
     "ExprCloner",
     "BindingSubstitutionCloner",
     "expr_children",
+    "stmt_expr_fields",
     "function_values",
     "StmtVisitor",
+    "StmtExprVisitor",
     "StmtMutator",
     "StmtExprMutator",
     "walk_prim_function",
@@ -109,7 +112,7 @@ def stmt_children(stmt: Stmt) -> tuple[Stmt, ...]:
     """Direct child Stmt nodes.
 
     Direct child Stmt nodes. (Not Expr fields — StmtVisitor does not descend
-    into embedded Expr by default; see StmtExprMutator for combined traversal.)
+    into embedded Expr; StmtExprVisitor and StmtExprMutator do.)
 
     P2: ``body`` fields are ``Sequential`` (a Stmt), so control-flow /
     scope Stmts report their body as a single child Sequential.
@@ -162,10 +165,11 @@ def rebuild_stmt_children(stmt: Stmt, new_children: tuple[Stmt, ...]) -> Stmt:
 def stmt_expr_fields(stmt: Stmt) -> tuple[str, ...]:
     """Names of Expr-typed fields on `stmt`.
 
-    Names of Expr-typed fields on `stmt`. StmtExprMutator uses this to
-    rewrite the Expr subtrees embedded inside a Stmt. Var-binding fields
-    (For.induction_var, LetStmt.var, MeshScope.binding) are intentionally
-    excluded — a rewrite must not turn a binding site into a non-Var.
+    Names of Expr-typed fields on `stmt`. StmtExprVisitor and StmtExprMutator
+    use this to read or rewrite the Expr subtrees embedded inside a Stmt.
+    Var-binding fields (For.induction_var, LetStmt.var, MeshScope.binding) are
+    intentionally excluded. Another Stmt, such as an intrinsic, names the fields
+    it declares as Expr, whatever value they hold.
     """
     match stmt:
         case LetStmt():
@@ -178,9 +182,15 @@ def stmt_expr_fields(stmt: Stmt) -> tuple[str, ...]:
             return ("callable", "args")
         case Evaluate():
             return ("args",)
-
-        case _:
+        case Sequential() | PrimFunction() | MeshScope() | Return():
             return ()
+        case _:
+            return tuple(
+                field.name
+                for field in dataclasses.fields(stmt)
+                if field.type in (expr.Expr, "Expr", "expr.Expr")
+                or isinstance(getattr(stmt, field.name), expr.Expr)
+            )
 
 
 class TypeFunctor[T]:
@@ -400,20 +410,48 @@ class BindingSubstitutionCloner(ExprCloner):
 class StmtVisitor[T]:
     """Read-only Stmt traversal.
 
-    Read-only Stmt traversal. Does NOT descend into embedded Expr fields
-    (use StmtExprMutator if you need Expr-level rewriting too).
+    Read-only Stmt traversal that passes ``ctx`` down unchanged. Does NOT
+    descend into embedded Expr fields (use StmtExprVisitor to read them, or
+    StmtExprMutator to rewrite them).
     """
 
-    def visit(self, stmt: Stmt) -> T:
+    def visit(self, stmt: Stmt, ctx: Any = None) -> T:
         method = getattr(self, f"visit_{type(stmt).__name__}", None)
         if method is not None:
-            return method(stmt)
-        return self.generic_visit(stmt)
+            return method(stmt, ctx)
+        return self.generic_visit(stmt, ctx)
 
-    def generic_visit(self, stmt: Stmt) -> T:
+    def generic_visit(self, stmt: Stmt, ctx: Any = None) -> T:
         for child in stmt_children(stmt):
-            self.visit(child)
+            self.visit(child, ctx)
         return None
+
+
+class StmtExprVisitor[T](StmtVisitor[T]):
+    """Read statement structure and the expression subtrees it holds.
+
+    Statements enter through ``visit`` and expressions through ``visit_expr``,
+    as in ``StmtExprMutator``. A statement's expressions are visited before
+    its child statements, and every use of an expression is visited.
+    """
+
+    def visit_expr(self, node: expr.Expr, ctx: Any = None) -> T:
+        method = getattr(self, f"visit_{type(node).__name__}", None)
+        if method is not None:
+            return method(node, ctx)
+        return self.expr_generic_visit(node, ctx)
+
+    def expr_generic_visit(self, node: expr.Expr, ctx: Any = None) -> T:
+        for child in expr_children(node):
+            self.visit_expr(child, ctx)
+        return None
+
+    def generic_visit(self, stmt: Stmt, ctx: Any = None) -> T:
+        for name in stmt_expr_fields(stmt):
+            value = getattr(stmt, name)
+            for node in value if isinstance(value, tuple) else (value,):
+                self.visit_expr(node, ctx)
+        return StmtVisitor.generic_visit(self, stmt, ctx)
 
 
 class StmtMutator:

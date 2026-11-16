@@ -629,15 +629,13 @@ def uncounted_movements(
     found: list[tuple[IterationScope, ReachedAddresses]] = []
     for path, (call, _) in root.access.accesses.get("narrow", {}).items():
         scope = root.at(path[:1])
-        refused = scope.access.refused.get("narrow", frozenset()) | scope.access.refused.get("unit", frozenset())
-        if call in refused:
+        refused = scope.access.refused.get("narrow", {}) | scope.access.refused.get("unit", {})
+        if id(call) in refused:
             found.extend(
                 (scope, item) for item in uncounted_boundaries(call, whole, Precision.UNKNOWN)
             )
             continue
         if ctx.module is not None and ctx.callee_context(call) is not None:
-            continue
-        if call in refused:
             continue
         moved = expr.get_metadata(call, MemoryMetadata)
         operands = () if moved is None else moved.operands
@@ -696,7 +694,7 @@ def reached_by(
     window: int,
 ) -> tuple[ReachedAddresses, ...] | None:
     """Return one Call's cache-backed addresses, or ``None`` for no stated wave."""
-    refused = call in scope.access.refused.get("narrow", ())
+    refused = id(call) in scope.access.refused.get("narrow", ())
     if len(operands) != len(call.args) + 1:
         return uncounted_boundaries(
             call,

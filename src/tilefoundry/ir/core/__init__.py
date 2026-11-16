@@ -27,6 +27,7 @@ from .visitor import (
     ExprVisitor,
     ExprWalker,
     StmtExprMutator,
+    StmtExprVisitor,
     StmtMutator,
     StmtVisitor,
     TypeFunctor,
@@ -34,6 +35,7 @@ from .visitor import (
     expr_children,
     function_values,
     rewrite_prim_function,
+    stmt_expr_fields,
     walk_prim_function,
 )
 from .while_stmt import While
