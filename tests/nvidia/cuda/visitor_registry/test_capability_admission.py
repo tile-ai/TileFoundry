@@ -121,7 +121,7 @@ def test_open_wgmma_refused_on_sm89() -> None:
     site = _MmaSite()
     site.visit(device.body, verify.Context(target=SM89))
     args, frame = site.site
-    mesh = frame.current_mesh
+    mesh = frame.mesh_scope
     operands = tuple(arg.type for arg in args)
     with pytest.raises(
         schedule.RefusalError, match="needs wgmma.mma_async, which nvidia.rtx_6000_ada does not list"

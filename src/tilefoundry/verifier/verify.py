@@ -438,7 +438,7 @@ class Visitor(core.StmtExprVisitor[None]):
             verify_value_layouts(stmt.callable)
             verify_function_call(stmt, self.function, ctx)
         else:
-            services.verify_call(stmt.callable, stmt.args, ctx.current_mesh, frame=ctx)
+            services.verify_call(stmt.callable, stmt.args, ctx.mesh_scope, frame=ctx)
 
     def visit_Var(self, var, ctx):
         if id(var) not in self.visible:

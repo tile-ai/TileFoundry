@@ -144,10 +144,10 @@ class Access:
 
     ``ordered`` holds ``(mesh chain, published)`` for each barrier that ordered it;
     it orders the access only for threads inside that scope, and ``published``
-    says a proxy fence ran before the barrier. ``fenced`` says the issuing threads
+    says a proxy fence ran before the barrier. ``fenced`` says the executing threads
     ran the proxy fence after it, and ``group_fenced`` that its group's fence ran
-    since this register access. ``issuers`` and ``unit`` are the issuing threads and
-    the collective unit whose steps they run together, if any.
+    since this register access. ``execution_mesh`` and ``unit`` are the threads that execute
+    the issue and the collective unit whose steps they run together, if any.
     """
 
     position: tuple[int, int]
@@ -159,7 +159,7 @@ class Access:
     group: Group | None = None
     proxy: Proxy = Proxy.GENERIC
     chain: tuple[int, expr.DType] | None = None
-    issuers: types.Mesh | None = None
+    execution_mesh: types.Mesh | None = None
     unit: types.Mesh | None = None
     threads: types.ShardLayout | None = None
     ordered: frozenset = frozenset()
@@ -200,9 +200,9 @@ def overlap(a, b) -> bool:
 
 
 def threads_of(op, type_, owners) -> types.ShardLayout | None:
-    """The layout giving each byte of a shared memory operand of *type_* to one issuing thread.
+    """The layout giving each byte of a shared memory operand of *type_* to one executing thread.
 
-    Each thread issues *op* on its own shard when *op* declares no execution
+    Each thread executes *op* on its own shard when *op* declares no execution
     mesh. A layout that splits along every mesh axis whose units share shared
     memory, as *owners* states, gives each shard's bytes to that thread alone.
     """
@@ -230,8 +230,8 @@ def alone(mesh: types.Mesh | None) -> bool:
         return False
 
 
-def region_mesh(scope) -> types.Mesh | None:
-    """The mesh of the innermost ``MeshRegion`` around *scope*."""
+def innermost_mesh(scope) -> types.Mesh | None:
+    """The innermost enclosing MeshRegion's mesh, or None when there is none."""
     return next(
         (node.owner.mesh for node in scope.ancestors() if isinstance(node.owner, core.MeshRegion)), None
     )
@@ -772,7 +772,7 @@ class Planner:
             effect.group,
             effect.proxy,
             effect.chain,
-            action.mesh or region_mesh(scope),
+            action.mesh or innermost_mesh(scope),
             effect.unit,
             use.threads,
             global_roots=use.global_roots,
@@ -794,7 +794,7 @@ class Planner:
             if access.state != DONE:
                 if access.unit is not None:
                     try:
-                        self.collective(meeting, access.unit, access.issuers)
+                        self.collective(meeting, access.unit, access.execution_mesh)
                     except analysis.Error as error:
                         raise UnplacedError(access.position, str(error)) from None
                 group = access.group
@@ -807,7 +807,7 @@ class Planner:
                     storage = expr.StorageKind.GMEM if access.global_roots else None
                     fence = SyncStep(StepKind.PROXY_FENCE, storage=storage)
                     state = self.plan(fence, meeting, position, state)
-                mesh = region_mesh(meeting)
+                mesh = innermost_mesh(meeting)
                 if alone(mesh):
                     barrier = SyncStep(StepKind.BARRIER, mesh)
                     state = self.effect(barrier, meeting, state, self.entered[position])
@@ -918,7 +918,7 @@ class Planner:
 
         It is the mesh of the innermost ``MeshRegion`` around *scope*.
         """
-        mesh = region_mesh(scope)
+        mesh = innermost_mesh(scope)
         try:
             barrier = None if mesh is None else tir.sync.classify(mesh)
         except expr.VerifyError as error:
@@ -930,7 +930,7 @@ class Planner:
 
     def collective(self, scope, unit: types.Mesh, threads: types.Mesh | None) -> None:
         """Require whole *unit*s of threads, *threads* among them, to reach *scope* together."""
-        mesh = region_mesh(scope)
+        mesh = innermost_mesh(scope)
         if mesh is None:
             raise analysis.Error(
                 "sync: a collective step is needed in a scope that no thread mesh binds"

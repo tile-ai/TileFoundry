@@ -72,7 +72,7 @@ def verify_warpgroups(call, ctx) -> None:
 
     The threads are those of the innermost mesh scope, whatever CTAs run it.
     """
-    mesh = ctx.enclosing_mesh()
+    mesh = ctx.innermost_mesh()
     if mesh is None or not whole_groups(mesh, tir.sync.sync_scope(nn.WARPGROUP).count):
         ctx.error(call, f"{type(call.target).__name__} needs whole warpgroups, got {mesh}")
 

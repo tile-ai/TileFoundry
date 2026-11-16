@@ -709,23 +709,23 @@ class LexicalScope:
     def __init__(
         self,
         frames: tuple[Mapping[str, object], ...] | None = None,
-        mesh_bindings: tuple[set[str], ...] | None = None,
+        mesh_names: tuple[set[str], ...] | None = None,
     ):
         source = frames or ({},)
         self.frames = [dict(frame) for frame in source]
-        self.mesh_bindings = [
-            set(names) for names in (mesh_bindings or tuple(set() for _ in source))
+        self.mesh_names = [
+            set(names) for names in (mesh_names or tuple(set() for _ in source))
         ]
-        if len(self.frames) != len(self.mesh_bindings):
+        if len(self.frames) != len(self.mesh_names):
             raise ValueError("lexical frames and mesh bindings must have the same length")
 
     def define(self, name: str, value: object) -> None:
         self.frames[-1][name] = value
-        self.mesh_bindings[-1].discard(name)
+        self.mesh_names[-1].discard(name)
 
     def define_mesh(self, name: str, value: object) -> None:
         self.frames[-1][name] = value
-        self.mesh_bindings[-1].add(name)
+        self.mesh_names[-1].add(name)
 
     def lookup(self, name: str) -> object | None:
         for frame in reversed(self.frames):
@@ -734,7 +734,7 @@ class LexicalScope:
         return None
 
     def lookup_mesh(self, name: str) -> object | None:
-        for frame, mesh_names in reversed(tuple(zip(self.frames, self.mesh_bindings))):
+        for frame, mesh_names in reversed(tuple(zip(self.frames, self.mesh_names))):
             if name in frame:
                 return frame[name] if name in mesh_names else None
         return None
@@ -742,17 +742,17 @@ class LexicalScope:
     def fork(self) -> LexicalScope:
         return LexicalScope(
             tuple(self.frames) + ({},),
-            tuple(self.mesh_bindings) + (set(),),
+            tuple(self.mesh_names) + (set(),),
         )
 
     def push_frame(self) -> None:
         self.frames.append({})
-        self.mesh_bindings.append(set())
+        self.mesh_names.append(set())
 
     def pop_frame(self) -> dict[str, object]:
         if len(self.frames) == 1:
             raise RuntimeError("cannot pop the root lexical frame")
-        self.mesh_bindings.pop()
+        self.mesh_names.pop()
         return self.frames.pop()
 
     def items(self):
@@ -1283,7 +1283,7 @@ class MatchContext:
             TYPE_INFER_CONTEXT,
             AuthoredInferContext(
                 module=function.module,
-                current_mesh=resolved_mesh,
+                mesh_scope=resolved_mesh,
                 parser_target=function.target,
             ),
         )

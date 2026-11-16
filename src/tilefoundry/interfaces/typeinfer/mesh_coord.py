@@ -28,7 +28,7 @@ def infer_mesh_coord(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
     if not isinstance(call.target.mesh, types.Mesh):
         ctx.error(call, "MeshCoord.mesh must be a Mesh")
     try:
-        covered = ctx.current_mesh is not None and types.equals_mesh_scope(call.target.mesh, ctx.current_mesh)
+        covered = ctx.mesh_scope is not None and types.equals_mesh_scope(call.target.mesh, ctx.mesh_scope)
     except ValueError as error:
         ctx.error(call, str(error))
     if not covered:

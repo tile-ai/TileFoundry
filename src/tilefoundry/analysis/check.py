@@ -166,7 +166,7 @@ class CheckCalls(valuation.Visitor[None]):
             param.type if implicit and param.is_const else next(given).type
             for param in callee.params
         )
-        self.derive(inner, type_list, ctx.current_mesh, f"{self.label}/{self.labels[id(call)]}")
+        self.derive(inner, type_list, ctx.mesh_scope, f"{self.label}/{self.labels[id(call)]}")
 
 
 def check_program(
@@ -243,7 +243,7 @@ def check_program(
             target=frame.target,
             topologies=frame.topologies,
             owner=definition,
-            current_mesh=mesh,
+            mesh_scope=mesh,
             memo=bindings,
         )
         typeinfer.infer_function(definition, context)

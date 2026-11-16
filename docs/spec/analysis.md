@@ -1921,7 +1921,7 @@ class AnalyzeContext(typeinfer.TypeInferContext):
     topology: str | None
     options: object | None
     scope: IterationScope | None = None
-    current_mesh: types.Mesh | None = None
+    mesh_scope: types.Mesh | None = None
 
     @property
     def topologies(self) -> tuple[Topology, ...]: ...
@@ -1980,7 +1980,7 @@ class Target:
     (`bind_scope`) before any analysis runs. `type_of` returns the `Expr.type` that
     `check_program` stored on the analyzed copy; `local_type_of` projects it to
     `topology` over the Module's topologies, or returns it whole without
-    one. `current_mesh` is `None`: relations are asked outside any execution
+    one. `mesh_scope` is `None`: relations are asked outside any execution
     mesh.
   - Analyze MUST obtain every root and dependency from the same exact Target
     instance through `get_analyzer`.

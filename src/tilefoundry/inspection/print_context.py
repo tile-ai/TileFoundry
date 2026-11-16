@@ -48,7 +48,7 @@ class PrintContext:
         self.imports: set[str] = set()
         self.dim_declarations: dict[str, tuple[object, str]] = {}
         self.mesh_bindings: list[tuple[types.Mesh, str]] = []
-        self.used_scope_names: set[str] = set()
+        self.used_mesh_names: set[str] = set()
         self.topologies = ()
         self.target = target
         self.value_printer = value_printer
@@ -90,26 +90,26 @@ class PrintContext:
             lines.append("")
         return lines
 
-    def scope_name(self, mesh: types.Mesh, preferred: str | None = None) -> str:
+    def mesh_name(self, mesh: types.Mesh, preferred: str | None = None) -> str:
         base = preferred or (mesh.topologies[0].name if mesh.topologies else "mesh")
         base = base if base.isidentifier() else "mesh"
         name = base
         suffix = 2
-        while name in self.used_scope_names:
+        while name in self.used_mesh_names:
             name = f"{base}_{suffix}"
             suffix += 1
-        self.used_scope_names.add(name)
+        self.used_mesh_names.add(name)
         return name
 
     def push_mesh(self, mesh: types.Mesh, name: str) -> None:
         self.mesh_bindings.append((mesh, name))
-        self.used_scope_names.add(name)
+        self.used_mesh_names.add(name)
 
     def pop_mesh(self) -> None:
         self.mesh_bindings.pop()
 
     @property
-    def current_mesh(self) -> types.Mesh | None:
+    def mesh_scope(self) -> types.Mesh | None:
         return types.Mesh.from_meshes(*(mesh for mesh, _ in self.mesh_bindings)) if self.mesh_bindings else None
 
     def mesh_alias(self, mesh: types.Mesh) -> str | None:
@@ -196,8 +196,8 @@ class TirPrintContext(PrintContext):
         Imports stay file-wide; mesh bindings and allocated names belong to this
         definition. A generated suffix cannot consume a later authored name.
         """
-        previous = self.mesh_bindings, self.used_scope_names, self.binding_names, self.reserved_names
-        self.mesh_bindings, self.used_scope_names = [], set()
+        previous = self.mesh_bindings, self.used_mesh_names, self.binding_names, self.reserved_names
+        self.mesh_bindings, self.used_mesh_names = [], set()
         self.binding_names = {}
         self.reserved_names = {
             binding.name for binding in bindings
@@ -208,7 +208,7 @@ class TirPrintContext(PrintContext):
                 self.binding_name(binding)
             yield
         finally:
-            self.mesh_bindings, self.used_scope_names, self.binding_names, self.reserved_names = previous
+            self.mesh_bindings, self.used_mesh_names, self.binding_names, self.reserved_names = previous
 
     def binding_name(self, binding) -> str:
         known = self.binding_names.get(id(binding))
@@ -216,12 +216,12 @@ class TirPrintContext(PrintContext):
             return known
         base = identifier(binding.name)
         name, suffix = base, 2
-        while name in self.used_scope_names or (
+        while name in self.used_mesh_names or (
             name in self.reserved_names and name != binding.name
         ):
             name = f"{base}_{suffix}"
             suffix += 1
-        self.used_scope_names.add(name)
+        self.used_mesh_names.add(name)
         self.binding_names[id(binding)] = name
         return name
 

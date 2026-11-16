@@ -262,10 +262,10 @@ nonzero fill uses `st.shared` with the destination dtype's repeated pattern.
 
 ### CopyAsyncBulk
 
-A staging copy whose completion lands on an mbarrier, and not a tier of
-`CopyAsync`: there every thread issues its own load and a commit closes the
-group, so the thread that issues is the thread that waits; here a consumer can
-wait for a tile it did not fetch.
+A staging copy whose completion lands on an mbarrier. It is not a tier of
+`CopyAsync`. There every thread executes its own load and a commit closes the
+group, so the thread that executes the load is the thread that waits. Here a
+consumer can wait for a tile it did not fetch.
 
 Which instruction carries it is the runtime's choice from the operand shard
 layouts, not something this op names: a contiguous run takes `cp.async.bulk`,
@@ -296,7 +296,7 @@ class CopyAsyncBulk(Op):
   - `src` is gmem, `dst` is smem, `barrier` is smem.
   - `src` and `dst` agree in dtype and shape; the copy moves bytes and does not
     convert them.
-  - Nothing blocks: the copy may still be in flight when the issuing thread
+  - Nothing blocks: the copy may still be in flight when the executing thread
     reaches the next statement.
   - Consumers wait with `MBarrierWaitParity`. The arrival that declares the
     transferred bytes is the implementation's, issued on the same instruction as
@@ -350,12 +350,12 @@ class CopyAsyncTensorTx(Op):
     schedules never name it, and it declares no capability.
   - `src`, `dst` and `execution_mesh` follow the `CopyAsyncTensor` rules with
     `src` in gmem and `dst` in smem.
-  - It is one whole operation: the box is in `dst` for every issuing thread
-    when it ends. Its emitter MUST, on the first issuing thread `t`, take word
-    `t // W` of `barrier`, `W` the target's `architecture.max_threads_per_warp`,
-    initialise it for one arrival, expect the box's
-    bytes, issue the copy on it, wait for phase 0 and invalidate it, and then
-    meet the issuing threads.
+  - It is one whole operation: the box is in `dst` for every executing thread
+    when it ends. Its emitter MUST use the first executing thread `t`. With `W`
+    the target's `architecture.max_threads_per_warp`, that thread takes word
+    `t // W` of `barrier` and initialises it for one arrival. It expects the
+    box's bytes, executes the copy on the word, waits for phase 0 and invalidates
+    it. Then the threads of the execution mesh meet.
   - CUDA codegen MUST reject it until host-encoded tensor-map construction exists.
 
 ### CopyReduceAsyncTensor
@@ -397,7 +397,7 @@ class LdMatrix(Op):
   - `src` is a shared-memory `(16, 16)` bf16 tile and `dst` is exactly the
     register A fragment declared by `T.cuda.sm80.Mma()`; their dtype and shape
     agree through explicit between-operand constraints.
-  - One canonical SM80 warp issues the operation. It requires the target's
+  - One canonical SM80 warp executes the operation. It requires the target's
     `ldmatrix` capability and lowers to `tilefoundry::ops::ldmatrix`.
   - The source and destination TV layouts follow CuTe `SM75_U32x4_LDSM_N`.
 

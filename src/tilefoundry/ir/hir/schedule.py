@@ -120,7 +120,7 @@ def schedule_access_relation(call: expr.Call, ctx) -> tuple[access.Relation, ...
     tiles = schedule.project(
         sched.op,
         tuple(ctx.type_of(arg) for arg in call.args),
-        ctx.current_mesh,
+        ctx.mesh_scope,
         repeat=sched.repeat,
         order=sched.order,
         fragments=False,
@@ -272,7 +272,7 @@ def infer_schedule(call: expr.Call, ctx) -> types.TensorType:
                 type(op),
                 attributes,
                 tuple(ctx.type_of(arg) for arg in call.args),
-                ctx.current_mesh,
+                ctx.mesh_scope,
                 frame=ctx,
                 repeat=call.target.repeat,
                 order=call.target.order,
@@ -281,21 +281,21 @@ def infer_schedule(call: expr.Call, ctx) -> types.TensorType:
             schedule.admit_fields(
                 op,
                 tuple(ctx.type_of(arg) for arg in call.args),
-                ctx.current_mesh,
+                ctx.mesh_scope,
                 pattern.Matcher(dict(getattr(getattr(op, "atom", None), "bindings", {}))),
                 target=ctx.target,
             )
             tiles = schedule.project(
                 op,
                 tuple(ctx.type_of(arg) for arg in call.args),
-                ctx.current_mesh,
+                ctx.mesh_scope,
                 repeat=call.target.repeat,
                 order=call.target.order,
             )
             schedule.check_call(
                 op,
                 tuple(ctx.type_of(arg) for arg in call.args),
-                ctx.current_mesh,
+                ctx.mesh_scope,
                 frame=ctx,
                 repeat=call.target.repeat,
                 order=call.target.order,

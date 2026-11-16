@@ -760,7 +760,7 @@ class ScopeBuilder(valuation.Visitor[None]):
             region,
             parent=ctx.scope,
             domain=iteration_domain(region, ctx.scope),
-            mesh=inner.current_mesh,
+            mesh=inner.mesh_scope,
             topologies=ctx.topologies,
         )
         child.share_facts(self.snapshot, ctx.scope.snapshot.definition.locations)
@@ -846,7 +846,7 @@ class ScopeBuilder(valuation.Visitor[None]):
         )
         root.share_facts(self.snapshot)
         self.context.bind_scope(root)
-        ctx = replace(self.context, owner=self.graph, parent=None, current_mesh=root.mesh)
+        ctx = replace(self.context, owner=self.graph, parent=None, mesh_scope=root.mesh)
         for param in self.graph.params:
             self.visit(param, ctx)
         self.visit_function_body(self.graph, ctx)

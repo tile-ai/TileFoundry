@@ -364,16 +364,16 @@ def add_traffic(
                 )
 
 
-def held_in_region(value_mesh: types.Mesh, region_mesh: types.Mesh) -> bool:
-    """Whether the region selects holders of *value_mesh* at every level it names.
+def held_in_mesh_scope(mesh: types.Mesh, mesh_scope: types.Mesh) -> bool:
+    """Whether *mesh_scope* selects holders of *mesh* at every topology it names.
 
-    A value mesh may also name enclosing levels. Those do not reject a region
-    that states only an inner level; each region level is compared independently
-    so sliced offsets remain in that topology's own numbering.
+    *mesh* may also name enclosing topologies. Those do not reject a mesh scope
+    that states only an inner topology; each topology of *mesh_scope* is compared
+    independently, so sliced offsets remain in that topology's own numbering.
     """
-    for region_level in types.sub_meshes(region_mesh):
-        value_level = types.get(value_mesh, types.topology_names(region_level)[0])
-        if value_level is None or not types.within_mesh_scope(value_level, region_level):
+    for scope_part in types.sub_meshes(mesh_scope):
+        part = types.get(mesh, types.topology_names(scope_part)[0])
+        if part is None or not types.within_mesh_scope(part, scope_part):
             return False
     return True
 
@@ -429,7 +429,7 @@ def values_in_region(
                 if layout is not None
                 else None
             )
-            if layout is None or not held_in_region(ir_utils.filter_topologies(layout).mesh, region.mesh):
+            if layout is None or not held_in_mesh_scope(ir_utils.filter_topologies(layout).mesh, region.mesh):
                 continue
         result.append(item)
     return tuple(result)

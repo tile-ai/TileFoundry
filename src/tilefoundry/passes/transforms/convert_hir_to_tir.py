@@ -513,7 +513,7 @@ class StoragePlan:
         values = (*self.function.params, *core.collect_exprs(self.function.body))
         memo = {id(node): (node, node.type) for node in values}
         ctx = typeinfer.TypeInferContext(
-            module=self.context.module, function=self.function, target=self.context.target, topologies=self.context.topologies, owner=self.function, current_mesh=self.mesh, memo=memo
+            module=self.context.module, function=self.function, target=self.context.target, topologies=self.context.topologies, owner=self.function, mesh_scope=self.mesh, memo=memo
         )
         return valuation.index_contexts(self.function, ctx)
 
@@ -742,7 +742,7 @@ class StoragePlan:
             if not (isinstance(node, expr.Call) and isinstance(node.target, core.FunctionRef)):
                 continue
             frame = self.regions[id(node)].callee_context(node)
-            child = StoragePlan(frame.function, frame, frame.current_mesh).scratch[0]
+            child = StoragePlan(frame.function, frame, frame.mesh_scope).scratch[0]
             calls[id(node)] = tuple(expr.Var(names.fresh(param.name), type=param.type) for param in child)
             params.extend(calls[id(node)])
         return tuple(params), roots, calls
@@ -1359,7 +1359,7 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
             id(param): expr.Var(param.name, type=param.type, is_const=param.is_const)
             for param in self.context.function.params
         }
-        storage = StoragePlan(self.context.function, self.context, self.context.current_mesh)
+        storage = StoragePlan(self.context.function, self.context, self.context.mesh_scope)
         self.context = LoweringContext(
             **{**vars(self.context), "memo": self.memo},
             parameters=physical,
@@ -1473,7 +1473,7 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
         lowering = self.callees.get(id(frame.function))
         if lowering is None:
             lowering = type(self)(
-                typeinfer.TypeInferContext(module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies, owner=frame.function, current_mesh=ctx.current_mesh),
+                typeinfer.TypeInferContext(module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies, owner=frame.function, mesh_scope=ctx.mesh_scope),
                 self.callees,
             )
             lowering.run()

@@ -48,8 +48,8 @@ class Issue:
     operands: tuple[tuple[str, expr.Expr], ...]
     read_values: dict[str, expr.Expr]
     written: expr.Expr | None
-    enclosing: types.Mesh | None
-    issuers: types.Mesh | None
+    mesh_scope: types.Mesh | None
+    execution_mesh: types.Mesh | None
 
 
 class CudaLowering(transforms.Lowering):
@@ -227,7 +227,7 @@ class CudaLowering(transforms.Lowering):
 
     def prepare_operands(self, call: expr.Call, op, operands, ctx) -> Issue:
         """Project *op*, lower the operands it takes and stage each scalar in a register."""
-        mesh = ctx.enclosing_mesh()
+        mesh = ctx.innermost_mesh()
         plan, type_list, owner = ctx.issues.plan(call, op, mesh)
         params = plan.params
         supplied, produced = analysis.operand_roles(call, params)
@@ -273,16 +273,16 @@ class CudaLowering(transforms.Lowering):
             else type_
             for type_ in type_list
         )
-        issuers = analysis.execution_mesh_of(op, owner, mesh)
-        return Issue(plan, type_list, tuple(issued_operands), read_values, written, mesh, issuers)
+        execution_mesh = analysis.execution_mesh_of(op, owner, mesh)
+        return Issue(plan, type_list, tuple(issued_operands), read_values, written, mesh, execution_mesh)
 
     def issue_in_owner(self, call: expr.Call, op, issue: Issue, ctx, emit) -> None:
         """Issue *op* once with its attributes through *emit*, in the region of its owner mesh."""
-        if issue.enclosing is None:
+        if issue.mesh_scope is None:
             raise transforms.LoweringError(f"{transforms.label(call)} instruction issue has no lexical mesh")
         params, type_list = issue.plan.params, issue.types
         with ctx.builder.region(
-            mesh=issue.issuers, binding=expr.Var(ctx.names.fresh("threads"), type=transforms.BINDING)
+            mesh=issue.execution_mesh, binding=expr.Var(ctx.names.fresh("threads"), type=transforms.BINDING)
         ):
             issued = []
             for param, (role, value) in zip(params, issue.operands, strict=True):
@@ -308,7 +308,7 @@ class CudaLowering(transforms.Lowering):
 
     def local_operands(self, op, issue: Issue, ctx) -> list:
         """Each operand as a unit of *op*'s execution mesh holds it, in parameter order."""
-        plan, type_list, issuers = issue.plan, issue.types, issue.issuers
+        plan, type_list, execution_mesh = issue.plan, issue.types, issue.execution_mesh
         required = analysis.required_execution_mesh(op)
         for region in ctx.builder.blocks[:-1]:
             for key, value in region.views.items():
@@ -317,7 +317,7 @@ class CudaLowering(transforms.Lowering):
         unit_coordinates = {}
         for (role, value), type_, rest in zip(issue.operands, type_list, plan.rests, strict=True):
             base = ctx.builder.value(ctx.storage.operand(value, type_, whole_tensor=True), ctx=ctx)
-            binding_mesh = rest.mesh if isinstance(rest, types.ShardLayout) else issuers
+            binding_mesh = rest.mesh if isinstance(rest, types.ShardLayout) else execution_mesh
             frame, dropped = utils.find_execution_mesh(binding_mesh, required)
             source = types.shard_layout_of(base.type.layout)
             attrs = (
@@ -381,7 +381,7 @@ class CudaLowering(transforms.Lowering):
         one serial tile, not a unit of the execution mesh.
         """
         with ctx.builder.region(
-            mesh=issue.issuers, binding=expr.Var(ctx.names.fresh("threads"), type=transforms.BINDING)
+            mesh=issue.execution_mesh, binding=expr.Var(ctx.names.fresh("threads"), type=transforms.BINDING)
         ):
             locals_ = [
                 ctx.builder.bind(expr.Var(ctx.names.fresh(f"{role}_local"), type=base.type), base)

@@ -82,7 +82,7 @@ def call_function(
         if inner.module is None
         else (id(inner.module), inner.target, inner.topologies)
     )
-    key = (id(callee), arg_types, ctx.current_mesh, context)
+    key = (id(callee), arg_types, ctx.mesh_scope, context)
     cached = ctx.instantiated_memo.get(key)
     if cached is not None:
         return cached
@@ -157,12 +157,12 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
                 target.check_indices(target.indices(arg_types))
                 arg_types = target.arguments(arg_types)
                 child_frame = ctx.callee_context(call)
-                check_input_reachability(child_frame.function, arg_types, ctx.current_mesh)
+                check_input_reachability(child_frame.function, arg_types, ctx.mesh_scope)
             except (KeyError, ValueError) as error:
                 ctx.error(call, str(error))
             return call_function(call, arg_types, ctx, child_frame)
         try:
-            check_input_reachability(target, arg_types, ctx.current_mesh)
+            check_input_reachability(target, arg_types, ctx.mesh_scope)
         except ValueError as error:
             ctx.error(call, str(error))
         op_cls = type(target)

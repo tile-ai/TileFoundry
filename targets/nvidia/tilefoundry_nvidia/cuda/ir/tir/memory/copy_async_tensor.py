@@ -173,8 +173,8 @@ class CopyAsyncTensorTx(expr.Op):
 
     Lowering emits it for a selected ``CopyAsyncTensor`` from global to shared
     memory; a schedule never names it. ``barrier`` holds one word per warp; the
-    first issuing thread completes the load on its own warp's word. The box is
-    in ``dst`` for every issuing thread when the operation ends.
+    first executing thread completes the load on its own warp's word. The box is
+    in ``dst`` for every executing thread when the operation ends.
     """
 
     src = expr.ParamDef(

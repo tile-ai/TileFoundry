@@ -27,7 +27,7 @@ def test_single_issue_keeps_instruction_relations() -> None:
     sched = _copy_schedule_call(repeat=(1,), order=(0,))
     source = sched.args[0]
     destination_type = types.TensorType((4,), expr.DType.bf16, types.Layout((4,), (1,)), expr.StorageKind.SMEM)
-    inferred = typeinfer.TypeInferContext(current_mesh=types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,))))
+    inferred = typeinfer.TypeInferContext(mesh_scope=types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,))))
     typeinfer.inference_type(sched, inferred)
     scheduled = access.relations_of(sched, inferred)
     single = schedule.operand_relations(sched.target.op, (source.type, destination_type))
@@ -54,7 +54,7 @@ def test_schedule_typeinfer_rejects_invalid_contract(call: expr.Call, message: s
     with pytest.raises(ValueError, match=message):
         typeinfer.inference_type(
             call,
-            typeinfer.TypeInferContext(current_mesh=types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,)))),
+            typeinfer.TypeInferContext(mesh_scope=types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,)))),
         )
 
 
@@ -68,7 +68,7 @@ def test_schedule_typeinfer_requires_access_relations() -> None:
     with pytest.raises(ValueError, match="states no access relations"):
         typeinfer.inference_type(
             call,
-            typeinfer.TypeInferContext(current_mesh=types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,)))),
+            typeinfer.TypeInferContext(mesh_scope=types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,)))),
         )
 
 
@@ -85,7 +85,7 @@ def test_schedule_typeinfer_requires_instruction_verifier(monkeypatch) -> None:
         access.identity_relations,
     )
 
-    context = typeinfer.TypeInferContext(current_mesh=types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,))))
+    context = typeinfer.TypeInferContext(mesh_scope=types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,))))
     assert typeinfer.inference_type(call, replace(context, memo={})) == type_
     param = expr.schema_of(_UnstatedInstruction).signature[0]
     monkeypatch.setattr(param, "pattern", pattern.Tensor(shape=(3,)))
@@ -121,7 +121,7 @@ def test_schedule_typeinfer_requires_whole_tiles(monkeypatch) -> None:
     ):
         typeinfer.inference_type(
             call,
-            typeinfer.TypeInferContext(current_mesh=types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,)))),
+            typeinfer.TypeInferContext(mesh_scope=types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,)))),
         )
 
 
@@ -142,7 +142,7 @@ def test_schedule_typeinfer_requires_instruction_operands(monkeypatch) -> None:
     ):
         typeinfer.inference_type(
             call,
-            typeinfer.TypeInferContext(current_mesh=types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,)))),
+            typeinfer.TypeInferContext(mesh_scope=types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,)))),
         )
 
 

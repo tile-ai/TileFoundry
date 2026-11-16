@@ -482,7 +482,7 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
             self.context,
             scope=scope,
             owner=scope.owner,
-            current_mesh=scope.mesh,
+            mesh_scope=scope.mesh,
             call_site=node if isinstance(node, expr.Call) else None,
         )
 

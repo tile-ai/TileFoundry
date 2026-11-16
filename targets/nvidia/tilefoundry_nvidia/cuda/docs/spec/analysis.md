@@ -125,7 +125,7 @@ class SyncPlanMetadata(IRMetadata):
     register storage runs on the threads that hold its value. See
     [hir Reshard](../../../../../../docs/spec/hir.md#reshard).
   - **Units.** An action with a `unit` effect MUST run in a scope whose mesh is
-    whole, aligned units that hold the issuing threads. Every loop around that
+    whole, aligned units. These units hold the threads of the execution mesh. Every loop around that
     scope MUST have bounds that the threads of each unit see alike. Such a
     bound is one that a barrier accepts, or a thread coordinate that reads one
     value across each unit. A step of that group needs the same from its scope.
@@ -140,8 +140,8 @@ class SyncPlanMetadata(IRMetadata):
     the later one. A barrier runs over the mesh of that scope. When that mesh
     holds one thread, no barrier runs: the thread's own program order orders
     its plain accesses. Only the barrier is left out. The commit and wait of a
-    group in flight and a proxy fence still run, since an asynchronous write
-    reaches even its issuing thread only through them. Otherwise the mesh MUST
+    group in flight and a proxy fence still run. An asynchronous write reaches
+    even its executing thread only through them. Otherwise the mesh MUST
     be a thread mesh that `classify` supports. Every loop around the position
     MUST have bounds that every thread sees alike. A barrier accepts constants,
     kernel parameters and their captures, and induction variables of such
@@ -196,15 +196,15 @@ class SyncPlanMetadata(IRMetadata):
 
     A retained call's relations are unknown.
   - **Threads.** No step orders the threads of one issue. An instruction that
-    states no execution mesh of its own is issued by every thread of the mesh
-    it runs on, each on the operands as that thread sees them. A retained
-    call, an instruction with a required execution mesh, and one that takes
-    its execution mesh as an attribute, as `CopyAsyncTensor` does, state for
-    themselves which threads issue. For every other action, `threads.py` pairs
-    each shared memory write with itself the way **CTAs** pairs global
-    accesses, with thread coordinates in place of CTA coordinates: the second
-    side renames every thread coordinate, and only the sliced thread meshes
-    around the action keep a thread from issuing it. A copy or fill that
+    states no execution mesh of its own is executed by every thread of its mesh.
+    Each thread uses the operands as it sees them. Some actions state for
+    themselves which threads execute. These are a retained call, an instruction
+    with a required execution mesh, and one that takes its execution mesh as an
+    attribute, as `CopyAsyncTensor` does. For every other
+    action, `threads.py` pairs each shared memory write with itself. It does so
+    the way **CTAs** pairs global accesses, with thread coordinates in place of
+    CTA coordinates. The second side renames every thread coordinate. Only the
+    sliced thread meshes around the action keep a thread from executing it. A copy or fill that
     lowering adds runs in the regions `transfer_meshes` gives it. When no
     operand's mesh splits the threads and the destination is in shared
     memory, the innermost of them is a slice holding the first thread of the
@@ -217,9 +217,9 @@ class SyncPlanMetadata(IRMetadata):
     through it. Two different threads that reach one element are otherwise
     decided by the rows of the **CTAs** table. The family checks **Threads**
     after **CTAs**.
-  - **Word users.** The word of warp `k` has one user, thread `W * k`: a
-    `CopyAsyncTensor` is issued by whole aligned warps, as its execution mesh
-    pattern states ([tir](./tir.md#copyasynctensor)), so its first issuing
+  - **Word users.** The word of warp `k` has one user, thread `W * k`. Whole
+    aligned warps execute a `CopyAsyncTensor`, as its execution mesh pattern
+    states ([tir](./tir.md#copyasynctensor)). So its first executing
     thread starts a warp. The plan orders no word.
   - **Refusals.** The family raises `analysis.Error` when an action or a barrier
     breaks a MUST of **Units** or **Execution mesh**. It also raises it for a loop
@@ -269,8 +269,8 @@ def completion_of(issued: Issued, *, key: type | None = None) -> tuple[Effect, .
   - A handler answers one `Effect` for each read and each write of the issued
     parameters. `effects` builds them in parameter order, with the reads of a
     parameter first. A handler sees the parameter types.
-  - `Mechanism.ON_RETURN` means the effect is complete for the issuing threads
-    once the statement returns. `Mechanism.GROUP` means it completes when those
+  - `Mechanism.ON_RETURN` means the effect is complete for the threads of the
+    execution mesh once the statement returns. `Mechanism.GROUP` means it completes when those
     threads wait on the `group` that holds it.
   - `proxy` is the path the effect takes to shared memory. A `unit` is the
     mesh of one set of threads that issue the instruction together. These

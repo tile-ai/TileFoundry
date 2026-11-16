@@ -36,7 +36,7 @@ def candidates(
                 typeinfer.TypeInferContext(
                     module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies,
                     owner=frame.function,
-                    current_mesh=None if mesh is None else mesh.mesh,
+                    mesh_scope=None if mesh is None else mesh.mesh,
                 ),
             )
         )
@@ -59,7 +59,7 @@ def candidates(
             continue
         calls.append(call)
         context = contexts[id(call)]
-        frame, mesh = context, context.current_mesh
+        frame, mesh = context, context.mesh_scope
         level = None if mesh is None else mesh.topologies[-1].name
         usable, refused = [], []
         for op_type, capability in declared:

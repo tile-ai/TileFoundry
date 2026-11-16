@@ -64,7 +64,7 @@ def test_arange_rejects_unsupported_attributes(op, message):
 
 
 def test_bound_mesh_coord_is_scalar() -> None:
-    inferred = typeinfer.TypeInferVisitor().visit(_coord(), typeinfer.TypeInferContext(current_mesh=_COORD_MESH))
+    inferred = typeinfer.TypeInferVisitor().visit(_coord(), typeinfer.TypeInferContext(mesh_scope=_COORD_MESH))
     assert inferred.shape == ()
     assert inferred.dtype == DType.i64
     assert inferred.layout == types.Layout(())
@@ -80,7 +80,7 @@ def test_inner_mesh_coord_binds_multilevel() -> None:
     cta = types.Mesh((Topology("cta", 2),), types.Layout((2,), (1,)), ("c",))
     current = types.Mesh.from_meshes(cta, _COORD_MESH)
     assert (
-        typeinfer.TypeInferVisitor().visit(_coord(), typeinfer.TypeInferContext(current_mesh=current)) == _COORD_INDEX
+        typeinfer.TypeInferVisitor().visit(_coord(), typeinfer.TypeInferContext(mesh_scope=current)) == _COORD_INDEX
     )
 
 

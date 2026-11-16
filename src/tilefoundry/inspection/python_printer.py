@@ -818,7 +818,7 @@ def emit_def(
                 lines.append(f"{prefix}return {printer.reference(region.body, ctx)}")
             return
         mesh_text = printer.mesh_context(region.mesh, ctx)
-        mesh_name = ctx.scope_name(region.mesh)
+        mesh_name = ctx.mesh_name(region.mesh)
         lines.append(
             f"{prefix}with {mesh_text} as {mesh_name}:{metadata_comments(region, options, printer, ctx)}"
         )

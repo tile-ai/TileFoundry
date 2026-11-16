@@ -537,7 +537,7 @@ __device__ void mma(TA const &a, TB const &b, TC &c);
 **`mma`.**
 
 `c += a @ b` for one atom. The operands are the calling lane's already-gathered
-fragments, and the entry issues one instruction.
+fragments, and the entry executes one instruction.
 
 - constraints:
   - The element type of `a` selects the atom: bf16 selects
@@ -651,7 +651,7 @@ wait for data fetched by another thread.
 - constraints:
   - Take tensors, not addresses or byte counts: shape, strides and element
     types come from operand layouts ([§2.6](#26-cudaops)).
-  - One elected thread issues nonblocking `cp.async.bulk`. Off-grain byte
+  - One elected thread executes nonblocking `cp.async.bulk`. Off-grain byte
     counts hand off at runtime to an element path executed by every block
     thread. Both paths complete the same barrier and are safe to call from
     every thread; consumers only wait on phase.
@@ -686,7 +686,7 @@ One warp loads a dense shared-memory `(16, 16)` bf16 tile into the per-lane A
 fragment consumed by `ops::mma`'s SM80 atom.
 
 - constraints:
-  - All 32 lanes issue `ldmatrix.sync.aligned.m8n8.x4.shared.b16` together.
+  - All 32 lanes execute `ldmatrix.sync.aligned.m8n8.x4.shared.b16` together.
     Each lane contributes the 16-byte-aligned address selected by the source's
     declared shard layout; a full-broadcast shard still uses that declaration,
     not the backing allocation's incidental layout.

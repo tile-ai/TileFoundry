@@ -62,9 +62,9 @@ class CudaLowering(Lowering):
   - `CopyAsyncTensor` and `CopyReduceAsyncTensor` register no asynchronous
     completion group: their effects complete on return, the shared operand
     through the async proxy ([analysis §2](./analysis.md#2-completion-registry)).
-    Their emitters MUST finish each copy before the operation ends: an mbarrier
-    wait for a load, a full bulk wait (not `.read`) for a store or reduction,
-    each followed by a meeting of the issuing threads.
+    Their emitters MUST finish each copy before the operation ends. A load
+    needs an mbarrier wait. A store or reduction needs a full bulk wait (not
+    `.read`). The threads of the execution mesh meet after each wait.
   - `visit_T_CopyAsyncTensor` lowers a load from global to shared memory to
     `CopyAsyncTensorTx` wherever `default_visit_T` would issue the load, with
     the words `SyncPlanMetadata.barriers` places as `barrier`: `count` words of

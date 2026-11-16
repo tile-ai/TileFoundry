@@ -44,7 +44,7 @@ class _OperandMatchVisitor(core.StmtVisitor[None]):
         op = stmt.callable
         if expr.schema_of(type(op)) is None:
             return
-        bindings, projection = schedule.check_call(op, stmt.args, ctx.current_mesh, frame=ctx)
+        bindings, projection = schedule.check_call(op, stmt.args, ctx.mesh_scope, frame=ctx)
         for param, declared in zip(projection.params, projection.patterns, strict=True):
             if declared is not None:
                 self.matches.append((op, param.name, dict(bindings)))

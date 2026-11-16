@@ -281,7 +281,7 @@ class Context:
     target: Target | None = None
     topologies: tuple[Topology, ...] | None = None
     caller_context: valuation.Context | None = None
-    current_mesh: Mesh | None = None
+    mesh_scope: Mesh | None = None
     loops: tuple[tuple[Expr, object, object, object], ...] = ()
     loop_aliases: dict[int, Expr] = field(default_factory=dict)
     call_site: Call | None = None
@@ -297,7 +297,7 @@ class Context:
     def capture_root(self, expr: Expr) -> Expr: ...
     def ancestors(self) -> Iterator[valuation.Context]: ...
     def enclosing_meshes(self) -> tuple[Mesh, ...]: ...
-    def enclosing_mesh(self) -> Mesh | None: ...
+    def innermost_mesh(self) -> Mesh | None: ...
     def resolve_target(self) -> Target | None: ...
 
 
@@ -336,15 +336,15 @@ Lexical parent links and caller links MUST remain distinct.
   - `enter_region` returns a context whose `owner` is the region and whose
     `parent` is the outer context. An HIR `LoopRegion` or `MeshRegion` records
     its captures; a `LoopRegion` appends to `loops`. A `MeshRegion` or TIR
-    `MeshScope` composes its mesh into `current_mesh`. A TIR `For` only enters
-    the lexical region chain: `loops`, `loop_aliases`, and `current_mesh` stay
+    `MeshScope` composes its mesh into `mesh_scope`. A TIR `For` only enters
+    the lexical region chain: `loops`, `loop_aliases`, and `mesh_scope` stay
     unchanged.
   - `ancestors()` yields contexts from the innermost to the definition root.
     `enclosing_meshes()` returns the mesh of each `MeshRegion` or `MeshScope`
     owner in that chain, outermost first. When the chain has none, it returns
-    `(current_mesh,)`, the definition's external mesh, or `()` when that is
+    `(mesh_scope,)`, the definition's external mesh, or `()` when that is
     `None`; an authored mesh is not prefixed with the external one.
-    `enclosing_mesh()` is the last element of `enclosing_meshes()`, or `None`.
+    `innermost_mesh()` is the last element of `enclosing_meshes()`, or `None`.
 
 `valuation.Context` carries the current Module, function, effective target, and
 whole topology hierarchy directly. A shared definition carries no parent or
@@ -360,7 +360,7 @@ inherited execution context ([core-ir §1](./core-ir.md#1-module)).
     definitions once through the shared dispatch; postorder visits dependencies
     before callers. Ordinary Call visits do not enter the called body.
   - Crossing a Function boundary uses `dataclasses.replace` so a context
-    subclass retains its analysis-specific state. It also retains `current_mesh`:
+    subclass retains its analysis-specific state. It also retains `mesh_scope`:
     a callee inherits the call site's mesh, and a region in its body composes
     with it using the usual nested-region rules.
   - `resolve_target` MUST return the context's effective Target, or
@@ -455,9 +455,9 @@ def inference_type(expr: Expr, ctx: TypeInferContext | None = None, *, ranges=Fa
     result is the carried entry types ([hir §1.2](./hir.md#12-loopregion)). It
     overrides the complete node visit; the base has no per-kind operand hook.
   - `visit_MeshRegion` composes the region mesh with the enclosing HIR
-    `current_mesh`, checks the resulting topology, and visits the body with a
+    `mesh_scope` and checks the resulting topology. It visits the body with a
     new visitor seeded from the region's entry bindings, in a replaced child
-    context, so a rule reading `ctx.type_of` inside the body sees the types
+    context. So a rule reading `ctx.type_of` inside the body sees the types
     derived in it. The region result type is the body's type.
   - `visit_leaf_ShapeOf` returns the node's declared rank-0 i32 type.
   - `inference_type` creates a fresh non-owning visitor and returns the inferred
@@ -607,7 +607,7 @@ field):
 ```python
 # tilefoundry.interfaces.verify
 @dataclass
-class Context(TypeInferContext):   # inherits current_mesh and the region chain
+class Context(TypeInferContext):   # inherits mesh_scope and the region chain
     """The context a per-stmt verify handler is annotated against."""
 ```
 
@@ -615,9 +615,9 @@ class Context(TypeInferContext):   # inherits current_mesh and the region chain
   - Where a statement stands is the shared region chain
     ([§4](#4-instance-1--typeinfer)): the verifier enters each TIR `MeshScope`
     and `For` with `enter_region`. A handler reads the composed
-    `current_mesh`, each enclosing mesh through `enclosing_meshes()`, or the
-    innermost through `enclosing_mesh()`. A context built without a region
-    chain answers `(current_mesh,)`.
+    `mesh_scope`, each enclosing mesh through `enclosing_meshes()`, or the
+    innermost through `innermost_mesh()`. A context built without a region
+    chain answers `(mesh_scope,)`.
 
 Registry + registration function, both exported by `tilefoundry.interfaces.verify`:
 
@@ -685,7 +685,7 @@ class Visitor(StmtExprVisitor[None]):
     each field `stmt_expr_fields` names goes through the same use rules, so a
     non-IR value is refused by name;
     `For` and `MeshScope` bodies are visited in `ctx.enter_region(stmt)`.
-    Effect Ops go through `check_call` with `ctx.current_mesh`.
+    Effect Ops go through `check_call` with `ctx.mesh_scope`.
 
 **Unregistered semantics.** The built-in control-flow / binding Stmts and
 `Evaluate` have dedicated methods; their semantic constraints (e.g.

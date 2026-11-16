@@ -663,7 +663,7 @@ class MeshAxisBoundOnceRule:
 def shard_layout_scope(context):
     if context.function is None or context.situation == "mesh_layout":
         return None
-    return authored_infer_context(context).current_mesh
+    return authored_infer_context(context).mesh_scope
 
 
 @dataclass(frozen=True)
@@ -4360,7 +4360,7 @@ def note_authored_call(node, context):
     """
     if context.function is None or context.function.dialect != "hir":
         return
-    if authored_infer_context(context).current_mesh is not None:
+    if authored_infer_context(context).mesh_scope is not None:
         return
     state = context.function.state
     if state.opened_mesh:
@@ -4446,13 +4446,13 @@ def enter_mesh_scope(context, mesh, match):
             reject_unscoped_call(state.unscoped_call, context)
         state.open_mesh()
     try:
-        entered_mesh = runtime.make_mesh(infer.current_mesh, mesh) if infer.current_mesh else mesh
+        mesh_scope = runtime.make_mesh(infer.mesh_scope, mesh) if infer.mesh_scope else mesh
     except ValueError as error:
         raise ParseError.from_node(match.node, context, str(error)) from error
     context.lexical_scope.push_frame()
     context.lexical_scope.define(
         TYPE_INFER_CONTEXT,
-        dataclasses.replace(infer, current_mesh=entered_mesh, parent=infer),
+        dataclasses.replace(infer, mesh_scope=mesh_scope, parent=infer),
     )
 
 
@@ -6004,8 +6004,8 @@ class FunctionPattern(ElementPattern):
         converter = context.function.converter
         if context.function.dialect == "hir":
             if body is not None and context.function.mesh is not None:
-                outer_mesh = authored_infer_context(context).current_mesh
-                if not isinstance(outer_mesh, runtime.Mesh):
+                root_mesh = authored_infer_context(context).mesh_scope
+                if not isinstance(root_mesh, runtime.Mesh):
                     raise ParseError.from_node(
                         match.node, context, "function mesh could not be resolved"
                     )
@@ -6016,7 +6016,7 @@ class FunctionPattern(ElementPattern):
                     body,
                     {id(old): new for old, new in zip(params, region_params, strict=True)},
                 )
-                body = scoped_region(outer_mesh, body, params=region_params, args=params)
+                body = scoped_region(root_mesh, body, params=region_params, args=params)
             declared_return = (
                 None if declared_return is None else dim.canonicalize_dims(declared_return)
             )

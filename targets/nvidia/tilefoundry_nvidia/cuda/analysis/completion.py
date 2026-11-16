@@ -49,8 +49,8 @@ class Issued:
 class Effect:
     """When one read or write of an issued parameter is complete.
 
-    ``ON_RETURN`` effects are complete for the issuing threads when the statement
-    returns, ``GROUP`` ones once those threads wait for ``group``. ``proxy`` is
+    ``ON_RETURN`` effects are complete for the threads of the execution mesh when
+    the statement returns, ``GROUP`` ones once those threads wait for ``group``. ``proxy`` is
     the path to shared or global memory. ``unit`` is the mesh of one group of
     threads that run the group's steps, and the issue itself, together. A
     ``fence`` effect on registers needs the group's fence since any other access to them, except an

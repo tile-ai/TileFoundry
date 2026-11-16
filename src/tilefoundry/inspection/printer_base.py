@@ -452,7 +452,7 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
         elif isinstance(layout, types.Layout):
             operand = self.layout_surface(layout, ctx)
         if ctx is not None and all(isinstance(attr, types.Broadcast) for attr in value.attrs):
-            current = ctx.current_mesh
+            current = ctx.mesh_scope
             if current is not None and operand is not None:
                 current = ir_utils.filter_topologies(types.ShardLayout(layout, tuple(
                     types.Broadcast() for _ in range(len(current.shape))

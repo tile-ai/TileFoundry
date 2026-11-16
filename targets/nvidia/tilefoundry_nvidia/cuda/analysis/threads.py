@@ -22,7 +22,7 @@ from .emission import required_execution_mesh
 
 
 def issued_op(planner, action):
-    """The instruction every issuing thread runs on its own for *action*, or None.
+    """The instruction every executing thread runs on its own for *action*, or None.
 
     A retained call orders its own accesses. An instruction with a required
     execution mesh is issued once for each point of it, and one that takes its
@@ -128,7 +128,7 @@ def thread_level(value) -> bool:
 def refuse_thread_overlaps(planner) -> None:
     """Refuse the planner's Function when two threads may write one shared element in one issue.
 
-    Each shared memory write of an action that every issuing thread runs on its
+    Each shared memory write of an action that every executing thread runs on its
     own pairs with itself, unless its layout, or a split operand a ``Copy``
     projects it through, gives each of its bytes one writer among the threads
     that run it. Both executions see the same values for everything but thread

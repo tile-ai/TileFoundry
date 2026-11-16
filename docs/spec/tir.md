@@ -914,7 +914,7 @@ class CopyAsync(Op):
     including its out-of-range fill behavior.
   - A later read of `dst` is ordered by `CpAsyncCommit` followed by
     `CpAsyncWait`.
-  - `execution_mesh` states the issuing threads. The gmem and smem operands are
+  - `execution_mesh` states the threads that execute the copy. The gmem and smem operands are
     unsharded and therefore declare no separate holder mesh.
 
 ##### CpAsyncCommit

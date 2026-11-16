@@ -587,11 +587,11 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
                 memo={
                     id(arg): (arg, type_) for arg, type_ in zip(args, tiles.tiles, strict=True)
                 },
-                current_mesh=mesh,
+                mesh_scope=mesh,
             )
             if isinstance(frame, verify.Context)
             else verify.Context(
-                module=None if frame is None else frame.module, function=None if frame is None else frame.function, target=None if frame is None else frame.target, topologies=None if frame is None else frame.topologies, current_mesh=mesh
+                module=None if frame is None else frame.module, function=None if frame is None else frame.function, target=None if frame is None else frame.target, topologies=None if frame is None else frame.topologies, mesh_scope=mesh
             )
         )
         try:
