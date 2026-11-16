@@ -856,7 +856,7 @@ An operand that carries a `ShardLayout` and executes element-wise MUST use that
 same execution-mesh pattern in `pattern.ShardLayout.mesh`. Unsharded gmem and
 smem operands carry no holder mesh; the execution declaration does not invent
 one for them. Plain operands read their state through
-[shard §6.1](./shard.md#61-placement-semantics) and match Broadcast only on
+[shard §6.1](./shard.md#61-shard-attr-semantics) and match Broadcast only on
 axes that do not separate storage copies.
 
 #### Async copy Ops (`tir.async_copy.*`)

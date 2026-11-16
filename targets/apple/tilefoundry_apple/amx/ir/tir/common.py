@@ -412,7 +412,7 @@ def infer(call, ctx):
     return check_types(call.target, tuple(ctx.type_of(a) for a in call.args))
 
 
-def placements(op, type_list):
+def operand_addresses(op, type_list):
     """Byte starts of logical elements; arithmetic is exclusively in evaluator semantics."""
     n = op.mnemonic
     out = {}
@@ -877,9 +877,9 @@ __all__ = [
     "int_vector_layout",
     "layout_offsets",
     "mode_offsets",
+    "operand_addresses",
     "operand_types",
     "packed_input_layout",
-    "placements",
     "validate",
     "vector_input_layout",
     "vector_layout",

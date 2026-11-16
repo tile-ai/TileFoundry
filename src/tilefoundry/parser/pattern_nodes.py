@@ -339,7 +339,7 @@ class PlainLayoutPattern(ElementPattern):
 
 @dataclass(frozen=True)
 class MeshAxisBindingRule:
-    STATEMENT: ClassVar[str] = "A placement axis resolves to a lexical Mesh binding."
+    STATEMENT: ClassVar[str] = "A shard layout axis resolves to a lexical Mesh binding."
 
     def apply(self, value, *, match, context):
         mesh, binding, _ = value
@@ -352,20 +352,20 @@ class MeshAxisBindingRule:
 
 @dataclass(frozen=True)
 class BareMeshAxisRule:
-    STATEMENT: ClassVar[str] = "A bare Mesh placement names a one-axis mesh."
+    STATEMENT: ClassVar[str] = "A bare Mesh in a shard layout names a one-axis mesh."
 
     def apply(self, value, *, match, context):
         mesh, _, axis_name = value
         if axis_name is None and len(types.flatten(mesh.layout).shape) != 1:
             raise ParseError.from_node(
-                match.node, context, "bare Mesh placement requires a one-axis mesh"
+                match.node, context, "a bare Mesh in a shard layout requires a one-axis mesh"
             )
         return value
 
 
 @dataclass(frozen=True)
 class MeshAxisNameRule:
-    STATEMENT: ClassVar[str] = "A named placement axis exists in its lexical Mesh."
+    STATEMENT: ClassVar[str] = "A named shard layout axis exists in its lexical Mesh."
 
     def apply(self, value, *, match, context):
         mesh, binding, axis_name = value
@@ -407,24 +407,24 @@ class MeshAxisPattern(ElementPattern):
 
 
 def meshes_outermost_first(meshes, context):
-    """Order placement meshes according to the module's topology declaration."""
+    """Order shard layout meshes according to the module's topology declaration."""
     declared = tuple(context.function.topologies) if context.function is not None else ()
     order = {name: index for index, name in enumerate(declared)}
 
     def rank(mesh):
-        levels = tuple(getattr(topology, "name", topology) for topology in mesh.topologies)
-        return min((order.get(level, len(order)) for level in levels), default=len(order))
+        topology_names = tuple(getattr(topology, "name", topology) for topology in mesh.topologies)
+        return min((order.get(name, len(order)) for name in topology_names), default=len(order))
 
     return tuple(sorted(meshes, key=rank))
 
 
 @dataclasses.dataclass(frozen=True)
 class PlacedLayout:
-    """A placement written as sugar: the shape the author wrote, and where it goes.
+    """A shard layout written as sugar: the shape the author wrote, and where it goes.
 
     The two are separate answers and neither reproduces the other. ``shape`` is
     the extent tuple as written, before any mesh axis divides it, which is what
-    a Tensor type states. ``layout`` is the placement that sugar implies, whose
+    a Tensor type states. ``layout`` is the shard layout that sugar implies, whose
     own shape is the divided one. Reading a logical shape back off the layout
     gives the divided shape instead, which is a different type.
     """
@@ -583,7 +583,7 @@ def value_state_parts(node: ast.AST):
 
 
 @dataclass(frozen=True)
-class PlacementCandidate:
+class ShardLayoutCandidate:
     shape: tuple
     strides: tuple | None
     splits: tuple[tuple[object, int, int], ...]
@@ -594,7 +594,7 @@ class PlacementCandidate:
     composed: types.ComposedLayout | None = None
 
 
-def placement_meshes(value: PlacementCandidate, context: MatchContext, match):
+def shard_layout_meshes(value: ShardLayoutCandidate, context: MatchContext, match):
     referenced_ids = {id(entry[0]) for entry in (*value.splits, *value.states)}
     if not referenced_ids:
         return ()
@@ -603,7 +603,7 @@ def placement_meshes(value: PlacementCandidate, context: MatchContext, match):
     meshes = tuple(dict.fromkeys(entry[0] for entry in (*value.splits, *value.states)))
     if len(meshes) != len(referenced_ids):
         raise ParseError.from_node(
-            match.node, context, "placement references a non-lexical Mesh binding"
+            match.node, context, "shard layout references a non-lexical Mesh binding"
         )
     return meshes
 
@@ -621,34 +621,34 @@ class LayoutStrideRankRule:
 
 
 @dataclass(frozen=True)
-class PlacementMeshResolutionRule:
-    STATEMENT: ClassVar[str] = "A placement's mesh must be a lexical mesh binding."
+class ShardLayoutMeshResolutionRule:
+    STATEMENT: ClassVar[str] = "A shard layout's mesh must be a lexical mesh binding."
 
     def apply(self, value, *, match, context):
-        placement_meshes(value, context, match)
+        shard_layout_meshes(value, context, match)
         return value
 
 
 @dataclass(frozen=True)
-class PlacementLevelRule:
-    STATEMENT: ClassVar[str] = "A placement's meshes cannot name the same topology."
+class ShardLayoutTopologyRule:
+    STATEMENT: ClassVar[str] = "A shard layout's meshes cannot name the same topology."
 
     def apply(self, value, *, match, context):
-        meshes = placement_meshes(value, context, match)
-        levels = [topology.name for mesh in meshes for topology in mesh.topologies]
-        if len(levels) != len(set(levels)):
-            duplicates = sorted(name for name in set(levels) if levels.count(name) > 1)
+        meshes = shard_layout_meshes(value, context, match)
+        topology_names = [topology.name for mesh in meshes for topology in mesh.topologies]
+        if len(topology_names) != len(set(topology_names)):
+            duplicates = sorted(name for name in set(topology_names) if topology_names.count(name) > 1)
             raise ParseError.from_node(
                 match.node,
                 context,
-                f"a layout can split one level once; two of these meshes name {duplicates}",
+                f"a layout can split one topology once; two of these meshes name {duplicates}",
             )
         return value
 
 
 @dataclass(frozen=True)
 class MeshAxisBoundOnceRule:
-    STATEMENT: ClassVar[str] = "A placement binds each mesh axis at most once."
+    STATEMENT: ClassVar[str] = "A shard layout binds each mesh axis at most once."
 
     def apply(self, value, *, match, context):
         seen: set[tuple[int, int]] = set()
@@ -660,16 +660,16 @@ class MeshAxisBoundOnceRule:
         return value
 
 
-def placement_scope(context):
+def shard_layout_scope(context):
     if context.function is None or context.situation == "mesh_layout":
         return None
     return authored_infer_context(context).current_mesh
 
 
 @dataclass(frozen=True)
-class PlacementScopeRule:
+class ShardLayoutScopeRule:
     STATEMENT: ClassVar[str] = (
-        "A placement requires and covers the current mesh scope, or the function "
+        "A shard layout requires and covers the current mesh scope, or the function "
         "mesh in a signature; each referenced axis must "
         "map uniquely to an axis of that scope. Unstated axes are Broadcast."
     )
@@ -677,10 +677,10 @@ class PlacementScopeRule:
     def apply(self, value, *, match, context):
         if not value.splits and not value.states and not value.states_written:
             return value
-        mesh = placement_scope(context)
+        mesh = shard_layout_scope(context)
         if mesh is None:
             raise ParseError.from_node(
-                match.node, context, "placement requires a current mesh scope"
+                match.node, context, "shard layout requires a current mesh scope"
             )
         keys = types.axis_keys(mesh)
         attrs = [runtime.Broadcast() for _ in keys]
@@ -691,7 +691,7 @@ class PlacementScopeRule:
                 raise ParseError.from_node(
                     match.node,
                     context,
-                    "placement axis does not map uniquely to the current mesh scope",
+                    "shard layout axis does not map uniquely to the current mesh scope",
                 )
             if len(state) == 1:
                 attr = runtime.Split(state[0])
@@ -703,11 +703,11 @@ class PlacementScopeRule:
 
 
 @dataclass(frozen=True)
-class PlacementConstructionRule:
-    """Materialize the candidate only after placement invariants have run."""
+class ShardLayoutConstructionRule:
+    """Materialize the candidate only after shard layout invariants have run."""
 
     STATEMENT: ClassVar[str] = (
-        "A placement must construct a valid shard layout. Without splits, partials "
+        "Shard layout sugar must construct a valid shard layout. Without splits, partials "
         "or stated strides, it uses row-major strides; Broadcast states do not "
         "affect this default. A composed operand is retained directly without "
         "canonical split decomposition."
@@ -746,24 +746,24 @@ class PlacementConstructionRule:
 
 
 @dataclass(frozen=True)
-class PlacementAnswerRule:
-    """A placement answers both halves: the shape written, and where it goes."""
+class ShardLayoutAnswerRule:
+    """Shard layout sugar answers both halves: the shape written, and where it goes."""
 
     STATEMENT: ClassVar[str] = (
-        "Placement sugar states both the shape as written and the layout it implies."
+        "Shard layout sugar states both the shape as written and the layout it implies."
     )
 
     def apply(self, value, *, match, context):
         if not isinstance(value, PlacedLayout):
-            raise ParseError.from_node(match.node, context, "placement did not answer a placement")
+            raise ParseError.from_node(match.node, context, "shard layout sugar did not answer a shard layout")
         if not isinstance(value.shape, tuple):
-            raise ParseError.from_node(match.node, context, "placement shape is not a tuple")
+            raise ParseError.from_node(match.node, context, "shard layout shape is not a tuple")
         if not isinstance(value.layout, runtime.LayoutBase):
-            raise ParseError.from_node(match.node, context, "placement did not carry a LayoutBase")
+            raise ParseError.from_node(match.node, context, "shard layout did not carry a LayoutBase")
         return value
 
 
-def placement_operand_syntax():
+def shard_layout_operand_syntax():
     return ChoicePattern(
         AstNodePattern(
             ast.Tuple,
@@ -773,10 +773,10 @@ def placement_operand_syntax():
     )
 
 
-def placement_parts(node: ast.AST) -> tuple[ast.AST, tuple[ast.AST, ...]] | None:
+def shard_layout_parts(node: ast.AST) -> tuple[ast.AST, tuple[ast.AST, ...]] | None:
     if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.MatMult):
         return None
-    left = placement_parts(node.left)
+    left = shard_layout_parts(node.left)
     if left is None:
         extent = node.left
         axes: tuple[ast.AST, ...] = ()
@@ -799,14 +799,14 @@ def enter_placed_layout(
     dims_node, strides_node = parts
     children: list[AstChild] = []
     bindings: list[tuple[str, int]] = []
-    found_placement = False
+    found_shard_layout = False
     for tensor_axis, item in enumerate(dims_node.elts):
-        placement = placement_parts(item)
+        parts = shard_layout_parts(item)
         extent_node = item
         axis_nodes: tuple[ast.AST, ...] = ()
-        if placement is not None:
-            found_placement = True
-            extent_node, axis_nodes = placement
+        if parts is not None:
+            found_shard_layout = True
+            extent_node, axis_nodes = parts
         extent_context = context.child(situation="layout_extent", role="layout_extent")
         if DimExprPattern().match(extent_node, extent_context) is None:
             return None
@@ -842,7 +842,7 @@ def enter_placed_layout(
                     "layout_strides",
                 )
             )
-    if not allow_plain and not found_placement and strides_node is None:
+    if not allow_plain and not found_shard_layout and strides_node is None:
         return None
     return dataclasses.replace(
         matched,
@@ -859,12 +859,12 @@ def enter_placed_layout(
 
 
 class PlacedLayoutPattern(ElementPattern):
-    """The one placement production, including dimensions, strides, and states."""
+    """The one shard layout production, including dimensions, strides, and states."""
 
     element_name = "placed_layout"
     syntax = LazyPattern(
         lambda: BindPattern(
-            placement_operand_syntax(),
+            shard_layout_operand_syntax(),
             enter_placed_layout,
         )
     )
@@ -882,31 +882,31 @@ class PlacedLayoutPattern(ElementPattern):
             (*children[child_name], tensor_axis)
             for child_name, tensor_axis in match.captures["bindings"]
         )
-        return PlacementCandidate(shape, strides, splits, ())
+        return ShardLayoutCandidate(shape, strides, splits, ())
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         LayoutStrideRankRule(),
         MeshAxisBoundOnceRule(),
-        PlacementMeshResolutionRule(),
-        PlacementLevelRule(),
-        PlacementScopeRule(),
-        PlacementConstructionRule(),
-        PlacementAnswerRule(),
+        ShardLayoutMeshResolutionRule(),
+        ShardLayoutTopologyRule(),
+        ShardLayoutScopeRule(),
+        ShardLayoutConstructionRule(),
+        ShardLayoutAnswerRule(),
     )
 
 
-def bind_placement_operand(node, context, matched):
+def bind_shard_layout_operand(node, context, matched):
     return enter_placed_layout(node, context, matched, allow_plain=True)
 
 
-class PlacementOperandPattern(PlacedLayoutPattern):
-    """Parse placement dimensions before the enclosing state rules construct them."""
+class ShardLayoutOperandPattern(PlacedLayoutPattern):
+    """Parse shard layout dimensions before the enclosing state rules construct them."""
 
-    element_name = "placement_operand"
+    element_name = "shard_layout_operand"
     syntax = LazyPattern(
         lambda: BindPattern(
-            placement_operand_syntax(),
-            bind_placement_operand,
+            shard_layout_operand_syntax(),
+            bind_shard_layout_operand,
         )
     )
     RULES = ()
@@ -914,16 +914,16 @@ class PlacementOperandPattern(PlacedLayoutPattern):
 @dataclass(frozen=True)
 class StatedLayoutOperandRule:
     STATEMENT: ClassVar[str] = (
-        "States attach to placement dimensions, a plain Layout, or a ComposedLayout "
+        "States attach to shard layout dimensions, a plain Layout, or a ComposedLayout "
         "whose outer is a plain Layout."
     )
 
     def apply(self, value, *, match, context):
         operand, states = value
-        if isinstance(operand, PlacementCandidate):
+        if isinstance(operand, ShardLayoutCandidate):
             return dataclasses.replace(operand, states=states, states_written=True)
         if isinstance(operand, types.ComposedLayout):
-            return PlacementCandidate(
+            return ShardLayoutCandidate(
                 operand.shape,
                 None,
                 (),
@@ -933,9 +933,9 @@ class StatedLayoutOperandRule:
             )
         if not isinstance(operand, types.Layout):
             raise ParseError.from_node(
-                match.node, context, "layout states require a Layout or placement operand"
+                match.node, context, "layout states require a Layout or shard layout operand"
             )
-        return PlacementCandidate(
+        return ShardLayoutCandidate(
             operand.shape,
             operand.strides,
             (),
@@ -978,7 +978,7 @@ class StatedLayoutPattern(ElementPattern):
                         "operand",
                         ChoicePattern(
                             ComposedLayoutSugarPattern(),
-                            PlacementOperandPattern(),
+                            ShardLayoutOperandPattern(),
                             StaticValuePattern(),
                         ),
                         "layout",
@@ -1025,7 +1025,7 @@ class ComposedLayoutOffsetRule:
 
 @dataclass(frozen=True)
 class ComposedLayoutOuterRule:
-    STATEMENT: ClassVar[str] = "A composed layout's outer is a plain Layout without mesh placement."
+    STATEMENT: ClassVar[str] = "A composed layout's outer is a plain Layout without a shard layout."
 
     def apply(self, value, *, match, context):
         outer = value["outer"]
@@ -1033,7 +1033,7 @@ class ComposedLayoutOuterRule:
             outer = outer.layout
         if not isinstance(outer, types.Layout):
             raise ParseError.from_node(
-                match.node, context, "composed layout outer must be a Layout without mesh placement"
+                match.node, context, "composed layout outer must be a Layout without a shard layout"
             )
         return {**value, "outer": outer}
 
@@ -1437,7 +1437,7 @@ class TensorPattern(ElementPattern):
     def construct(self, match, children, context):
         """One layout, from one slot.
 
-        A shape slot's placement sugar states a layout, and so does a layout
+        A shape slot's shard layout sugar states a layout, and so does a layout
         slot. Accepting both at once meant one silently replaced the other, so
         the arity branches keep them apart: a stated layout slot takes a plain
         shape beside it.

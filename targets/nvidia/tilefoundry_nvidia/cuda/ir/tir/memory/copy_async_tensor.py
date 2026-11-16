@@ -54,7 +54,7 @@ def tma_box_pattern(dtype: str, *, allow_partial=False) -> pattern.Switch:
     boxes = {
         TmaSwizzle.NONE: pattern.Layout(
             predicates=(
-                pattern.PlainArrangement(allow_partial=allow_partial),
+                pattern.Strided(allow_partial=allow_partial),
                 pattern.BoxDims(plain_dims, dtype, BOX_EXTENT, allow_partial=allow_partial),
                 *dim_formulas("dim0", dtype),
                 *rest_formulas,
@@ -73,7 +73,7 @@ def tma_box_pattern(dtype: str, *, allow_partial=False) -> pattern.Switch:
             0,
             pattern.Layout(
                 predicates=(
-                    pattern.PlainArrangement(allow_partial=allow_partial),
+                    pattern.Strided(allow_partial=allow_partial),
                     pattern.BoxDims(
                         dims,
                         dtype,
@@ -93,7 +93,7 @@ def tma_global_pattern(dtype: str) -> pattern.Layout:
     steps = tuple(pattern.Wildcard(f"step{index}") for index in range(1, TMA_RANK))
     return pattern.Layout(
         predicates=(
-            pattern.PlainArrangement(),
+            pattern.Strided(),
             pattern.TensorMap(steps, dtype),
             *(pattern.Bits(dtype) * step % TMA_UNIT_BITS == 0 for step in steps),
         )

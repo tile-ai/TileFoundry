@@ -10,7 +10,7 @@ from tilefoundry.ir import types
 from .match import named
 
 
-def strided_arrangement(layout, *, allow_partial=False):
+def strided_layout(layout, *, allow_partial=False):
     """Read a strided address layout beneath permitted value-state wrappers."""
     if isinstance(layout, types.ShardLayout):
         if not all(
@@ -79,12 +79,10 @@ class SameConstraint(Constraint):
         return f"{self.left}.{self.field} = {self.right}.{self.field}"
 
 
-def read_mode(tensor: types.TensorType, arrangement=None, *, allow_partial=False):
-    layout = strided_arrangement(
-        tensor.layout if arrangement is None else arrangement, allow_partial=allow_partial
-    )
+def read_mode(tensor: types.TensorType, stated=None, *, allow_partial=False):
+    layout = strided_layout(tensor.layout if stated is None else stated, allow_partial=allow_partial)
     if layout is None:
-        return None, f"{tensor.layout!r} is no strided arrangement"
+        return None, f"{tensor.layout!r} is no strided layout"
     shape, strides = tuple(layout.shape), tuple(layout.strides)
     extents = tuple(tensor.shape)
     if len(shape) != len(extents) or any(
@@ -133,12 +131,12 @@ class SameModesConstraint(Constraint):
             and left.attrs == right.attrs
             and left.mesh == right.mesh
         ):
-            arrangements = (left.layout, right.layout)
+            stated_layouts = (left.layout, right.layout)
         else:
-            arrangements = (None, None)
+            stated_layouts = (None, None)
         return tuple(
-            read_mode(value, arrangement, allow_partial=self.allow_partial)
-            for value, arrangement in zip(pair, arrangements)
+            read_mode(value, stated, allow_partial=self.allow_partial)
+            for value, stated in zip(pair, stated_layouts)
         )
 
     def holds(self, operands: dict) -> bool:
@@ -192,5 +190,5 @@ __all__ = [
     "DistinctConstraint",
     "SameConstraint",
     "SameModesConstraint",
-    "strided_arrangement",
+    "strided_layout",
 ]

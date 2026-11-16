@@ -139,7 +139,7 @@ class ReuseWindow:
 class RegionMemoryMetadata(expr.IRMetadata):
     """Record one region's memory behavior against a target hierarchy.
 
-    A Function carries whole-function traffic, placement, and lifetimes. A
+    A Function carries whole-function traffic, addresses, and lifetimes. A
     MeshRegion carries only the peaks reached while that region executes, and no
     empty record is attached merely to reserve the type.
     """

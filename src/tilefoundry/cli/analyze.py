@@ -88,7 +88,7 @@ def guidance() -> str:
           logical traffic omits loop replication that does not change an access;
             total traffic counts every executed occurrence. Per-unit traffic is
             the selected topology unit's share of that executed total.
-          a reported placement peak holds under the order this walk took. Which
+          a reported memory peak holds under the order this walk took. Which
             order the program really takes is settled by scheduling, so the peak
             is an observation, not a bound.
 

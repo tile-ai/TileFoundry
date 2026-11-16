@@ -90,13 +90,13 @@ def held_threads(mesh: types.Mesh) -> frozenset | None:
     ):
         return None
     try:
-        arrangement, offset = tir.sync.participant_layout(level)
+        layout, offset = tir.sync.participant_layout(level)
     except expr.VerifyError:
         return None
-    count = types.size(arrangement)
+    count = types.size(layout)
     if not isinstance(count, int):
         return None
-    held = [offset + types.apply(arrangement, index) for index in range(count)]
+    held = [offset + types.apply(layout, index) for index in range(count)]
     return frozenset(held) if all(isinstance(thread, int) for thread in held) else None
 
 

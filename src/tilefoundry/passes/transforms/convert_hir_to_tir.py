@@ -298,9 +298,9 @@ class TirBuilder:
         type_ = desired or ir_utils.leaves_of(node.type)[leaf.index]
         buffers = getattr(node.target, "buffers", 1) if isinstance(node, expr.Call) else 1
         owner = (
-            ctx.storage.placement[id(node)][0]
+            ctx.storage.declaration_sites[id(node)][0]
             if buffers > 1
-            else ctx.storage.placement.get(id(node), (None, (), None))[2]
+            else ctx.storage.declaration_sites.get(id(node), (None, (), None))[2]
             if type_.storage is expr.StorageKind.RMEM
             else None
         )
@@ -351,7 +351,7 @@ class TirBuilder:
             )
             stages = expr.Var(ctx.names.fresh(f"{stem}_stages"), type=types.TupleType(tuple(field.type for field in fields)))
             self.bind(stages, expr.Tuple(fields, type=stages.type))
-            loops = ctx.storage.placement[id(node)][1]
+            loops = ctx.storage.declaration_sites[id(node)][1]
             if any(
                 expr.static_dim_value(bound) is None
                 for loop in loops[1:]
@@ -361,7 +361,7 @@ class TirBuilder:
                 if key not in self.stage_counters:
                     counter = expr.Var(ctx.names.fresh("stage_counter"), type=BINDING)
                     one = expr.Var(ctx.names.fresh("stage_one"), type=BINDING)
-                    with ctx.builder.region(owner=ctx.storage.placement[id(node)][0]):
+                    with ctx.builder.region(owner=ctx.storage.declaration_sites[id(node)][0]):
                         for value, number in ((counter, 0), (one, 1)):
                             ctx.builder.bind(
                                 value,
@@ -804,12 +804,12 @@ class StoragePlan:
         return None
 
     @cached_property
-    def placement(self):
+    def declaration_sites(self):
         """Place genuinely shared registers at their outermost HIR definition.
 
         Region results share their body's storage; ties and views follow the
         same storage trace as outputs. Allocation's peak-estimation buffers
-        are not physical register sharing and do not determine placement.
+        are not physical register sharing and do not determine declaration sites.
         """
         locations = {}
         for key, region in self.regions.items():
@@ -871,7 +871,7 @@ class StoragePlan:
                     continue
                 for value in self.answers[member].relation.values.values():
                     dimensions[id(value)] = value
-                for loop in self.placement[id(member.expr)][1]:
+                for loop in self.declaration_sites[id(member.expr)][1]:
                     if expr.static_dim_value(loop.start) != 0:
                         dimensions[id(loop.start)] = loop.start
         return tuple(dimensions.values())
@@ -988,8 +988,12 @@ class StoragePlan:
             if isinstance(window.type.layout, types.ShardLayout)
             else window.type.layout
         )
-        placement = desired.layout
-        layout = replace(placement, layout=address) if isinstance(placement, types.ShardLayout) else address
+        shard_layout = desired.layout
+        layout = (
+            replace(shard_layout, layout=address)
+            if isinstance(shard_layout, types.ShardLayout)
+            else address
+        )
         type_ = replace(window.type, layout=layout)
         return expr.Call(memory.TensorView(layout=layout, shape=tuple(type_.shape)), (pointer,), type=type_)
 

@@ -8,14 +8,14 @@ from dataclasses import dataclass, replace
 from tilefoundry.ir import types
 from tilefoundry.ir.types import layout_algebra
 
-from .constraint import strided_arrangement
+from .constraint import strided_layout
 from .match import matched
 from .pattern import Predicate, Sequence, Tensor, Wildcard
 
 
-def arrangement(subject, *, allow_partial=False) -> types.Layout | None:
+def static_strided_layout(subject, *, allow_partial=False) -> types.Layout | None:
     """Read the static strided layout beneath shard and composition wrappers."""
-    subject = strided_arrangement(subject, allow_partial=allow_partial)
+    subject = strided_layout(subject, allow_partial=allow_partial)
     if subject is None:
         return None
     extents = tuple(types.flatten(subject.shape))
@@ -46,7 +46,7 @@ def is_ranked_tensor(**fields) -> Tensor:
     return Tensor(predicates=(Ranked(),), **fields)
 
 
-def arrangements(layout: types.Layout, per_mode: bool) -> tuple[types.Layout, ...]:
+def mode_layouts(layout: types.Layout, per_mode: bool) -> tuple[types.Layout, ...]:
     if per_mode:
         return tuple(
             types.Layout(tuple(types.flatten(shape)), tuple(types.flatten(steps)))
@@ -63,12 +63,12 @@ class Forward(Predicate):
 
     @typing.override
     def holds(self, subject, bindings: dict) -> bool:
-        held = arrangement(subject)
+        held = static_strided_layout(subject)
         if held is None:
             return False
         return all(
             all(step >= 0 for step in types.flatten(part.strides))
-            for part in arrangements(held, self.per_mode)
+            for part in mode_layouts(held, self.per_mode)
         )
 
 
@@ -80,12 +80,12 @@ class Injective(Predicate):
 
     @typing.override
     def holds(self, subject, bindings: dict) -> bool:
-        held = arrangement(subject)
+        held = static_strided_layout(subject)
         if held is None:
             return False
         return all(
             layout_algebra.is_inverse_projectable(part)
-            for part in arrangements(held, self.per_mode)
+            for part in mode_layouts(held, self.per_mode)
         )
 
 
@@ -112,7 +112,7 @@ def vector_widths(layout, element_bits: int, widths: tuple[int, ...]) -> tuple[i
     inner = getattr(stated, "inner", None)
     if inner is not None and hasattr(inner, "base"):
         widest = min(widest, 1 << inner.base)
-    held = arrangement(layout)
+    held = static_strided_layout(layout)
     if held is None:
         return ()
     grouped = layout_algebra.coalesce(
@@ -160,7 +160,7 @@ class WholeVectors(Predicate):
 
 
 @dataclass(frozen=True)
-class PlainArrangement(Predicate):
+class Strided(Predicate):
     """Require an arrangement with no transform and no nonzero offset."""
 
     allow_partial: bool = False
@@ -172,7 +172,7 @@ class PlainArrangement(Predicate):
             stated.inner is not None or stated.offset != 0
         ):
             return False
-        return arrangement(subject, allow_partial=self.allow_partial) is not None
+        return static_strided_layout(subject, allow_partial=self.allow_partial) is not None
 
 
 @dataclass(frozen=True)
@@ -223,9 +223,9 @@ class BoxDims(Predicate):
     allow_partial: bool = False
 
     def reading(self, subject, captures) -> tuple[tuple | None, str | None]:
-        layout = arrangement(subject, allow_partial=self.allow_partial)
+        layout = static_strided_layout(subject, allow_partial=self.allow_partial)
         if layout is None:
-            return None, f"{subject!r} is no static strided arrangement"
+            return None, f"{subject!r} is no static strided layout"
         width = getattr(captures.get(self.dtype), "bit_width", None)
         if type(width) is not int:
             return None, f"the element it arranges is not bound as {self.dtype}"
@@ -276,7 +276,7 @@ class TensorMap(Predicate):
     dtype: str
 
     def reading(self, subject) -> tuple[tuple | None, str | None]:
-        layout = arrangement(subject)
+        layout = static_strided_layout(subject)
         if layout is None:
             return None, f"{subject!r} is no static strided tensor a tensormap describes"
         modes = [
@@ -308,11 +308,11 @@ __all__ = [
     "BoxDims",
     "Forward",
     "Injective",
-    "PlainArrangement",
     "Ranked",
+    "Strided",
     "TensorMap",
     "WholeVectors",
-    "arrangement",
     "is_ranked_tensor",
     "is_scalar_tensor",
+    "static_strided_layout",
 ]

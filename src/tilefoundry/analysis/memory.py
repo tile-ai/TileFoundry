@@ -40,7 +40,7 @@ UMAT_CONSUMPTION_LEVEL = str(expr.StorageKind.RMEM)
 
 @dataclass(frozen=True)
 class MemoryOptions:
-    """How long the placement may look, and how to reproduce what it found."""
+    """How long the address assignment may look, and how to reproduce what it found."""
 
     timeout_seconds: float = 60.0
     workers: int = 1
@@ -778,9 +778,9 @@ def place(model, facts, topologies):
 
 
 def memory_findings(peaks, footprint, reuse, cache, wave):
-    """Build placement and cache findings from this definition's conclusions."""
+    """Build address and cache findings from this definition's conclusions."""
     errors = tuple(
-        f"{peak.memory_level} placement peak {utils.format_bytes(peak.peak_bytes)} exceeds "
+        f"{peak.memory_level} peak {utils.format_bytes(peak.peak_bytes)} exceeds "
         f"capacity {utils.format_bytes(peak.capacity_bytes)}"
         for peak in peaks
         if peak.exceeds_capacity

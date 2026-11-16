@@ -180,13 +180,13 @@ class Mesh:
                 )
                 if not within_scope(result, current):
                     parent_runs = {
-                        name: (filter(arrangement, major="row"), start)
-                        for name, arrangement, start in zip(here, layouts(current), starts(current))
+                        name: (filter(topology_layout, major="row"), start)
+                        for name, topology_layout, start in zip(here, layouts(current), starts(current))
                         if name in there
                     }
                     inner_runs = {
-                        name: (filter(arrangement, major="row"), start)
-                        for name, arrangement, start in zip(there, layouts(inner), starts(inner))
+                        name: (filter(topology_layout, major="row"), start)
+                        for name, topology_layout, start in zip(there, layouts(inner), starts(inner))
                     }
                     raise ValueError(
                         f"replacement scope selects runs {inner_runs}, outside parent "
@@ -289,14 +289,14 @@ def flat_layouts(mesh: Mesh) -> tuple[tuple[tuple, tuple], ...]:
     A level stating no axes reads as one mode of one, so a consumer
     subscripting the levels still has something to pick.
     """
-    arrangements = []
+    flat = []
     for level in layouts(mesh):
         shape = tuple(flatten(level.shape))
         strides = tuple(flatten(level.strides))
         if not shape:
             shape, strides = (1,), (0,)
-        arrangements.append((shape, strides))
-    return tuple(arrangements)
+        flat.append((shape, strides))
+    return tuple(flat)
 
 
 def starts(mesh: Mesh) -> tuple[int, ...]:
@@ -323,11 +323,11 @@ def dim_at_most(a, b) -> bool:
 def within_scope(mesh: Mesh, current: Mesh) -> bool:
     """Whether each continuous selection is contained in the enclosing level."""
     enclosing = dict(zip(topology_names(current), zip(layouts(current), starts(current))))
-    for name, arrangement, start in zip(topology_names(mesh), layouts(mesh), starts(mesh)):
+    for name, topology_layout, start in zip(topology_names(mesh), layouts(mesh), starts(mesh)):
         if name not in enclosing:
             return False
         outer_arrangement, at_start = enclosing[name]
-        inner = filter(arrangement, major="row")
+        inner = filter(topology_layout, major="row")
         outer = filter(outer_arrangement, major="row")
         if not is_contiguous(inner, major="row") or not is_contiguous(outer, major="row"):
             return False
@@ -346,11 +346,11 @@ def check_topology(mesh: Mesh) -> None:
     """
     if isinstance(mesh.layout, ComposedLayout):
         return
-    for topology, arrangement in zip(mesh.topologies, layouts(mesh)):
+    for topology, topology_layout in zip(mesh.topologies, layouts(mesh)):
         declared = getattr(topology, "size", None)
         if not isinstance(declared, int) or isinstance(declared, bool):
             continue
-        count = size(arrangement)
+        count = size(topology_layout)
         if isinstance(count, int) and count > declared:
             raise ValueError(
                 f"mesh level {getattr(topology, 'name', topology)!r} has {count} "

@@ -234,7 +234,7 @@ Each reported Call's JSON projection is under its `compute-cost` key:
 
 `memory` states what every occurrence moves and at which level, the unique
 addresses one wave touches at a representative iteration, whole-Function value
-lifetimes and placement peaks, and which repeated reads fit in cache. The movement
+lifetimes and memory peaks, and which repeated reads fit in cache. The movement
 is read off the Op's own registered evaluator and the amounts its access
 relations reach.
 
@@ -591,7 +591,7 @@ class BufferAlias:
     instances and addresses. Gmem has one instance per device; smem has one
     per device and CTA; rmem has one per thread. Broadcast replicas MUST be included: removing a
     replica changes the set. Which copies each end holds follows
-    [shard §6.1](./shard.md#61-placement-semantics); two ends holding the same
+    [shard §6.1](./shard.md#61-shard-attr-semantics); two ends holding the same
     copies at the same addresses alias. Every other Reshard MUST retain its
     independent buffer.
   - Bitcast MUST alias its source and allocate no independent buffer. Its

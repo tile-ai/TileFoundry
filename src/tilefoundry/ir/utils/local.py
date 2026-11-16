@@ -70,9 +70,9 @@ def participant_layout(
             selected.append(level)
             selected_attrs.extend(attrs)
         elif any(isinstance(attr, (types.Split, types.Partial)) for attr in attrs):
-            raise ValueError(f"non-Broadcast placement outside participant level {name!r}")
+            raise ValueError(f"shard attr other than Broadcast outside the kept topology {name!r}")
     if not selected:
-        raise ValueError("shard layout has no participant level")
+        raise ValueError("shard layout keeps no topology")
     if len(selected) == len(levels):
         return layout
     return types.ShardLayout(layout.layout, tuple(selected_attrs), types.Mesh.from_meshes(*selected))

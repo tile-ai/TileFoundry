@@ -3,7 +3,7 @@
 Logical AMX fragment adapters to the sole Python instruction semantics.
 
 Physical register state is internal scratch. Public operands remain typed logical
-fragments; their instruction placement describes byte locations, not arithmetic
+fragments; their operand addresses describe byte locations, not arithmetic
 conversions. This module never loads a C oracle or dispatches native AMX.
 """
 
@@ -13,7 +13,7 @@ from tilefoundry.ir import expr
 from tilefoundry_apple.amx import evaluator as amx_evaluator
 
 from .common import access as common_access
-from .common import check_types, encode, infer, placements
+from .common import check_types, encode, infer, operand_addresses
 from .common import cost as common_cost
 
 
@@ -22,10 +22,10 @@ def byte_addresses(binding, count, nbytes):
     bank = binding["bank"]
     offsets = tuple(binding["offsets"])
     if len(offsets) != count:
-        raise ValueError("AMX placement element count differs from logical operand")
+        raise ValueError("AMX address element count differs from logical operand")
     for start in offsets:
         if not isinstance(start, int):
-            raise TypeError("AMX placement offsets must be integer byte addresses")
+            raise TypeError("AMX address offsets must be integer byte addresses")
         for lane in range(nbytes):
             address = start + lane
             yield address % 512 if bank in ("x", "y") else address
@@ -45,12 +45,12 @@ def evaluate(ctx):
     op = ctx.op
     types = tuple(value.type for value in ctx.args)
     check_types(op, types)
-    bindings = placements(op, types)
+    bindings = operand_addresses(op, types)
     params = schedule.call_params(op, len(ctx.args))
     roles = tuple(p.name for p in params)
     values = dict(zip(roles, ctx.args, strict=True))
     if set(bindings) != set(roles):
-        raise ValueError("AMX placements must describe every logical operand")
+        raise ValueError("AMX operand addresses must describe every logical operand")
     state = amx_evaluator.AMXState(version=op.generation)
     banks = buffers(state)
     assigned = {}
@@ -65,11 +65,11 @@ def evaluate(ctx):
         locations = tuple(byte_addresses(bindings[role], value.data.numel(), nbytes))
         bank_name = bindings[role]["bank"]
         if bank_name not in banks:
-            raise ValueError(f"AMX placement selects unknown bank {bank_name}")
+            raise ValueError(f"AMX address selects unknown bank {bank_name}")
         bank = banks[bank_name]
         raw = value.data.contiguous().view(utils.torch.uint8).reshape(-1).tolist()
         if len(raw) != len(locations):
-            raise ValueError("AMX placement byte count differs from logical operand")
+            raise ValueError("AMX address byte count differs from logical operand")
         for address, byte in zip(locations, raw, strict=True):
             if not 0 <= address < len(bank):
                 raise IndexError("AMX logical fragment lies outside scratch capacity")

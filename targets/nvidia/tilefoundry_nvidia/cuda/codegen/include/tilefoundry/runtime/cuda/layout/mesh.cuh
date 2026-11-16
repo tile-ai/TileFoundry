@@ -76,7 +76,7 @@ template <class L> CUTE_HOST_DEVICE constexpr auto plain_layout(L const &l) {
 ///
 /// ``reverse`` because a mesh is row-major and CuTe is not -- the reason is
 /// on ``reverse`` itself in layout/cute_ext.cuh -- and ``filter`` because an
-/// axis of one position, which CuTe writes as stride zero, names no id.
+/// axis of extent one, which CuTe writes as stride zero, names no id.
 template <class L> CUTE_HOST_DEVICE constexpr auto id_axes(L const &l) {
     return cute::filter(reverse(cute::flatten(plain_layout(l))));
 }
@@ -160,12 +160,11 @@ CUTE_HOST_DEVICE constexpr bool contains(Mesh<L, Topos...> const &mesh,
         const int rel = detail::level_id(mesh, coord);
         if (rel < 0)
             return false;
-        auto const positions = detail::plain_layout(mesh.layout);
-        auto const at = positions.get_hier_coord(rel);
+        auto const plain = detail::plain_layout(mesh.layout);
+        auto const at = plain.get_hier_coord(rel);
         /// idx2crd answers for a hole and for overshoot too; only the value
         /// it was built to reproduce says the id is one this mesh covers.
-        return cute::elem_less(at, cute::shape(positions)) &&
-               int(positions(at)) == rel;
+        return cute::elem_less(at, cute::shape(plain)) && int(plain(at)) == rel;
     }
 }
 
@@ -222,7 +221,7 @@ CUTE_HOST_DEVICE constexpr bool is_warped(Mesh<L, Topos...> const &mesh) {
 }
 
 /// The same mesh with its lanes stated as an axis of their own: the fastest
-/// axis of ``E`` positions becomes ``(E/32, 32)``, so the last axis is one
+/// axis of extent ``E`` becomes ``(E/32, 32)``, so the last axis is one
 /// warp and the axis before it steps between warps.
 ///
 /// Idempotent -- a fastest axis of exactly 32 is already that -- and every

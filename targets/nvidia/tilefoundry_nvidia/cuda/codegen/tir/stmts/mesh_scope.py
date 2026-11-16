@@ -42,10 +42,10 @@ def levelwise_layout(mesh: types.Mesh) -> str:
     where a boundary falls. The composite is a grouping, not a map: only the
     nests are evaluated.
     """
-    arrangements = types.flat_layouts(mesh)
+    topology_layouts = types.flat_layouts(mesh)
     return cute_layout.render_layout_type(
-        tuple(shape for shape, _ in arrangements),
-        tuple(strides for _, strides in arrangements),
+        tuple(shape for shape, _ in topology_layouts),
+        tuple(strides for _, strides in topology_layouts),
     )
 
 

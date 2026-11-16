@@ -101,7 +101,7 @@ def assert_reported_contract(report: dict) -> None:
     def nonnegative(value: object) -> None:
         """Every quantity these four families report is a count, so none is below zero.
 
-        Work, moved bytes, placement peaks and a bound are all counts of something that
+        Work, moved bytes, memory peaks and a bound are all counts of something that
         happened or has to happen. A negative one is not a small answer but a
         derivation that ran backwards -- a projection dividing what it should have
         multiplied, or a difference taken the wrong way round -- and it would then be

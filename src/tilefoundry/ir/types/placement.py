@@ -62,9 +62,9 @@ class Placement:
     @classmethod
     def from_mesh(cls, mesh: Mesh) -> "tuple[Placement, ...]":
         """Every placement of *mesh*: each level's unit ids are its arrangement's values."""
-        arrangements = layouts(mesh)
+        mesh_layouts = layouts(mesh)
         names = topology_names(mesh)
         return tuple(
-            cls(dict(zip(names, map(apply, arrangements, at), strict=True)))
-            for at in product(*(range(int_tuple_product(level.shape)) for level in arrangements))
+            cls(dict(zip(names, map(apply, mesh_layouts, at), strict=True)))
+            for at in product(*(range(int_tuple_product(level.shape)) for level in mesh_layouts))
         )

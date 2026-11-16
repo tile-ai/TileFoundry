@@ -23,7 +23,7 @@ def attrs_by_axis(
 ) -> dict[tuple[str, int], types.ShardAttr]:
     """Read mesh-axis states keyed by level and ordinal.
 
-    See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics).
 
     Args:
         type_: Tensor whose plain layout reads as Varying.
@@ -68,7 +68,7 @@ def reject_partials(
 ) -> None:
     """Reject Partial states that do not commute with this operation.
 
-    See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics).
 
     Args:
         name: Operand name used in the diagnostic.
@@ -96,7 +96,7 @@ def check_multilinear_partials(
 ) -> None:
     """Check Partial combinations using each operand's precomputed states.
 
-    See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics).
     Plain operands merge states from existing meshes before checking keys;
     the state at a shared key depends only on storage and topology level.
 

@@ -7,7 +7,7 @@ from .constraint import (
     DistinctConstraint,
     SameConstraint,
     SameModesConstraint,
-    strided_arrangement,
+    strided_layout,
 )
 from .match import (
     OPAQUE,
@@ -51,13 +51,13 @@ from .predicates import (
     BoxDims,
     Forward,
     Injective,
-    PlainArrangement,
     Ranked,
+    Strided,
     TensorMap,
     WholeVectors,
-    arrangement,
     is_ranked_tensor,
     is_scalar_tensor,
+    static_strided_layout,
 )
 from .solve import UNKNOWN, Unknown, evaluate, failing, solve
 from .utils import (

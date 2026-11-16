@@ -348,13 +348,13 @@ def test_capacity_overflow_reports_error() -> None:
 
     tight_memory = analysis.analyze(*analysis.check_program(tight, split), analysis="memory")
     tight_record = expr.get_metadata(tight_memory.function, analysis.RegionMemoryMetadata)
-    assert tight_record.errors == ("smem placement peak 206.25KiB exceeds capacity 103.12KiB",)
-    assert '#   error="smem placement peak 206.25KiB exceeds capacity 103.12KiB"' in inspection.render_text(
+    assert tight_record.errors == ("smem peak 206.25KiB exceeds capacity 103.12KiB",)
+    assert '#   error="smem peak 206.25KiB exceeds capacity 103.12KiB"' in inspection.render_text(
         inspection.render_analysis(tight_memory)
     )
     assert inspection.render_analysis(tight_memory).data["functions"][0]["function_records"]["memory"][
         "errors"
-    ] == ["smem placement peak 206.25KiB exceeds capacity 103.12KiB"]
+    ] == ["smem peak 206.25KiB exceeds capacity 103.12KiB"]
 
     tight_performance = analysis.analyze(*analysis.check_program(tight, split), analysis="performance")
     assert (

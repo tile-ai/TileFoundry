@@ -560,7 +560,7 @@ class Binary(Op):
     views does not make either operand's layout describe the result. This
     fallback MUST NOT accept an incompatible `ShardLayout` pair.
   - Sharded results merge value states using
-    [shard §6.1](./shard.md#61-placement-semantics), including plain inputs.
+    [shard §6.1](./shard.md#61-shard-attr-semantics), including plain inputs.
     All-Broadcast inputs retain Broadcast. A result may use plain layout for
     Varying only when plain reads back to the same states on every axis of the
     original input frame, including omitted Broadcast levels.
@@ -572,7 +572,7 @@ class Binary(Op):
     (`op(reduction(x)) == reduction(op(x))`); typeinfer rejects otherwise,
     naming the offending operand and the fix (an explicit `Reshard` to
     `Broadcast`).
-    States follow [shard §6.1](./shard.md#61-placement-semantics). A Varying
+    States follow [shard §6.1](./shard.md#61-shard-attr-semantics). A Varying
     peer is rejected with an explicit `reshard(..., @ {B()})` remedy.
     Decisions are made independently for each mesh axis. `Partial` states on
     different axes are not interchangeable; `ADD` rejects two Partial inputs
@@ -693,7 +693,7 @@ second presentation of the result.
   Both layouts MUST be plain `Layout` / `ComposedLayout` without `ShardLayout`
   components, or both MUST be rmem `ShardLayout` on the same mesh containing
   only `Split` and `Varying` attributes
-  ([shard §6.1](./shard.md#61-placement-semantics)). Omitted authored strides MUST be materialized at
+  ([shard §6.1](./shard.md#61-shard-attr-semantics)). Omitted authored strides MUST be materialized at
   Bitcast type inference using the same default and storage-owner rules as
   Reshard and TensorView; every resulting `Layout` component has concrete strides.
   For rmem shards, an address is the owning mesh coordinate paired with the
@@ -1599,7 +1599,7 @@ class Reshard(Op):
     is unchanged, the shape is literal, both structural address boxes agree,
     and on every mesh axis with a `Partial` end both ends are equal, or a
     Varying (or plain) source becomes Partial
-    ([shard §6.1](./shard.md#61-placement-semantics)). Each
+    ([shard §6.1](./shard.md#61-shard-attr-semantics)). Each
     thread holds register storage privately, so an `rmem` Reshard with a
     `ShardLayout` is a view only when every logical element keeps the threads
     that hold it and its register on each. The box of an `rmem` `ShardLayout`

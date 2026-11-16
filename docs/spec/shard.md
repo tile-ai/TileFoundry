@@ -719,7 +719,7 @@ Field meanings:
   splitting; the value is replicated across this mesh axis.
 - `Varying` — the current mesh axis does not split the value; every copy holds
   all coordinates and values may differ between units. A plain layout is
-  Varying on every axis ([shard §6.1](./shard.md#61-placement-semantics)).
+  Varying on every axis ([shard §6.1](./shard.md#61-shard-attr-semantics)).
 - `Partial(reduction)` — the current mesh axis carries an **un-reduced
   partial value**: the full result over this mesh axis is the
   `reduction` (`sum` / `max` / `min`) of the per-shard values, and a
@@ -735,7 +735,7 @@ that keeps mesh axes aligned with their attributes without rewriting stored type
 It omits all-Broadcast levels except an instruction's required topology levels;
 levels containing Split or Partial remain part of the distribution.
 
-### 6.1 Placement semantics
+### 6.1 Shard attr semantics
 
 | attr | axis separates copies | axis inside one copy |
 | --- | --- | --- |
@@ -811,7 +811,7 @@ lowering for the whole Reshard.
 Placement covers the current composed mesh scope, or the function mesh in a
 signature; unstated axes are Broadcast. An annotation with `layout=None`
 imposes no layout constraint. Plain `Layout` and an all-Broadcast `ShardLayout` state different facts on an axis
-that separates copies: Varying and Broadcast ([shard §6.1](./shard.md#61-placement-semantics)). Written shape and stride
+that separates copies: Varying and Broadcast ([shard §6.1](./shard.md#61-shard-attr-semantics)). Written shape and stride
 constraints remain.
 Shared-memory distribution belongs to CTA or coarser levels; author-written tiles
 in thread scope use plain layouts. A `where` clause constrains named topologies;

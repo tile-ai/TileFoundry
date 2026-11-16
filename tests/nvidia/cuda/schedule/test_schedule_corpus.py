@@ -657,7 +657,7 @@ class TmaPeakOverCapacity(ScheduleCase):
         result = analysis.analyze(*checked, analysis=("memory", "sync"))
         records = inspection.render_analysis(result).data["functions"][0]["function_records"]
         assert records["memory"]["errors"] == [
-            "smem placement peak 228.00KiB exceeds capacity 227.00KiB"
+            "smem peak 228.00KiB exceeds capacity 227.00KiB"
         ]
         assert records["sync"]["errors"] == []
 

@@ -144,14 +144,14 @@ def render_shard_layout_type(sl: types.ShardLayout, ctx=None) -> str:
     return f"tilefoundry::ShardLayout<{layout_str}, cute::tuple<{attrs_str}>, {mesh_str}>"
 
 
-def composed_mesh_layout(positions: str, base: int) -> str:
+def composed_mesh_layout(layout: str, base: int) -> str:
     """A mesh layout value expression, its slice origin folded in.
 
     [runtime §2.3.2](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/runtime.md#232-layoutmeshcuh).
     """
     if not base:
-        return positions
-    return f"cute::make_composed_layout(cute::identity{{}}, cute::Int<{base}>{{}}, {positions})"
+        return layout
+    return f"cute::make_composed_layout(cute::identity{{}}, cute::Int<{base}>{{}}, {layout})"
 
 
 def shard_engine_layout(shard: types.ShardLayout, storage: expr.StorageKind) -> types.LayoutBase:
@@ -275,12 +275,12 @@ def render_shard_layout_value(var_name: str, sl: types.ShardLayout, dynamic_exte
     if len(topos) == 1:
         mesh_shape, mesh_strides = mesh_axes.shape, mesh_axes.strides
     else:
-        arrangements = types.flat_layouts(replace(sl.mesh, layout=stated))
-        mesh_shape = tuple(shape for shape, _ in arrangements)
-        mesh_strides = tuple(strides for _, strides in arrangements)
+        topology_layouts = types.flat_layouts(replace(sl.mesh, layout=stated))
+        mesh_shape = tuple(shape for shape, _ in topology_layouts)
+        mesh_strides = tuple(strides for _, strides in topology_layouts)
     scope = ", ".join(context.topology_level_str(t.name) for t in topos)
-    positions = cute_layout.render_layout_value(mesh_shape, mesh_strides, mesh_dim, mesh_stride)
-    mesh_layout = composed_mesh_layout(positions, ml_base)
+    raw_mesh_layout = cute_layout.render_layout_value(mesh_shape, mesh_strides, mesh_dim, mesh_stride)
+    mesh_layout = composed_mesh_layout(raw_mesh_layout, ml_base)
 
     attrs = ", ".join(render_attr(a) for a in sl.attrs)
     sl_layout = render_layout_value(

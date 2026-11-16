@@ -28,23 +28,23 @@ def device_layout(mesh: types.Mesh) -> types.Layout:
     scales = types.compact_major(sizes, major="row") if all(
         isinstance(one, int) for one in sizes
     ) else (1,) * len(sizes)
-    for arrangement, scale in zip(types.layouts(mesh), scales):
-        stated = arrangement.strides
-        shape.extend(types.flatten(arrangement.shape))
+    for layout, scale in zip(types.layouts(mesh), scales):
+        stated = layout.strides
+        shape.extend(types.flatten(layout.shape))
         strides.extend(
             step * scale
             for step in (
                 types.flatten(stated)
                 if stated is not None
-                else types.compact_major(tuple(types.flatten(arrangement.shape)))
+                else types.compact_major(tuple(types.flatten(layout.shape)))
             )
         )
     return types.Layout(shape=tuple(shape), strides=tuple(strides))
 
 
-def level_selection(arrangement, start):
+def level_selection(layout, start):
     """One level of a scope as the units it selects: a size when they run contiguously."""
-    reduced = layout_algebra.filter(arrangement, major="row")
+    reduced = layout_algebra.filter(layout, major="row")
     if layout_algebra.is_contiguous(reduced, major="row"):
         return services.normalize_dim(types.size(reduced)), start
     return reduced, start
@@ -60,16 +60,16 @@ def covered_by_scope(mesh: types.Mesh, current: types.Mesh) -> bool:
     however either of them wrote the axes down.
     """
     scope = {
-        getattr(topology, "name", topology): level_selection(arrangement, start)
-        for topology, arrangement, start in zip(
+        getattr(topology, "name", topology): level_selection(layout, start)
+        for topology, layout, start in zip(
             current.topologies, types.layouts(current), types.starts(current)
         )
     }
     return all(
         getattr(topology, "name", topology) in scope
-        and level_selection(arrangement, start)
+        and level_selection(layout, start)
         == scope[getattr(topology, "name", topology)]
-        for topology, arrangement, start in zip(
+        for topology, layout, start in zip(
             mesh.topologies, types.layouts(mesh), types.starts(mesh)
         )
     )

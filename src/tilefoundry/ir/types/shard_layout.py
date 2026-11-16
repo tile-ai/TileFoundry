@@ -78,7 +78,7 @@ class Varying(ShardAttr):
 def combine_attrs(kind: expr.BinaryKind | None, a: ShardAttr, b: ShardAttr) -> ShardAttr:
     """Merge value states before access relations map Split attrs.
 
-    See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics).
     """
     if a is None or b is None:
         raise ValueError("combine requires resolved attrs; read states with attrs_by_axis first")
@@ -186,15 +186,15 @@ class ShardLayout(LayoutBase):
                 if mesh_axis >= len(mesh_shape) or attr.axis >= len(shape):
                     raise ValueError(f"Split({attr.axis}) has no matching mesh axis {mesh_axis}")
                 bindings.setdefault(attr.axis, []).append(mesh_axis)
-        layout_shape, factor_position = [], {}
+        layout_shape, factor_mode = [], {}
         for logical_axis, axis_size in enumerate(shape):
             splitting = bindings.get(logical_axis, ())
             for index, mesh_axis in enumerate(splitting):
-                factor_position[mesh_axis] = len(layout_shape) + index
+                factor_mode[mesh_axis] = len(layout_shape) + index
             layout_shape.extend(factor_axis(axis_size, mesh_shape, splitting, logical_axis) if splitting else (axis_size,))
 
         remapped_attrs = tuple(
-            Split(factor_position[mesh_axis]) if isinstance(attr, Split) else attr
+            Split(factor_mode[mesh_axis]) if isinstance(attr, Split) else attr
             for mesh_axis, attr in enumerate(attrs)
         )
         layout_shape = tuple(layout_shape)
@@ -334,7 +334,7 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
     profile = compatible_profile(primitive.shape, tensor_shape)
     flat, mesh = flatten(primitive), flatten(shard.mesh.layout)
     coords = tuple(coords) + (None,) * (len(shard.attrs) - len(coords))
-    shape, strides, fixed, positions = [], [], [], {}
+    shape, strides, fixed, modes = [], [], [], {}
     for mode, (extent, stride) in enumerate(zip(flat.shape, flat.strides, strict=True)):
         axes = [
             axis
@@ -345,7 +345,7 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
         factors = factor_axis(extent, mesh.shape, axes, mode) if normalize else (extent,)
         steps = compact_row_major(factors)
         for index, mesh_axis in enumerate(axes):
-            positions[mesh_axis] = len(shape) + (index if normalize else 0)
+            modes[mesh_axis] = len(shape) + (index if normalize else 0)
         for index, (factor, step) in enumerate(zip(factors, steps, strict=True)):
             axis = axes[index] if index < len(axes) else None
             symbolic_whole = len(axes) == 1 and not isinstance(extent, int)
@@ -381,8 +381,8 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
     remaining = [axis for axis, at in enumerate(coords) if at is None]
     if remaining:
         groups, topologies, begin = [], [], 0
-        for topology, arrangement in zip(shard.mesh.topologies, layouts(shard.mesh), strict=True):
-            count = len(flatten(arrangement.shape))
+        for topology, topology_layout in zip(shard.mesh.topologies, layouts(shard.mesh), strict=True):
+            count = len(flatten(topology_layout.shape))
             group = [axis for axis in remaining if begin <= axis < begin + count]
             if group:
                 topologies.append(topology)
@@ -403,7 +403,7 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
             tuple(shard.mesh.names[i] for i in remaining if i < len(shard.mesh.names)),
         )
         attrs = tuple(
-            Split(kept[positions[axis]])
+            Split(kept[modes[axis]])
             if isinstance(shard.attrs[axis], Split)
             else shard.attrs[axis]
             for axis in remaining
@@ -434,8 +434,8 @@ def mesh_coords(mesh: Mesh, ids: tuple[int | None, ...]) -> tuple[int | None, ..
     The host side of the CUDA runtime's ``mesh_coords(mesh, unit_ids())``.
     """
     coords = []
-    for index, arrangement in enumerate(layouts(mesh)):
-        flat = flatten(arrangement)
+    for index, layout in enumerate(layouts(mesh)):
+        flat = flatten(layout)
         unit_id = ids[index] if index < len(ids) else None
         coords.extend(
             (None,) * len(flat.shape)

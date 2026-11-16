@@ -1,4 +1,4 @@
-"""Internal values and solver results for physical memory placement."""
+"""Internal values and solver results for physical memory address assignment."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ from .visitor import AnalyzeContext
 
 
 class SolverOptions(Protocol):
-    """Placement limits consumed independently of the memory front end."""
+    """Address assignment limits consumed independently of the memory front end."""
 
     timeout_seconds: float
     workers: int
@@ -725,7 +725,7 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
         facts = context.target.get_facts(target.MemoryHierarchyFacts)
         quantities = {}
         persistent = set()
-        placement = cost.Context(
+        cost_ctx = cost.Context(
             module=context.module,
             function=context.function,
             target=context.target,
@@ -734,7 +734,7 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
         )
         for lifetime in liveness.intervals:
             key = lifetime.value
-            leaves = ir_utils.leaves_of(placement.local_type_of(key.expr))
+            leaves = ir_utils.leaves_of(cost_ctx.local_type_of(key.expr))
             if not leaves:
                 continue
             held = leaves[key.index]
@@ -1198,7 +1198,7 @@ def solve_allocation(
     *,
     memory_level: str,
 ) -> AllocationResult:
-    """Return the first feasible whole-function placement for one level."""
+    """Return the first feasible whole-function address assignment for one level."""
     summary = summary.resolve(ctx)
     groups = defaultdict(list)
     for value in summary.values:
@@ -1297,7 +1297,7 @@ def solve_allocation(
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         status_name = solver.status_name(status).lower()
         raise Error(
-            f"allocation: no feasible {memory_level} placement was found "
+            f"allocation: no feasible {memory_level} address assignment was found "
             f"({status_name}); {len(values)} roots conflict with "
             f"{len(interference)} interference constraints"
         )
