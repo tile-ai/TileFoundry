@@ -437,7 +437,7 @@ print(report.partition("\n\n")[0].rstrip())
 #   buffer=pos_ids holds=7.86MiB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
 #   buffer=cur_pos holds=7.86MiB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
 #   buffer=write_len holds=7.86MiB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
-#   error="smem placement peak 227.12KiB exceeds capacity 227.00KiB"
+#   error="smem peak 227.12KiB exceeds capacity 227.00KiB"
 # roofline ideal-ns=22187 bound-by=memory
 ```
 
@@ -473,7 +473,7 @@ print(report.partition("\n\n")[0].rstrip())
 #   buffer=pos_ids holds=7.87MiB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
 #   buffer=cur_pos holds=7.87MiB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
 #   buffer=write_len holds=7.87MiB time=none space=cta.head reuse=28B fits=yes precision=upper_bound
-#   error="smem placement peak 227.62KiB exceeds capacity 227.00KiB"
+#   error="smem peak 227.62KiB exceeds capacity 227.00KiB"
 # roofline ideal-ns=22234 bound-by=memory
 ```
 
