@@ -172,8 +172,8 @@ parameters; omitting it means one output.
 - constraints:
   - itself a `Stmt`, not a separate top-level node; returns no value.
   - `add_variant` MUST raise `RuntimeError` once `sealed`. Each variant carries
-    exactly one `pattern.Range` in `specializations`, whose dimension variable
-    MUST be derivable from the base parameters; `verify_prim_function` checks
+    exactly one `pattern.Range` in `specializations`. Its dimension variable
+    MUST be derivable from the base parameters. `verify_prim_function` checks
     each variant with the rules below.
 
 `verifier.verify_prim_function(fn, *, ctx=None)` enforces (`ctx` is the
@@ -199,19 +199,19 @@ resolved and an `Evaluate(FunctionRef)` is rejected):
   appear directly as `LetStmt.value`. Nesting it inside any other
   Expr is rejected.
 - **`MeshScope` mesh in scope**. Any embedded `ShardLayout` MUST
-  reference a mesh on the active TIR `MeshScope` traversal cache, the
-  composition of that stack, or a parameter's `ShardLayout.mesh`.
-- **`For` bound coordinates**. A `MeshCoord` read by `For.start` / `.stop` /
-  `.step` MUST name a literal in-range axis of a mesh bound by an enclosing
+  reference one of three meshes. The first is a mesh on the active TIR `MeshScope` traversal cache.
+  The second is the composition of that stack. The third is a parameter's `ShardLayout.mesh`.
+- **`For` bound coordinates**. A `MeshCoord` in `For.start`, `.stop`, or
+  `.step` MUST name a literal in-range axis. The mesh MUST be bound by an enclosing
   `MeshScope`.
 - **`Evaluate.callable`**. When `callable` is a `FunctionRef`
-  ([§2.1](#21-functionref)), its callee MUST be a `PrimFunction` (an HIR
-  callee is accepted only as a `Launch` callee). `args` follow
+  ([§2.1](#21-functionref)), its callee MUST be a `PrimFunction`. An HIR
+  callee is valid only as a `Launch` callee. `args` follow
   [core-ir §2.1](./core-ir.md#21-call), and `ref.arguments(args)` MUST strictly
   equal, in count and type, the parameters the call supplies.
-  Recursion is rejected over every reference the reached functions and their
-  variants state, `Launch` callees included; reaching the prototype of a
-  variant being verified is a path back to it. When `callable` is
+  Verification rejects recursion over every reference that the reached functions and their
+  variants state, `Launch` callees included. A path that reaches the prototype of a
+  variant under verification is a path back to it. When `callable` is
   an `Op`, it MUST pass the same `check_call` used by ScheduleOp type inference,
   candidate admission, and lowering. Its declared execution mesh MUST match
   the enclosing mesh and its operands MUST be reachable from that scope.
@@ -221,7 +221,7 @@ resolved and an `Evaluate(FunctionRef)` is rejected):
   declared `between` relation MUST hold. A per-Op verifier registered via
   `verify.register(Op)` MAY impose additional rules that the declaration
   does not express. An effect Op with neither an input pattern nor a `between`
-  relation MUST register such a verifier; an Op stating no contract is rejected.
+  relation MUST register such a verifier. Verification rejects an Op that states no contract.
   Host `Launch` is checked instead as a function invocation ([§2.3](#23-tir-ops)).
 
 ### 1.4 `Evaluate`
@@ -278,25 +278,27 @@ class Sync(Op):
 - `mesh` is the (possibly sliced) mesh `Sync` synchronizes. `T.sync(m)`
   synchronizes the whole mesh; `T.sync(m[1:3, :])` synchronizes the constant
   sub-mesh selected by the slice.
-- A **mesh slice is a compile-time descriptor.** `m[...]` is evaluated at parse
-  time via `Mesh.__getitem__` into a sub-`Mesh` whose `layout` is a
-  **`ComposedLayout`** recording the sub-box of units (the affine "mesh
-  scope" case `image(c) = offset + outer(c)`): the selected per-axis extents
-  over the parent strides in `outer`, the slice origin (linear thread index of
-  the first unit) in `offset`, identity `inner`. An un-sliced mesh's
-  `layout` is a plain `Layout`. A sliced mesh is still a `Mesh`; the slice never
+- A **mesh slice is a compile-time descriptor.** The parser evaluates `m[...]`
+  via `Mesh.__getitem__` into a sub-`Mesh`. Its `layout` is a
+  **`ComposedLayout`** that records the sub-box of units (the affine "mesh
+  scope" case `image(c) = offset + outer(c)`). `outer` holds the selected per-axis extents
+  over the parent strides. `offset` holds the slice origin (linear thread index of
+  the first unit). `inner` is the identity. An un-sliced mesh's
+  `layout` is a plain `Layout`. A sliced mesh is still a `Mesh`. The slice never
   becomes an IR/SSA value.
-- The **unit set** is derived through the existing layout algebra
-  (`shard.md`): the linear thread ids of the units are `offset +
-  outer(coord)` over `outer`'s domain (the plain `layout` at `offset 0` for an
-  un-sliced mesh); `base` is the minimum, `count = size(outer)`, and the block
+- The **unit set** comes from the existing layout algebra
+  (`shard.md`). The linear thread ids of the units are `offset +
+  outer(coord)` over `outer`'s domain. For an un-sliced mesh, they are the plain `layout` at `offset 0`.
+  `base` is the minimum. `count = size(outer)`. The block
   domain is the product of the topology extents. `classify` / `sync_scope`
-  are the single source of truth shared by verify and codegen.
-- **Legal-slice verification.** A sliced mesh is accepted only if its
+  are the single source of truth for verify and codegen.
+- **Legal-slice verification.** Verification accepts a sliced mesh only if its
   `ComposedLayout` `layout` reconstructs as a constant slice of an enclosing
-  full mesh `e`: same strides, per-axis sub-extents bounded by `e`'s shape, an
-  offset that decomposes into in-range per-axis starts, and the **full topology
-  tuple** + names equal — the proof rebuilds `e[key]` and compares, so a forged
+  full mesh `e`. The slice MUST have the same strides as the enclosing mesh.
+  The per-axis sub-extents MUST be bounded by `e`'s shape.
+  The offset MUST decompose into in-range per-axis starts.
+  The **full topology tuple** + names MUST be equal.
+  The proof rebuilds `e[key]` and compares, so a forged
   slice cannot pass. A full mesh (plain-`Layout` `layout`) is accepted only by
   equality with an enclosing mesh.
 
@@ -334,9 +336,9 @@ def <name>(<param>: Expr, ...) -> None: ...    # decorated function's signature 
 ```
 
 - constraints:
-  - synthesises a Stmt subclass, registers the body as its verifier, and wires
-    parser dispatch under the snake-case name; parameters are annotated `Expr` and
-    the return annotation is `None`.
+  - the decorator synthesises a Stmt subclass, registers the body as its verifier, and wires
+    parser dispatch under the snake-case name.
+  - parameters are annotated `Expr`. The return annotation is `None`.
 
 ## 2. TIR Expr and callable constructs
 
@@ -378,12 +380,14 @@ MUST preserve it. It is distinct from HIR `tf.shape_of`.
   - `type` is a rank-0 `i32` `TensorType` (scalar): one runtime tensor extent.
   - `param` MUST resolve to a parameter `Var` of the enclosing
     `PrimFunction`; `axis` MUST be a valid axis index of `param.type`.
-  - the type is the only record that an axis is open. A `PrimFunction` MUST
-    NOT carry a second parameter standing for an extent its own types already
-    state as a `DimVar`; the convention expands the tensor parameter into a
+  - the type is the only record that an axis is open.
+  - A `PrimFunction` MUST
+    NOT carry a second parameter for an extent that its own types already
+    state as a `DimVar`.
+  - The convention expands the tensor parameter into a
     pointer plus one extent per open axis
-    ([codegen §4.4](./codegen.md#44-signatures)), so no parameter name is
-    reserved and a user parameter named `<something>_shape_<n>` is an ordinary
+    ([codegen §4.4](./codegen.md#44-signatures)). No parameter name is
+    reserved. A user parameter named `<something>_shape_<n>` is an ordinary
     parameter.
 
 ### 2.3 TIR Ops
@@ -395,14 +399,14 @@ below; code carries only a one-line purpose docstring
 ([SPEC-RULES](../SPEC-RULES.md)).
 
 The canonical inspection surface covers every Op in this catalog. Printing and
-re-importing a TIR program MUST reach a fixed point: value Ops remain assignment
-forms, effect Ops remain statement forms, and enum-valued attributes use their
-named enum members with the owning enum imported by the printed program.
+re-importing a TIR program MUST reach a fixed point. Value Ops remain assignment
+forms. Effect Ops remain statement forms. Enum-valued attributes use their
+named enum members. The printed program imports the owning enum.
 
 - `TensorType.storage` is a `StorageKind` ([types §2](./types.md#2-tensortype)).
-  A memory-resident TIR tensor MUST carry a concrete level; the unmaterialized
-  `umat` ([types §2](./types.md#2-tensortype)) is an HIR-only value and MUST
-  already be materialized to a concrete level in TIR — it never appears there.
+  A memory-resident TIR tensor MUST carry a concrete level. The unmaterialized
+  `umat` ([types §2](./types.md#2-tensortype)) is an HIR-only value. It MUST
+  already be materialized to a concrete level in TIR and never appears there.
 - `Reshard` ([hir §1.3](./hir.md#13-op)) does not appear in TIR. A layout change
   is a `TensorView` here and allocates and copies nothing; a storage change is a
   `LetStmt(AllocTensor)` plus `Evaluate(Copy, ...)`.
@@ -481,8 +485,8 @@ class TensorView(Op):
   - A `PointerType` input MAY restate `dtype` or `storage`, but any stated value
     MUST equal the pointer descriptor.
   - Trailing coordinate inputs are not supported on pointer views.
-  - `T.ptr_of` MAY point at an allocated `ShardTensor`; the view rebuilds over
-    the engine pointer rather than reusing the existing shard layout.
+  - `T.ptr_of` MAY point at an allocated `ShardTensor`. The view rebuilds over
+    the engine pointer. It does not reuse the existing shard layout.
 
 Copy and Fill use a shared mesh wildcard, specialized from the Target's
 `MemoryExecutionFacts`. They require a contiguous run and sharded register
@@ -509,8 +513,8 @@ class Copy(Op):
     dtype. Their storages MAY be equal; same-storage copy is still a byte move.
   - `src` and `dst` MUST have equal logical shapes for every storage direction.
     Copy's access relation pairs the same logical coordinate on both ends.
-    A caller changing shape MUST state that shape in its source or destination
-    view; Copy does not infer a reshape from the runtime's enumeration order.
+    A caller that changes shape MUST state that shape in its source or destination
+    view. Copy does not infer a reshape from the runtime's enumeration order.
   - `execution_mesh` is the mesh declaration shared by every rmem operand's
     `pattern.ShardLayout.mesh`.
 
@@ -638,10 +642,10 @@ class Dot(Op):
     axes; restating them would introduce a second source for one fact.
   - `lhs` and `rhs` contract over the same number of *local* elements: the fold
     walks one operand's length and indexes the other with it. Their global
-    shapes may differ, and in the canonical matrix-vector call they do — a row
-    of the matrix is split over the mesh while the vector is broadcast.
-  - `dst` is one cell. A contraction leaves a total and every unit leaves
-    holding it, so a wider destination is not a wider result but cells the op
+    shapes may differ. In the canonical matrix-vector call they differ: the mesh splits a row
+    of the matrix, and the vector is broadcast.
+  - `dst` is one cell. A contraction leaves a total, and every unit leaves
+    holding it. A wider destination is not a wider result. It has cells that the op
     never writes.
   - An optional smem workspace stages partial results when the target's
     lowering requires it. Such staging requires a `ShardLayout` on `lhs`,
@@ -662,10 +666,10 @@ definitions are [core-ir §4](./core-ir.md#4-shared-operation-kinds).
 
 `Binary`, `Unary`, `Where`, `Clamp`, `Cast`, `ReLU`, and `Reduce` are target-neutral
 instruction declarations (`OpCapability(None)`) with registered access
-relations, so schedule discovery and an explicit `tf.schedule` consume the same
+relations. Schedule discovery and an explicit `tf.schedule` consume the same
 contracts as TIR verification. The five elementwise declarations use the
 thread mesh named by their rmem operands. `Reduce` instead walks the source
-coordinates and collapses its declared axes into the destination; its optional
+coordinates and collapses its declared axes into the destination. Its optional
 workspace is an operand only when the call supplies it.
 
 ##### Clamp
@@ -732,8 +736,7 @@ this effect-form instruction.
 `T.arange(dst, start=0, step=1)` writes `start + i * step` into coordinate
 `i` of a one-dimensional `i32` or `i64` register destination. It is a
 WRITE-effect instruction available on every target. `start` and `step` are
-static integers; a symbolic HIR start MUST be refused during candidate
-admission with a reason naming `start`. Its schedule evaluator returns the
+static integers. Candidate admission MUST refuse a symbolic HIR start, with a reason naming `start`. Its schedule evaluator returns the
 same typed sequence. It uses the ordinary registered-op parser and printer.
 
 ##### Unary
@@ -758,9 +761,9 @@ class Unary(Op):
 
 #### `Launch`
 
-Effect Op for a host-side launch of a device kernel (CPU entry only, no value);
-the callee `FunctionRef` and grid/block extents flow through the `Evaluate` args,
-the non-grid/block launch config through the Op attributes.
+Effect Op for a host-side launch of a device kernel (CPU entry only, no value).
+The callee `FunctionRef` and grid/block extents flow through the `Evaluate` args.
+The Op attributes carry the non-grid/block launch config.
 
 The shared `LaunchAttrs` descriptor carries target-owned selector values:
 
@@ -807,14 +810,14 @@ class Launch(Op):
 args)` with `args = (FunctionRef(callee), grid_x, grid_y, grid_z, block_x,
 block_y, block_z, *forwarded_args)`:
 
-- **callee**: `args[0]` MUST be a `FunctionRef` ([§2.1](#21-functionref)) resolving to
-  a device `PrimFunction` whose target is not CPU, or a HIR `Function`, from
+- **callee**: `args[0]` MUST be a `FunctionRef` ([§2.1](#21-functionref)). It MUST resolve to
+  a device `PrimFunction` whose target is not CPU, or to a HIR `Function`. The callee comes from
   the Module of the calling host function. A launch names a function with
-  constant indices: the parser refuses a bare slot (`launch(child, ...)`) and a
-  run-time index, and verification refuses a `Launch` whose path has a `None`
-  segment even without a Module context.
+  constant indices. The parser refuses a bare slot (`launch(child, ...)`) and a
+  run-time index. Verification refuses a `Launch` whose path has a `None`
+  segment, even without a Module context.
   The host-entry pass writes and checks a HIR callee's forwarded args
-  ([passes §7.3](./passes.md#73-inserthostentrypass)); verification
+  ([passes §7.3](./passes.md#73-inserthostentrypass)). Verification
   resolves the selector and checks only that each forwarded arg is a tensor.
 - **grid / block**: `args[1:7]` are the grid then block extents in the fixed
   order `grid_x, grid_y, grid_z, block_x, block_y, block_z`. Each is an `Expr`
@@ -824,12 +827,12 @@ block_y, block_z, *forwarded_args)`:
   through the codegen `topology_size` / `topology_shape` accessors, never as
   arguments.
 - **forwarded args**: the remaining `args` bind the callee's parameters, one
-  each, in declaration order. Each MUST be a tensor; for a `PrimFunction`
-  callee, the count MUST equal the parameter count and each type MUST equal its
-  parameter's type. An extent the callee's types leave open is not
-  among them: it travels with the pointer the convention expands that
-  parameter into ([codegen §4.4](./codegen.md#44-signatures)), read off the
-  tensor the host holds.
+  each, in declaration order. Each MUST be a tensor. For a `PrimFunction`
+  callee, the count MUST equal the parameter count. Each type MUST equal its
+  parameter's type. An extent that the callee's types leave open is not
+  among them. It travels with the pointer that the convention expands that
+  parameter into ([codegen §4.4](./codegen.md#44-signatures)). The host reads it off the
+  tensor that it holds.
 - **attributes**: `cluster`, `dynamic_smem`, `stream`, and `attrs` carry the
   non-grid/block launch configuration. A `cluster` / `stream` / `attrs` value
   the active target does not support MUST be rejected in target lowering.
@@ -895,14 +898,14 @@ class CopyAsync(Op):
     and shard attrs are identical.
   - With `index`, only dim 0 is gathered: `dst[r] = src[index[r]]`.
     It is the third positional input: `T.copy_async(src, dst, index, fill=0)`.
-    Each of `src`, `dst`, and `index` MUST have a plain layout or a pure
-    Broadcast ShardLayout, with no Split or Partial attributes. Verification
+    `src`, `dst`, and `index` MUST each have a plain layout or a pure
+    Broadcast ShardLayout. They MUST NOT have Split or Partial attributes. Verification
     MUST reject other distributions and identify the operand. This restriction
     does not apply to transfers without an index.
     The index MUST be rank-1 i32 or i64, and `dst` MUST have shape
     `(index.shape[0], *src.shape[1:])`. Without `index`, `fill` MUST be `None`.
     With a stated `fill`, an index below zero or at least `src.shape[0]`
-    MUST fill the whole destination row without reading the source.
+    MUST fill the whole destination row. The transfer MUST NOT read the source for that row.
   - Indexed transfers MUST partition destination vectors among executing
     threads. Vectors MUST stay inside a row; their width is chosen statically
     from inner contiguous runs and row-stride alignment, using `ASYNC_WIDTHS`.

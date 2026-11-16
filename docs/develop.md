@@ -41,9 +41,9 @@ shadows stdlib `types` via `tests/types/__init__.py`.
 
 `pytest tests/` runs the **entire** suite — unit, codegen, nvcc-compiled,
 and GPU end-to-end — with no marker gating. There is no `--gpu` flag or
-`-m nvcc` opt-in: a machine without `nvcc` or a CUDA device fails (not
-skips) the compile / e2e tests, so end-to-end coverage is never silently
-hidden. Per-test dump output lands under
+`-m nvcc` opt-in. A machine without `nvcc` or a CUDA device fails the
+compile and e2e tests. It does not skip them. End-to-end coverage is never
+silently hidden. Per-test dump output lands under
 `test_results/{file_stem}/{test_name}/...` (gitignored).
 
 Set `TILEFOUNDRY_CACHE_DIR` to keep compile results across runs. The test session
@@ -139,10 +139,10 @@ short bullet list — keep it that way.
 
 ### Tests
 
-- How a milestone is accepted is settled with the author while the plan is
-  written, in its `##### Accepted by`; `scripts/finalize_plan_context.py`
-  refuses to finalize a plan that leaves that choice open, and prints the
-  contract from `docs/policies/project-policy.json`.
+- Settle with the author how a milestone is accepted, while the plan is
+  written, in its `##### Accepted by`.
+  `scripts/finalize_plan_context.py` refuses to finalize a plan that leaves that choice open.
+  It prints the contract from `docs/policies/project-policy.json`.
 - Each milestone defines its own Target State Design before implementation.
   Show every part the milestone settles in its delivered form as code or compact
   pseudocode. Implementation and review match that design.
@@ -195,15 +195,24 @@ The terms are in [shard §0](./spec/shard.md#0-terms).
 - N7: Lowering issues an instruction. A unit executes it.
 - A review checks N1–N7 at the Final Gate of each plan.
 - S1–S11 and C4–C6 in this section bind the Python sources in the scope of [code-organization §4](spec/code-organization.md#4-checkers), with its exceptions.
-- S10: Classes are `CapWords`; functions, methods and variables are `snake_case`; constants are `UPPER_CASE`; an exception class name ends in `Error`. Method names dispatched by reflection on a class name (`<prefix>_<ClassName>`: `visit_*`, `visit_leaf_*`, `print_*` and the pattern printer's readers) and the DSL's authored names (`S`, `P`, `B`, …) are the `ignore-names` of `pyproject.toml`. (checker: ruff `N`)
+- S10: Classes are `CapWords`; functions, methods and variables are `snake_case`; constants are `UPPER_CASE`; an exception class name ends in `Error`. Reflection dispatches some method names on a class name (`<prefix>_<ClassName>`: `visit_*`, `visit_leaf_*`, `print_*` and the pattern printer's readers).
+  `pyproject.toml` lists these names in `ignore-names`.
+  It lists the DSL's authored names (`S`, `P`, `B`, …) there too. (checker: ruff `N`)
 - C4: No name starts with `_`: files, classes, functions, methods, attributes, variables, parameters and import aliases. Dunder names and a lone `_` are exempt. (checker: `scripts/code_organization_lint.py`)
-- S11: A public class or function name does not repeat its package's name: the classes and functions of package `p`, and the names `p` exports, do not contain `p`, unless the name is exactly `p` (`cost.Cost`). Module file names are not constrained. (checker: `scripts/code_organization_lint.py`)
-- `ir/types/layout_algebra.py` has a mechanically checkable public surface: every name in its `__all__` MUST have the same name in CuTe, with `is_inverse_projectable` as its sole exception. Python's missing overload dispatch requires the separately named `supports_composition`, `supports_inverse`, and `inverse` adapters in `swizzle_layout.py`; `NotProjectableError` in `layout.py` is the named Python diagnostic needed by composed application and inversion. These are explicit exceptions, not a license for unrelated helpers in the algebra modules.
+- S11: A public class or function name does not repeat its package's name.
+  The classes and functions of package `p`, and the names `p` exports, do not contain `p`.
+  A name that is exactly `p` (`cost.Cost`) is allowed. Module file names are not constrained. (checker: `scripts/code_organization_lint.py`)
+- `ir/types/layout_algebra.py` has a mechanically checkable public surface.
+  Every name in its `__all__` MUST have the same name in CuTe. `is_inverse_projectable` is the sole exception.
+  Python has no overload dispatch, so `swizzle_layout.py` needs the separately named `supports_composition`, `supports_inverse`, and `inverse` adapters.
+  `NotProjectableError` in `layout.py` is the named Python diagnostic for composed application and inversion.
+  These are explicit exceptions. They are not a license for unrelated helpers in the algebra modules.
 
 ### Data
 
 - S8: A class that derives from a frozen dataclass and declares fields of its own is itself `@dataclass(frozen=True)`. A frozen dataclass's `__post_init__` writes only through `object.__setattr__(self, "<own field>", ...)`. (checker: `scripts/code_organization_lint.py`)
-- C5: An attribute, or an element of an attribute, is written only through the `self` / `cls` of the method that writes it. No `setattr`, `delattr`, `object.__setattr__`, `vars(x).update` or `x.__dict__` change is applied to another object; a method may change a copy of its own instance that it just made with `copy.copy(self)`. (checker: `scripts/code_organization_lint.py`)
+- C5: An attribute, or an element of an attribute, is written only through the `self` / `cls` of the method that writes it. No `setattr`, `delattr`, `object.__setattr__`, `vars(x).update` or `x.__dict__` change is applied to another object.
+  A method may change a copy of its own instance that it just made with `copy.copy(self)`. (checker: `scripts/code_organization_lint.py`)
 - C6: No `global`. A module-level container is immutable (`tuple`, `frozenset`, `MappingProxyType`); `__all__` is exempt. Mutable runtime state lives in a class instance and is written by that instance's own methods (C5). (checker: `scripts/code_organization_lint.py`)
 - S7: A `@property` body is not only `return self.<field>`; a setter body is not only `self.<field> = value`. (checker: `scripts/code_organization_lint.py`)
 
@@ -220,7 +229,9 @@ The terms are in [shard §0](./spec/shard.md#0-terms).
 - S5: No custom metaclass, `__del__`, `__import__` or `importlib.import_module`. A plugin loading point that imports by name carries a per-file ignore ([code-organization §4](spec/code-organization.md#4-checkers)). `getattr` / `hasattr` are allowed for dispatch. (checker: `scripts/code_organization_lint.py`)
 - S6: A parameter default is neither a mutable value nor a function call. (checker: ruff `B006`, `B008`)
 - Data lives in the low layer and behaviour in the high layer. A lower layer calls a higher implementation through `services` ([code-organization §3](spec/code-organization.md#3-imports-and-exports)).
-- A key with no registration raises `MissingHandlerError` where it is looked up; the tests cover the registrations. A registration is written next to its key's owner: an Op's registrations in the Op's own module, a Target's in that Target's package, a core HIR-to-TIR pairing in the `schedule` package.
+- A key with no registration raises `MissingHandlerError` where it is looked up; the tests cover the registrations. Write a registration next to its key's owner.
+  Put an Op's registrations in the Op's own module. Put a Target's in that Target's package.
+  Put a core HIR-to-TIR pairing in the `schedule` package.
 - A walk over Exprs, Stmts or types uses a `Functor`, `Visitor` or `Mutator` of [visitor-mutator](spec/visitor-mutator.md), `TypeVisitor` and `TypeMutator` included.
 
 ## 6. Writing a target

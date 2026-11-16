@@ -47,18 +47,19 @@ print(hir_function_to_dot(fn))
 ## 2. Python DSL Printer
 
 Canonical Python DSL printer that outputs executable `@func` /
-`@module` source. The output is round-trippable: write `as_script(fn)` to a
-Python file and import it, and the real authoring decorators MUST produce a
+`@module` source. The output is round-trippable. Write `as_script(fn)` to a
+Python file and import it. The real authoring decorators MUST produce a
 structurally equivalent IR. Printing that rebuilt value MUST reproduce the
 same canonical text.
 
 `PythonPrinter.print(value, ctx=None, indent="")` is the printer's one public
 entry ([core-ir §2.4](./core-ir.md#24-printable-and-printerbase)); callers do not
 call `visit`, which is the printers' own dispatch. It writes a `DType` as its
-name, a tensor, pointer, mesh or layout type at `indent`, a `Printable` by
-handing it the printer, an Enum, a `Target` through its `to_python()`, a tuple
-item by item, a Python scalar as itself, and any other IR node through the
-visitor, joining statement lines into one text. A value with no Python form
+name. It writes a tensor, pointer, mesh or layout type at `indent`. It writes a
+`Printable` by handing it the printer. It writes an Enum. It writes a `Target`
+through its `to_python()`. It writes a tuple item by item. It writes a Python
+scalar as itself. It writes any other IR node through the visitor. Printing
+joins statement lines into one text. A value with no Python form
 raises `NotImplementedError`. `HirPrinter.print(fn, options=...)` writes a whole
 HIR function and prints any other value the same way.
 
@@ -141,24 +142,24 @@ used by the rendered program and MUST remain lint-clean.
 
 - constraints:
   - Module input MUST emit every Function. A Module whose functions are all
-    `PrimFunction`s goes to the TIR printer; any other Module goes to the HIR
-    module printer, which prints each HIR Function as `@func` and each
+    `PrimFunction`s goes to the TIR printer. Any other Module goes to the HIR
+    module printer. That printer prints each HIR Function as `@func` and each
     `PrimFunction` as `@prim_func`. Meshes used by a function are written at
     their scope boundary. The TIR printer raises `NotImplementedError` for an
     HIR Function it reaches.
 
-The printer MUST emit each Module definition once before the slots that use it,
-with class-body bindings preserving shared definitions and instance keys.
-It MUST emit only what a Module *declares*, never what the Module
-resolves to — an inherited Target or topology hierarchy prints nothing, so
-the declaration-versus-inheritance split survives the round trip. A declared
+The printer MUST emit each Module definition once, before the slots that use it.
+Class-body bindings MUST preserve shared definitions and instance keys.
+The printer MUST emit only what a Module *declares*. It MUST NOT emit what the
+Module resolves to. An inherited Target or topology hierarchy prints nothing.
+So the declaration-versus-inheritance split survives the round trip. A declared
 Target prints as the `@module(target=...)` argument and a declared hierarchy
 as the `@module(topologies=...)` argument
 ([parser §3](./parser.md#3-implementation-overview)).
 Every dimension referenced only by a declared topology expression MUST still
 be emitted in the file header. A topology `ShapeDim` MUST use the same DSL
-expression text as tensor and Mesh geometry, including public constructors such
-as `ceildiv`, so importing restores the same expression tree.
+expression text as tensor and Mesh geometry. This includes public constructors such
+as `ceildiv`. Importing then restores the same expression tree.
 
 - constraints:
   - The decorator MUST print in its called form, `@module()` included. A bare
@@ -178,8 +179,8 @@ DSL text forms for tensor / layout / shard annotations are owned by
 [parser](./parser.md). Layouts and shard layouts use the forms described in
 [shard §6](./shard.md#6-shardattr), with acceptance rules in
 [parser §2](./parser.md#2-syntax-and-rules). The printer uses sugar only when it
-preserves the value, including mesh / layout / storage information and the
-needed lexical bindings; otherwise it emits a complete constructor
+preserves the value. The value includes mesh, layout and storage information
+and the needed lexical bindings. Otherwise the printer emits a complete constructor
 (`ShardLayout(...)`). Python-evaluated constructor arguments retain
 `Layout(...)` and `ComposedLayout(...)`.
 
@@ -190,9 +191,8 @@ as an explicit tuple of operands, retaining a trailing comma for one operand.
 Storage attributes MUST be emitted as strings.
 
 The printer has one type-text surface: the canonical `Tensor[...]` form of
-[parser §2.1](./parser.md#21-syntax), used by `as_script()`, comments, DOT,
-the viewer graph, and viewer detail panels, all supplied by the same printer
-visitor. Comments may flatten this text onto one physical line, but MUST NOT
+[parser §2.1](./parser.md#21-syntax). The same printer visitor supplies it to
+`as_script()`, comments, DOT, the viewer graph, and viewer detail panels. Comments may flatten this text onto one physical line, but MUST NOT
 change its syntax or semantics.
 
 The meaning of `Split` / `Partial` / `Broadcast` is owned by
@@ -208,22 +208,22 @@ text forms of [§2.3](#23-dsl-text-forms). Op attributes that are `DType`,
 raw `repr()`.
 
 `repr()` is a debug surface, not the source of truth. It may delegate to the
-[§2.3](#23-dsl-text-forms) implementation for context-free values, but
-context-dependent printing (for example, stable mesh names across a whole
-function) MUST use an explicit pretty-printer API.
+[§2.3](#23-dsl-text-forms) implementation for context-free values.
+Context-dependent printing MUST use an explicit pretty-printer API. An example is
+stable mesh names across a whole function.
 
 ### 2.5 Mesh bindings and file header
 
 The print context records imports and declarations while the printer visits the
-program. After the body has been visited, the context emits the file header;
-it MUST contain only imports and `DimVar` declarations reached by the output.
+program. After the printer visits the body, the context emits the file header.
+The header MUST contain only imports and `DimVar` declarations reached by the output.
 There is no module-level mesh hoist or global mesh name map.
 
 TIR binding names MUST be allocated independently for each `def`, including
 every specialization and each parent or child function. Collect all bindings
-before allocating names: preserve valid identifiers, replace other characters
-with underscores, and resolve collisions with `_2`, `_3`, and later suffixes
-without consuming a later authored identifier. Parameters, LetStmt bindings,
+before allocating names. Preserve valid identifiers. Replace other characters
+with underscores. Resolve collisions with `_2`, `_3`, and later suffixes.
+Do not consume a later authored identifier. Parameters, LetStmt bindings,
 mesh bindings, loop variables, and their references MUST use the same map.
 Parent and child modules share the file's import collection, not binding names.
 
@@ -234,13 +234,13 @@ have names. Name allocation MUST reserve later authored identifiers before
 assigning generated names or collision suffixes.
 Constant tensor parameters MUST retain `ConstTensor` annotations.
 
-A `FunctionRef` MUST print its child-slot path followed by its function name,
-with each component rendered as a Python identifier: slot names join with dots,
-an instance index is a subscript (a run-time index renders its leading
-operand), and only `ref.arguments(args)` appear inside the call parentheses,
+A `FunctionRef` MUST print its child-slot path followed by its function name.
+Each component MUST render as a Python identifier. Slot names join with dots.
+An instance index is a subscript. A run-time index renders its leading
+operand. Only `ref.arguments(args)` appear inside the call parentheses,
 e.g. `helper(x)`, `child(x)`, `layers[i](x)`, `child.run(x)`. The printer reads
-that path from the IR and MUST NOT infer it by searching the module tree;
-importing the text rebuilds the same `FunctionRef`. Generated value names avoid
+that path from the IR. It MUST NOT infer it by searching the module tree.
+Importing the text rebuilds the same `FunctionRef`. Generated value names avoid
 every referenced name.
 
 The DSL surface MUST be imported with `from tilefoundry.dsl import *`, which
@@ -266,8 +266,8 @@ alone do not establish that binding. Otherwise it MUST print the complete
 `ShardLayout(..., mesh=Mesh(...))` value, including in a register allocation
 outside the scope that uses it.
 
-Analysis annotations use the same type text for value-producing statements, but
-a structural `LoopRegion` or `MeshRegion` line MUST NOT restate the aggregate
+Analysis annotations use the same type text for value-producing statements.
+A structural `LoopRegion` or `MeshRegion` line MUST NOT restate the aggregate
 type of its body. The region may still carry selected analysis metadata.
 
 ### 2.6 Specialization printing
@@ -289,8 +289,8 @@ def small_sequence(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
 
 The pattern prints in its constructor form (`pattern.Range("S", 1, 3)`;
 other `Pattern` subclasses fall back to `repr(pattern)`). The emitted binding
-mirrors the authoring surface ([parser.md §2.1](./parser.md#21-syntax));
-when an IR variant has no display label, the printer synthesizes a valid binding
+mirrors the authoring surface ([parser.md §2.1](./parser.md#21-syntax)).
+When an IR variant has no display label, the printer synthesizes a valid binding
 from its canonical specialization signature. Because a
 dispatch prototype has a `DimVar` parameter, its rendering is a
 **display-only** surface ([§2.7](#27-round-trip-contract)): human-readable, not a round-trip
@@ -308,11 +308,11 @@ This TIR runtime extent query is distinct from HIR `tf.shape_of`.
 
 A rendering is one of two surfaces:
 
-**Canonical** — the rendering of a function with no `DimVar` parameter, or a
-Module whose Functions have no `DimVar` parameter and whose symbolic dimensions
-occur in round-trippable tensor, Mesh, or topology geometry. It
-MUST round-trip: printing, importing, and the test-side structural comparison
-MUST agree over
+**Canonical** — the rendering of a function with no `DimVar` parameter. It is
+also the rendering of a Module whose Functions have no `DimVar` parameter. The
+symbolic dimensions of that Module occur in round-trippable tensor, Mesh, or
+topology geometry. A canonical rendering MUST round-trip. Printing, importing,
+and the test-side structural comparison MUST agree over
 
 - Params: shape, dtype, storage, layout.attrs, layout.shape, layout.strides, mesh identity (topology name/size, layout shape, names)
 - Body: op class, args, keyword attrs, types
@@ -333,39 +333,39 @@ Invariant parameters print using their external argument names through the
 capture alias chain, including captured tile induction variables. Reparsing
 MUST preserve the parameters and arguments across loop and mesh boundaries.
 A canonical tile window with static integer scaling and translation MUST retain
-its index form (`t * c` or `t * c ± k`): start `c * iv ± k`, element count equal
-to the tile step, and stride `c`. This keeps index dimension arithmetic inside
+its index form (`t * c` or `t * c ± k`). Its start MUST be `c * iv ± k`. Its
+element count MUST equal the tile step. Its stride MUST be `c`. This keeps index dimension arithmetic inside
 the subscript when reparsed.
 
 A canonical grid loop MUST render each yielded expression under its own unique
-binding. After the loop body has emitted every yielded expression, the printer
+binding. The printer
 MUST emit one `carry = yield` assignment per carried value, in
-`LoopRegion.params[:len(yield_values)]` order. Those assignments are the final statements
+`LoopRegion.params[:len(yield_values)]` order. It MUST emit them after the loop
+body emits every yielded expression. Those assignments are the final statements
 in the loop body. This preserves references to the old carry until the update
 point and lets the parser's final-RHS carry rule rebuild the same loop.
 
-A `DimVar` shape entry prints as its bare name, and a shape-valued op attribute
-holding one MUST print it the same way rather than as its repr. The rendering
-MUST therefore also emit, once, a declaration binding each such name to the
-`DimVar` it stands for, with the envelope bounds it was declared with, so the
-printed file can be imported. The bounds are not recoverable from the name, so
+A `DimVar` shape entry prints as its bare name. A shape-valued op attribute
+holding one MUST print it the same way, not as its repr. The rendering
+MUST also emit, once, a declaration for each such name. The declaration binds the
+name to the `DimVar` it stands for, with the envelope bounds it was declared with.
+This lets the printed file import. The bounds are not recoverable from the name, so
 they are restated rather than inferred.
 
 ### 2.8 Record comment forms
 
 A record attached to an expression is typed fields and nothing else
-([core-ir §2](./core-ir.md#2-expr)). What one looks like on a printed line is
-decided here, by walking its fields; a family MUST NOT write its own form
-string.
+([core-ir §2](./core-ir.md#2-expr)). This section decides what a record looks like on a printed line, by walking
+its fields. A family MUST NOT write its own form string.
 
-A record MUST declare that it renders as a comment, and MAY declare which keys
-it emits: a field by its own name, anything else as a projection carrying its
-key, its type, and where its value comes from. Metadata with no declaration
-renders as nothing, which is how an annotation that is not a report -- a binding
-name, a constraint -- stays off the line.
+A record MUST declare that it renders as a comment. A record MAY declare which
+keys it emits. A key is a field by its own name. Any other key is a projection
+that carries its key, its type, and where its value comes from. Metadata with no
+declaration renders as nothing. So an annotation that is not a report, such as a
+binding name or a constraint, stays off the line.
 
 A record an analysis report projects ([analysis §1](./analysis.md#1-authored-hir-metrics))
-MUST NOT emit a key that projection cannot state; it MAY emit fewer. A record no
+MUST NOT emit a key that projection cannot state. It MAY emit fewer. A record no
 report projects (for example `SourceSpanMetadata`) is comment-only.
 
 One separator per layer, and a separator MUST NOT appear inside a value it
@@ -383,24 +383,24 @@ separates unless that value brackets itself:
 
 - constraints:
   - A key MUST be its declared name with `_` written as `-`. It MUST NOT be
-    derived from the value, and a unit MUST be part of the name -- `ideal-ns=13`,
-    never `ideal=13ns` -- so the unit is stated once, where the field states it.
+    derived from the value. A unit MUST be part of the name, as in `ideal-ns=13`,
+    never `ideal=13ns`. The unit is then stated once, where the field states it.
   - A value MUST be an `int`, a `str`, a mapping of them, or a type with a
     declared rendering. `int` and `str` MUST NOT be wrapped in a type that
     renders identically.
   - A `str` that is a token renders bare. Text that is a sentence MUST render as
-    a quoted, escaped DSL string literal ([§2.3](#23-dsl-text-forms)), which is
-    what lets it hold a separator the ladder uses; a reader splits a layer
+    a quoted, escaped DSL string literal ([§2.3](#23-dsl-text-forms)). Such a
+    literal can hold a separator the ladder uses. A reader splits a layer
     outside the quotes.
-  - A key whose value equals what it declared it says nothing by MUST be left
-    out, so a record that measured nothing collapses to its family name.
-  - A record declaring exactly one key MUST use the family name as that key: for
-    a record of one thing the family and the key state the same thing.
+  - A record MUST leave out a key whose value equals what the key declared it says
+    nothing by. A record that measured nothing then collapses to its family name.
+  - A record declaring exactly one key MUST use the family name as that key.
+    For a record of one thing, the family and the key state the same thing.
   - The family name MUST be the class name without a trailing `Metadata`, in
     kebab case. A record whose reported name differs MUST state that name where
     its keys are declared.
-  - Part zero of a line is the value's own type, which carries no key: it is not
-    a measurement of the value, it is the value, and it is DSL text
+  - Part zero of a line is the value's own type. It carries no key. It is not
+    a measurement of the value. It is the value, and it is DSL text
     ([§2.3](#23-dsl-text-forms)) that pastes back. Every later part is a record.
 
 Analysis rendering prints each reached definition once, with its Function
@@ -428,8 +428,8 @@ Layout values use single-line positional forms such as `Layout((r, W), (l,
 their names, unnamed wildcards print `_`, and star captures print `*name`.
 Predicate conditions retain structural traversal and authored declaration
 order; de-duplication keeps the first occurrence. Declaration rendering MUST
-traverse the authored pattern directly: nested switches retain every branch
-condition, and `pattern.Or` lists its alternatives as a set. Tensor shape, dtype,
+traverse the authored pattern directly. Nested switches retain every branch
+condition. `pattern.Or` lists its alternatives as a set. Tensor shape, dtype,
 storage and layout retain their symbolic constraints. Parameter lines include
 declared Enum domains, optionality and defaults. Ordinary boolean and other
 literal predicates retain their value constraints.
@@ -439,8 +439,8 @@ literal predicates retain their value constraints.
 hoist conditions across branches. `alternatives()` is an explicit enumeration
 API, separate from declaration rendering; its bindings retain declaration order.
 Every `Pattern` carries its own `predicates` slot. The structural line comes
-only from that pattern's structural fields, while its predicate block comes
-only from `pattern.predicates`; the printer MUST NOT infer one role from the
+only from that pattern's structural fields. Its predicate block comes
+only from `pattern.predicates`. The printer MUST NOT infer one role from the
 text produced for the other. `pattern.ShardLayout` patterns render all
 three declared fields through the same visitor/rules dispatch: local layout,
 shard attrs, and holder mesh. Instruction declarations call the reserved field
@@ -475,8 +475,8 @@ printer lazily to render structural `Refusal` evidence without creating an
 
 The viewer is the interactive HIR inspector. `Viewer(root).serve(port,
 open_browser)` (root = `core.Function` or `Module`) starts a local HTTP server
-and opens a browser page that lays the graph out **client-side** with the
-vendored WebAssembly Graphviz build (`@hpcc-js/wasm`); no `dot` process exists.
+and opens a browser page. The page lays the graph out **client-side** with the
+vendored WebAssembly Graphviz build (`@hpcc-js/wasm`). No `dot` process exists.
 The page offers pan / zoom, a detail panel, collapsible function regions, node
 search, and upstream/downstream highlight on the rendered SVG.
 
@@ -498,29 +498,30 @@ d3-zoom pan/zoom · click → detail + highlight · search · collapse toggle
 ```
 
 - **Backend** is the `tilefoundry.inspection.viewer` package. `Viewer(root)
-  .serve(...)` ensures the vendored JS is cached, then serves five GET
-  routes and returns the bound port: `/` (page), `/static/<name>`
+  .serve(...)` ensures the vendored JS is cached. It then serves five GET
+  routes and returns the bound port. The routes are `/` (page), `/static/<name>`
   (first-party files, then cached vendor JS), `/api/dot?collapsed=<csv>`
   (a fresh `viewer.Builder(root, collapsed).build().source`),
   `/api/expr/<visual_id>` (detail JSON formatted on demand from the
   `DetailIndex`), and `/api/palette` (the colour palette). The server runs on a
   background daemon thread; `serve` returns the bound port immediately
   unless `block` holds the process open. When `block` is unset it
-  follows `open_browser` — an interactive call (`open_browser=True`)
-  blocks until interrupted so the page stays reachable; a programmatic
+  follows `open_browser`. An interactive call (`open_browser=True`)
+  blocks until interrupted, so the page stays reachable. A programmatic
   call returns.
 - **Builder.** `viewer.Builder` walks the HIR `Module` (or a `Function`
   that calls no function) directly into a `graphviz.Digraph`; there is no
   intermediate model. A direct call `FunctionRef((), name)` and a top-level
-  `Function` share one unified emitter — a collapsed region renders as a
-  stand-in node, an expanded one as a `subgraph cluster_<region_visual_id>`.
+  `Function` share one unified emitter. A collapsed region renders as a
+  stand-in node. An expanded region renders as a `subgraph cluster_<region_visual_id>`.
   Each region and call detail carries the context its references resolve
   from. An instance call
   (`child(x)`, `layers[i](x)`) is a call node titled by the reference's dotted
-  path; it is not expanded, since the instance may be chosen at run time. Its
-  ports and its detail parameters share one naming: one `index` port per
-  run-time index, then the names of the parameters its arguments bind, with
-  the ConstTensor parameters an instance entry omits left out.
+  path. The Builder does not expand it, since the instance may be chosen at run
+  time. Its ports and its detail parameters share one naming. The naming is one
+  `index` port per run-time index, then the names of the parameters its
+  arguments bind. It leaves out the ConstTensor parameters that an instance
+  entry omits.
 - **Frontend** is `static/index.html` + `static/viewer.js` (first-party,
   committed). On load it fetches `/api/palette`, then renders `/api/dot`;
   each collapse toggle re-fetches `/api/dot?collapsed=...` and re-renders.
@@ -538,34 +539,34 @@ d3-zoom pan/zoom · click → detail + highlight · search · collapse toggle
 
 `visual_id` is the stable id of every emitted artifact:
 `"__".join(call_path) + "__" + local`. The call path namespaces inline
-expansions, so two calls to the same callee produce disjoint node ids and
-disjoint detail entries; a dispatch prototype's variants, which share the
-base name, are likewise disambiguated by their canonical specialization
-signature. `region_visual_id` follows the same scheme, and collapse state
+expansions. So two calls to the same callee produce disjoint node ids and
+disjoint detail entries. The canonical specialization signature likewise
+disambiguates the variants of a dispatch prototype, which share the
+base name. `region_visual_id` follows the same scheme, and collapse state
 is a set of region ids.
 
 `DetailIndex` maps `visual_id → DetailRef(hir_expr, kind, call_path,
 region_visual_id?, param_index?)`. It is a click-lookup index, NOT a graph
 model: it holds live HIR references, never pre-formatted panel JSON. Each
-`/api/dot` build rebuilds and atomically replaces the index, so
+`/api/dot` build rebuilds and atomically replaces the index. So
 `/api/expr/<visual_id>` always resolves against the currently displayed
-graph; an id that was collapsed away returns 404.
+graph. An id that was collapsed away returns 404.
 
 ### 3.3 Node rendering
 
 - **Function node.** Title row: a `▼/▶` toggle port, the clickable
   `fn <name>` title, then one cell per parameter showing the param name.
-  When expanded the params span two rows — `:pin<i>` (top, where the
-  caller connects) and `:pout<i>` (bottom, where the body reads) — so a
+  When expanded, the params span two rows. `:pin<i>` (top) is where the
+  caller connects. `:pout<i>` (bottom) is where the body reads. So a
   single port is never both an external sink and an internal source. A
   collapsed stand-in instead carries `:out<i>` result ports. The cluster
   is tinted by nesting depth (an independent low-saturation channel).
-- **Op call node.** Title row (op name + per-operand input ports labelled
-  with the Op's declared field names), then one field row per non-input
-  attribute (`axis: 2`, `new_shape: …`), then the result-type row.
+- **Op call node.** The title row shows the op name and one input port per
+  operand, labelled with the Op's declared field names. One field row follows per
+  non-input attribute (`axis: 2`, `new_shape: …`). The result-type row comes last.
 - **Return producer.** In an expanded function the real body producer of
-  each return slot carries a bottom `▼ out<i>` marker (no separate anchor
-  node), and a region's direct return producers share one rank. Output
+  each return slot carries a bottom `▼ out<i>` marker. There is no separate anchor
+  node. A region's direct return producers share one rank. Output
   ports live on the collapsed stand-in only — an expanded header has no
   output port (that would read as the function depending on itself).
 - **Var / Constant / Tuple.** `Var` shows its name; `Constant` uses the
@@ -581,9 +582,9 @@ graph; an id that was collapsed away returns 404.
 
 ### 3.4 Interaction contract
 
-- **Detail panel.** Clicking a node title fetches `/api/expr/<visual_id>`
-  and renders `params` (name | type), `returns` (idx | type) and `attrs`
-  (key | value), formatted on demand from the live HIR expr. Type text is
+- **Detail panel.** Clicking a node title fetches `/api/expr/<visual_id>`.
+  The panel renders `params` (name | type), `returns` (idx | type) and `attrs`
+  (key | value). The backend formats them on demand from the live HIR expr. Type text is
   canonical ([§3.3](#33-node-rendering)); DimVar / `@storage` tokens are re-coloured client-side
   from `/api/palette` using the same rule as the graph. A stale id (after
   a collapse changed the index) yields 404 and the panel clears.
@@ -595,8 +596,8 @@ graph; an id that was collapsed away returns 404.
   clears. Adjacency is derived from the rendered SVG (`g.edge` titles,
   ports stripped to bare node ids), transitively.
 - **Search.** A header search box highlights nodes whose id or visible
-  label contains the query and dims the rest; it re-applies after a
-  re-render and is independent of the highlight-direction mode.
+  label contains the query and dims the rest. It re-applies after a
+  re-render. It is independent of the highlight-direction mode.
 - **Collapse / expand.** The `▼/▶` toggle cell on a function node flips
   that region's collapse state, which re-fetches `/api/dot?collapsed=<csv>`
   and re-renders. Collapse state is mirrored in the URL hash so a refresh
@@ -675,5 +676,5 @@ def dump(
     than adding a worker directory. `pytest.mark.no_dump` disables it.
   - A completed `analyze(...)` call MUST dump its complete report data as
     `analysis.json` when `Flags.ANALYSIS` is enabled. Every conclusion in
-    that dump MUST come from the selected typed records; the report layer MUST
+    that dump MUST come from the selected typed records. The report layer MUST
     NOT reconstruct target-aware findings that no record carries.

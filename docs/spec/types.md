@@ -91,9 +91,9 @@ class TensorType:
   - After type inference, each tensor value MUST carry a concrete `LayoutBase`
     from [shard §2](./shard.md#2-layout-hierarchy), with no omitted strides.
     Parameter annotations keep the authored constraint, including a completely
-    omitted layout; function calls compare arguments against the annotation, and
-    a declared `layout=None` imposes no layout constraint (a signature rule, not
-    a physical layout). Authored layouts receive concrete strides at
+    omitted layout. Function calls compare arguments against the annotation. A
+    declared `layout=None` imposes no layout constraint. This is a signature
+    rule, not a physical layout. Authored layouts receive concrete strides at
     construction (`Layout(shape)`: [shard §9](./shard.md#9-layout-construction-and-algebra));
     standalone inference gives an omitted layout a separate default value type.
     Verification reports an incomplete value type with its source location.
@@ -111,7 +111,7 @@ class TensorType:
     resolved to a concrete residency (or otherwise materialized) before codegen
     consumes it ([§10](#10-unmaterialized-values)).
   - For plain `Layout` / `ComposedLayout`, `layout.shape` MUST have the same rank
-    and logical extents as `shape`; the layout describes the value whose type
+    and logical extents as `shape`. The layout describes the value whose type
     carries it. Consumers use this common contract rather than inspecting a
     `ComposedLayout` component.
   - For `ShardLayout`, `TensorType.shape` remains the logical shape;
@@ -130,9 +130,9 @@ dispatched per [visitor-registry](./visitor-registry.md).
 ### 2.1 Recursive local projection
 
 `local_type_of` lives in `ir/utils/local.py` and is exported as
-`utils.local_type_of`; the size helpers of [§2.2](#22-logical-size) live in
-`ir/utils/sizes.py` (`tensor_types` in `ir/utils/leaves.py`) and are exported
-by `ir.utils` the same way.
+`utils.local_type_of`. The size helpers of [§2.2](#22-logical-size) live in
+`ir/utils/sizes.py`. `tensor_types` lives in `ir/utils/leaves.py`. `ir.utils`
+exports these functions the same way.
 
 ```python
 def local_type_of(
@@ -165,14 +165,16 @@ def topology_level(topology: str, topologies: tuple[Topology, ...]) -> int:
     leaf and rebuild `TupleType` structure. A `Split` at `topology` or a
     coarser topology level MUST divide; a finer `Split`, `Broadcast`, and
     `Partial` MUST NOT.
-  - Without `topology`, every `Split` MUST divide, the returned tensor layout MUST
-    be `None`, and the tensor's logical rank MUST remain unchanged. This form
+  - Without `topology`, every `Split` MUST divide. In this form, the returned
+    tensor layout MUST be `None`. The tensor's logical rank MUST remain
+    unchanged. This form
     is the logical-axis projection used by relation construction.
-  - Each resolved nested `ShardLayout` MUST be applied exactly once per layer,
-    whether it is held directly or as the outer of a static-offset
+  - Each resolved nested `ShardLayout` MUST be applied exactly once per layer.
+    This holds when it is held directly or as the outer of a static-offset
     `ComposedLayout(inner=None, ...)`.
-    Every mesh axis MUST state its own extent, and local projection MUST use
-    that extent without substituting a target or topology capacity. A stated
+    Every mesh axis MUST state its own extent. Local projection MUST use
+    that extent. Local projection MUST NOT substitute a target or topology
+    capacity. A stated
     static extent that does not divide the split dimension MUST raise. A
     symbolic tensor axis or mesh extent MUST be bound before local projection.
   - Every axis of a Mesh carrying one topology MUST be read at that topology
@@ -215,10 +217,10 @@ def bytes_by_storage(type: Type, *, umat_level: str | None = None) -> dict[str, 
 ```
 
 - constraints:
-  - Both MUST sum over the tensor leaves of a `TupleType` and MUST report `0`
+  - Both MUST sum over the tensor leaves of a `TupleType`. Both MUST report `0`
     for a type with no tensor leaf.
-  - Both MUST reject a symbolic or negative extent (`ValueError`) rather than
-    skip it, and MUST report `0` for a concrete zero extent.
+  - Both MUST reject a symbolic or negative extent (`ValueError`) and MUST NOT
+    skip it. Both MUST report `0` for a concrete zero extent.
   - `tensor_bytes` MUST round a sub-byte dtype up to whole bytes per leaf.
   - They state the logical size, the same for every backend, and MUST NOT live
     in a target package.
@@ -259,7 +261,7 @@ def resolve_storage(value: "str | StorageKind | None") -> "StorageKind | None":
     `TMEM=5` / `tmem`, and `UMAT=6` / `umat`.
   - `resolve_storage` MUST pass through `None` and a `StorageKind` instance.
     It MUST accept exactly the canonical strings `host`, `gmem`, `smem`,
-    `rmem`, `tmem`, and `umat`, and MUST reject other strings and non-storage
+    `rmem`, `tmem`, and `umat`. It MUST reject other strings and non-storage
     values. Matching is case-sensitive.
   - The storage vocabulary is closed at the IR type boundary. It MUST NOT
     provide target-specific registration or capability validation.
@@ -336,7 +338,7 @@ The canonical descriptors are:
     or iteration surfaces.
   - `DType.from_name(name)` is the single string → descriptor resolution
     surface. It MUST reject an unknown name and name the valid set in the
-    diagnostic; every string-accepting surface (annotations, sugar, `Tensor[...]`)
+    diagnostic. Every string-accepting surface (annotations, sugar, `Tensor[...]`)
     MUST resolve through it.
   - Descriptor equality and hashing MUST use the complete descriptor fields.
   - `DType` is independent of `layout` and `storage`.
@@ -553,22 +555,22 @@ def ceildiv(a, b) -> Expr:
     `simplify_dim`. A `DimVar` and the `Call` produced by dimension arithmetic
     both support continued `+`, `-`, `*`, `//`, and `%` construction, including
     the reflected forms. Other `Call` values do not support this arithmetic.
-  - `simplify_dim` MUST only construct dimension arithmetic: it wraps raw integer
-    operands as integer `Constant` values and rejects boolean operands, but MUST
+  - `simplify_dim` MUST only construct dimension arithmetic. It wraps raw integer
+    operands as integer `Constant` values and rejects boolean operands. It MUST
     NOT fold constants or apply algebraic identities.
   - Every dimension stored in an IR type or op attribute MUST use the one
     `normalize_dim` isl affine normal form. This covers function signatures,
-    inferred types, layouts, topology and mesh entries, and op attributes; it
+    inferred types, layouts, topology and mesh entries, and op attributes. It
     does not cover dimension expressions used as `Expr` operands, such as a
     `Slice` start address. All-constant expressions normalize to plain Python
     integers. Runtime scalar `Var` leaves MUST be represented by object identity,
-    not name, so repeated uses of one value can cancel without conflating
-    distinct same-named values. Normalization MUST NOT apply `DimVar` envelope
+    not name. Repeated uses of one value then cancel, and distinct same-named
+    values stay distinct. Normalization MUST NOT apply `DimVar` envelope
     bounds. Expressions outside the affine subset or not decodable as one
     `ShapeDim` MUST remain unchanged.
   - `is_dimension` MUST accept non-boolean integers, `DimVar`, integer-valued
     `Constant`, and recursively valid calls to the seven dimension arithmetic
-    operations, and MUST reject other values.
+    operations. It MUST reject other values.
   - `has_symbolic_dims(value)` MUST report whether a `DimVar` is reachable, not
     whether dimension arithmetic contains a runtime `Expr`. A dimension call
     recursively checks its operands; non-dimension expressions do not become
@@ -585,10 +587,11 @@ def ceildiv(a, b) -> Expr:
   - `ir.expr.dim` MUST own the dimension IR definitions and their structural
     predicates without depending on isl or on a type. Construction belongs to
     `ir.dim.simplify`, reached by the lower layers through the `simplify_dim`
-    service. Conversion between dimension and shape IR values and isl, affine
+    service. `ir.dim.isl_interop` ([§11](#11-isl-interoperability)) owns conversion
+    between dimension and shape IR values and isl. It also owns affine
     normalization, shape-domain construction, and conservative value-range
-    queries belong to `ir.dim.isl_interop` ([§11](#11-isl-interoperability)),
-    reached through the `normalize_dim` and `dim_range` services.
+    queries. Lower layers reach it through the `normalize_dim` and `dim_range`
+    services.
 
 ---
 
@@ -714,10 +717,10 @@ def make_shard_tensor_type(
 - constraints:
   - `TensorType.from_shape` MUST preserve `shape` as a tuple and pass the remaining
     fields to `TensorType`.
-  - `make_shard_tensor_type` (in `ir/utils/local.py`, exported as
-    `utils.make_shard_tensor_type`) MUST return a plain tensor type (layout
-    `Layout(shape)`) when `mesh` is `None` or `attrs` is empty; otherwise it
-    MUST build the layout through `ShardLayout.from_logical`.
+  - `make_shard_tensor_type` MUST return a plain tensor type (layout
+    `Layout(shape)`) when `mesh` is `None` or `attrs` is empty. Otherwise it
+    MUST build the layout through `ShardLayout.from_logical`. It lives in
+    `ir/utils/local.py`. It is exported as `utils.make_shard_tensor_type`.
 
 ## 9. Callable type projection
 
@@ -756,8 +759,9 @@ def callable_type_for_prim_function(fn) -> CallableType:
 
 ## 10. Unmaterialized values
 
-`UMAT` states that a value's residency is not decided: not a claim that the value
-is known at compile time, nor that it never lives in memory. A shape element
+`UMAT` states that a value's residency is not decided. It does not claim that
+the value is known at compile time. It does not claim that the value never
+lives in memory. A shape element
 read from a symbolic dimension is unmaterialized and unknown; a literal `2` is
 unmaterialized and known.
 
@@ -772,13 +776,13 @@ TensorType.from_umat_tensor(shape, dtype) # ranked: a shape vector
   - `TensorType.storage` MUST be a `StorageKind`. There is no unset residency;
     an undecided one is `UMAT`.
   - A value whose residency is undecided MUST carry `UMAT`.
-  - Shape elements and `dim.*` results MUST use `from_umat_scalar`; shape-vector
+  - Shape elements and `dim.*` results MUST use `from_umat_scalar`. Shape-vector
     construction sites MUST use `from_umat_tensor`. A statically indexed rank-0
-    result from a shape vector MUST use `from_umat_scalar`; other ranked `Slice`
-    views retain their derived layouts and are not required to be structurally
+    result from a shape vector MUST use `from_umat_scalar`. Other ranked `Slice`
+    views retain their derived layouts. They are not required to be structurally
     equal to `from_umat_tensor`.
   - An operand carrying `UMAT` MUST NOT be charged to a memory level by the
-    residency of its own type alone; what charges it is where it is consumed
+    residency of its own type alone. What charges it is where it is consumed
     ([analysis §1.2.1](./analysis.md#121-compute-cost)).
 
 ---
@@ -788,55 +792,58 @@ TensorType.from_umat_tensor(shape, dtype) # ranked: a shape vector
 `ir.dim.isl_interop` converts IR values to isl objects and back; every analysis
 service that reasons about coordinates goes through it. Within one conversion or
 normalization context (one `IslParamValues` dictionary, or one Op's relations
-lined up by `iterating`) one value is one isl parameter; independent
+lined up by `iterating`), one value is one isl parameter. Independent
 dictionaries may name the same value differently. The dictionary maps isl
 parameter name to IR value.
 
 - constraints:
   - Every IR-to-isl conversion in `ir.dim.isl_interop` MUST be named
-    `XX_to_isl_YY`, where `YY` is the isl type it returns, and MUST take the one
+    `XX_to_isl_YY`, where `YY` is the isl type it returns. Each such conversion MUST take the one
     parameter dictionary `IslParamValues` (isl parameter name to IR value). Every
     isl-to-IR conversion MUST be named `isl_to_XX` and read the same dictionary.
-    A conversion MUST look a leaf up by object identity, reuse the name it
-    already has, and name a new leaf into the dictionary with a name no other
-    value or coordinate has. A new name MUST be the fixed prefix `p` and a
-    number, never read off the value's own name or a mesh axis name: the name
-    carries no meaning, and a reader MUST NOT expect a particular number. Two
+    A conversion MUST look a leaf up by object identity. It MUST reuse the name
+    the leaf already has. It MUST name a new leaf into the dictionary. The name
+    MUST be one that no other value or coordinate has. A new name MUST be the
+    fixed prefix `p` and a number. It MUST NOT be read off the value's own name
+    or a mesh axis name. The name carries no meaning. A reader MUST NOT expect
+    a particular number. Two
     distinct values sharing a `DimVar` name are two parameters. A parameter's
     stated range MUST be a constraint on the returned isl object, not a second
     record.
   - `dimension_to_isl_pw_aff(dim, values, *, coords)` MUST return one dimension
     expression as an `isl.pw_aff`. `coords` maps the identity of a value that is
-    a coordinate of the space, such as an induction variable, to that dimension's
-    name; those values are dimensions of the result, not parameters. A
-    `DimFloorDiv` or `DimMod` divisor MUST have one value, read the way a
-    constant `DimMul` operand is read, a product of constants included; a
-    divisor with more than one value raises `NotImplementedError`.
+    a coordinate of the space to that dimension's name. An induction variable is
+    such a value. Those values are dimensions of the result, not parameters. A
+    `DimFloorDiv` or `DimMod` divisor MUST have one value. A conversion reads
+    that value the way it reads a constant `DimMul` operand. This includes a
+    product of constants. A divisor with more than one value raises `NotImplementedError`.
     `isl_to_dimension` MUST decode an isl affine expression using `values`.
     `shape_to_isl_set(shape, values)` MUST return one shape's coordinate set over
-    dimensions `d0` to `d{rank-1}`; every `Call` extent, dimension arithmetic
-    such as `P // 4` included, is one opaque parameter for the whole extent. A
+    dimensions `d0` to `d{rank-1}`. Every `Call` extent is one opaque parameter for the whole
+    extent. This includes dimension arithmetic such as `P // 4`. A
     negative static extent is an empty set and a boolean extent is a
     `TypeError`.
   - A conversion MUST raise `ValueError` when a name in `values` is also the
-    name of a coordinate of the result, rather than read that parameter as the
+    name of a coordinate of the result. It MUST NOT read that parameter as the
     coordinate.
   - `layout_to_isl_map(shape, layout, values, *, divided)` MUST return the map
     from a value's logical coordinates to the flattened layout coords one unit
     holds. The map follows the regroup of [semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain).
     `layout` MUST be a `ShardLayout` or a static-offset view of one; any other
-    layout is a `TypeError`. A `ShardLayout` whose `layout` is itself a
-    `ShardLayout`, directly or as the outer of a static-offset
-    `ComposedLayout(inner=None, ...)`, is placed layer by layer, each layer
-    once, the innermost layer's cuts outermost, as
-    [§2.1](#21-recursive-local-projection) projects it. `divided(layer)` names the mesh axes of that layer whose `Split` the
-    unit holds one part of; each such axis's coordinate is a `MeshCoord`
-    parameter named into `values`, ranging over the axis.
+    layout is a `TypeError`. The map places a `ShardLayout` whose `layout` is itself a
+    `ShardLayout` layer by layer. This holds directly or as the outer of a
+    static-offset `ComposedLayout(inner=None, ...)`. The map places each layer
+    once, with the innermost layer's cuts outermost. This matches the
+    projection of [§2.1](#21-recursive-local-projection). `divided(layer)` names
+    the mesh axes of that layer whose `Split` the unit holds one part of. Each
+    such axis's coordinate is a `MeshCoord` parameter named into `values`. The
+    parameter ranges over the axis.
   - `layout_to_isl_map` MUST raise `ValueError` for static logical and layout
-    sizes that differ, checked before a size-zero shape yields an empty map; a
-    regroup that needs a symbolic divisor or modulus; a divided mode or
-    mesh extent that is not static; and mesh extents that do not divide their
-    mode.
+    sizes that differ. This check MUST run before a size-zero shape yields an
+    empty map. It MUST raise the same error for a regroup that needs a symbolic
+    divisor or modulus. It MUST raise the same error for a divided mode or
+    mesh extent that is not static. It MUST raise the same error for mesh
+    extents that do not divide their mode.
   - `dim_range(value)` MUST return conservative half-open bounds from
     `RangeMetadata` before attempting structural dimension arithmetic. A value
     with neither stored nor structurally derivable bounds returns `None`.

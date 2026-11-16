@@ -1,47 +1,49 @@
 # TileFoundry Spec — semantic-analysis (per-Op semantic derivation)
 
 This spec owns the semantic contracts that derive types, access relations, and
-shard layouts over the IR. Each service is a registry-backed derived visitor:
-registration and dispatch are owned by [visitor-registry](./visitor-registry.md),
-including the access relation's carrier
-([§4.1](./visitor-registry.md#41-access-relation-service--access_relation)); this
-file owns each service's requirements and the semantic rules it enforces.
+shard layouts over the IR. Each service is a registry-backed derived visitor.
+[visitor-registry](./visitor-registry.md) owns registration and dispatch,
+including the carrier of the access relation
+([§4.1](./visitor-registry.md#41-access-relation-service--access_relation)).
+This file owns the requirements of each service and the semantic rules that it
+enforces.
 
 ## 1. Type propagation
 
-Type inference is registered per Op through
+Each Op registers its type inference through
 `typeinfer.register(<OpClass>)` ([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)).
-A handler receives the op and a typeinfer context, derives the output `Type`, and
-reports violations through `ctx.error`. A `core.Function` call composes these
-per-op rules under elaboration ([hir §1.1](./hir.md#11-function)): the callee
-body is reconstructed and each node re-derives under the call's actual argument
-types, so a relation-derived rule needs no function-boundary case of its own.
+A handler receives the op and a typeinfer context. It derives the output `Type`.
+It reports violations through `ctx.error`. A `core.Function` call composes these
+per-op rules under elaboration ([hir §1.1](./hir.md#11-function)).
+Elaboration reconstructs the callee body. Each node re-derives its type under
+the actual argument types of the call. So a relation-derived rule needs no
+function-boundary case of its own.
 
 - constraints:
   - A function boundary MUST NOT complete or reject a legal `Partial`.
-  - A function return MAY carry a `Partial(reduction)` in a `TensorType`, and a
-    tuple return MAY carry it in any nested tensor field.
+  - A function return MAY carry a `Partial(reduction)` in a `TensorType`.
+    A tuple return MAY carry it in any nested tensor field.
   - Call elaboration MUST preserve the `ShardLayout` mesh-axis position and
-    reduction on the actual value; completion remains the responsibility of an
-    explicit `Reshard` or allreduce.
+    reduction on the actual value. An explicit `Reshard` or allreduce completes
+    it.
 
 ### 1.1 Relation-derived type behavior
 
 An op's typeinfer MAY derive the output type from the Op's access relations
 ([visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation))
-rather than from a hand-written rule. Every boundary states an access map from
-the Op's own iteration space to that tensor's index space. The relations carry
-**no tensor shape**: the output shape is typeinfer-side data, derived from the
-op's shape rule or from the extents the output relation reaches.
+instead of a hand-written rule. Every boundary states an access map from the
+Op's own iteration space to the index space of that tensor. The relations carry
+**no tensor shape**. The output shape is typeinfer-side data. It comes from the
+op's shape rule or from the extents that the output relation reaches.
 
 - A domain dim that appears in an input access map but **not** in the
   output access map is a **reduction** dim.
 - A tensor axis whose access maps to a constant is a **broadcast** axis.
-- A symbolic size is an isl parameter of the domain; the relation's rank is
-  read from the input types.
+- A symbolic size is an isl parameter of the domain. The input types give the
+  rank of the relation.
 
-The shard consequences ( `Split` / `Broadcast` / `Partial` propagation and the
-reduction effect) are in [§3.2](#32-relation-driven-shard-propagation).
+[§3.2](#32-relation-driven-shard-propagation) describes the shard consequences:
+`Split`, `Broadcast` and `Partial` propagation and the reduction effect.
 
 ### 1.2 Domain construction and output shape derivation
 
@@ -50,27 +52,30 @@ describes ([visitor-registry §4.1](./visitor-registry.md#41-access-relation-ser
 
 ## 2. Access relation analysis
 
-The access relation is the boundary model shared by relation-derived type
-behavior, shard propagation, dependence and movement: per boundary, an affine
-access map from the Op's own iteration space to a tensor's index space. Its
-carrier `access.Relation`, the tuple one Op states, and the registry are defined
-in [visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation).
-Type and shard rules read only the access maps' affine structure (which domain
-dim each axis uses), never the domain bounds, so they are size-agnostic and
-identical for static and dynamic shapes.
+The access relation is the boundary model that relation-derived type behavior,
+shard propagation, dependence and movement share. For each boundary, it is an
+affine access map from the Op's own iteration space to the index space of a
+tensor. The section
+[visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation)
+defines its carrier `access.Relation`, the tuple that one Op states, and the
+registry.
+Type and shard rules read only the affine structure of the access
+maps, which is the domain dim that each axis uses. They never read the domain
+bounds. So they are size-agnostic and identical for static and dynamic shapes.
 
-An effect-form TIR instruction uses the same tuple even though its call has
+An effect-form TIR instruction uses the same tuple, although its call has
 the void result `TupleType.Void`:
 
-- One relation per input `ParamDef`, in parameter order, comes first, whether
-  that operand is read, written or both.
-- Its relation after those is the void result's one boundary, as for any Op.
-- Which operands are read and which are written is each parameter's `effect`,
-  not its position: the argument prefix is not the set of reads.
+- One relation per input `ParamDef` comes first, in parameter order. This holds
+  whether that operand is read, written or both.
+- The relation after those is the one boundary of the void result, as for any
+  Op.
+- The `effect` of each parameter says which operands are read and which are
+  written, not its position. The argument prefix is not the set of reads.
 
 An HIR consumer such as [`tf.schedule`](./schedule.md) may use the relations
 of written operands to derive its own value result. Instructions selected by
-such a consumer MUST register their relation explicitly; there is no fallback
+such a consumer MUST register their relation explicitly. They have no fallback
 relation.
 
 ### 2.1 IR to isl conversion
@@ -84,17 +89,17 @@ both as one `IslParamValues` dictionary from isl parameter name to IR value.
 - constraints:
   - A service MUST compose converted values as isl objects. It MUST NOT render
     an isl object back to text and splice that text into a new relation.
-  - A loop domain MUST treat each enclosing induction variable, and each
-    capture of one, as a dimension of the space, not as a parameter. Each other
-    leaf of a loop bound MUST be a parameter with a stated range; a loop bound
-    with an unbounded parameter is refused.
+  - A loop domain MUST treat each enclosing induction variable as a dimension
+    of the space, not as a parameter. It MUST treat each capture of such a
+    variable the same way. Each other leaf of a loop bound MUST be a parameter
+    with a stated range. A loop bound with an unbounded parameter is refused.
   - A parameter of an access relation that an enclosing scope already names
-    MUST keep that name, and a capture of that value MUST be the same
-    parameter, so one value is one parameter across the scope.
+    MUST keep that name. A capture of that value MUST be the same parameter.
+    So one value is one parameter across the scope.
   - A reader MUST find what a parameter stands for in `values`, not in its
     name. Boundaries of one Op MUST share a parameter only when they bind the
-    same object, which `iterating` makes so before the Op's boundaries are
-    combined.
+    same object. `iterating` establishes this condition before the Op's
+    boundaries are combined.
 
 ## 3. Shard propagation
 
@@ -102,39 +107,44 @@ both as one `IslParamValues` dictionary from isl parameter name to IR value.
 
 - `TensorType.shape` is the logical shape.
 - `layout` has its own domain shape.
-- The interpretation is canonical regroup: linearize along the logical shape's
-  row-major order, then reinterpret along the layout domain's row-major order. Strides describe physical indices only
-  and MUST NOT participate in logical-coordinate correspondence. Nested
-  domains associate their top-level modes with the corresponding logical axes
-  only when the number of top-level modes equals the logical rank and each
-  mode's size equals its axis extent; otherwise, the flattened modes regroup.
+- The interpretation is a canonical regroup. It linearizes along the row-major
+  order of the logical shape. Then it reinterprets along the row-major order of
+  the layout domain. Strides describe physical indices only. Strides MUST NOT
+  participate in logical-coordinate correspondence. A nested domain associates
+  its top-level modes with the corresponding logical axes only when two
+  conditions hold. The number of top-level modes equals the logical rank. The
+  size of each mode equals its axis extent. Otherwise, the flattened modes
+  regroup.
 - Axis grouping uses `compatible_profile(layout.shape, shape)` to construct a
   profile without splitting or coalescing authored modes. `unflatten` reads the
-  layout against that profile; `mode_axes` names each flat mode's logical axis.
+  layout against that profile. `mode_axes` names the logical axis of each flat
+  mode.
 - `layout_to_isl_map` ([types §11](./types.md#11-isl-interoperability))
   implements this regroup for a `ShardLayout`. A logical axis whose extent is
-  the product of consecutive flattened modes maps onto them, so a
-  symbolic extent stays representable. Any other regroup, including a mode
-  merging logical axes, MUST be rejected where the type is stated. Type
-  inference MUST check function parameters and every Call result with the same
-  axis-group rule and report the declaring source location. Canonical
-  UMAT shape metadata uses the same compact `Layout(shape)` as other tensor values.
+  the product of consecutive flattened modes maps onto them. So a
+  symbolic extent stays representable. Any other regroup MUST be rejected where
+  the type is stated. This includes a mode that merges logical axes. Type
+  inference MUST check function parameters with the same axis-group rule. It
+  MUST check every Call result with that rule. It MUST report the declaring
+  source location. Canonical UMAT shape metadata uses the same compact
+  `Layout(shape)` as other tensor values.
 - A reader with no topology level addresses logical coordinates. A reader at a
-  named topology level addresses the coords one unit of that level holds. The
+  given topology level addresses the coords one unit of that level holds. The
   reader splits a coord cut by mesh axes at that level or coarser into digits. The
   digits follow the cutting axes outermost first in mesh-axis order, then the
   residual. Each cutting-axis digit is that unit's `MeshCoord` on that axis.
   The residual is the local coord within the unit and is not a `MeshCoord`.
-- A mesh coordinate is an isl parameter while the layout map is built. The
-  access relation service fixes it to the requested unit, 0 on every mesh axis
-  unless stated, and removes it before any boundary is counted.
+- A mesh coord is an isl parameter while the layout map is built. The
+  access relation service fixes it to the requested unit. The default is 0 on
+  every mesh axis unless stated. The service removes it before any boundary is
+  counted.
 
 ### 3.2 Relation-driven shard propagation
 
-When an op's output `ShardLayout` is derived from a forward access
-relation ([§1.1](#11-relation-derived-type-behavior)), the
-output `ShardAttr`s are determined from the input shards and the
-relation's access maps by a single rule, shared across ops.
+This section applies when the output `ShardLayout` of an op is derived from a
+forward access relation ([§1.1](#11-relation-derived-type-behavior)). A single
+rule determines the output `ShardAttr`s from the input shards and the access
+maps of the relation. All ops share this rule.
 
 ```python
 # types.partial_reductions_by_axis (ir/types/shard_layout.py)
@@ -156,28 +166,30 @@ def derive_output_shard_layout(
 ```
 
 - constraints:
-  - `derive_output_shard_layout` reads only input types, `access.Relation.affine`
-    (the Op-written mapping before iteration-domain intersection), the requested
-    output shape, and the explicit reduction/stride controls. It MUST NOT read
-    the bounded `access.Relation.relation` or an already-derived output type.
-  - `partial_reductions_by_axis` returns one entry per mesh axis: the carried
-    reduction name for `Partial`, `None` for any other attr, and an empty tuple
-    for a non-sharded layout.
-  - Every input is first projected onto the executing topologies (each
-    topology any input distributes), so mesh axes keep one index across inputs.
-    With no real input sharding it returns `None`. Inputs with real sharding on
-    different meshes MUST fail (`ValueError`).
-  - When every propagated physical layout agrees (`carrier_layout`, which
-    returns `None` for anything short of an exact coordinate projection), the
-    result keeps it; otherwise the result is `ShardLayout.from_logical` over the
-    output shape.
-  - Both sets turn a reduced split into `Partial(reduction)`: each unit holds
-    its part, and the whole value is an explicit `Reshard` away. A reduction
+  - `derive_output_shard_layout` reads only the input types, the requested
+    output shape, the explicit reduction/stride controls, and
+    `access.Relation.affine`, which is the Op-written mapping before
+    iteration-domain intersection. It MUST NOT read the bounded
+    `access.Relation.relation` or an already-derived output type.
+  - `partial_reductions_by_axis` returns one entry per mesh axis. The entry is
+    the carried reduction name for `Partial` and `None` for any other attr. For
+    a non-sharded layout, it returns an empty tuple.
+  - The service first projects every input onto the executing topologies, that
+    is, each topology that any input distributes. So mesh axes keep one index
+    across inputs. With no real input sharding, the service returns `None`.
+    Inputs with real sharding on different meshes MUST fail (`ValueError`).
+  - When every propagated physical layout agrees, the result keeps it.
+    Otherwise the result is `ShardLayout.from_logical` over the output shape.
+    `carrier_layout` returns `None` for anything short of an exact coordinate
+    projection.
+  - Both sets turn a reduced split into `Partial(reduction)`. Each unit holds
+    its part. The whole value is an explicit `Reshard` away. A reduction
     never turns a split into `Broadcast`, which would hide that communication.
     `complete_reduction_dims` additionally collapses the reduced
     modes to extent one. The sets MUST NOT overlap.
-  - `fresh_strides=True` uses `ShardLayout.from_modes` for fresh compact row-major strides;
-    statically unit leaves have stride zero, and symbolic strides remain symbolic.
+  - `fresh_strides=True` uses `ShardLayout.from_modes` for fresh compact
+    row-major strides. Statically unit leaves have stride zero. Symbolic strides
+    remain symbolic.
     Split modes owned per instance by `ctx.target` for the result `storage` also
     have stride zero. Compacting the remaining
     modes drops only each Split's mesh factor and retains its local residual
@@ -188,9 +200,10 @@ def derive_output_shard_layout(
     value state at that exact index, not an unordered collection of reductions
     and not a mode. Every propagation decision MUST retain that
     index and its reduction independently of every other mesh axis.
-  - A reduction dim (a domain dim absent from the output access map) is declared
-    by the op in `partial_reduction_dims` or `complete_reduction_dims`; both
-    yield `Partial(reduction)` on a split mesh axis (step 3).
+  - The op declares a reduction dim in `partial_reduction_dims` or
+    `complete_reduction_dims`. A reduction dim is a domain dim absent from the
+    output access map. Both sets yield `Partial(reduction)` on a split mesh
+    axis (step 3).
   - Propagation applies per input mesh axis:
     1. `Split(k)` maps mode `k` to the input's logical tensor axis and
        then to a domain dim through the input access map.
@@ -202,7 +215,7 @@ def derive_output_shard_layout(
     4. A `Partial(reduction)` input propagates on the same mesh axis only when
        the op's math is proven to commute with `reduction`:
        `op(reduction(x0..xn)) == reduction(op(x0)..op(xn))`. This service MUST
-       NOT make that mathematical judgment; each op's typeinfer rule owns it.
+       NOT make that mathematical judgment. Each op's typeinfer rule owns it.
        On each mesh axis, two Partial inputs MUST be compatible with that op's
        rule. States on different mesh axes MUST NOT be compared as an unordered
        set. Only an explicit reduction/allreduce resolves `Partial` to
@@ -212,17 +225,18 @@ def derive_output_shard_layout(
   - A `Partial` MUST NOT be silently eliminated or carried through a
     non-commuting ordinary op.
   - An ordinary multi-input op MUST inspect every tensor input for a `Partial`.
-    When its result type cannot represent a secondary input's axis-preserving
-    state, typeinfer MUST reject that input and name the `Reshard` remedy.
-  - A fully-`Broadcast` input `ShardLayout` is replicated: it carries no real
-    sharding, contributes no `Split`/`Partial`, and does not pin a mesh. When no
-    input carries real sharding, the output carries none.
+    Typeinfer MUST reject a secondary input whose axis-preserving state the
+    result type cannot represent. It MUST name the `Reshard` remedy.
+  - A fully-`Broadcast` input `ShardLayout` is replicated. It carries no real
+    sharding. It contributes no `Split`/`Partial`. It does not pin a mesh. When
+    no input carries real sharding, the output carries none.
   - Only a zero-offset, unit-coefficient access of one domain dim is a
-    projection for shared ownership propagation. An input `Split` that accesses
-    any other form, including a nonzero affine translation, or an
-    output-surviving dim reachable only through such an access, MUST fail
-    closed (`ValueError`): without domain bounds the service has no
-    owner-boundary alignment proof for a translated access.
+    projection for shared ownership propagation. An input `Split` MUST fail
+    closed (`ValueError`) in two cases. The first case is an access of any other
+    form, including a nonzero affine translation. The second case is an
+    output-surviving dim that is reachable only through such an access. Without
+    domain bounds, the service has no owner-boundary alignment proof for a
+    translated access.
   - `Split(axis)` indexes an output mode, not a logical tensor axis.
 
 ### 3.3 Output storage and mesh/layout compatibility
@@ -230,20 +244,21 @@ def derive_output_shard_layout(
 - constraints:
   - A symmetric multi-input op (`Binary`, `MatMul`, `Concat`, `Stack`)
     resolves output storage with `resolve_anchor_storage` over the concrete
-    residency among its operands ([types §2](./types.md#2-tensortype)),
-    independently of operand order and with no memory-level lattice.
+    residency among its operands ([types §2](./types.md#2-tensortype)). The
+    result does not depend on operand order. The op uses no memory-level
+    lattice.
   - An unmaterialized operand (`storage=umat`), including host shape metadata,
     abstains. One concrete storage, or several that agree, is the output
-    storage; with none the output is `umat`.
+    storage. With none, the output is `umat`.
   - Several concrete operands that disagree cause typeinfer to `ctx.error`,
-    unless the op defines its own destination/mixed-storage resolution. There is
-    no operand-order tie-break.
+    unless the op defines its own destination/mixed-storage resolution. Typeinfer
+    uses no operand-order tie-break.
 
-A tensor value's mesh / layout is carried by its `TensorType.layout`
-(`ShardLayout.mesh` names the mesh instance), and the IR places no scope-based
-restriction on values from different meshes coexisting. Each op's registered
-typeinfer **owns** the operand layout / mesh compatibility it requires and its
-result layout; no uniform cross-op rule is imposed from outside. `Reshard` is
-the explicit op that changes a value's layout / mesh. For example, `IndexSelect`
-owns whether an indexed access is a foldable one-element slice or a
-materializing data-dependent selection.
+`TensorType.layout` carries the mesh and layout of a tensor value.
+`ShardLayout.mesh` names the mesh instance. The IR places no scope-based
+restriction on values from different meshes that coexist. The registered
+typeinfer of each op **owns** the layout and mesh compatibility that its
+operands need, and its result layout. Nothing outside imposes a uniform cross-op
+rule. `Reshard` is the explicit op that changes the layout and mesh of a value.
+For example, `IndexSelect` owns whether an indexed access is a foldable
+one-element slice or a materializing data-dependent selection.

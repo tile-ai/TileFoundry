@@ -264,9 +264,9 @@ class FloatingALU(Op):
   - MATFP applies the operation to matrix fragments; VECFP applies it to
     vector rows. Shuffles permute X/Y lanes before arithmetic. Masks preserve
     unselected destinations and encode the instruction's zero/broadcast forms.
-  - VECFP version 3 aligns repeated X/Y origins to register boundaries, with the
-    lane/index alignment exceptions selected by broadcast and index mode;
-    version 2 retains byte-offset origins.
+  - VECFP version 3 aligns repeated X/Y origins to register boundaries.
+    Broadcast and index mode select the lane/index alignment exceptions.
+    Version 2 retains byte-offset origins.
 
 ## 7. Matint and Vecint
 
@@ -308,9 +308,9 @@ class IntegerALU(Op):
     WIDE16 or I32. VECINT ordinary arithmetic admits NARROW16, WIDE16,
     I8_I8_I32, I8_I8_I16, I8_I16_I32 and I16_I8_I32; its SHIFT also
     admits I8. Both families restrict SQRDMLAH/SQRDMLSH to NARROW16.
-  - Dtypes are signed or unsigned integers with the following X/Y/Z widths:
-    NARROW16 16/16/16, WIDE16 16/16/32, I32 32/32/32,
-    I8 8/8/8, I8_I8_I32 8/8/32, I8_I8_I16 8/8/16,
+  - Dtypes are signed or unsigned integers. The X/Y/Z widths are:
+    NARROW16 16/16/16, WIDE16 16/16/32, I32 32/32/32, I8 8/8/8.
+    The other widths are: I8_I8_I32 8/8/32, I8_I8_I16 8/8/16,
     I8_I16_I32 8/16/32, I16_I8_I32 16/8/32.
     MATINT WIDE_PRODUCT uses 8-bit X/Y except I8_I16_I32: that mode is
     8/8/16 on version 1 and 8/16/32 on version 2. NARROW16 WIDE_PRODUCT is 8/8/16.
@@ -324,10 +324,10 @@ class IntegerALU(Op):
     MATINT `z_row ∈ [0,3]`, repeat 1 and broadcast 0.
     VECINT `z_row ∈ [0,63]`; version 1 repeat 1, version 2/version 3 repeat 1/2/4,
     broadcast in `[0,7]`, zero for repeat 1.
-  - Matrix and vector fragments use the declared nested Z lane decomposition:
-    widening ratio `q=max(1,bits(acc_dtype)/bits(input_lane_dtype))` splits
-    the lane axis into `(q,lanes/q)` with inner stride 1 and outer stride
-    `lanes(acc_dtype)`. For matrix arithmetic let `xb=bytes(x_dtype)`,
+  - Matrix and vector fragments use the declared nested Z lane decomposition.
+    The widening ratio `q=max(1,bits(acc_dtype)/bits(input_lane_dtype))` splits
+    the lane axis into `(q,lanes/q)`. The inner stride is 1.
+    The outer stride is `lanes(acc_dtype)`. For matrix arithmetic let `xb=bytes(x_dtype)`,
     `zb=bytes(acc_dtype)` and `step=zb` when `xb=1`, otherwise `step=xb`:
     accumulator shape is `(64/step,64/xb)` and row stride is `step*64/zb`.
     Vector lane count is `64/min(bytes(x_dtype),bytes(y_dtype))`, row count
@@ -450,8 +450,8 @@ class GenerateLookup(Op):
 
 - semantics:
   - Generation scans table entries until the first value greater than each
-    source value and packs the preceding index using the selected index width;
-    unused destination bytes are zero. The comparison uses the mode's signed,
+    source value. It packs the preceding index using the selected index width.
+    Unused destination bytes are zero. The comparison uses the mode's signed,
     unsigned or floating interpretation.
   - Lookup unpacks 2-, 4-, or 5-bit indices and copies the indexed table values
     to the destination lanes. It changes neither the table nor source bytes.

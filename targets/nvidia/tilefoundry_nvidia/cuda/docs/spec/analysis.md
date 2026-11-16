@@ -99,8 +99,8 @@ class SyncPlanMetadata(IRMetadata):
     plan orders whole allocations, not stages or windows.
   - **Global memory roots.** An access to global memory touches the
     allocation root of its value. A Function other than the entry touches an
-    unknown root for a value it returns, and any Function for a global value
-    the memory family did not record. Unknown roots match all roots.
+    unknown root for a value it returns. Any Function touches an unknown root
+    for a global value that the memory family did not record. Unknown roots match all roots.
   - **Order.** A later access conflicts with an earlier one and follows it
     after steps, as this table states:
 
@@ -109,13 +109,13 @@ class SyncPlanMetadata(IRMetadata):
     | Conflict | one of the two writes and their bytes overlap | one of the two writes, one of the two goes through the async proxy, and their roots match | the earlier access is in flight |
     | Conflict in one group | as above | as above | only when one of the two writes and they share no non-None `chain` |
     | No conflict | the earlier access is complete, and both are operands of instructions without an execution mesh, with one `ShardLayout` that splits along each mesh axis whose threads share shared memory | - | - |
-    | Steps | a commit and a wait for an earlier group effect, a proxy fence for an async access after a generic one, then a barrier over a scope whose mesh chain is a prefix of the later access's | as for shared memory, with a proxy fence over global memory | a commit and a wait for the group of the earlier access, and no barrier |
+    | Steps | a commit and a wait for an earlier group effect. A proxy fence for an async access after a generic one. Then a barrier over a scope whose mesh chain is a prefix of the later access's | as for shared memory, with a proxy fence over global memory | a commit and a wait for the group of the earlier access, and no barrier |
 
-    A proxy fence runs on every thread of its scope before the barrier, so
-    the threads that made the generic accesses publish them before the async
-    access issues. An async access needs no fence before a later generic one:
-    the completion of a tensor-map copy is followed by an implicit
-    generic-async proxy fence (PTX `cp.async.bulk`).
+    A proxy fence runs on every thread of its scope before the barrier.
+    The threads that made the generic accesses publish them before the async
+    access issues. An async access needs no fence before a later generic one.
+    An implicit generic-async proxy fence follows the completion of a
+    tensor-map copy (PTX `cp.async.bulk`).
   - **Group fence.** A `fence` effect needs the fence of its group before the
     action in two cases. First, its registers have no access yet. Second, an
     access to its registers since the last fence is not an effect of that group
@@ -154,35 +154,36 @@ class SyncPlanMetadata(IRMetadata):
     on return. A retained call also reads and writes unknown shared memory
     bytes, unless the callee has a plan in which no action touches shared
     memory. These effects complete as a `cp.async` group. An access that
-    conflicts with them waits for every `cp.async` group in flight. Unless the
-    callee has a plan whose `global_async` is False, the call also reads and
-    writes unknown global memory through the async proxy, the callee's own
-    temporaries included.
-  - **Barrier words.** A Function with a `CopyAsyncTensor` load from global to
-    shared memory, or a retained call whose callee plan has `barriers`, gets
-    `barriers = (offset, count)`: one 8-byte mbarrier word per warp of the CTA,
-    `count = ceil(threads / W)` with `W` the target's
-    `architecture.max_threads_per_warp`, at `offset`, the entry's shared-memory peak
-    rounded up to 8. Only the entry places shared memory, so every Function it
+    conflicts with them waits for every `cp.async` group in flight. The call
+    also reads and writes unknown global memory through the async proxy, the
+    callee's own temporaries included. This does not hold when the callee has
+    a plan whose `global_async` is False.
+  - **Barrier words.** A Function gets `barriers = (offset, count)` when it has a
+    `CopyAsyncTensor` load from global to shared memory. It gets them too when
+    it has a retained call whose callee plan has `barriers`. The words are one
+    8-byte mbarrier word per warp of the CTA. `count = ceil(threads / W)`,
+    with `W` the `architecture.max_threads_per_warp` of the target. The words
+    are at `offset`, the entry's shared-memory peak rounded up to 8. Only the entry places shared memory, so every Function it
     reaches shares the offset. Words that end above the target's capacity
-    refuse nothing, as a peak above it refuses nothing. When the placed peak
-    fits the capacity and the words do not, `errors` says so; a peak already
-    above capacity is the memory family's error, and an unknown capacity adds
-    none. `SyncPlanMetadata` is a structured record of the `sync` report
+    refuse nothing, as a peak above it refuses nothing. `errors` says
+    so when the placed peak fits the capacity and the words do not. A peak
+    already above capacity is the memory family's error. An unknown capacity
+    adds none. `SyncPlanMetadata` is a structured record of the `sync` report
     family, so a JSON report that requests `sync` carries it.
   - **CTAs.** No step orders two CTAs of one launch. In an entry launched on
     more than one CTA, `ctas.py` pairs the global memory reads and writes of
-    its actions where one of the two goes through the async proxy, one of the
-    two writes and their roots match; each pairs with itself too. Each side is
+    its actions. Two accesses form a pair when one of the two goes through the
+    async proxy, one of the two writes, and their roots match. Each access
+    pairs with itself too. Each side is
     the device access relation of its action, constrained by the loops around
     it. The second side renames every coordinate except the entry's own
     parameters and module dimensions, so two iterations of one action pair as
-    well. Each execution runs in one physical CTA of the launch, and every CTA
+    well. Each execution runs in one physical CTA of the launch. Every CTA
     coordinate its relation names is the coordinate that CTA reads, as the
-    runtime's `mesh_coords` reads it; the two CTAs differ. A coordinate that
+    runtime's `mesh_coords` reads it. The two CTAs differ. A coordinate that
     cannot be bound this way leaves the pair unproven. Only the sliced CTA
     meshes around an access keep a CTA from running it, as the runtime's
-    `contains` guard does; a mesh smaller than its topology repeats over the
+    `contains` guard does. A mesh smaller than its topology repeats over the
     launch. A slice whose units are not static keeps no CTA out. For two
     different CTAs, the first row that holds decides a pair:
 
@@ -205,10 +206,10 @@ class SyncPlanMetadata(IRMetadata):
     the way **CTAs** pairs global accesses, with thread coordinates in place of
     CTA coordinates. The second side renames every thread coordinate. Only the
     sliced thread meshes around the action keep a thread from executing it. A copy or fill that
-    lowering adds runs in the regions `transfer_meshes` gives it. When no
-    operand's mesh splits the threads and the destination is in shared
-    memory, the innermost of them is a slice holding the first thread of the
-    enclosing mesh, and it counts as a slice around the action. A write needs
+    lowering adds runs in the regions `transfer_meshes` gives it. Take the case
+    where no operand's mesh splits the threads and the destination is in
+    shared memory. Then the innermost of them is a slice holding the first
+    thread of the enclosing mesh. It counts as a slice around the action. A write needs
     no relation when a layout splits it over a mesh whose units are
     exactly the threads that execute it. These are the threads that every
     thread slice around it holds, or every thread of the CTA without one. That

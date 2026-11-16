@@ -7,17 +7,11 @@ contracts.
 ## 1. Python Runtime Surface
 
 The sections are one per file, and a file with more than one class states each
-under its own heading. Each signature block is read out of that file by
-`scripts/runtime_spec_surface.py` and written into its `<!-- generated -->`
-region; a file's `__all__` is what it states, and a docstring is the half the
-spec says in its own words instead. Section numbers retain gaps where earlier
-sections were consolidated under their owning files.
+under its own heading. The script `scripts/runtime_spec_surface.py` reads each signature block out of that file. It writes the block into its `<!-- generated -->` region. A file's `__all__` is what the spec states. The spec states a docstring in its own words.
 
 ### 1.1 `runtime/module.py`
 
-An ir `Module` (the semantic definition — @func bodies the evaluator runs) and
-a `runtime.Module` (the runtime instance — kernel bodies) are twins: same
-`name`, same child tree, same `entry`. `@runtime.module` / `@runtime.func`
+An ir `Module` is the semantic definition: its @func bodies run in the evaluator. A `runtime.Module` is the runtime instance: it holds kernel bodies. The two are twins. They have the same `name`, the same child tree, and the same `entry`. `@runtime.module` / `@runtime.func`
 (`tilefoundry.runtime.decorator`, below) build one twin mechanically from the
 other, validated one-to-one at decoration time. The correspondence is held by
 comparing the two numerically ([§1.9](#19-runtimemeasurepy)) against bounds the
@@ -54,44 +48,33 @@ class Module:
     the child tree in `__init__` (children registered via `children=`), write
     the composition in `forward`. Function bodies are `runtime.Function`
     attributes called from `forward`. `@runtime.module` (below) generates
-    this subclass mechanically from a semantic `Module` and is the normal
-    authoring path; a direct subclass remains available for special cases
+    this subclass mechanically from a semantic `Module`. This is the normal
+    authoring path. A direct subclass is available for special cases
     (e.g. `CompiledModule`, below).
-  - `load(resource, *, placement=None)` (base class): recurses into each child
-    with `resource.subtree(key)` for a single slot, or
-    `resource.subtree(key).subtree(str(i))` for each indexed instance, handing
-    every one the same
-    *placement*; the base class itself resolves nothing. One process is one
-    unit throughout the tree it loaded, so a child MUST NOT be given a
-    placement of its own.
+  - `load(resource, *, placement=None)` (base class) recurses into each child. A single slot uses `resource.subtree(key)`. Each indexed instance uses `resource.subtree(key).subtree(str(i))`. Every child receives the same *placement*. The base class itself resolves nothing. One process is one unit throughout the tree it loads. A child MUST NOT receive a placement of its own.
   - a twin with a sharded weight and no *placement* MUST refuse to read it.
     Nothing else in the system says which of the mesh's units this process
-    holds, and returning the whole tensor would silently give every unit
+    holds. Returning the whole tensor would silently give every unit
     every other unit's data ([§1.10](#110-shardtensor)).
     Weight prefixes follow module paths, matching ir attribute addressing.
     Lifecycle: construct (structure) → `load` (remember source) → call. A
     `runtime.Module` does **not** run `prepare`; it loads straight from the
     directory the semantic side prepared ([§1.3](#13-runtimedecoratorpy)).
   - correspondence contract: the twin's `forward` and the semantic
-    `evaluate(LoadedModule, ...)` MUST agree on the same inputs, as judged by
-    `measure.check` against stated bounds ([§1.9](#19-runtimemeasurepy)).
-  - `module` names the authored `Module` a twin was generated from, so a
-    caller holding an implementation can reach what it is judged against. A
-    `runtime.Module` that stands for no single authored Module — a compiled entry,
-    a hand-written subclass — MUST report `None` rather than something chosen
-    for it, and a caller that needs one MUST refuse instead of substituting.
-  - `module` is therefore reserved on a twin, as are `bound`, `resource`,
-    `placement`, `setup`, `to_local`, `from_local` and `weight_of`, which a
-    generated twin keeps its own state and helpers under. An authored `Module`
-    MAY name a function, child or method `module`, and a generated twin binds
+    `evaluate(LoadedModule, ...)` MUST agree on the same inputs. `measure.check` judges this against stated bounds ([§1.9](#19-runtimemeasurepy)).
+  - `module` names the authored `Module` that generated a twin. A caller that holds an implementation reaches the Module that judges it. A
+    `runtime.Module` that stands for no single authored Module MUST report `None` rather than a chosen value. Examples are a compiled entry and a hand-written subclass. A caller that needs one MUST refuse instead of substituting.
+  - `module` is therefore reserved on a twin. So are `bound`, `resource`,
+    `placement`, `setup`, `to_local`, `from_local` and `weight_of`. A
+    generated twin keeps its own state and helpers under these names. An authored `Module`
+    MAY name a function, child or method `module`. A generated twin binds
     each of those as an attribute, which would shadow the field.
-    `@runtime.module` MUST reject such a Module when it is decorated, rather than
-    generate a twin whose field answers something else.
+    `@runtime.module` MUST reject such a Module at decoration, so that no twin has a field that answers something else.
   - the base class holds no weights or resource.
-  - two origins: compiled — `tilefoundry.build` / `compile` / `jit` →
-    `LinkedModule` → the loader binds a `CompiledModule` (a `runtime.Module`,
-    not a `runtime.Function`) ([§1.4](#14-runtimeloaderpy)); handwritten — a `@runtime.module`
-    class (below), loading from a prepared checkpoint directory via a
+  - a twin has two origins. A compiled twin comes from `tilefoundry.build` / `compile` / `jit` →
+    `LinkedModule`. The loader binds a `CompiledModule` (a `runtime.Module`,
+    not a `runtime.Function`) ([§1.4](#14-runtimeloaderpy)). A handwritten twin is a `@runtime.module`
+    class (below). It loads from a prepared checkpoint directory via a
     `runtime.Resource` ([§1.8](#18-runtimeresourcepy)).
 
 #### `CompiledModule`
@@ -121,9 +104,8 @@ trailing params are outputs):
 - **Pre-alloc**: `len(args) == len(type.params)` — uses the provided output
   tensors and returns them. Any other argument count raises `TypeError`.
 - **Return**: single output → bare tensor; multiple outputs → `tuple`.
-- **Unit ids**: when `type.leading` is non-empty, the unit ids of those topology
-  levels, read from the `Placement` given to `load`, are passed ahead of the
-  arguments; with no `Placement` the call raises `ValueError`.
+- **Unit ids**: when `type.leading` is non-empty, the call passes the unit ids of those topology
+  levels ahead of the arguments. It reads them from the `Placement` given to `load`. With no `Placement` the call raises `ValueError`.
 
 Output shape and dtype come from `CallableSignature.output_params` (set by
 codegen from lowered IR, never guessed at runtime). This convention is specific
@@ -152,9 +134,7 @@ class Function:
 - constraints:
   - the base `__call__` raises; every usable body is a subclass. Agents may
     write any subclass whose `__call__` runs (torch or another implementation / …).
-  - the signature is codegen's product and the runtime's input: it is defined
-    by [codegen §4.4](./codegen.md#44-signatures) and MUST NOT be redefined
-    here.
+  - codegen produces the signature, and the runtime takes it as input. [codegen §4.4](./codegen.md#44-signatures) defines it. This spec MUST NOT redefine it.
 
 ### 1.3 `runtime/decorator.py`
 
@@ -197,9 +177,9 @@ class LoadedModule:
 ```
 
 `LoadedModule` is a frozen resource binding: it stores no tensors. Attribute
-access resolves a function to another callable `LoadedModule` whose `entry`
-names that function, a single child to its reading, an indexed child to its
-ordered tuple of readings, and an orchestration method
+access resolves each name as follows. A function becomes another callable `LoadedModule` whose `entry`
+names that function. A single child becomes its reading. An indexed child becomes its
+ordered tuple of readings. An orchestration method binds
 with `types.MethodType`. Calling a loaded module enters `evaluate` once and
 passes only activations; constants come from its resource at first use.
 
@@ -224,9 +204,9 @@ passes only activations; constants come from its resource at first use.
     children before their parent, using the same key and index segments as load.
     Each instance MUST run its definition's converters independently against its
     own raw subtree. For each declared weight, fetch its converter's parameters by their
-    own (raw) names — a one-to-many alias is assembled here via
-    `torch.stack` (`prepare`'s only reshaping) — run the converter through
-    the evaluator, then strictly validate the result's shape and dtype
+    own (raw) names. `prepare` assembles a one-to-many alias here via
+    `torch.stack`, its only reshaping. Run the converter through
+    the evaluator. Then strictly validate the result's shape and dtype
     against the weight's declared `ConstTensor` type. A weight with no
     converter is validated the same way against its raw (or stacked) value,
     unchanged. Output: one safetensors shard plus
@@ -237,26 +217,25 @@ passes only activations; constants come from its resource at first use.
   - `Module.load(resource)`: bind this node to `resource` and recurse into
     each slot under its key and optional index segments, returning a frozen
     `LoadedModule` tree. It MUST NOT write bindings onto the `Module`, which
-    stays pure IR: one `Module` may be read any number of times — two
-    checkpoints, two devices — and each reading is independent of the others.
+    stays pure IR. One `Module` may be read any number of times, for example with two
+    checkpoints or two devices. Each reading is independent of the others.
     A definition reached from two slots therefore yields one `LoadedModule` per
     instance rather than one binding the last instance wins. This is the semantic-side
     counterpart of the `runtime.Module` twin's own `load` ([§1.1](#11-runtimemodulepy)).
   - The caller supplies `evaluate(..., device=...)`. Every activation and every
-    weight used by the reading MUST already be on that device; a mismatch is
-    rejected at the activation binding or weight's first-use point, naming the
+    weight the reading uses MUST already be on that device. The runtime rejects a mismatch at the
+    activation binding or the weight's first use. The diagnostic names the
     offending position or weight. Neither side moves tensors implicitly.
-  - state is the caller's: a tensor that must survive across steps (e.g. a KV
-    cache) is an ordinary `Tensor` param passed in and returned, and a step MUST
-    NOT mutate one it was given. Sharding such a tensor is therefore the same
-    mechanism as for any other — its own `TensorType.layout` — rather than a
-    second description for an opaque state object.
+  - state belongs to the caller. A tensor that must survive across steps (e.g. a KV
+    cache) is an ordinary `Tensor` param, passed in and returned. A step MUST
+    NOT mutate a tensor it was given. Such a tensor shards by the same
+    mechanism as any other tensor, its own `TensorType.layout`.
   - The runtime twin's `forward` runs a registered `forward` orchestration
     method (`Module.methods`) when present, else its entry `@func`. A multi-node
     composition is chained by the caller, one `forward` per node.
     On the runtime twin, a bare step MUST be refused when neither a `forward`
-    method nor an entry is present, naming the functions and methods to call
-    instead of reporting `entry` as wrong.
+    method nor an entry is present. The refusal MUST name the functions and methods to call.
+    It reports no `entry` as wrong.
     On the semantic side, `evaluate(loaded)` and `loaded(...)` run `entry` when
     one is declared; neither treats a `forward` method as an implicit default.
     A caller selects another HIR function or child through `loaded.<name>` and
@@ -265,26 +244,26 @@ passes only activations; constants come from its resource at first use.
     is the runtime event governed by [hir §1.1](./hir.md#11-function). A
     registered plain Python orchestration method stays on the host; every
     function it calls is a separate Python-to-HIR entry. An HIR-to-HIR `Call`
-    remains inside the invocation and MUST NOT be surfaced as another runtime
+    remains inside the invocation. It MUST NOT surface as another runtime
     launch merely because its callee belongs to another Module.
   - a causal-LM root MAY define `init_caches`,
     `prepare_inputs_for_generation`, and `append_cache` orchestration methods.
     `prepare_inputs_for_generation(input_ids, step, caches, *, device)` receives
     a one-dimensional `torch.Tensor` of token IDs. The model selects the token
-    at `step`, reshapes and places it, creates all other activation inputs in
-    its own `forward` order, and returns that positional tuple. The caller owns
-    the cache and expands only the token-ID tensor; it MUST NOT reconstruct a
-    model's positional, rotary, scaling, or state inputs. It passes the active
-    token-ID prefix as a view; a method MUST NOT mutate that view or retain it
+    at `step`, reshapes it and places it. It creates all other activation inputs in
+    its own `forward` order. It returns that positional tuple. The caller owns
+    the cache. The caller expands only the token-ID tensor. The caller MUST NOT reconstruct a
+    model's positional, rotary, scaling, or state inputs. The caller passes the active
+    token-ID prefix as a view. A method MUST NOT mutate that view. A method MUST NOT retain it
     across steps. These methods bind on the runtime twin in the same way as
     `forward`.
 
 #### `@runtime.module` / `@runtime.func`
 
 
-`@runtime.module(sem)` is a class decorator taking the semantic `Module`
-instance; it returns a `runtime.Module` subclass whose instances are *sem*'s
-runtime twin — same function names, same child tree, same entry.
+`@runtime.module(sem)` is a class decorator that takes the semantic `Module`
+instance. It returns a `runtime.Module` subclass. Its instances are the
+runtime twin of *sem*, with the same function names, the same child tree, and the same entry.
 `@runtime.func` tags a plain method as a kernel body: same call signature as
 the semantic `@func` of the same name, weight params included.
 
@@ -301,13 +280,13 @@ class Attention:
 ```
 
 - constraints:
-  - decoration-time validation is **strictly one-to-one**: the
-    `@runtime.func` name set (a tagged method, or a `runtime.Function`
-    instance class attribute — a heavy kernel that owns its own compilation
-    state, standing in for a `@runtime.func`) MUST equal `sem`'s function
-    name set, and the child-attribute name set MUST equal `sem.children`'s
-    key set; missing *or* extra either MUST be rejected. Each slot MUST
-    match both its single/indexed form and its number of elements, and a mismatch
+  - decoration-time validation is **strictly one-to-one**. The
+    `@runtime.func` name set MUST equal `sem`'s function
+    name set. The name set includes tagged methods and `runtime.Function`
+    instance class attributes. Such an attribute is a heavy kernel that owns its own compilation
+    state. It stands in for a `@runtime.func`. The child-attribute name set MUST equal `sem.children`'s
+    key set. A name missing from either set MUST be rejected. A name extra in either set MUST be rejected. Each slot MUST
+    match both its single/indexed form and its number of elements. A mismatch
     diagnostic MUST identify the key and the semantic and runtime counts.
   - Twin child declarations follow the semantic slots
     ([core-ir §1.3](./core-ir.md#13-modulelist)).
@@ -319,9 +298,9 @@ class Attention:
     stored effective tuple rather than reading context from the shared definition.
   - weights are filled by name at call time from what `load` bound, so a
     kernel method's caller passes only activations.
-  - orchestration methods (`forward` / `init_caches` / …) are reused from the
-    semantic `Module.methods` verbatim and are never rewritten on the
-    runtime side: inside them, `self.<fn>` / `self.<child>` resolve to the
+  - the generated class reuses orchestration methods (`forward` / `init_caches` / …) from the
+    semantic `Module.methods` verbatim. The runtime side never rewrites them.
+    Inside them, `self.<fn>` / `self.<child>` resolve to the
     runtime twin's own kernels / children. Absent an own `forward`, the generated
     class runs `sem.methods["forward"]` if present, else calls the entry function
     by name.
@@ -355,7 +334,7 @@ implements the out-param calling convention directly
 #### Launcher ABI
 
 `tilefoundry.build(mod)` runs codegen, links the artifact (see
-[codegen](./codegen.md)), loads it and binds the entry; it MUST raise
+[codegen](./codegen.md)), loads it and binds the entry. It MUST raise
 `ValueError` when `Module.entry` is not a CPU host `PrimFunction`. Users interact
 only with `runtime.Module.__call__` / `runtime.Function.__call__`.
 
@@ -389,8 +368,8 @@ The exported function accepts flattened input/output tensor arguments. HIR
 functions may be written as `Function(params) -> tensor`, but by the runtime
 boundary the TIR/codegen surface is explicit input/output parameters.
 
-Launch geometry (grid / block extents) is embedded into the generated host entry
-or supplied by an authored `launch(...)`; it is never carried as metadata past
+Launch geometry (grid / block extents) is embedded in the generated host entry,
+or an authored `launch(...)` supplies it. Metadata never carries it past
 codegen.
 
 A refused launch MUST raise `RuntimeError` from the call and identify the
@@ -509,8 +488,8 @@ participates in the key.
 ### 1.8 `runtime/resource.py`
 
 Checkpoint aliasing is a base capability of every resource, not a wrapper
-class: both implementations below take an `alias={canonical: raw}` table,
-resolved by the same lookup order.
+class. Both implementations below take an `alias={canonical: raw}` table.
+The same lookup order resolves it.
 
 <!-- generated: py-resource -->
 ```python
@@ -596,82 +575,78 @@ def draw_tensor(
 - constraints:
   - `Preprocessed` is a frozen dataclass carrying one raw name and its one-tensor
     read transform.
-  - `load(name)` returns the tensor for *name*; raises `KeyError` if absent,
-    and MUST raise `TypeError` (naming `load_group`) if *name* resolves to a
+  - `load(name)` returns the tensor for *name*. It raises `KeyError` if *name* is absent.
+    It MUST raise `TypeError` (naming `load_group`) if *name* resolves to a
     tuple-valued (one-to-many) alias.
   - `load_group(name)` returns the tuple of raw tensors for a one-to-many
-    alias entry (e.g. per-expert weight shards, in declared order), or
-    `None` when *name* has no tuple-valued alias — the ordinary, one-to-one
+    alias entry (e.g. per-expert weight shards, in declared order).
+    It returns `None` when *name* has no tuple-valued alias. That is the ordinary, one-to-one
     case.
-  - `subtree(seg)` returns a view scoped under one more path *segment*
-    (`seg` is itself alias-resolved), so a child `runtime.Module` addresses
-    its own weights by their bare (unprefixed) name — `runtime.Module.__init__`
+  - `subtree(seg)` returns a view scoped under one more path *segment*.
+    The resource alias-resolves `seg` itself. A child `runtime.Module` therefore addresses
+    its own weights by their bare (unprefixed) name. `runtime.Module.__init__`
     never sees a dotted name.
-  - the resource resolves names and reads tensors. It MUST NOT stack, and it
+  - the resource resolves names and reads tensors. It MUST NOT stack. It
     reshapes only where a `Preprocessed` alias entry states that the checkpoint
-    stores that one tensor differently from how the Module declares it — a
+    stores that one tensor differently from how the Module declares it. Examples are a
     transpose, a slice of a fused tensor, or a dropped axis. Assembling a
-    one-to-many group into one tensor stays `prepare`'s job ([§1.3](#13-runtimedecoratorpy)), via
-    `torch.stack`, and so does any value that is a function of more than one raw
-    tensor. `Preprocessed` MUST resolve to one name: a tuple-valued name is
-    rejected at construction, naming the weight converter as the way to express
-    it. Precision is not preprocessing: every read tensor keeps the element type
-    the checkpoint stores, a declaration requiring another precision uses a
-    weight converter, and `load` validates the converted or raw result against
+    one-to-many group into one tensor is the job of `prepare` ([§1.3](#13-runtimedecoratorpy)), via
+    `torch.stack`. The same holds for any value that is a function of more than one raw
+    tensor. `Preprocessed` MUST resolve to one name. Construction rejects a tuple-valued name
+    and names the weight converter as the way to express
+    it. Precision is not preprocessing. Every read tensor keeps the element type
+    the checkpoint stores. A declaration that requires another precision uses a
+    weight converter. `load` validates the converted or raw result against
     the declaration ([§1.3](#13-runtimedecoratorpy)).
 
 An `alias` entry renames one path *segment* or *leaf* **within the current
-scope**, joined onto the caller's already-accumulated prefix: lookup order is
+scope**. The caller's already-accumulated prefix is joined onto it. The lookup order is
 a path-qualified key (`f"{prefix}{name}"`) first, then a bare `name` entry,
 then identity (`f"{prefix}{name}"` unchanged). A bare entry therefore serves
 every instance at that level uniformly (e.g. `{"gamma_kv": "kv_norm.weight"}`
-fires under every layer); a per-instance name (one real decoder layer, one
-per-expert shard group) needs one literal entry per instance instead. A
+fires under every layer). A per-instance name needs one literal entry per instance.
+Examples are one real decoder layer and one per-expert shard group. A
 `Preprocessed` value is a one-to-one leaf: `load` applies its `read` callable
-to the raw tensor. A tuple value is the one-to-many group `load_group` reads;
-`subtree`'s own segment resolution rejects a tuple-valued or `Preprocessed` hit
-(a subtree segment MUST resolve to one relative path).
+to the raw tensor. A tuple value is the one-to-many group `load_group` reads.
+A subtree segment MUST resolve to one relative path.
+`subtree`'s own segment resolution rejects a tuple-valued or `Preprocessed` hit.
 
-Aliasing therefore only ever reaches **downward**: a name resolved inside a
-scope carries that scope's prefix, so a node cannot address a tensor its
-parent owns — and a checkpoint may well store one there, such as a
-layer-level norm weight a child consumes. `Absolute(name)` is the escape: an
-alias whose value is `Absolute` MUST resolve to `name` as the whole raw key,
-with no prefix joined onto it. It stays a leaf-only form — `load_group` reads
-it as the one-to-one case and returns `None`, and `subtree` MUST reject it in
-the same shape as a tuple-valued hit, because a subtree segment must resolve
+Aliasing therefore only ever reaches **downward**. A name resolved inside a
+scope carries that scope's prefix. A node therefore cannot address a tensor its
+parent owns. A checkpoint may store such a tensor there, such as a
+layer-level norm weight that a child consumes. `Absolute(name)` is the escape. An
+alias whose value is `Absolute` MUST resolve to `name` as the whole raw key.
+No prefix joins onto it. It stays a leaf-only form. `load_group` reads
+it as the one-to-one case and returns `None`. `subtree` MUST reject it in
+the same shape as a tuple-valued hit. The reason is that a subtree segment must resolve
 to one relative name.
 
 - constraints:
-  - `DictResource` — in-memory / test double over a flat, dot-prefixed
-    `{"layer0.w": tensor, ...}` mapping; `subtree` only extends the prefix
-    each `load` / `load_group` name is joined onto, carrying `alias` down to
+  - `DictResource` is an in-memory / test double over a flat, dot-prefixed
+    `{"layer0.w": tensor, ...}` mapping. `subtree` only extends the prefix
+    that each `load` / `load_group` name joins onto. It carries `alias` down to
     every child view.
-  - `SafetensorsResource` — reads a safetensors checkpoint directory; `load` /
+  - `SafetensorsResource` reads a safetensors checkpoint directory. `load` /
     `load_group` open at most one shard handle per shard file (mmap'd via
-    `safetensors.safe_open`, shared across `subtree` views) and read only the
+    `safetensors.safe_open`, shared across `subtree` views). They read only the
     requested tensor(s), placed on *device*. Two directory shapes MUST be
-    accepted: N shard files with a `model.safetensors.index.json` whose
-    `weight_map` names the shard holding each key, and a single unsharded
-    `model.safetensors` with no index, whose own key list is that map — a
-    published checkpoint is only sharded once it outgrows the writer's limit,
-    so requiring an index would refuse the small ones. A directory with
+    accepted. The first has N shard files and a `model.safetensors.index.json`,
+    whose `weight_map` names the shard that holds each key. The second has a single unsharded
+    `model.safetensors` with no index, and its own key list is that map.
+    A directory with
     neither MUST be reported as such rather than as a missing index.
-    A raw key is cached weakly: repeated reads return the same tensor while a
-    caller holds it, and the entry may disappear after the last reference is
-    collected; scoped views share the index, shard handles, and tensor cache.
-  - *device* is resolved on every read, and both the shard handles and the
-    tensor cache are keyed by that resolved device alongside the name. A device name
-    without an index means the process's currently selected device, which a
-    single-process multi-device host can change between reads; a handle keyed by
-    file alone would stay pinned to the card that first opened it, and a tensor
-    keyed by name alone would hand a reader on one card what another card
-    holds.
+    A raw key is cached weakly. Repeated reads return the same tensor while a
+    caller holds it. The entry may disappear after the last reference is
+    collected. Scoped views share the index, shard handles, and tensor cache.
+  - The resource resolves *device* on every read. The shard handles and the
+    tensor cache are both keyed by that resolved device alongside the name. A device name
+    without an index means the process's currently selected device. A
+    single-process multi-device host can change that device between reads.
   - `DrawnResource` draws a declared weight lazily with `draw_tensor`, keeps
     the result strongly, and shares its generator and drawing ledger across
-    `subtree` views without reseeding. The strong ledger is a contract: drawing
-    the same name again would produce another random tensor, so the two sides
-    of a comparison would no longer receive the same value. It has no alias
+    `subtree` views without reseeding. The strong ledger is a contract. Drawing
+    the same name again would produce another random tensor. The two sides
+    of a comparison would then receive different values. It has no alias
     groups, so `load_group` always returns `None`.
 
 ### 1.9 `runtime/measure.py`
@@ -806,37 +781,36 @@ def check(
     for it. Neither *reference* nor *expect* has a default.
   - `inputs` is passed positionally to both callables.
   - a result MUST be a bare tensor or an arbitrarily nested tuple of tensors
-    (e.g. `forward`'s `(logits, past_key_values)`); any other leaf raises
+    (e.g. `forward`'s `(logits, past_key_values)`). Any other leaf raises
     `TypeError`. `check` flattens both results and MUST reject a candidate
     whose flattened structure, shape or dtype differs from the reference's.
     A returned `ShardTensor` is compared as the one unit's piece it holds;
     data of more than one unit raises `TypeError` ([§1.10](#110-shardtensor)).
-  - every produced tensor MUST have exactly one non-empty list of predicates,
-    and a path *expect* names that was not produced MUST be rejected. A result
+  - every produced tensor MUST have exactly one non-empty list of predicates.
+    A path that *expect* names and the check did not produce MUST be rejected. A result
     that flattens to nothing MUST be an error rather than a pass.
   - `reference=None` admits only predicates whose `needs_reference` is false; any
     other MUST be rejected. `ref_norm` is then absent, having nothing to measure.
   - a predicate whose `discrete` is false MUST be rejected on an integer or
     boolean output, naming exact comparison instead.
-  - where a measure has no meaning at the values it was given — a relative
-    distance against a zero reference, a direction between two zero vectors — the
-    result MUST state what was measured instead through its `note`, rather than
+  - a measure can have no meaning at the values it was given. Examples are a relative
+    distance against a zero reference and a direction between two zero vectors. Then the
+    result MUST state what was measured instead through its `note`. It MUST NOT
     return a number whose scale is an artefact of a clamp.
   - `OutputCheck.passed` and `Report.passed` are read-only properties derived
-    as `all` of their parts; neither is accepted as a constructor field, so a
-    verdict cannot disagree with the measurements printed beside it.
-  - it is not specific to `runtime.Module`: *candidate* / *reference* may be a
+    as `all` of their parts. Neither is accepted as a constructor field. A
+    verdict therefore cannot disagree with the measurements printed beside it.
+  - the check is not specific to `runtime.Module`. *candidate* / *reference* may be a
     `runtime.Module` bound method, a raw torch callable, or an evaluator
-    closure — anything callable on *inputs*.
+    closure. Anything callable on *inputs* is allowed.
 
 ### 1.10 `ShardTensor`
 
 `Module.prepare` writes one canonical tensor per weight and the HIR keeps the
 global `TensorType`, so a checkpoint read hands back every unit's data at
 once. `ShardTensor` (in `tilefoundry.core`, exported as `tilefoundry.ShardTensor`)
-pairs a global type with its data in a global view -- one global logical
-tensor -- or a local view -- one piece per `Placement`. The two names are
-OneFlow's. The evaluator holds its values in the same class
+pairs a global type with its data. The data has a global view, one global logical
+tensor, or a local view, one piece per `Placement`. The evaluator holds its values in the same class
 ([evaluator §1](evaluator.md#1-value)).
 
 <!-- generated: py-tensor -->
@@ -875,13 +849,13 @@ class ShardTensor:
     an axis the mesh only broadcasts over. A global `Partial` value is its
     reduced value, so `to_local` MUST refuse it: no unit's own part is left.
   - `to_local` on a global view is the host side of the CUDA runtime's
-    `local_tensor`: `mesh_coords` of the placement's unit ids, then
-    `local_layout_and_offset` ([shard §7.6](shard.md#76-local_layout)) of the
-    shard with its layout replaced by the row-major layout of the same modes.
+    `local_tensor`. It applies `mesh_coords` to the placement's unit ids. Then it applies
+    `local_layout_and_offset` ([shard §7.6](shard.md#76-local_layout)) to the
+    shard, with its layout replaced by the row-major layout of the same modes.
     Host data is logical, while the address stride of a private `Split` may be
     zero, so the address layout cannot select a piece of it.
-  - `to_global` reads a local view by the meaning of its type: `Split` pieces
-    sit side by side, any `Broadcast` piece serves, and `Partial` pieces combine
+  - `to_global` reads a local view by the meaning of its type. `Split` pieces
+    sit side by side. Any `Broadcast` piece serves. `Partial` pieces combine
     by their reduction. A type with no `ShardLayout`, or `Partial` reductions
     that differ, MUST be refused.
   - a level whose id is unfixed MUST be left undivided
@@ -889,14 +863,13 @@ class ShardTensor:
   - a `runtime.Module`'s public boundary takes and returns `ShardTensor`, while
     a body -- a Python reference or a launched kernel alike -- only ever
     receives the local `torch.Tensor`. A returned tensor is already one
-    unit's, so it is returned as a local view: this unit's piece under the
-    declared global type, never narrowed again.
-  - a weight narrowed on first use is copied out of the read it came from, so
-    the whole canonical tensor is released once every shard it contributes is
+    unit's. It is returned as a local view, this unit's piece under the
+    declared global type. The runtime never narrows it again.
+  - a weight narrowed on first use is copied out of the read it came from.
+    The whole canonical tensor is therefore released once every shard it contributes is
     held. A weight the mesh does not divide is kept as the read itself.
   - what remembers a read weight is keyed by name, unit ids and the current
-    device together. One weight read on two cards is two tensors, and a key of
-    the name alone hands a reader on one card what another card holds.
+    device together. One weight read on two cards is two tensors.
 
 ---
 
@@ -904,9 +877,9 @@ class ShardTensor:
 
 CPU headers live under `src/tilefoundry/runtime/include/tilefoundry/runtime/cpu/`.
 They are package data, located through `importlib.resources`, and retain their
-include-relative paths. Each declaration block is read out of its header by
-`scripts/runtime_spec_surface.py` and written into its `<!-- generated -->`
-region, so a signature is stated once, where it is compiled. What follows a
+include-relative paths. The script `scripts/runtime_spec_surface.py` reads each declaration block out of its header.
+It writes the block into its `<!-- generated -->`
+region. A signature is therefore stated once, where it is compiled. What follows a
 region is written by hand: the terms the declarations are spelled in, and the
 decisions two reasonable implementations would differ on.
 
@@ -921,7 +894,7 @@ decisions two reasonable implementations would differ on.
 ```
 <!-- /generated -->
 
-**Terms.** The CPU target's launch boundary is raw pointers and shape scalars, so this header declares no surface. Host-side tensor compute is future work.
+**Terms.** The CPU target's launch boundary is raw pointers and shape scalars, so this header declares no surface. 
 
 - constraints:
   - The CPU target crosses the launch boundary as raw pointers and shape scalars, so nothing here is a type a caller names.

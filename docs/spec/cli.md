@@ -1,24 +1,24 @@
 # TileFoundry Command-Line Interface
 
-This file defines the command-line contract for translating a published model
-into authored HIR and turning that HIR into a runtime implementation. The
-commands answer what only this project knows: which models have been described,
-what a specification section says, whether an implementation agrees with its
-reference, and what an authored program costs. Authoring syntax is in the
-[parser specification](./parser.md); the authored IR is the
+This file defines the command-line contract for translating a published model into
+authored HIR and turning that HIR into a runtime implementation. The commands answer
+questions that only this project can answer. Which models are described? What does a
+specification section say? Does an implementation agree with its reference? What
+does an authored program cost? Authoring syntax is in the
+[parser specification](./parser.md). The authored IR is the
 [HIR specification](./hir.md).
 
 Naming no command at any command level MUST print that level's `--help` page,
 byte for byte, and MUST exit 0. The page content is the parser's to render and
 is not restated here.
 
-A command usage error MUST print that command's usage form followed by the error
-to standard error and exit with status 2.
+On a command usage error, the command MUST print its usage form and then the error
+to standard error. It MUST exit with status 2.
 
-`--version` MUST print the installed distribution's version and exit. Both it
-and the project summary MUST come from installed distribution metadata; with
-none available the command surface MUST fail rather than fall back to a version
-or summary restated in this project's source.
+`--version` MUST print the installed distribution's version and exit. The version
+and the project summary MUST come from installed distribution metadata. With no
+metadata available, the command surface MUST fail. It MUST NOT use a version or
+summary restated in this project's source.
 
 ## Commands
 
@@ -28,91 +28,87 @@ top-level HIR Module or Function. A selector chooses the named Module and its
 default entry, or one of that Module's own Functions. Child Module path segments
 MUST be refused; a child used independently is named by its own top-level binding.
 
-A selector MAY name a top-level binding that is a bare `Function` — a source
-whose `@func` declares no execution context binds one. Every verb here reads
-hardware facts, so such a selection MUST be rejected naming the Module that
-would declare its context, rather than analysed against a default
+A selector MAY name a top-level binding that is a bare `Function`. A source whose
+`@func` declares no execution context binds one. Every verb here reads hardware
+facts. Such a selection MUST be rejected, naming the Module that would declare its
+context. It MUST NOT be analysed against a default
 ([target §6](./target.md#6-target-ownership-and-compile-resolution)).
 
-The file in `SOURCE` is any readable Python file. Nothing privileges the model
-sources this project ships: a copy of a shipped model directory, edited to
-coarsen a boundary, MUST reach the same command surface. The installed directory
-named by `models <name> --source` stays the reference to compare against.
+The file in `SOURCE` is any readable Python file. The command surface MUST NOT
+privilege the model sources this project ships. A copy of a shipped model directory,
+edited to coarsen a boundary, MUST reach the same command surface. The installed
+directory named by `models <name> --source` is the reference to compare against.
 
-Reading a shipped document by a name that has none MUST be refused the same way
-at every kind: name what was asked for and what there is, in the vocabulary the
-command takes (not an internal filename).
+A refusal for a shipped document name that does not exist MUST be the same at every
+kind. It MUST name what was asked for and what exists, in the vocabulary the command
+takes. It MUST NOT name an internal filename.
 
 A command MUST load `SOURCE` as a Python module. While loading it, the directory
-containing `SOURCE` MUST be first on the Python module search path, so a file beside
-it MAY be imported by its module name. A command MUST capture and suppress standard
-output that `SOURCE` emits while loading.
+containing `SOURCE` MUST be first on the Python module search path. A file beside it
+MAY then be imported by its module name. A command MUST capture and suppress
+standard output that `SOURCE` emits while loading.
 
 How much of `SOURCE` is executed depends on whether it named a root, and the two
 boundaries are different:
 
-- Without a selector, `SOURCE` MUST be executed as one unit. The command was asked
-  about the file, so the first statement that fails is the answer and MUST be
-  reported as itself.
+- Without a selector, `SOURCE` MUST be executed as a whole. The first statement that
+  fails MUST be reported as itself, because the caller asked about the file.
 - With a selector, each top-level statement of `SOURCE` MUST be executed on its own
-  and in source order, and one that fails MUST be set aside rather than ending the
-  load. No statement MAY be skipped unexecuted: what the selection needs is whatever
-  it turns out to read, and a reader cannot decide that from the text without
-  deciding which names are a function's own.
+  and in source order. A statement that fails MUST be set aside. It MUST NOT end the
+  load. No statement MAY be skipped unexecuted. What the selection needs is whatever
+  it turns out to read. A reader cannot decide that from the text without deciding
+  which names are a function's own.
 
-  `SOURCE` MUST first be compiled whole, so that every rule the language applies
-  to a module still applies: a `__future__` import that is not at the beginning of
-  the file MUST be refused here exactly as an interpreter refuses it. Executing
-  less of a file is what a selector asks for; accepting more of the language is
-  not.
+  `SOURCE` MUST first be compiled whole. Every rule that the language applies to a
+  module MUST still apply. A `__future__` import that is not at the beginning of the
+  file MUST be refused here, as an interpreter refuses it. A selector asks
+  the command to execute less of a file, not to accept more of the language.
 
-  `SOURCE`'s leading `__future__` imports MUST then prefix each statement so that
-  they still govern it, and each statement MUST be compiled without inheriting the
+  `SOURCE`'s leading `__future__` imports MUST then prefix each statement, so that
+  they still govern it. Each statement MUST be compiled without inheriting the
   compiling code's own `__future__` flags. The module docstring MUST NOT be
-  prefixed: it is the docstring because nothing precedes it, and a load that put
-  anything in front of it would leave the module with none. What a file postpones is that file's
-  decision: a file that postpones its annotations MUST keep them postponed, and
-  one that does not MUST have them evaluated, exactly as loading it as one unit
-  would.
+  prefixed. It is the docstring because nothing precedes it. A load that put
+  anything in front of it would leave the module with none. A file decides what it
+  postpones. A file that postpones its annotations MUST keep them postponed. A file
+  that does not postpone them MUST have them evaluated, exactly as loading it as a
+  whole would.
 
-  A statement that is the selection's own MUST NOT be set aside. That is one that
-  binds the selected root, or that reads it while the file runs. Reads means free
-  reads and not spellings: a name being written is not a reading of it, and a
-  function body is not read then -- so a class attribute or a parameter sharing the
-  root's name is not a reading of it. A comprehension's variables are its own,
-  every one of them: only its first iterable is evaluated where the comprehension
-  is written, so a name read there is a name from outside, while every later
-  iterable is evaluated inside where all the targets already belong to it.
+  A statement that is the selection's own MUST NOT be set aside. That is a statement
+  that binds the selected root, or that reads it while the file runs. Reads means
+  free reads, not spellings. A name being written is not a reading of it. A function
+  body is not read then. A class attribute or a parameter that shares the root's
+  name is not a reading of it. A comprehension's variables are its own, every one of
+  them. Only its first iterable is evaluated where the comprehension is written, so
+  a name read there is a name from outside. Every later iterable is evaluated
+  inside, where all the targets already belong to it.
 
   What decorates a function and what defaults its arguments IS read then. Whether
-  its annotations are is the file's own decision: where `SOURCE` postpones its
-  annotations they stay strings and reach for nothing, and where it does not they
-  are read like anything else.
-  Such a statement is building or reconfiguring what was named, so its failure
-  MUST be reported even when an earlier statement also failed and even when the
-  root is already bound. Only an `Exception` MAY be set aside at all: anything
-  else is the interpreter unwinding rather than an unfinished program, and MUST
-  propagate.
+  its annotations are read is the file's own decision. Where `SOURCE` postpones its
+  annotations, they stay strings and reach for nothing. Where it does not, they are
+  read like anything else. Such a statement builds or reconfigures what was named.
+  Its failure MUST be reported, even when an earlier statement also failed. It MUST
+  also be reported when the root is already bound. Only an `Exception` MAY be set
+  aside at all. Anything else is the interpreter unwinding rather than an unfinished
+  program. It MUST propagate.
 
-  The exception is a failure that follows from one already set aside: a statement
+  A failure that follows from one already set aside is the exception. A statement
   reaching for a name that a set-aside statement would have bound fails for that
-  reason rather than its own, and reporting it would name the symptom instead of
-  the cause. Such a failure MUST be set aside too.
+  reason, not its own. Reporting it would name the symptom instead of the cause.
+  Such a failure MUST be set aside too.
 
   The selected root MUST then be resolved from what the load bound. If it is not
-  bound, the load MUST fail with the first failure it set aside, because something
-  the selection needed is what failed. A root reached under a second name is that
-  same root and keeps its own name.
+  bound, the load MUST fail with the first failure it set aside. What failed is
+  something the selection needed. A root reached under a second name is that same
+  root and keeps its own name.
 
 A class body runs when the file does, so a class that refuses to be built refuses
 there.
 
-`check` reads the same `SOURCE` shape and one thing more: its selector MAY name a
-runtime twin instead of an authored Module. A twin generated from an authored
-Module states which Module that is ([runtime §1.1](./runtime.md#11-runtimemodulepy)),
-so naming the implementation is enough to reach what it is judged against. A
-runtime module that states none MUST be refused rather than compared against
-something chosen for it.
+`check` reads the same `SOURCE` shape. Its selector MAY also name a runtime twin
+instead of an authored Module. A twin generated from an authored Module states that
+Module ([runtime §1.1](./runtime.md#11-runtimemodulepy)). Naming the implementation
+is then enough to reach what it is judged against. A runtime module that states none
+MUST be refused rather than compared against something chosen for it.
 
 ## Scaffold
 
@@ -138,8 +134,8 @@ placeholders; signatures, views, variant dispatch,
 launchers and host registrations remain intact. The project can be rebuilt with
 `cmake -G Ninja -S OUT_DIR -B BUILD_DIR` followed by `cmake --build BUILD_DIR`. Load the
 library with `tvm_ffi.load_module`, then bind its dotted registrations with
-`tvm_ffi.get_global_func`. The caller manages this library's lifetime and MUST
-retain it while its registrations may be called; this does not involve a
+`tvm_ffi.get_global_func`. The caller manages this library's lifetime. The caller
+MUST retain it while its registrations may be called. This does not involve a
 `runtime.Module`. Authored host orchestration remains in Python.
 
 ## Check
@@ -151,26 +147,24 @@ bounds the caller stated.
 - constraints:
   - `--inputs random` draws one activation per non-constant parameter in
     declaration order. `--inputs files:A.pt,B.pt` reads one file per activation
-    parameter in that same order. Output names MUST come from return position: one tensor is
-    `output`; a tuple's tensors are `output[0]`, `output[1]`, and so on in return
+    parameter in that same order. Output names MUST come from return position. One tensor is `output`. A tuple's tensors are `output[0]`, `output[1]`, and so on in return
     order. These are positions, not names authored in the function.
-  - `--weights` states where weights come from: `random` MUST draw each weight
-    the first time it is asked for, and `ckpt:DIR` MUST read them from a
-    safetensors checkpoint. It is OPTIONAL: omitted, the run has no weight
-    source. A weight reached with no source MUST be refused where it is first
-    asked for, naming the Module that declares it and the weight. It MUST NOT be
-    refused ahead of the run from what the selected Module declares: a Module
-    declares only its own functions' weights, so what a run reaches is not that
-    set.
-  - One input file MUST bind one parameter. Its value MAY be a bare tensor or
-    an arbitrarily nested tuple or list of tensors; every leaf MUST be a tensor.
-  - A target whose step is an orchestration method rather than a `@func` MUST
-    be refused, naming the method and the HIR functions that may be checked
-    instead. Orchestration is host Python reused verbatim on both sides; `check`
-    compares HIR, not one Python function object against itself.
-  - Every output MUST be judged by at least one predicate the caller states, and
-    there MUST be no default predicate and no default bound (a single
-    `f32`→`bf16` rounding already measures `rel_l2` 1.66e-3).
+  - `--weights` states where weights come from. `random` MUST draw each weight the
+    first time it is asked for. `ckpt:DIR` MUST read the weights from a safetensors
+    checkpoint. It is OPTIONAL: omitted, the run has no weight source. A weight
+    reached with no source MUST be refused where it is first asked for. The refusal
+    MUST name the Module that declares the weight and the weight. A weight MUST NOT
+    be refused ahead of the run from what the selected Module declares. A Module
+    declares only its own functions' weights, so what a run reaches is not that set.
+  - One input file MUST bind one parameter. Its value MAY be a bare tensor or an
+    arbitrarily nested tuple or list of tensors. Every leaf MUST be a tensor.
+  - A target whose step is an orchestration method, not a `@func`, MUST be refused.
+    The refusal MUST name the method and the HIR functions to check instead.
+    Orchestration is host Python reused verbatim on both sides. `check` compares
+    HIR, not one Python function object against itself.
+  - Every output MUST be judged by at least one predicate that the caller states.
+    There MUST be no default predicate and no default bound. A single `f32`→`bf16`
+    rounding already measures `rel_l2` 1.66e-3.
   - Naming an output that was not produced, or leaving a produced output
     unjudged, MUST be refused.
   - An empty result MUST be an error, never a PASS.
@@ -178,43 +172,44 @@ bounds the caller stated.
     An aggregate over a discrete (index) output MUST be refused, pointing at
     exact comparison.
   - The reference MAY be stated as files, or MAY be the evaluator running the
-    authored Module the implementation stands for. With no reference at all, only
-    a predicate that judges the candidate alone is admissible; every two-sided
+    authored Module the implementation stands for. With no reference at all, only a
+    predicate that judges the candidate alone is admissible. Every two-sided
     predicate MUST be refused, because there is nothing to compare against.
   - Each output MUST report the norm of its reference. Near zero, the report MUST
     state what it measured instead of a relative number with no scale.
-  - Activations MUST be stated -- random or files -- and no form MAY be the
-    default. Weights MUST come from the same draw on both sides, and the report
-    MUST say which form was used and what seed drew it. It MUST also say the
-    actual and declared dtype of every activation, plus the tensor count and
-    shape tree each input file supplied.
+  - Activations MUST be stated, random or files. No form MAY be the default. Weights
+    MUST come from the same draw on both sides. The report MUST say which form was
+    used and what seed drew it. The report MUST also say the actual and declared
+    dtype of every activation. It MUST also say the tensor count and shape tree that
+    each input file supplied.
   - `--device DEVICE` names where inputs and weights are built, and so where the
     run happens. Omitted, it is the device the selection's Target declares. Given,
     it is honoured as stated even when the declared hardware is unavailable,
     because the caller has said where to run. The evaluator picks no
     device of its own ([evaluator §2](./evaluator.md#2-parameters-and-inputs)).
   - A FAIL with `--inputs random` MUST state that each activation is drawn
-    independently, so a target relying on relationships between activations MAY
-    differ at ulp scale; a `--inputs files:...` run decides the comparison.
+    independently. It MUST also state that a target relying on relationships between
+    activations MAY differ at ulp scale. It MUST also state that a
+    `--inputs files:...` run decides the comparison.
   - A FAIL measured against a reference MUST state that it proves disagreement,
     not which side is closer to truth.
-  - `--json PATH` MUST write the machine-readable report to `PATH` and MUST NOT
-    write any byte of that report to stdout. Without `--json`, the human report
-    MUST remain on stdout. A `PATH` whose parent directory does not exist MUST
-    be refused when the arguments are parsed, before any comparison runs, and
-    the refusal MUST name the path.
-  - Reaching one leaf MUST read only that leaf Module's own weights. A comparison
-    of one kernel MUST NOT materialise a whole model. A Module is the unit that
-    loads, so what a run binds is everything the selected Module declares, not the
-    subset the selected function names. A run MUST read the checkpoint relative
-    to the selected Module ([Commands](#commands)).
-  - A dimension the target states as a range MUST be bound by `--dim`; a run
-    MUST NOT choose an extent on the caller's behalf. Several extents MAY be
+  - `--json PATH` MUST write the machine-readable report to `PATH`. It MUST NOT
+    write any byte of that report to stdout. Without `--json`, the human report MUST
+    remain on stdout. A `PATH` whose parent directory does not exist MUST be refused
+    when the arguments are parsed, before any comparison runs. The refusal MUST name
+    the path.
+  - Reaching one leaf MUST read only that leaf Module's own weights. A comparison of
+    one kernel MUST NOT materialise a whole model. A Module loads as a whole, so
+    what a run binds is everything the selected Module declares, not the subset the
+    selected function names. A run MUST read the checkpoint relative to the selected
+    Module ([Commands](#commands)).
+  - A dimension the target states as a range MUST be bound by `--dim`. A run MUST NOT choose an extent on the caller's behalf. Several extents MAY be
     stated for one dimension, and each MUST be run and reported. Where the
     extents select an implementation, the report MUST name the one selected and
     the range it covers.
-  - An extent no declared variant covers MUST fail, naming the ranges that are
-    covered; a neighbouring implementation MUST NOT be chosen instead.
+  - An extent that no declared variant covers MUST fail. The failure MUST name the
+    ranges that are covered. A neighbouring implementation MUST NOT be chosen
+    instead.
   - Text and `--json` MUST carry the same facts.
 
 ## Tutorial
@@ -223,30 +218,30 @@ bounds the caller stated.
 granularity.
 
 - constraints:
-  - It MUST point at `spec` for normative and reference material and at
-    `check --help` for the predicate flags, and MUST NOT duplicate either.
-  - Its pages ship as data beside the specifications and MUST be read from the
-    same installed lookup, so a page is available to an installed wheel and not
-    only to a checkout.
-  - Where a page teaches by example, the example MUST be source the page executes:
-    a page carrying programs MUST open with the command that extracts them from the
-    page itself, and every later command on the page MUST run against what that
-    command produced. A copy pasted into prose is a second source that drifts.
+  - It MUST point at `spec` for normative and reference material. It MUST point at
+    `check --help` for the predicate flags. It MUST NOT duplicate either.
+  - Its pages ship as data beside the specifications. Its pages MUST be read from
+    the same installed lookup. Then a page is available to an installed wheel and
+    not only to a checkout.
+  - Where a page teaches by example, the example MUST be source that the page
+    executes. A page that carries programs MUST open with the command that extracts
+    them from the page itself. Every later command on the page MUST run against what
+    that command produced. A copy pasted into prose is a second source that drifts.
   - A rendered page MUST be the output of executing its own blocks in order against
-    the current tree, extraction command first, so a command whose flags changed
-    cannot stay in a page unnoticed.
-  - `tutorial orchestrator` MUST list the shipped orchestrator families, and
-    `tutorial orchestrator FAMILY` MUST show that family's shipped directory and
-    every source file's leading docstring without importing or executing it. An
-    unknown family MUST name the available families. Checkout and installed
-    lookups MUST report the same shipped families and files.
-  - Its pages are `index`, `migrate`, `optimize`, `schedule`, and `showcase`; the
-    first four are the workflow and `showcase` is one kernel taken through six
-    analyze-driven stages, exercising the authoring surface the other pages touch in part.
-    Causal-LM decode sources are listed through `tutorial orchestrator`. A bare
-    `tutorial` MUST print the `index` page followed by its own help, which names
-    the pages a reader may ask for and `orchestrator`. `index` is that overview's
-    source, not a page the command accepts.
+    the current tree. The extraction command MUST run first. Then a command whose
+    flags changed cannot stay in a page unnoticed.
+  - `tutorial orchestrator` MUST list the shipped orchestrator families.
+    `tutorial orchestrator FAMILY` MUST show that family's shipped directory. It
+    MUST also show every source file's leading docstring, without importing or
+    executing the files. An unknown family MUST name the available families.
+    Checkout and installed lookups MUST report the same shipped families and files.
+  - Its pages are `index`, `migrate`, `optimize`, `schedule`, and `showcase`. The
+    first four are the workflow. `showcase` is one kernel taken through six
+    analyze-driven stages. It exercises the authoring surface that the other pages
+    touch in part. Causal-LM decode sources are listed through
+    `tutorial orchestrator`. A bare `tutorial` MUST print the `index` page and then
+    its own help. The help names the pages a reader may ask for and `orchestrator`.
+    `index` is that overview's source, not a page the command accepts.
   - A family's list description MUST be the leading docstring of the first file
     in stable filename order.
 
@@ -255,39 +250,38 @@ granularity.
 `models` reports the models this project has described, and hands back one model's
 authored source as a reference to copy from.
 
-It reads a shipped catalog and MUST NOT import or execute a model's source: an
-installed package carries the authored sources as read-only data, not as
-importable code.
+It reads a shipped catalog. It MUST NOT import or execute a model's source. An
+installed package carries the authored sources as read-only data, not as importable
+code.
 
 - constraints:
   - With no `NAME`, output MUST list every described model with its counts. The
     catalog states what each model *is*, not how well it is verified.
-  - With a `NAME`, output MUST be that model's whole forest: every root it
-    publishes, each Module's own functions with their signatures beneath it, and
-    the leaf Modules marked. A leaf is a Module with no child Modules, not a
-    function: a runtime twin is written per Module and MUST cover all of that
-    Module's functions at once.
-  - A catalog root MUST declare a target and MUST NOT be held, directly or
-    transitively, by another target-declaring Module in the same model package.
-    A layer that declares its own target remains usable on its own, but MUST NOT
-    be listed as another root when a published top-level model holds it.
-  - A run of sibling Modules MAY be written once as the range it covers, and only
-    when the run is adjacent, identically shaped down its whole subtree, named from
-    one stem, and numbered consecutively. Such an entry MUST name every Module it
-    stands for and MUST say how many there are. Distinct siblings MUST stay
-    separate.
+  - With a `NAME`, output MUST be that model's whole forest. The forest MUST show
+    every root that the model publishes. It MUST show each Module's own functions
+    with their signatures beneath it. It MUST mark the leaf Modules. A leaf is a
+    Module with no child Modules, not a function. A runtime twin is written per
+    Module. It MUST cover all of that Module's functions at once.
+  - A catalog root MUST declare a target. A catalog root MUST NOT be held, directly
+    or transitively, by another target-declaring Module in the same model package. A
+    layer that declares its own target remains usable on its own. Such a layer MUST
+    NOT be listed as another root when a published top-level model holds it.
+  - A run of sibling Modules MAY be written once as the range it covers. The run
+    MUST be adjacent, identically shaped down its whole subtree, named from one
+    stem, and numbered consecutively. Such an entry MUST name every Module it stands
+    for and MUST say how many there are. Distinct siblings MUST stay separate.
   - The leaf-Module count and function count MUST count definitions by object
     identity, once per model. Repeated instances of one definition MUST NOT
     increase either count. The forest MUST still show every instance, including
     the element count of an indexed slot when its instances are grouped.
-  - `--source` MUST print the model directory's absolute path alone on the first line, then
-    one line per file except `__pycache__`, in stable filename order. Each file line MUST
-    give its filename and the first line of its own docstring, or `-` when it has none.
-    Checkout and installation MUST list the same files.
-  - `--source` MUST parse a file's text to read its docstring and MUST NOT import
-    or execute model source. It MUST NOT reformat, regenerate, or copy a shipped
-    file: the installed directory is the reference, and a rendered copy is a
-    different artifact wearing its name.
+  - `--source` MUST print the model directory's absolute path alone on the first
+    line. It MUST then print one line per file except `__pycache__`, in stable
+    filename order. Each file line MUST give its filename. It MUST also give the first line of its own docstring, or `-` when it has none. Checkout and installation MUST list the
+    same files.
+  - `--source` MUST parse a file's text to read its docstring. It MUST NOT import or
+    execute model source. It MUST NOT reformat, regenerate, or copy a shipped file.
+    The installed directory is the reference. A rendered copy is a different
+    artifact with the same name.
   - Catalog membership and `--source` describe a model and its shipped authored files; neither
     claims that the model has a runnable decode path. Model directories MUST NOT publish `run.py` or
     `generation.py`; these MUST ship once in core's `orchestrator/causal_lm/` resources.
@@ -301,32 +295,32 @@ importable code.
 
 `spec` discloses the installed specifications a step at a time: which documents
 there are, what is in one, and one section of one. It MUST NOT print a document
-whole; a reader who asked what a rule says is not asking for every rule.
+whole. A reader who asked what a rule says is not asking for every rule.
 
 - constraints:
-  - With no `TOPIC`, output MUST list the documents that can be asked for,
-    including any name that is another name for one of them.
-  - With a `TOPIC` and no `SECTION`, output MUST be that document's outline —
-    every section's key and title, indented by heading depth — and MUST NOT
-    include the sections' bodies.
-  - A section's key MUST be its own number when its heading carries one, and
-    otherwise a name derived from its title.
-  - Keys MUST be unique within a document. A key that would repeat MUST take on
-    the name of its enclosing heading, and the one above that, until the keys
-    differ.
+  - With no `TOPIC`, output MUST list the documents that can be asked for. It MUST
+    include any name that is another name for one of them.
+  - With a `TOPIC` and no `SECTION`, output MUST be that document's outline. The
+    outline MUST show every section's key and title, indented by heading depth. It
+    MUST NOT include the sections' bodies.
+  - A section's key MUST be its own number when its heading carries one. Otherwise
+    the key MUST be a name derived from its title.
+  - Keys MUST be unique within a document. A key that would repeat MUST take on the
+    name of its enclosing heading. It MUST keep taking the next enclosing heading's
+    name until the keys differ.
   - Headings MUST be recognised outside fenced code blocks only.
-  - With a `SECTION`, output MUST be that section — its heading and the lines
-    down to the next heading at its level or above — followed by the keys of the
-    sections beside it: the previous and the next at its level, and the ones it
-    contains. Naming the neighbours is what lets a reader walk the document
-    without returning to the outline.
-  - A `SECTION` the document does not have MUST be refused naming the keys it
-    does have, so the next attempt can succeed.
+  - With a `SECTION`, output MUST be that section. The section is its heading and the lines down to the next heading at its level or above. Output MUST then give the keys of the
+    sections beside it. These are the previous and the next at its level, and the
+    ones it contains. Naming the neighbours lets a reader walk the document without
+    returning to the outline.
+  - A `SECTION` that the document does not have MUST be refused. The refusal MUST
+    name the keys that the document does have, so the next attempt can succeed.
   - A `TOPIC` with no installed document MUST be refused as that.
-  - Documents MUST be read from the source tree when one is present, and from the
-    installed data directory otherwise, so the command answers the same in an
-    editable checkout as in an installed environment. The source tree comes first
-    because in an editable checkout the working copy is what its author means.
+  - Documents MUST be read from the source tree when one is present. Otherwise they
+    MUST be read from the installed data directory. Then the command answers the
+    same in an editable checkout as in an installed environment. The source tree
+    comes first because in an editable checkout the working copy is what its author
+    means.
 
 ## Analyze
 
@@ -345,18 +339,18 @@ explicit analysis; there is no ordinary `--target` option.
     after 300s` to standard error, flush that message, and exit nonzero. This
     budget is currently fixed and MUST NOT be exposed as a CLI flag or public
     analysis option.
-  - `analyze` MUST invoke the public operation once with every requested root,
-    so their union dependency closure runs over one checked Module
-    ([analysis §2](./analysis.md#2-composed-analysis)). Each closure member MUST
-    run once, and requesting another root MUST NOT let one analyzer change
-    Metadata owned by another.
-  - A selection MUST resolve to a Module. A bare Function MUST be rejected
-    naming the reason: it declares neither the Target its numbers are measured
-    against nor the topology hierarchy they divide over.
+  - `analyze` MUST invoke the public operation once with every requested root. Their
+    union dependency closure then runs over one checked Module
+    ([analysis §2](./analysis.md#2-composed-analysis)). Each closure member MUST run
+    once. Requesting another root MUST NOT let one analyzer change Metadata owned by
+    another.
+  - A selection MUST resolve to a Module. A bare Function MUST be rejected. It
+    declares neither the Target its numbers are measured against nor the topology
+    hierarchy they divide over. The rejection MUST name that reason.
   - `analyze` MUST accept an optional `PATH` whether or not an analysis flag was
     supplied. With `PATH`, its typed HIR, text report, or JSON report MUST be
-    written to that path, and successful execution MUST write none of the report
-    to stdout. Without `PATH`, the same report bytes MUST be written to stdout.
+    written to that path. Successful execution MUST write none of the report to
+    stdout. Without `PATH`, the same report bytes MUST be written to stdout.
   - `--json` MUST write the report as JSON, to `PATH` or stdout, instead of text.
     Its `source` field MUST carry each reached definition once with its records
     ([analysis §2](./analysis.md#2-composed-analysis)).
@@ -367,61 +361,61 @@ explicit analysis; there is no ordinary `--target` option.
     `analyze` usage. Both formats MUST carry the same conclusions
     ([analysis §1](./analysis.md#1-authored-hir-metrics)).
   - `--operands` MUST add each operand's share of a call's traffic to that call's
-    annotation, and MUST NOT change the JSON report, which carries that split
-    either way. It is the traffic the annotation already states, one layer finer,
-    so a reader who did not ask is not made to read it.
-    With no analysis flag it MUST be accepted and inert.
+    annotation. It MUST NOT change the JSON report, which carries that split either
+    way. It is the traffic the annotation already states, one layer finer, so a
+    reader who did not ask is not made to read it. With no analysis flag it MUST be
+    accepted and inert.
   - `--topology TOPOLOGY` MUST be optional, passed through as the public analysis
     operation's `topology`, and name the unit for per-unit figures. Its help MUST
-    state the default and, for every family, which figure changes with the level
-    and when to pass it, together with the logical/total traffic distinction and
-    the observed-peak assumption. Compute cost MUST distinguish `logical`,
-    `total`, and each topology level's per-unit share; movement MUST name the
-    `MemoryMetadata.traffic.storage` per-unit account against `total`.
-    With no analysis flag it MUST be accepted and inert.
-  - `--dim NAME=EXTENT` MUST bind one dimension the selection leaves open, and
-    MUST be repeatable to bind several. One dimension MUST receive one extent;
-    a comma-separated list of extents for one dimension MUST be rejected because
+    state the default. For every family, its help MUST state which figure changes
+    with the level and when to pass it. Its help MUST also state the logical/total
+    traffic distinction and the observed-peak assumption. Compute cost MUST
+    distinguish `logical`, `total`, and each topology level's per-unit share.
+    Movement MUST name the `MemoryMetadata.traffic.storage` per-unit account against
+    `total`. With no analysis flag it MUST be accepted and inert.
+  - `--dim NAME=EXTENT` MUST bind one dimension the selection leaves open, and MUST
+    be repeatable to bind several. One dimension MUST receive one extent. A
+    comma-separated list of extents for one dimension MUST be rejected, because
     several extents together are a `check` request. It MUST be passed through as the
-    operation's `dims` ([analysis §1.2](./analysis.md#12-analysis-families));
-    the CLI MUST NOT specialise the selection itself, because then what it
-    wrote would be about a program the operation never saw.
-  - A `--dim` argument that is not `NAME=EXTENT`, or whose extent is not an
-    integer, MUST be rejected naming which argument and why.
-  - Repeating `--dim` states another dimension. One dimension stated twice MUST
-    be rejected naming that dimension, whether or not the two extents agree; the
-    later occurrence MUST NOT win, because both came from the caller and choosing
-    between them silently answers a request that has no answer.
-  - With no `--dim`, the selection MUST be analysed or type-checked as authored.
-    A selection that leaves a dimension open MUST then fail naming the dimension,
-    its declared `[lo, hi]` interval, and concrete extents inside that interval
-    the caller can use: inferring its concrete program requires an extent, and a
-    range is not one. The bare form MUST apply stated dimensions before running
-    the public program check used by Analyze, followed by the same
-    authored-analysis readiness validation as Analyze; this is an internal CLI
-    path, not a public typecheck operation. It MUST reject an unsupported declared
-    topology level or an extent over that level's target limit, even though no
+    operation's `dims` ([analysis §1.2](./analysis.md#12-analysis-families)). The
+    CLI MUST NOT specialise the selection itself. Then what it wrote would be about
+    a program the operation never saw.
+  - A `--dim` argument that is not `NAME=EXTENT` MUST be rejected. An argument whose
+    extent is not an integer MUST be rejected. The rejection MUST name which
+    argument and why.
+  - Repeating `--dim` states another dimension. One dimension stated twice MUST be
+    rejected, naming that dimension, whether or not the two extents agree. The later
+    occurrence MUST NOT win. Both came from the caller, and choosing between them
+    silently answers a request that has no answer.
+  - With no `--dim`, the selection MUST be analysed or type-checked as authored. A
+    selection that leaves a dimension open MUST then fail. The failure MUST name the
+    dimension, its declared `[lo, hi]` interval, and concrete extents that the
+    caller can use inside it. Inferring the concrete program requires an extent, and
+    a range is not one. The bare form MUST apply stated dimensions before it runs
+    the public program check used by Analyze. It MUST then run the same
+    authored-analysis readiness validation as Analyze. This is an internal CLI path,
+    not a public typecheck operation. It MUST reject an unsupported declared topology level. It MUST also reject an extent over that level's target limit, even though no
     analysis family was requested.
-  - Every requested analysis MUST be reported together even when each was run at
-    the stated extents, which builds one program per analysis. The report MUST
-    accept those as one program when they were rebuilt from the same function at
-    the same extents, and MUST refuse results rebuilt at different extents. The
-    comparison MUST read the recorded extents and MUST NOT infer them from the
-    resulting signature: a dimension occurring only in a loop bound or a body
+  - Every requested analysis MUST be reported together, even when each was run at
+    the stated extents. That run builds one program per analysis. The report MUST
+    accept those as one program when they were rebuilt from the same function at the
+    same extents. It MUST refuse results rebuilt at different extents. The
+    comparison MUST read the recorded extents. It MUST NOT infer them from the
+    resulting signature. A dimension that occurs only in a loop bound or a body
     operation's attribute leaves the signature identical at every extent.
   - Output MUST report the analyses that were requested. A dependency that ran
-    because a requested root needed it MUST appear in the executed list and, other
-    than the bounded roofline support view defined by
-    [analysis §1](./analysis.md#1-authored-hir-metrics), MUST NOT have its own
-    measurements reported.
-  - The report's `target` field MUST be the concrete Target value's `identity`,
-    so two products served by one Target class remain distinguishable.
+    because a requested root needed it MUST appear in the executed list. Except for
+    the bounded roofline support view defined by
+    [analysis §1](./analysis.md#1-authored-hir-metrics), such a dependency MUST NOT
+    have its own measurements reported.
+  - The report's `target` field MUST be the concrete Target value's `identity`. Two
+    products served by one Target class then remain distinguishable.
   - On success with at least one requested root, the report begins with the
     `#`-headed report followed by annotated HIR. With no analysis flag, it
     contains typed HIR alone, with no report header and no analysis Metadata
     comment.
-    On inference, verification, or analysis failure, stdout MUST be empty and
-    stderr MUST report the source location, binding where available, and reason.
+    On inference, verification, or analysis failure, stdout MUST be empty. Stderr
+    MUST report the source location, binding where available, and reason.
 
 ## Schedule
 
@@ -436,7 +430,7 @@ tilefoundry schedule candidates SOURCE PATH [--json] [--dim NAME=EXTENT ...]
 
 `analyze`, `candidates` and `finalize` share one front end: load the source, bind
 one extent per `--dim`, and check the entry. `finalize` then runs the analyses
-the Target's `ConvertHIRToTIR` names in `analyses` and writes the lowered Module
+the Target's `ConvertHIRToTIR` names in `analyses`. It writes the lowered Module
 as canonical TIR source following
 [passes §7.1](./passes.md#71-converthirtotir), also when it holds a single
 PrimFunction. With `--json`, `PATH` instead
@@ -444,10 +438,10 @@ contains an object whose `source` field is that same canonical TIR. `facts` desc
 by the exact `TARGET` identity, optionally narrowed to one fully-qualified
 `OP` name. With no `OP`, it lists every registered TIR Op
 that owns a class-level instruction-capability declaration. A named capability
-must occur in the target architecture's capability set; a declaration with no
+must occur in the target architecture's capability set. A declaration with no
 required capability imposes no named feature requirement. Execution mesh
 Patterns are reported as declaration constraints and checked against the actual
-call mesh; the facts inventory does not prove that a concrete call is valid. A carrier may associate more
+call mesh. The facts inventory does not prove that a concrete call is valid. A carrier may associate more
 than one named declaration with itself. The inventory lists that carrier once,
 while each associated declaration remains addressable by its own exact name.
 With or without a selected name, `facts` reports each declaration's capability,
@@ -465,8 +459,7 @@ associated attribute reports execution meshes as alternatives selected by each
 declaration.
 `candidates` reports the instructions whose access relation and operand
 patterns can implement each unscheduled registered HIR site. A target-neutral
-pairing registry decides which TIR carrier families are relevant to each HIR
-Op; a HIR Op with no pairing is not a candidate site. Rank-0 UMAT values
+pairing registry decides which TIR carrier families are relevant to each HIR Op. A HIR Op with no pairing is not a candidate site. Rank-0 UMAT values
 are unmaterialized scalars rather than instruction sites, regardless of their
 HIR operation class. Target capabilities then
 silently remove paired carriers unsupported by the selected target. Every remaining instruction uses the same match entry as explicit
@@ -489,7 +482,7 @@ error.
     one extent per dimension before analysis, with the same format and
     duplicate-dimension validation as Analyze.
     An unbound dimension MUST be named with its closed declared interval and
-    suggested extents; the command MUST NOT write a report when binding fails.
+    suggested extents. The command MUST NOT write a report when binding fails.
   - `PATH` is required, is the only report destination, and MUST NOT be partly
     written when the operation fails. A successful command writes a trailing
     newline and writes nothing to stdout.
@@ -500,11 +493,10 @@ error.
   - `facts --target` is required. `TARGET` and `OP`, when present,
     match exact identities; neither accepts a short alias or a best-effort
     fallback.
-  - A selected instruction with no access relation, an addressable result
-    without an analyzed offset, an unsupported HIR call, an unknown instruction,
-    an unknown target, or a source with no candidate site MUST print
-    `tilefoundry: error: REASON` to stderr and exit 1. No partial output is
-    permitted.
+  - Six failures MUST print `tilefoundry: error: REASON` to stderr and exit 1. They
+    are: a selected instruction with no access relation; an addressable result
+    without an analyzed offset; an unsupported HIR call; an unknown instruction; an
+    unknown target; a source with no candidate site. No partial output is permitted.
 
 ## Target
 
@@ -521,46 +513,46 @@ identifies its unit, conditions, source, and origin. A fact with no usable value
 is reported as unavailable rather than given a placeholder number.
 
 For a Target without retained documents, `target show` prints only its identity,
-its reconstructing expression, and `facts: unavailable`. It does not query or
-attempt to enumerate `get_facts`: a Target exposes facts on demand but has no
-interface that claims to list every Facts projection it supports.
+its reconstructing expression, and `facts: unavailable`. It does not query or attempt to enumerate `get_facts`. A Target exposes facts on demand. It has no interface that claims to list every Facts projection it supports.
 
 - constraints:
   - Target discovery MUST be an explicit `target add` operation. Installing a
     Python distribution MUST NOT implicitly register a Target through package
     metadata or entry points.
-  - `target add --document PATH` MUST parse a complete hardware document, find
-    the Target that owns its schema, validate and adopt it, and persist its
-    absolute source path and content digest. Adding a device whose declared
-    architecture is unavailable MUST fail naming the architecture to add first.
+  - `target add --document PATH` MUST parse a complete hardware document and find
+    the Target that owns its schema. It MUST validate and adopt the document. It
+    MUST persist the document's absolute source path and content digest. Adding a
+    device whose declared architecture is unavailable MUST fail naming the
+    architecture to add first.
   - Without `--document`, `target add` MUST import a module name unless the
-    argument ends in `.py` or names an existing file. A file source MUST be
-    stored as an absolute path, loaded under its filename stem, executed on
-    every command that loads the registry, and reported as such when added.
-    Only one file source with a given stem may be added; a collision MUST fail
-    naming the absolute path that already occupies that module name. A stem
-    already occupied by any other importable module MUST likewise be rejected
-    without replacing that module in `sys.modules`.
-  - Every command MUST replay the registry before doing its own work, so an
-    added Target is equally available to inspection and analysis.
-    A missing or changed source MUST produce a warning naming that entry while
-    valid entries continue to load and the requested command continues.
+    argument ends in `.py` or names an existing file. A file source MUST be stored
+    as an absolute path and loaded under its filename stem. It MUST be executed on
+    every command that loads the registry. It MUST be reported as such when added.
+    Only one file source with a given stem may be added. A collision MUST fail,
+    naming the absolute path that already occupies that module name. A stem already
+    occupied by any other importable module MUST likewise be rejected without
+    replacing that module in `sys.modules`.
+  - Every command MUST replay the registry before doing its own work. Then an added
+    Target is equally available to inspection and analysis. A missing or changed
+    source MUST produce a warning naming that entry. Valid entries continue to load,
+    and the requested command continues.
   - The default writable registry MUST be
     `<sys.prefix>/share/tilefoundry/registry.toml`. It MUST NOT use checkout
     data-file discovery or a user-global directory. `--registry PATH` MUST
     override it without reading or writing the default path.
-  - A document entry MUST retain its original bytes at its source: replay MUST
-    compare the content digest and MUST NOT silently adopt changed contents or
-    store a private copy. Adding the document again is the explicit update.
+  - A document entry MUST retain its original bytes at its source. Replay MUST
+    compare the content digest. It MUST NOT silently adopt changed contents or store
+    a private copy. Adding the document again is the explicit update.
   - Every available Target identity MUST be unique across registered provider
-    classes and device documents. A document ID already in a `HardwareSpec`
-    MUST retain the document-duplicate diagnostic; a Target identity collision
-    MUST instead name the value and provider that already occupy it.
+    classes and device documents. A document ID already in a `HardwareSpec` MUST
+    retain the document-duplicate diagnostic. A Target identity collision MUST
+    instead name the value and provider that already occupy it.
   - `target remove` MUST accept a document ID, a module name, or any identity
     loaded from that module. Removing a module MUST report every identity it
     removes, and the next command MUST no longer load those values.
   - Every expression printed by `target list` MUST be executable with the
-    accompanying imports and MUST reconstruct the Target named by that row.
+    accompanying imports. The expression MUST also reconstruct the Target named by
+    that row.
   - `target show` MUST accept every identity printed by `target list`. An
     unknown identity MUST fail naming the identities currently available.
   - `inspect` MUST NOT remain as a second Target inspection command.
