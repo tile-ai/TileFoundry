@@ -128,7 +128,7 @@ def first_thread(enclosing: types.Mesh | None, topologies) -> types.Mesh | None:
     """A slice holding the first thread of *enclosing*, or of the CTA when there is none.
 
     None when that level holds one thread already, or when the first thread has
-    no constant position: *enclosing* is a slice whose start is not a number, or
+    no constant index: *enclosing* is a slice whose start is not a number, or
     one over several levels whose sizes are not all numbers, so its start cannot
     be split into the start of each level.
     """

@@ -77,7 +77,7 @@ def carrier_layout(
 ):
     """Transform a covering input shard layout into the output layout.
 
-    Route positions through domain projections and emit them in output-axis
+    Route modes through domain projections and emit them in output-axis
     order. This carries a physical factorization across, so anything short of an
     exact coordinate projection returns ``None`` and lets synthesis build a
     canonical layout instead.
@@ -115,12 +115,12 @@ def carrier_layout(
     new_pos_of: dict[int, int] = {}
     src_pos: list = []
     for o in range(out_rank):
-        positions = per_axis[o]
-        if not positions:
+        modes = per_axis[o]
+        if not modes:
             new_shape.append(1)
             src_pos.append(None)
             continue
-        for p in positions:
+        for p in modes:
             reduced = pos_dom[p] in complete_reduction_dims
             new_pos_of[p] = len(new_shape)
             new_shape.append(1 if reduced else layout.shape[p])

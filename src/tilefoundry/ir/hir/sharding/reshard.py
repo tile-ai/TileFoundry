@@ -103,11 +103,11 @@ def buffer_alias(call: expr.Call) -> int | None:
                     and expr.static_dim_value(tuple(types.flatten(shard.mesh.layout.shape))[mesh_axis]) != 1
                     and steps[attr.axis] == 0
                 ):
-                    position = attr.axis
-                    suffix = prod(flat.shape[index] for index in range(position + 1, len(axes))
-                                  if axes[index] == axes[position])
-                    splits.append((mesh_axis, axes[position], suffix, flat.shape[position]))
-                    independent.add(position)
+                    mode = attr.axis
+                    suffix = prod(flat.shape[index] for index in range(mode + 1, len(axes))
+                                  if axes[index] == axes[mode])
+                    splits.append((mesh_axis, axes[mode], suffix, flat.shape[mode]))
+                    independent.add(mode)
         kept = tuple(
             (extent, step)
             for index, (extent, step) in enumerate(zip(flat.shape, steps, strict=True))
@@ -128,8 +128,8 @@ def reshard_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """Every logical index reads itself. Where those bytes go is a separate fact.
 
     A reshard moves a value between storages or redistributes it across
-    positions; neither changes which logical element the result's index came
-    from, so the boundary is exactly identity and never opaque. Which positions
+    units; neither changes which logical element the result's index came
+    from, so the boundary is exactly identity and never opaque. Which modes
     those indices are is the reader's question, not this one's.
     """
     logical = ctx.type_of(call.args[0])

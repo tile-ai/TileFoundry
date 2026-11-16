@@ -97,8 +97,8 @@ def read_mode(tensor: types.TensorType, stated=None, *, allow_partial=False):
             step for extent, step in zip(types.flatten(group), types.flatten(steps)) if extent > 1
         )
         unit += [
-            (axis, position, position == len(walked) - 1)
-            for position, step in enumerate(walked)
+            (axis, mode, mode == len(walked) - 1)
+            for mode, step in enumerate(walked)
             if step == 1
         ]
     if len(unit) != 1:

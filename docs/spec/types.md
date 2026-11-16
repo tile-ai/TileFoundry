@@ -104,7 +104,7 @@ class TensorType:
     `umat`). A concrete level (`gmem` / `smem` / `rmem` / `host` /
     `tmem`) is the value's **abstract result residency** — where the result tensor
     logically lives — not the transient register/ALU staging any individual step
-    happens to use. `umat` marks an **unmaterialized** (placement-polymorphic)
+    happens to use. `umat` marks an **unmaterialized** (storage-polymorphic)
     value not yet committed to a concrete residency. A source value literal
     carries `storage=umat`, as do shape elements. An unmaterialized value MUST be
     resolved to a concrete residency (or otherwise materialized) before codegen
@@ -176,8 +176,8 @@ def topology_level(topology: str, topologies: tuple[Topology, ...]) -> int:
     symbolic tensor axis or mesh extent MUST be bound before local projection.
   - Every axis of a Mesh carrying one topology MUST be read at that topology
     level. A Mesh carrying multiple topologies remains a valid Mesh, but local
-    projection MUST reject it when asking for a position count by topology name
-    rather than assign one of its layout axes to a guessed level
+    projection MUST reject it when asking for a unit count by topology name
+    rather than assign one of its modes to a guessed level
     ([shard §5](./shard.md#5-mesh)).
   - The result MUST remain an ordinary IR Type and MUST NOT introduce a
     consumer-specific tensor type.
@@ -822,7 +822,7 @@ parameter name to IR value.
     name of a coordinate of the result, rather than read that parameter as the
     coordinate.
   - `layout_to_isl_map(shape, layout, values, *, divided)` MUST return the map
-    from a value's logical coordinates to the flattened layout positions one
+    from a value's logical coordinates to the flattened layout coords one
     unit holds, by the regroup of
     [semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain).
     `layout` MUST be a `ShardLayout` or a static-offset view of one; any other
@@ -835,9 +835,9 @@ parameter name to IR value.
     parameter named into `values`, ranging over the axis.
   - `layout_to_isl_map` MUST raise `ValueError` for static logical and layout
     sizes that differ, checked before a size-zero shape yields an empty map; a
-    regroup that needs a symbolic divisor or modulus; a divided position or
+    regroup that needs a symbolic divisor or modulus; a divided mode or
     mesh extent that is not static; and mesh extents that do not divide their
-    position.
+    mode.
   - `dim_range(value)` MUST return conservative half-open bounds from
     `RangeMetadata` before attempting structural dimension arithmetic. A value
     with neither stored nor structurally derivable bounds returns `None`.

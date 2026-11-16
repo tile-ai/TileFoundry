@@ -232,7 +232,7 @@ def canonicalize_topology_dims(topology: object) -> object:
 
 
 def map_mesh_layout(layout, rebuild):
-    """Rebuild what a mesh stated, whether that is one arrangement or one per level."""
+    """Rebuild what a mesh stated, whether that is one layout or one per level."""
     if isinstance(layout, tuple):
         return tuple(rebuild(one) for one in layout)
     return rebuild(layout)

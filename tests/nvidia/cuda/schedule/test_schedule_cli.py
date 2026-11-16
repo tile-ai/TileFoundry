@@ -248,7 +248,7 @@ class CrossingAxesRefusal(ScheduleCliCase):
     def guard(self, state, problems):
         out, captured = state
         assert captured.out == ""
-        assert "layout positions (2, 8, 2, 4, 2, 4, 8) cross logical axes of (64, 128)" in captured.err
+        assert "layout modes (2, 8, 2, 4, 2, 4, 8) cross logical axes of (64, 128)" in captured.err
         assert "layout_crossing_axes.py:13:" in captured.err
         assert not out.exists()
 

@@ -72,7 +72,7 @@ def metadata_view(call: expr.Call, ctx: Context) -> Cost:
 
 
 def structure(call: expr.Call, ctx: Context) -> Cost:
-    """Pure data placement: every input read whole, the result written whole."""
+    """Pure data movement: every input read whole, the result written whole."""
     return Cost({}, traffic(input_types(call, ctx), output_type(call, ctx)))
 
 

@@ -268,7 +268,7 @@ class ConvertHIRToTIR(ModulePass):
     HIR function. When lowering HIR from a CPU host root, exactly one `Launch` MUST
     resolve to an HIR function; otherwise `LoweringError` names the host and the
     number of such launches.
-  - Address placement comes only from `MemoryMetadata`: integer shared-memory
+  - Address assignment comes only from `MemoryMetadata`: integer shared-memory
     addresses are byte offsets, and every analyzed offset becomes one concrete
     buffer view. Multiple offsets bind one view per offset and one tuple of
     those views outside the outermost enclosing HIR loop; each consuming scope
@@ -360,7 +360,7 @@ class ConvertHIRToTIR(ModulePass):
     A non-affine access retains a partner ComposedLayout's composition; without
     that composition it raises LoweringError naming the relation. Existing
     refusals, including duplicate output storage, retain their text.
-    Only `gmem` and `smem` have physical address placements. Optional `rmem`
+    Only `gmem` and `smem` have physical address assignments. Optional `rmem`
     IN_PLACE sharing is a live-byte peak estimate: each result retains its own
     typed AllocTensor. Semantic views, forwards, InsertSlice destinations and
     carry ties share register storage. Placed `smem` views MUST state their dtype
@@ -369,7 +369,7 @@ class ConvertHIRToTIR(ModulePass):
     own induction values in the visit context.
     Shared register storage is declared at the outermost definition among its
     users, retaining the HIR tensor type and declared mesh.
-    Staged storage retains its placement outside the outermost HIR loop.
+    Staged storage retains its declaration site outside the outermost HIR loop.
     Each return-type leaf becomes a new external output parameter with that
     leaf's type; `umat` becomes `gmem`, retaining its layout. A non-tensor leaf
     raises `LoweringError` naming its position and type. Outputs use the analyzed
@@ -411,7 +411,7 @@ rewrite a host function after it lowers the device functions. Tensor parameters 
 HIR types, and output parameters follow the return-leaf rule above, including
 `ShardLayout`. Default and explicit compact row-major layouts denote the same
 physical layout. A returned retained call MUST receive the caller's output
-parameter directly when it satisfies the same placement rule as `Empty`.
+parameter directly when it satisfies the same address rule as `Empty`.
 Call boundaries MAY create matching views of
 existing buffers, but MUST NOT insert copies, scheduling, or storage transfers.
 The original destination remains the call's result after passing its view.

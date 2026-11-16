@@ -186,11 +186,11 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TupleType:
 
 @access.register_relation(TopK)
 def topk_access_relation(call: "expr.Call", ctx: "TypeInferContext") -> tuple[access.Relation, ...]:
-    """One selection per kept position, scanning the whole axis it selects from.
+    """One selection per kept coord, scanning the whole axis it selects from.
 
     The axis a selection lands on is not a view of the axis it came from -- which
     element is picked is a value's answer -- so the space walked names both: the
-    ``k`` positions produced and the coordinate scanned to produce them. The
+    ``k`` coords produced and the coordinate scanned to produce them. The
     result projects the first; the source reads the second.
     """
     x_ty = ctx.type_of(call.args[0])

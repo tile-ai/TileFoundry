@@ -92,10 +92,10 @@ Operand, tiling, pattern, and verifier rejections raise `schedule.RefusalError`.
 Errors from implementation code, including `TypeError` and ISL errors,
 propagate to the caller.
 
-A source window is matched in the arrangement in which it lies: its
+A source window is matched in the layout in which it lies: its
 address offset is not part of the layout, and an unstated layout uses the
 parent tensor's compact row-major strides. When an instruction reads a plain
-shared-memory arrangement through an all-`Broadcast` `pattern.ShardLayout`, the
+shared-memory layout through an all-`Broadcast` `pattern.ShardLayout`, the
 single-issue view is bound to one required instruction frame for matching. This
 does not assign issues to frames; issue assignment is a lowering decision.
 
@@ -193,7 +193,7 @@ contributes no bound; it is neither treated as zero bandwidth nor rejected.
 Finalization MUST NOT reject a program because analysis reports capacity
 findings. It MUST retain the function-level analysis metadata on the resulting
 PrimFunction and print the same report header as `analyze` before the entire
-TIR program. Placement and cache findings remain analysis diagnostics; whether
+TIR program. Address assignment and cache findings remain analysis diagnostics; whether
 to adopt the result is the user's decision. Successful finalization MUST leave
 stdout and stderr empty, and JSON output MUST contain only the `source` field.
 

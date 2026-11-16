@@ -353,7 +353,7 @@ def unit_guard(mesh: types.Mesh, unit: str, name: str = "cta") -> str | None:
     extents, strides = layout.shape, layout.strides
     if not all(isinstance(value, int) for value in (start, *extents, *strides)):
         return None
-    steps = [f"p{position}" for position in range(len(extents))]
+    steps = [f"p{mode}" for mode in range(len(extents))]
     held = [f"{unit} = {start}" + "".join(f" + {s} * {p}" for s, p in zip(strides, steps))]
     held += [f"0 <= {p} < {e}" for p, e in zip(steps, extents)]
     return f"exists ({', '.join(steps)} : {' and '.join(held)})"

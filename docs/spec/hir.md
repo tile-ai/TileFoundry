@@ -190,7 +190,7 @@ function records its origin and chosen dimensions as specified by the
 **Function specialization API** below.
 
 A wholly omitted tensor layout remains `None` in a parameter or return
-annotation and imposes no layout constraint. A stated layout or placement is
+annotation and imposes no layout constraint. A stated layout or shard attr is
 concrete when constructed and MUST match exactly; unwritten strides use the
 default constructor with the enclosing storage and target.
 
@@ -671,9 +671,9 @@ Tensor structural operations; consensus ops (`Transpose` / `Slice` / `Concat`
 
 `Transpose`, statically positioned `Slice`, and `Reshape` derive their result
 layout during type inference. Their result `TensorType.layout` MUST NOT be
-`None`; a `Layout` whose `strides` are `None` states that the arrangement
+`None`; a `Layout` whose `strides` are `None` states that the layout
 is known while its steps are not. A missing input layout is the compact
-arrangement that HIR readers assign to that value. This requirement applies to
+layout that HIR readers assign to that value. This requirement applies to
 these structural ops, not to every tensor-producing HIR op.
 
 Pattern matching and lowering MUST read this result type rather than derive a
@@ -681,15 +681,15 @@ second presentation of the result.
 
 - `Transpose` produces a new value, not a storage alias. It MUST permute the
   tensor shape and use a fresh compact C-order result layout. A `ShardLayout`
-  MUST remap its split positions through the registered relation with fresh
+  MUST remap its split modes through the registered relation with fresh
   strides. Lowering MUST copy the source's permuted-stride view into the new
   result storage.
 - `Bitcast(x, layout)` reinterprets the same bytes with a new shape and layout,
   preserving the input dtype and storage. `layout` is a `LayoutBase`; the result
   shape for a plain layout is the product of the nested sizes in each top-level
   layout mode. For an rmem `ShardLayout`, the result preserves `x.shape` and
-  changes only its layout. Its layout modes and `Split` positions MUST be valid
-  for that logical shape under the existing layout-position-to-tensor-axis rules.
+  changes only its layout. Its layout modes and `Split` modes MUST be valid
+  for that logical shape under the existing layout-mode-to-tensor-axis rules.
   Both layouts MUST be plain `Layout` / `ComposedLayout` without `ShardLayout`
   components, or both MUST be rmem `ShardLayout` on the same mesh containing
   only `Split` and `Varying` attributes
@@ -1041,7 +1041,7 @@ class Reshape(Op):
     the remaining axes, including when the input is a strided tensor window.
   - A bare, fully-`Broadcast` `ShardLayout` input (every attr `Broadcast`, no
     genuine sharding) carries that `ShardLayout` through `Reshape` when the
-    input layout positions can express `new_shape` by the view rules below.
+    input layout modes can express `new_shape` by the view rules below.
     When they cannot (including while either layout shape is symbolic), the
     result layout is `None` and no error is raised because no genuine ownership
     is discarded. This rule does not extend to a `ComposedLayout` whose outer
@@ -1051,22 +1051,22 @@ class Reshape(Op):
     scalar case and produces a plain `UMAT` scalar.
   - A genuine `ShardLayout` input (at least one non-`Broadcast` attr) carries
     through `Reshape` when the reshape is expressible as a view over the
-    input's layout positions (`layout.layout.shape`, [shard §7.1.1](./shard.md#711-layoutshape)):
-    - every layout position lies entirely within one new axis — non-size-1 new
-      axes are the product of a contiguous run of whole layout positions, in
+    input's layout modes (`layout.layout.shape`, [shard §7.1.1](./shard.md#711-layoutshape)):
+    - every layout mode lies entirely within one new axis — non-size-1 new
+      axes are the product of a contiguous run of whole layout modes, in
       either merge direction; size-1 axes insert/drop freely and hold no
-      sharding; a `Split` layout-axis reference remaps to its new layout
-      position; `Partial` / `Broadcast` carry through unchanged (mesh-axis
-      states, no layout axis); OR
-    - a `Split`-bound layout position divides across a new-axis boundary at a
+      sharding; a `Split` mode reference remaps to its new
+      mode; `Partial` / `Broadcast` carry through unchanged (mesh-axis
+      states, no mode); OR
+    - a `Split`-bound mode divides across a new-axis boundary at a
       point its bound mesh extent evenly divides: the outer (earlier)
       sub-factor itself further factors into `(mesh_ext, Split-bound, local
       extent 1)` and `(sub-factor / mesh_ext, plain)`, and the inner residual
-      becomes a plain (non-`Split`) layout position — every `Split`-bound layout
-      dim keeps local extent 1 ([shard §7.1.1](./shard.md#711-layoutshape)).
-  - Arbitrary rank-N regroup — a `Split`-bound position whose device-owned
+      becomes a plain (non-`Split`) mode — every `Split`-bound
+      mode keeps local extent 1 ([shard §7.1.1](./shard.md#711-layoutshape)).
+  - Arbitrary rank-N regroup — a `Split`-bound mode whose device-owned
     block spans a boundary deeper than one divide, or two or more
-    `Split`-bound positions interacting across the same regroup — is not yet
+    `Split`-bound modes interacting across the same regroup — is not yet
     supported and MUST fail closed.
   - A reshape of a genuine `ShardLayout` not expressible by the above MUST fail
     closed rather than fabricate or discard a layout.
@@ -1233,7 +1233,7 @@ class Reduce(Op):
     identity — there is nothing to divide by — so it MUST NOT invent one.
   - Storage is preserved.
   - Plain input layout passes through unchanged.
-  - For `ShardLayout` input, every split layout position that belongs to a
+  - For `ShardLayout` input, every split mode that belongs to a
     reduced tensor axis collapses to broadcast with size-1 stride-0 output.
   - Non-default-stride sharded input must carry explicit producer strides, or
     typeinfer rejects it.
@@ -1571,7 +1571,7 @@ class MeshCoord(Op):
 - constraints:
   - `axes` is an `i64` scalar, an `i64` vector, or a tuple of `i64` scalars.
     The result is one `i64` coordinate per axis -- a scalar for a scalar,
-    a vector of the same length otherwise -- with no placement.
+    a vector of the same length otherwise -- with no shard layout.
   - Type inference MUST reject a mesh that is not bound by the current
     `MeshRegion`, and a literal axis outside the mesh's rank.
   - Evaluation holds one value per unit of `mesh`
@@ -1611,7 +1611,7 @@ class Reshard(Op):
     two notations of one thread numbering may be judged a copy.
     A Split on a mesh axis of extent 1 places nothing: the box neither records
     it nor treats its tensor mode as independent. A box records every other
-    zero-stride Split's mesh axis, logical tensor axis, position within that
+    zero-stride Split's mesh axis, logical tensor axis, coord within that
     axis, and extent. Its physical address layout is the coalesced layout after
     removing these independent modes; swizzle and offset are preserved. Source
     offsets are derived from starts along the registered view chain, independently
@@ -1684,7 +1684,7 @@ class Local(Op):
     the contracted result shape. A noncanonical input MUST be rejected at the
     `Local` call with its source location.
   - Static split sizes divide by mesh extent; symbolic sizes pass through.
-  - `Local` only names the current topology position's existing view; it
+  - `Local` only names the current unit's existing view; it
     materializes no value and moves no bytes.
 
 ## 2. Function specialization API

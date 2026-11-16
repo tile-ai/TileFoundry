@@ -130,7 +130,7 @@ class Target(target.Target):
     sole compatible architecture document is available. Its `identity` MUST be
     that device document's ID.
   - `get_facts(TopologyFacts).topologies` MUST contain only `thread`, with logical
-    and physical execution-position limits equal to performance plus efficiency
+    and physical execution-unit limits equal to performance plus efficiency
     core counts (12 for the installed AppleM2 Pro). It MUST NOT set `from_target`.
     `parallel_topology` MUST be `thread`. These limits describe program workers,
     not independent AMX matrix engines.

@@ -53,7 +53,7 @@ class ShardAttr:
 
 @dataclass(frozen=True)
 class Split(ShardAttr):
-    """The mesh axis divides a layout position."""
+    """The mesh axis divides a layout mode."""
 
     axis: int
 
@@ -272,7 +272,7 @@ def shard_layout_local_shape(sl: "ShardLayout", *, require_static: bool = True) 
 
     Splits divide by mesh extents: equal symbols yield one, matching products
     yield their other factor, and other symbolic splits are undecidable.
-    Non-Split attributes consume no positions. ``require_static=False`` permits
+    Non-Split attributes consume no modes. ``require_static=False`` permits
     unconsumed symbols during inference; lowering and codegen require integers.
 
     See [shard §7](docs/spec/shard.md#7-shardlayout).
@@ -457,7 +457,7 @@ def local_layout_and_offset(shard: ShardLayout, tensor_shape: tuple, coord: tupl
 
 
 def normalize_layout(layout: LayoutBase) -> LayoutBase:
-    """Normalize unit leaves without changing modes, placement or addresses."""
+    """Normalize unit leaves without changing modes, shard attrs or addresses."""
     if isinstance(layout, Layout):
         return replace(layout, strides=normalize_strides(layout.shape, layout.strides))
     if isinstance(layout, ComposedLayout):

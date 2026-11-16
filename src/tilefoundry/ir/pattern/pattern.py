@@ -182,10 +182,10 @@ def validate_mode_frame(shape, strides, path=()) -> None:
         shape_stars = tuple(index for index, item in enumerate(shape) if isinstance(item, Star))
         stride_stars = tuple(index for index, item in enumerate(strides) if isinstance(item, Star))
         if len(shape_stars) > 1 or len(stride_stars) > 1:
-            positions = shape_stars if len(shape_stars) > 1 else stride_stars
+            modes = shape_stars if len(shape_stars) > 1 else stride_stars
             raise ValueError(
                 "pattern.Layout allows at most one pattern.Star per tuple at "
-                f"{mode_path(path)}; found positions {positions}"
+                f"{mode_path(path)}; found modes {modes}"
             )
         if len(shape) != len(strides):
             raise ValueError(
@@ -264,7 +264,7 @@ class Layout(Pattern):
         *,
         predicates=(),
     ):
-        """Build the exact pattern for one authored arrangement."""
+        """Build the exact pattern for one authored layout."""
         held = tuple(predicates)
         if isinstance(layout, types.ComposedLayout):
             inner = layout.inner

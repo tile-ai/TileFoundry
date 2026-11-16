@@ -216,10 +216,10 @@ def local_type_of(
 
     With ``topology``: a ``Split`` at that topology or coarser divides, while
     finer splits, ``Broadcast``, and ``Partial`` do not; logical axes may factor
-    into layout positions, and ``topologies`` supplies the ordered hierarchy.
+    into layout modes, and ``topologies`` supplies the ordered hierarchy.
     Without it: every ``Split`` divides, the layout is dropped, and the logical
     rank is preserved. This form is for relations over logical axes, where
-    factoring an axis into layout positions would lose the modeled flow.
+    factoring an axis into layout modes would lose the modeled flow.
     """
     if topology is None:
         projected = all_split_local_type(type, refuse_indivisible=True)
@@ -274,7 +274,7 @@ def divided_mesh_axes(
 
     A ``Split`` at that level or coarser divides; a finer one does not. This is
     the rule ``local_type_of`` divides by, stated once for whoever places a
-    value's coordinates among that unit's positions.
+    value's coordinates among that unit's modes.
     """
     selected = topology_level(topology, topologies)
     return divided_axes(layout, selected_level=selected, topologies=topologies)

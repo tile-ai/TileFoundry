@@ -438,7 +438,7 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
 
 
     def shard_surface(self, value: types.ShardLayout, ctx=None, *, storage=None) -> str | None:
-        """Render placement sugar only when every mesh axis has a scope binding.
+        """Render shard layout sugar only when every mesh axis has a scope binding.
 
         The sugar states one extent per tensor axis, each a dimension
         expression, so it declines a layout whose modes are grouped by tile

@@ -1,4 +1,4 @@
-"""Layouts: shape and strides of an arrangement, the swizzle functor, and their application."""
+"""Layouts: shape and strides of a layout, the swizzle functor, and their application."""
 
 from __future__ import annotations
 
@@ -230,12 +230,12 @@ def apply_any(layout, x: int) -> int:
 
 
 def size(layout: Layout) -> int:
-    """The number of positions in the layout's domain."""
+    """The number of coords in the layout's domain."""
     return product(layout.shape)
 
 
 def flatten(layout):
-    """CuTe ``flatten``: every mode at the top level, of an arrangement or a tuple.
+    """CuTe ``flatten``: every mode at the top level, of a layout or a tuple.
 
     CuTe spells this once for each (``layout.hpp`` and the tuple algorithms);
     here one name reads both, because which was handed over is plain from what
@@ -253,7 +253,7 @@ def flatten(layout):
 
 
 def unflatten(layout: LayoutBase, profile) -> "Layout":
-    """CuTe ``unflatten``: a flat arrangement nested to *profile*'s shape."""
+    """CuTe ``unflatten``: a flat layout nested to *profile*'s shape."""
     strides = layout.strides
     return Layout(
         shape=int_tuple.unflatten(tuple(layout.shape), profile),

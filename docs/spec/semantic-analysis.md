@@ -103,7 +103,7 @@ both as one `IslParamValues` dictionary from isl parameter name to IR value.
 - `TensorType.shape` is the logical shape.
 - `layout` has its own domain shape.
 - The interpretation is canonical regroup: linearize along the logical shape's
-  row-major order, then reinterpret along the layout domain's row-major order. Strides describe physical positions only
+  row-major order, then reinterpret along the layout domain's row-major order. Strides describe physical indices only
   and MUST NOT participate in logical-coordinate correspondence. Nested
   domains associate their top-level modes with the corresponding logical axes
   only when the number of top-level modes equals the logical rank and each
@@ -113,18 +113,18 @@ both as one `IslParamValues` dictionary from isl parameter name to IR value.
   layout against that profile; `mode_axes` names each flat mode's logical axis.
 - `layout_to_isl_map` ([types §11](./types.md#11-isl-interoperability))
   implements this regroup for a `ShardLayout`. A logical axis whose extent is
-  the product of consecutive flattened layout positions maps onto them, so a
+  the product of consecutive flattened modes maps onto them, so a
   symbolic extent stays representable. Any other regroup, including a mode
   merging logical axes, MUST be rejected where the type is stated. Type
   inference MUST check function parameters and every Call result with the same
   axis-group rule and report the declaring source location. Canonical
   UMAT shape metadata uses the same compact `Layout(shape)` as other tensor values.
 - A reader with no topology level addresses logical coordinates. A reader at a
-  named topology level addresses the positions one unit of that level holds:
-  a position cut by mesh axes at that level or coarser is split into digits,
+  named topology level addresses the coords one unit of that level holds:
+  a coord cut by mesh axes at that level or coarser is split into digits,
   the cutting axes outermost first in mesh-axis order and then the residual,
   and each such digit is that unit's mesh coordinate.
-- A mesh coordinate is an isl parameter while the placement is built. The
+- A mesh coordinate is an isl parameter while the shard layout is built. The
   access relation service fixes it to the requested unit, 0 on every mesh axis
   unless stated, and removes it before any boundary is counted.
 
@@ -173,8 +173,8 @@ def derive_output_shard_layout(
   - Both sets turn a reduced split into `Partial(reduction)`: each unit holds
     its part, and the whole value is an explicit `Reshard` away. A reduction
     never turns a split into `Broadcast`, which would hide that communication.
-    `complete_reduction_dims` additionally collapses the reduced layout
-    positions to extent one. The sets MUST NOT overlap.
+    `complete_reduction_dims` additionally collapses the reduced
+    modes to extent one. The sets MUST NOT overlap.
   - `fresh_strides=True` uses `ShardLayout.from_modes` for fresh compact row-major strides;
     statically unit leaves have stride zero, and symbolic strides remain symbolic.
     Split modes owned per instance by `ctx.target` for the result `storage` also
@@ -185,19 +185,19 @@ def derive_output_shard_layout(
     Otherwise a compatible propagated physical layout is preserved when possible.
   - `ShardLayout.attrs` is indexed by mesh axis. A `Partial(reduction)` is a
     value state at that exact index, not an unordered collection of reductions
-    and not a layout position. Every propagation decision MUST retain that
+    and not a mode. Every propagation decision MUST retain that
     index and its reduction independently of every other mesh axis.
   - A reduction dim (a domain dim absent from the output access map) is declared
     by the op in `partial_reduction_dims` or `complete_reduction_dims`; both
     yield `Partial(reduction)` on a split mesh axis (step 3).
   - Propagation applies per input mesh axis:
-    1. `Split(k)` maps layout axis `k` to the input's logical tensor axis and
+    1. `Split(k)` maps mode `k` to the input's logical tensor axis and
        then to a domain dim through the input access map.
     2. If that domain dim appears in the output access map, the output carries
-       `Split` on the output layout axis to which the domain dim maps.
+       `Split` on the output mode to which the domain dim maps.
     3. If that domain dim is reduced, the output mesh axis becomes
        `Partial(reduction)`. This `Partial` is a value state on that mesh axis
-       and carries no layout axis.
+       and carries no mode.
     4. A `Partial(reduction)` input propagates on the same mesh axis only when
        the op's math is proven to commute with `reduction`:
        `op(reduction(x0..xn)) == reduction(op(x0)..op(xn))`. This service MUST
@@ -222,7 +222,7 @@ def derive_output_shard_layout(
     output-surviving dim reachable only through such an access, MUST fail
     closed (`ValueError`): without domain bounds the service has no
     owner-boundary alignment proof for a translated access.
-  - `Split(axis)` indexes an output layout axis, not a logical tensor axis.
+  - `Split(axis)` indexes an output mode, not a logical tensor axis.
 
 ### 3.3 Output storage and mesh/layout compatibility
 

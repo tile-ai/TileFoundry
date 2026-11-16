@@ -25,8 +25,8 @@ def crd2idx_unbounded(layout: Layout, coord: int) -> int:
     idx = 0
     rem = coord
     last = len(shape) - 1
-    for position, (extent, step) in enumerate(zip(shape, stride)):
-        if position == last:
+    for mode, (extent, step) in enumerate(zip(shape, stride)):
+        if mode == last:
             idx += rem * step
         else:
             idx += (rem % extent) * step

@@ -69,7 +69,7 @@ def repeat_interleave_access(call: "expr.Call", ctx) -> tuple[access.Relation, .
     """Several result coordinates read one source coordinate, which is read once.
 
     The pattern is many-to-one and the amount is its image. That three output
-    positions depend on one element is the pattern's business; the element still
+    coords depend on one element is the pattern's business; the element still
     crossed the boundary once.
     """
     source = ctx.type_of(call.args[0])

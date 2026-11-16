@@ -570,7 +570,7 @@ def register_relation(op_cls: type) -> Callable[[Callable], Callable]: ...
     count that cannot be derived MUST fail closed rather than fall back on a
     stated number.
   - `relations_of` answers in logical axes only. `projected` carries every
-    boundary from logical axes onto the positions the reader addresses, by
+    boundary from logical axes onto the coords the reader addresses, by
     composing with the layout the value ended up with, and holds every boundary
     to the iterations this participant performs; `local_relations_of` is
     `projected` over `relations_of`. A value nobody divided is addressed whole

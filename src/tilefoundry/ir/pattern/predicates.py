@@ -104,7 +104,7 @@ def row_major_groups_for_cute(layout: types.Layout) -> types.Layout:
 
 
 def vector_widths(layout, element_bits: int, widths: tuple[int, ...]) -> tuple[int, ...]:
-    """Every requested byte width that divides every run in an arrangement."""
+    """Every requested byte width that divides every run in a layout."""
     if not widths:
         return ()
     widest = widths[-1]
@@ -161,7 +161,7 @@ class WholeVectors(Predicate):
 
 @dataclass(frozen=True)
 class Strided(Predicate):
-    """Require an arrangement with no transform and no nonzero offset."""
+    """Require a layout with no transform and no nonzero offset."""
 
     allow_partial: bool = False
 

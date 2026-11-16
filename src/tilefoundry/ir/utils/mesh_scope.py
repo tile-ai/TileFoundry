@@ -87,7 +87,7 @@ def storage_reaches(storage, mesh: types.Mesh, current: types.Mesh) -> bool:
 
 
 def states_consistent_positions(mesh: types.Mesh) -> bool:
-    """Whether the positions a mesh states are the ones its levels declare."""
+    """Whether the units a mesh states are the ones its levels declare."""
     return int_tuple.product(mesh.topologies) == types.size(mesh.layout)
 
 

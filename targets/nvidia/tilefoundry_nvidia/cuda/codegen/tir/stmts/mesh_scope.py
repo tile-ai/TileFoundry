@@ -37,8 +37,8 @@ def validate_topology(mesh: types.Mesh, tgt) -> None:
 def levelwise_layout(mesh: types.Mesh) -> str:
     """One nest per topology, each in that topology's own numbering.
 
-    A mesh states one arrangement per level already, each in that level's own
-    numbering, so a nest is that arrangement written out: nothing here decides
+    A mesh states one layout per level already, each in that level's own
+    numbering, so a nest is that layout written out: nothing here decides
     where a boundary falls. The composite is a grouping, not a map: only the
     nests are evaluated.
     """

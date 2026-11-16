@@ -1,4 +1,4 @@
-"""Meshes: hardware levels, the arrangement of their units, and sub-mesh slices."""
+"""Meshes: hardware levels, the layout of their units, and sub-mesh slices."""
 
 from __future__ import annotations
 
@@ -36,12 +36,12 @@ __all__ = [
 
 @dataclass(frozen=True)
 class Mesh:
-    """Describe hardware levels, the arrangement of their units, and axis names.
+    """Describe hardware levels, the layout of their units, and axis names.
 
-    ``layout`` runs parallel to ``topologies``: one arrangement per level, in
+    ``layout`` runs parallel to ``topologies``: one layout per level, in
     that level's own numbering, so a level states which of its units it
     selects without any level above it entering the answer. A constant slice
-    replaces one level's arrangement with a ``ComposedLayout`` whose ``offset``
+    replaces one level's layout with a ``ComposedLayout`` whose ``offset``
     is where that level's run starts.
 
     See [shard §5](docs/spec/shard.md#5-mesh).
@@ -52,7 +52,7 @@ class Mesh:
     names: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        """Normalize the layout to one arrangement per level and refuse an unnamed extent."""
+        """Normalize the layout to one layout per level and refuse an unnamed extent."""
         if len(self.topologies) > 1 and any(
             not isinstance(topology, Topology) for topology in self.topologies
         ):
@@ -73,7 +73,7 @@ class Mesh:
 
         Missing axes are full slices; integers select extent one. The result
         preserves topology and names while recording the sub-box as a
-        ``ComposedLayout``. Each level retains its own arrangement, while the
+        ``ComposedLayout``. Each level retains its own layout, while the
         slice offset uses the device's numbering across all levels.
 
         See [shard §5](docs/spec/shard.md#5-mesh).
@@ -207,12 +207,12 @@ class Mesh:
 def nested_layout(layout_value, topologies: tuple) -> "Layout | ComposedLayout":
     """What a mesh was written as, with every level's axes under its own mode.
 
-    A mesh naming one level states that level's arrangement directly. One
-    naming several may state a tuple of extents or one arrangement over all of
+    A mesh naming one level states that level's layout directly. One
+    naming several may state a tuple of extents or one layout over all of
     their axes; the axes are handed to the levels left to right, each taking
     them until their extents multiply to its own size, and each level's steps
     are divided by what the levels under it hold. So mode ``i`` of what comes
-    back is level ``i``'s own arrangement, and a boundary no prefix of axes
+    back is level ``i``'s own layout, and a boundary no prefix of axes
     lands on is refused rather than guessed.
     """
     if not isinstance(layout_value, LayoutBase):
@@ -248,7 +248,7 @@ def nested_layout(layout_value, topologies: tuple) -> "Layout | ComposedLayout":
         if not isinstance(count, int) or isinstance(count, bool) or count < 1:
             raise ValueError(
                 f"mesh level {topology.name!r} states extent "
-                f"{count!r}; cutting one arrangement at the level boundaries needs "
+                f"{count!r}; cutting one layout at the level boundaries needs "
                 "each of their unit counts"
             )
         below *= count
@@ -273,18 +273,18 @@ def nested_layout(layout_value, topologies: tuple) -> "Layout | ComposedLayout":
 
 
 def layouts(mesh: Mesh) -> tuple[Layout, ...]:
-    """Each level's arrangement, in that level's own numbering."""
+    """Each level's layout, in that level's own numbering."""
     stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
     if stated is None:
         raise ValueError(
-            "a mesh whose slice states an identity box states no arrangement of "
+            "a mesh whose slice states an identity box states no layout of "
             "its own, so its levels select nothing"
         )
     return tuple(get(stated, index) for index in range(layout.rank(stated)))
 
 
 def flat_layouts(mesh: Mesh) -> tuple[tuple[tuple, tuple], ...]:
-    """Each level's arrangement as flat (shape, strides) int-tuples.
+    """Each level's layout as flat (shape, strides) int-tuples.
 
     A level stating no axes reads as one mode of one, so a consumer
     subscripting the levels still has something to pick.

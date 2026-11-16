@@ -664,7 +664,7 @@ class BufferAlias:
     executable address is a nested view of its partner, not a composed root map.
     Duplicate outputs and unsupported retained returns preserve lowering's
     refusal text; analysis reports remain available. Lowering retains zero-trip
-    loops. Estimation, optional reuse, placement and reports continue to use the
+    loops. Estimation, optional reuse, address assignment and reports continue to use the
     source tables above.
     A retained Call return leaf MUST project the callee's return source.
     Source identity describes data for footprint and traffic, independently of
@@ -783,7 +783,7 @@ remain unchanged.
 After accepting links, CARRY_INIT, CARRY_YIELD, and INSERT_SLICE candidates whose
 holder and target already reach one root MUST be recorded as accepted,
 including when another accepted edge established that storage identity. This
-completion MUST NOT change roots or placement. Both links remain in the
+completion MUST NOT change roots or addresses. Both links remain in the
 summary, with their distinct partners and kinds. WINDOW is excluded from this completion.
 
 WINDOW is the exception whose holder precedes its target. It MUST be accepted
@@ -828,7 +828,7 @@ retain their identities and share one address across all translated windows.
 The caller MUST NOT mutate AllocationValue aliases in a callee summary. Own
 windows MUST reference the AllocationValue's lifetime object rather than copy it.
 Only the entry solves
-placement, once, after collecting its Call leaves; non-boundary callee offsets
+address assignment, once, after collecting its Call leaves; non-boundary callee offsets
 MUST be published from that solution. Repeated region windows contribute their
 maximum occupancy without traversing the callee body again.
 
@@ -869,12 +869,12 @@ class MemoryLevelPeak:
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `MemoryLevelPeak.memory_level` | Each storage level with at least one lifetime or traffic entry, sorted by name. | No |
-| `MemoryLevelPeak.peak_bytes` | On a Function, the address high-water mark of the first feasible global `gmem` or `smem` placement; its `rmem` peak is the maximum of every `MeshRegion` stage peak and the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest root occupancy in its inclusive entry-to-exit event window. Unsplit tensor values defined in its body or child regions contribute while their lifetimes intersect the window, without region-versus-owner filtering. Split values retain owner eligibility and holder-mesh selection. Target-owned storage (`gmem`) never contributes to a region. | `MemoryHierarchyFacts.explicit_levels[].owner` for a `MeshRegion`; otherwise no. |
+| `MemoryLevelPeak.peak_bytes` | On a Function, the address high-water mark of the first feasible global `gmem` or `smem` address assignment; its `rmem` peak is the maximum of every `MeshRegion` stage peak and the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest root occupancy in its inclusive entry-to-exit event window. Unsplit tensor values defined in its body or child regions contribute while their lifetimes intersect the window, without region-versus-owner filtering. Split values retain owner eligibility and holder-mesh selection. Target-owned storage (`gmem`) never contributes to a region. | `MemoryHierarchyFacts.explicit_levels[].owner` for a `MeshRegion`; otherwise no. |
 | `MemoryLevelPeak.persistent_bytes` | Union of persistent address intervals at `gmem`/`smem`; greatest persistent member span per root at other levels. | No |
 | `MemoryLevelPeak.capacity_bytes` | Capacity of the matching explicit level, or `None` when unknown. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
 | `RegionMemoryMetadata.peaks` | One peak per occupied or moved storage level; present on the entry Function only, and a callee Function states none. | As above |
-| `RegionMemoryMetadata.solver_status` | `"feasible"` after the entry's whole-Function placement settles, including when there is no addressable value; `"not_run"` on a callee Function, which does not place. | No |
-| `RegionMemoryMetadata.errors` | Non-fatal placement-capacity failures and cache-capacity failures proved by exact or lower-bound counts. | `MemoryHierarchyFacts` |
+| `RegionMemoryMetadata.solver_status` | `"feasible"` after the entry's whole-Function address assignment settles, including when there is no addressable value; `"not_run"` on a callee Function, which does not place. | No |
+| `RegionMemoryMetadata.errors` | Non-fatal address-capacity failures and cache-capacity failures proved by exact or lower-bound counts. | `MemoryHierarchyFacts` |
 | `RegionMemoryMetadata.advisories` | Cache-capacity findings whose upper-bound or unknown counts do not prove excess. | `MemoryHierarchyFacts` |
 
 - constraints:
@@ -891,7 +891,7 @@ class MemoryLevelPeak:
   - An access relation that keeps a parameter with a stated finite range is
     exact and MAY prove overlap. A widened relation, and one with an unbounded
     parameter, MUST NOT.
-  - Placement MUST be settled for the addressable levels `gmem` and `smem` only,
+  - Address assignment MUST be settled for the addressable levels `gmem` and `smem` only,
     once per capacity domain that holds a buffer -- the whole target for a level
     owned target-wide, one per owning unit otherwise -- with two buffers in
     one domain never live in the same bytes at once. Residency at another level
@@ -907,15 +907,15 @@ class MemoryLevelPeak:
     result element width. A staged result's copies MUST be contiguous: copy
     `k` starts at the solved block offset plus `k * buffer_bytes`.
   - Mandatory aliases, alignment, and lifetime interference that have no
-    feasible joint placement MUST raise `analysis.Error`; analysis MUST NOT
+    feasible joint address assignment MUST raise `analysis.Error`; analysis MUST NOT
     silently discard a required alias.
   - A domain that cannot be expressed or does not settle in time MUST raise
     `analysis.Error` and leave no record. The solver MUST stop at its first
     feasible assignment rather than prove a minimum. Capacity MUST NOT restrict
     the address space.
-  - A seed is a complete candidate placement that analysis builds for itself
+  - A seed is a complete candidate address assignment that analysis builds for itself
     before solving: a starting byte address for every placed value and the peak
-    byte extent that placement reaches. It is not an input and not a random
+    byte extent that assignment reaches. It is not an input and not a random
     seed. The solver takes its addresses as a hint and its peak as an upper
     bound on the search. With no seed it solves the same model, every
     constraint kept, without those hints or that seed-derived upper bound.
@@ -1430,7 +1430,7 @@ the summary's own envelope, not a second measurement. `wave` is the summary's
 selected topology level and the coarser ones, 1 when it states no mesh, and
 `physical` is that level's `TopologyLimits.max_physical_units`. Forty
 units on a 132-unit level read `wave=40/132`, and 8192 read `wave=8192/132`.
-It states where the program's placement reaches, not an occupancy guarantee.
+It states where the program's units reach, not an occupancy guarantee.
 
 Every Call with a modeled duration receives this annotation, one interval whether
 or not it repeats: a single trip states its own bounds, and a repeated occurrence
@@ -1511,10 +1511,10 @@ model.
     program rewrite; it enters one-unit rates only as the cap on `active`.
   - The buffers a plan keeps live MUST have been placed by `memory` before a
     time is reported for it. A successful dependency records
-    `RegionMemoryMetadata.solver_status="feasible"`; a placement that failed
+    `RegionMemoryMetadata.solver_status="feasible"`; an address assignment that failed
     never reaches performance because `memory` refuses it.
     Capacity therefore changes whether there is an answer, never which answer:
-    two capacities that both admit a placement MUST produce the same intervals.
+    two capacities that both admit an address assignment MUST produce the same intervals.
 
 ## 2. Composed analysis
 
@@ -1620,7 +1620,7 @@ class CheckContext(valuation.Context):
   - Authored-analysis readiness is not a program-level rejection. Analyze MUST
     NOT reject an authored `where(...)` constraint: it is an input to a later
     decision, and a program carrying one is measured as written. A value whose
-    placement is deferred contributes its whole-program figures to the per-unit
+    shard layout is deferred contributes its whole-program figures to the per-unit
     total, because a deferred layout states no distribution to project through;
     values with a resolved layout still project.
 

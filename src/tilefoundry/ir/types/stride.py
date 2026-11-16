@@ -1,7 +1,7 @@
-"""Strides: the steps a compact arrangement walks, and reading one back.
+"""Strides: the steps a compact layout walks, and reading one back.
 
 CuTe keeps this apart from the layout algebra (``stride.hpp``): making the
-steps of a compact arrangement, and turning an index back into the coordinate
+steps of a compact layout, and turning an index back into the coordinate
 that reaches it, are not operations on layouts.
 """
 
@@ -28,7 +28,7 @@ def multiply(a, b):
 
 
 def compact_major(shape: tuple, *, major: str = "row", mul=None, current=1) -> tuple:
-    """CuTe ``compact_major``: the steps a compact arrangement of *shape* walks.
+    """CuTe ``compact_major``: the steps a compact layout of *shape* walks.
 
     ``"col"`` makes mode zero the fastest and ``"row"`` the last one, which is
     the one difference between CuTe's two spellings of it. A mode that is
@@ -86,7 +86,7 @@ def idx2crd(idx: int, shape: tuple, stride: tuple) -> tuple:
     """CuTe ``idx2crd``: the coordinate in ``<shape, stride>`` an index reaches.
 
     Per mode ``(idx // stride) % shape``, recursing wherever a mode is itself a
-    group of them, so what comes back is shaped like the arrangement it was
+    group of them, so what comes back is shaped like the layout it was
     read against. Which mode walks fastest is the strides' to say, not this
     function's.
     """

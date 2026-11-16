@@ -52,18 +52,18 @@ def row_count(node) -> object:
 
 
 def row_limit(offsets: tuple, extents: tuple, limit: int | None) -> tuple:
-    """The most the row window may extend, at the position holding the rows.
+    """The most the row window may extend, at the mode holding the rows.
 
-    A window is stated per logical axis and projected onto positions, so the
-    ceiling has to land on the one position that varies over the rows -- the same
+    A window is stated per logical axis and projected onto modes, so the
+    ceiling has to land on the one mode that varies over the rows -- the same
     one the extent did.
     """
     if limit is None:
         return ()
     placed = [None] * len(extents)
-    for position, extent in enumerate(extents):
-        if extent is not offsets[position] and not isinstance(extent, int):
-            placed[position] = limit
+    for mode, extent in enumerate(extents):
+        if extent is not offsets[mode] and not isinstance(extent, int):
+            placed[mode] = limit
     return tuple(placed)
 
 
@@ -74,7 +74,7 @@ def cache_update_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     How many rows move is ``s`` and where they land is ``cur_pos``; only the
     first is a quantity, and it is the same one wherever the second points. The
     two controls are rank-0, so their own boundaries reach one number each.
-    Everything is said in the cache's own axes: which positions those are is the
+    Everything is said in the cache's own axes: which modes those are is the
     reader's question, and answering it here would be answering it twice.
     """
     cache = tuple(ctx.type_of(call.args[0]).shape)
@@ -234,10 +234,10 @@ __all__ = ["CacheUpdate"]
 
 
 def by_logical_axis(local, logical) -> list:
-    """One extent per logical axis of a value, folding the positions it factored."""
+    """One extent per logical axis of a value, folding the modes it factored."""
     extents = [1] * len(logical.shape)
-    for position, owner in enumerate(access.logical_axes_of(local, logical)):
-        extents[owner] *= local.shape[position]
+    for mode, owner in enumerate(access.logical_axes_of(local, logical)):
+        extents[owner] *= local.shape[mode]
     return extents
 
 

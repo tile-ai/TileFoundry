@@ -721,8 +721,8 @@ The implementation is split by responsibility under `ir/pattern/`:
   `pattern.Star`; the computed-condition base `pattern.Predicate`; and the
   integer `pattern.Term` expressions and Boolean `pattern.Formula` predicates
   written over named bindings.
-- `predicates.py` defines the named arrangement predicates `pattern.Forward`,
-  `pattern.Injective`, `pattern.WholeVectors`, `pattern.PlainArrangement`,
+- `predicates.py` defines the named layout predicates `pattern.Forward`,
+  `pattern.Injective`, `pattern.WholeVectors`, `pattern.Strided`,
   `pattern.BoxDims` and `pattern.TensorMap`, and the tensor predicate
   `pattern.Ranked`. It also owns the `pattern.is_ranked_tensor(**fields)` and
   `pattern.is_scalar_tensor(**fields)` factories.
@@ -785,7 +785,7 @@ position of both fields consumes zero or more modes and applies `p` to every
 consumed mode; each tuple may contain at most one star. Bindings below a star
 are tuples, and a name may not occur both below and outside a star.
 `pattern.Layout.from_layout(layout, ...)` constructs the exact bare or composed
-pattern for an authored arrangement, preserving its nested structure and the
+pattern for an authored layout, preserving its nested structure and the
 explicitly supplied predicate table. `Forward(per_mode=True)` and
 `Injective(per_mode=True)` check each top-level mode independently.
 `ComposedLayout(None, 0, L)` and `L` are equivalent for both `pattern.Layout`
@@ -795,7 +795,7 @@ unconstrained and therefore admits any inner, including a swizzle. To require
 no swizzle, state `pattern.Swizzle(0, 4, 3)`; its zero-bit variant also matches
 an identity (`None`) inner. The three swizzle fields may themselves be
 patterns.
-`pattern.Mesh` rejects any supplied arrangement predicate that exposes
+`pattern.Mesh` rejects any supplied layout predicate that exposes
 `per_mode=False`, because each mesh level uses its own numbering space; an
 empty predicate table is allowed. It never changes the supplied pattern
 implicitly. Predicates on a surrounding `pattern.ComposedLayout` instead
@@ -824,7 +824,7 @@ Two consumer surfaces:
   A tensor rank is stated by giving `shape` that many positions; wildcard
   positions constrain only the sequence length. An omitted shape admits any
   rank. During selection, `umat` satisfies any concrete storage requirement
-  because its placement is undecided; lowering MUST materialize it before TIR. During effect-Op verification,
+  because its storage is undecided; lowering MUST materialize it before TIR. During effect-Op verification,
   input patterns match in `ParamDef` order against one shared capture
   environment, so a later operand can require a value captured by an earlier
   operand.

@@ -189,10 +189,10 @@ def variants(
   - `role("A")`, `role("B")`, and `role("C")` MUST resolve the declaration's
     role pattern under the instance bindings. The logical TIR orientation is
     always A `(M,K)`, B `(K,N)`, C `(M,N)`; each role pattern separately states
-    the fragment's physical arrangement.
+    the fragment's physical layout.
   - The registered `T.tiled_mma` access relation is the sole source of the map
     from each operand axis to the operation's work axes. Atom declarations state
-    operand shapes and arrangements, but MUST NOT repeat that axis map.
+    operand shapes and layouts, but MUST NOT repeat that axis map.
   - `execution_mesh_pattern()` MUST require the declaration's exact unit
     count at an aligned offset. `mesh`, when present, binds the atom to one
     concrete frame and MUST match the active frame at verify.
@@ -228,7 +228,7 @@ T.tiled_mma(acc, lhs, rhs, atom=T.cuda.sm80.Mma())
 - `lhs` MUST match `atom.role("A")` and is read-only.
 - `rhs` MUST match `atom.role("B")` and is read-only.
 - A, B, and C shapes MUST be `(M,K)`, `(K,N)`, and `(M,N)` respectively;
-  operands MUST use the atom's declared dtypes and fragment arrangements.
+  operands MUST use the atom's declared dtypes and fragment layouts.
 - `TiledMma` generates its execution-mesh declaration from the atom's lane
   shape and strides, preceded by zero or more group modes captured by
   `pattern.Star`. The whole matched layout MUST be forward and injective,
@@ -378,7 +378,7 @@ class CopyReduceAsyncTensor(Op):
   - One aligned warp participates, with the same execution-mesh declaration as
     `CopyAsyncTensor`. The capability is `cp.async.bulk.tensor` and the resource
     is `tma_engine`. Partial state MUST NOT select instruction owner levels;
-    owner selection treats Partial as Broadcast while retaining Split placement.
+    owner selection treats Partial as Broadcast while retaining Split shard attr.
   - Cost MUST charge one source read and one destination write per unit, no
     destination read and no FLOPs. The hardware addition occurs in L2; analysis
     reports the write as gmem traffic under the existing leaf-storage rule.

@@ -35,9 +35,9 @@ def matrix_type(type_, reverse):
         )
         if shard is None:
             return result
-        positions = {old: new for new, old in enumerate(order)}
+        modes = {old: new for new, old in enumerate(order)}
         attrs = tuple(
-            types.Split(positions[attr.axis]) if isinstance(attr, types.Split) else attr for attr in shard.attrs
+            types.Split(modes[attr.axis]) if isinstance(attr, types.Split) else attr for attr in shard.attrs
         )
         return replace(shard, layout=result, attrs=attrs)
 

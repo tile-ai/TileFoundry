@@ -83,13 +83,13 @@ def eval_stack(ctx):
 
 @access.register_relation(Stack)
 def stack_access(call: "Call", ctx) -> tuple[access.Relation, ...]:
-    """Each input writes one position of the new axis, and is read whole.
+    """Each input writes one coord of the new axis, and is read whole.
 
     The result has one more axis than its inputs, so an input's relation drops
-    that axis rather than pretending to an index on it. Which position an input
+    that axis rather than pretending to an index on it. Which coord an input
     lands at is the guard; how much it moves is its own size. The result keeps
     every axis it has: borrowing an input's map would describe a value one axis
-    short, pinned to whichever position that input landed at.
+    short, pinned to whichever coord that input landed at.
     """
     stacked = tuple(ctx.type_of(call.args[0]).shape)
     rank = len(stacked) + 1
@@ -100,11 +100,11 @@ def stack_access(call: "Call", ctx) -> tuple[access.Relation, ...]:
     reads = ", ".join(dim for index, dim in enumerate(dims) if index != axis)
     inputs = tuple(
         access.Relation(
-            isl.map(f"{{ [{domain}] -> [{reads}] : d{axis} = {position} }}")
+            isl.map(f"{{ [{domain}] -> [{reads}] : d{axis} = {coord} }}")
             if rank > 1
-            else isl.map(f"{{ [{domain}] -> [] : d{axis} = {position} }}")
+            else isl.map(f"{{ [{domain}] -> [] : d{axis} = {coord} }}")
         )
-        for position in range(len(call.args))
+        for coord in range(len(call.args))
     )
     return access.iterating(out_shape, (*inputs, access.identity(rank)))
 

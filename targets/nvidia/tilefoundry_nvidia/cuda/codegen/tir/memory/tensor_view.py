@@ -337,7 +337,7 @@ def coord_ref(index_var, ctx: context.Context) -> str:
     Integer literals become static coordinates; rank-zero scalars use their
     native names; one-element offset tensors read element zero. Dim arithmetic
     renders as the arithmetic itself: a multiplication preserves grid output
-    placement after an ordinal is converted to an element start, and an addition
+    address after an ordinal is converted to an element start, and an addition
     moves a window's base by a compile-time offset. A mesh coordinate reads this
     unit's coord along its axis. Other forms fail closed.
     """

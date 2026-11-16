@@ -1,7 +1,7 @@
 """Canonical Python DSL printer for HIR Functions.
 
 Converts a ``hir.Function`` to executable Python source using the
-``@func`` DSL. Placement sugar names only explicit mesh-scope bindings;
+``@func`` DSL. Shard layout sugar names only explicit mesh-scope bindings;
 otherwise the verbose ``ShardLayout(...)`` form is used.
 """
 
@@ -983,7 +983,7 @@ def render_hir_function(
 
     A normal function prints as a single ``@func``. A dispatch prototype
     (``variants != ()``) prints as a ``pass``-bodied ``@func`` base followed by
-    one ``@<name>.specialize(pattern)`` block per variant. Placement sugar is
+    one ``@<name>.specialize(pattern)`` block per variant. Shard layout sugar is
     emitted only where an explicit mesh-scope binding dominates its use.
     """
     indent = "    "

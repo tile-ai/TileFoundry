@@ -55,8 +55,8 @@ def is_induction_var_singleton_reshape(node) -> bool:
 def carry_sharded_reshape(layout: types.ShardLayout, new_shape: tuple):
     """Carry static sharding across an aligned view reshape.
 
-    Layout positions may merge or divide at exact factor boundaries. A divided
-    Split position must preserve a mesh-sized Split factor; singleton axes and
+    Layout modes may merge or divide at exact factor boundaries. A divided
+    Split mode must preserve a mesh-sized Split factor; singleton axes and
     mesh-only states carry freely. Unrepresentable alignment returns ``None``.
 
     See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).

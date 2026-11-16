@@ -175,7 +175,7 @@ executed. A Target subclass with a different constructor customizes ordinary
 ### 2.3 DSL text forms
 
 DSL text forms for tensor / layout / shard annotations are owned by
-[parser](./parser.md). Layouts and placements use the forms described in
+[parser](./parser.md). Layouts and shard layouts use the forms described in
 [shard §6](./shard.md#6-shardattr), with acceptance rules in
 [parser §2](./parser.md#2-syntax-and-rules). The printer uses sugar only when it
 preserves the value, including mesh / layout / storage information and the
@@ -260,7 +260,7 @@ a matching slice uses the slice form. Otherwise the printer emits a complete
 mesh constructor. The function's execution mesh is available while printing
 its signature and body; a named constant outside those bindings does not
 create a printable lexical name.
-A sharded type uses placement sugar only when each referenced mesh level has
+A sharded type uses shard layout sugar only when each referenced mesh level has
 an active binding with the same geometry. Equal axis names and topology sizes
 alone do not establish that binding. Otherwise it MUST print the complete
 `ShardLayout(..., mesh=Mesh(...))` value, including in a register allocation
@@ -441,7 +441,7 @@ API, separate from declaration rendering; its bindings retain declaration order.
 Every `Pattern` carries its own `predicates` slot. The structural line comes
 only from that pattern's structural fields, while its predicate block comes
 only from `pattern.predicates`; the printer MUST NOT infer one role from the
-text produced for the other. `pattern.ShardLayout` arrangements render all
+text produced for the other. `pattern.ShardLayout` patterns render all
 three declared fields through the same visitor/rules dispatch: local layout,
 shard attrs, and holder mesh. Instruction declarations call the reserved field
 `execution mesh` everywhere, including the standalone facts field and the
@@ -574,7 +574,7 @@ graph; an id that was collapsed away returns 404.
   constants / types render through the [§2.4](#24-pretty-print--debug-display-contract) pretty-print, never raw
   `repr`.
 - **Type text.** Graph labels and detail panels use the canonical type text from
-  [§2.3](#23-dsl-text-forms), including `Tensor[...]` and placement sugar when
+  [§2.3](#23-dsl-text-forms), including `Tensor[...]` and shard layout sugar when
   a scope binding is available. `Reshard` / layout attrs render through the
   same visitor (never raw `repr`).
 

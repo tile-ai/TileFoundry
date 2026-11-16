@@ -106,7 +106,7 @@ def compatible_profile(flat_shape, shape):
         if groups:
             groups[-1] += extents[cursor:]
     except (IndexError, ValueError) as error:
-        raise ValueError(f"layout positions {extents} cross logical axes of {tuple(shape)}") from error
+        raise ValueError(f"layout modes {extents} cross logical axes of {tuple(shape)}") from error
     return tuple(group[0] if len(group) == 1 else group for group in groups)
 
 
@@ -139,7 +139,7 @@ def repeat_like(profile, value) -> object:
 
     What a flat tuple has to say about a nested one is said by building it
     against the nesting and flattening that, rather than by working out which
-    flat positions each mode covers.
+    flat modes each mode covers.
     """
     if not isinstance(profile, tuple):
         return value

@@ -24,7 +24,7 @@ def axes_shape(axes_type) -> tuple | None:
 
 @register(dim.MeshCoord)
 def infer_mesh_coord(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
-    """Coordinates are numbers about this unit, so they carry no placement."""
+    """Coordinates are numbers about this unit, so they carry no shard layout."""
     if not isinstance(call.target.mesh, types.Mesh):
         ctx.error(call, "MeshCoord.mesh must be a Mesh")
     try:

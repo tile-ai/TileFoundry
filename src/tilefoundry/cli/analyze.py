@@ -78,7 +78,7 @@ def guidance() -> str:
         compute-cost   nothing. Every kind states its total     never
                        and every level's per-unit share
         memory         nothing for traffic, which states every   the program shards
-                       level; placement remains Function-wide
+                       level; address assignment remains Function-wide
         roofline       nothing. The bound is the machine's     never
                        and is unchanged by program splits
         performance    which level's parallel capacity the     the program shards
