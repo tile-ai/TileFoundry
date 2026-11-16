@@ -1103,7 +1103,7 @@ def emit_module_class(
         if isinstance(fn, core.Function):
             blocks.append(emit_decorated_defs(fn, ctx, indent, options))
         elif isinstance(fn, core.PrimFunction):
-            tir_block = function_block(fn, frame=valuation.Context(mod, fn))
+            tir_block = function_block(fn, ctx=valuation.Context(mod, fn))
             ctx.imports.update(tir_block.imports)
             blocks.append(tir_block)
         else:

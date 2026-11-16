@@ -275,8 +275,8 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
                     for attr in shard.attrs
                 )
                 source = utils.filter_topologies(replace(shard, attrs=tile_attrs), participant)
-                frame, dropped = utils.find_execution_mesh(source.mesh, participant)
-                tile = types.ShardLayout(tile, source.attrs[dropped:], frame)
+                execution_mesh, dropped = utils.find_execution_mesh(source.mesh, participant)
+                tile = types.ShardLayout(tile, source.attrs[dropped:], execution_mesh)
                 rest = types.ShardLayout(
                     rest,
                     tuple(
@@ -470,7 +470,7 @@ def admit_fields(op, operands, mesh, matcher, *, target=None):
             raise pattern_refusal(matcher, op, param.name)
 
 
-def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection=None):
+def check_call(op, operands, mesh, *, ctx, repeat=None, order=None, projection=None):
     """Match whole fields, project atom tiles, then check one closed declaration.
 
     Operands may be types for candidate admission or typed expressions for
@@ -497,11 +497,11 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
     matcher = pattern.Matcher(
         dict(getattr(atom, "bindings", {})),
         mesh=mesh,
-        owners=frame.target.storage_owners
-        if frame is not None and frame.target is not None
+        owners=ctx.target.storage_owners
+        if ctx is not None and ctx.target is not None
         else expr.StorageOwners((), {}),
     )
-    admit_fields(op, whole, mesh, matcher, target=None if frame is None else frame.target)
+    admit_fields(op, whole, mesh, matcher, target=None if ctx is None else ctx.target)
     try:
         tiles = (
             projection
@@ -520,13 +520,13 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
     participant = getattr(
         declaration, "required_execution_mesh", getattr(declaration, "execution_mesh", None)
     )
-    needs_frame = any(
+    needs_execution_mesh = any(
         isinstance(declared, pattern.Tensor)
         and isinstance(declared.layout, pattern.ShardLayout)
         and types.shard_layout_of(type_.layout) is None
         for declared, type_ in zip(tiles.patterns, tiles.tiles, strict=True)
     )
-    if needs_frame and isinstance(participant, types.Mesh) and mesh is not None:
+    if needs_execution_mesh and isinstance(participant, types.Mesh) and mesh is not None:
         selected = utils.filter_topologies(
             types.ShardLayout(
                 types.Layout(()),
@@ -536,14 +536,14 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
             participant,
         ).mesh
         try:
-            frame_mesh, _ = utils.find_execution_mesh(selected, participant)
+            execution_mesh, _ = utils.find_execution_mesh(selected, participant)
         except ValueError as error:
             raise RefusalError(
                 f"scope {mesh!r} does not contain execution mesh {participant!r}",
                 path=matcher.bindings,
                 op=op,
             ) from error
-        matcher.use_mesh(frame_mesh)
+        matcher.use_mesh(execution_mesh)
     view = getattr(atom, "match_view", None)
     for param, declared, type_ in zip(params, tiles.patterns, tiles.tiles, strict=True):
         match_type = type_ if view is None else view(param.name, type_)
@@ -581,30 +581,30 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
             for value, param, type_ in zip(operands, params, tiles.tiles, strict=True)
         )
         call = expr.Call(op, args, type=types.TupleType.Void)
-        ctx = (
+        verify_ctx = (
             replace(
-                frame,
+                ctx,
                 memo={
                     id(arg): (arg, type_) for arg, type_ in zip(args, tiles.tiles, strict=True)
                 },
                 mesh_scope=mesh,
             )
-            if isinstance(frame, verify.Context)
+            if isinstance(ctx, verify.Context)
             else verify.Context(
-                module=None if frame is None else frame.module, function=None if frame is None else frame.function, target=None if frame is None else frame.target, topologies=None if frame is None else frame.topologies, mesh_scope=mesh
+                module=None if ctx is None else ctx.module, function=None if ctx is None else ctx.function, target=None if ctx is None else ctx.target, topologies=None if ctx is None else ctx.topologies, mesh_scope=mesh
             )
         )
         try:
-            handler(call, ctx)
+            handler(call, verify_ctx)
         except expr.VerifyError as error:
             raise RefusalError(str(error), path=matcher.bindings, op=op) from error
     return dict(matcher.bindings), tiles
 
 
-def verify_call(op, args, mesh, *, frame):
+def verify_call(op, args, mesh, *, ctx):
     """Verify one scheduled TIR call; a schedule refusal becomes a ``VerifyError``."""
     try:
-        check_call(op, args, mesh, frame=frame)
+        check_call(op, args, mesh, ctx=ctx)
     except RefusalError as error:
         raise expr.VerifyError(str(error)) from error
 

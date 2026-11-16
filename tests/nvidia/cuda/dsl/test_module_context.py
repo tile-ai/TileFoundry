@@ -5,7 +5,7 @@ Module declares its Target; a child declaration defines its own domain, while
 an undeclared child inherits during a visitor walk. Topologies are declared per
 Module: omitting them inherits the owner's hierarchy, while an explicit empty
 tuple declares a topology-free
-domain. A visitor frame supplies inherited context without any
+domain. A visitor context supplies inherited context without any
 Function carrying it.
 """
 
@@ -41,7 +41,7 @@ def test_target_declaration_defines_domain() -> None:
     _Root, *_ = _context()
     target = _Root.resolve_target()
     assert target == cuda.Target("nvidia.h200_sxm")
-    assert all(frame.target is target for frame in valuation.collect_functions(_Root).values())
+    assert all(ctx.target is target for ctx in valuation.collect_functions(_Root).values())
     forward = _Root.lookup("forward")
     child = core.Module("child", (forward,), "forward", target=cpu.Target())
     root = core.Module("root", (forward,), "forward", children={"child": child}, target=target)
@@ -63,9 +63,9 @@ def test_topology_tuple_inherits_or_replaces() -> None:
     _Root, _CTA, _WARP, _THREAD = _context()
     assert _Root.inherits.topologies is None
     inherits = _Root.inherits
-    frame = next(frame for frame in valuation.collect_functions(_Root).values() if frame.module is inherits)
-    assert frame.topologies == (_CTA, _WARP)
-    assert frame.topologies[1] is _WARP
+    ctx = next(ctx for ctx in valuation.collect_functions(_Root).values() if ctx.module is inherits)
+    assert ctx.topologies == (_CTA, _WARP)
+    assert ctx.topologies[1] is _WARP
 
     assert _Root.topology_free.topologies == ()
     topology_free = _Root.topology_free

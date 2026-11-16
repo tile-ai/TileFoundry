@@ -174,7 +174,7 @@ def schedule_cost(call: expr.Call, ctx) -> cost.Cost:
     return cost.Cost({}, tuple(moved))
 
 
-def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat=None, order=None):
+def match_instruction(op_type, attributes, operand_types, mesh, *, ctx, repeat=None, order=None):
     """Enumerate atoms, admitting each concrete call through the shared checker."""
     op = op_type(**attributes)
     params, _ = instruction_schema(op, len(operand_types))
@@ -183,10 +183,10 @@ def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat
     atom = getattr(op, "atom", None)
     if not isinstance(atom, type):
         matcher = pattern.Matcher(dict(getattr(atom, "bindings", {})))
-        schedule.admit_fields(op, operand_types, mesh, matcher, target=None if frame is None else frame.target)
+        schedule.admit_fields(op, operand_types, mesh, matcher, target=None if ctx is None else ctx.target)
         tiles = schedule.project(op, operand_types, mesh, bindings=matcher.bindings, repeat=repeat, order=order)
         bindings, _ = schedule.check_call(
-            op, operand_types, mesh, frame=frame, repeat=repeat, order=order, projection=tiles
+            op, operand_types, mesh, ctx=ctx, repeat=repeat, order=order, projection=tiles
         )
         return (InstructionMatch(op, tuple(bindings.items())),)
     atom_param = next(param for param in expr.schema_of(op_type).signature if param.name == "atom")
@@ -208,7 +208,7 @@ def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat
     for seed in partial:
         matcher = pattern.Matcher(seed)
         try:
-            schedule.admit_fields(op, operand_types, mesh, matcher, target=None if frame is None else frame.target)
+            schedule.admit_fields(op, operand_types, mesh, matcher, target=None if ctx is None else ctx.target)
         except schedule.RefusalError as error:
             refusal = refusal or error
             continue
@@ -240,7 +240,7 @@ def match_instruction(op_type, attributes, operand_types, mesh, *, frame, repeat
                 instance,
                 operand_types,
                 mesh,
-                frame=frame,
+                ctx=ctx,
                 repeat=repeat,
                 order=order,
                 projection=tiles,
@@ -273,7 +273,7 @@ def infer_schedule(call: expr.Call, ctx) -> types.TensorType:
                 attributes,
                 tuple(ctx.type_of(arg) for arg in call.args),
                 ctx.mesh_scope,
-                frame=ctx,
+                ctx=ctx,
                 repeat=call.target.repeat,
                 order=call.target.order,
             )
@@ -296,7 +296,7 @@ def infer_schedule(call: expr.Call, ctx) -> types.TensorType:
                 op,
                 tuple(ctx.type_of(arg) for arg in call.args),
                 ctx.mesh_scope,
-                frame=ctx,
+                ctx=ctx,
                 repeat=call.target.repeat,
                 order=call.target.order,
                 projection=tiles,

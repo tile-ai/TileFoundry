@@ -50,9 +50,9 @@ def report_json(result: object) -> str:
     return registry.require(report_json)(result)
 
 
-def verify_call(op: object, args: tuple, mesh: object, *, frame: object) -> None:
+def verify_call(op: object, args: tuple, mesh: object, *, ctx: object) -> None:
     """Verify one scheduled TIR call; raise ``VerifyError`` when it is refused."""
-    return registry.require(verify_call)(op, args, mesh, frame=frame)
+    return registry.require(verify_call)(op, args, mesh, ctx=ctx)
 
 
 def describe_refusal(instruction: str, path: tuple, reason: object) -> str:

@@ -41,8 +41,8 @@ def test_analyze_at_stated_size() -> None:
     assert result.function is not authored
     assert result.function.name == authored.name
     assert all(
-        valuation.residual_dims(frame.function, frame) == ()
-        for frame in valuation.definitions(valuation.Context(result.module, result.function))
+        valuation.residual_dims(ctx.function, ctx) == ()
+        for ctx in valuation.definitions(valuation.Context(result.module, result.function))
     )
 
 

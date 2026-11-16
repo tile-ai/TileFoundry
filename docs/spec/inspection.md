@@ -514,7 +514,7 @@ d3-zoom pan/zoom · click → detail + highlight · search · collapse toggle
   intermediate model. A direct call `FunctionRef((), name)` and a top-level
   `Function` share one unified emitter — a collapsed region renders as a
   stand-in node, an expanded one as a `subgraph cluster_<region_visual_id>`.
-  Each region and call detail carries the frame its references resolve
+  Each region and call detail carries the context its references resolve
   from. An instance call
   (`child(x)`, `layers[i](x)`) is a call node titled by the reference's dotted
   path; it is not expanded, since the instance may be chosen at run time. Its

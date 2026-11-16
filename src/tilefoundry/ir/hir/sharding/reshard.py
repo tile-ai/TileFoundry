@@ -36,9 +36,9 @@ def buffer_alias(call: expr.Call) -> int | None:
     if result.storage is not source.storage or not expr.is_literal_shape(result.shape):
         return None
     layouts = tuple(types.shard_layout_of(held.layout) for held in (source, result))
-    frame = next((layout.mesh for layout in layouts if layout is not None), None)
+    shard_mesh = next((layout.mesh for layout in layouts if layout is not None), None)
     states = tuple(
-        utils.attrs_by_axis(held, None if layout is not None else frame)
+        utils.attrs_by_axis(held, None if layout is not None else shard_mesh)
         for held, layout in zip((source, result), layouts)
     )
     for key in states[0].keys() | states[1].keys():
@@ -175,9 +175,9 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     result = types.TensorType(
         shape=x_ty.shape, dtype=x_ty.dtype, layout=new_layout, storage=new_storage
     )
-    frame = next((layout.mesh for layout in layouts if layout is not None), None)
+    shard_mesh = next((layout.mesh for layout in layouts if layout is not None), None)
     states = tuple(
-        utils.attrs_by_axis(held, None if layout is not None else frame, owners)
+        utils.attrs_by_axis(held, None if layout is not None else shard_mesh, owners)
         for held, layout in zip((x_ty, result), layouts)
     )
     for key in states[0].keys() | states[1].keys():

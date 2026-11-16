@@ -394,7 +394,7 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
             if isinstance(shard.mesh.layout, ComposedLayout)
             else outer
         )
-        frame = Mesh(
+        shard_mesh = Mesh(
             tuple(topologies),
             layout,
             tuple(shard.mesh.names[i] for i in remaining if i < len(shard.mesh.names)),
@@ -405,7 +405,7 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
             else shard.attrs[axis]
             for axis in remaining
         )
-        sliced = ShardLayout(sliced, attrs, frame)
+        sliced = ShardLayout(sliced, attrs, shard_mesh)
     return sliced, services.normalize_dim(start)
 
 

@@ -318,7 +318,7 @@ class CudaLowering(transforms.Lowering):
         for (role, value), type_, rest in zip(issue.operands, type_list, plan.rests, strict=True):
             base = ctx.builder.value(ctx.storage.operand(value, type_, whole_tensor=True), ctx=ctx)
             binding_mesh = rest.mesh if isinstance(rest, types.ShardLayout) else execution_mesh
-            frame, dropped = utils.find_execution_mesh(binding_mesh, required)
+            _, dropped = utils.find_execution_mesh(binding_mesh, required)
             source = types.shard_layout_of(base.type.layout)
             attrs = (
                 list(source.attrs)

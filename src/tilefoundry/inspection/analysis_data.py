@@ -177,9 +177,9 @@ def report_data(
     selected = frozenset(selected_types(module, analyses, metadata_types))
     target = module.resolve_target()
     owners = {
-        id(candidate): frame.module.name
-        for frame in valuation.collect_functions(module).values()
-        for candidate in (frame.function, *getattr(frame.function, "variants", ()))
+        id(candidate): context.module.name
+        for context in valuation.collect_functions(module).values()
+        for candidate in (context.function, *getattr(context.function, "variants", ()))
     }
     rows = []
     for body in functions or (function,):

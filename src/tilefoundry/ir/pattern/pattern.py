@@ -377,7 +377,7 @@ class Tensor(Pattern):
 
 @dataclass(frozen=True)
 class ShardLayout(Pattern):
-    """Match a sharded layout's layout, shard attrs, and mesh frame."""
+    """Match a sharded layout's layout, shard attrs, and shard mesh."""
 
     layout: object
     attrs: tuple

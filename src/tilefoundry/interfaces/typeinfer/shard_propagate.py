@@ -193,11 +193,11 @@ def derive_output_shard_layout(
         for type_, state in zip(input_types, states, strict=True)
         for layout in (types.shard_layout_of(type_.layout),)
     )
-    frame_levels = {level for state in states for level, _ in state}
+    topologies = {level for state in states for level, _ in state}
     required = {
         level
         for type_, layout, state in zip(input_types, layouts, states)
-        for level in frame_levels
+        for level in topologies
         if any(attr != types.Broadcast() for (at, _), attr in state.items() if at == level)
         or (layout is None and owners.private(type_.storage, level))
     }
@@ -312,7 +312,7 @@ def derive_output_shard_layout(
 
     if all(isinstance(attr, types.Varying) for attr in attrs):
         kept_levels = {level for level, _ in keys}
-        if all((level in kept_levels) == owners.private(storage, level) for level in frame_levels):
+        if all((level in kept_levels) == owners.private(storage, level) for level in topologies):
             return None
 
     carriers = [

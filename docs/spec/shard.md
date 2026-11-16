@@ -781,12 +781,13 @@ its own base address; completing the reduction leaves one copy.
 A plain layout is Varying on every axis. An unstated axis of a
 `ShardLayout`, and a level its mesh omits, is Broadcast.
 
-Value frames retain Varying levels. An explicit instruction frame may omit
-outside levels that contain neither Split nor Partial; checks inside that frame
-still distinguish Broadcast from Varying. Physical projection first omits levels
+The topologies a ShardLayout keeps include its Varying levels. An explicit
+execution mesh may omit outside levels that contain neither Split nor Partial.
+Checks inside that execution mesh still distinguish Broadcast from Varying. Physical projection first omits levels
 containing Varying but no Split or Partial, then reads remaining Varying as
-Broadcast without changing the stored value type. An entirely omitted physical
-frame uses the plain layout; levels containing only Broadcast retain their frame.
+Broadcast without changing the stored value type. When physical projection
+omits every level, the value uses the plain layout. Levels containing only
+Broadcast stay in the shard mesh.
 
 Type compatibility compares shard attrs as written and reads no storage owner:
 plain, Broadcast, and Varying are distinct; an omitted level reads as Broadcast.

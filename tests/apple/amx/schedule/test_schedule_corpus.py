@@ -116,12 +116,12 @@ class MatMul(AmxCase):
         ):
             call = next(node for node in core.collect_exprs(state.entry.body)
                         if isinstance(node, expr.Call) and (expr.value_label(node) or "").split(":")[0] == label)
-            frame = contexts[id(call)]
+            ctx = contexts[id(call)]
             attrs, operands = schedule.candidate_operands(call, instruction)
-            matches = hir.schedule.match_instruction(instruction, attrs, operands, frame.mesh_scope, frame=frame)
+            matches = hir.schedule.match_instruction(instruction, attrs, operands, ctx.mesh_scope, ctx=ctx)
             assert matches
             for match in matches:
-                _, projection = schedule.check_call(match.op, operands, frame.mesh_scope, frame=frame)
+                _, projection = schedule.check_call(match.op, operands, ctx.mesh_scope, ctx=ctx)
                 assert projection.repeat == expected, (label, projection.repeat)
 
 

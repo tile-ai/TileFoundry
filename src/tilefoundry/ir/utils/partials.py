@@ -27,12 +27,12 @@ def attrs_by_axis(
 
     Args:
         type_: Tensor whose plain layout reads as Varying.
-        mesh: Frame to read; defaults to the tensor's shard mesh.
+        mesh: Shard mesh to read; defaults to the tensor's shard mesh.
         owners: Target facts used to normalize shared copies. None reads attrs
             as written; empty facts instead normalize Broadcast and Varying alike.
 
     Returns:
-        States in frame order; omitted shard axes and levels read as Broadcast.
+        States in mesh axis order; omitted shard axes and levels read as Broadcast.
     """
     shard = types.shard_layout_of(type_.layout)
     stated, counts = {}, {}

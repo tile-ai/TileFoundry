@@ -25,5 +25,5 @@ def test_tensor_map_copy_rejects_partial(reverse):
     operands = (dst, src) if reverse else (src, dst)
     mesh = types.Mesh.from_meshes(src.layout.mesh, types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,))))
     with pytest.raises(schedule.RefusalError):
-        schedule.check_call(memory.CopyAsyncTensor(), operands, mesh, frame=None)
-    schedule.check_call(memory.CopyReduceAsyncTensor(), (src, dst), mesh, frame=None)
+        schedule.check_call(memory.CopyAsyncTensor(), operands, mesh, ctx=None)
+    schedule.check_call(memory.CopyReduceAsyncTensor(), (src, dst), mesh, ctx=None)

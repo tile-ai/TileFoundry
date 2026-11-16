@@ -172,11 +172,11 @@ class CrossScopePerformance(FamilyCase):
         timed = []
         context = analysis.build_context(cross_scope.module, cross_scope.function)[-1]
         for call in _calls(cross_scope.function):
-            frame = context.callee_context(call)
+            ctx = context.callee_context(call)
             occurrence = expr.get_metadata(call, analysis.PerformanceMetadata)
-            if frame is None or occurrence is None:
+            if ctx is None or occurrence is None:
                 continue
-            for primitive in _calls(frame.function):
+            for primitive in _calls(ctx.function):
                 record = expr.get_metadata(primitive, analysis.PerformanceMetadata)
                 if record is None:
                     continue

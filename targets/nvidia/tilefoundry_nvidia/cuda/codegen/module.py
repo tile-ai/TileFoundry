@@ -40,32 +40,32 @@ DEFAULT_DYNAMIC_SMEM = 48 * 1024
 
 def reject_omitted_child_weights(module: core.Module) -> None:
     """Reject device calls that depend on implicit child-owner weight injection."""
-    frames = valuation.collect_functions(module)
-    selectors = {id(frame.function): ref.qualified_name for ref, frame in frames.items()}
+    contexts = valuation.collect_functions(module)
+    selectors = {id(ctx.function): ref.qualified_name for ref, ctx in contexts.items()}
 
     class Check(core.ExprVisitor[None]):
-        def default_visit_leaf(self, node, operands, frame):
+        def default_visit_leaf(self, node, operands, ctx):
             return None
 
-        def visit_Call(self, call, frame):
-            self.visit_operands(call, frame)
-            inner = frame.callee_context(call) if frame is not None else None
+        def visit_Call(self, call, ctx):
+            self.visit_operands(call, ctx)
+            inner = ctx.callee_context(call) if ctx is not None else None
             if inner is None or call.target.name is not None:
                 return
             callee = inner.function
             weights = [param.name for param in callee.params if param.is_const]
             if weights:
                 raise ValueError(
-                    f"CUDA skeleton: {selectors[id(frame.function)]} calls "
+                    f"CUDA skeleton: {selectors[id(ctx.function)]} calls "
                     f"{selectors[id(callee)]} with omitted weights {weights}; "
                     "declare the weights as parameters or call from orchestration"
                 )
 
-    for frame in frames.values():
-        if isinstance(frame.function, core.Function):
-            for function in (frame.function, *frame.function.variants):
+    for ctx in contexts.values():
+        if isinstance(ctx.function, core.Function):
+            for function in (ctx.function, *ctx.function.variants):
                 if function.body is not None:
-                    Check().visit(function.body, frame)
+                    Check().visit(function.body, ctx)
 
 
 def emit_function(fn: core.ModuleFunction, ctx: Context) -> codegen.LinkableFunction:

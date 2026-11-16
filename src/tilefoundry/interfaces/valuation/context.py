@@ -68,7 +68,7 @@ class Context:
         return self.enter_reference(call.target)
 
     def enter_reference(self, ref):
-        """The environment of the function *ref* names from this frame's Module.
+        """The environment of the function *ref* names from this context's Module.
 
         Each Module the path passes through may declare its own target and
         topologies; undeclared ones inherit from the Module before it.

@@ -44,9 +44,9 @@ def call_function(
     call: expr.Call,
     arg_types: tuple[types.Type, ...],
     ctx: TypeInferContext,
-    child_frame: valuation.Context,
+    callee_ctx: valuation.Context,
 ) -> types.Type:
-    callee = child_frame.function
+    callee = callee_ctx.function
     child = call.target.name is None
     supplied = tuple(param for param in callee.params if not (child and param.is_const))
     if len(arg_types) != len(supplied):
@@ -76,7 +76,7 @@ def call_function(
     if callee.body is None or callee.variants:
         return callee.return_type
 
-    inner = replace(child_frame, function=callee, owner=callee, parent=None, call_site=None, memo={})
+    inner = replace(callee_ctx, function=callee, owner=callee, parent=None, call_site=None, memo={})
     context = (
         None
         if inner.module is None
@@ -156,11 +156,11 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
             try:
                 target.check_indices(target.indices(arg_types))
                 arg_types = target.arguments(arg_types)
-                child_frame = ctx.callee_context(call)
-                check_input_reachability(child_frame.function, arg_types, ctx.mesh_scope)
+                callee_ctx = ctx.callee_context(call)
+                check_input_reachability(callee_ctx.function, arg_types, ctx.mesh_scope)
             except (KeyError, ValueError) as error:
                 ctx.error(call, str(error))
-            return call_function(call, arg_types, ctx, child_frame)
+            return call_function(call, arg_types, ctx, callee_ctx)
         try:
             check_input_reachability(target, arg_types, ctx.mesh_scope)
         except ValueError as error:
@@ -259,9 +259,9 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
                     utils.tensor_types(entry_type), utils.tensor_types(yield_type)
                 ):
                     shards = tuple(types.shard_layout_of(t.layout) for t in (entry, yielded))
-                    frame = next((shard.mesh for shard in shards if shard is not None), None)
+                    shard_mesh = next((shard.mesh for shard in shards if shard is not None), None)
                     states = tuple(
-                        utils.attrs_by_axis(t, None if shard is not None else frame)
+                        utils.attrs_by_axis(t, None if shard is not None else shard_mesh)
                         for t, shard in zip((entry, yielded), shards)
                     )
                     for key in states[0].keys() | states[1].keys():

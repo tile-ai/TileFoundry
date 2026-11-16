@@ -374,11 +374,11 @@ def definition_lines(fn: core.PrimFunction, name: str, ctx: TirPrintContext) -> 
 
 
 def function_block(
-    fn: core.PrimFunction, context: TirPrintContext | None = None, *, frame=None
+    fn: core.PrimFunction, context: TirPrintContext | None = None, *, ctx=None
 ) -> list[str]:
-    ctx = context or TirPrintContext()
-    ctx.bind_function(frame, fn.target)
-    target = ctx.use(fn.target.to_python())
+    print_ctx = context or TirPrintContext()
+    print_ctx.bind_function(ctx, fn.target)
+    target = print_ctx.use(fn.target.to_python())
     dim_vars = {
         d.name: d
         for p in fn.params
@@ -391,16 +391,16 @@ def function_block(
     if fn.output_count != 1:
         attrs.append(f"output_count={fn.output_count}")
     lines.append(f"@prim_func({', '.join(attrs)})")
-    lines.extend(definition_lines(fn, identifier(fn.name), ctx))
+    lines.extend(definition_lines(fn, identifier(fn.name), print_ctx))
     for variant in fn.variants:
         pat = variant.specializations[0]
         lines.append("")
         lines.append(
-            f"@{identifier(fn.name)}.specialize({TirPrinter(context=ctx).render_pattern(pat, ctx)})"
+            f"@{identifier(fn.name)}.specialize({TirPrinter(context=print_ctx).render_pattern(pat, print_ctx)})"
         )
         name = identifier(getattr(variant, "display_name", variant.name))
-        lines.extend(definition_lines(variant, name, ctx))
-    return RenderedLines(lines, ctx.imports)
+        lines.extend(definition_lines(variant, name, print_ctx))
+    return RenderedLines(lines, print_ctx.imports)
 
 
 def tir_function_to_python(fn: core.PrimFunction) -> str:
@@ -444,7 +444,7 @@ def single_module_to_python(mod: core.Module, module_name: str, names) -> str:
             if isinstance(fn, core.Function):
                 raise NotImplementedError("mixed HIR/TIR module printing is not yet supported")
             raise TypeError(f"TIR printer cannot serialize {type(fn).__name__}")
-        block = function_block(fn, frame=valuation.Context(mod, fn))
+        block = function_block(fn, ctx=valuation.Context(mod, fn))
         ctx.imports.update(block.imports)
         blocks.append(block)
     for index, block in enumerate(blocks):

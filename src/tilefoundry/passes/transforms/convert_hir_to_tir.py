@@ -741,8 +741,8 @@ class StoragePlan:
         for node in core.collect_exprs(self.function.body):
             if not (isinstance(node, expr.Call) and isinstance(node.target, core.FunctionRef)):
                 continue
-            frame = self.regions[id(node)].callee_context(node)
-            child = StoragePlan(frame.function, frame, frame.mesh_scope).scratch[0]
+            callee_ctx = self.regions[id(node)].callee_context(node)
+            child = StoragePlan(callee_ctx.function, callee_ctx, callee_ctx.mesh_scope).scratch[0]
             calls[id(node)] = tuple(expr.Var(names.fresh(param.name), type=param.type) for param in child)
             params.extend(calls[id(node)])
         return tuple(params), roots, calls
@@ -1469,15 +1469,15 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
 
     def visit_callee(self, call: expr.Call, operands, ctx) -> expr.Expr | View:
         """Call the retained function *call* names, lowering it once."""
-        frame = ctx.callee_context(call)
-        lowering = self.callees.get(id(frame.function))
+        callee_ctx = ctx.callee_context(call)
+        lowering = self.callees.get(id(callee_ctx.function))
         if lowering is None:
             lowering = type(self)(
-                typeinfer.TypeInferContext(module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies, owner=frame.function, mesh_scope=ctx.mesh_scope),
+                typeinfer.TypeInferContext(module=callee_ctx.module, function=callee_ctx.function, target=callee_ctx.target, topologies=callee_ctx.topologies, owner=callee_ctx.function, mesh_scope=ctx.mesh_scope),
                 self.callees,
             )
             lowering.run()
-            self.callees[id(frame.function)] = lowering
+            self.callees[id(callee_ctx.function)] = lowering
         destination = ctx.result(call)
         scratch = ctx.storage.scratch[2][id(call)]
         target = call.target
@@ -1556,13 +1556,13 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
         )
 
 
-def scratch_buffers(frame) -> tuple[expr.Var, ...]:
-    """The scratch parameters the lowered *frame* function declares, in order.
+def scratch_buffers(ctx) -> tuple[expr.Var, ...]:
+    """The scratch parameters the function of the lowered *ctx* declares, in order.
 
     A synthesized host entry declares and forwards the same list, so it never
     has to be rewritten after lowering.
     """
-    return StoragePlan(frame.function, frame).scratch[0]
+    return StoragePlan(ctx.function, ctx).scratch[0]
 
 
 def device_root(module):
@@ -1600,7 +1600,7 @@ class ConvertHIRToTIR(pass_base.ModulePass):
 
     def run(self, module: core.Module) -> core.Module:
         if not self.options.lower or not any(
-            isinstance(frame.function, core.Function) for frame in valuation.collect_functions(module).values()
+            isinstance(ctx.function, core.Function) for ctx in valuation.collect_functions(module).values()
         ):
             return module
         function = device_root(module)

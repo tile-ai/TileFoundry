@@ -37,9 +37,9 @@ def test_verifier_rejects_malformed_tir_calls(wrong, refused):
     caller_params = (param,) if wrong == "device-launch" else ()
     caller = core.PrimFunction("caller", caller_params, core.Sequential((call,)), target=callee.target)
     module = core.Module("Calls", (callee, caller))
-    frame = None if wrong == "device-launch" else valuation.Context(module, caller)
+    ctx = None if wrong == "device-launch" else valuation.Context(module, caller)
     with pytest.raises(expr.VerifyError, match=refused):
-        verifier.verify_prim_function(caller, frame=frame)
+        verifier.verify_prim_function(caller, ctx=ctx)
 
 
 def test_verifier_rejects_noninteger_slot_index():

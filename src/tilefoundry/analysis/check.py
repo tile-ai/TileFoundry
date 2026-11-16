@@ -119,10 +119,10 @@ class PerformanceChecker:
 
 def program_dim_vars(module: core.Module, function: core.Function) -> dict[str, object]:
     """Dimension declarations in reachable values and effective execution geometry."""
-    return valuation.dim_vars_reached(function, required_frame(module, function))
+    return valuation.dim_vars_reached(function, required_context(module, function))
 
 
-def required_frame(module: core.Module, function: core.Function):
+def required_context(module: core.Module, function: core.Function):
     """Read a function directly from its supplied owning definition."""
     if module.owns(function, derived=True):
         return valuation.Context(module, function)
@@ -205,7 +205,7 @@ def check_program(
                 raise valuation.SpecializationError(
                     f"specialising {function.name!r}: dimension {name!r} takes an integer extent, got {extent!r}"
                 )
-    required_frame(module, function)
+    required_context(module, function)
     bound_module, bound_root = valuation.instantiate(module, function, dims)
     initial = valuation.Context(bound_module, bound_root)
     residual = set(valuation.dim_vars_reached(bound_root, initial))
@@ -219,8 +219,8 @@ def check_program(
         )
     signatures = {}
 
-    def derive(frame, type_list, mesh, label):
-        definition = frame.function
+    def derive(ctx, type_list, mesh, label):
+        definition = ctx.function
         identity = id(definition)
         signature = (type_list, mesh)
         if identity in signatures:
@@ -238,10 +238,10 @@ def check_program(
         prepare_function(definition)
         definition.attach_metadata(ExecutionMeshMetadata(mesh))
         context = typeinfer.TypeInferContext(
-            module=frame.module,
-            function=frame.function,
-            target=frame.target,
-            topologies=frame.topologies,
+            module=ctx.module,
+            function=ctx.function,
+            target=ctx.target,
+            topologies=ctx.topologies,
             owner=definition,
             mesh_scope=mesh,
             memo=bindings,
@@ -259,8 +259,8 @@ def check_program(
         function.name,
     )
 
-    frames = tuple(valuation.definitions(valuation.Context(module, root)))
-    functions = tuple(frame.function for frame in frames)
+    contexts = tuple(valuation.definitions(valuation.Context(module, root)))
+    functions = tuple(ctx.function for ctx in contexts)
     size = sum(len(core.collect_exprs(body.body)) for body in functions)
     if size > budget:
         raise Error(
@@ -281,12 +281,12 @@ def check_program(
         except ValueError as error:
             raise Error(f"program topology {topology!r} is invalid: {error}") from None
 
-    for frame in frames:
-        for call in core.collect_exprs(frame.function.body):
-            if not isinstance(call, expr.Call) or (inner := frame.callee_context(call) if frame is not None else None) is None:
+    for ctx in contexts:
+        for call in core.collect_exprs(ctx.function.body):
+            if not isinstance(call, expr.Call) or (inner := ctx.callee_context(call) if ctx is not None else None) is None:
                 continue
             for field, noun in (("target", "target"), ("topologies", "topology hierarchy")):
-                expected, actual = getattr(frame, field), getattr(inner, field)
+                expected, actual = getattr(ctx, field), getattr(inner, field)
                 if expected != actual:
                     suffix = (
                         "one kernel invocation runs one target"
@@ -296,7 +296,7 @@ def check_program(
                         )
                     )
                     raise Error(
-                        f"{frame.module.name!r} calls {inner.module.name!r}, which resolves "
+                        f"{ctx.module.name!r} calls {inner.module.name!r}, which resolves "
                         f"a different {noun} {actual!r} against {expected!r}; {suffix}"
                     )
     check_analyses(module, root, analyzers, topology=topology)
@@ -312,7 +312,7 @@ def check_analyses(
 ) -> None:
     """Check requested families against a built program before any writes."""
     functions = tuple(
-        frame.function for frame in valuation.definitions(valuation.Context(module, function))
+        context.function for context in valuation.definitions(valuation.Context(module, function))
     )
     ctx = check_context(module, function, topology)
     for analyzer in analyzers:

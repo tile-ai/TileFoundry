@@ -125,8 +125,8 @@ def run_authored_analysis(
         checked, root = program.module, program.entry
         if not analyses:
             annotated = "\n".join(
-                inspection.as_script(frame.function, options=inspection.PythonPrintOptions(show_types=True))
-                for frame in valuation.definitions(valuation.Context(checked, root))
+                inspection.as_script(ctx.function, options=inspection.PythonPrintOptions(show_types=True))
+                for ctx in valuation.definitions(valuation.Context(checked, root))
             )
             write_report(out_path, annotated)
             return 0

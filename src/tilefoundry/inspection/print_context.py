@@ -184,9 +184,9 @@ class TirPrintContext(PrintContext):
         self.reserved_names = set()
         self.valuation = None
 
-    def bind_function(self, frame, target) -> None:
-        """Take the call-path frame and target of the PrimFunction about to print."""
-        self.valuation = frame
+    def bind_function(self, ctx, target) -> None:
+        """Take the call-path context and target of the PrimFunction about to print."""
+        self.valuation = ctx
         self.target = target
 
     @contextmanager

@@ -50,7 +50,7 @@ def call_label(call: expr.Call) -> str:
     return target.qualified_name if isinstance(target, core.FunctionRef) else expr.get_registered_name(target)
 
 
-def operand_names(call: expr.Call, frame) -> list[str]:
+def operand_names(call: expr.Call, ctx) -> list[str]:
     """One port name per operand of *call*, in operand order.
 
     A reference's run-time indices come first as ``index`` ports; its
@@ -60,7 +60,7 @@ def operand_names(call: expr.Call, frame) -> list[str]:
     """
     target = call.target
     if isinstance(target, core.FunctionRef):
-        callee = frame.callee_context(call).function
+        callee = ctx.callee_context(call).function
         count = len(target.indices(call.args))
         indices = ["index" if count == 1 else f"index{k}" for k in range(count)]
         return [*indices, *(p.name for p in callee.params if target.name is not None or not p.is_const)]
@@ -88,7 +88,7 @@ class DetailRef:
     call_path: tuple[str, ...]
     region_visual_id: str | None = None
     param_index: int | None = None
-    frame: Any = None
+    ctx: Any = None
 
 
 @dataclass
@@ -221,7 +221,7 @@ def format_detail(
         attrs = [{"key": key, "value": value} for key, value in op_attributes(node.target, context=context)]
         params = [
             {"name": operand, "type": type_text(arg.type, context)}
-            for operand, arg in zip(operand_names(node, ref.frame), node.args, strict=True)
+            for operand, arg in zip(operand_names(node, ref.ctx), node.args, strict=True)
         ]
         returns = returns_of(node.type, context)
     else:
@@ -310,8 +310,8 @@ class Builder:
 
             module = self.root if isinstance(self.root, core.Module) else None
             for i, (label, fn) in enumerate(renderable_functions(self.root)):
-                frame = valuation.Context(module, fn)
-                self.emit_function_region(g, fn, frame, call_path=(label,), local_idx=i)
+                ctx = valuation.Context(module, fn)
+                self.emit_function_region(g, fn, ctx, call_path=(label,), local_idx=i)
         else:
             raise TypeError(f"Builder root must be HirFunction or Module, got {type(self.root).__name__}")
 
@@ -335,7 +335,7 @@ class Builder:
         self,
         g: graphviz.Digraph,
         fn: core.Function,
-        frame: valuation.Context,
+        ctx: valuation.Context,
         *,
         call_path: tuple[str, ...],
         local_idx: int,
@@ -396,7 +396,7 @@ class Builder:
             direct_output_nodes: list[str] = []
             for slot, elem in enumerate(elements):
                 ref = self.walk_expr(
-                    sub, elem, frame, call_path=call_path, visited=visited,
+                    sub, elem, ctx, call_path=call_path, visited=visited,
                     local_counter=inner_local_counter, output_slot=slot,
                 )
                 outputs.append(ref)
@@ -506,7 +506,7 @@ class Builder:
         self,
         g: graphviz.Digraph,
         node2,
-        frame: valuation.Context,
+        ctx: valuation.Context,
         *,
         call_path: tuple[str, ...],
         visited: dict[int, str],
@@ -528,7 +528,7 @@ class Builder:
 
         if isinstance(node2, expr.Tuple):
             return self.emit_tuple(
-                g, node2, frame, call_path=call_path, visited=visited, local_counter=local_counter
+                g, node2, ctx, call_path=call_path, visited=visited, local_counter=local_counter
             )
 
         if isinstance(node2, expr.Var):
@@ -568,7 +568,7 @@ class Builder:
 
         if isinstance(node2, expr.Call):
             return self.emit_call(
-                g, node2, frame, call_path=call_path, visited=visited,
+                g, node2, ctx, call_path=call_path, visited=visited,
                 local_counter=local_counter, output_slot=output_slot,
             )
 
@@ -592,7 +592,7 @@ class Builder:
         self,
         g: graphviz.Digraph,
         call: expr.Call,
-        frame: valuation.Context,
+        ctx: valuation.Context,
         *,
         call_path: tuple[str, ...],
         visited: dict[int, str],
@@ -601,11 +601,11 @@ class Builder:
     ) -> str:
         """Emit one call: a direct function call expands into the callee's own region.
 
-        The callee resolves from the caller's frame, and its body is drawn in
-        the callee's frame, so a reference inside it resolves from its own Module.
+        The callee resolves from the caller's context, and its body is drawn in
+        the callee's context, so a reference inside it resolves from its own Module.
         """
         if expanded(call):
-            inner = frame.callee_context(call)
+            inner = ctx.callee_context(call)
             inner_idx = local_counter[0]
             local_counter[0] += 1
             inner_path = call_path + (call.target.name, str(inner_idx))
@@ -616,7 +616,7 @@ class Builder:
 
             for i, arg in enumerate(call.args):
                 src = self.walk_expr(
-                    g, arg, frame, call_path=call_path, visited=visited, local_counter=local_counter
+                    g, arg, ctx, call_path=call_path, visited=visited, local_counter=local_counter
                 )
                 g.edge(src, f"{inner_vid}:pin{i}")
 
@@ -634,7 +634,7 @@ class Builder:
         local_counter[0] += 1
         vid = self.visual_id(call_path, local)
         op_label = call_label(call)
-        self.index.add(vid, DetailRef(hir_expr=call, kind=op_label, call_path=call_path, frame=frame))
+        self.index.add(vid, DetailRef(hir_expr=call, kind=op_label, call_path=call_path, ctx=ctx))
 
         tbl = Table(cellpadding=6, bgcolor=PAPER, color=HAIR)
         cells = [
@@ -651,7 +651,7 @@ class Builder:
 
 
 
-        for i, label in enumerate(operand_names(call, frame)):
+        for i, label in enumerate(operand_names(call, ctx)):
             cells.append(
                 Cell(
                     text=label,
@@ -712,7 +712,7 @@ class Builder:
             tuple_index = call.args[1].value
         for i, arg in enumerate(call.args):
             src = self.walk_expr(
-                g, arg, frame, call_path=call_path, visited=visited, local_counter=local_counter
+                g, arg, ctx, call_path=call_path, visited=visited, local_counter=local_counter
             )
             if tuple_index is not None and i == 0:
 
@@ -733,7 +733,7 @@ class Builder:
         self,
         g: graphviz.Digraph,
         tup: expr.Tuple,
-        frame: valuation.Context,
+        ctx: valuation.Context,
         *,
         call_path: tuple[str, ...],
         visited: dict[int, str],
@@ -784,7 +784,7 @@ class Builder:
 
         for i, elem in enumerate(tup.elements):
             src = self.walk_expr(
-                g, elem, frame, call_path=call_path, visited=visited, local_counter=local_counter
+                g, elem, ctx, call_path=call_path, visited=visited, local_counter=local_counter
             )
             g.edge(src, f"{vid}:in{i}")
 

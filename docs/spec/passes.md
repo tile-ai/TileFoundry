@@ -325,7 +325,7 @@ class ConvertHIRToTIR(ModulePass):
     the current scope, retaining unit axes. An instruction issued on the enclosing
     scope's mesh is emitted directly; another declared mesh opens a nested
     `MeshScope`. Meshes compare after resolving layouts, preserving unit axes.
-    IR and type mesh names are retained; lowering MUST NOT rebuild mesh frames.
+    IR and type mesh names are retained; lowering MUST NOT rebuild meshes.
     Adjacent scopes are not merged. A view is bound in each consuming scope,
     never at its definition; its sharding refers to that scope's mesh.
     Storage declarations follow their HIR definition's scope and position.
@@ -448,8 +448,8 @@ def for_target(module: core.Module, point: PassPoint) -> list[ModulePass]: ...
 
 - constraints:
   - `passes.for_target` MUST collect PrimFunction targets from each function and
-    HIR targets from the corresponding `collect_functions` frame. A frame with
-    no Target MUST contribute no target. It MUST order
+    HIR targets from the corresponding `collect_functions` context. A context
+    with no Target MUST contribute no target. It MUST order
     targets by registered name and preserve registration order within a target.
   - A pass class MUST be registered at most once per point; a duplicate MUST
     raise `ValueError` naming the Target and pass.

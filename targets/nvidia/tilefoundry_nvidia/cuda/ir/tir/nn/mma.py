@@ -67,7 +67,7 @@ class TiledMma(expr.Op):
     )
 
     def execution_mesh_pattern(self):
-        """The atom's lane frame, preceded by independent group modes."""
+        """The atom's execution mesh of lanes, preceded by independent group modes."""
         return self.atom.execution_mesh_pattern(groups=True)
 
 

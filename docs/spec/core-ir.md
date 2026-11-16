@@ -213,8 +213,8 @@ shape-specialization variants live inside that entry's `Function.variants`
 `tilefoundry.interfaces.valuation.collect_functions(root)` enumerates each declared
 function once by identity, in DFS first-instance order. It returns a
 `dict[FunctionRef, valuation.Context]`, including HIR Functions and PrimFunctions,
-keyed by the root-relative reference ([§1.4](#14-function-references)). The frame records the current Module,
-function, effective target, and effective topologies; shared definitions use the first
+keyed by the root-relative reference ([§1.4](#14-function-references)). The context records the current Module,
+function, effective target, and effective topologies. Shared definitions use the first
 path for generated names, including indexed segments such as `layers.0.run`.
 
 ### 1.3 `ModuleList`
@@ -282,7 +282,7 @@ class FunctionRef(Expr):
     names that Module's entry. It names a prototype, never a variant: dispatch
     picks the variant.
   - `core.resolve(scope, ref)` is the only resolver; verify, the evaluator and
-    codegen use it from the current frame's Module `scope`, so rebuilt module
+    codegen use it from the current context's Module `scope`, so rebuilt module
     trees remain authoritative. Each `str` segment MUST
     select a child slot, and `name` MUST select exactly one function in the
     reached Module; it MUST NOT search descendants by an unqualified name.

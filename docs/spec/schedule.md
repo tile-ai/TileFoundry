@@ -62,7 +62,7 @@ logical Split axes when that projection is possible; if factored splits have
 no local logical box, it compares whole types instead.
 
 Each single-issue operand MUST match the corresponding instruction parameter
-pattern. `hir.schedule.match_instruction(op_type, attributes, operand_types, mesh, *, frame,
+pattern. `hir.schedule.match_instruction(op_type, attributes, operand_types, mesh, *, ctx,
 repeat=None, order=None)` returns a tuple of frozen `hir.schedule.InstructionMatch(op, path)`
 records. Each op uses the existing constructor; its path contains every binding
 from the closed matcher in binding order. A `schedule.RefusalError` carries the
@@ -84,9 +84,9 @@ projection and layout matching. A rejected extent does not stop other extents
 from matching. If all non-integer bindings fail field admission, the refusal
 names that field without an unrelated integer extent. Otherwise the first failed
 closed check supplies the refusal if no extent is accepted.
-`frame` is required and reaches the verifier unchanged, including its target
+`ctx` is required and reaches the verifier unchanged, including its target
 capability checks. Explicit schedule inference uses this same matcher with
-the authored instruction attributes, frame, repeat, and order.
+the authored instruction attributes, context, repeat, and order.
 
 Operand, tiling, pattern, and verifier rejections raise `schedule.RefusalError`.
 Errors from implementation code, including `TypeError` and ISL errors,
@@ -96,8 +96,8 @@ Matching reads a source window in the layout in which it lies. The address offse
 is not part of the layout. An unstated layout uses the parent tensor's compact
 row-major strides. When an instruction reads a plain
 shared-memory layout through an all-`Broadcast` `pattern.ShardLayout`, the
-single-issue view is bound to one required instruction frame for matching. This
-does not assign issues to frames; issue assignment is a lowering decision.
+single-issue view is bound to one required execution mesh for matching. This
+does not assign issues to units; issue assignment is a lowering decision.
 
 An instruction without a registered access relation cannot be selected by a
 schedule.
@@ -149,7 +149,7 @@ extension beyond the AtomSched reference, which rejects it.
 ScheduleOp operands follow the same Visit and memo path as other operations.
 Before issuing, CuTe `slice_and_offset` fixes the bound modes once per unit.
 Shared storage uses MeshCoord; private storage uses coordinate zero, preserving
-the authored strides. The retained ShardLayout uses the execution frame.
+the authored strides. The retained ShardLayout uses the execution mesh.
 Each serial issue slices this local value at its logical rest coordinate.
 When that Slice already has the required type, it is used directly. Otherwise,
 a TensorView over PtrOf(Slice) replaces only the execution mesh and attrs;

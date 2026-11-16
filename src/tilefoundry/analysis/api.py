@@ -120,24 +120,26 @@ def build_context(
         topology = topologies[0].name if topologies else None
 
     contexts, definitions = [], {}
-    frames = tuple(valuation.definitions(valuation.Context(module, function), postorder=True))
-    for frame in frames:
+    definition_contexts = tuple(
+        valuation.definitions(valuation.Context(module, function), postorder=True)
+    )
+    for ctx in definition_contexts:
         context = AnalyzeContext(
-            module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies,
-            owner=frame.function,
+            module=ctx.module, function=ctx.function, target=ctx.target, topologies=ctx.topologies,
+            owner=ctx.function,
             topology=topology,
             options=options,
             entry=function,
             definitions=definitions,
         )
         builder = ScopeBuilder(
-            frame.module,
-            frame.function,
+            ctx.module,
+            ctx.function,
             ctx=context,
-            is_root=frame.function is function,
+            is_root=ctx.function is function,
         )
         builder.build()
-        definitions[id(frame.function)] = context.scope
+        definitions[id(ctx.function)] = context.scope
         contexts.append(context)
     return tuple(contexts)
 
@@ -173,7 +175,7 @@ def analyze(
         options=options,
     )
     context = contexts[-1]
-    functions = tuple(frame.function for frame in valuation.definitions(context))
+    functions = tuple(ctx.function for ctx in valuation.definitions(context))
 
     order: list[type[expr.IRMetadata]] = []
     written_records: set[tuple] = set()

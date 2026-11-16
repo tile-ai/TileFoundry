@@ -123,7 +123,7 @@ class SameModesConstraint(Constraint):
         return None if any(not isinstance(value, types.TensorType) for value in held) else held
 
     def readings(self, pair: tuple[types.TensorType, types.TensorType]):
-        """Read below one shared shard frame only after proving it is the same."""
+        """Read below one shared shard mesh only after proving it is the same."""
         left, right = (value.layout for value in pair)
         if (
             isinstance(left, types.ShardLayout)

@@ -7,7 +7,7 @@ from tilefoundry_nvidia import cuda
 
 
 @pytest.mark.parametrize("levels", (("thread", "gpu"), ("gpu", "thread")))
-def test_plain_multilinear_operand_reads_every_frame(levels):
+def test_plain_multilinear_operand_reads_every_topology(levels):
     target = cuda.Target("nvidia.h200_sxm")
     address = types.Layout((8,), (1,))
     operands = tuple(

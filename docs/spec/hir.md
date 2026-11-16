@@ -562,8 +562,8 @@ class Binary(Op):
   - Sharded results merge value states using
     [shard §6.1](./shard.md#61-shard-attr-semantics), including plain inputs.
     All-Broadcast inputs retain Broadcast. A result may use plain layout for
-    Varying only when plain reads back to the same states on every axis of the
-    original input frame, including omitted Broadcast levels.
+    Varying only when plain reads back to the same states on every axis. These
+    are the axes of the original input shard mesh, including omitted Broadcast levels.
   - If that fallback result is a shaped value in `rmem` or `smem`, Binary MUST
     give the newly produced value its own C-order `Layout`; a concrete local
     result cannot reach authored analysis with an unresolved layout.
@@ -1746,12 +1746,12 @@ class InstantiateDimensionCloner(ExprCloner):
     def function(self, function: Function) -> Function: ...
 
 
-def residual_dims(fn: Function, frame: valuation.Context | None = None) -> tuple[str, ...]:
+def residual_dims(fn: Function, ctx: valuation.Context | None = None) -> tuple[str, ...]:
     """Return every dimension still stated as a range.
 
     Args:
         fn: Function to inspect recursively.
-        frame: Current module and effective execution context, required for instance targets.
+        ctx: Current module and effective execution context, required for instance targets.
 
     Returns:
         Residual dimension names.
@@ -1759,12 +1759,12 @@ def residual_dims(fn: Function, frame: valuation.Context | None = None) -> tuple
     ...
 
 
-def dim_vars_reached(fn: Function, frame: valuation.Context | None = None) -> dict[str, object]:
+def dim_vars_reached(fn: Function, ctx: valuation.Context | None = None) -> dict[str, object]:
     """Return residual dimension declarations by name.
 
     Args:
         fn: Function to inspect recursively.
-        frame: Current module and effective execution context, required for instance targets.
+        ctx: Current module and effective execution context, required for instance targets.
 
     Returns:
         Residual dimension declarations.
@@ -1780,9 +1780,9 @@ def dim_vars_reached(fn: Function, frame: valuation.Context | None = None) -> di
     an unstated dimension used by a pattern MUST raise `SpecializationError`.
   - `InstantiateDimensionCloner` MUST select variants by `variant_for` and
     substitute dimensions in types, Op attributes, loop bounds, and meshes.
-    It MUST clone every function the collector reaches from its frame, with
-    one clone per shared definition, and MUST preserve every `FunctionRef`
-    target, because a name does not change; a run-time index operand is
+    It MUST clone every function the collector reaches from its context, with
+    one clone per shared definition. It MUST preserve every `FunctionRef`
+    target, because a name does not change. A run-time index operand is
     rebuilt like any operand. It MUST NOT perform type inference while cloning.
   - Each cloned function MUST retain its original name and record the chosen
     implementation and sorted bindings, recoverable through `origin_of` and
@@ -1796,5 +1796,5 @@ def dim_vars_reached(fn: Function, frame: valuation.Context | None = None) -> di
     and called functions, including return types. Runtime values without a
     `DimVar` are rejected later by their consumer.
   - Instance dimension scans MUST receive a `valuation.Context` and recurse through
-    the entries the current frame's Module resolves ([core-ir §2.1](./core-ir.md#21-call)).
-    Function-only graphs retain the frame-free query API.
+    the entries the current context's Module resolves ([core-ir §2.1](./core-ir.md#21-call)).
+    Function-only graphs retain the context-free query API.

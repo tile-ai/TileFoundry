@@ -195,7 +195,7 @@ def variants(
     operand shapes and layouts, but MUST NOT repeat that axis map.
   - `execution_mesh_pattern()` MUST require the declaration's exact unit
     count at an aligned offset. `mesh`, when present, binds the atom to one
-    concrete frame and MUST match the active frame at verify.
+    concrete execution mesh. It MUST match the active execution mesh at verify.
   - `capability` MUST use the emitted instruction-family name and be present in
     the active CUDA architecture's `capabilities`. `resource` MUST name the
     execution engine with an `_engine` suffix. These are separate axes: support
@@ -236,7 +236,7 @@ T.tiled_mma(acc, lhs, rhs, atom=T.cuda.sm80.Mma())
   meshes retain the atom's exact lane axes.
 - The active physical mesh MUST satisfy `atom.execution_mesh_pattern()`. If the atom
   carries `mesh=...`, its affine offset and ordered lanes MUST equal the active
-  frame.
+  execution mesh.
 
 There is one TIR MMA op: `T.tiled_mma`. There is no optional-atom or bare-MMA
 path. Per-target emission dispatches on the atom ([target](./target.md)); the

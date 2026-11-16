@@ -176,7 +176,7 @@ parameters; omitting it means one output.
     MUST be derivable from the base parameters; `verify_prim_function` checks
     each variant with the rules below.
 
-`verifier.verify_prim_function(fn, *, frame=None)` enforces (`frame` is the
+`verifier.verify_prim_function(fn, *, ctx=None)` enforces (`ctx` is the
 `valuation.Context` of the Module declaring `fn`; without it no reference is
 resolved and an `Evaluate(FunctionRef)` is rejected):
 
@@ -844,8 +844,8 @@ schema's `category` and sort by its `name` within each category.
 
 An instruction Op reserves the class-body name `execution_mesh` for the mesh
 that executes one issue. A fixed instruction declaration MAY state a concrete
-`Mesh`; an Op with a caller-selectable frame MAY state a `ParamDef` whose
-pattern is a `pattern.Mesh`; and an element-wise Op MAY point directly at the
+`Mesh`. An Op with a caller-selectable execution mesh MAY state a `ParamDef` whose
+pattern is a `pattern.Mesh`. An element-wise Op MAY point directly at the
 same `pattern.Mesh` used by its operand shard declarations. A declaration
 MAY use an `pattern.Or` of mesh patterns when it supports distinct execution
 topologies. The target's verifier enforces any topology-specific restrictions.
