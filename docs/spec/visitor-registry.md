@@ -342,8 +342,8 @@ Lexical parent links and caller links MUST remain distinct.
   - `ancestors()` yields contexts from the innermost to the definition root.
     `enclosing_meshes()` returns the mesh of each `MeshRegion` or `MeshScope`
     owner in that chain, outermost first. When the chain has none, it returns
-    `(mesh_scope,)`, the definition's external mesh, or `()` when that is
-    `None`; an authored mesh is not prefixed with the external one.
+    `(mesh_scope,)`, the definition's external mesh. It returns `()` when that
+    is `None`. An authored mesh is not prefixed with the external one.
     `innermost_mesh()` is the last element of `enclosing_meshes()`, or `None`.
 
 `valuation.Context` carries the current Module, function, effective target, and
