@@ -861,8 +861,8 @@ axes that do not separate storage copies.
 
 #### Async copy Ops (`tir.async_copy.*`)
 
-Non-blocking gmem→smem staging: a producer issues copies and commits groups;
-a consumer waits on the group queue.
+Non-blocking gmem→smem staging. A producer executes copies and commits groups.
+A consumer waits on the group queue.
 
 ##### CopyAsync
 

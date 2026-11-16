@@ -1,7 +1,7 @@
 """Shared memory that two threads may write in one issue of an action.
 
-An instruction without an execution mesh is issued by every thread of the mesh it
-runs on, each on the operands as that thread sees them, and no step orders the
+An instruction without an execution mesh is executed by every thread of the mesh
+it runs on, each on the operands as that thread sees them, and no step orders the
 threads of one issue. The ``sync`` family refuses a Function in which two such
 threads may write one shared memory element in the same issue, unless the
 operand's layout gives each of its bytes to one of the threads that run it. See
@@ -24,10 +24,10 @@ from .emission import required_execution_mesh
 def issued_op(planner, action):
     """The instruction every executing thread runs on its own for *action*, or None.
 
-    A retained call orders its own accesses. An instruction with a required
-    execution mesh is issued once for each point of it, and one that takes its
-    execution mesh as an attribute states for itself which threads of that mesh
-    issue it, as ``CopyAsyncTensor`` does.
+    None for a retained call, which orders its own accesses. None for an
+    instruction with a required execution mesh, and for one that takes its
+    execution mesh as an attribute, as ``CopyAsyncTensor`` does: each states for
+    itself which threads execute it.
     """
     owner, tag = action.owner, action.tag
     if isinstance(owner, core.LoopRegion) or tag in ("base", "update"):
@@ -155,7 +155,7 @@ def refuse_thread_overlaps(planner) -> None:
             if verdict is not None:
                 what = "write" if verdict is Overlap.CONFLICT else "may write"
                 raise analysis.Error(
-                    f"sync: two threads that issue {reach.name} {what} one shared memory "
+                    f"sync: two threads that execute {reach.name} {what} one shared memory "
                     "element at once, which no step orders"
                 )
 

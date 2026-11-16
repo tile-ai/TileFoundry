@@ -415,19 +415,19 @@ class StMatrix(Op):
     ownership of CuTe `SM90_U32x4_STSM_N`: four 32-bit registers per thread.
   - `dst` is shared memory with whole contiguous 16-byte vectors. Source and
     destination shape and dtype MUST agree.
-  - One warp (32 threads) issues the CuTe `SM90_U32x4_STSM_N` transfer
-    of a 16-by-16 b16 tile. Larger scheduled operands are projected into warp
-    issues. The capability is `stmatrix` and the resource is `tensor_core_engine`.
+  - One warp (32 threads) executes the CuTe `SM90_U32x4_STSM_N` transfer
+    of a 16-by-16 b16 tile. Lowering projects larger scheduled operands into
+    issues, each executed by one warp. The capability is `stmatrix` and the resource is `tensor_core_engine`.
   - CUDA codegen MUST reject it until stmatrix runtime support exists.
 
 ## Barrier object Ops (`tir.sync.mbarrier_*`)
 
 A Hopper mbarrier is a 64-bit shared-memory word carrying an arrival count, a
 transaction-byte count and a phase parity. It is not `Sync`
-([§1.5](../../../../../../docs/spec/tir.md#15-sync)): `Sync` is a whole-mesh rendezvous every unit reaches,
-while these let a producer signal completion of work the consumer did not
-perform — which is what an asynchronous copy needs, since the thread that issues
-one is not the thread that waits for it.
+([§1.5](../../../../../../docs/spec/tir.md#15-sync)). `Sync` is a whole-mesh rendezvous every unit reaches.
+These let a producer signal completion of work the consumer did not perform.
+An asynchronous copy needs that, since the thread that executes the copy is
+not the thread that waits for it.
 
 **Each lowers to its instruction, not to a runtime entry, and the runtime
 publishes no `ops::` entry for any of them:** an mbarrier is a shared-memory
@@ -484,8 +484,8 @@ class MBarrierArriveExpectTx(Op):
 ```
 - constraints:
   - `barrier` is smem and `tx_bytes` is a positive compile-time count.
-  - The phase completes when both the arrivals and the byte count are satisfied,
-    so one wait covers a copy the waiting thread did not issue.
+  - The phase completes when both the arrivals and the byte count are satisfied.
+    So one wait covers a copy the waiting thread did not execute.
   - `tx_bytes` MUST equal the bytes the paired copy delivers. A phase expecting a
     different count never completes, and that failure presents as a hang rather
     than as a wrong value.

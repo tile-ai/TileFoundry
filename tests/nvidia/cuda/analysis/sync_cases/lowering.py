@@ -261,7 +261,7 @@ class OneWriterFill(SyncCase):
         everyone = patch(
             "tilefoundry.passes.transforms.convert_hir_to_tir.first_thread", lambda enclosing, topologies: None
         )
-        with everyone, pytest.raises(analysis.Error, match="two threads that issue Fill tensor write one shared"):
+        with everyone, pytest.raises(analysis.Error, match="two threads that execute Fill tensor write one shared"):
             _analyzed(self.load())
 
 

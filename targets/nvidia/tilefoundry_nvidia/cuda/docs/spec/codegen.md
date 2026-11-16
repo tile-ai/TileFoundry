@@ -73,8 +73,8 @@ while owning register tensors are copied.
 CUDA emits `CopyAsyncBulk` and `LdMatrix` as the uniform runtime calls
 `tilefoundry::ops::copy_async_bulk(...)` and
 `tilefoundry::ops::ldmatrix(...)`. `CopyAsyncTensor` is a public TIR declaration, but CUDA emission MUST fail explicitly until the host can
-construct and pass encoded tensor maps; it MUST NOT substitute a bulk or
-thread-issued copy. `CopyReduceAsyncTensor` has the same boundary and MUST NOT
+construct and pass encoded tensor maps; it MUST NOT substitute a bulk copy or a
+copy that each thread executes for itself. `CopyReduceAsyncTensor` has the same boundary and MUST NOT
 substitute a copy that drops the reduction. `StMatrix` MUST fail explicitly
 until stmatrix runtime support exists.
 

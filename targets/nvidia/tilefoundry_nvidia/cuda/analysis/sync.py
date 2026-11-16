@@ -111,7 +111,7 @@ class SyncPlanMetadata(expr.IRMetadata):
 class Use:
     """One effect of an action on shared memory bytes, global memory roots or one register storage.
 
-    ``threads`` is the layout that gives each of those bytes to one issuing
+    ``threads`` is the layout that gives each of those bytes to one executing
     thread, when there is one. A root of None in ``global_roots`` is unknown.
     """
 
@@ -948,7 +948,7 @@ class Planner:
             )
         if needed.base < held.base or needed.base + needed.count > held.base + held.count:
             raise analysis.Error(
-                "sync: a collective step is needed outside the threads that issued it"
+                "sync: a collective step is needed outside the threads that execute it"
             )
         self.uniform_loops(scope, mesh, "a collective step", size)
 

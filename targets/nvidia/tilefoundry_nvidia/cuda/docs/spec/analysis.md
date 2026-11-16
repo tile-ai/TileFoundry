@@ -210,11 +210,11 @@ class SyncPlanMetadata(IRMetadata):
     memory, the innermost of them is a slice holding the first thread of the
     enclosing mesh, and it counts as a slice around the action. A write needs
     no relation when a layout splits it over a mesh whose units are
-    exactly the threads that issue it, those every thread slice around it
-    holds, or every thread of the CTA without one. That layout is the
-    destination's own or, for a `Copy`, that of the one operand
-    that splits every thread axis, since `Copy` projects a plain operand
-    through it. Two different threads that reach one element are otherwise
+    exactly the threads that execute it. These are the threads that every
+    thread slice around it holds, or every thread of the CTA without one. That
+    layout is the destination's own. For a `Copy`, it is that of the one
+    operand that splits every thread axis, since `Copy` projects a plain
+    operand through it. Two different threads that reach one element are otherwise
     decided by the rows of the **CTAs** table. The family checks **Threads**
     after **CTAs**.
   - **Word users.** The word of warp `k` has one user, thread `W * k`. Whole
@@ -270,10 +270,10 @@ def completion_of(issued: Issued, *, key: type | None = None) -> tuple[Effect, .
     parameters. `effects` builds them in parameter order, with the reads of a
     parameter first. A handler sees the parameter types.
   - `Mechanism.ON_RETURN` means the effect is complete for the threads of the
-    execution mesh once the statement returns. `Mechanism.GROUP` means it completes when those
-    threads wait on the `group` that holds it.
+    execution mesh once the statement returns. `Mechanism.GROUP` means it
+    completes when those threads wait on the `group` that holds it.
   - `proxy` is the path the effect takes to shared memory. A `unit` is the
-    mesh of one set of threads that issue the instruction together. These
+    mesh of one set of threads that execute the instruction together. These
     threads also run the steps of its group together. A `fence` effect on
     registers needs the fence of its group after any other access to those
     registers. An earlier effect with the same non-None `chain` is the

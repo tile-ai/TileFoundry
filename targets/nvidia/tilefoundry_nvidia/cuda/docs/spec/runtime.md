@@ -645,7 +645,7 @@ __device__ inline void copy_async_bulk(Src const &src, Dst &dst,
 <!-- /generated -->
 
 **`copy_async_bulk`.** Stages a tile into shared memory and signals an
-mbarrier when readable. Unlike thread-issued `copy_async`, its consumer can
+mbarrier when readable. Unlike `copy_async`, which each thread executes for itself, its consumer can
 wait for data fetched by another thread.
 
 - constraints:

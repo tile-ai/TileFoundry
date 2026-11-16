@@ -1295,7 +1295,7 @@ EXPECTED = {
         },
     ),
     "hir/split_copy_fewer_threads": dict(
-        sync_refusal="two threads that issue Copy dst write one shared memory element",
+        sync_refusal="two threads that execute Copy dst write one shared memory element",
         smem_peak=512,
         candidates_refusal="source has no unscheduled candidate site",
     ),
