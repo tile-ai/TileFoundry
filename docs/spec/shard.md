@@ -470,9 +470,11 @@ def within_scope(mesh: Mesh, current: Mesh) -> bool:
   - `get(mesh, topology)` MUST return the single-topology mesh of that topology,
     or `None` when the mesh does not name it. `get(layout, i)` is the CuTe mode
     getter. Only `get` divides the total offset into one topology's unit id.
-  - To divide a nonzero offset, every topology inside the outermost one MUST
-    have a static positive size. The outermost size MAY be symbolic. `get` MUST
-    refuse an offset that it cannot divide. It MUST refuse a mesh of several
+  - `get` divides the offset from the innermost topology outward, down to the
+    selected one. A size that divides a nonzero remainder MUST be static and
+    positive. A remainder of 0 needs no further size. The outermost topology
+    keeps the quotient, so its size MAY be symbolic. `get` MUST refuse an offset
+    that it cannot divide. It MUST refuse a mesh of several
     topologies whose slice has an inner transform.
   - Scope comparison MUST reduce each level's layout with
     `layout_algebra.filter(layout, major="row")`, retaining the level's start. Filtering

@@ -420,7 +420,8 @@ def get(value, key):
 
     For a mesh, *key* is a topology name and a name the mesh does not state gives
     ``None``. The total offset divides into that topology's own unit id here
-    only: the inner topology sizes MUST be static, the outermost one need not be.
+    only. A size used to divide a nonzero remainder must be static and positive;
+    once the remainder is 0 no further size is read, and the outermost keeps the quotient.
     """
     if not isinstance(value, Mesh):
         return layout.get(value, key)
