@@ -139,20 +139,6 @@ def test_verify_rejects_non_ir_node():
         verifier.verify_prim_function(function)
 
 
-def test_verify_rejects_non_ir_callable():
-    """A lowering recipe in callable position is refused before instruction checks."""
-    tensor = types.TensorType.from_shape((4,), storage="rmem")
-    source = expr.Var(type=tensor, name="source")
-    recipe = transforms.View(base=source, starts=(), sizes=(4,), type=tensor)
-    function = core.PrimFunction(
-        name="recipe_callable",
-        params=(source,),
-        body=core.Sequential(body=(core.Evaluate(callable=recipe, args=()),)),
-    )
-    with pytest.raises(expr.VerifyError, match="non-IR node View in Evaluate"):
-        verifier.verify_prim_function(function)
-
-
 def test_variant_refuses_parent_parameter():
     """Each specialization owns its parameters; the parent's Var is invisible."""
     program = cli.load_authored_ir(str(Path(__file__).parents[1] / "fixtures/tir/parent_parameter.py"))

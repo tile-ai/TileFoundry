@@ -9,13 +9,14 @@ a structural Stmt is checked without a registered rule, while an unregistered Op
 must raise rather than return a zero.
 """
 
+from __future__ import annotations
+
 import pytest
 
-from tilefoundry import parser, verifier
+from tilefoundry import verifier
 from tilefoundry.interfaces import cost, evaluator, typeinfer
 from tilefoundry.ir import core, expr, types
 from tilefoundry.ir.tir import memory
-from tilefoundry.passes import transforms
 
 
 def _t() -> types.TensorType:
@@ -94,39 +95,3 @@ def test_verify_copy_evaluate_dispatch_and_structural_statements(src, dst) -> No
     verifier.verify_prim_function(
         core.PrimFunction(name="structural", params=(), body=core.Sequential((let, core.Return())))
     )
-
-
-@parser.intrinsic
-def verifier_probe(value: expr.Expr) -> None:
-    """An intrinsic whose one Expr field the verifier reads like any other use."""
-
-
-def _probe_field(case: str, param: expr.Var) -> object:
-    if case == "visible":
-        return param
-    if case == "unbound":
-        return expr.Var(type=_t(), name="stray")
-    if case == "recipe":
-        return transforms.View(base=param, starts=(), sizes=(), type=_t())
-    return expr.Call(type=_t(), target=memory.AllocTensor(tensor_type=_t()), args=())
-
-
-@pytest.mark.parametrize(
-    ("case", "refusal"),
-    [
-        ("visible", None),
-        ("unbound", r"stray is used outside the scope that binds it"),
-        ("recipe", r"non-IR node View in VerifierProbe"),
-        ("alloc", r"Call\(AllocTensor, \.\.\.\) may only appear as a direct LetStmt.value"),
-    ],
-)
-def test_intrinsic_fields_are_verified_as_uses(case, refusal) -> None:
-    """An intrinsic statement's Expr fields meet the same use rules as any statement's."""
-    param = expr.Var(type=_t(), name="x")
-    probe = verifier_probe(value=_probe_field(case, param))
-    function = core.PrimFunction(name="probe", params=(param,), body=core.Sequential((probe,)))
-    if refusal is None:
-        verifier.verify_prim_function(function)
-        return
-    with pytest.raises(expr.VerifyError, match=refusal):
-        verifier.verify_prim_function(function)

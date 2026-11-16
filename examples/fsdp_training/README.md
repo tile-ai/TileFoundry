@@ -175,10 +175,10 @@ There are four disjoint groups of size four for each collective. Four-way reduce
 
 ## Regression checks
 
-Target-independent ownership and reduction unit tests live under `tests/core`. CI runs this example through `tests/nvidia/cuda/integration/test_fsdp_training_example.py`: for one and two participants under both policies, it builds the program, checks it and compares two training steps with the dense reference on CPU. `tests/nvidia/cuda/evaluator/test_mesh_calls.py` covers participant-local values retained across typed tuple calls. CI does not run the HSDP meshes or the residency study; the runner commands above cover them.
+Target-independent ownership and reduction unit tests live under `tests/core`. CI runs this example through the child-evaluation corpus in `tests/nvidia/cuda/evaluator/test_child_evaluation.py`, which loads the fixture `tests/nvidia/cuda/fixtures/evaluator/fsdp_training_example.py`: for one and two participants under both policies, it builds the program, checks it and compares two training steps with the dense reference on CPU. `tests/nvidia/cuda/evaluator/test_mesh_calls.py` covers participant-local values retained across typed tuple calls. CI does not run the HSDP meshes or the residency study; the runner commands above cover them.
 
 ```bash
-python -m pytest tests/nvidia/cuda/integration/test_fsdp_training_example.py \
+python -m pytest tests/nvidia/cuda/evaluator/test_child_evaluation.py \
   tests/nvidia/cuda/evaluator/test_mesh_calls.py -q
 ```
 
