@@ -37,7 +37,7 @@ class Result:
     module: core.Module
     function: core.Function
     analyses: tuple[str, ...]
-    topology_level: str | None
+    topology: str | None
     executed: tuple[str, ...]
     metadata_types: tuple[type[expr.IRMetadata], ...]
     functions: tuple[core.Function, ...]
@@ -110,14 +110,14 @@ def build_context(
     module: core.Module,
     function: core.Function,
     *,
-    topology_level: str | None = None,
+    topology: str | None = None,
     options: object | None = None,
 ) -> tuple[AnalyzeContext, ...]:
     """Build one local scope tree per definition in a previously checked program."""
     check_subject(module, function)
     topologies = module.effective_topologies()
-    if topology_level is None:
-        topology_level = topologies[0].name if topologies else None
+    if topology is None:
+        topology = topologies[0].name if topologies else None
 
     contexts, definitions = [], {}
     frames = tuple(valuation.definitions(valuation.Context(module, function), postorder=True))
@@ -125,7 +125,7 @@ def build_context(
         context = AnalyzeContext(
             module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies,
             owner=frame.function,
-            topology_level=topology_level,
+            topology=topology,
             options=options,
             entry=function,
             definitions=definitions,
@@ -147,7 +147,7 @@ def analyze(
     function: core.Function,
     *,
     analysis: str | Sequence[str],
-    topology_level: str | None = None,
+    topology: str | None = None,
     level: str | None = None,
     options: object | None = None,
 ) -> Result:
@@ -157,23 +157,23 @@ def analyze(
     write records onto that same program; dimensions are bound by the caller.
     The selected topology defaults to the module's coarsest level.
     """
-    if topology_level is not None and level is not None and topology_level != level:
-        raise ValueError("analyze: topology_level and level disagree")
-    topology_level = topology_level if topology_level is not None else level
+    if topology is not None and level is not None and topology != level:
+        raise ValueError("analyze: topology and level disagree")
+    topology = topology if topology is not None else level
     check_subject(module, function)
     if expr.get_metadata(function, ExecutionMeshMetadata) is None:
         raise Error("analyze needs the program returned by check_program")
     roots = normalize_roots(analysis)
     result_module = module
     closure = analyzer_closure(module.resolve_target(), roots)
-    if topology_level is None:
+    if topology is None:
         topologies = module.effective_topologies()
-        topology_level = topologies[0].name if topologies else None
-    check_analyses(module, function, closure, topology_level=topology_level)
+        topology = topologies[0].name if topologies else None
+    check_analyses(module, function, closure, topology=topology)
     contexts = build_context(
         module,
         function,
-        topology_level=topology_level,
+        topology=topology,
         options=options,
     )
     context = contexts[-1]
@@ -205,7 +205,7 @@ def analyze(
         module=result_module,
         function=function,
         analyses=roots,
-        topology_level=topology_level,
+        topology=topology,
         executed=tuple(algorithm.selector for algorithm in closure),
         metadata_types=tuple(item for item in order if item in surviving),
         functions=functions,

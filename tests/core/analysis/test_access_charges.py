@@ -193,7 +193,7 @@ def test_insert_read_held_to_window(
         args=(expr.Var(type=destination, name="dst"), expr.Var(type=update, name="update"), offsets),
     )
     topologies = (_CTA4, _THREAD2) if level == "thread" else (_CTA2,)
-    ctx = cost.Context(topology_level=level, topologies=topologies)
+    ctx = cost.Context(topology=level, topologies=topologies)
 
     stated = access.relations_of(call, ctx)
     reads = stated[1].relation

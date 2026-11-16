@@ -117,17 +117,17 @@ class Target(target.Target):
         """
         return target.TopologyFacts(
             (
-                target.TopologyLevelFacts(
+                target.TopologyLimits(
                     "gpu", self.device_count, parallel_units(self, "gpu"), from_target=True
                 ),
-                target.TopologyLevelFacts("cta", None, parallel_units(self, "cta")),
-                target.TopologyLevelFacts(
+                target.TopologyLimits("cta", None, parallel_units(self, "cta")),
+                target.TopologyLimits(
                     "thread",
                     self.architecture.topology_limit("thread"),
                     parallel_units(self, "thread"),
                 ),
             ),
-            parallel_level="cta",
+            parallel_topology="cta",
         )
 
     def get_analyzer(self, selector: str) -> target.Analyzer:
@@ -149,12 +149,12 @@ class Target(target.Target):
             return target.facts_result(
                 self, facts_type, target.MemoryExecutionFacts((self.topology_facts().topologies[-1].name,))
             )
-        if facts_type is target.TopologyLevelFacts:
-            level = self.topology_facts().level(
+        if facts_type is target.TopologyLimits:
+            limits = self.topology_facts().topology(
                 query if isinstance(query, str) else None
             )
-            if level is not None:
-                return target.facts_result(self, facts_type, level)
+            if limits is not None:
+                return target.facts_result(self, facts_type, limits)
             return super().get_facts(facts_type, query)
 
         if facts_type is target.MemoryHierarchyFacts:
@@ -186,7 +186,7 @@ class Target(target.Target):
         return self.architecture.name
 
     def topology_limit(self, name: str) -> int:
-        """Return the physical parallel limit for one CUDA topology level."""
+        """Return the physical parallel limit for one CUDA topology."""
         if name == "gpu":
             return self.device_count or 1
         if name == "cta":

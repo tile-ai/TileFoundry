@@ -456,7 +456,7 @@ def axis_parameters_of(scope: IterationScope, mesh: types.Mesh | None) -> tuple[
     )
 
 
-def wave_mesh(scope: IterationScope, topology_level: str) -> types.Mesh | None:
+def wave_mesh(scope: IterationScope, topology: str) -> types.Mesh | None:
     """Find the enclosing mesh, including the definition's checked outer mesh."""
     for ctx in scope.ancestors():
         mesh = (
@@ -466,8 +466,8 @@ def wave_mesh(scope: IterationScope, topology_level: str) -> types.Mesh | None:
         )
         if mesh is not None:
             for component in types.separate(mesh):
-                topology = component.topologies[0]
-                if getattr(topology, "name", topology) == topology_level:
+                held = component.topologies[0]
+                if getattr(held, "name", held) == topology:
                     return component
     return None
 
@@ -484,7 +484,7 @@ def one_time_fill(loops, operands: tuple[cost.TrafficBytes, ...]) -> bool:
     return not loops and all(item.read == 0 for item in operands)
 
 
-def shared_origin(scope, tgt, definitions, topology_level, wave) -> bool:
+def shared_origin(scope, tgt, definitions, topology, wave) -> bool:
     """A material definition made by multiple wave units is not shared data.
 
     Registered storage-sharing edges have already resolved the origin, so a
@@ -496,7 +496,7 @@ def shared_origin(scope, tgt, definitions, topology_level, wave) -> bool:
         if isinstance(tgt, expr.Call) and core.SSAValue(tgt) not in scope.provenance.snapshot
         else None,
     )
-    mesh = None if origin is None else wave_mesh(origin, topology_level)
+    mesh = None if origin is None else wave_mesh(origin, topology)
     if mesh is None:
         return True
     axes = tuple(range(len(types.flatten(types.flatten(mesh.layout).shape))))
@@ -514,9 +514,9 @@ def moving_boundaries(
 
     Definition-time source entries already name each boundary's material result.
     """
-    whole = replace(ctx, topology_level=None, topologies=())
+    whole = replace(ctx, topology=None, topologies=())
     wave_units, declared_units = wave
-    topology_level = ctx.topology_level or ctx.target.get_facts(target.TopologyFacts).parallel_level
+    topology = ctx.topology or ctx.target.get_facts(target.TopologyFacts).parallel_topology
     definitions = {
         value_id: scope
         for definition in ctx.definitions.values()
@@ -532,7 +532,7 @@ def moving_boundaries(
     found: list[MovingBoundary] = []
     for path, (call, _) in root.access.accesses.get("narrow", {}).items():
         scope = root.at(path[:1])
-        mesh = wave_mesh(scope, topology_level)
+        mesh = wave_mesh(scope, topology)
         axis_parameters = axis_parameters_of(scope, mesh)
         _, loops = scope.access_environment(path)
         moved = expr.get_metadata(call, MemoryMetadata)
@@ -610,7 +610,7 @@ def moving_boundaries(
                     mesh_parameters=mesh_parameters,
                     axis_parameters=axis_parameters
                     if wave_stated
-                    and shared_origin(scope, acc.target.expr, definitions, topology_level, wave)
+                    and shared_origin(scope, acc.target.expr, definitions, topology, wave)
                     else (),
                     unit_id=unit_id,
                 )
@@ -625,7 +625,7 @@ def uncounted_movements(
     ctx: cost.Context,
 ) -> tuple[tuple[IterationScope, ReachedAddresses], ...]:
     """Keep completeness evidence that has no countable moving boundary."""
-    whole = replace(ctx, topology_level=None, topologies=())
+    whole = replace(ctx, topology=None, topologies=())
     found: list[tuple[IterationScope, ReachedAddresses]] = []
     for path, (call, _) in root.access.accesses.get("narrow", {}).items():
         scope = root.at(path[:1])
@@ -908,28 +908,28 @@ def reuse_windows(root, *, memory_level, wave, ctx, capacity):
 def wave_of(
     module: core.Module,
     tgt: target.Target,
-    topology_level: str | None,
+    topology: str | None,
     *,
     topologies: tuple[Topology, ...] | None = None,
 ) -> tuple[int, int] | None:
     """Return ``(wave_units, declared_units)``, or ``None`` when unstated."""
     try:
         facts = tgt.get_facts(target.TopologyFacts)
-        level = facts.parallel() if topology_level is None else facts.level(topology_level)
-        if level is None or level.max_physical_units is None:
+        limits = facts.parallel() if topology is None else facts.topology(topology)
+        if limits is None or limits.max_physical_units is None:
             return None
         declared_units = expr.static_dim_value(
             (
-                module.resolve_topology(level.name)
+                module.resolve_topology(limits.name)
                 if topologies is None
-                else next(item for item in topologies if item.name == level.name)
+                else next(item for item in topologies if item.name == limits.name)
             ).size
         )
     except (target.UnsupportedCapabilityError, ValueError):
         return None
     if declared_units is None:
         return None
-    return min(declared_units, level.max_physical_units), declared_units
+    return min(declared_units, limits.max_physical_units), declared_units
 
 
 def cached_level(facts: target.MemoryHierarchyFacts) -> tuple[str, str, int] | None:

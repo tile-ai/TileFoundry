@@ -237,8 +237,8 @@ class OneWriterRow(SyncCase):
         assert [kind for kind, _ in issued[start : start + 5]] == list(kinds)
         (_, writer), (_, commit), (_, wait) = issued[start : start + 3]
         assert isinstance(writer.layout, types.ComposedLayout)
-        assert types.size(types.levels(writer)[0]) == 1
-        assert commit == wait and types.size(types.levels(wait)[0]) == wait.topologies[0].size
+        assert types.size(types.layouts(writer)[0]) == 1
+        assert commit == wait and types.size(types.layouts(wait)[0]) == wait.topologies[0].size
 
 
 @case
@@ -257,7 +257,7 @@ class OneWriterFill(SyncCase):
         issuers.visit(finalize(result).lookup(result.function.name).body)
         (writer,) = [mesh for op, mesh in issuers.issued if isinstance(op, memory.Fill)]
         assert isinstance(writer.layout, types.ComposedLayout)
-        assert types.size(types.levels(writer)[0]) == 1
+        assert types.size(types.layouts(writer)[0]) == 1
         everyone = patch(
             "tilefoundry.passes.transforms.convert_hir_to_tir.first_thread", lambda enclosing, topologies: None
         )

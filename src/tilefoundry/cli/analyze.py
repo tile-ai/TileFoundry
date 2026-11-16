@@ -120,7 +120,7 @@ def run_authored_analysis(
     disarmed = watch(ANALYSIS_TIMEOUT_SECONDS)
     try:
         program = checked_program(
-            source, dims, command="analyze", topology_level=topology if analyses else None
+            source, dims, command="analyze", topology=topology if analyses else None
         )
         checked, root = program.module, program.entry
         if not analyses:
@@ -135,7 +135,7 @@ def run_authored_analysis(
             checked,
             root,
             analysis=analyses,
-            topology_level=topology,
+            topology=topology,
         )
         rendered = inspection.render_analysis(result, operands=operands and not as_json)
         if as_json:

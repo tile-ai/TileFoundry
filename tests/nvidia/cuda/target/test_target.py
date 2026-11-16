@@ -44,8 +44,8 @@ class _NoComputeUnitRateCudaTarget(cuda.Target):
 class ExtraTopologyCudaTarget(cuda.Target):
     name = "tests.core.target.extra_topology_cuda"
     extra_levels = (
-        target.TopologyLevelFacts("custom", 1, None),
-        target.TopologyLevelFacts("unknown", 1, None),
+        target.TopologyLimits("custom", 1, None),
+        target.TopologyLimits("unknown", 1, None),
     )
 
     def get_facts(self, facts_type: type, query: object | None = None):
@@ -53,9 +53,9 @@ class ExtraTopologyCudaTarget(cuda.Target):
             inherited = super().get_facts(facts_type, query)
             return target.TopologyFacts(
                 (*inherited.topologies, *self.extra_levels),
-                parallel_level=inherited.parallel_level,
+                parallel_topology=inherited.parallel_topology,
             )
-        if facts_type is target.TopologyLevelFacts:
+        if facts_type is target.TopologyLimits:
             for level in self.extra_levels:
                 if level.name == query:
                     return level
@@ -74,7 +74,7 @@ def test_cuda_projects_cta_rates() -> None:
     device = tgt.get_facts(target.ThroughputFacts)
     services = tgt.get_facts(target.PerformanceServiceFacts)
 
-    assert services.unit == "cta"
+    assert services.topology == "cta"
     assert dict(services.unit_flops) == {
         dtype: rate // tgt.device.sm_count for dtype, rate in device.peak_flops_per_second
     }

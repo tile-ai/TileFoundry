@@ -173,7 +173,7 @@ class Module:
             available = ", ".join(t.name for t in levels) or "none"
             raise ValueError(
                 f"Module {self.name!r}: no topology named {name!r}; "
-                f"effective topology levels are {available}"
+                f"effective topologies are {available}"
             )
         if len(matches) > 1:
             raise ValueError(

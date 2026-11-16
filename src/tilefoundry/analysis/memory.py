@@ -177,7 +177,7 @@ def movement(
             if moved.write:
                 writes[memory_level] = writes.get(memory_level, 0) + value
     moving = any(item.read or item.write for item in traffic)
-    levels = (
+    by_memory_level = (
         tuple(
             (name, cost.TrafficBytes(reads.get(name, 0), writes.get(name, 0)))
             for name in sorted(set(reads) | set(writes))
@@ -185,7 +185,7 @@ def movement(
         if moving
         else ()
     )
-    return levels, traffic
+    return by_memory_level, traffic
 
 
 def call_traffic(
@@ -218,8 +218,8 @@ def call_traffic(
             *(ctx.local_type_of(arg) for arg in node.args),
             ctx.local_type_of(node),
         )
-        levels, positional = movement(node, cost_value, ctx, type_list, scope)
-        for memory_level, moved in levels:
+        by_memory_level, positional = movement(node, cost_value, ctx, type_list, scope)
+        for memory_level, moved in by_memory_level:
             if unit is None:
                 storage_whole[memory_level] = moved
             else:
@@ -249,17 +249,17 @@ def call_traffic(
     )
 
 
-def finer_than(unit: str, boundary: str, ordered: "dict[str, cost.Context]") -> bool:
-    """Whether *unit* sits inside *boundary* rather than at or around it.
+def finer_than(topology: str, boundary: str, ordered: "dict[str, cost.Context]") -> bool:
+    """Whether *topology* sits inside *boundary* rather than at or around it.
 
     Crossing a boundary is what the units on either side of it do. A unit
     inside one did not cross it, and stating a share for it would divide a
     move nobody made.
     """
     names = tuple(ordered)
-    if unit not in names or boundary not in names:
+    if topology not in names or boundary not in names:
         return False
-    return names.index(unit) > names.index(boundary)
+    return names.index(topology) > names.index(boundary)
 
 
 def occurrence_shares(
@@ -397,11 +397,11 @@ def values_in_region(
     Unsharded tensor leaves defined in the window contribute while live,
     including definitions in child regions.
     """
-    positions = {name: index for index, name in enumerate(topology_names)}
-    region_positions = tuple(
-        positions[getattr(topology, "name", topology)] for topology in region.mesh.topologies
+    topology_levels = {name: index for index, name in enumerate(topology_names)}
+    region_levels = tuple(
+        topology_levels[getattr(topology, "name", topology)] for topology in region.mesh.topologies
     )
-    outermost_region = min(region_positions)
+    outermost_region = min(region_levels)
     result = []
     for item in values:
         lifetime = item
@@ -467,10 +467,10 @@ class MemoryVisitor(valuation.Visitor[None]):
             moved = (
                 call_traffic(
                     node,
-                    replace(ctx, topology_level=None),
-                    {unit: replace(ctx, topology_level=unit) for unit in ctx.units},
+                    replace(ctx, topology=None),
+                    {unit: replace(ctx, topology=unit) for unit in ctx.units},
                     ctx.scope,
-                    ctx.topology_level,
+                    ctx.topology,
                 )
                 if recorded
                 else MemoryMetadata()
@@ -490,7 +490,7 @@ class MemoryVisitor(valuation.Visitor[None]):
                 raise Error(f"memory: missing summary for {callee.name!r}")
             moved = MemoryMetadata(topologies=summary.topologies, traffic=summary.traffic)
         node.attach_metadata(moved)
-        repeats = ctx.scope.repeats_of(node, ctx.topology_level)
+        repeats = ctx.scope.repeats_of(node, ctx.topology)
         add_traffic(
             ctx.storage,
             ctx.communication,
@@ -503,31 +503,31 @@ class MemoryVisitor(valuation.Visitor[None]):
 def analyze_memory(function: core.Function, context: AnalyzeContext) -> None:
     """Attach one definition's movement, reached addresses and liveness."""
     module = context.module
-    topology_level = context.topology_level
+    topology = context.topology
     facts = context.target.get_facts(target.MemoryHierarchyFacts)
     owner_topologies = tuple(
-        level.name for level in context.target.get_facts(target.TopologyFacts).topologies
+        limits.name for limits in context.target.get_facts(target.TopologyFacts).topologies
     )
-    for level in facts.explicit_levels:
-        if not level.owner:
-            raise Error(f"memory: level {level.name!r} has no declared owner")
+    for explicit in facts.explicit_levels:
+        if not explicit.owner:
+            raise Error(f"memory: level {explicit.name!r} has no declared owner")
         try:
             context.target.storage_owners
         except ValueError:
             raise Error(
-                f"memory: level {level.name!r} owner {level.owner!r} is not a "
+                f"memory: level {explicit.name!r} owner {explicit.owner!r} is not a "
                 f"target topology in {owner_topologies}"
             )
     topologies = context.topologies
     cache = cached_level(facts)
     wave = (
-        wave_of(module, context.target, topology_level, topologies=topologies)
+        wave_of(module, context.target, topology, topologies=topologies)
         if cache is not None
         else None
     )
     memory_level = cache[1] if cache is not None and wave is not None else None
-    units = tuple(topology.name for topology in topologies) or (
-        (topology_level,) if topology_level else ()
+    units = tuple(each.name for each in topologies) or (
+        (topology,) if topology else ()
     )
     memory_context = MemoryContext(
         **vars(context),
@@ -562,7 +562,7 @@ def analyze_memory(function: core.Function, context: AnalyzeContext) -> None:
                 wave_units=wave[0],
                 declared_units=wave[1],
                 operands=() if moved is None else moved.operands,
-                ctx=replace(context, topology_level=None),
+                ctx=replace(context, topology=None),
                 window=len(scope.loop_scopes) - 1,
                 path=path,
                 loops=loops,
@@ -570,7 +570,7 @@ def analyze_memory(function: core.Function, context: AnalyzeContext) -> None:
             if evidence is None:
                 available = False
                 continue
-            windows = -(-origin.mesh_units(topology_level) // wave[0])
+            windows = -(-origin.mesh_units(topology) // wave[0])
             trips = prod(loop.trips() for loop in loops)
             key = (path[:-1], origin, windows * trips)
             groups[key].extend(evidence)
@@ -587,7 +587,7 @@ def analyze_memory(function: core.Function, context: AnalyzeContext) -> None:
             context.scope.root,
             memory_level=memory_level,
             wave=wave,
-            ctx=replace(context, topology_level=topology_level),
+            ctx=replace(context, topology=topology),
             capacity=cache[2],
         )
     )
@@ -621,13 +621,13 @@ def analyze_memory(function: core.Function, context: AnalyzeContext) -> None:
 
 def resident_peaks(model, windows, offsets, facts, sizes, *, interval=None):
     """Count live root spans, using address unions only for solved arenas."""
-    levels = {}
+    by_memory_level = {}
     for window in windows:
         value = model.by_value.get(window.value)
         if value is not None:
-            levels.setdefault(window.memory_level, []).append((model.root(value), window))
+            by_memory_level.setdefault(window.memory_level, []).append((model.root(value), window))
     peaks = []
-    for name, items in sorted(levels.items()):
+    for name, items in sorted(by_memory_level.items()):
         events = {
             point for _, window in items for point in (window.defined_at, window.last_used_at)
         }
@@ -653,13 +653,13 @@ def resident_peaks(model, windows, offsets, facts, sizes, *, interval=None):
                 end = max(end, stop)
             return amount
 
-        level = facts.explicit(name)
+        explicit = facts.explicit(name)
         peaks.append(
             MemoryLevelPeak(
                 name,
                 max((occupied(p) for p in events), default=0),
                 occupied(0, True),
-                level.capacity_bytes if level else None,
+                explicit.capacity_bytes if explicit else None,
             )
         )
     return tuple(peaks)
@@ -719,7 +719,7 @@ def place(model, facts, topologies):
     )
     regions, claimed = {}, set()
     rmem_peak = 0
-    names = tuple(level.name for level in model.context.target.get_facts(target.TopologyFacts).topologies)
+    names = tuple(limits.name for limits in model.context.target.get_facts(target.TopologyFacts).topologies)
     for window in model.liveness.regions:
         resident = values_in_region(
             tuple(model.windows),
@@ -730,25 +730,25 @@ def place(model, facts, topologies):
             names,
             model.context.target.storage_owners,
         )
-        levels = resident_peaks(
+        peaks_here = resident_peaks(
             model, resident, offsets, facts, sizes, interval=(window.entered_at, window.exited_at)
         )
-        if not levels:
+        if not peaks_here:
             continue
         region, held = regions.setdefault(id(window.region), (window.region, {}))
-        for level in levels:
-            previous = held.get(level.memory_level)
-            held[level.memory_level] = (
-                level
+        for peak in peaks_here:
+            previous = held.get(peak.memory_level)
+            held[peak.memory_level] = (
+                peak
                 if previous is None
                 else replace(
-                    level,
-                    peak_bytes=max(previous.peak_bytes, level.peak_bytes),
-                    persistent_bytes=max(previous.persistent_bytes, level.persistent_bytes),
+                    peak,
+                    peak_bytes=max(previous.peak_bytes, peak.peak_bytes),
+                    persistent_bytes=max(previous.persistent_bytes, peak.persistent_bytes),
                 )
             )
-            if level.memory_level == "rmem":
-                rmem_peak = max(rmem_peak, level.peak_bytes)
+            if peak.memory_level == "rmem":
+                rmem_peak = max(rmem_peak, peak.peak_bytes)
                 claimed.update(id(value) for value in resident if value.memory_level == "rmem")
     for region, held in regions.values():
         region.attach_metadata(RegionMemoryMetadata(

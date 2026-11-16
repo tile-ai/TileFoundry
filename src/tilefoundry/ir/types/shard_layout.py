@@ -18,7 +18,7 @@ from .layout import (
     unflatten,
 )
 from .layout_algebra import coalesce, slice_and_offset
-from .mesh import Mesh, levels, separate
+from .mesh import Mesh, layouts, separate
 from .stride import compact_row_major, crd2idx, idx2crd
 
 __all__ = [
@@ -381,7 +381,7 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
     remaining = [axis for axis, at in enumerate(coords) if at is None]
     if remaining:
         groups, topologies, begin = [], [], 0
-        for topology, arrangement in zip(shard.mesh.topologies, levels(shard.mesh), strict=True):
+        for topology, arrangement in zip(shard.mesh.topologies, layouts(shard.mesh), strict=True):
             count = len(flatten(arrangement.shape))
             group = [axis for axis in remaining if begin <= axis < begin + count]
             if group:
@@ -434,7 +434,7 @@ def mesh_coords(mesh: Mesh, ids: tuple[int | None, ...]) -> tuple[int | None, ..
     The host side of the CUDA runtime's ``mesh_coords(mesh, unit_ids())``.
     """
     coords = []
-    for index, arrangement in enumerate(levels(mesh)):
+    for index, arrangement in enumerate(layouts(mesh)):
         flat = flatten(arrangement)
         unit_id = ids[index] if index < len(ids) else None
         coords.extend(

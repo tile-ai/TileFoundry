@@ -421,7 +421,7 @@ def test_local_duration_prices_stated_rates() -> None:
 
     with pytest.raises(
         analysis.Error,
-        match=r"^performance: selected topology level 'thread', but the target's "
+        match=r"^performance: selected topology 'thread', but the target's "
         r"one-unit throughputs are stated for 'cta'$",
     ):
         analysis.local_duration_ns(work, throughput, services, level="thread")

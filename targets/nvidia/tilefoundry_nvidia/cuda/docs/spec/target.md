@@ -84,7 +84,7 @@ class Target(target.Target):
     the access being priced. `ThroughputFacts` is `rates` itself, the
     whole deployment when asked about no level; `PerformanceServiceFacts` is
     `rates` divided by `active`, rounding down. CUDA MUST name its default unit
-    `cta`; `TopologyLevelFacts.max_physical_units` MUST NOT enter this
+    `cta`; `TopologyLimits.max_physical_units` MUST NOT enter this
     derivation.
   - `rates` MUST scale each deployment dense-FLOP rate, each service rate
     (`unit_ops` from the device document, per SM) and the shared-memory
@@ -130,7 +130,7 @@ thread mesh layouts.
   - A declared program topology name MUST be one of the levels its target
     states. A name outside that set MUST be refused naming the levels the
     target declares.
-  - `get_facts(TopologyLevelFacts, "cta").max_logical_units` MUST be `None`:
+  - `get_facts(TopologyLimits, "cta").max_logical_units` MUST be `None`:
     the CUDA grid is a launch shape rather than an SM allocation, so its static
     extent is unbounded here. The `"thread"` Facts projection MUST equal
     `architecture.max_threads_per_cta`.

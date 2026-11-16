@@ -176,7 +176,7 @@ class Target:
     def get_facts(self, facts_type: type[FactsT], query: object | None = None) -> FactsT:
         """Return one immutable hardware-facts aggregate for this Target.
 
-        A backend that states no topology levels runs one program per call, so
+        A backend that states no topologies runs one program per call, so
         the empty level list is the default rather than a missing projection.
         """
         if facts_type is TopologyFacts and query is None:
@@ -195,7 +195,7 @@ class Target:
         limits = {level.name: level.max_logical_units for level in levels}
         if topology.name not in limits:
             raise ValueError(
-                f"{described}: unsupported topology level {topology.name!r}; "
+                f"{described}: unsupported topology {topology.name!r}; "
                 f"supported levels are {tuple(limits)}"
             )
         limit = limits[topology.name]

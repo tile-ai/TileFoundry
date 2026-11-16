@@ -60,7 +60,7 @@ def test_smem_capacity_counts_only_the_selected_units_coordinates(level, capacit
     held = types.TensorType(
         (2, 4, 3), expr.DType.f32, types.ShardLayout(layout, (types.Split(0), types.Split(1)), mesh), expr.StorageKind.SMEM
     )
-    assert analysis.storage_bytes(held, topology_level=level, topologies=topologies) == capacity
+    assert analysis.storage_bytes(held, topology=level, topologies=topologies) == capacity
     addresses = {
         types.apply(layout, block + 2 * lane + 8 * column) * 4 + byte
         for block in range(2 if level is None else 1)

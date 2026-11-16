@@ -100,7 +100,7 @@ def test_topology_resolution_names_levels() -> None:
     answer with whichever declaration happened to come first.
     """
     _Root, _CTA, _, _ = _context()
-    with pytest.raises(ValueError, match="effective topology levels are cta, warp"):
+    with pytest.raises(ValueError, match="effective topologies are cta, warp"):
         _Root.resolve_topology("block")
 
     with pytest.raises(ValueError, match="duplicate topology name"):

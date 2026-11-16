@@ -631,7 +631,7 @@ class PlacementMeshResolutionRule:
 
 @dataclass(frozen=True)
 class PlacementLevelRule:
-    STATEMENT: ClassVar[str] = "A placement's meshes cannot name the same topology level."
+    STATEMENT: ClassVar[str] = "A placement's meshes cannot name the same topology."
 
     def apply(self, value, *, match, context):
         meshes = placement_meshes(value, context, match)
@@ -4005,12 +4005,12 @@ def finish_mesh_context(mesh, match, context):
 
 @dataclass(frozen=True)
 class SelectionLevelRule:
-    STATEMENT: ClassVar[str] = "A mesh selection names exactly one topology level."
+    STATEMENT: ClassVar[str] = "A mesh selection names exactly one topology."
 
     def apply(self, value, *, match, context):
         if isinstance(value, MeshSelection) and len(value.selection.topologies) != 1:
             raise ParseError.from_node(
-                match.node, context, "a mesh selection selects one topology level"
+                match.node, context, "a mesh selection selects one topology"
             )
         return value
 
@@ -4025,7 +4025,7 @@ class SelectionSizeRule:
     def apply(self, value, *, match, context):
         if not isinstance(value, MeshSelection):
             return value
-        source = types.flatten(types.levels(value.selection)[0])
+        source = types.flatten(types.layouts(value.selection)[0])
         layout = value.layout
         message = None
         if types.size(layout) != types.size(source):
@@ -4074,7 +4074,7 @@ class SelectionStrideRule:
     def apply(self, value, *, match, context):
         if not isinstance(value, MeshSelection):
             return value
-        source = types.flatten(types.levels(value.selection)[0])
+        source = types.flatten(types.layouts(value.selection)[0])
         try:
             outer = layout_algebra.composition(source, value.layout, major="row")
         except (AssertionError, ValueError, TypeError) as error:

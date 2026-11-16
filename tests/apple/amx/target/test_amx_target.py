@@ -20,19 +20,19 @@ def test_amx_target_reports_and_validates_its_own_topology_levels():
     levels = tgt.get_facts(target.TopologyFacts).topologies
     assert tuple(level.name for level in levels) == ("thread",)
     assert not any(level.from_target for level in levels)
-    assert tgt.get_facts(target.TopologyLevelFacts, "thread") == target.TopologyLevelFacts("thread", 12, 12)
+    assert tgt.get_facts(target.TopologyLimits, "thread") == target.TopologyLimits("thread", 12, 12)
     assert amx.Target().get_facts(target.TopologyFacts) == tgt.get_facts(target.TopologyFacts)
     assert amx.Target("apple.m2_pro") == tgt
     assert tgt.to_python().text == 'amx.Target("apple.m2_pro")'
 
     with pytest.raises(ValueError) as topology_error:
         tgt.validate_program_topology(types.Topology("cta", 4))
-    assert "unsupported topology level 'cta'" in str(topology_error.value)
+    assert "unsupported topology 'cta'" in str(topology_error.value)
     assert "('thread',)" in str(topology_error.value)
     with pytest.raises(target.UnsupportedCapabilityError, match="no Facts projection"):
-        tgt.get_facts(target.TopologyLevelFacts, "cta")
+        tgt.get_facts(target.TopologyLimits, "cta")
 
-    with pytest.raises(ValueError, match="unsupported topology level 'amx'"):
+    with pytest.raises(ValueError, match="unsupported topology 'amx'"):
         tgt.validate_program_topology(types.Topology("amx", 1))
     tgt.validate_program_topology(types.Topology("thread", 12))
     with pytest.raises(ValueError, match="must satisfy 1 <= extent <= 12"):

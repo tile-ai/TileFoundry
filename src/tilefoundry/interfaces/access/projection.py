@@ -44,7 +44,7 @@ def projected(
             f"with {len(fields)}"
         )
     bindings = values_of(relations)
-    level = getattr(ctx, "topology_level", None)
+    level = getattr(ctx, "topology", None)
     coordinates: dim.IslParamValues = {}
 
     def placement(value) -> "isl.map | None":
@@ -56,7 +56,7 @@ def projected(
             value.layout,
             coordinates,
             divided=lambda layer: ir_utils.divided_mesh_axes(
-                layer, topology_level=level, topologies=ctx.topologies
+                layer, topology=level, topologies=ctx.topologies
             ),
         )
         return at_device(placed_at, coordinates, device or {})

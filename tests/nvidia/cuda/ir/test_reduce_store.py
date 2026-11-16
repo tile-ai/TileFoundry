@@ -13,7 +13,7 @@ def test_reduce_store_cost_via_schedule():
     args = (expr.Var("src", type=src), expr.Var("dst", type=dst))
     call = expr.Call(hir.schedule.ScheduleOp(op=memory.CopyReduceAsyncTensor()), args, type=dst)
     cost_value = cost.Visitor().visit(
-        call, cost.Context(topology_level="cta", topologies=(types.Topology("cta", 2),))
+        call, cost.Context(topology="cta", topologies=(types.Topology("cta", 2),))
     )
     assert not cost_value.flops and not cost_value.service
     assert cost_value.traffic == (cost.TrafficBytes(read=16_384), cost.TrafficBytes(write=16_384), cost.TrafficBytes())

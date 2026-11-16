@@ -24,7 +24,7 @@ class Cost:
     flops: Mapping[expr.DType, int] = field(default_factory=dict)
     ops: Mapping[str, int] = field(default_factory=dict)
     traffic: tuple[cost.TrafficBytes, ...] = ()
-    topology_level: str | None = None
+    topology: str | None = None
     topologies: tuple[types.Topology, ...] = ()
 
 
@@ -100,7 +100,7 @@ def _cost(call, expected, input_types):
     context = cost.Context(
         selected_types={id(arg): type_ for arg, type_ in zip(call.args, input_types)},
         selected_output_type=call.type,
-        topology_level=expected.topology_level,
+        topology=expected.topology,
         topologies=expected.topologies,
     )
     return cost.Visitor().visit_Call(call, context)

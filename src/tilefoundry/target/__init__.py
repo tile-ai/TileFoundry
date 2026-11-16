@@ -15,7 +15,7 @@ from .facts import (
     PerformanceServiceFacts,
     ThroughputFacts,
     TopologyFacts,
-    TopologyLevelFacts,
+    TopologyLimits,
     facts_result,
 )
 from .registry import Catalog, LoadError, catalog, load, register, registered, unregister

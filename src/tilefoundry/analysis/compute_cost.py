@@ -31,18 +31,18 @@ def is_structural_occurrence(
     cost_value: ComputeCostMetadata,
     moved: MemoryMetadata | None = None,
     *,
-    unit: str,
+    topology: str,
 ) -> bool:
     """Whether an occurrence asks for nothing this model puts on a clock."""
     return (
-        all(not value for _, value in level_value(cost_value.flops, cost_value.topologies, unit))
+        all(not value for _, value in level_value(cost_value.flops, cost_value.topologies, topology))
         and all(
-            not value for _, value in level_value(cost_value.other_ops, cost_value.topologies, unit)
+            not value for _, value in level_value(cost_value.other_ops, cost_value.topologies, topology)
         )
         and not any(
             traffic.total_bytes
             for traffic in (
-                shares(moved.traffic.storage, moved.topologies, unit).values()
+                shares(moved.traffic.storage, moved.topologies, topology).values()
                 if moved is not None
                 else ()
             )
@@ -56,7 +56,7 @@ def local_duration_ns(
     services: target.PerformanceServiceFacts,
     *,
     moved: MemoryMetadata | None = None,
-    topology_level: str | None = None,
+    topology: str | None = None,
     level: str | None = None,
     scale: int = 1,
     units: int = 1,
@@ -66,19 +66,19 @@ def local_duration_ns(
     At the bandwidth level, one unit moves its share of the occurrence's
     footprint: one window's bytes over the *units* that window holds.
     """
-    topology_level = topology_level if topology_level is not None else level
-    if topology_level is None:
-        raise Error("performance: no topology level was selected")
-    if services.unit != topology_level:
+    topology = topology if topology is not None else level
+    if topology is None:
+        raise Error("performance: no topology was selected")
+    if services.topology != topology:
         raise Error(
-            f"performance: selected topology level {topology_level!r}, but the "
-            f"target's one-unit throughputs are stated for {services.unit!r}"
+            f"performance: selected topology {topology!r}, but the "
+            f"target's one-unit throughputs are stated for {services.topology!r}"
         )
-    if is_structural_occurrence(cost_value, moved, unit=topology_level):
+    if is_structural_occurrence(cost_value, moved, topology=topology):
         return 0
 
     compute_ns = 0
-    for name, value in level_value(cost_value.flops, cost_value.topologies, topology_level):
+    for name, value in level_value(cost_value.flops, cost_value.topologies, topology):
         if not value:
             continue
         dtype = getattr(expr.DType, name, None)
@@ -88,24 +88,24 @@ def local_duration_ns(
         if throughput is None or throughput <= 0:
             raise Error(
                 f"performance: target states no one-unit throughput for dtype "
-                f"{name!r} at {topology_level!r}"
+                f"{name!r} at {topology!r}"
             )
         compute_ns += -(-(value * scale * 1_000_000_000) // throughput)
 
-    for kind, value in level_value(cost_value.other_ops, cost_value.topologies, topology_level):
+    for kind, value in level_value(cost_value.other_ops, cost_value.topologies, topology):
         if not value:
             continue
         throughput = services.ops(kind)
         if throughput is None or throughput <= 0:
             raise Error(
                 f"performance: target states no one-unit throughput for {kind!r} "
-                f"work at {topology_level!r}"
+                f"work at {topology!r}"
             )
         compute_ns += -(-(value * scale * 1_000_000_000) // throughput)
 
     memory_ns = 0
     storage_traffic = (
-        shares(moved.traffic.storage, moved.topologies, topology_level) if moved is not None else {}
+        shares(moved.traffic.storage, moved.topologies, topology) if moved is not None else {}
     )
     unique = None if moved is None or moved.footprint is None else moved.footprint.bytes_at(facts.bandwidth_level)
     for memory_level, traffic in storage_traffic.items():
@@ -118,7 +118,7 @@ def local_duration_ns(
         if throughput <= 0:
             raise Error(
                 f"performance: target states no one-unit throughput for level "
-                f"{memory_level!r} at {topology_level!r}"
+                f"{memory_level!r} at {topology!r}"
             )
         duration = -(-(crossed * 1_000_000_000) // throughput)
         memory_ns = max(memory_ns, duration)
@@ -127,8 +127,8 @@ def local_duration_ns(
         traffic_bytes(
             moved.traffic.communication,
             moved.topologies,
-            topology_level,
-            topology_level,
+            topology,
+            topology,
         )
         * scale
         if moved is not None
@@ -136,7 +136,7 @@ def local_duration_ns(
     )
     link_ns = 0
     if sent:
-        rate = services.bandwidth(topology_level)
+        rate = services.bandwidth(topology)
         if rate:
             link_ns = -(-(sent * 1_000_000_000) // rate)
     return max(compute_ns, memory_ns, link_ns)
@@ -216,9 +216,9 @@ def traffic_bytes(
     held: Breakdown[cost.TrafficBytes],
     topologies: tuple[str, ...],
     kind: str,
-    topology_level: str | None,
+    topology: str | None,
 ) -> int:
-    moved = shares(held, topologies, topology_level).get(kind)
+    moved = shares(held, topologies, topology).get(kind)
     return moved.total_bytes if moved is not None else 0
 
 
@@ -339,15 +339,15 @@ class ComputeCostVisitor(valuation.Visitor[None]):
             return
         if not ctx.units:
             raise Error("compute-cost: visitor context is missing its cost context")
-        repeats = ctx.scope.repeats_of(node, ctx.topology_level)
+        repeats = ctx.scope.repeats_of(node, ctx.topology)
         callee = ctx.callee
         if callee is None:
             record = call_cost_record(
                 node,
-                {unit: replace(ctx, topology_level=unit) for unit in ctx.units},
+                {unit: replace(ctx, topology=unit) for unit in ctx.units},
                 repeats.mesh_units,
-                replace(ctx, topology_level=None),
-                ctx.topology_level,
+                replace(ctx, topology=None),
+                ctx.topology,
             )
             dependencies = ctx.scope.provenance.dependencies(node)
 
@@ -366,9 +366,9 @@ class ComputeCostVisitor(valuation.Visitor[None]):
 
 def analyze_compute_cost(function: core.Function, context: AnalyzeContext) -> None:
     """Attach one-trip work per Call and multiplicity-aware totals per Function."""
-    topology_level = context.topology_level
+    topology = context.topology
     topologies = context.topologies
-    units = tuple(topology.name for topology in topologies) or (topology_level,)
+    units = tuple(each.name for each in topologies) or (topology,)
     cost_context = ComputeCostContext(
         **vars(context), units=tuple(dict.fromkeys(unit for unit in units if unit is not None))
     )

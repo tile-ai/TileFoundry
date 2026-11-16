@@ -24,25 +24,25 @@ def program_topologies(mesh: types.Mesh) -> tuple[types.Topology, ...]:
 
 
 def validate_topology(mesh: types.Mesh, tgt) -> None:
-    """Validate that the target supports every program topology level.
+    """Validate that the target supports every program topology.
 
-    Each program topology level a mesh binds must be one this target
-    supports; finer levels (e.g. warp) belong in the mesh layout, not as a
-    program topology level. Defense-in-depth alongside the declared-topology
+    Each program topology a mesh binds must be one this target
+    supports; finer groupings (e.g. warp) belong in the mesh layout, not as a
+    program topology. Defense-in-depth alongside the declared-topology
     check at lowering entry.
     """
     validate_cuda_topology_levels(tgt, (resolved(t).name for t in mesh.topologies))
 
 
 def levelwise_layout(mesh: types.Mesh) -> str:
-    """One nest per topology level, each in that level's own numbering.
+    """One nest per topology, each in that topology's own numbering.
 
     A mesh states one arrangement per level already, each in that level's own
     numbering, so a nest is that arrangement written out: nothing here decides
     where a boundary falls. The composite is a grouping, not a map: only the
     nests are evaluated.
     """
-    arrangements = types.flattened_levels(mesh)
+    arrangements = types.flat_layouts(mesh)
     return cute_layout.render_layout_type(
         tuple(shape for shape, _ in arrangements),
         tuple(strides for _, strides in arrangements),
@@ -64,7 +64,7 @@ def mesh_type(mesh: types.Mesh) -> str:
     else:
         base = 0
     if len(topos) == 1:
-        shape, strides = types.flattened_levels(mesh)[0]
+        shape, strides = types.flat_layouts(mesh)[0]
         layout = cute_layout.render_layout_type(shape, strides)
     else:
         if base:
@@ -102,7 +102,7 @@ def validate_cuda_topology_levels(tgt: target.Target, names) -> None:
         if name not in supported:
             raise ValueError(
                 f"cuda target supports {{{', '.join(supported)}}} "
-                f"topology levels; got {name!r}"
+                f"topologies; got {name!r}"
             )
 
 

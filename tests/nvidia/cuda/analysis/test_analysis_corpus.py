@@ -121,7 +121,7 @@ def _report(result):
         module=result.module,
         function=result.function,
         analyses=result.analyses,
-        topology_level=result.topology_level,
+        topology=result.topology,
         executed=result.executed,
         metadata_types=result.metadata_types,
     )
@@ -129,7 +129,7 @@ def _report(result):
 
 
 def _scopes(result):
-    context = analysis.build_context(result.module, result.function, topology_level=result.topology_level)
+    context = analysis.build_context(result.module, result.function, topology=result.topology)
     return tuple(
         scope
         for local in context
@@ -142,7 +142,7 @@ def _scopes(result):
 def _predicted_ns(module, dims=None) -> int:
     """What the four families together say one program takes."""
     result = analysis.analyze(
-        *analysis.check_program(module, module.entry_function(), topology_level="cta", dims=dims),
+        *analysis.check_program(module, module.entry_function(), topology="cta", dims=dims),
         analysis=FAMILIES,
         level="cta",
     )
@@ -591,9 +591,9 @@ class InvariantReuse(AnalysisCase):
         duration = analysis.local_duration_ns(
             expr.get_metadata(loaded, analysis.ComputeCostMetadata),
             tgt.get_facts(target.ThroughputFacts),
-            tgt.get_facts(target.PerformanceServiceFacts, result.topology_level),
+            tgt.get_facts(target.PerformanceServiceFacts, result.topology),
             moved=expr.get_metadata(loaded, analysis.MemoryMetadata),
-            level=result.topology_level,
+            level=result.topology,
         )
         timeline = expr.get_metadata(loaded, analysis.PerformanceMetadata).timeline
         assert (timeline.end_ns - timeline.start_ns) * timeline.trips == duration * 12

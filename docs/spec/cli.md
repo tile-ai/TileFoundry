@@ -371,8 +371,8 @@ explicit analysis; there is no ordinary `--target` option.
     either way. It is the traffic the annotation already states, one layer finer,
     so a reader who did not ask is not made to read it.
     With no analysis flag it MUST be accepted and inert.
-  - `--topology LEVEL` MUST be optional, passed through as the public analysis
-    operation's `topology_level`, and name the unit for per-unit figures. Its help MUST
+  - `--topology TOPOLOGY` MUST be optional, passed through as the public analysis
+    operation's `topology`, and name the unit for per-unit figures. Its help MUST
     state the default and, for every family, which figure changes with the level
     and when to pass it, together with the logical/total traffic distinction and
     the observed-peak assumption. Compute cost MUST distinguish `logical`,

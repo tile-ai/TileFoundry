@@ -30,11 +30,11 @@ def test_documentless_target_projects_facts() -> None:
     tgt = VendorNpuTarget()
 
     assert tgt.get_analyzer("roofline").selector == "roofline"
-    assert tgt.get_facts(target.TopologyLevelFacts, "core") == target.TopologyLevelFacts("core", 256, 16)
+    assert tgt.get_facts(target.TopologyLimits, "core") == target.TopologyLimits("core", 256, 16)
     memory = tgt.get_facts(target.MemoryHierarchyFacts)
     assert memory.explicit("gmem").capacity_bytes == 64_000_000_000
     assert tgt.get_facts(target.ThroughputFacts).peak_for(DType.f32) == 2_000_000_000_000_000
-    assert tgt.get_facts(target.TopologyFacts).parallel() == target.TopologyLevelFacts("core", 256, 16)
+    assert tgt.get_facts(target.TopologyFacts).parallel() == target.TopologyLimits("core", 256, 16)
     tgt.validate_program_topology(Topology("core", 256))
     with pytest.raises(ValueError, match="1 <= extent <= 256"):
         tgt.validate_program_topology(Topology("core", 257))

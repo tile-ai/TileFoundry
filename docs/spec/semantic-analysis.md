@@ -162,8 +162,8 @@ def derive_output_shard_layout(
   - `partial_reductions_by_axis` returns one entry per mesh axis: the carried
     reduction name for `Partial`, `None` for any other attr, and an empty tuple
     for a non-sharded layout.
-  - Every input is first projected onto the participating topology levels (each
-    level any input distributes), so mesh axes keep one index across inputs.
+  - Every input is first projected onto the executing topologies (each
+    topology any input distributes), so mesh axes keep one index across inputs.
     With no real input sharding it returns `None`. Inputs with real sharding on
     different meshes MUST fail (`ValueError`).
   - When every propagated physical layout agrees (`carrier_layout`, which

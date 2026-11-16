@@ -216,7 +216,7 @@ def participant_frame(mesh):
         return None
 
     try:
-        arranged = types.levels(mesh)
+        arranged = types.layouts(mesh)
     except (IndexError, TypeError, ValueError):
         return None
     return types.starts(mesh), tuple(layout_algebra.coalesce(reverse(layout)) for layout in arranged)

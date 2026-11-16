@@ -78,11 +78,11 @@ def card_count(tgt: "Target") -> int:
     return 1 if tgt.device_count is None else tgt.device_count
 
 
-def parallel_units(tgt: "Target", unit: str) -> int:
-    """How many of *unit* the deployment runs at once.
+def parallel_units(tgt: "Target", topology: str) -> int:
+    """How many units of *topology* the deployment runs at once.
 
     Both the divisor a per-unit rate is the deployment peak over, and the
-    answer to how many units of a level run together -- the same number,
+    answer to how many units of a topology run together -- the same number,
     asked once. A target that never said how many cards is one card.
     """
     cards = card_count(tgt)
@@ -91,28 +91,28 @@ def parallel_units(tgt: "Target", unit: str) -> int:
             "gpu": cards,
             "cta": cards * tgt.device.sm_count,
             "thread": (cards * tgt.device.sm_count * tgt.architecture.max_threads_per_cta),
-        }[unit]
+        }[topology]
     except KeyError:
         raise target.UnsupportedCapabilityError(
-            f"cuda: no per-unit rate for topology level {unit!r}; the levels this "
+            f"cuda: no per-unit rate for topology {topology!r}; the topologies this "
             "target divides its peaks among are ('gpu', 'cta', 'thread')"
         ) from None
 
 
 def asked(tgt: "Target", query: object) -> tuple[str, int, int | None]:
     """A query's level, running units and bytes in flight; only ``cta`` counts fewer."""
-    unit, active, inflight = (*query, None)[:3] if isinstance(query, tuple) else (query, None, None)
-    unit = "cta" if unit is None else str(unit)
-    share = parallel_units(tgt, unit)
-    if active is None or unit != "cta":
-        return unit, share, None
-    return unit, min(active, share), inflight
+    topology, active, inflight = (*query, None)[:3] if isinstance(query, tuple) else (query, None, None)
+    topology = "cta" if topology is None else str(topology)
+    share = parallel_units(tgt, topology)
+    if active is None or topology != "cta":
+        return topology, share, None
+    return topology, min(active, share), inflight
 
 
 def rates(
-    tgt: "Target", unit: str, active: int, inflight: int | None = None
+    tgt: "Target", topology: str, active: int, inflight: int | None = None
 ) -> target.PerformanceServiceFacts:
-    """What *active* units of *unit* get through together, by kind of work.
+    """What *active* units of *topology* get through together, by kind of work.
 
     The one source of every CUDA rate: the roofline reads it whole and the
     timeline divides it among the *active* units. Float, service and
@@ -124,9 +124,9 @@ def rates(
     architecture = tgt.architecture
     device = tgt.device
     cards = card_count(tgt)
-    share = parallel_units(tgt, unit)
+    share = parallel_units(tgt, topology)
     gmem = device.hbm_bandwidth_bytes_per_second * cards
-    if unit == "cta" and inflight and device.gmem_latency_ns is not None:
+    if topology == "cta" and inflight and device.gmem_latency_ns is not None:
         gmem = min(gmem, inflight * active * 1_000_000_000 // device.gmem_latency_ns)
     bandwidth = [("gmem", gmem)]
     if (
@@ -154,7 +154,7 @@ def rates(
             for kind, rate in sorted(device.service_ops_per_second.items())
         ),
         unit_bandwidth=tuple(bandwidth),
-        unit=unit,
+        topology=topology,
     )
 
 
@@ -172,14 +172,14 @@ def throughput(tgt: "Target", query: object = None) -> target.ThroughputFacts:
 
 
 def performance_service(tgt: "Target", query: object = None) -> target.PerformanceServiceFacts:
-    """What one unit of the level asked about gets through: `rates` among its active units."""
-    unit, active, inflight = asked(tgt, query)
-    whole = rates(tgt, unit, active, inflight)
+    """What one unit of the topology asked about gets through: `rates` among its active units."""
+    topology, active, inflight = asked(tgt, query)
+    whole = rates(tgt, topology, active, inflight)
     return target.PerformanceServiceFacts(
         unit_flops=tuple((dtype, rate // active) for dtype, rate in whole.unit_flops),
         unit_ops=tuple((kind, rate // active) for kind, rate in whole.unit_ops),
         unit_bandwidth=tuple((level, rate // active) for level, rate in whole.unit_bandwidth),
-        unit=unit,
+        topology=topology,
     )
 
 

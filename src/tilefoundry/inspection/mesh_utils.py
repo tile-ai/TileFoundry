@@ -47,7 +47,7 @@ def selection_layout(mesh: types.Mesh, selection: types.Mesh) -> types.Layout | 
         return None
     if not isinstance(mesh.layout.outer, types.Layout) or mesh.layout.offset != types.starts(selection)[0]:
         return None
-    source = types.flatten(types.levels(selection)[0])
+    source = types.flatten(types.layouts(selection)[0])
     target = types.flatten(mesh.layout.outer)
     if types.size(source) != types.size(target):
         return None

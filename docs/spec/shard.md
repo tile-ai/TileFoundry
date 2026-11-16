@@ -57,10 +57,10 @@ $$
 1. A **topology** is one layer of parallel resource. Its name is the kind of **unit**. Its **topology size** counts its units within one unit of its parent, when present. A **unit id** is the number of one unit in its topology. The **topology scope** is all units of the topology.
 
 $$
-\underbrace{\big(\ \underbrace{\mathrm{gpu}:1}_{\text{topology level }0},\quad \underbrace{\mathrm{cta}:132}_{\text{topology level }1},\quad \underbrace{\mathrm{thread}:384}_{\text{topology level }2}\ \big)}_{\text{topologies of the target}}
+\underbrace{\big(\ \underbrace{\mathrm{gpu}:1}_{\text{topology level }0},\quad \underbrace{\mathrm{cta}:132}_{\text{topology level }1},\quad \underbrace{\mathrm{thread}:384}_{\text{topology level }2}\ \big)}_{\text{topologies of the Module}}
 $$
 
-2. A target has an ordered list of **topologies**. The **topology level** is the position of a topology in this list. Level 0 is the coarsest.
+2. A Module declares an ordered list of **topologies**. The **topology level** is the position of a topology in this list. Level 0 is the coarsest. The list is the Module's, not the target's: in `(cta, thread)` the cta is at level 0.
 
 $$
 \underbrace{\mathcal{M}}_{\text{mesh}} =
@@ -125,7 +125,7 @@ The names `gpu`, `cta`, `thread`, `sm`, `group` and `lane` above are examples of
 | unit (execution unit) | One thing that executes: one gpu, one cta, one thread. | own | `program`, `instance`, `participant`, `position` (for a member) | `per_unit`, `max_physical_units` | — |
 | topology | One layer of parallel resource: the kind of unit (its name) and the number of units. | existing | `level` (for this object) | `Topology(name, size)` | enum value only |
 | topology size | The number of units of this topology in one unit of the topology above. | CuTe `size` | `program_dim`, `instances`, `extent` of a topology | `Topology.size` | `topology_size<L>()` |
-| topology level | The position of a topology in the target hierarchy, an `int`. 0 is the outermost. Python and C++ use the same numbers. | own | `topology_level: str` (a value that is a name) | `topology: str` for a name; `topology_level()` gives the position | `enum class TopologyLevel` |
+| topology level | The position of a topology in the topologies that the Module declares, an `int`. 0 is the outermost. Python and C++ count the same list. | own | `topology_level: str` (a value that is a name) | `topology: str` for a name; `topology_level(topology, topologies)` gives the position | `cute::find(program_topologies(), cute::C<L>{})` gives the position; `enum class TopologyLevel` labels the topology |
 | unit id | The number of a unit in its topology, in `[0, size)`. | CUDA `%tid`, `%ctaid` | `program_id`, `rank` | `Placement.ids`, `unit_ids()` | `unit_id<L>()`, `unit_ids()` |
 | mesh | The units of one or more adjacent topologies, arranged by a layout on named mesh axes. | JAX | — | `Mesh(topologies, layout, names)` | `Mesh<TLayout, TopologyLevel...>` |
 | sub mesh | The part of a mesh that is one topology. It is a mesh of one topology. | CuTe sublayout, `get<I>` | `separate`, `level` (for this object), `sub-mesh` for the result of a slice | `get(mesh, topology)`, `sub_meshes(mesh)` | `get<L>(mesh)` |
@@ -443,8 +443,8 @@ class Mesh:
     def __getitem__(self, key) -> Mesh: ...
 
 
-def levels(mesh: Mesh) -> tuple[Layout, ...]:
-    """Return each topology level's arrangement in its own numbering."""
+def layouts(mesh: Mesh) -> tuple[Layout, ...]:
+    """Return each topology's layout in its own unit ids."""
     ...
 
 
@@ -603,7 +603,7 @@ class Placement:
     def unit_ids(self, topologies: tuple[Topology | str, ...]) -> tuple[int | None, ...]: ...
 
     @classmethod
-    def from_env(cls, topology_level: str = "gpu") -> "Placement": ...
+    def from_env(cls, topology: str = "gpu") -> "Placement": ...
 
     @classmethod
     def from_mesh(cls, mesh: Mesh) -> tuple["Placement", ...]: ...

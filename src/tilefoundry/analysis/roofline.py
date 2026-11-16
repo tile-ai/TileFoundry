@@ -161,7 +161,7 @@ def analyze_roofline(
     context: AnalyzeContext,
 ) -> None:
     """Attach a bound to every Call and the normalized Function."""
-    unit = context.topology_level
+    unit = context.topology
     visitor = RooflineVisitor(None if unit is None else (unit, context.scope.active_units(unit)))
     visitor.visit(function.body, context)
     total = expr.get_metadata(function, ComputeCostMetadata)

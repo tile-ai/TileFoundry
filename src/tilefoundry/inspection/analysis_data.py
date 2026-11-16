@@ -162,7 +162,7 @@ def report_data(
     module: core.Module,
     function: core.Function,
     analyses: tuple[str, ...],
-    topology_level: str | None,
+    topology: str | None,
     executed: tuple[str, ...],
     metadata_types: tuple[type[expr.IRMetadata], ...],
     labels: Mapping[int, str] | None = None,
@@ -208,7 +208,7 @@ def report_data(
     return {
         "target": target.identity,
         "module": module.name,
-        "topology": topology_level,
+        "topology": topology,
         "requested": list(analyses),
         "executed": list(executed),
         "functions": rows,

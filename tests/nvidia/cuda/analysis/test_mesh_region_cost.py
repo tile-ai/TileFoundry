@@ -13,9 +13,9 @@ ANALYSIS = Path(__file__).parents[1] / "fixtures" / "analysis"
 
 def _cost(owner) -> tuple[int, int, int, int]:
     result = analysis.analyze(
-        *analysis.check_program(owner, owner.entry_function(), topology_level="thread"),
+        *analysis.check_program(owner, owner.entry_function(), topology="thread"),
         analysis=("compute-cost", "memory", "roofline"),
-        topology_level="thread",
+        topology="thread",
     )
     record = expr.get_metadata(result.function, analysis.ComputeCostMetadata)
     assert record is not None
@@ -50,9 +50,9 @@ def test_region_calls_priced_per_position() -> None:
     region_boundaries = Path(__file__).parents[1] / "fixtures/placed/region_boundaries.py"
     RegionBoundaries = cli.load_authored_ir(f"{region_boundaries}:RegionBoundaries")
     helper = analysis.analyze(
-        *analysis.check_program(RegionBoundaries, RegionBoundaries.lookup("helper"), topology_level="thread"),
+        *analysis.check_program(RegionBoundaries, RegionBoundaries.lookup("helper"), topology="thread"),
         analysis="compute-cost",
-        topology_level="thread",
+        topology="thread",
     )
     helper_record = expr.get_metadata(helper.function, analysis.ComputeCostMetadata)
     assert helper_record is not None
@@ -60,9 +60,9 @@ def test_region_calls_priced_per_position() -> None:
     assert helper_flops == 8
 
     result = analysis.analyze(
-        *analysis.check_program(RegionBoundaries, RegionBoundaries.entry_function(), topology_level="thread"),
+        *analysis.check_program(RegionBoundaries, RegionBoundaries.entry_function(), topology="thread"),
         analysis=("compute-cost", "memory"),
-        topology_level="thread",
+        topology="thread",
     )
     record = expr.get_metadata(result.function, analysis.ComputeCostMetadata)
     assert record is not None

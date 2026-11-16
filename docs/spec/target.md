@@ -68,7 +68,7 @@ def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]: ...
     only requested Facts, so a backend reuses them by answering `get_facts`, not
     by inheriting a backend-specific analysis base class. A missing Facts
     projection MUST fail when the selected analyzer requests it.
-  - `facts_result`, `FactsError`, `TopologyFacts`, `TopologyLevelFacts`,
+  - `facts_result`, `FactsError`, `TopologyFacts`, `TopologyLimits`,
     `MemoryExecutionFacts`, `MemoryHierarchyFacts`, `ThroughputFacts`, and
     `PerformanceServiceFacts` MUST be importable from `tilefoundry.target`.
   - `name` MUST be a non-empty class variable declared directly by every
@@ -95,7 +95,7 @@ def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]: ...
     immutable descriptors and Facts, and a subclass inherits those selections
     unless it overrides or refuses them.
   - `get_facts(TopologyFacts)` MUST list every topology level the Target
-    admits, coarsest first, as the `TopologyLevelFacts` of each. A Target that
+    admits, coarsest first, as the `TopologyLimits` of each. A Target that
     states none MUST answer the empty tuple: it runs one program per call.
   - `validate_program_topology` MUST reject a level outside
     `get_facts(TopologyFacts)` and any resolved static extent that is not
@@ -385,14 +385,14 @@ class Target:
     ) -> FactsT: ...
 
 
-class TopologyLevelFacts:
-    """The program-side and machine-side unit counts for one topology level.
+class TopologyLimits:
+    """The program-side and machine-side unit counts for one topology.
 
     Attributes:
-        name: Topology level being stated.
+        name: Topology being stated.
         max_logical_units: Maximum units a program may declare, or None.
-        max_physical_units: Machine positions the level divides over, or None.
-        from_target: Whether the target instance supplies extent and program ids.
+        max_physical_units: Machine units the topology divides over, or None.
+        from_target: Whether the target instance supplies extent and unit ids.
     """
 
     name: str
@@ -402,11 +402,11 @@ class TopologyLevelFacts:
 
 
 class TopologyFacts:
-    topologies: tuple[TopologyLevelFacts, ...]
-    parallel_level: str | None = None
+    topologies: tuple[TopologyLimits, ...]
+    parallel_topology: str | None = None
 
-    def level(self, name: str | None) -> TopologyLevelFacts | None: ...
-    def parallel(self) -> TopologyLevelFacts | None: ...
+    def topology(self, name: str | None) -> TopologyLimits | None: ...
+    def parallel(self) -> TopologyLimits | None: ...
 
 
 class MemoryExecutionFacts:
@@ -420,9 +420,9 @@ class MemoryExecutionFacts:
     Shared instruction matching MUST specialize the memory mesh wildcard from
     this projection before checking operands.
   - `max_logical_units` is the program-side declaration limit.
-    `max_physical_units` is the machine-side count of positions the level
+    `max_physical_units` is the machine-side count of units the topology
     divides over, independently of hardware residency limits.
-  - `parallel_level`, when present, MUST name an entry in `topologies`.
+  - `parallel_topology`, when present, MUST name an entry in `topologies`.
     `parallel()` MUST return that entry. An empty aggregate MUST use `None` and
     return `None` from `parallel()`.
   - A subclass MUST inherit its base Target's projections through normal Python

@@ -73,10 +73,10 @@ def breakdown[V](
 def shares[V](
     held: Breakdown[V],
     topologies: tuple[str, ...],
-    topology_level: "str | None" = None,
+    topology: "str | None" = None,
 ) -> dict[str, V]:
     """Each kind's value at one topology level, or its total."""
-    index = topologies.index(topology_level) if topology_level in topologies else None
+    index = topologies.index(topology) if topology in topologies else None
     return {
         kind: spread.total if index is None else spread.at(index) for kind, spread in held.kinds
     }

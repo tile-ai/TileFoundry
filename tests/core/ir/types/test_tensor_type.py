@@ -51,7 +51,7 @@ def test_zero_extent_has_zero_logical_and_local_size() -> None:
     sharded = utils.make_shard_tensor_type(
         (0,), mesh=types.Mesh((types.Topology("gpu", 2),), types.Layout((2,), (1,)), ("g",)), attrs=(types.Split(0),)
     )
-    assert utils.local_type_of(sharded, topology_level="gpu", topologies=(types.Topology("gpu", 2),)).shape == (
+    assert utils.local_type_of(sharded, topology="gpu", topologies=(types.Topology("gpu", 2),)).shape == (
         1,
         0,
     )
@@ -77,7 +77,7 @@ def test_local_type_rejects_a_zero_mesh_extent() -> None:
     type = types.TensorType(shape=(0,), dtype=expr.DType.f32, layout=layout, storage="gmem")
 
     with pytest.raises(ValueError, match="mesh extent is not a concrete positive integer"):
-        utils.local_type_of(type, topology_level="gpu", topologies=(types.Topology("gpu", 0),))
+        utils.local_type_of(type, topology="gpu", topologies=(types.Topology("gpu", 0),))
 
 
 def _cta_mesh(extent: int) -> types.Mesh:
@@ -100,7 +100,7 @@ def test_local_type_preserves_canonical_split_projection(
     tensor = utils.make_shard_tensor_type(shape, mesh=_cta_mesh(extent), attrs=(types.Split(1),))
 
     assert (
-        utils.local_type_of(tensor, topology_level="cta", topologies=(types.Topology("cta", extent),)).shape
+        utils.local_type_of(tensor, topology="cta", topologies=(types.Topology("cta", extent),)).shape
         == expected
     )
 
@@ -116,7 +116,7 @@ def test_local_type_projects_a_static_offset_sharded_view():
         storage=sharded.storage,
     )
 
-    local = utils.local_type_of(view, topology_level="cta", topologies=(types.Topology("cta", 8),))
+    local = utils.local_type_of(view, topology="cta", topologies=(types.Topology("cta", 8),))
 
     assert local.shape == (64, 1, 1, 16)
     assert local.layout is view.layout
@@ -149,7 +149,7 @@ def test_local_type_projects_every_axis_of_a_single_topology_mesh(
 
     local = utils.local_type_of(
         tensor,
-        topology_level="cta",
+        topology="cta",
         topologies=(types.Topology("cta", topology_extent),),
     )
 
@@ -171,7 +171,7 @@ def test_local_type_rejects_dynamic_split_against_fixed_mesh(axis: object) -> No
     tensor = utils.make_shard_tensor_type((1, axis, 128, 2048), mesh=_cta_mesh(132), attrs=(types.Split(1),))
 
     with pytest.raises(ValueError, match="bind the axis before local projection"):
-        utils.local_type_of(tensor, topology_level="cta", topologies=(types.Topology("cta", 132),))
+        utils.local_type_of(tensor, topology="cta", topologies=(types.Topology("cta", 132),))
 
 
 def test_local_type_rejects_unfactorized_inexact_split_with_two_loop_form() -> None:
@@ -181,7 +181,7 @@ def test_local_type_rejects_unfactorized_inexact_split_with_two_loop_form() -> N
     tensor = types.TensorType(shape=(10,), dtype=expr.DType.f32, layout=layout, storage="gmem")
 
     with pytest.raises(ValueError, match=r"two loops out as \(ceildiv\(N, T\), T\)"):
-        utils.local_type_of(type=tensor, topology_level="cta", topologies=(types.Topology("cta", 3),))
+        utils.local_type_of(type=tensor, topology="cta", topologies=(types.Topology("cta", 3),))
 
 
 def test_local_type_stops_before_a_finer_split() -> None:
@@ -206,12 +206,12 @@ def test_local_type_stops_before_a_finer_split() -> None:
 
     cta = utils.local_type_of(
         tensor,
-        topology_level="cta",
+        topology="cta",
         topologies=(types.Topology("cta", 2), types.Topology("thread", 4)),
     )
     thread = utils.local_type_of(
         tensor,
-        topology_level="thread",
+        topology="thread",
         topologies=(types.Topology("cta", 2), types.Topology("thread", 4)),
     )
 
@@ -223,7 +223,7 @@ def test_local_type_stops_before_a_finer_split() -> None:
 def test_local_type_does_not_divide_replicated_or_partial_values(attr) -> None:
     tensor = utils.make_shard_tensor_type((256,), mesh=_cta_mesh(4), attrs=(attr,))
 
-    local = utils.local_type_of(tensor, topology_level="cta", topologies=(types.Topology("cta", 4),))
+    local = utils.local_type_of(tensor, topology="cta", topologies=(types.Topology("cta", 4),))
 
     assert utils.numel(local) == 256
 

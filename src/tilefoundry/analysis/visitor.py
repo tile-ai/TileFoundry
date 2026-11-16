@@ -21,7 +21,7 @@ class AnalyzeContext(typeinfer.TypeInferContext):
     scope: IterationScope | None = None
     definitions: dict[int, IterationScope] = field(default_factory=dict)
     caller_context: AnalyzeContext | None = field(default=None, repr=False)
-    topology_level: str | None = None
+    topology: str | None = None
 
     def bind_scope(self, scope):
         """Make *scope* the one this context answers queries from."""
@@ -31,12 +31,12 @@ class AnalyzeContext(typeinfer.TypeInferContext):
         return expr.type
 
     def local_type_of(self, expr):
-        if self.topology_level is None:
+        if self.topology is None:
             return expr.type
-        key = ("analysis_local", id(expr), self.topology_level, self.topologies)
+        key = ("analysis_local", id(expr), self.topology, self.topologies)
         if key not in self.instantiated_memo:
             self.instantiated_memo[key] = ir_utils.local_type_of(
-                expr.type, topology_level=self.topology_level, topologies=self.topologies
+                expr.type, topology=self.topology, topologies=self.topologies
             )
         return self.instantiated_memo[key]
 

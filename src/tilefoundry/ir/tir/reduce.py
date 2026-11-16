@@ -91,7 +91,7 @@ def workspace_slots(source) -> int:
     mesh = source.layout.mesh
     names = types.topology_names(mesh)
     if "thread" in names:
-        level = types.levels(mesh)[names.index("thread")]
+        level = types.layouts(mesh)[names.index("thread")]
     else:
         stated = mesh.layout.outer if isinstance(mesh.layout, types.ComposedLayout) else mesh.layout
         level = stated

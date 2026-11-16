@@ -36,11 +36,11 @@ def test_local_view_zero_traffic(name, shape, dims) -> None:
         assert relation.dim(isl.dim_type.OUT) == len(value.shape)
         assert relation.is_empty(), "a view of the same value reads and writes no element"
 
-    for topology_level in ("cta", "thread"):
+    for topology in ("cta", "thread"):
         result = analysis.analyze(
-            *analysis.check_program(_LocalProgram, entry, topology_level=topology_level, dims=dims),
+            *analysis.check_program(_LocalProgram, entry, topology=topology, dims=dims),
             analysis=("compute-cost", "memory"),
-            topology_level=topology_level,
+            topology=topology,
         )
         analysed_local = next(
             node
@@ -49,7 +49,7 @@ def test_local_view_zero_traffic(name, shape, dims) -> None:
         )
         record = expr.get_metadata(analysed_local, analysis.ComputeCostMetadata)
         moved = expr.get_metadata(analysed_local, analysis.MemoryMetadata)
-        assert result.topology_level == topology_level
+        assert result.topology == topology
         assert record is not None
         assert record.flops.kinds == ()
         assert moved.traffic.storage.kinds == ()

@@ -275,7 +275,7 @@ def render_shard_layout_value(var_name: str, sl: types.ShardLayout, dynamic_exte
     if len(topos) == 1:
         mesh_shape, mesh_strides = mesh_axes.shape, mesh_axes.strides
     else:
-        arrangements = types.flattened_levels(replace(sl.mesh, layout=stated))
+        arrangements = types.flat_layouts(replace(sl.mesh, layout=stated))
         mesh_shape = tuple(shape for shape, _ in arrangements)
         mesh_strides = tuple(strides for _, strides in arrangements)
     scope = ", ".join(context.topology_level_str(t.name) for t in topos)

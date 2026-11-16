@@ -135,15 +135,16 @@ by `ir.utils` the same way.
 
 ```python
 def local_type_of(
-    type: Type, *, topology_level: str | None = None, topologies: tuple[Topology, ...] = ()
+    type: Type, *, topology: str | None = None, topologies: tuple[Topology, ...] = ()
 ) -> Type:
     """Project every tensor leaf to what one unit holds.
 
     Args:
         type: Type to project.
-        topology_level: Topology level whose unit is being projected. When
+        topology: Topology whose unit is being projected. When
             omitted, every Split divides and the logical rank is preserved.
-        topologies: Ordered declared topology levels with resolved extents.
+        topologies: The Module's declared topologies, coarsest first, with
+            resolved extents. The topology level of each is its position here.
 
     Returns:
         The recursively projected type.
@@ -152,11 +153,11 @@ def local_type_of(
 ```
 
 - constraints:
-  - With `topology_level`, `local_type_of` MUST recursively project every tensor
-    leaf and rebuild `TupleType` structure. A `Split` at `topology_level` or a
+  - With `topology`, `local_type_of` MUST recursively project every tensor
+    leaf and rebuild `TupleType` structure. A `Split` at `topology` or a
     coarser topology level MUST divide; a finer `Split`, `Broadcast`, and
     `Partial` MUST NOT.
-  - Without `topology_level`, every `Split` MUST divide, the returned tensor layout MUST
+  - Without `topology`, every `Split` MUST divide, the returned tensor layout MUST
     be `None`, and the tensor's logical rank MUST remain unchanged. This form
     is the logical-axis projection used by relation construction.
   - Each resolved nested `ShardLayout` MUST be applied exactly once per layer,

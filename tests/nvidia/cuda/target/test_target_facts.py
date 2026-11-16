@@ -87,8 +87,8 @@ def test_topology_limits_are_target_facts_and_base_validation_is_inherited() -> 
     cuda_value = cuda.Target("nvidia.h200_sxm")
 
     cuda_levels = cuda_value.get_facts(target.TopologyFacts)
-    assert cuda_levels.level("cta") == target.TopologyLevelFacts("cta", None, 132)
-    assert cuda_levels.level("thread").max_logical_units == 1024
-    assert cuda_levels.parallel() == cuda_levels.level("cta")
+    assert cuda_levels.topology("cta") == target.TopologyLimits("cta", None, 132)
+    assert cuda_levels.topology("thread").max_logical_units == 1024
+    assert cuda_levels.parallel() == cuda_levels.topology("cta")
     assert cuda_value.topology_limit("cta") == cuda_value.device.sm_count == 132
     assert cuda_value.topology_limit("thread") == cuda_value.architecture.max_threads_per_cta

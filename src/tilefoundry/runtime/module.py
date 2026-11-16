@@ -99,13 +99,13 @@ class CompiledModule(Module):
         """
         if not self.type.leading:
             return ()
-        topology_levels = tuple(p.topology for p in self.type.leading)
+        topologies = tuple(p.topology for p in self.type.leading)
         if self.placement is None:
             raise ValueError(
-                f"{self.type.name}: needs the ids of {topology_levels} and no Placement "
+                f"{self.type.name}: needs the ids of {topologies} and no Placement "
                 f"says which unit this is; pass placement= to load()"
             )
-        return tuple(int(self.placement.ids[topology_level]) for topology_level in topology_levels)
+        return tuple(int(self.placement.ids[topology]) for topology in topologies)
 
     def forward(self, *args):
         leading = self.unit_ids()

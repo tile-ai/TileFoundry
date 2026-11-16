@@ -32,7 +32,7 @@ class PerformanceContext(AnalyzeContext):
 
     facts: target.ThroughputFacts | None = None
     active: int = 1
-    parallel: target.TopologyLevelFacts | None = None
+    parallel: target.TopologyLimits | None = None
     occurrences: list[tuple[IterationScope, expr.Call, int]] = field(default_factory=list)
 
 
@@ -67,10 +67,10 @@ class PerformanceVisitor(valuation.Visitor[None]):
         duration = local_duration_ns(
             cost,
             ctx.facts,
-            ctx.target.get_facts(target.PerformanceServiceFacts, (ctx.topology_level, ctx.active, inflight)),
+            ctx.target.get_facts(target.PerformanceServiceFacts, (ctx.topology, ctx.active, inflight)),
             moved=moved,
-            topology_level=ctx.topology_level,
-            units=min(scope.mesh_units(ctx.topology_level), ctx.active),
+            topology=ctx.topology,
+            units=min(scope.mesh_units(ctx.topology), ctx.active),
         )
         ctx.occurrences.append((scope, node, duration))
 
@@ -97,7 +97,7 @@ def schedule(occurrences, context, *, origin):
     for scope, call, duration in occurrences:
         if not duration:
             continue
-        trips = scope.repeats_of(call, context.topology_level, stop=origin).loop_trips
+        trips = scope.repeats_of(call, context.topology, stop=origin).loop_trips
         scheduled = duration * trips
         serialize_boundary = (
             (len(scope.loop_scopes) - len(origin.loop_scopes)) >= 4
@@ -141,16 +141,16 @@ def analyze_performance(function: core.Function, context: AnalyzeContext) -> Non
     Rates are those of the units the function's meshes run, and the envelope
     repeats once per wave of those units.
     """
-    if context.topology_level is None:
-        raise Error("performance requires a resolved topology level")
+    if context.topology is None:
+        raise Error("performance requires a resolved topology")
     topologies = context.target.get_facts(target.TopologyFacts)
     level = topologies.parallel()
     if level is None or level.max_physical_units is None:
         raise target.UnsupportedCapabilityError(
-            f"{type(context.target).__name__}: no default parallel topology level"
+            f"{type(context.target).__name__}: no default parallel topology"
         )
-    units = context.scope.active_units(context.topology_level)
-    physical = topologies.level(context.topology_level).max_physical_units
+    units = context.scope.active_units(context.topology)
+    physical = topologies.topology(context.topology).max_physical_units
     active = min(units, physical)
     performance_context = PerformanceContext(
         **vars(context),

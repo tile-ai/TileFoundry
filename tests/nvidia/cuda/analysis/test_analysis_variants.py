@@ -27,7 +27,7 @@ def _report(module, *, analysis=("memory",)) -> dict:
         module=result.module,
         function=result.function,
         analyses=result.analyses,
-        topology_level=result.topology_level,
+        topology=result.topology,
         executed=result.executed,
         metadata_types=result.metadata_types,
     )

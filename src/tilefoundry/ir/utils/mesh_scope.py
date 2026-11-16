@@ -28,7 +28,7 @@ def device_layout(mesh: types.Mesh) -> types.Layout:
     scales = types.compact_major(sizes, major="row") if all(
         isinstance(one, int) for one in sizes
     ) else (1,) * len(sizes)
-    for arrangement, scale in zip(types.levels(mesh), scales):
+    for arrangement, scale in zip(types.layouts(mesh), scales):
         stated = arrangement.strides
         shape.extend(types.flatten(arrangement.shape))
         strides.extend(
@@ -62,7 +62,7 @@ def covered_by_scope(mesh: types.Mesh, current: types.Mesh) -> bool:
     scope = {
         getattr(topology, "name", topology): level_selection(arrangement, start)
         for topology, arrangement, start in zip(
-            current.topologies, types.levels(current), types.starts(current)
+            current.topologies, types.layouts(current), types.starts(current)
         )
     }
     return all(
@@ -70,7 +70,7 @@ def covered_by_scope(mesh: types.Mesh, current: types.Mesh) -> bool:
         and level_selection(arrangement, start)
         == scope[getattr(topology, "name", topology)]
         for topology, arrangement, start in zip(
-            mesh.topologies, types.levels(mesh), types.starts(mesh)
+            mesh.topologies, types.layouts(mesh), types.starts(mesh)
         )
     )
 

@@ -858,12 +858,12 @@ class Context(TypeInferContext):
     Attributes:
         selected_types: attribute; selected ``id(expr)`` to ``Type`` mapping.
         selected_output_type: attribute; selected output type, when supplied.
-        topology_level: attribute; topology window to project through, or None for types as written.
+        topology: attribute; topology window to project through, or None for types as written.
     """
 
     selected_types: Mapping[int, Type] = field(default_factory=dict)
     selected_output_type: Type | None = None
-    topology_level: str | None = None
+    topology: str | None = None
 
     def local_type_of(self, expr: Expr) -> Type: ...  # read expr.type, then project
     def local_output_type(self, call: Call) -> Type: ...
@@ -929,7 +929,7 @@ class Visitor(valuation.Visitor[Cost]):
     moves nothing, a `Slice` moves nothing of its tensor source or result and
     reads the numbers placing it, and a `Transpose` reads and writes because its
     evaluator materialises the permutation.
-  - With no `topology_level`, `cost.Context.local_type_of` MUST return the selected
+  - With no `topology`, `cost.Context.local_type_of` MUST return the selected
     Type as written. With one, it MUST apply `local_type_of` using the context's
     topology hierarchy and MUST reject unresolved or non-concrete local extents
     at the point where the evaluator requires them.

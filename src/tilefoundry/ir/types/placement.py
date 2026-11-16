@@ -19,7 +19,7 @@ from itertools import product
 
 from .int_tuple import product as int_tuple_product
 from .layout import apply
-from .mesh import Mesh, levels, topology_names
+from .mesh import Mesh, layouts, topology_names
 from .topology import Topology
 
 __all__ = ["Placement"]
@@ -44,7 +44,7 @@ class Placement:
         return tuple(self.ids.get(getattr(topology, "name", topology)) for topology in topologies)
 
     @classmethod
-    def from_env(cls, topology_level: str = "gpu") -> "Placement":
+    def from_env(cls, topology: str = "gpu") -> "Placement":
         """The peer this process is, out of the ones a launcher started.
 
         ``torchrun``, ``deepspeed`` and ``mpirun`` all put the local rank in
@@ -55,14 +55,14 @@ class Placement:
         if rank is None:
             raise ValueError(
                 "Placement.from_env: no LOCAL_RANK in the environment; a launcher "
-                "sets it, so pass Placement({topology_level!r}: rank) yourself instead"
+                "sets it, so pass Placement({topology!r}: rank) yourself instead"
             )
-        return cls({topology_level: int(rank)})
+        return cls({topology: int(rank)})
 
     @classmethod
     def from_mesh(cls, mesh: Mesh) -> "tuple[Placement, ...]":
         """Every placement of *mesh*: each level's unit ids are its arrangement's values."""
-        arrangements = levels(mesh)
+        arrangements = layouts(mesh)
         names = topology_names(mesh)
         return tuple(
             cls(dict(zip(names, map(apply, arrangements, at), strict=True)))

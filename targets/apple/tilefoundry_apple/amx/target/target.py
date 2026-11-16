@@ -99,8 +99,8 @@ class Target(target.Target):
         """CPU execution units; AMX is an instruction capability."""
         count = self.device.performance_core_count + self.device.efficiency_core_count
         return target.TopologyFacts(
-            (target.TopologyLevelFacts("thread", count, count),),
-            parallel_level="thread",
+            (target.TopologyLimits("thread", count, count),),
+            parallel_topology="thread",
         )
 
     def get_facts(self, facts_type: type, query: object | None = None):
@@ -112,12 +112,12 @@ class Target(target.Target):
                 self, facts_type,
                 target.MemoryExecutionFacts(tuple(level.name for level in self.topology_facts().topologies)),
             )
-        if facts_type is target.TopologyLevelFacts:
-            level = self.topology_facts().level(
+        if facts_type is target.TopologyLimits:
+            limits = self.topology_facts().topology(
                 query if isinstance(query, str) else None
             )
-            if level is not None:
-                return target.facts_result(self, facts_type, level)
+            if limits is not None:
+                return target.facts_result(self, facts_type, limits)
             return super().get_facts(facts_type, query)
 
         if facts_type is target.MemoryHierarchyFacts:

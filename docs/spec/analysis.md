@@ -5,7 +5,7 @@ This spec owns TileFoundry's fact layer: everything a later stage decides
 
 | Surface | Entry | What it states |
 |---|---|---|
-| Program check | `check_program(module, function, dims=..., topology_level=..., budget=..., analyzers=...)` | a checked Module and root Function; each derived Function carries internal `ExecutionMeshMetadata(mesh)` recording its unique enclosing mesh, or `None` for root |
+| Program check | `check_program(module, function, dims=..., topology=..., budget=..., analyzers=...)` | a checked Module and root Function; each derived Function carries internal `ExecutionMeshMetadata(mesh)` recording its unique enclosing mesh, or `None` for root |
 | Composed measurement | `analyze(program, function, analysis=...)` | one or more root analyses and their union dependency closure, writing typed Metadata in place on the program returned by `check_program`; no cloning or dimension binding |
 
 The caller binds dimensions through `check_program`, then passes both returned
@@ -129,7 +129,7 @@ layer settles is which type a field holds and what its keys name:
     states its own through the checker its descriptor carries, and one
     metadata-free traversal of the derived program answers all of them.
     Performance readiness requires a selected topology level whose
-    `TopologyLevelFacts.max_physical_units` is a positive integer and one-unit
+    `TopologyLimits.max_physical_units` is a positive integer and one-unit
     `PerformanceServiceFacts` stated for that same level. Where an occurrence
     runs is stated by the program, so that checker visits no occurrence; where
     the buffers go is not a readiness question. Failing performance readiness
@@ -434,7 +434,7 @@ class Footprint:
   - A program declaring more units than the target holds MUST NOT have them all
     counted as concurrent. The wave is the first `wave_units` units in the
     mesh's own linear order, taken through `Mesh.layout`'s strides.
-  - The wave count MUST be `ceil(mesh_units(topology_level) / wave_units)`; a
+  - The wave count MUST be `ceil(mesh_units(topology) / wave_units)`; a
     partial last wave MUST count as a full wave. Reuse, cache capacity checks,
     and the printed `footprint` field MUST use the single-window `logical` bytes.
   - `Footprint.precision` MUST preserve direction throughout address merging
@@ -1215,7 +1215,7 @@ class ThroughputFacts:
 ```
 
 Roofline asks for `ThroughputFacts` with the query
-`(topology_level, active, inflight)`, where `active` is the most units the
+`(topology, active, inflight)`, where `active` is the most units the
 Function's meshes run at that level and `inflight` is a Call's bytes in flight,
 as performance states them; the Function uses the most any of its own Calls
 keeps, so its bound stays a lower bound. A call into another definition is not
@@ -1299,7 +1299,7 @@ its full form as defined in that family's section.
     `ComputeCostMetadata.flops` by `unit_flops`, of `service` by `unit_ops`, and
     of the bytes at each storage level by `unit_bandwidth`, all at the level it
     was asked about, for the Function's active units: performance asks for
-    `PerformanceServiceFacts` with `(topology_level, active, inflight)`, `active`
+    `PerformanceServiceFacts` with `(topology, active, inflight)`, `active`
     capped at the level's `max_physical_units`. `inflight` is the bytes one
     parallel unit keeps in flight for the occurrence: an asynchronous copy
     (`category="async"`, such as TMA or `cp.async`) keeps one unit's bytes at
@@ -1408,7 +1408,7 @@ Function summary fields are:
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `timeline` | `[0, local makespan * waves)`, where the local makespan is the end of the CTA-local timeline, or zero with no work (on the entry Function, raised to the roofline `ideal_ns` when roofline ran), and `waves` is `ceil(N / P)`: `N` is the most units the Function's meshes run at the level selected by `TopologyFacts.parallel_level` and `P` is that level's `max_physical_units`. Its duration is the prediction; `waves` is not a field. | `TopologyFacts` |
+| `timeline` | `[0, local makespan * waves)`, where the local makespan is the end of the CTA-local timeline, or zero with no work (on the entry Function, raised to the roofline `ideal_ns` when roofline ran), and `waves` is `ceil(N / P)`: `N` is the most units the Function's meshes run at the level selected by `TopologyFacts.parallel_topology` and `P` is that level's `max_physical_units`. Its duration is the prediction; `waves` is not a field. | `TopologyFacts` |
 
 Occurrence intervals remain CTA-local and are not copied once per wave. The
 capacity `P` is the machine-side unit count; the mapping of one CTA to one
@@ -1428,7 +1428,7 @@ does not appear in that record's JSON projection. `predicted-ns` is the duration
 the summary's own envelope, not a second measurement. `wave` is the summary's
 `wave`: `active` is the most units any mesh the Function executes runs at the
 selected topology level and the coarser ones, 1 when it states no mesh, and
-`physical` is that level's `TopologyLevelFacts.max_physical_units`. Forty
+`physical` is that level's `TopologyLimits.max_physical_units`. Forty
 units on a 132-unit level read `wave=40/132`, and 8192 read `wave=8192/132`.
 It states where the program's placement reaches, not an occupancy guarantee.
 
@@ -1526,7 +1526,7 @@ def check_program(
     module: "core.Module",
     function: "core.Function",
     *,
-    topology_level: str | None = None,
+    topology: str | None = None,
     budget: int = NODE_BUDGET,
     analyzers: tuple["target.Analyzer", ...] = (),
     dims: "Mapping[str, int] | None" = None,
@@ -1543,7 +1543,7 @@ class CheckContext(valuation.Context):
     module: "core.Module"
     function: "core.Function"
     target: "target.Target"
-    topology_level: str | None
+    topology: str | None
 
 ```
 
@@ -1561,7 +1561,7 @@ class CheckContext(valuation.Context):
   - Every effective Module topology MUST name a level the resolved Target
     supports, with a positive static extent within that level's finite hardware
     limit; a rejection names the level, its extent, and the reason.
-  - A non-`None` `topology_level` MUST name exactly one effective Module topology.
+  - A non-`None` `topology` MUST name exactly one effective Module topology.
   - `check_program(analyzers=...)` and Analyze use the same checker gate: each
     checker's `check_target_facts`, followed by `visit` on each reached
     definition. Analyze MUST run the requested closure's checkers on the checked
@@ -1649,7 +1649,7 @@ class Result:
         module: attribute; Source Module.
         function: attribute; Function that received records.
         analyses: attribute; Requested root analyses in first-occurrence order.
-        topology_level: attribute; Topology level whose unit the per-unit quantities describe, or None.
+        topology: attribute; Topology whose unit the per-unit quantities describe, or None.
         executed: attribute; Analyses executed in dependency order.
         metadata_types: attribute; Metadata classes actually written.
         functions: attribute; Reached derived functions in root-first DFS order.
@@ -1658,7 +1658,7 @@ class Result:
     module: "core.Module"
     function: "core.Function"
     analyses: tuple[str, ...]
-    topology_level: str | None
+    topology: str | None
     executed: tuple[str, ...]
     metadata_types: tuple[type[expr.IRMetadata], ...]
     functions: tuple["core.Function", ...]
@@ -1669,27 +1669,27 @@ def analyze(
     function: "core.Function",
     *,
     analysis: str | Sequence[str],
-    topology_level: str | None = None,
+    topology: str | None = None,
     level: str | None = None,
     options: object | None = None,
 ) -> Result: ...
 ```
 
 - constraints:
-  - `level` is an alias of `topology_level`; naming both with different values
+  - `level` is an alias of `topology`; naming both with different values
     MUST raise `ValueError`.
-  - `topology_level` MUST name one effective Module topology. When omitted, it
-    MUST default to the coarsest effective topology whose `TopologyLevelFacts`
+  - `topology` MUST name one effective Module topology. When omitted, it
+    MUST default to the coarsest effective topology whose `TopologyLimits`
     states `max_physical_units`. A program may name a level the host places
     rather than the machine runs -- several cards are one deployment's shape,
     not one card's -- and measuring per such a level would ask the machine for
     a unit it publishes no rate for. When the target answers for none of the
     declared levels the coarsest MUST be left selected, so the refusal names
     the level rather than the absence of one; when the Module declares none,
-    `topology_level` MUST remain `None` and no per-unit projection divides.
-    `analysis.Result.topology_level` MUST record the resolved answer.
+    `topology` MUST remain `None` and no per-unit projection divides.
+    `analysis.Result.topology` MUST record the resolved answer.
   - A target MUST answer `PerformanceServiceFacts` and state
-    `TopologyLevelFacts.max_physical_units` for the level it is asked about,
+    `TopologyLimits.max_physical_units` for the level it is asked about,
     and MUST refuse a level it publishes no rate for rather than answering for a different one. The query is
     the level name, or `(level, active)` when the program runs `active` of its
     units; a target MAY ignore `active`. What one unit gets through is the
@@ -1918,7 +1918,7 @@ class AnalyzeContext(typeinfer.TypeInferContext):
     module: core.Module
     function: core.Function
     target: target.Target
-    topology_level: str | None
+    topology: str | None
     options: object | None
     scope: IterationScope | None = None
     current_mesh: types.Mesh | None = None
@@ -1972,14 +1972,14 @@ class Target:
   - `AnalysisCallable` MUST receive the normalized Function graph and one
     `AnalyzeContext` carrying the exact Module, Target, resolved topology level,
     caller options, and the shared `scope` view (`scope.root` for the definition). The
-    `topology_level` MAY be `None` only when the Module declares no topology;
+    `topology` MAY be `None` only when the Module declares no topology;
     options MAY be `None`.
   - The same `AnalyzeContext` is what analysis reads types and access relations
     through. It is created before the scope tree, which reads relations through
     it with no topology level, and its `scope` is bound to that tree
     (`bind_scope`) before any analysis runs. `type_of` returns the `Expr.type` that
     `check_program` stored on the analyzed copy; `local_type_of` projects it to
-    `topology_level` over the Module's topologies, or returns it whole without
+    `topology` over the Module's topologies, or returns it whole without
     one. `current_mesh` is `None`: relations are asked outside any execution
     mesh.
   - Analyze MUST obtain every root and dependency from the same exact Target

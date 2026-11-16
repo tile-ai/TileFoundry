@@ -1,4 +1,4 @@
-"""The local view of a type: what one unit of a topology level holds."""
+"""The local view of a type: what one unit of a topology holds."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ __all__ = [
     "participant_frame",
     "participant_layout",
     "physical_layout",
+    "topology_level",
     "try_local_type_of",
 ]
 
@@ -102,7 +103,7 @@ def physical_layout(layout: types.ShardLayout) -> types.LayoutBase:
 
 def participant_frame(source: types.Mesh, required: types.Mesh) -> tuple[types.Mesh, int]:
     """Find a physical suffix; its dropped count indexes the full source layout."""
-    assert len(required.topologies) == 1, "participant frames require one topology level"
+    assert len(required.topologies) == 1, "participant frames require one topology"
     source_layout = types.flatten(source.layout)
     required_layout = types.flatten(required.layout)
     if not isinstance(source_layout, types.Layout) or not isinstance(required_layout, types.Layout):
@@ -209,27 +210,27 @@ def try_local_type_of(type: types.Type) -> types.Type | None:
 
 
 def local_type_of(
-    type: types.Type, *, topology_level: str | None = None, topologies: tuple[types.Topology, ...] = ()
+    type: types.Type, *, topology: str | None = None, topologies: tuple[types.Topology, ...] = ()
 ) -> types.Type:
     """Project every tensor leaf to what one unit holds.
 
-    With ``topology_level``: a ``Split`` at that level or coarser divides, while
+    With ``topology``: a ``Split`` at that topology or coarser divides, while
     finer splits, ``Broadcast``, and ``Partial`` do not; logical axes may factor
     into layout positions, and ``topologies`` supplies the ordered hierarchy.
     Without it: every ``Split`` divides, the layout is dropped, and the logical
     rank is preserved. This form is for relations over logical axes, where
     factoring an axis into layout positions would lose the modeled flow.
     """
-    if topology_level is None:
+    if topology is None:
         projected = all_split_local_type(type, refuse_indivisible=True)
         assert projected is not None
         return projected
 
-    selected = level_index(topology_level, topologies)
+    selected = topology_level(topology, topologies)
     if isinstance(type, types.TupleType):
         return types.TupleType(
             fields=tuple(
-                local_type_of(field, topology_level=topology_level, topologies=topologies)
+                local_type_of(field, topology=topology, topologies=topologies)
                 for field in type.fields
             )
         )
@@ -239,9 +240,7 @@ def local_type_of(
     shard = types.shard_layout_of(layout)
     if shard is not None:
         return types.TensorType(
-            shape=local_layout_shape(
-                shard, selected_topology_level=selected, topologies=topologies
-            ),
+            shape=local_layout_shape(shard, selected_level=selected, topologies=topologies),
             dtype=type.dtype,
             layout=layout,
             storage=type.storage,
@@ -254,47 +253,41 @@ def local_type_of(
     )
 
 
-def level_index(topology_level: str, topologies: tuple[types.Topology, ...]) -> int:
-    """Where *topology_level* sits in the declared hierarchy, coarsest first."""
-    levels = {topology.name: index for index, topology in enumerate(topologies)}
-    if topology_level not in levels:
-        available = ", ".join(levels) or "none"
+def topology_level(topology: str, topologies: tuple[types.Topology, ...]) -> int:
+    """Where *topology* sits in the Module's declared *topologies*, coarsest first."""
+    declared = {each.name: index for index, each in enumerate(topologies)}
+    if topology not in declared:
+        available = ", ".join(declared) or "none"
         raise ValueError(
-            f"local_type_of: topology level {topology_level!r} is not declared; "
-            f"available levels are {available}"
+            f"local_type_of: topology {topology!r} is not declared; "
+            f"available topologies are {available}"
         )
-    if len(levels) != len(topologies):
-        raise ValueError("local_type_of: topology level names must be unique")
-    return levels[topology_level]
+    if len(declared) != len(topologies):
+        raise ValueError("local_type_of: topology names must be unique")
+    return declared[topology]
 
 
 def divided_mesh_axes(
-    layout: types.ShardLayout, *, topology_level: str, topologies: tuple[types.Topology, ...]
+    layout: types.ShardLayout, *, topology: str, topologies: tuple[types.Topology, ...]
 ) -> tuple[int, ...]:
-    """The mesh axes whose ``Split`` one unit of *topology_level* holds one part of.
+    """The mesh axes whose ``Split`` one unit of *topology* holds one part of.
 
     A ``Split`` at that level or coarser divides; a finer one does not. This is
     the rule ``local_type_of`` divides by, stated once for whoever places a
     value's coordinates among that unit's positions.
     """
-    selected = level_index(topology_level, topologies)
-    return divided_axes(layout, selected_topology_level=selected, topologies=topologies)
+    selected = topology_level(topology, topologies)
+    return divided_axes(layout, selected_level=selected, topologies=topologies)
 
 
 def divided_axes(
-    layout: types.ShardLayout, *, selected_topology_level: int, topologies: tuple[types.Topology, ...]
+    layout: types.ShardLayout, *, selected_level: int, topologies: tuple[types.Topology, ...]
 ) -> tuple[int, ...]:
-    declared = {topology.name: index for index, topology in enumerate(topologies)}
-    for topology in layout.mesh.topologies:
-        if topology.name not in declared:
-            raise ValueError(
-                f"local_type_of: shard uses undeclared topology level {topology.name!r}"
-            )
     mesh_layout = layout.mesh.layout
     stated = mesh_layout.outer if isinstance(mesh_layout, types.ComposedLayout) else mesh_layout
-    axis_topology_level = types.flatten(
+    axis_topology_levels = types.flatten(
         tuple(
-            int_tuple.repeat_like(mode, declared[topology.name])
+            int_tuple.repeat_like(mode, topology_level(topology.name, topologies))
             for mode, topology in zip(stated.shape, layout.mesh.topologies, strict=True)
         )
     )
@@ -303,11 +296,11 @@ def divided_axes(
         for mesh_axis, attr in enumerate(layout.attrs)
         if isinstance(attr, types.Split)
         and (
-            axis_topology_level[mesh_axis]
-            if mesh_axis < len(axis_topology_level)
-            else selected_topology_level
+            axis_topology_levels[mesh_axis]
+            if mesh_axis < len(axis_topology_levels)
+            else selected_level
         )
-        <= selected_topology_level
+        <= selected_level
     )
 
 
@@ -319,12 +312,12 @@ def require_concrete(shape: tuple | list) -> None:
 
 
 def nested_layout_shape(
-    layout: object, *, selected_topology_level: int, topologies: tuple[types.Topology, ...]
+    layout: object, *, selected_level: int, topologies: tuple[types.Topology, ...]
 ) -> tuple:
     shard = types.shard_layout_of(layout)
     if shard is not None:
         return local_layout_shape(
-            shard, selected_topology_level=selected_topology_level, topologies=topologies
+            shard, selected_level=selected_level, topologies=topologies
         )
     if isinstance(layout, (types.Layout, types.ComposedLayout)):
         return tuple(types.flatten(layout).shape)
@@ -334,16 +327,16 @@ def nested_layout_shape(
 
 
 def local_layout_shape(
-    layout: types.ShardLayout, *, selected_topology_level: int, topologies: tuple[types.Topology, ...]
+    layout: types.ShardLayout, *, selected_level: int, topologies: tuple[types.Topology, ...]
 ) -> tuple[int, ...]:
     shape = list(
         nested_layout_shape(
-            layout.layout, selected_topology_level=selected_topology_level, topologies=topologies
+            layout.layout, selected_level=selected_level, topologies=topologies
         )
     )
     mesh_shape = types.flatten(layout.mesh.layout).shape
     for mesh_axis in divided_axes(
-        layout, selected_topology_level=selected_topology_level, topologies=topologies
+        layout, selected_level=selected_level, topologies=topologies
     ):
         attr = layout.attrs[mesh_axis]
         if mesh_axis >= len(mesh_shape):

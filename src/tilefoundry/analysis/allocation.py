@@ -256,7 +256,7 @@ def visible_at(model, value, producer):
         axes = dim.literal_axes(value.args[0])
         offset = 0
         for topology, layout in zip(
-            value.target.mesh.topologies, types.levels(value.target.mesh), strict=True
+            value.target.mesh.topologies, types.layouts(value.target.mesh), strict=True
         ):
             width = len(types.flatten(layout.shape))
             if axes is None or any(offset <= axis < offset + width for axis in axes):
@@ -729,7 +729,7 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
             module=context.module,
             function=context.function,
             target=context.target,
-            topology_level=context.topology_level,
+            topology=context.topology,
             topologies=context.topologies,
         )
         for lifetime in liveness.intervals:
@@ -837,7 +837,7 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
                     size = max(
                         amount // copies,
                         storage_bytes(
-                            leaf, topology_level=ctx.topology_level, topologies=ctx.topologies
+                            leaf, topology=ctx.topology, topologies=ctx.topologies
                         ),
                     )
                     if copies > 1:
@@ -929,7 +929,7 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
                 )
             )
         update = self.by_value.get(core.SSAValue(node.args[1]))
-        relations = ctx.scope.access.projected_relations(node, replace(ctx, topology_level=None))
+        relations = ctx.scope.access.projected_relations(node, replace(ctx, topology=None))
         if update is not None and len(relations) > len(node.args):
             mapping = (
                 relations[1]
@@ -1009,7 +1009,7 @@ def partial_copies(held: types.TensorType, owners: expr.StorageOwners) -> int:
     return copies
 
 
-def storage_bytes(held: types.TensorType, *, topology_level=None, topologies=()) -> int:
+def storage_bytes(held: types.TensorType, *, topology=None, topologies=()) -> int:
     """A unit's safe arena span, including holes and all reachable swizzle phases."""
     if not expr.is_literal_shape(held.shape):
         raise Error(f"allocation: unresolved physical shape {held.shape!r}")
@@ -1018,10 +1018,10 @@ def storage_bytes(held: types.TensorType, *, topology_level=None, topologies=())
 
     def bounds(layout, low, high, shape=None):
         if isinstance(layout, types.ShardLayout):
-            if topology_level is not None:
+            if topology is not None:
                 shape = ir_utils.local_type_of(
                     replace(held, layout=layout),
-                    topology_level=topology_level,
+                    topology=topology,
                     topologies=topologies,
                 ).shape
             return bounds(layout.layout, low, high, shape)

@@ -18,10 +18,10 @@ class VendorNpuTarget(target.Target):
     def get_facts(self, facts_type: type, query: object | None = None):
         if facts_type is target.TopologyFacts and query is None:
             value = target.TopologyFacts(
-                (target.TopologyLevelFacts("core", 256, 16),), parallel_level="core"
+                (target.TopologyLimits("core", 256, 16),), parallel_topology="core"
             )
-        elif facts_type is target.TopologyLevelFacts and query == "core":
-            value = target.TopologyLevelFacts("core", 256, 16)
+        elif facts_type is target.TopologyLimits and query == "core":
+            value = target.TopologyLimits("core", 256, 16)
         elif facts_type is target.MemoryHierarchyFacts:
             value = target.MemoryHierarchyFacts(
                 explicit_levels=(
@@ -50,7 +50,7 @@ class VendorNpuTarget(target.Target):
                     ("special", 250_000_000),
                 ),
                 unit_bandwidth=(("gmem", 2_000_000_000_000 // 16),),
-                unit="core",
+                topology="core",
             )
         else:
             return super().get_facts(facts_type, query)

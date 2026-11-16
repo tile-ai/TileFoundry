@@ -132,7 +132,7 @@ class Target(target.Target):
   - `get_facts(TopologyFacts).topologies` MUST contain only `thread`, with logical
     and physical execution-position limits equal to performance plus efficiency
     core counts (12 for the installed AppleM2 Pro). It MUST NOT set `from_target`.
-    `parallel_level` MUST be `thread`. These limits describe program workers,
+    `parallel_topology` MUST be `thread`. These limits describe program workers,
     not independent AMX matrix engines.
   - Declared extents MUST be positive and bounded by that limit, including the
     complete admitted range of a symbolic extent. `amx` MUST be rejected as a

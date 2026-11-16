@@ -90,7 +90,7 @@ def _check_chunk(cases):
                 shape=SHAPE, dtype=expr.DType.f32, layout=layout, storage=storage
             )
             actual = utils.local_type_of(
-                tensor, topology_level=LEVELS[selected], topologies=topologies
+                tensor, topology=LEVELS[selected], topologies=topologies
             )
             if attrs:
                 logical_axes = types.int_tuple.mode_axes(
