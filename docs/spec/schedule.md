@@ -96,8 +96,7 @@ Matching reads a source window in the layout in which it lies. The address offse
 is not part of the layout. An unstated layout uses the parent tensor's compact
 row-major strides. When an instruction reads a plain
 shared-memory layout through an all-`Broadcast` `pattern.ShardLayout`, the
-single-issue view is bound to one required execution mesh for matching. This
-does not assign issues to units; issue assignment is a lowering decision.
+single-issue view is bound to one required execution mesh for matching.
 
 An instruction without a registered access relation cannot be selected by a
 schedule.
