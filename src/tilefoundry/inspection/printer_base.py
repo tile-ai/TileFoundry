@@ -93,7 +93,7 @@ def ceildiv_operands(value: expr.Call) -> tuple[object, object] | None:
     return added.args[0], divisor
 
 
-class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
+class PythonPrinter(core.PrinterBase, expr.Functor[str], types.TypeFunctor[str]):
     """Render the Python DSL with one dispatch root for expressions and types."""
 
     def print_SSAValue(self, value):

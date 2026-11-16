@@ -82,3 +82,4 @@ from .stride import (
 from .swizzle_layout import get_swizzle_portion
 from .tensor_type import ShapeDim, TensorType, TupleType, Type
 from .topology import Topology, topology_name
+from .visitor import TypeFunctor, TypeMutator, TypeVisitor

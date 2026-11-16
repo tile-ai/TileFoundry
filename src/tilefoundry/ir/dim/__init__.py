@@ -19,14 +19,10 @@ from .simplify import as_dimension, ceildiv, i64_const, is_dimension, maximum, m
 from .substitute import (
     SubstitutionError,
     canonicalize_dims,
-    canonicalize_topology_dims,
     collect_vars,
     has_symbolic_dims,
     substitute_dims,
-    substitute_layout_dims,
-    substitute_mesh_dims,
     substitute_shape_entry,
-    substitute_topology_dims,
     var_names,
     vars_by_name,
 )

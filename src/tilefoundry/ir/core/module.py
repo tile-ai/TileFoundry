@@ -129,7 +129,7 @@ class Module:
                 f"method and a function/child module; names must be disjoint"
             )
         if self.topologies is not None:
-            topologies = tuple(dim.canonicalize_topology_dims(t) for t in self.topologies)
+            topologies = tuple(dim.canonicalize_dims(t) for t in self.topologies)
             if topologies != self.topologies:
                 self.topologies = topologies
             names = [t.name for t in self.topologies]

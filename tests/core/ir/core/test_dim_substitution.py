@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir import dim, expr, types
+from tilefoundry import services
+from tilefoundry.ir import core, dim, expr, types
 
 CTX = expr.DimVar("ctx_len", 1, 262144)
 
@@ -108,3 +109,49 @@ def test_the_dimensions_present_are_reported_in_first_seen_order() -> None:
         "seq_len",
         "ctx_len",
     )
+
+
+_CTA = types.Topology("cta", CTX)
+_THREAD = types.Topology("thread", 128)
+_MESH = types.Mesh((_CTA, _THREAD), types.Layout(((SEQ,), (128,)), ((128,), (1,))), ("c", "t"))
+
+
+def _sharded() -> types.TensorType:
+    layout = types.ShardLayout(
+        types.ComposedLayout(types.Swizzle(1, 0, 1), 0, types.Layout((SEQ, 128))),
+        (types.Split(0), types.Split(1)),
+        _MESH,
+    )
+    return types.TensorType(shape=(SEQ, 128), dtype=expr.DType.f32, layout=layout, storage="rmem")
+
+
+def test_a_type_visitor_reads_every_dimension_in_field_order() -> None:
+    """Shape, then the shard layout's layout, then its mesh: topologies before layout."""
+
+    class Entries(types.TypeVisitor[None]):
+        def visit_dim(self, entry, seen):
+            seen.append(entry)
+
+    seen = []
+    Entries().visit(_sharded(), seen)
+    assert seen == [SEQ, 128, SEQ, 128, 128, 1, 0, CTX, 128, SEQ, 128, 128, 1]
+    assert dim.var_names(_sharded()) == ("seq_len", "ctx_len")
+
+
+def test_a_type_mutator_rebuilds_only_what_changed() -> None:
+    sharded = _sharded()
+    assert types.TypeMutator().visit(sharded) is sharded
+    bound = dim.substitute_dims(sharded, {"ctx_len": 8})
+    assert bound.layout.layout is sharded.layout.layout
+    assert bound.layout.mesh.topologies == (types.Topology("cta", 8), _THREAD)
+    assert bound.layout.mesh.layout is _MESH.layout
+    assert bound.layout.mesh.names == ("c", "t")
+
+
+def test_a_topology_layout_or_mesh_is_bound_and_normalized_directly() -> None:
+    assert dim.substitute_dims(_CTA, {"ctx_len": 8}) == types.Topology("cta", 8)
+    assert dim.substitute_dims(_MESH, {"seq_len": 2}).layout == types.Layout(((2,), (128,)), ((128,), (1,)))
+    written = types.Topology("thread", services.simplify_dim("mul", (32, 4)))
+    assert dim.canonicalize_dims(written) == types.Topology("thread", 128)
+    module = core.Module("m", (), topologies=(written,))
+    assert module.topologies == (types.Topology("thread", 128),)

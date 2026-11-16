@@ -175,7 +175,7 @@ class InstantiateDimensionCloner(core.ExprCloner):
             None
             if node.topologies is None
             else tuple(
-                dim.substitute_topology_dims(topology, self.dims) for topology in node.topologies
+                dim.substitute_dims(topology, self.dims) for topology in node.topologies
             )
         )
         functions = tuple(self.functions.get(id(fn), fn) for fn in node.functions)
@@ -210,7 +210,7 @@ class InstantiateDimensionCloner(core.ExprCloner):
             args=tuple(self.visit(arg) for arg in region.args),
             params=tuple(self.visit(param) for param in region.params),
             body=self.visit(region.body),
-            mesh=dim.substitute_mesh_dims(region.mesh, self.dims),
+            mesh=dim.substitute_dims(region.mesh, self.dims),
             type=dim.substitute_dims(region.type, self.dims),
         )
 
@@ -290,12 +290,8 @@ def substitute_op_dims(target: object, dims: Mapping[str, int]) -> object:
         if param.kind != "attribute":
             continue
         value = getattr(target, param.name, None)
-        if isinstance(value, types.TensorType):
+        if isinstance(value, (types.TensorType, types.LayoutBase, types.Mesh)):
             rebuilt = dim.substitute_dims(value, dims)
-        elif isinstance(value, types.LayoutBase):
-            rebuilt = dim.substitute_layout_dims(value, dims)
-        elif isinstance(value, types.Mesh):
-            rebuilt = dim.substitute_mesh_dims(value, dims)
         elif dim.is_dimension(value):
             rebuilt = dim.substitute_shape_entry(value, dims)
         elif isinstance(value, tuple) and value and all(dim.is_dimension(item) for item in value):

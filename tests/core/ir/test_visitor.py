@@ -355,3 +355,24 @@ def test_prim_function_walk_and_identity_preserving_rewrite() -> None:
     core.walk_prim_function(V(), pf)
     assert seen == ["For"]
     assert core.rewrite_prim_function(core.StmtMutator(), pf) is pf
+
+
+def test_an_expr_visitor_reads_a_type_only_when_handed_one() -> None:
+    """``node.type`` is not walked; a type handed to ``visit`` reaches the type handlers."""
+
+    class Dims(core.ExprWalker[None]):
+        def __init__(self):
+            super().__init__()
+            self.dims = []
+
+        def visit_dim(self, entry, ctx):
+            self.dims.append(entry)
+
+    var = expr.Var("x", type=types.TensorType.from_shape((4, 8), storage=expr.StorageKind.RMEM))
+    walker = Dims()
+    walker.visit(var)
+    assert walker.dims == []
+    walker.clear()
+    walker.visit(var.type)
+    assert walker.dims == [4, 8, 4, 8, 8, 1]
+    assert walker.root_expr is None and not walker.memo
