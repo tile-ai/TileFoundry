@@ -4,11 +4,12 @@
 
 namespace tilefoundry {
 template <>
-CUTE_HOST_DEVICE constexpr auto program_dim<TopologyScope::thread>() noexcept {
+CUTE_HOST_DEVICE constexpr auto
+topology_size<TopologyLevel::thread>() noexcept {
     return cute::Int<256>{};
 }
 template <>
-CUTE_HOST_DEVICE constexpr auto program_dim<TopologyScope::cta>() noexcept {
+CUTE_HOST_DEVICE constexpr auto topology_size<TopologyLevel::cta>() noexcept {
     return cute::Int<8>{};
 }
 }
@@ -33,7 +34,7 @@ template <class T, class D> struct dep {
 template <class T, class D> using dep_t = typename dep<T, D>::type;
 
 template <int... Es> __device__ auto tmesh() {
-    return make_mesh<TopologyScope::thread>(
+    return make_mesh<TopologyLevel::thread>(
         cute::make_shape(cute::Int<Es>{}...));
 }
 
@@ -110,8 +111,8 @@ __global__ void k() {
     using sparse_layout =
         cute::Layout<cute::Shape<cute::Int<2>, cute::Int<32>>,
                      cute::Stride<cute::Int<64>, cute::Int<1>>>;
-    using sparse_mesh = Mesh<sparse_layout, TopologyScope::thread>;
-    /// One id per level this program names, as program_ids() gives: cta,
+    using sparse_mesh = Mesh<sparse_layout, TopologyLevel::thread>;
+    /// One id per level this program names, as unit_ids() gives: cta,
     /// thread.
     constexpr auto sparse_ids = cute::make_tuple(0, 0);
     static_assert(
@@ -135,9 +136,9 @@ __global__ void k() {
                                  cute::Shape<cute::Int<32>>>,
                      cute::Stride<cute::Stride<cute::Int<2>, cute::Int<1>>,
                                   cute::Stride<cute::Int<1>>>>;
-    using mesh = Mesh<grouped, TopologyScope::cta, TopologyScope::thread>;
-    constexpr auto cta = tilefoundry::get<TopologyScope::cta>(mesh{});
-    constexpr auto thread = tilefoundry::get<TopologyScope::thread>(mesh{});
+    using mesh = Mesh<grouped, TopologyLevel::cta, TopologyLevel::thread>;
+    constexpr auto cta = tilefoundry::get<TopologyLevel::cta>(mesh{});
+    constexpr auto thread = tilefoundry::get<TopologyLevel::thread>(mesh{});
     static_assert(decltype(cta)::level_count == 1, "one level each");
     static_assert(int(cute::size(cta.layout)) == 8, "8 CTAs of their own");
     static_assert(int(cute::size(thread.layout)) == 32, "32 threads of theirs");
@@ -153,7 +154,7 @@ template <class D = void> __global__ void k() {
     using box =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
     using ml = cute::ComposedLayout<inner, cute::Int<0>, box>;
-    using mesh = dep_t<Mesh<ml, TopologyScope::thread>, D>;
+    using mesh = dep_t<Mesh<ml, TopologyLevel::thread>, D>;
     static_assert(tilefoundry::offset(mesh{}) == 0, "unreachable");
 }
 void use() { (void)&k<>; }
@@ -167,7 +168,7 @@ template <class D = void> __global__ void k() {
     using box =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
     using ml = cute::ComposedLayout<cute::identity, int, box>;
-    using mesh = dep_t<Mesh<ml, TopologyScope::thread>, D>;
+    using mesh = dep_t<Mesh<ml, TopologyLevel::thread>, D>;
     static_assert(tilefoundry::offset(mesh{}) == 0, "unreachable");
 }
 void use() { (void)&k<>; }
@@ -215,8 +216,7 @@ template <class D = void> __global__ void k(float *p) {
     ShardLayout<decltype(layout), cute::tuple<shard::S<0>>, decltype(mesh)> sl{
         layout, mesh};
     p[0] = float(cute::get<1>(tilefoundry::detail::local_layout_and_offset(
-        sl,
-        tilefoundry::mesh_coords(sl.mesh_value, tilefoundry::program_ids()))));
+        sl, tilefoundry::mesh_coords(sl.mesh_value, tilefoundry::unit_ids()))));
 }
 void use() { (void)&k<>; }
 }
@@ -297,7 +297,7 @@ __global__ void k(float *p) {
     float a = p[0], b = 0.f;
     using wlayout =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
-    using wmesh = Mesh<wlayout, TopologyScope::scope_count>;
+    using wmesh = Mesh<wlayout, TopologyLevel::level_count>;
     wmesh mesh{wlayout{}};
     auto sl = cute::make_layout(cute::make_shape(cute::Int<32>{}));
     auto dl = cute::make_layout(cute::make_shape(cute::Int<1>{}));
@@ -410,7 +410,7 @@ namespace case_19 {
 __global__ void k() {
     using wlayout =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
-    Mesh<wlayout, TopologyScope::scope_count> mesh{wlayout{}};
+    Mesh<wlayout, TopologyLevel::level_count> mesh{wlayout{}};
     sync(mesh);
 }
 }
@@ -420,7 +420,7 @@ __global__ void k() {
 namespace case_20 {
 /// ops::sync: a CTA mesh handed no grid-barrier counter.
 __global__ void k() {
-    auto mesh = make_mesh<TopologyScope::cta>(cute::make_shape(cute::Int<8>{}));
+    auto mesh = make_mesh<TopologyLevel::cta>(cute::make_shape(cute::Int<8>{}));
     sync(mesh);
 }
 }
@@ -466,7 +466,7 @@ namespace case_25 {
 template <class D = void> __global__ void k() {
     using layout = cute::Layout<cute::Shape<cute::Int<2>, cute::Int<32>>,
                                 cute::Stride<cute::Int<64>, cute::Int<1>>>;
-    using mesh = dep_t<Mesh<layout, TopologyScope::thread>, D>;
+    using mesh = dep_t<Mesh<layout, TopologyLevel::thread>, D>;
     static_assert(tilefoundry::is_warped(mesh{}), "whole warps, so warped");
     static_assert(int(cute::size(tilefoundry::as_warped(mesh{}).layout)) == 64);
     static_assert(sync_impl::warps_run_together<mesh>(),
@@ -481,9 +481,9 @@ namespace case_26 {
 template <class D = void> __global__ void k() {
     using mesh = dep_t<Mesh<cute::Layout<cute::Shape<cute::Int<32>>,
                                          cute::Stride<cute::Int<1>>>,
-                            TopologyScope::thread>,
+                            TopologyLevel::thread>,
                        D>;
-    constexpr auto cta = tilefoundry::get<TopologyScope::cta>(mesh{});
+    constexpr auto cta = tilefoundry::get<TopologyLevel::cta>(mesh{});
     static_assert(int(cute::size(cta.layout)) == 32, "unreachable");
 }
 void use() { (void)&k<>; }

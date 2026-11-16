@@ -364,13 +364,13 @@ class TensorSignature(Signature):
     @property
     def dynamic_axes(self) -> tuple[int, ...]: ...
 
-class ProgramIdSignature(Signature):
-    """The id of one topology level, told to a program that cannot read it."""
+class UnitIdSignature(Signature):
+    """The unit id of one topology, told to a program that cannot read it."""
 
     name: str
-    topology_level: str
+    topology: str
 
-class ProgramMetaSignature(Signature):
+class PlacementSignature(Signature):
     """The block of ids a kernel hands to the runtime it was compiled against."""
 
     name: str
@@ -435,8 +435,8 @@ class CallableSignature(Signature):
     identities. Target conventions receive the resolved symbol and target;
     they MAY append target-owned suffixes but MUST NOT reconstruct paths.
     CPU functions use the mangled root.
-  - parameters codegen inserts (`tilefoundry_meta`,
-    `tilefoundry_<level>_program_id`) and unit-owned state MUST carry the
+  - parameters codegen inserts (`tilefoundry_placement`,
+    `tilefoundry_<topology>_unit_id`) and unit-owned state MUST carry the
     `tilefoundry_` prefix. Their spellings belong to their respective targets.
   - host wrappers use `export_name(root, fn)` registration names, registering
     through `Function::SetGlobal` with override enabled.
@@ -448,15 +448,15 @@ class CallableSignature(Signature):
   - the entry the loader is handed ([§4.3](#43-linkedmodule)) is a fourth
     value of the same shape: its `name` is the TVM FFI registration name, which
     the loader combines with the `LinkedFunction`'s `signature` to obtain it,
-    and each `leading` entry is a `ProgramIdSignature` whose `topology_level`
-    names the level whose id the host must supply, because that caller reads
+    and each `leading` entry is a `UnitIdSignature` whose `topology`
+    names the topology whose unit id the host must supply, because that caller reads
     the id out of a `Placement` ([shard §5](./shard.md#5-mesh)) instead of writing
     a C++ declaration.
 
 ```python
-def program_id_params(
+def unit_id_params(
     module: core.Module, target: Target
-) -> tuple[ProgramIdSignature, ...]:
+) -> tuple[UnitIdSignature, ...]:
     """The ids a call into *module* has to carry for *target* to run it."""
     ...
 
@@ -477,8 +477,8 @@ per compile and holds it as `codegen.Context.symbols`. A `FunctionSymbol` pairs 
 function with its `symbol`, `export_name`, `owner`, `target` and `callable`.
 
 - constraints:
-  - `program_id_params` is the one place that asks which levels supply their
-    own program ids: the levels whose `TopologyFacts` entry is `from_target`
+  - `unit_id_params` is the one place that asks which levels supply their
+    own unit ids: the levels whose `TopologyFacts` entry is `from_target`
     ([target §1](./target.md#1-target)), intersected with the levels
     the module's program names. A level stated that way has no register the
     device can read, so its id arrives with the call.

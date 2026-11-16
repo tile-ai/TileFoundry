@@ -431,7 +431,7 @@ def local_readback(layout):
 def mesh_coords(mesh: Mesh, ids: tuple[int | None, ...]) -> tuple[int | None, ...]:
     """Each mesh axis's coordinate under per-level program ids; None where a level is unfixed.
 
-    The host side of the CUDA runtime's ``mesh_coords(mesh, program_ids())``.
+    The host side of the CUDA runtime's ``mesh_coords(mesh, unit_ids())``.
     """
     coords = []
     for index, arrangement in enumerate(levels(mesh)):

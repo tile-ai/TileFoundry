@@ -99,7 +99,7 @@ class CompiledModule(Module):
         """
         if not self.type.leading:
             return ()
-        topology_levels = tuple(p.topology_level for p in self.type.leading)
+        topology_levels = tuple(p.topology for p in self.type.leading)
         if self.placement is None:
             raise ValueError(
                 f"{self.type.name}: needs the ids of {topology_levels} and no Placement "

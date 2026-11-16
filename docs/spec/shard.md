@@ -1015,7 +1015,7 @@ def local_layout_and_offset(shard, tensor_shape, coord) -> tuple[Layout, int]: .
     by the row-major layout of the same modes
     ([runtime §1.10](runtime.md#110-shardtensor)).
   - `mesh_coords` turns per-level program ids into mesh coordinates, as the
-    CUDA runtime's `mesh_coords(mesh, program_ids())` does; a level whose id is
+    CUDA runtime's `mesh_coords(mesh, unit_ids())` does; a level whose id is
     `None` leaves its axes `None`.
   - the host states `tensor_shape` and `ids`, which the device reads off its
     own layout and its hardware: [§7.1.1](#711-layoutshape) factors a split

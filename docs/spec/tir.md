@@ -821,7 +821,7 @@ block_y, block_z, *forwarded_args)`:
   — a `Constant` for a static extent, a `ShapeOf` ([§2.2](#22-shapeof)) for a
   launch-provided (dynamic) one, or a dim-arithmetic `Call` over those. They are
   launch configuration, not kernel parameters: the device observes geometry
-  through the codegen `program_dim` / `program_shape` accessors, never as
+  through the codegen `topology_size` / `topology_shape` accessors, never as
   arguments.
 - **forwarded args**: the remaining `args` bind the callee's parameters, one
   each, in declaration order. Each MUST be a tensor; for a `PrimFunction`

@@ -26,12 +26,12 @@ A valid participant set maps to exactly one hardware barrier:
 
 Codegen MUST guard the `__syncwarp(mask)` and `bar.sync` cases with the
 participant predicate `base <= tid < base+count` (`tid =
-program_id<thread>()`): a non-participant thread MUST NOT execute the barrier,
+unit_id<thread>()`): a non-participant thread MUST NOT execute the barrier,
 and every participant MUST execute the same id and count.
 
 The first four rows synchronize threads **within one block**; their participant
 set is the contiguous thread interval above. A mesh whose topologies are all the
-`cta` topology instead synchronizes **CTAs across the grid** — `program_id<cta>`
+`cta` topology instead synchronizes **CTAs across the grid** — `unit_id<cta>`
 ranges over the launch's blocks — and maps to the grid-wide software barrier.
 Only the **full** cta mesh participates: a cta slice (a subset of CTAs) has no
 supported barrier and MUST be rejected at verify. The grid barrier's correctness

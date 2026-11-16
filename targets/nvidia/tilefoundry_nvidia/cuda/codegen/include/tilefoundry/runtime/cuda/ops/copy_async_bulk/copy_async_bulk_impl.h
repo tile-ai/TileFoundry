@@ -33,7 +33,7 @@ CUTE_HOST_DEVICE constexpr void check_operands() {
     static_assert(leaves_tile_whole<Src>() && leaves_tile_whole<Dst>(),
                   "ops::copy_async_bulk: both operands must leave the tile "
                   "whole on every "
-                  "instance");
+                  "unit");
     static_assert(tilefoundry::ShardTensorLike<Dst>,
                   "ops::copy_async_bulk: the destination must name a mesh");
     static_assert(one_run_v<s_view> && one_run_v<d_view>,
@@ -53,7 +53,7 @@ template <int Instances> struct StridedCopy {
     __device__ void operator()(SV const &sv, DV &dv) const {
         const int n = int(cute::size(dv));
         const int first =
-            int(tilefoundry::program_id<tilefoundry::TopologyScope::thread>());
+            int(tilefoundry::unit_id<tilefoundry::TopologyLevel::thread>());
         for (int i = first; i < n; i += Instances)
             dv(i) = static_cast<cute::remove_cvref_t<decltype(dv(0))>>(sv(i));
     }
@@ -64,7 +64,7 @@ struct Strided {
     __device__ void operator()(Src const &src, Dst &dst, uint64_t *bar) const {
         auto s = tilefoundry::local_tensor(src);
         auto &&d = tilefoundry::local_tensor(dst);
-        StridedCopy<tilefoundry::shard_mesh_instances<Dst>()>{}(s, d);
+        StridedCopy<tilefoundry::shard_mesh_units<Dst>()>{}(s, d);
         __threadfence_block();
         ops::sync(dst.shard_layout.mesh_value);
         if (tilefoundry::shuffle_elect())

@@ -1,6 +1,6 @@
 /// tilefoundry runtime — thin wrapper around CuTe.
 ///
-/// Provides our own `tilefoundry::Mesh` / `tilefoundry::TopologyScope` /
+/// Provides our own `tilefoundry::Mesh` / `tilefoundry::TopologyLevel` /
 /// `tilefoundry::ShardLayout` / `tilefoundry::ShardTensor` template surface.
 /// Re-exports CuTe primitives (`cute::copy`, `cute::make_tensor`, etc.)
 /// so codegen can emit real CuTe calls.
@@ -31,48 +31,48 @@ inline constexpr int kWarpSize = 32;
 template <class...> inline constexpr bool dependent_false_v = false;
 
 /// Program topology levels and sentinel.
-enum class TopologyScope {
+enum class TopologyLevel {
     gpu,
     cta,
     thread,
-    scope_count,
+    level_count,
 };
 
-/// How many instances the launch gives level T. One .cu is one launch, so
-/// each states its own; a launch-provided grid states it at run time.
-template <TopologyScope T>
-CUTE_HOST_DEVICE constexpr auto program_dim() noexcept;
+/// How many units the launch gives topology level L. One .cu is one launch,
+/// so each states its own; a launch-provided grid states it at run time.
+template <TopologyLevel L>
+CUTE_HOST_DEVICE constexpr auto topology_size() noexcept;
 
 namespace detail {
 /// Start and every level under it, coarsest first, one constant each. A
 /// tuple rather than a count, so that how many there are and where one
 /// sits are cute::rank and cute::find instead of arithmetic of our own.
-template <TopologyScope Start, size_t... Is>
+template <TopologyLevel Start, size_t... Is>
 CUTE_HOST_DEVICE constexpr auto
 topologies_from(std::index_sequence<Is...>) noexcept {
-    return cute::make_tuple(cute::C<TopologyScope(int(Start) + int(Is))>{}...);
+    return cute::make_tuple(cute::C<TopologyLevel(int(Start) + int(Is))>{}...);
 }
 
-template <TopologyScope Start>
+template <TopologyLevel Start>
 CUTE_HOST_DEVICE constexpr auto topologies_from() noexcept {
     return topologies_from<Start>(
-        std::make_index_sequence<size_t(int(TopologyScope::scope_count) -
+        std::make_index_sequence<size_t(int(TopologyLevel::level_count) -
                                         int(Start))>{});
 }
 }
 
-/// Level T and every level under it, one mode each. A mesh naming several
+/// Level L and every level under it, one mode each. A mesh naming several
 /// levels is indexed against this shape: an axis belongs to the level whose
 /// extents its own multiply up to, and a stride counts the levels below it.
 ///
 /// Each count is a dependent call, so the counts are read where the shape is
 /// asked for and not where it is written -- a translation unit states them
 /// after this header.
-template <TopologyScope T>
-CUTE_HOST_DEVICE constexpr auto program_shape() noexcept {
+template <TopologyLevel L>
+CUTE_HOST_DEVICE constexpr auto topology_shape() noexcept {
     return cute::transform(
-        detail::topologies_from<T>(),
-        []<TopologyScope S>(cute::C<S>) { return program_dim<S>(); });
+        detail::topologies_from<L>(),
+        []<TopologyLevel S>(cute::C<S>) { return topology_size<S>(); });
 }
 
 /// The coarsest level this program names. It names a contiguous run of them
@@ -84,10 +84,10 @@ CUTE_HOST_DEVICE constexpr auto program_shape() noexcept {
 /// rather than a function the .cu defines, because the levels decide how long
 /// a coord is and a length is read while this header is compiled.
 #if !defined(TILEFOUNDRY_PROGRAM_TOPOLOGY)
-#define TILEFOUNDRY_PROGRAM_TOPOLOGY tilefoundry::TopologyScope::cta
+#define TILEFOUNDRY_PROGRAM_TOPOLOGY tilefoundry::TopologyLevel::cta
 #endif
 
-CUTE_HOST_DEVICE constexpr TopologyScope program_topology() noexcept {
+CUTE_HOST_DEVICE constexpr TopologyLevel program_topology() noexcept {
     return TILEFOUNDRY_PROGRAM_TOPOLOGY;
 }
 
@@ -104,12 +104,12 @@ CUTE_HOST_DEVICE constexpr auto program_topologies() noexcept {
  * @brief What a launch is told that it cannot read for itself.
  *
  * A card has no register naming which of the mesh's cards it is, so the host
- * that placed it says so. Indexed by TopologyScope, so a slot says which
+ * that placed it says so. Indexed by TopologyLevel, so a slot says which
  * level it answers for; levels the device reads for itself leave theirs
  * unused. Only a program that names such a level is given one.
  */
-struct ProgramMetaData {
-    int program_id[int(TopologyScope::scope_count)];
+struct Placement {
+    int unit_id[int(TopologyLevel::level_count)];
 };
 
 /**
@@ -118,12 +118,12 @@ struct ProgramMetaData {
  * Shared rather than global: the name is an offset into whichever block is
  * running, so one name is one copy per block rather than one per device.
  */
-CUTE_HOST_DEVICE ProgramMetaData &program_meta() {
+CUTE_HOST_DEVICE Placement &placement() {
 #if defined(__CUDA_ARCH__)
-    __shared__ ProgramMetaData held;
+    __shared__ Placement held;
     return held;
 #else
-    static ProgramMetaData held{};
+    static Placement held{};
     return held;
 #endif
 }
@@ -134,25 +134,25 @@ CUTE_HOST_DEVICE ProgramMetaData &program_meta() {
  * Called once, before any divergence: one thread writes and the barrier
  * orders that write against every read of it.
  */
-CUTE_HOST_DEVICE void program_meta(ProgramMetaData const &meta) {
+CUTE_HOST_DEVICE void placement(Placement const &given) {
 #if defined(__CUDA_ARCH__)
     if (threadIdx.x == 0)
-        program_meta() = meta;
+        placement() = given;
     __syncthreads();
 #else
-    program_meta() = meta;
+    placement() = given;
 #endif
 }
 
-/// Linearized id within topology level T.
-template <TopologyScope T> CUTE_HOST_DEVICE size_t program_id() noexcept {
-    static_assert(T == TopologyScope::gpu || T == TopologyScope::cta ||
-                      T == TopologyScope::thread,
-                  "program_id: only gpu, cta and thread have an id");
+/// The unit id within topology level L.
+template <TopologyLevel L> CUTE_HOST_DEVICE size_t unit_id() noexcept {
+    static_assert(L == TopologyLevel::gpu || L == TopologyLevel::cta ||
+                      L == TopologyLevel::thread,
+                  "unit_id: only gpu, cta and thread have an id");
 #if defined(__CUDA_ARCH__)
-    if constexpr (T == TopologyScope::gpu) {
-        return size_t(program_meta().program_id[int(TopologyScope::gpu)]);
-    } else if constexpr (T == TopologyScope::cta) {
+    if constexpr (L == TopologyLevel::gpu) {
+        return size_t(placement().unit_id[int(TopologyLevel::gpu)]);
+    } else if constexpr (L == TopologyLevel::cta) {
         return size_t(blockIdx.x) + size_t(blockIdx.y) * size_t(gridDim.x) +
                size_t(blockIdx.z) * size_t(gridDim.x) * size_t(gridDim.y);
     } else {
@@ -166,15 +166,14 @@ template <TopologyScope T> CUTE_HOST_DEVICE size_t program_id() noexcept {
 
 namespace detail {
 /// One id per level this program names, from the coarsest it names inward.
-template <TopologyScope Start, size_t... Is>
+template <TopologyLevel Start, size_t... Is>
 CUTE_HOST_DEVICE auto ids_of(std::index_sequence<Is...>) noexcept {
-    return cute::make_tuple(
-        program_id<TopologyScope(int(Start) + int(Is))>()...);
+    return cute::make_tuple(unit_id<TopologyLevel(int(Start) + int(Is))>()...);
 }
 }
 
 /// Every level's id, indexed the way program_topologies() is.
-CUTE_HOST_DEVICE auto program_ids() noexcept {
+CUTE_HOST_DEVICE auto unit_ids() noexcept {
     return detail::ids_of<program_topology()>(
         std::make_index_sequence<size_t(cute::rank(program_topologies()))>{});
 }

@@ -16,7 +16,7 @@ template <int Id> struct BarrierId {
 /// ``bar_id<3>``, so the call site reads as an id and not as a type.
 template <int Id> inline constexpr BarrierId<Id> bar_id{};
 
-/// Synchronise every instance of ``mesh``.
+/// Synchronise every unit of ``mesh``.
 
 struct no_resource_t {};
 template <class T> struct barrier_id_traits {
@@ -28,7 +28,7 @@ template <int Id> struct barrier_id_traits<BarrierId<Id>> {
 };
 
 /// The grid, which needs the module's counter.
-template <class TMesh, TopologyScope... Topos, class TRes = no_resource_t>
+template <class TMesh, TopologyLevel... Topos, class TRes = no_resource_t>
 __device__ inline void sync(Mesh<TMesh, Topos...> const &mesh,
                             TRes resource = {}) {
     using mesh_t = Mesh<TMesh, Topos...>;
@@ -42,7 +42,7 @@ __device__ inline void sync(Mesh<TMesh, Topos...> const &mesh,
         }
     } else if constexpr (barrier_id_traits<TRes>::value) {
         if constexpr (tier == sync_impl::Tier::named)
-            sync_impl::Named<mesh_t, sync_impl::instances<mesh_t>(),
+            sync_impl::Named<mesh_t, sync_impl::units<mesh_t>(),
                              barrier_id_traits<TRes>::id>{}();
         else {
             static_assert(

@@ -6,7 +6,7 @@ namespace sync_impl {
 
 __device__ __forceinline__ void grid_barrier(unsigned int *bar) {
     __syncthreads();
-    if (tilefoundry::program_id<tilefoundry::TopologyScope::thread>() == 0) {
+    if (tilefoundry::unit_id<tilefoundry::TopologyLevel::thread>() == 0) {
         unsigned int n_ctas = gridDim.x * gridDim.y * gridDim.z;
         unsigned int phase = atomicAdd(&bar[1], 0u);
         __threadfence();
@@ -43,15 +43,15 @@ struct plan_t {
 };
 template <Tier, class...> CUTE_HOST_DEVICE constexpr void reject();
 
-/// How many instances a mesh covers, as a compile-time number.
+/// How many units a mesh covers, as a compile-time number.
 ///
 /// One level, because every tier below names threads of one block -- a
 /// barrier counts those, and a mesh naming a coarser level counts programs
 /// no barrier here reaches.
-template <class TMesh> CUTE_HOST_DEVICE constexpr int instances() {
+template <class TMesh> CUTE_HOST_DEVICE constexpr int units() {
     static_assert(TMesh::level_count == 1,
                   "ops::sync: a barrier is over one topology level's "
-                  "instances, and this mesh names several");
+                  "units, and this mesh names several");
     return int(cute::size(typename TMesh::layout_type{}));
 }
 
@@ -71,7 +71,7 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr bool warps_run_together() {
 /// The lanes of one warp this mesh occupies, as a ``__shfl`` mask. Only a
 /// mesh inside one warp has one, which is the only mesh that is asked.
 template <class TMesh> CUTE_HOST_DEVICE constexpr unsigned lane_mask() {
-    constexpr int extent = instances<TMesh>();
+    constexpr int extent = units<TMesh>();
     static_assert(extent <= kWarpSize,
                   "ops::sync: a lane mask names the lanes of one warp, and "
                   "this mesh holds more threads than a warp has");
@@ -82,14 +82,14 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr unsigned lane_mask() {
 /// Classify a mesh into its synchronization tier.
 template <class TMesh> CUTE_HOST_DEVICE constexpr Tier classify() {
     constexpr int first = tilefoundry::offset(TMesh{});
-    if constexpr (TMesh::scope == TopologyScope::cta) {
+    if constexpr (TMesh::level == TopologyLevel::cta) {
         /// A CTA mesh based at zero covers the grid.
         return first == 0 ? Tier::grid : Tier::illegal_grid_slice;
-    } else if constexpr (TMesh::scope == TopologyScope::thread) {
-        constexpr int count = instances<TMesh>();
+    } else if constexpr (TMesh::level == TopologyLevel::thread) {
+        constexpr int count = units<TMesh>();
         /// A mesh that is every thread of its level needs no warp shape:
         /// whatever shape it is, one barrier for the block covers it.
-        if constexpr (first == 0 && count == int(program_dim<TMesh::scope>()))
+        if constexpr (first == 0 && count == int(topology_size<TMesh::level>()))
             return count <= kWarpSize ? Tier::warp : Tier::block;
         else if constexpr (!tilefoundry::is_warped(TMesh{}))
             return Tier::illegal_warp_layout;
@@ -107,7 +107,7 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr Tier classify() {
 
 template <class TMesh> CUTE_HOST_DEVICE constexpr plan_t plan() {
     constexpr Tier tier = classify<TMesh>();
-    return {tier,  tilefoundry::offset(TMesh{}), instances<TMesh>(),
+    return {tier,  tilefoundry::offset(TMesh{}), units<TMesh>(),
             false, tier == Tier::grid,           tier == Tier::named};
 }
 
@@ -121,8 +121,9 @@ CUTE_HOST_DEVICE constexpr void reject_barrierless() {
         static_assert(dependent_false_v<Dep>,
                       "ops::sync: the mesh warp layout must be contiguous");
     else if constexpr (tier == Tier::illegal_scope)
-        static_assert(dependent_false_v<Dep>,
-                      "ops::sync: a mesh's scope must be cta or thread");
+        static_assert(
+            dependent_false_v<Dep>,
+            "ops::sync: a mesh's topology level must be cta or thread");
     else
         static_assert(dependent_false_v<Dep>,
                       "ops::sync: barrier tier is missing from dispatch");
@@ -158,7 +159,7 @@ struct Warp {
 template <class TMesh, int Count, int BarId> struct Named {
     __device__ void operator()() const {
         TMesh mesh{};
-        if (tilefoundry::contains(mesh, tilefoundry::program_ids()))
+        if (tilefoundry::contains(mesh, tilefoundry::unit_ids()))
             asm volatile("bar.sync %0, %1;" ::"n"(BarId), "n"(Count));
     }
 };

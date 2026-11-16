@@ -24,7 +24,7 @@ struct LdMatrix {
     __device__ void operator()(Src const &src, Dst &dst) const {
         auto d = dst.data();
         const int lane =
-            int(tilefoundry::program_id<tilefoundry::TopologyScope::thread>()) &
+            int(tilefoundry::unit_id<tilefoundry::TopologyLevel::thread>()) &
             31;
         const int row = lane & 15;
         const int col = (lane >> 4) * 8;

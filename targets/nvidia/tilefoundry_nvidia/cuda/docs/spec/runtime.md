@@ -20,34 +20,34 @@ inline constexpr int kWarpSize;
 
 template <class...> inline constexpr bool dependent_false_v;
 
-enum class TopologyScope {
+enum class TopologyLevel {
     gpu,
     cta,
     thread,
-    scope_count,
+    level_count,
 };
 
-template <TopologyScope T>
-CUTE_HOST_DEVICE constexpr auto program_dim() noexcept;
+template <TopologyLevel L>
+CUTE_HOST_DEVICE constexpr auto topology_size() noexcept;
 
-template <TopologyScope T>
-CUTE_HOST_DEVICE constexpr auto program_shape() noexcept;
+template <TopologyLevel L>
+CUTE_HOST_DEVICE constexpr auto topology_shape() noexcept;
 
-CUTE_HOST_DEVICE constexpr TopologyScope program_topology() noexcept;
+CUTE_HOST_DEVICE constexpr TopologyLevel program_topology() noexcept;
 
 CUTE_HOST_DEVICE constexpr auto program_topologies() noexcept;
 
-struct ProgramMetaData {
-    int program_id[int(TopologyScope::scope_count)];
+struct Placement {
+    int unit_id[int(TopologyLevel::level_count)];
 };
 
-CUTE_HOST_DEVICE ProgramMetaData &program_meta();
+CUTE_HOST_DEVICE Placement &placement();
 
-CUTE_HOST_DEVICE void program_meta(ProgramMetaData const &meta);
+CUTE_HOST_DEVICE void placement(Placement const &given);
 
-template <TopologyScope T> CUTE_HOST_DEVICE size_t program_id() noexcept;
+template <TopologyLevel L> CUTE_HOST_DEVICE size_t unit_id() noexcept;
 
-CUTE_HOST_DEVICE auto program_ids() noexcept;
+CUTE_HOST_DEVICE auto unit_ids() noexcept;
 ```
 <!-- /generated -->
 
@@ -55,23 +55,23 @@ CUTE_HOST_DEVICE auto program_ids() noexcept;
 of a thread mesh, not a level.
 
 - constraints:
-  - `program_id<TopologyScope::gpu>()` MUST equal the host `Placement`'s id
+  - `unit_id<TopologyLevel::gpu>()` MUST equal the host `Placement`'s id
     ([runtime §1.10](../../../../../../docs/spec/runtime.md#110-shardtensor)).
     Devices have no register for their position in the host's mesh.
-  - The id travels in a by-value `ProgramMetaData` kernel parameter, hidden
+  - The id travels in a by-value `Placement` kernel parameter, hidden
     from the user signature. Before divergence, one thread MUST initialize
-    `program_meta` and synchronize readers. Its `__shared__` slot belongs to
+    `placement` and synchronize readers. Its `__shared__` slot belongs to
     one block, so concurrent kernels cannot overwrite each other's metadata.
-  - Every level-indexed length MUST derive from `scope_count`, including
-    `program_id`, `program_ids()` and mesh coordinates. Refuse short
+  - Every level-indexed length MUST derive from `level_count`, including
+    `unit_id`, `unit_ids()` and mesh coordinates. Refuse short
     coordinates rather than reading an adjacent level's id.
   - `program_topology()` is the coarsest named level; `program_topologies()`
-    lists from there to `scope_count`, coarsest first. Use CuTe's `rank` and
+    lists from there to `level_count`, coarsest first. Use CuTe's `rank` and
     `find` on that tuple. A missing level produces rank from `find`, so the
     following `get` MUST refuse it as `"Index out of range"`.
   - Positions are row-major: `(8, 32)` gives `(id / 32, id % 32)`. This is
     opposite to CuTe order ([§2.3.1](#231-layoutcute_extcuh)).
-  - One `.cu` states one launch's `program_dim<T>()`; `program_shape<T>()`
+  - One `.cu` states one launch's `topology_size<L>()`; `topology_shape<L>()`
     includes level `T` and all levels below it. A mesh recompiled in another
     translation unit belongs to that unit's launch.
 
@@ -101,40 +101,40 @@ reverse(cute::ComposedLayout<A, O, B> const &l);
 <!-- generated: layout-mesh -->
 ```cpp
 // targets/nvidia/tilefoundry_nvidia/cuda/codegen/include/tilefoundry/runtime/cuda/layout/mesh.cuh
-template <class TLayout, TopologyScope... Topos> struct Mesh {
+template <class TLayout, TopologyLevel... Topos> struct Mesh {
     using layout_type = TLayout;
     static constexpr int level_count;
-    static constexpr TopologyScope scope;
+    static constexpr TopologyLevel level;
     TLayout layout;
-    /// The scope flat axis ``I`` runs at. A mesh naming one level
-    /// answers its own scope for every axis. A mesh naming several
+    /// The topology level flat axis ``I`` runs at. A mesh naming one level
+    /// answers its own level for every axis. A mesh naming several
     /// groups its layout one nest per level, and the nest holding
     /// flat axis ``I`` states its level.
     template <int I>
-    CUTE_HOST_DEVICE static constexpr TopologyScope axis_scope();
+    CUTE_HOST_DEVICE static constexpr TopologyLevel axis_level();
 };
 
-template <TopologyScope S, class L, TopologyScope... Topos>
+template <TopologyLevel S, class L, TopologyLevel... Topos>
 CUTE_HOST_DEVICE constexpr auto get(Mesh<L, Topos...> const &mesh);
 
-template <class L, TopologyScope... Topos>
+template <class L, TopologyLevel... Topos>
 CUTE_HOST_DEVICE constexpr int offset(Mesh<L, Topos...> const &mesh);
 
-template <class L, TopologyScope... Topos, class Coord>
+template <class L, TopologyLevel... Topos, class Coord>
 CUTE_HOST_DEVICE constexpr bool contains(Mesh<L, Topos...> const &mesh,
                                          Coord const &coord);
 
-template <class L, TopologyScope... Topos, class Coord>
+template <class L, TopologyLevel... Topos, class Coord>
 CUTE_HOST_DEVICE constexpr auto mesh_coords(Mesh<L, Topos...> const &mesh,
                                             Coord const &coord);
 
-template <class L, TopologyScope... Topos>
+template <class L, TopologyLevel... Topos>
 CUTE_HOST_DEVICE constexpr bool is_warped(Mesh<L, Topos...> const &mesh);
 
-template <class L, TopologyScope... Topos>
+template <class L, TopologyLevel... Topos>
 CUTE_HOST_DEVICE constexpr auto as_warped(Mesh<L, Topos...> const &mesh);
 
-template <TopologyScope Scope, class Extents>
+template <TopologyLevel Level, class Extents>
 CUTE_HOST_DEVICE constexpr auto make_mesh(Extents const &extents);
 ```
 <!-- /generated -->
@@ -142,14 +142,14 @@ CUTE_HOST_DEVICE constexpr auto make_mesh(Extents const &extents);
 **Terms.** Terms are those of [shard §0](../../../../../../docs/spec/shard.md#0-terms). A *slice* is a mesh whose layout has a constant term: it covers part of a level, starting at that term. *Warped* describes a thread mesh whose ids run a whole number of warps; its *lane* axis is one warp and its *warp* axis steps between them.
 
 - constraints:
-  - A mesh is the levels it names and the layout whose values are their ids -- the same two facts the IR `Mesh` carries beside its axis names ([shard §5](../../../../../../docs/spec/shard.md#5-mesh)). Its instance count and shape are `cute::size` and `cute::shape` of that layout, which read through a slice on their own.
+  - A mesh is the levels it names and the layout whose values are their ids -- the same two facts the IR `Mesh` carries beside its axis names ([shard §5](../../../../../../docs/spec/shard.md#5-mesh)). Its unit count and shape are `cute::size` and `cute::shape` of that layout, which read through a slice on their own.
   - A mesh naming several levels states its axes grouped one nest per level, each already in that level's own numbering, and `get<level>` picks the nest. A mesh that names several without that grouping is refused: no rule says which axes are whose. It cannot also be sliced -- the slice and the level boundary would both be deciding which positions these are.
-  - `mesh_coords` answers where this program sits in the mesh's own coordinates: one `idx2crd` per level, of that level's id against that level's nest, grouped the way the mesh is. The answer is congruent with `cute::shape` of the mesh's layout whether it names one level or several, so a layout over that shape indexes with it as it stands. The ids it reads are `program_ids()`, one per level this program names, so a coord of another length is refused by name.
-  - `contains` and `mesh_coords` are not the same question, and on a mesh narrower than its level not the same answer. `idx2crd` is `(id / stride) % extent`, so thread 64 of a 128-thread block is not in a 32-instance mesh and does act as its instance 0: the upper warps repeat what the lowest warp does. A slice does not repeat, so a coordinate from outside one reaching `mesh_coords` is a codegen fault. `contains` asks every level the mesh names, because a mesh grouped one nest per level is one instance per level together.
+  - `mesh_coords` answers where this program sits in the mesh's own coordinates: one `idx2crd` per level, of that level's id against that level's nest, grouped the way the mesh is. The answer is congruent with `cute::shape` of the mesh's layout whether it names one level or several, so a layout over that shape indexes with it as it stands. The ids it reads are `unit_ids()`, one per level this program names, so a coord of another length is refused by name.
+  - `contains` and `mesh_coords` are not the same question, and on a mesh narrower than its level not the same answer. `idx2crd` is `(id / stride) % extent`, so thread 64 of a 128-thread block is not in a 32-unit mesh and does act as its unit 0: the upper warps repeat what the lowest warp does. A slice does not repeat, so a coordinate from outside one reaching `mesh_coords` is a codegen fault. `contains` asks every level the mesh names, because a mesh grouped one nest per level is one unit per level together.
   - A thread mesh has warps only when its ids run a whole number of them. `(32,..)` stepping by one is one warp and the axis beyond it carries the warps; `(128,..)` holds four that `as_warped` splits out. Lanes shorter than a warp, repeated across warps, MUST be refused by name -- they reach neither `bar.sync`, which counts whole warps, nor one `__syncwarp`.
   - `as_warped` is idempotent: a mesh whose fastest axis is already one warp comes back unchanged.
-  - Only one shape of `cute::ComposedLayout` is a mesh: `cute::identity` over a static offset. A swizzle in the first slot, or a dynamic offset, is a mesh whose first instance is not a compile-time number, and every reader wants it as one.
-  - The offset MUST NOT be dropped. A mesh layout maps a coordinate to an instance *within* the mesh; only the offset turns that into an instance of the launch, and reading a coordinate off a raw id instead hands every instance of a slice the box its neighbour owns. A plain `cute::Layout` is the whole level at offset zero.
+  - Only one shape of `cute::ComposedLayout` is a mesh: `cute::identity` over a static offset. A swizzle in the first slot, or a dynamic offset, is a mesh whose first unit is not a compile-time number, and every reader wants it as one.
+  - The offset MUST NOT be dropped. A mesh layout maps a coordinate to a unit *within* the mesh; only the offset turns that into a unit of the launch, and reading a coordinate off a raw id instead hands every unit of a slice the box its neighbour owns. A plain `cute::Layout` is the whole level at offset zero.
 
 #### 2.3.3 `layout/shard_layout.cuh`
 
@@ -212,7 +212,7 @@ struct ShardTensor {
     TEngine engine;
     TShardLayout shard_layout;
     /// As ``cute::Tensor`` has it: the engine's own pointer, before any
-    /// instance's slice is projected out of it.
+    /// unit's slice is projected out of it.
     CUTE_HOST_DEVICE auto data();
     CUTE_HOST_DEVICE auto data() const;
 };
@@ -233,21 +233,21 @@ template <class T>
 using local_view_t =
     cute::remove_cvref_t<decltype(local_tensor(std::declval<T const &>()))>;
 
-template <class T> CUTE_HOST_DEVICE constexpr int shard_mesh_instances();
+template <class T> CUTE_HOST_DEVICE constexpr int shard_mesh_units();
 ```
 <!-- /generated -->
 
-**Terms.** A *shard tensor* is an engine, the global layout it came from, and a shard layout. *Projecting* it is resolving it to the slice this instance owns: `local_tensor`, whose type-level half is `local_view_t`, while `ShardTensorLike` is the one test for "is this operand sharded". All three are `tilefoundry::` names, not `detail` ones.
+**Terms.** A *shard tensor* is an engine, the global layout it came from, and a shard layout. *Projecting* it is resolving it to the slice this unit owns: `local_tensor`, whose type-level half is `local_view_t`, while `ShardTensorLike` is the one test for "is this operand sharded". All three are `tilefoundry::` names, not `detail` ones.
 
 - constraints:
   - `engine` is a CuTe tensor or view, never a raw pointer: residency lives on the engine type, and `data()` drops it. Its layout MUST be the declared concrete local shard layout, using the shared register numbering for rmem; codegen MUST NOT choose a separate default engine order. Storage spans the layout codomain, including any pitch. A rank-0 address is encoded in CuTe as one singleton mode with stride zero.
-  - A shard layout whose layout is a `cute::ComposedLayout` -- which is how a [`Swizzle`](../../../../../../docs/spec/shard.md#41-swizzle) reaches the device -- is projected with its function kept: `shard_layout_is_composed_v` picks that path, and `local_tensor` returns a tensor over the engine's own pointer whose layout is the same composition, this instance's origin folded into its offset. Advancing the pointer instead would run the function on a slice-relative index and hand two instances one address, so the offset MUST NOT move to the engine.
+  - A shard layout whose layout is a `cute::ComposedLayout` -- which is how a [`Swizzle`](../../../../../../docs/spec/shard.md#41-swizzle) reaches the device -- is projected with its function kept: `shard_layout_is_composed_v` picks that path, and `local_tensor` returns a tensor over the engine's own pointer whose layout is the same composition, this unit's origin folded into its offset. Advancing the pointer instead would run the function on a slice-relative index and hand two units one address, so the offset MUST NOT move to the engine.
   - A composed layout takes that path even when no mesh axis splits it. The composed path reconstructs the declared function and the participant offset over the engine pointer, including when every mesh attribute broadcasts.
   - `local_tensor`, `local_view_t` and `ShardTensorLike` are public: a step every op must take, and the word an op writes its own constraints in, are not implementation details. `is_shard_tensor` -- how `ShardTensorLike` is decided, which nothing outside needs -- stays in `detail`.
-  - A tensor whose layout is a `ShardLayout` has distributed semantics -- it is the whole tensor, and each instance owns the slice its shard layout gives it.
+  - A tensor whose layout is a `ShardLayout` has distributed semantics -- it is the whole tensor, and each unit owns the slice its shard layout gives it.
   - One attr per mesh axis, against the mesh's axes flattened: a mesh naming several levels states them grouped one nest per level, and its rank is then how many levels it names rather than how many axes the attrs answer for.
   - Several mesh axes MAY cut one tensor axis -- two axes of one level as a grid, or two levels one taking a block of what the other left. Each cut divides what the previous one left, so the axis's local extent is the whole divided by all of them, and one step of a mesh axis clears everything the axes inside it hold.
-  - Where an instance's slice begins is that mesh's own shape carrying, on each axis, how far along the tensor one step of it moves the origin: the attrs say which tensor axis and how much of it a step clears, the tensor layout says what that costs in elements. It is congruent with the mesh's shape, grouping and all, so `mesh_coords` indexes it as it stands and reading it is `crd2idx`. It is not `offset(mesh)`, which is the first id a sliced mesh covers.
+  - Where a unit's slice begins is that mesh's own shape carrying, on each axis, how far along the tensor one step of it moves the origin: the attrs say which tensor axis and how much of it a step clears, the tensor layout says what that costs in elements. It is congruent with the mesh's shape, grouping and all, so `mesh_coords` indexes it as it stands and reading it is `crd2idx`. It is not `offset(mesh)`, which is the first id a sliced mesh covers.
 
 ### 2.5 `cuda/primitive/`
 
@@ -389,11 +389,11 @@ not create another entry. `tilefoundry::ops` contains only:
 ```
 <!-- /generated -->
 
-**Terms.** `ops::detail` is the set of tensor-view *implementation* names an op may reach for: `id_axes`, `is_partial_attr_v`, `is_shard_tensor`, `is_split_attr_v`, `positions_of`, `shard_attrs_match_mesh`, `shard_layout_is_full_broadcast`. They are defined in `tilefoundry::detail`; this header states which of them cross into `ops`. *Projecting* an operand is `local_tensor`: a ShardTensor resolved to this instance's slice, and an operand the mesh never spread returned whole. It is not one of them -- it, `local_view_t` and `ShardTensorLike` are `tilefoundry::` names an op calls unqualified by `detail` ([§2.4.1](#241-tensor_viewshard_tensorcuh)).
+**Terms.** `ops::detail` is the set of tensor-view *implementation* names an op may reach for: `id_axes`, `is_partial_attr_v`, `is_shard_tensor`, `is_split_attr_v`, `plain_layout`, `shard_attrs_match_mesh`, `shard_layout_is_full_broadcast`. They are defined in `tilefoundry::detail`; this header states which of them cross into `ops`. *Projecting* an operand is `local_tensor`: a ShardTensor resolved to this unit's slice, and an operand the mesh never spread returned whole. It is not one of them -- it, `local_view_t` and `ShardTensorLike` are `tilefoundry::` names an op calls unqualified by `detail` ([§2.4.1](#241-tensor_viewshard_tensorcuh)).
 
 - constraints:
   - An op reaches for a tensor-view *implementation* name through `ops::detail` and nowhere else, so what crosses that boundary is stated in one header. The gate holds only names an op may want and none must have; a step no op may skip is public instead, because a thing every op goes through is not an implementation detail.
-  - An op projects every operand through `tilefoundry::local_tensor`, sharded or not. An operand with no shard layout is not a case to refuse: it is one every instance holds entire, and the op's arithmetic over it is the same. So the choice is made once, where the operand is projected, rather than at each op.
+  - An op projects every operand through `tilefoundry::local_tensor`, sharded or not. An operand with no shard layout is not a case to refuse: it is one every unit holds entire, and the op's arithmetic over it is the same. So the choice is made once, where the operand is projected, rather than at each op.
 
 #### 2.6.2 `ops/copy.cuh`
 
@@ -433,7 +433,7 @@ layouts without recovering the source tensor.
 **`copy`.**
 
 One entry, taking tensors, with the transfer shape, the strides, the element
-types, the share this instance owns and the move width all read off the operand
+types, the share this unit owns and the move width all read off the operand
 `ShardLayout`s.
 
 - constraints:
@@ -466,7 +466,7 @@ types, the share this instance owns and the move width all read off the operand
     There is no synchronous tier hiding under this entry for the caller to wait
     on.
   - The two projected slices hold the same number of elements. Where an
-    instance owns part of a wider destination, that is the destination's shard
+    unit owns part of a wider destination, that is the destination's shard
     layout to state; the source's offset is not borrowed for it.
   - Runtime implementation details such as vector width and tail handling live
     in code comments, not this spec entry.
@@ -603,7 +603,7 @@ template <class T> struct barrier_id_traits {
     static constexpr bool value;
 };
 
-template <class TMesh, TopologyScope... Topos, class TRes = no_resource_t>
+template <class TMesh, TopologyLevel... Topos, class TRes = no_resource_t>
 __device__ inline void sync(Mesh<TMesh, Topos...> const &mesh,
                             TRes resource = {});
 ```

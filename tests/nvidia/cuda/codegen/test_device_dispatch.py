@@ -1,7 +1,7 @@
 """Which variant runs is decided on the card, not before the launch.
 
 The variants of a prototype cannot differ in launch geometry -- a translation
-unit specializes ``program_dim`` once for every kernel in it -- so there is
+unit specializes ``topology_size`` once for every kernel in it -- so there is
 nothing for the host to gain by choosing between them. One symbol, one kernel,
 one branch on the extent the call already carries.
 """

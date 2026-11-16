@@ -4,7 +4,7 @@
 /// ``namespace tilefoundry::ops`` where the reduce surface used to live. It
 /// therefore does NOT open ``namespace tilefoundry`` / ``ops`` and pulls in
 /// no system headers — cute/std and the surrounding names
-/// (``local_tensor``, ``shard::S``/``shard::B``, ``TopologyScope``) are
+/// (``local_tensor``, ``shard::S``/``shard::B``, ``TopologyLevel``) are
 /// already in scope. The op tags below must precede the impl-header includes
 /// because ``reduce_impl::reduce_traits<Op>`` specializes on them.
 #pragma once
@@ -44,7 +44,7 @@ __device__ inline void reduce(Src const &src, Dst &dst, Ws &&ws = {}) {
                       "ops::reduce: a reduced mesh axis must divide into whole "
                       "lanes and whole warps");
         if constexpr (!plan.mesh_reduced) {
-            /// Reduce without crossing mesh instances.
+            /// Reduce without crossing mesh units.
             reduce_impl::Plain<Op, Axes>{}(src, dst);
         } else if constexpr (plan.warps_per_group == 1) {
             /// Reduce within one warp.

@@ -4,14 +4,14 @@
 #include <tilefoundry/runtime/cuda/runtime.cuh>
 
 namespace tilefoundry {
-{%- for dim in program_dims %}
-template <> CUTE_HOST_DEVICE constexpr auto program_dim<{{ dim.scope }}>() noexcept {
+{%- for dim in topology_sizes %}
+template <> CUTE_HOST_DEVICE constexpr auto topology_size<{{ dim.level }}>() noexcept {
   return cute::Int<{{ dim.count }}>{};
 }
 {%- endfor %}
 {%- if dynamic_cta %}
 template <>
-CUTE_HOST_DEVICE auto program_dim<tilefoundry::TopologyScope::cta>() noexcept {
+CUTE_HOST_DEVICE auto topology_size<tilefoundry::TopologyLevel::cta>() noexcept {
 #if defined(__CUDA_ARCH__)
   return int(gridDim.x) * int(gridDim.y) * int(gridDim.z);
 #else

@@ -125,7 +125,7 @@ thread mesh layouts.
     outermost first. A program names `gpu` when its data is divided across
     cards.
   - A topology level whose `from_target` is set takes its extent and its
-    program ids from the target instance rather than from the hardware
+    unit ids from the target instance rather than from the hardware
     document or a register. `"gpu"` MUST be the only CUDA level that sets it.
   - A declared program topology name MUST be one of the levels its target
     states. A name outside that set MUST be refused naming the levels the

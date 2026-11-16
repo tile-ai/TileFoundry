@@ -13,7 +13,7 @@ from tilefoundry.ir import core, tir
 from tilefoundry.target import cpu
 
 from .options import Options
-from .signature import LAUNCH_ABI, CallableSignature, called_as, program_id_params
+from .signature import LAUNCH_ABI, CallableSignature, called_as, unit_id_params
 
 
 def function_paths(module: core.Module, prefix: tuple[str, ...] = ()):
@@ -281,7 +281,7 @@ def build_context(
     )
     if len(device_targets) != 1:
         raise ValueError(f"codegen: expected one device Target, found {len(device_targets)}")
-    program_ids = program_id_params(module, device_targets[0])
+    unit_ids = unit_id_params(module, device_targets[0])
     by_function: dict[int, FunctionSymbol] = {}
     device_functions = tuple(
         fn for fn in identities.values() if not isinstance(targets[id(fn)], cpu.Target)
@@ -304,7 +304,7 @@ def build_context(
         signature = called_as(
             function,
             mangled,
-            program_ids,
+            unit_ids,
             target=targets[id(function)],
             params=launch_args.get(id(function)),
         )

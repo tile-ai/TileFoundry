@@ -175,7 +175,7 @@ short bullet list — keep it that way.
   a feature commit (that belongs in its own isolated commit).
 - Naming: **types** (`struct`/`class`/`enum`/`using` aliases) are `PascalCase`
   (`Topology`, `Mesh`, `ShardLayout`); **functions** are `snake_case`
-  (`program_shape`, `make_shard_tensor`); **template parameters** are
+  (`topology_shape`, `make_shard_tensor`); **template parameters** are
   `T`-prefixed `PascalCase` (`TLayout`, `TMesh`, `TAttrs`) — no trailing
   underscore.
 - Headers: each target's preamble directly includes its package-owned runtime

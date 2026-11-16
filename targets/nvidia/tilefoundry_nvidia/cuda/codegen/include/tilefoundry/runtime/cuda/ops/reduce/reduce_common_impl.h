@@ -5,7 +5,7 @@
 /// ``namespace tilefoundry::ops`` from runtime.cuh). This header therefore does
 /// NOT open ``namespace tilefoundry`` / ``ops`` and does NOT pull in system
 /// headers — cute/std and the surrounding names (``tilefoundry::local_tensor``,
-/// ``shard::S``/``shard::B``, ``TopologyScope``) are already in scope.
+/// ``shard::S``/``shard::B``, ``TopologyLevel``) are already in scope.
 #pragma once
 
 namespace reduce_impl {
@@ -143,7 +143,7 @@ __device__ float local_fold(SrcT const &s, int j) {
     return acc;
 }
 
-/// How many outputs this instance produces, and how many elements each eats.
+/// How many outputs this unit produces, and how many elements each eats.
 template <class Axes, class SrcT> CUTE_HOST_DEVICE constexpr int kept_cells() {
     return int(cute::size(pick_axes<false, Axes>(
         cute::remove_cvref_t<decltype(cute::layout(std::declval<SrcT>()))>{})));
@@ -163,7 +163,7 @@ template <class Op, class WorkspaceT>
 __device__ float cta_combine_via_workspace(float warp_partial,
                                            WorkspaceT &workspace,
                                            int warps_per_group) {
-    const int tid = int(program_id<TopologyScope::thread>());
+    const int tid = int(unit_id<TopologyLevel::thread>());
     const int lane = tid % kWarpSize;
     const int warp_id = tid / kWarpSize;
     if (lane == 0) {
@@ -188,7 +188,7 @@ __device__ float cta_combine_via_workspace(float warp_partial,
 using detail::is_partial_attr_v;
 using detail::is_split_attr_v;
 
-/// An axis whose instances hold pieces of one value, either kind.
+/// An axis whose units hold pieces of one value, either kind.
 template <class T>
 inline constexpr bool is_reducible_attr_v =
     is_split_attr_v<T> || is_partial_attr_v<T>;
@@ -212,7 +212,7 @@ using plan_t = reduce_dispatch_info;
 /// no ``(lanes, warps)`` at all.
 template <class TMesh> CUTE_HOST_DEVICE constexpr int lanes_of_mesh() {
     using mesh_t = cute::remove_cvref_t<TMesh>;
-    if constexpr (mesh_t::scope == TopologyScope::thread &&
+    if constexpr (mesh_t::level == TopologyLevel::thread &&
                   tilefoundry::is_warped(mesh_t{}))
         return kWarpSize;
     else
@@ -231,25 +231,26 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
     using src_attrs = typename SrcSL::attrs;
     using dst_attrs = typename DstSL::attrs;
     using mesh_t = cute::remove_cvref_t<typename SrcSL::mesh>;
-    static_assert(mesh_t::scope == TopologyScope::thread ||
-                      mesh_t::scope == TopologyScope::cta,
+    static_assert(mesh_t::level == TopologyLevel::thread ||
+                      mesh_t::level == TopologyLevel::cta,
                   "ops::reduce: mesh must name cta or thread");
     using m_layout_t = typename mesh_t::layout_type;
     constexpr int m_rank = cute::tuple_size<src_attrs>::value;
     /// Levels order coarsest first, so a thread level is the last nest when
-    /// the mesh names one, and the last flat axis's scope answers for it.
+    /// the mesh names one, and the last flat axis's level answers for it.
     constexpr bool has_thread =
-        mesh_t::template axis_scope<m_rank - 1>() == TopologyScope::thread;
+        mesh_t::template axis_level<m_rank - 1>() == TopologyLevel::thread;
     static_assert(detail::shard_attrs_match_mesh<SrcSL>() &&
                       detail::shard_attrs_match_mesh<DstSL>(),
                   "ops::reduce: both operands need one attr per mesh axis");
     static_assert(std::is_same_v<typename SrcSL::mesh, typename DstSL::mesh>,
                   "ops::reduce: the two operands must name one mesh");
-    static_assert(has_thread || mesh_t::scope == TopologyScope::cta,
-                  "ops::reduce: a reduce mesh's scope must be cta or thread");
+    static_assert(
+        has_thread || mesh_t::level == TopologyLevel::cta,
+        "ops::reduce: a reduce mesh's topology level must be cta or thread");
 
     /// The attrs answer for the mesh's axes end to end, whatever grouping the
-    /// levels state, so extents and scopes read off the flattened shape.
+    /// levels state, so extents and levels read off the flattened shape.
     int m_ext[m_rank] = {};
     bool reduced[m_rank] = {};
     bool thread_axis[m_rank] = {};
@@ -264,7 +265,7 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
                   shard::B>),
          ...);
         ((thread_axis[Is] =
-              mesh_t::template axis_scope<int(Is)>() == TopologyScope::thread),
+              mesh_t::template axis_level<int(Is)>() == TopologyLevel::thread),
          ...);
     }(std::make_index_sequence<m_rank>{});
 
@@ -277,7 +278,7 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
     constexpr int kLanes = [] {
         if constexpr (has_thread)
             return lanes_of_mesh<cute::remove_cvref_t<
-                decltype(tilefoundry::get<TopologyScope::thread>(mesh_t{}))>>();
+                decltype(tilefoundry::get<TopologyLevel::thread>(mesh_t{}))>>();
         else
             return 0;
     }();

@@ -44,7 +44,7 @@ template <class R> struct is_partial_attr<shard::P<R>> : std::true_type {};
 template <class A>
 inline constexpr bool is_partial_attr_v = is_partial_attr<A>::value;
 
-/// Whether a mesh-axis attr leaves each instance the whole tensor.
+/// Whether a mesh-axis attr leaves each unit the whole tensor.
 template <class A> CUTE_HOST_DEVICE constexpr bool attr_leaves_tensor_whole() {
     if constexpr (is_split_attr_v<A>) {
         return false;
@@ -212,7 +212,7 @@ template <class SL> CUTE_HOST_DEVICE constexpr bool shard_attrs_match_mesh() {
                cute::flatten(cute::shape(typename SL::mesh::layout_type{}))));
 }
 
-/// A shard layout no mesh axis splits: every instance holds the whole tensor.
+/// A shard layout no mesh axis splits: every unit holds the whole tensor.
 template <class SL>
 CUTE_HOST_DEVICE constexpr bool shard_layout_is_full_broadcast() {
     static_assert(shard_attrs_match_mesh<SL>(),
@@ -227,9 +227,9 @@ CUTE_HOST_DEVICE constexpr bool shard_layout_is_full_broadcast() {
     }(std::make_index_sequence<cute::tuple_size<attrs_t>::value>{});
 }
 
-/// The layout one mesh instance holds: each tensor axis narrowed by what
-/// cuts it, keeping the whole tensor's own strides. Every instance holds
-/// the same shape, so this does not depend on which instance it is.
+/// The layout one mesh unit holds: each tensor axis narrowed by what
+/// cuts it, keeping the whole tensor's own strides. Every unit holds
+/// the same shape, so this does not depend on which unit it is.
 template <class L, class A, class M>
 CUTE_HOST_DEVICE constexpr auto local_layout(ShardLayout<L, A, M> const &sl) {
     constexpr int t_rank =
@@ -243,7 +243,7 @@ CUTE_HOST_DEVICE constexpr auto local_layout(ShardLayout<L, A, M> const &sl) {
 }
 
 /// What ``cute::slice_and_offset`` is to a Layout, this is to a ShardLayout:
-/// the instance at ``coord`` holds this layout, beginning this many elements
+/// the unit at ``coord`` holds this layout, beginning this many elements
 /// into the whole tensor's engine.
 ///
 /// The offset is a layout over the mesh applied to ``coord``: the attrs give

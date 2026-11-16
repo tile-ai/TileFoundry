@@ -3,7 +3,7 @@
 The host places a card and the kernel projects its own rows out of the shard
 layout it was given. Which rows come back written is the only thing that says
 the id survived the whole way: through the entry's internal argument, the
-launch shim, the block's copy of it, and ``program_id`` inside a tensor view.
+launch shim, the block's copy of it, and ``unit_id`` inside a tensor view.
 One thread and one module per card, so nothing about a module changes while it
 holds data narrowed for the card it was loaded on.
 """
@@ -42,7 +42,7 @@ def test_placed_kernel_writes_own_rows() -> None:
         )
 
     entry = tilefoundry.compile(GpuPlacedRows).type
-    assert tuple(p.topology_level for p in entry.leading) == ("gpu",)
+    assert tuple(p.topology for p in entry.leading) == ("gpu",)
     failures: list[BaseException] = []
 
     def run(card: int) -> None:

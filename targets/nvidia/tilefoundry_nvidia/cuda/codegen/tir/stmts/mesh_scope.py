@@ -76,7 +76,7 @@ def mesh_type(mesh: types.Mesh) -> str:
         layout = levelwise_layout(mesh)
     if base:
         layout = f"cute::ComposedLayout<cute::identity, cute::Int<{base}>, {layout}>"
-    return f"tilefoundry::Mesh<{layout}, {', '.join(context.topology_scope_str(t.name) for t in topos)}>"
+    return f"tilefoundry::Mesh<{layout}, {', '.join(context.topology_level_str(t.name) for t in topos)}>"
 
 
 def is_dynamic_mesh(mesh: types.Mesh) -> bool:
@@ -126,7 +126,7 @@ def emit_mesh_scope(node: core.MeshScope, emitter) -> None:
             ctx.emit(f"using {alias} = {mesh_type_str};")
             ctx.emit(f"constexpr {alias} {name}_mesh{{}};")
         if is_slice:
-            ctx.emit(f"if (tilefoundry::contains({name}_mesh, tilefoundry::program_ids())) {{")
+            ctx.emit(f"if (tilefoundry::contains({name}_mesh, tilefoundry::unit_ids())) {{")
             ctx.indent()
         emitter.visit(node.body)
         if is_slice:

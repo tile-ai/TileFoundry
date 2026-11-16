@@ -92,7 +92,7 @@ def mesh_coord_value(call: expr.Call, ctx) -> str:
     mesh = scope_mesh_value(call.target.mesh, ctx)
     if mesh is None:
         raise ValueError("CUDA MeshCoord requires its enclosing mesh binding")
-    return f"cute::get<{axis}>(cute::flatten(tilefoundry::mesh_coords({mesh}, tilefoundry::program_ids())))"
+    return f"cute::get<{axis}>(cute::flatten(tilefoundry::mesh_coords({mesh}, tilefoundry::unit_ids())))"
 
 
 def render_mesh_type(mesh, ctx=None) -> str:
@@ -183,7 +183,7 @@ def static_dim(value, what):
 
 def mesh_dim(d):
     if d is None:
-        return "tilefoundry::program_dim<tilefoundry::TopologyScope::cta>()"
+        return "tilefoundry::topology_size<tilefoundry::TopologyLevel::cta>()"
     return static_dim(d, "mesh layout dim")
 
 
@@ -195,7 +195,7 @@ def render_shard_layout_value(var_name: str, sl: types.ShardLayout, dynamic_exte
     """Render a shard layout as runtime C++ preamble and value expression.
 
     Static values retain the type produced by the type renderer. Runtime
-    dimension mappings supply dynamic globals and ``program_dim<cta>()``
+    dimension mappings supply dynamic globals and ``topology_size<cta>()``
     supplies a launch-provided mesh extent. Missing or unmapped dynamic values
     raise instead of falling back to an envelope bound. A sliced mesh reaches
     the value the same way it reaches the type: through the mesh layout directly.
@@ -278,7 +278,7 @@ def render_shard_layout_value(var_name: str, sl: types.ShardLayout, dynamic_exte
         arrangements = types.flattened_levels(replace(sl.mesh, layout=stated))
         mesh_shape = tuple(shape for shape, _ in arrangements)
         mesh_strides = tuple(strides for _, strides in arrangements)
-    scope = ", ".join(context.topology_scope_str(t.name) for t in topos)
+    scope = ", ".join(context.topology_level_str(t.name) for t in topos)
     positions = cute_layout.render_layout_value(mesh_shape, mesh_strides, mesh_dim, mesh_stride)
     mesh_layout = composed_mesh_layout(positions, ml_base)
 

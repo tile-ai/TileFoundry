@@ -17,13 +17,13 @@ from tilefoundry_nvidia.cuda import target
 from .context import Context
 from .tir import stmts
 
-PROGRAM_ID_CTYPE = "long long"
-"""What a level's id travels as, wide enough for any count a target states."""
+UNIT_ID_CTYPE = "long long"
+"""What a unit id travels as, wide enough for any count a target states."""
 
-PROGRAM_META_CTYPE = "tilefoundry::ProgramMetaData"
+PLACEMENT_CTYPE = "tilefoundry::Placement"
 """The block of ids a kernel hands to the runtime it was compiled against."""
 
-PROGRAM_META = codegen.ProgramMetaSignature(name="tilefoundry_meta")
+PLACEMENT = codegen.PlacementSignature(name="tilefoundry_placement")
 """The one block of them a launcher fills in and its kernel takes by value."""
 
 C_ABI = ("void*", "long long")
@@ -97,7 +97,7 @@ def kernel_signature(launcher: codegen.CallableSignature, name: str) -> codegen.
         name=kernel_symbol(name),
         params=launcher.params,
         output_count=launcher.output_count,
-        leading=(PROGRAM_META,) if launcher.leading else (),
+        leading=(PLACEMENT,) if launcher.leading else (),
     )
 
 
@@ -123,7 +123,7 @@ def kernel_arguments(kernel: codegen.CallableSignature, ctx: Context) -> str:
 
 @codegen.register(target.Target, codegen.Role.CALLEE, core.PrimFunction)
 def called_as_launcher(
-    fn: core.PrimFunction, symbol: str, program_ids: tuple[codegen.ProgramIdSignature, ...]
+    fn: core.PrimFunction, symbol: str, unit_ids: tuple[codegen.UnitIdSignature, ...]
 ) -> codegen.CallableSignature:
     """The one convention of *fn* a caller can reach: its launcher.
 
@@ -135,18 +135,18 @@ def called_as_launcher(
         name=launcher_symbol(symbol),
         params=tuple(codegen.tensor_signature_of(var) for var in fn.params),
         output_count=fn.output_count,
-        leading=program_ids,
+        leading=unit_ids,
     )
 
 
 @codegen.register(target.Target, codegen.Role.CALLEE, core.Function)
-def hir_launcher_signature(fn, symbol, program_ids, params) -> codegen.CallableSignature:
+def hir_launcher_signature(fn, symbol, unit_ids, params) -> codegen.CallableSignature:
     """The TIR pointer and extent ABI over the arguments *fn*'s Launch binds."""
     return codegen.CallableSignature(
         name=launcher_symbol(symbol),
         params=tuple(codegen.tensor_signature_of(param) for param in params),
         output_count=len(params) - len(fn.params),
-        leading=program_ids,
+        leading=unit_ids,
     )
 
 
@@ -179,16 +179,16 @@ def declare_launch(sig: codegen.LaunchSignature, ctx: Context) -> tuple[str, ...
     return (f"{sig.ctype} {sig.name}",)
 
 
-@codegen.register(target.Target, codegen.Role.CALLEE, codegen.ProgramIdSignature)
-def declare_program_id(sig: codegen.ProgramIdSignature, ctx: Context) -> tuple[str, ...]:
+@codegen.register(target.Target, codegen.Role.CALLEE, codegen.UnitIdSignature)
+def declare_unit_id(sig: codegen.UnitIdSignature, ctx: Context) -> tuple[str, ...]:
     """The id of a level no card can read for itself, told to it instead."""
-    return (f"{PROGRAM_ID_CTYPE} {sig.name}",)
+    return (f"{UNIT_ID_CTYPE} {sig.name}",)
 
 
-@codegen.register(target.Target, codegen.Role.CALLEE, codegen.ProgramMetaSignature)
-def declare_program_meta(sig: codegen.ProgramMetaSignature, ctx: Context) -> tuple[str, ...]:
+@codegen.register(target.Target, codegen.Role.CALLEE, codegen.PlacementSignature)
+def declare_placement(sig: codegen.PlacementSignature, ctx: Context) -> tuple[str, ...]:
     """The whole block of ids, which a kernel takes by value."""
-    return (f"{PROGRAM_META_CTYPE} {sig.name}",)
+    return (f"{PLACEMENT_CTYPE} {sig.name}",)
 
 
 @codegen.register(target.Target, codegen.Role.CALLER, codegen.TensorSignature)
@@ -205,17 +205,17 @@ def pass_tensor(sig: codegen.TensorSignature, ctx: codegen.EmitContext) -> tuple
 
 
 @codegen.register(target.Target, codegen.Role.CALLER, codegen.LaunchSignature)
-@codegen.register(target.Target, codegen.Role.CALLER, codegen.ProgramIdSignature)
-@codegen.register(target.Target, codegen.Role.CALLER, codegen.ProgramMetaSignature)
+@codegen.register(target.Target, codegen.Role.CALLER, codegen.UnitIdSignature)
+@codegen.register(target.Target, codegen.Role.CALLER, codegen.PlacementSignature)
 def pass_value(sig: codegen.Signature, ctx: codegen.EmitContext) -> tuple[str, ...]:
     """One argument the caller already holds, spelled in its own scope."""
     return (ctx.local_value(sig),)
 
 
 __all__ = [
-    "PROGRAM_ID_CTYPE",
-    "PROGRAM_META",
-    "PROGRAM_META_CTYPE",
+    "PLACEMENT",
+    "PLACEMENT_CTYPE",
+    "UNIT_ID_CTYPE",
     "kernel_symbol",
     "kernel_arguments",
     "kernel_signature",
