@@ -101,10 +101,11 @@ class TensorType:
     materialized by producers or standalone annotation binding, never by
     consumers.
   - `storage` is a `StorageKind` (`gmem` / `smem` / `rmem` / `host` / `tmem` /
-    `umat`). A concrete level (`gmem` / `smem` / `rmem` / `host` /
-    `tmem`) is the value's **abstract result residency** — where the result tensor
-    logically lives — not the transient register/ALU staging any individual step
-    happens to use. `umat` marks an **unmaterialized** (storage-polymorphic)
+    `umat`). A concrete level (`gmem` / `smem` / `rmem` / `host` / `tmem`) is the
+    value's **abstract result residency**. The abstract result residency is where
+    the result tensor logically lives. It is not the transient register/ALU
+    staging any individual step happens to use. `umat` marks an **unmaterialized**
+    (storage-polymorphic)
     value not yet committed to a concrete residency. A source value literal
     carries `storage=umat`, as do shape elements. An unmaterialized value MUST be
     resolved to a concrete residency (or otherwise materialized) before codegen
@@ -175,9 +176,9 @@ def topology_level(topology: str, topologies: tuple[Topology, ...]) -> int:
     static extent that does not divide the split dimension MUST raise. A
     symbolic tensor axis or mesh extent MUST be bound before local projection.
   - Every axis of a Mesh carrying one topology MUST be read at that topology
-    level. A Mesh carrying multiple topologies remains a valid Mesh, but local
-    projection MUST reject it when asking for a unit count by topology name
-    rather than assign one of its modes to a guessed level
+    level. A Mesh carrying multiple topologies remains a valid Mesh. Local
+    projection MUST reject such a Mesh when asked for a unit count by topology
+    name. Local projection MUST NOT assign one of its modes to a guessed level
     ([shard §5](./shard.md#5-mesh)).
   - The result MUST remain an ordinary IR Type and MUST NOT introduce a
     consumer-specific tensor type.
@@ -822,9 +823,8 @@ parameter name to IR value.
     name of a coordinate of the result, rather than read that parameter as the
     coordinate.
   - `layout_to_isl_map(shape, layout, values, *, divided)` MUST return the map
-    from a value's logical coordinates to the flattened layout coords one
-    unit holds, by the regroup of
-    [semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain).
+    from a value's logical coordinates to the flattened layout coords one unit
+    holds. The map follows the regroup of [semantic-analysis §3.1](./semantic-analysis.md#31-logical-shape-to-layout-domain).
     `layout` MUST be a `ShardLayout` or a static-offset view of one; any other
     layout is a `TypeError`. A `ShardLayout` whose `layout` is itself a
     `ShardLayout`, directly or as the outer of a static-offset

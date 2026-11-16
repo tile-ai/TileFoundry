@@ -379,7 +379,7 @@ class Matcher:
                 ):
                     return False
             else:
-                places = pattern.positions()
+                places = pattern.mode_fields()
                 profile, actual, values = (
                     (pattern.shape, structural.shape, extents)
                     if pattern.shape is not None

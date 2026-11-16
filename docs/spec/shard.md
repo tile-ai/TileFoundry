@@ -489,25 +489,26 @@ single-level selection.
 cover every selected unit once, with one fixed physical stride per axis.
 Composition preserves topology and offset; slicing the resulting composed mesh is rejected.
 
-Every mesh MUST state one layout per level it names, each in that level's
-own numbering, as one nested `Layout` whose mode `i` is level `i` (a one-level
-mesh included). `Mesh` normalizes what was written into that form at
-construction: one layout over all levels' axes is cut at the level
-boundaries, each level taking axes left to right until their extents multiply to
-its own size, with steps divided by what the levels under it hold. An axis of
+Every mesh MUST state one layout per level it names. Each layout MUST use that
+level's own numbering. The mesh MUST state them as one nested `Layout` whose mode
+`i` is level `i`, a one-level mesh included. `Mesh` normalizes what was written
+into that form at construction. `Mesh` cuts one layout over all levels' axes at
+the level boundaries. Each level takes axes left to right until their extents
+multiply to its own size. `Mesh` divides the steps by what the levels under each
+level hold. An axis of
 extent one adds no units and joins the level being filled. An axis that
 straddles a boundary MUST be refused rather than divided; every axis MUST
 belong to one level, and a stride the division does not divide exactly MUST be
 refused. A one-level mesh takes every axis into its single mode, needing no
 division and no declared extent.
 
-Because the layout is a nested `Layout`, the layout operations read it: `get(mesh.layout, i)`
-is level `i`'s own layout, `flatten(mesh.layout)` is every level's axes end
-to end, and `int_tuple.repeat_like` against `mesh.layout.shape` states per axis whatever is
-stated per level. `utils.device_layout(mesh)` is those axes as the device numbers its
-units, each stepping by what its level states times what the levels under it
-hold, and a slice's `ComposedLayout.offset` is where the whole mesh starts in
-that numbering.
+Because the layout is a nested `Layout`, the layout operations read it.
+`get(mesh.layout, i)` is level `i`'s own layout. `flatten(mesh.layout)` is every
+level's axes end to end. `int_tuple.repeat_like` against `mesh.layout.shape`
+states per axis whatever is stated per level. `utils.device_layout(mesh)` is those
+axes as the device numbers its units. Each axis steps by what its level states
+times what the levels under it hold. A slice's `ComposedLayout.offset` is where
+the whole mesh starts in that numbering.
 
 Mesh composition uses the following rules:
 
@@ -519,9 +520,9 @@ Mesh composition uses the following rules:
 - Append concatenates the per-level layouts. When an appended mesh is
   sliced, its per-level start is re-encoded in the combined index
   and retained in the result's `ComposedLayout.offset`.
-- Replacing a suffix with a sliced mesh MUST preserve each retained upper
-  level's start and take each replaced level's start and layout from the
-  inner mesh. The combined `ComposedLayout.offset` MUST then be re-encoded in
+- Replacing a suffix with a sliced mesh MUST preserve each retained upper level's
+  start. It MUST take each replaced level's start and layout from the inner mesh.
+  The combined `ComposedLayout.offset` MUST then be re-encoded in
   index from those per-level starts. Replacing an unsliced suffix
   and replacing the whole mesh retain their existing behavior. Every replaced
   level MUST select a continuous unit set contained in the enclosing level's
@@ -557,9 +558,9 @@ value is consumed by a region.
     sizes equals `size(mesh.layout)`. Mesh-scope verification asserts this
     predicate; Mesh construction and slicing do not, so a derived slice
     remains a record of its parent scope.
-  - A Mesh naming several levels may be sliced: the key addresses all level
-    axes in order, every level retains its own layout, and the slice offset
-    is the sum of each selected start times that axis's step in the index.
+  - A Mesh naming several levels may be sliced. The key addresses all level axes
+    in order. Every level retains its own layout. The slice offset is the sum of
+    each selected start times that axis's step in the index.
   - Nested single-level Mesh scopes compose to exactly that shape: the axes join
     outermost first and each outer stride is scaled by the units below it.
     A value distributed at two levels at once may therefore be written either

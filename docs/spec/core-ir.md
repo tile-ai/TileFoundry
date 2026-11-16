@@ -445,8 +445,8 @@ class Call(Expr):
     `FunctionRef(("layers", None), None)` with `i` as the first operand.
   - Generic traversal visits `args` only; it MUST NOT traverse the definitions
     a `FunctionRef` names.
-  - a value-form `Call` has a non-`Unit` result type and is anchored by `LetStmt` in TIR; a Stmt-position effect
-    invocation is `Evaluate(op, args)`.
+  - a value-form `Call` has a result type other than `TupleType.Void`. TIR anchors it with `LetStmt`.
+    A Stmt-position effect invocation is `Evaluate(op, args)`.
   - A `Call` MUST NOT appear as a top-level Stmt directly.
   - Normally, `len(args)` MUST equal the number of `kind="input"` ParamDefs on
     `target`. A sole input annotated `Tuple[T]` describes a variadic sequence,
@@ -824,10 +824,10 @@ Two consumer surfaces:
   A tensor rank is stated by giving `shape` that many positions; wildcard
   positions constrain only the sequence length. An omitted shape admits any
   rank. During selection, `umat` satisfies any concrete storage requirement
-  because its storage is undecided; lowering MUST materialize it before TIR. During effect-Op verification,
-  input patterns match in `ParamDef` order against one shared capture
-  environment, so a later operand can require a value captured by an earlier
-  operand.
+  because its storage is undecided; lowering MUST materialize it before TIR.
+  During effect-Op verification, input patterns match in `ParamDef` order against
+  one shared capture environment. A later operand can therefore require a value
+  captured by an earlier operand.
 - **Specialization dispatch** — patterns appearing in
   `core.Function.specializations` ([hir.md §1.1](./hir.md#11-function))
   and `core.PrimFunction.specializations` describe which runtime

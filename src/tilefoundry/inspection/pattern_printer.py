@@ -348,7 +348,7 @@ class PatternPrinter:
         return f"Layout({shape}, {strides})"
 
     def rules_Layout(self, node, name) -> tuple[str, ...]:
-        return self.rules_of(node.positions())
+        return self.rules_of(node.mode_fields())
 
     def visit_Swizzle(self, node, name) -> str:
         return (

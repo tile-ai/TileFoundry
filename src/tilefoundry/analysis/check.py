@@ -55,9 +55,7 @@ class CheckContext(valuation.Context):
     def selected_topology(self) -> types.Topology:
         """The topology the analyses were asked about."""
         if self.topology is None:
-            raise Error(
-                "no topology was selected, so results cannot carry an execution placement"
-            )
+            raise Error("no topology selected")
         return self.module.resolve_topology(self.topology)
 
 

@@ -195,7 +195,7 @@ resolved and an `Evaluate(FunctionRef)` is rejected):
   permitted.
 - **`LetStmt` typing**. `LetStmt.var.type` MUST equal the typeinfer
   of `LetStmt.value`.
-- **`AllocTensor` placement**. `Call(AllocTensor, ...)` MAY only
+- **`AllocTensor` call position**. `Call(AllocTensor, ...)` MAY only
   appear directly as `LetStmt.value`. Nesting it inside any other
   Expr is rejected.
 - **`MeshScope` mesh in scope**. Any embedded `ShardLayout` MUST

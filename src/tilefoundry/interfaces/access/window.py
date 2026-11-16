@@ -26,11 +26,11 @@ def at_most(extent: str, limits: tuple, mode: int) -> list[str]:
 def placed_window(
     offsets: tuple, extents: tuple, rank: int, limits: tuple = (), within: tuple = ()
 ) -> tuple:
-    """What a window reaches among a value's own modes, and what it leaves.
+    """What a window reaches among a value's own coords, and what it leaves.
 
-    One domain for both, the value's own modes, so the two answer about the
-    same coordinates: the window is where the offsets put it, and what is left
-    alone is every mode it does not cover -- a difference, not a flag. An
+    One domain for both, the value's own coordinate space, so the two answer about
+    the same coordinates: the window is where the offsets put it, and what is left
+    alone is every coord it does not cover -- a difference, not a flag. An
     offset or an extent only known later is a parameter bound to the value it is,
     kept inside whatever the Op guarantees about it, and a window begins and ends
     inside what it is placed in -- so one covering the whole of something leaves
@@ -104,7 +104,7 @@ def control_space(rank: int, ctx, arg) -> "tuple[str, str, str]":
     """The domain, image and reach of one control operand's own coordinates.
 
     A tuple of numbers is indexed flat, one leaf however its fields are nested.
-    A lone scalar's legal index set is the single point, at whatever modes
+    A lone scalar's legal index set is the single point, at whatever coords
     its own view gives it.
     """
     domain = ", ".join(f"d{index}" for index in range(rank))
@@ -118,7 +118,7 @@ def control_space(rank: int, ctx, arg) -> "tuple[str, str, str]":
 def control_read(rank: int, ctx, arg) -> Relation:
     """The control numbers one operand carries, each read once.
 
-    The domain is the result's modes like every other boundary, because a
+    The domain is the result's coordinate space like every other boundary, because a
     reader applies one execution domain to all of them and a boundary with a rank
     of its own is one it cannot answer. What it reaches is one point per number,
     so a reader counts the numbers rather than believing an empty set.
@@ -137,7 +137,7 @@ def reached_at(
 ) -> Relation:
     """The coordinates one operand is reached at, stated per logical axis.
 
-    An Op reasons in logical axes and a unit is indexed by the modes
+    An Op reasons in logical axes and a unit indexes coords over the modes
     its layout made, so the expressions are given per axis and spread over the
     modes holding it. An axis named `free` is one whose coordinate is a value
     nobody has here because data determines it, so this may-access relation

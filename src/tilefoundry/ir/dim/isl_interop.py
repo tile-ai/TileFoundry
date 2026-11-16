@@ -539,14 +539,14 @@ def layout_to_isl_map(
     *,
     divided: Callable[[types.ShardLayout], Collection[int]],
 ) -> "isl.map":
-    """Where each logical coordinate of a *shape* value sits among one unit's modes.
+    """Map each logical coordinate of a *shape* value to one unit's local layout coords.
 
-    The coordinates regroup row-major onto the flattened layout modes
+    The coordinates regroup row-major onto the coords of the flattened layout modes
     ([semantic-analysis §3.1](docs/spec/semantic-analysis.md#31-logical-shape-to-layout-domain)).
-    A mode cut by the mesh axes ``divided(layer)`` names, layer by layer
+    A coord on a mode cut by the mesh axes ``divided(layer)`` names, layer by layer
     from the innermost, is split into digits -- cutting axes outermost first,
     then the residual: a divided digit is that unit's ``MeshCoord``, a parameter
-    named into *values*, and the rest is the coord within.
+    named into *values*, and the rest is the local coord on that mode.
     """
     layers = [types.shard_layout_of(layout) or layout]
     if not isinstance(layers[0], (types.Layout, types.ShardLayout)):

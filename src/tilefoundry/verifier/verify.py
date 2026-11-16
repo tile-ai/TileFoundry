@@ -1,4 +1,4 @@
-"""Verify HIR and TIR functions, bindings, calls, and contextual placement.
+"""Verify HIR and TIR functions, bindings, calls, and the call scope of each call.
 
 The checked rule set is defined by
 [tir §1.3](docs/spec/tir.md#13-primfunction).
@@ -626,7 +626,7 @@ def verify_launch_extent(extent, extent_params, ref_name) -> None:
 
 
 def verify_launch(stmt: core.Evaluate, fn, ctx):
-    """Check host launches before target-specific placement validation.
+    """Check host launches before the target checks each execution mesh.
 
     The launch is ``Evaluate(Launch(...), (FunctionRef(callee), grid_x, grid_y,
     grid_z, block_x, block_y, block_z, *forwarded))``. An HIR callee's arguments

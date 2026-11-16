@@ -153,7 +153,7 @@ def window_tiler(call, ctx, source):
     if splits.difference(kept):
         mode = next(iter(splits.difference(kept)))
         refuse_window(call, ctx, int_tuple.mode_axes(profile)[mode], source)
-    positions = {old: new for new, old in enumerate(kept)}
+    mode_indices = {old: new for new, old in enumerate(kept)}
     if len(kept) != len(flat.shape):
         axes = int_tuple.mode_axes(profile)
         def modes(values, axis):
@@ -164,7 +164,7 @@ def window_tiler(call, ctx, source):
     if isinstance(source, types.ShardLayout):
         window = types.flatten(window) if not any(isinstance(x, tuple) for x in primitive.shape) else window
         window = replace(source, layout=window, attrs=tuple(
-            types.Split(positions[attr.axis]) if isinstance(attr, types.Split) else attr for attr in source.attrs
+            types.Split(mode_indices[attr.axis]) if isinstance(attr, types.Split) else attr for attr in source.attrs
         ))
     return window
 

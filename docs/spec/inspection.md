@@ -574,8 +574,9 @@ graph; an id that was collapsed away returns 404.
   constants / types render through the [§2.4](#24-pretty-print--debug-display-contract) pretty-print, never raw
   `repr`.
 - **Type text.** Graph labels and detail panels use the canonical type text from
-  [§2.3](#23-dsl-text-forms), including `Tensor[...]` and shard layout sugar when
-  a scope binding is available. `Reshard` / layout attrs render through the
+  [§2.3](#23-dsl-text-forms). The text includes `Tensor[...]` and shard layout
+  sugar when a scope binding is available. `Reshard` / layout attrs render through
+  the
   same visitor (never raw `repr`).
 
 ### 3.4 Interaction contract

@@ -252,12 +252,12 @@ def place_boundary(
     layout_map,
     bindings: dim.IslParamValues,
 ) -> "isl.map":
-    """One boundary's image carried from logical axes onto the layout modes it has.
+    """One boundary's image carried from logical axes onto the local coords it has.
 
     Held to the coords this unit was given, so which iterations are
     its own follows from the layout map rather than from a relation that may
     reach past what it was handed. A coordinate past the logical value is cut
-    before mapping, since a regroup would fold it onto a mode it does not
+    before mapping, since a regroup would fold it onto a coord it does not
     name. A value with no layout map is addressed at its own coordinates.
     """
     relation = access.relation
@@ -333,7 +333,7 @@ def local_relations_of(call, ctx) -> tuple[Relation, ...]:
     """One Op's relations, held against the Type in this reader's view.
 
     The Op stated its coordinates in its own axes; here they are carried onto the
-    modes this reader addresses, and then held to the Call. What is checked
+    local coords this reader addresses, and then held to the Call. What is checked
     is what needs the Type: one relation per result field after the arguments',
     each written at the rank that field has in this view.
     """
@@ -440,7 +440,7 @@ def factored_image(reads: "Sequence[str]", local: "types.Type", logical: "types.
 
     A canonical `ShardLayout` factors a logical axis into several modes, and
     an image has to name every one of them or it cannot be composed with the
-    `Layout` that turns modes into bytes. A mode a unit holds one
+    `Layout` that turns coords into an index. A mode a unit holds one
     of contributes a constant, because its coordinate is the unit's
     identity rather than anything the expression varies over. The rest carry the
     expression, delinearized across them in the order the layout states.

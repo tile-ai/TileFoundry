@@ -91,7 +91,7 @@ def throughput(tgt: target.Target, query: object = None) -> target.ThroughputFac
 
 
 def performance_service(tgt: target.Target, query: object = None) -> target.PerformanceServiceFacts:
-    """Leave generic CPU-thread rates unknown without a P/E placement policy."""
+    """Leave generic CPU-thread rates unknown without a P/E core selection policy."""
     topology = "thread" if query is None else str(query[0] if isinstance(query, tuple) else query)
     if topology != "thread":
         raise ValueError(f"AMX performance services have no topology {topology!r}")

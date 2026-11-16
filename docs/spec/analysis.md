@@ -232,9 +232,10 @@ Each reported Call's JSON projection is under its `compute-cost` key:
 
 #### 1.2.2 `memory`
 
-`memory` states what every occurrence moves and at which level, the unique
-addresses one wave touches at a representative iteration, whole-Function value
-lifetimes and memory peaks, and which repeated reads fit in cache. The movement
+`memory` states what every occurrence moves and at which level. `memory` also
+states the unique addresses one wave touches at a representative iteration.
+`memory` also states whole-Function value lifetimes and memory peaks. `memory`
+also states which repeated reads fit in cache. The movement
 is read off the Op's own registered evaluator and the amounts its access
 relations reach.
 
@@ -869,7 +870,7 @@ class MemoryLevelPeak:
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `MemoryLevelPeak.memory_level` | Each storage level with at least one lifetime or traffic entry, sorted by name. | No |
-| `MemoryLevelPeak.peak_bytes` | On a Function, the address high-water mark of the first feasible global `gmem` or `smem` address assignment; its `rmem` peak is the maximum of every `MeshRegion` stage peak and the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest root occupancy in its inclusive entry-to-exit event window. Unsplit tensor values defined in its body or child regions contribute while their lifetimes intersect the window, without region-versus-owner filtering. Split values retain owner eligibility and holder-mesh selection. Target-owned storage (`gmem`) never contributes to a region. | `MemoryHierarchyFacts.explicit_levels[].owner` for a `MeshRegion`; otherwise no. |
+| `MemoryLevelPeak.peak_bytes` | On a Function, `peak_bytes` is the address high-water mark of the first feasible global `gmem` or `smem` address assignment. On a Function, the `rmem` peak is the maximum of every `MeshRegion` stage peak. The maximum also includes the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest root occupancy in its inclusive entry-to-exit event window. Unsplit tensor values defined in its body or child regions contribute while their lifetimes intersect the window, without region-versus-owner filtering. Split values retain owner eligibility and holder-mesh selection. Target-owned storage (`gmem`) never contributes to a region. | `MemoryHierarchyFacts.explicit_levels[].owner` for a `MeshRegion`; otherwise no. |
 | `MemoryLevelPeak.persistent_bytes` | Union of persistent address intervals at `gmem`/`smem`; greatest persistent member span per root at other levels. | No |
 | `MemoryLevelPeak.capacity_bytes` | Capacity of the matching explicit level, or `None` when unknown. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
 | `RegionMemoryMetadata.peaks` | One peak per occupied or moved storage level; present on the entry Function only, and a callee Function states none. | As above |
@@ -891,11 +892,12 @@ class MemoryLevelPeak:
   - An access relation that keeps a parameter with a stated finite range is
     exact and MAY prove overlap. A widened relation, and one with an unbounded
     parameter, MUST NOT.
-  - Address assignment MUST be settled for the addressable levels `gmem` and `smem` only,
-    once per capacity domain that holds a buffer -- the whole target for a level
-    owned target-wide, one per owning unit otherwise -- with two buffers in
-    one domain never live in the same bytes at once. Residency at another level
-    MUST NOT make a program unplaceable, and a level owned per unit of a topology
+  - Address assignment MUST be settled for the addressable levels `gmem` and
+    `smem` only. Address assignment MUST be settled once per capacity domain that
+    holds a buffer. A capacity domain is the whole target for a level owned
+    target-wide, and one per owning unit otherwise. Two buffers in one domain are
+    never live in the same bytes at once. Residency at another level
+    MUST NOT make a program unplaceable. A level owned per unit of a topology
     other than the one being analysed MUST fail rather than be assumed. Domains
     holding the same buffers are one question, decided once.
   - Carry, InsertSlice, window and in-place sharing MUST follow
@@ -913,9 +915,10 @@ class MemoryLevelPeak:
     `analysis.Error` and leave no record. The solver MUST stop at its first
     feasible assignment rather than prove a minimum. Capacity MUST NOT restrict
     the address space.
-  - A seed is a complete candidate address assignment that analysis builds for itself
-    before solving: a starting byte address for every placed value and the peak
-    byte extent that assignment reaches. It is not an input and not a random
+  - A seed is a complete candidate address assignment that analysis builds for
+    itself before solving. A seed holds a starting byte address for every placed
+    value and the peak byte extent that assignment reaches. It is not an input and
+    not a random
     seed. The solver takes its addresses as a hint and its peak as an upper
     bound on the search. With no seed it solves the same model, every
     constraint kept, without those hints or that seed-derived upper bound.
@@ -1320,12 +1323,12 @@ its full form as defined in that family's section.
   - Having moved bytes and having work this can time are different questions.
     What decides the second is the quantities a rate exists for: a nonzero
     share of `flops` or of `service`, or nonzero
-    `MemoryMetadata.traffic.storage` at `bandwidth_level`. An occurrence with none of
-    them MUST take zero time, MUST NOT be required to carry an execution
-    placement, and MUST still record its movement at any other level: it is
-    untimed, not absent. Work of a dtype or kind the target states no one-unit
-    throughput for MUST refuse rather than price at zero, because that would
-    leave a hole inside a number the reader takes as whole.
+    `MemoryMetadata.traffic.storage` at `bandwidth_level`. An occurrence with none
+    of them MUST take zero time. It MUST NOT be required to carry an execution
+    mesh. It MUST still record its movement at any other level. It is untimed, not
+    absent. Work of a dtype or kind with no stated one-unit throughput
+    MUST refuse rather than price at zero. A zero price would leave a hole
+    inside a number the reader takes as whole.
   - A predicate MUST NOT be recorded as floating-point work. A comparison
     records `predicate` service and a selection records `select`; neither has a
     FLOP count, and neither MAY be priced at zero for want of one.

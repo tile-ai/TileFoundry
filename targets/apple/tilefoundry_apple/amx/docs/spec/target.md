@@ -86,7 +86,7 @@ class AppleM2Pro(target.Device):
     state their sources and assumptions separately from measured throughput and
     MUST NOT populate `throughput_for`'s measured-rate map.
   - Generic `thread` PerformanceServiceFacts MUST leave rates unknown while
-    placement between performance and efficiency cores is unspecified. Existing
+    core selection between performance and efficiency cores is unspecified. Existing
     P-core observations and estimates MUST NOT be projected as equal rates for
     all CPU threads. Stored AMX rates and unit-count estimates MUST NOT be
     multiplied by the CPU thread count.

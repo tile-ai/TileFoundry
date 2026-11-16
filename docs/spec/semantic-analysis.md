@@ -120,11 +120,11 @@ both as one `IslParamValues` dictionary from isl parameter name to IR value.
   axis-group rule and report the declaring source location. Canonical
   UMAT shape metadata uses the same compact `Layout(shape)` as other tensor values.
 - A reader with no topology level addresses logical coordinates. A reader at a
-  named topology level addresses the coords one unit of that level holds:
-  a coord cut by mesh axes at that level or coarser is split into digits,
-  the cutting axes outermost first in mesh-axis order and then the residual,
-  and each such digit is that unit's mesh coordinate.
-- A mesh coordinate is an isl parameter while the shard layout is built. The
+  named topology level addresses the coords one unit of that level holds. The
+  reader splits a coord cut by mesh axes at that level or coarser into digits. The
+  digits follow the cutting axes outermost first in mesh-axis order, then the
+  residual. Each such digit is that unit's mesh coordinate.
+- A mesh coordinate is an isl parameter while the layout map is built. The
   access relation service fixes it to the requested unit, 0 on every mesh axis
   unless stated, and removes it before any boundary is counted.
 

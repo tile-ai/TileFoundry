@@ -187,8 +187,8 @@ def kept(shape: tuple) -> int:
 def reduce_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """Every source coordinate feeding a result coordinate, read once.
 
-    A reduction walks what it reads, so the source's own modes are the
-    coordinates: it reads more of them than it writes, which is the whole of what
+    A reduction walks what it reads, so the source's own coordinates are the
+    domain: it reads more of them than it writes, which is the whole of what
     it does, and the collapse happens on the way out. The extents walked are this
     unit's own, a reduced axis being one a layout can split, and the
     correspondence to the result comes from both layouts, since a result

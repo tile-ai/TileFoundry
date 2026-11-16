@@ -284,7 +284,7 @@ class Layout(Pattern):
             predicates=held,
         )
 
-    def positions(self) -> tuple:
+    def mode_fields(self) -> tuple:
         return (
             *(types.flatten(self.shape) if self.shape is not None else ()),
             *(types.flatten(self.strides) if self.strides is not None else ()),
@@ -293,7 +293,7 @@ class Layout(Pattern):
     def fixed(self):
         if self.shape is None or self.strides is None:
             return None
-        if any(isinstance(value, Pattern) for value in self.positions()):
+        if any(isinstance(value, Pattern) for value in self.mode_fields()):
             return None
         return types.Layout(tuple(self.shape), tuple(self.strides))
 

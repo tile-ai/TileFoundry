@@ -95,7 +95,7 @@ def carry_sharded_reshape(layout: types.ShardLayout, new_shape: tuple):
         prod = 1
         while prod < d:
             if pending is not None:
-                cs, stride, old_pos = pending
+                cs, stride, old_mode = pending
                 pending = None
             else:
                 ci = next_nonunit(ci)
@@ -103,13 +103,13 @@ def carry_sharded_reshape(layout: types.ShardLayout, new_shape: tuple):
                     return None
                 cs = int(axis_shape[ci])
                 stride = axis_strides[ci]
-                old_pos = ci
+                old_mode = ci
                 ci += 1
             new_prod = prod * cs
             if new_prod <= d:
-                if old_pos is not None:
-                    old_to_new[old_pos] = len(new_modes)
-                new_modes.append((cs, stride, old_pos))
+                if old_mode is not None:
+                    old_to_new[old_mode] = len(new_modes)
+                new_modes.append((cs, stride, old_mode))
                 prod = new_prod
                 continue
 
@@ -119,19 +119,19 @@ def carry_sharded_reshape(layout: types.ShardLayout, new_shape: tuple):
             if cs % needed != 0:
                 return None
             residual = cs // needed
-            mesh_ext = split_mesh_extent.get(old_pos) if old_pos is not None else None
+            mesh_ext = split_mesh_extent.get(old_mode) if old_mode is not None else None
             if mesh_ext is not None and needed % mesh_ext != 0:
                 return None
             base_stride = stride * residual
             if mesh_ext is not None and needed != mesh_ext:
                 outer_residual = needed // mesh_ext
-                old_to_new[old_pos] = len(new_modes)
-                new_modes.append((mesh_ext, base_stride * outer_residual, old_pos))
+                old_to_new[old_mode] = len(new_modes)
+                new_modes.append((mesh_ext, base_stride * outer_residual, old_mode))
                 new_modes.append((outer_residual, base_stride, None))
             else:
-                if old_pos is not None:
-                    old_to_new[old_pos] = len(new_modes)
-                new_modes.append((needed, base_stride, old_pos))
+                if old_mode is not None:
+                    old_to_new[old_mode] = len(new_modes)
+                new_modes.append((needed, base_stride, old_mode))
             pending = (residual, stride, None)
             prod = d
     if pending is not None or next_nonunit(ci) < n_axis:

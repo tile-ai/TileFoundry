@@ -670,7 +670,7 @@ def shard_layout_scope(context):
 class ShardLayoutScopeRule:
     STATEMENT: ClassVar[str] = (
         "A shard layout requires and covers the current mesh scope, or the function "
-        "mesh in a signature; each referenced axis must "
+        "mesh in a signature. Each referenced axis must "
         "map uniquely to an axis of that scope. Unstated axes are Broadcast."
     )
 

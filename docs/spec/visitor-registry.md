@@ -570,9 +570,9 @@ def register_relation(op_cls: type) -> Callable[[Callable], Callable]: ...
     count that cannot be derived MUST fail closed rather than fall back on a
     stated number.
   - `relations_of` answers in logical axes only. `projected` carries every
-    boundary from logical axes onto the coords the reader addresses, by
-    composing with the layout the value ended up with, and holds every boundary
-    to the iterations this participant performs; `local_relations_of` is
+    boundary from logical axes onto the coords the reader addresses. `projected`
+    composes with the layout the value ended up with. `projected` also holds every
+    boundary to the iterations this participant performs. `local_relations_of` is
     `projected` over `relations_of`. A value nobody divided is addressed whole
     by every participant, so leaving one boundary unheld would charge one
     participant what all of them read.
@@ -675,7 +675,7 @@ class Visitor(StmtExprVisitor[None]):
     def visit_Sequential(self, stmt, ctx): ...        # also LetStmt, For, While, If, MeshScope, Return, Evaluate
     def generic_visit(self, stmt, ctx): ...           # any other Stmt: its verify.registry entry, then its Expr fields
     def visit_Var(self, var, ctx): ...                # every use must be visible
-    def visit_Call(self, call, ctx): ...              # AllocTensor placement and embedded ShardLayout meshes
+    def visit_Call(self, call, ctx): ...              # AllocTensor call position and embedded ShardLayout meshes
 ```
 
 - constraints:

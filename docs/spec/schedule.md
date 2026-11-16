@@ -92,9 +92,9 @@ Operand, tiling, pattern, and verifier rejections raise `schedule.RefusalError`.
 Errors from implementation code, including `TypeError` and ISL errors,
 propagate to the caller.
 
-A source window is matched in the layout in which it lies: its
-address offset is not part of the layout, and an unstated layout uses the
-parent tensor's compact row-major strides. When an instruction reads a plain
+Matching reads a source window in the layout in which it lies. The address offset
+is not part of the layout. An unstated layout uses the parent tensor's compact
+row-major strides. When an instruction reads a plain
 shared-memory layout through an all-`Broadcast` `pattern.ShardLayout`, the
 single-issue view is bound to one required instruction frame for matching. This
 does not assign issues to frames; issue assignment is a lowering decision.

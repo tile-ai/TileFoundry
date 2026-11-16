@@ -133,7 +133,7 @@ class SyncPlanMetadata(IRMetadata):
     place when such an effect can be in flight at the return. Then its group's
     commit and wait run under the tag `"after"`. The family plans the Function
     again. The accesses of the action stay recorded as complete.
-  - **Placement.** An action runs on the mesh that lowering issues it on, or on
+  - **Execution mesh.** An action runs on the mesh that lowering issues it on, or on
     its lexical scope's mesh when that is None. That mesh MUST lie within its
     lexical scope's mesh, as `within_scope` decides. The family places steps in
     the innermost scope that holds both accesses, before the child that holds
@@ -222,7 +222,7 @@ class SyncPlanMetadata(IRMetadata):
     pattern states ([tir](./tir.md#copyasynctensor)), so its first issuing
     thread starts a warp. The plan orders no word.
   - **Refusals.** The family raises `analysis.Error` when an action or a barrier
-    breaks a MUST of **Units** or **Placement**. It also raises it for a loop
+    breaks a MUST of **Units** or **Execution mesh**. It also raises it for a loop
     whose state does not settle within its limit, and for a pair that
     **CTAs** or **Threads** refuses.
 

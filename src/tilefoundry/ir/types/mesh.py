@@ -326,9 +326,9 @@ def within_scope(mesh: Mesh, current: Mesh) -> bool:
     for name, topology_layout, start in zip(topology_names(mesh), layouts(mesh), starts(mesh)):
         if name not in enclosing:
             return False
-        outer_arrangement, at_start = enclosing[name]
+        outer_layout, at_start = enclosing[name]
         inner = filter(topology_layout, major="row")
-        outer = filter(outer_arrangement, major="row")
+        outer = filter(outer_layout, major="row")
         if not is_contiguous(inner, major="row") or not is_contiguous(outer, major="row"):
             return False
         if not dim_at_most(at_start, start):

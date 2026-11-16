@@ -91,18 +91,18 @@ def carrier_layout(
     out_access = result_access(output_map)
     dom_to_out = {d: o for o, (k, d) in out_access.items() if k == "proj"}
 
-    pos_dom: list = []
+    mode_domain_dims: list = []
     for p in range(len(layout.shape)):
         kind, ddim = in_access[la2ta_in[p]]
         if kind != "proj":
             return None
-        pos_dom.append(ddim)
-    if not set(dom_to_out).issubset(set(pos_dom)):
+        mode_domain_dims.append(ddim)
+    if not set(dom_to_out).issubset(set(mode_domain_dims)):
         return None
 
     out_rank = len(output_shape)
     per_axis: dict[int, list] = {o: [] for o in range(out_rank)}
-    for p, ddim in enumerate(pos_dom):
+    for p, ddim in enumerate(mode_domain_dims):
         if ddim in dom_to_out:
             per_axis[dom_to_out[ddim]].append(p)
         elif ddim in complete_reduction_dims:
@@ -112,30 +112,30 @@ def carrier_layout(
             return None
 
     new_shape: list = []
-    new_pos_of: dict[int, int] = {}
-    src_pos: list = []
+    new_mode_of: dict[int, int] = {}
+    src_modes: list = []
     for o in range(out_rank):
         modes = per_axis[o]
         if not modes:
             new_shape.append(1)
-            src_pos.append(None)
+            src_modes.append(None)
             continue
         for p in modes:
-            reduced = pos_dom[p] in complete_reduction_dims
-            new_pos_of[p] = len(new_shape)
+            reduced = mode_domain_dims[p] in complete_reduction_dims
+            new_mode_of[p] = len(new_shape)
             new_shape.append(1 if reduced else layout.shape[p])
-            src_pos.append(None if reduced else p)
-    new_strides = [0 if p is None else layout.strides[p] for p in src_pos]
+            src_modes.append(None if reduced else p)
+    new_strides = [0 if p is None else layout.strides[p] for p in src_modes]
 
     out_attrs: list = [
         attr if not isinstance(attr, types.Split) else types.Broadcast() for attr in propagated_attrs
     ]
     for p_mesh, attr in enumerate(sl.attrs):
-        if isinstance(attr, types.Split) and attr.axis in new_pos_of:
+        if isinstance(attr, types.Split) and attr.axis in new_mode_of:
             out_attrs[p_mesh] = (
                 types.Partial(reduction)
-                if pos_dom[attr.axis] in complete_reduction_dims
-                else types.Split(new_pos_of[attr.axis])
+                if mode_domain_dims[attr.axis] in complete_reduction_dims
+                else types.Split(new_mode_of[attr.axis])
             )
         elif isinstance(attr, types.Partial):
             out_attrs[p_mesh] = types.Partial(attr.reduction)

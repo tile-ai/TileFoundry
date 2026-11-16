@@ -691,9 +691,9 @@ second presentation of the result.
   changes only its layout. Its layout modes and `Split` modes MUST be valid
   for that logical shape under the existing layout-mode-to-tensor-axis rules.
   Both layouts MUST be plain `Layout` / `ComposedLayout` without `ShardLayout`
-  components, or both MUST be rmem `ShardLayout` on the same mesh containing
-  only `Split` and `Varying` attributes
-  ([shard §6.1](./shard.md#61-shard-attr-semantics)). Omitted authored strides MUST be materialized at
+  components. Otherwise both layouts MUST be rmem `ShardLayout` on the same mesh.
+  That `ShardLayout` MUST contain only `Split` and `Varying` attributes ([shard §6.1](./shard.md#61-shard-attr-semantics)). Omitted authored strides MUST be
+  materialized at
   Bitcast type inference using the same default and storage-owner rules as
   Reshard and TensorView; every resulting `Layout` component has concrete strides.
   For rmem shards, an address is the owning mesh coordinate paired with the
@@ -1040,34 +1040,33 @@ class Reshape(Op):
   - Removing only unit axes from a plain layout MUST preserve the strides of
     the remaining axes, including when the input is a strided tensor window.
   - A bare, fully-`Broadcast` `ShardLayout` input (every attr `Broadcast`, no
-    genuine sharding) carries that `ShardLayout` through `Reshape` when the
-    input layout modes can express `new_shape` by the view rules below.
-    When they cannot (including while either layout shape is symbolic), the
-    result layout is `None` and no error is raised because no genuine ownership
-    is discarded. This rule does not extend to a `ComposedLayout` whose outer
+    genuine sharding) carries that `ShardLayout` through `Reshape`. This holds
+    when the input layout modes can express `new_shape` by the view rules below.
+    When they cannot (including while either layout shape is symbolic), the result
+    layout is `None`. `Reshape` raises no error, because the reshape discards no
+    genuine ownership. This rule does not extend to a `ComposedLayout` whose outer
     layout is a `ShardLayout`; that input follows the generic composed-layout
     rule and may produce a `None` layout.
   - A non-genuinely-sharded `UMAT` input reshaped to `()` remains the early
     scalar case and produces a plain `UMAT` scalar.
-  - A genuine `ShardLayout` input (at least one non-`Broadcast` attr) carries
-    through `Reshape` when the reshape is expressible as a view over the
-    input's layout modes (`layout.layout.shape`, [shard §7.1.1](./shard.md#711-layoutshape)):
-    - every layout mode lies entirely within one new axis — non-size-1 new
-      axes are the product of a contiguous run of whole layout modes, in
-      either merge direction; size-1 axes insert/drop freely and hold no
-      sharding; a `Split` mode reference remaps to its new
-      mode; `Partial` / `Broadcast` carry through unchanged (mesh-axis
-      states, no mode); OR
-    - a `Split`-bound mode divides across a new-axis boundary at a
-      point its bound mesh extent evenly divides: the outer (earlier)
-      sub-factor itself further factors into `(mesh_ext, Split-bound, local
-      extent 1)` and `(sub-factor / mesh_ext, plain)`, and the inner residual
-      becomes a plain (non-`Split`) mode — every `Split`-bound
-      mode keeps local extent 1 ([shard §7.1.1](./shard.md#711-layoutshape)).
-  - Arbitrary rank-N regroup — a `Split`-bound mode whose device-owned
-    block spans a boundary deeper than one divide, or two or more
-    `Split`-bound modes interacting across the same regroup — is not yet
-    supported and MUST fail closed.
+  - A genuine `ShardLayout` input has at least one non-`Broadcast` attr. It
+    carries through `Reshape` when the reshape is a view over its layout modes
+    (`layout.layout.shape`, [shard §7.1.1](./shard.md#711-layoutshape)). The view
+    takes one of these two forms:
+    - every layout mode lies entirely within one new axis. Non-size-1 new axes are
+      the product of a contiguous run of whole layout modes, in either merge
+      direction. Size-1 axes insert/drop freely and hold no sharding. A `Split`
+      mode reference remaps to its new mode. `Partial` / `Broadcast` carry through
+      unchanged (mesh-axis states, no mode); OR
+    - a `Split`-bound mode divides across a new-axis boundary at a point its bound
+      mesh extent evenly divides. The outer (earlier) sub-factor further factors
+      into `(mesh_ext, Split-bound, local extent 1)` and `(sub-factor / mesh_ext,
+      plain)`. The inner residual becomes a plain (non-`Split`) mode. Every
+      `Split`-bound mode keeps local extent 1 ([shard §7.1.1](./shard.md#711-layoutshape)).
+  - Arbitrary rank-N regroup is not yet supported and MUST fail closed. One
+    case is a `Split`-bound mode whose device-owned block spans a boundary deeper
+    than one divide. The other case is two or more `Split`-bound modes that
+    interact across the same regroup.
   - A reshape of a genuine `ShardLayout` not expressible by the above MUST fail
     closed rather than fabricate or discard a layout.
 
@@ -1570,8 +1569,8 @@ class MeshCoord(Op):
 
 - constraints:
   - `axes` is an `i64` scalar, an `i64` vector, or a tuple of `i64` scalars.
-    The result is one `i64` coordinate per axis -- a scalar for a scalar,
-    a vector of the same length otherwise -- with no shard layout.
+    The result is one `i64` coordinate per axis, with no shard layout. The result
+    is a scalar for a scalar `axes` and a vector of the same length otherwise.
   - Type inference MUST reject a mesh that is not bound by the current
     `MeshRegion`, and a literal axis outside the mesh's rank.
   - Evaluation holds one value per unit of `mesh`
@@ -1595,27 +1594,28 @@ class Reshard(Op):
 - constraints:
   - Omitting `layout` preserves `x.layout`; omitting `storage` preserves
     `x.storage`. The output preserves the input logical `TensorType.shape`.
-  - Memory analysis and lowering MUST treat a Reshard as a view iff storage
-    is unchanged, the shape is literal, both structural address boxes agree,
-    and on every mesh axis with a `Partial` end both ends are equal, or a
-    Varying (or plain) source becomes Partial
-    ([shard §6.1](./shard.md#61-shard-attr-semantics)). Each
-    thread holds register storage privately, so an `rmem` Reshard with a
-    `ShardLayout` is a view only when every logical element keeps the threads
-    that hold it and its register on each. The box of an `rmem` `ShardLayout`
-    therefore also holds the mesh's thread numbering -- its topology levels,
-    its `device_layout`, and the mesh offset, 0 for a mesh stated without one
-    -- and steps by `register_strides` instead of the physical strides, so
-    every Split keeps its mesh axis even where its physical stride is not 0.
+  - Memory analysis and lowering MUST treat a Reshard as a view iff four
+    conditions hold. Storage is unchanged. The shape is literal. Both structural
+    address boxes agree. On every mesh axis with a `Partial` end, both ends are
+    equal, or a Varying (or plain) source becomes Partial ([shard §6.1](./shard.md#61-shard-attr-semantics)). Each thread holds register storage
+    privately. So an `rmem` Reshard with a `ShardLayout` is a view only when each
+    logical element keeps its threads and its register on each thread. The box
+    of an `rmem` `ShardLayout` also holds the mesh's thread numbering. That
+    numbering is the topology levels, the `device_layout`, and the mesh offset
+    (0 when the mesh states none). That box steps by `register_strides` instead of the
+    physical strides. So every Split keeps its mesh axis even where its physical
+    stride is not 0.
     Such a value whose mesh is not static is a copy. The rule is conservative:
     two notations of one thread numbering may be judged a copy.
     A Split on a mesh axis of extent 1 places nothing: the box neither records
-    it nor treats its tensor mode as independent. A box records every other
-    zero-stride Split's mesh axis, logical tensor axis, coord within that
-    axis, and extent. Its physical address layout is the coalesced layout after
+    it nor treats its tensor mode as independent. A box records four fields for
+    every other zero-stride Split. The fields are the mesh axis, the logical
+    tensor axis, the coordinate scale of the mode within that axis, and the
+    extent. The coordinate scale is the product of the later mode extents of the
+    same axis. Its physical address layout is the coalesced layout after
     removing these independent modes; swizzle and offset are preserved. Source
     offsets are derived from starts along the registered view chain, independently
-    of the offset-free types of plain slices. No element or participant enumeration is required.
+    of the offset-free types of plain slices. No element or unit enumeration is required.
     The result MUST reuse the source buffer, lower to a view, and require no
     instruction candidate. Broadcast and nonzero-stride Split ownership do not
     change a shared address, including a device ownership change with the same
