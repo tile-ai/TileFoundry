@@ -595,7 +595,6 @@ class TupleType:
     """
 
     fields: tuple[TensorType | "TupleType" | CallableType, ...] = ()
-    Void: ClassVar[TupleType]  # TupleType(()), built on first access
 ```
 
 - constraints:
@@ -613,12 +612,15 @@ class TupleType:
 
 ## 6. Void result
 
+`TupleType.Void` is a class constant of `TupleType`. Its value is the `TupleType` with no fields. It is built on first access.
+
 ```python
+# example
 TupleType.Void == TupleType(())
 ```
 
 - constraints:
-  - `TupleType.Void` is the result type of an effect-form Op. It has no fields.
+  - `TupleType.Void` is the result type of an effect-form Op.
   - An effect-form Op produces no readable value. It appears in Stmt position as `Evaluate(op, args)`.
   - Compare a type with `TupleType.Void` by `==`. Object identity is not part of the contract.
   - The printer writes `TupleType.Void` as `None`.

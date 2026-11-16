@@ -143,7 +143,7 @@ def movement(
             else access.projected(access.relations_of(call, ctx), call, ctx)
         )
         result = ctx.local_type_of(call)
-        fields = result.fields if isinstance(result, types.TupleType) else (result,)
+        fields = ir_utils.result_fields(result)
         outputs = local_relations[len(call.args) :]
         if len(fields) > len(outputs):
             raise Error(

@@ -13,7 +13,7 @@ The split:
 
 - **`typeinfer`** dispatches on any Expr-producing `Op`'s `Call` —
   HIR value Ops plus TIR-owned Expr Ops (`tir.memory.{AllocTensor,PtrOf,Span,
-  TensorView}`) and the unit-typed TIR effect Ops. It
+  TensorView}`) and the TIR effect Ops with a void result. It
   fills / refreshes `Expr.type`.
 - **`verify`** dispatches on TIR `Stmt` (control-flow / binding /
   `Evaluate`) plus cross-function invariants (`Evaluate(FunctionRef)`

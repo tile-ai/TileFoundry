@@ -13,7 +13,7 @@ from .bounds import (
     upper_bound,
 )
 from .compatible import is_unsharded_layout, types_compatible
-from .leaves import leaf_rank, leaf_span, leaves_of, tensor_types
+from .leaves import leaf_rank, leaf_span, leaves_of, result_fields, tensor_types
 from .local import (
     divided_mesh_axes,
     local_type_of,

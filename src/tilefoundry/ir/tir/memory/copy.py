@@ -3,7 +3,7 @@
 Copies ``src`` to ``dst``. Memory direction (gmem / smem
 / rmem) is inferred from ``.type.storage`` of each operand. Covers
 Load / Store too. The Op is placed in Stmt position as
-``Evaluate(Copy, ...)``; the invocation is unit-typed (no result value).
+``Evaluate(Copy, ...)``; the invocation has the void result (no result value).
 """
 
 from __future__ import annotations

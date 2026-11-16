@@ -393,7 +393,7 @@ def missing_boundaries(
         output = ctx.local_type_of(call)
     except ValueError:
         return (ReachedAddresses(core.SSAValue(call, 0), None, None, None, Precision.LOWER_BOUND),)
-    output_count = len(output.fields) if isinstance(output, types.TupleType) else 1
+    output_count = len(ir_utils.result_fields(output))
     missing_inputs = (
         ReachedAddresses(
             core.SSAValue(call.args[index], 0), None, None, None, Precision.LOWER_BOUND
@@ -419,7 +419,7 @@ def uncounted_boundaries(
         output = ctx.local_type_of(call)
     except ValueError:
         return (ReachedAddresses(core.SSAValue(call, 0), None, None, None, precision),)
-    output_count = len(output.fields) if isinstance(output, types.TupleType) else 1
+    output_count = len(ir_utils.result_fields(output))
     return (
         *(ReachedAddresses(core.SSAValue(arg, 0), None, None, None, precision) for arg in call.args),
         *(

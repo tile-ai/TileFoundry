@@ -59,12 +59,12 @@ Type and shard rules read only the access maps' affine structure (which domain
 dim each axis uses), never the domain bounds, so they are size-agnostic and
 identical for static and dynamic shapes.
 
-An effect-form TIR instruction uses the same tuple even though its call is
-unit-typed:
+An effect-form TIR instruction uses the same tuple even though its call has
+the void result `TupleType.Void`:
 
 - One relation per input `ParamDef`, in parameter order, comes first, whether
   that operand is read, written or both.
-- Its relations after those are its Unit result's, as for any Op.
+- Its relation after those is the void result's one boundary, as for any Op.
 - Which operands are read and which are written is each parameter's `effect`,
   not its position: the argument prefix is not the set of reads.
 

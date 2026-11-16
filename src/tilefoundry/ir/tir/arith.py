@@ -5,7 +5,7 @@ Dispatched by kind enum. ``BinaryKind`` and ``UnaryKind`` are owned by
 without remapping.
 
 ``Binary`` / ``Unary`` are ``Op`` subclasses (not ``Stmt``); in Stmt
-position they are invoked as ``Evaluate(op, args)`` (unit-typed, no
+position they are invoked as ``Evaluate(op, args)`` (void result, no
 result value), matching the TIR convention shared with
 ``tir.memory.Copy``.
 """

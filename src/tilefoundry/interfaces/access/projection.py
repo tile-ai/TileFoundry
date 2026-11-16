@@ -34,9 +34,9 @@ def projected(
     """
     ninputs = len(call.args)
     held = ctx.local_type_of(call)
-    fields = held.fields if isinstance(held, types.TupleType) else (held,)
+    fields = ir_utils.result_fields(held)
     logical = ctx.type_of(call)
-    logical_fields = logical.fields if isinstance(logical, types.TupleType) else (logical,)
+    logical_fields = ir_utils.result_fields(logical)
     if len(relations) - ninputs != len(fields):
         raise ValueError(
             f"{type(call.target).__name__} describes {len(relations) - ninputs} output "

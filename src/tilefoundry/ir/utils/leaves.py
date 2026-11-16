@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from tilefoundry.ir import types
 
-__all__ = ["leaf_rank", "leaf_span", "leaves_of", "tensor_types"]
+__all__ = ["leaf_rank", "leaf_span", "leaves_of", "result_fields", "tensor_types"]
 
 
 def leaves_of(type_: "types.Type") -> tuple:
@@ -12,6 +12,16 @@ def leaves_of(type_: "types.Type") -> tuple:
     if isinstance(type_, types.TupleType):
         return tuple(leaf for field in type_.fields for leaf in leaves_of(field))
     return (type_,) if isinstance(type_, types.TensorType) else ()
+
+
+def result_fields(type_: "types.Type") -> tuple:
+    """The result boundaries of one value: a tuple's fields, else the value itself.
+
+    ``TupleType.Void`` is one boundary: an effect Op states one relation for it.
+    """
+    if isinstance(type_, types.TupleType) and type_ != types.TupleType.Void:
+        return type_.fields
+    return (type_,)
 
 
 def leaf_span(type_: "types.Type", field: int) -> "tuple[int, int]":
