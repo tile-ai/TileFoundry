@@ -572,10 +572,10 @@ def register_relation(op_cls: type) -> Callable[[Callable], Callable]: ...
   - `relations_of` answers in logical axes only. `projected` carries every
     boundary from logical axes onto the coords the reader addresses. `projected`
     composes with the layout the value ended up with. `projected` also holds every
-    boundary to the iterations this participant performs. `local_relations_of` is
+    boundary to the iterations this unit performs. `local_relations_of` is
     `projected` over `relations_of`. A value nobody divided is addressed whole
-    by every participant, so leaving one boundary unheld would charge one
-    participant what all of them read.
+    by every unit. So leaving one boundary unheld would charge one unit what
+    all of them read.
   - A boundary whose value is not read or written at any coordinate MUST be
     stated as an empty relation at that value's own rank; `access.unread`
     builds one. An Op whose result follows from its operands' Types alone --

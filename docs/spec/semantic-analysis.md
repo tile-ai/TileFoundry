@@ -123,7 +123,8 @@ both as one `IslParamValues` dictionary from isl parameter name to IR value.
   named topology level addresses the coords one unit of that level holds. The
   reader splits a coord cut by mesh axes at that level or coarser into digits. The
   digits follow the cutting axes outermost first in mesh-axis order, then the
-  residual. Each such digit is that unit's mesh coordinate.
+  residual. Each cutting-axis digit is that unit's `MeshCoord` on that axis.
+  The residual is the local coord within the unit and is not a `MeshCoord`.
 - A mesh coordinate is an isl parameter while the layout map is built. The
   access relation service fixes it to the requested unit, 0 on every mesh axis
   unless stated, and removes it before any boundary is counted.
