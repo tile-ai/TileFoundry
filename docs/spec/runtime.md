@@ -895,7 +895,7 @@ decisions two reasonable implementations would differ on.
 ```
 <!-- /generated -->
 
-**Terms.** The CPU target's launch boundary is raw pointers and shape scalars, so this header declares no surface. 
+**Terms.** The CPU target's launch boundary is raw pointers and shape scalars, so this header declares no surface.
 
 - constraints:
   - The CPU target crosses the launch boundary as raw pointers and shape scalars, so nothing here is a type a caller names.
