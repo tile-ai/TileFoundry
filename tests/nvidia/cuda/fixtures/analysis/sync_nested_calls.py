@@ -33,9 +33,10 @@ def _staged_leaf():
         @func
         def run(x: Tensor[(32,), "f32"]) -> Tensor[(32,), "f32"]:
             with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
-                with Mesh(("thread",), layout=(32,), names=("lane",)) as _thread:
+                with Mesh(("thread",), layout=(32,), names=("lane",)) as thread:
                     stage = tf.empty(Tensor[(32,), "f32", Layout((32,), (1,)), "smem"])
-                    staged = tf.schedule((x, stage), op=T.copy())
+                    with thread[0:1] as _writer:
+                        staged = tf.schedule((x, stage), op=T.copy())
                     value_dst = tf.empty(Tensor[(32,), "f32", (32,), "rmem"])
                     value = tf.schedule((staged, value_dst), op=T.copy())
                     out = tf.zeros(Tensor[(32,), "f32", None, "gmem"])

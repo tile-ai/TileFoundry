@@ -13,8 +13,9 @@ class MnMajorB:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as threads:
                 output = tf.zeros(Tensor[(64, 128), "f32"])
-                lhs = tf.schedule((a, tf.empty(Tensor[(64, 16), "f16", A_SMEM, "smem"])), op=T.copy())
-                rows = tf.schedule((v, tf.empty(Tensor[(32, 128), "f16", V_SMEM, "smem"])), op=T.copy())
+                with threads[0, 0, 0] as _writer:
+                    lhs = tf.schedule((a, tf.empty(Tensor[(64, 16), "f16", A_SMEM, "smem"])), op=T.copy())
+                    rows = tf.schedule((v, tf.empty(Tensor[(32, 128), "f16", V_SMEM, "smem"])), op=T.copy())
                 acc = tf.zeros(Tensor[(64, 128), "f32",
                     ((4 @ threads.warp, 2, 8 @ threads.lane8, 16, 4 @ threads.lane4, 2), (16, 8, 1, 512, 128, 64)), "rmem"])
                 result = tf.schedule(

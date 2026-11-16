@@ -18,18 +18,19 @@ class Issue:
                 ((4 @ threads.warp, 2, 8 @ threads.lane8, 2, 4 @ threads.lane4, 2,),
                  (16, 8, 1, 512, 128, 64)), "rmem",
             ])
-            lhs = tf.schedule(
-                (a, tf.empty(Tensor[
-                    (64, 16), "bf16", Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), "smem",
-                ])),
-                op=T.copy(),
-            )
-            rhs = tf.schedule(
-                (tf.transpose(b, (1, 0)), tf.empty(Tensor[
-                    (16, 16), "bf16", Layout(((2, 8), (2, 8)), ((64, 1), (128, 8))), "smem",
-                ])),
-                op=T.copy(),
-            )
+            with threads[0, 0, 0] as _writer:
+                lhs = tf.schedule(
+                    (a, tf.empty(Tensor[
+                        (64, 16), "bf16", Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), "smem",
+                    ])),
+                    op=T.copy(),
+                )
+                rhs = tf.schedule(
+                    (tf.transpose(b, (1, 0)), tf.empty(Tensor[
+                        (16, 16), "bf16", Layout(((2, 8), (2, 8)), ((64, 1), (128, 8))), "smem",
+                    ])),
+                    op=T.copy(),
+                )
             return tf.schedule(
                 (acc, lhs, rhs),
                 op=T.tiled_mma(atom=T.cuda.sm90.Wgmma(

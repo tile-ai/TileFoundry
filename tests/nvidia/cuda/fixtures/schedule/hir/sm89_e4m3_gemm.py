@@ -1,10 +1,12 @@
 """Stage E4M3 K slices through shared memory with cp.async for the SM89 warp MMA.
 
 One warp computes the 16 x 8 F32 tile of A (16, 128) by B, the (K, N) view of a
-row-major (N, K) weight. Each 32-wide K slice of A lands row-major and each slice
-of B K-contiguous; ``T.copy`` gathers them into the SM89 atom's fragments, and the
-MMA accumulates. The waits and barriers between the copies and their consumers
-belong to the implementation, as in ``tests/nvidia/cuda/fixtures/tir/e4m3_gemm.py``.
+row-major (N, K) weight. Each 32-wide K slice is copied by threads that own
+disjoint parts of it: 16 threads one row of A each, 8 threads one K-contiguous
+column of B each. The whole slices are then read through views of the same shared
+memory, ``T.copy`` gathers them into the SM89 atom's fragments, and the MMA
+accumulates. The waits and barriers between the copies and their consumers belong
+to the implementation, as in ``tests/nvidia/cuda/fixtures/tir/e4m3_gemm.py``.
 """
 
 from tilefoundry.dsl import *
@@ -35,14 +37,21 @@ class SM89_E4M3_GEMM:
                     ((2, 8 @ threads.lane, 4 @ threads.warp, 2), (64, 8, 2, 1)), "rmem",
                 ])
                 for k in tf.tile(K, BK):
-                    lhs_stage = tf.empty(
-                        Tensor[(M, BK), "fp8e4m3", Layout((M, BK), (BK, 1)), "smem"]
-                    )
-                    lhs = tf.schedule((a[:, k], lhs_stage), op=T.copy_async())
-                    rhs_stage = tf.empty(
-                        Tensor[(BK, N), "fp8e4m3", Layout((BK, N), (1, BK)), "smem"]
-                    )
-                    rhs = tf.schedule((b[k, :], rhs_stage), op=T.copy_async())
+                    with Mesh(("thread",), layout=(32,), names=("thread",)) as flat:
+                        with flat[0:M] as rows:
+                            lhs_runs = tf.reshard(
+                                a[:, k],
+                                ShardLayout(layout=Layout((M, BK), (K, 1)), attrs=(S(0),), mesh=rows),
+                            )
+                            lhs_stage = tf.empty(
+                                Tensor[
+                                    (M, BK), "fp8e4m3",
+                                    ShardLayout(layout=Layout((M, BK), (BK, 1)), attrs=(S(0),), mesh=rows),
+                                    "smem",
+                                ]
+                            )
+                            lhs = tf.schedule((lhs_runs, lhs_stage), op=T.copy_async())
+                    lhs = tf.reshard(lhs, Layout((M, BK), (BK, 1)))
                     lhs_frag_dst = tf.empty(
                         Tensor[
                             (M, BK), "fp8e4m3",
@@ -55,6 +64,21 @@ class SM89_E4M3_GEMM:
                         ]
                     )
                     lhs_frag = tf.schedule((lhs, lhs_frag_dst), op=T.copy())
+                    with Mesh(("thread",), layout=(32,), names=("thread",)) as flat:
+                        with flat[0:N] as columns:
+                            rhs_runs = tf.reshard(
+                                b[k, :],
+                                ShardLayout(layout=Layout((BK, N), (1, K)), attrs=(S(1),), mesh=columns),
+                            )
+                            rhs_stage = tf.empty(
+                                Tensor[
+                                    (BK, N), "fp8e4m3",
+                                    ShardLayout(layout=Layout((BK, N), (1, BK)), attrs=(S(1),), mesh=columns),
+                                    "smem",
+                                ]
+                            )
+                            rhs = tf.schedule((rhs_runs, rhs_stage), op=T.copy_async())
+                    rhs = tf.reshard(rhs, Layout((BK, N), (1, BK)))
                     rhs_frag_dst = tf.empty(
                         Tensor[
                             (BK, N), "fp8e4m3",
