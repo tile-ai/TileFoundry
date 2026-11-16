@@ -148,18 +148,14 @@ def analyze(
     *,
     analysis: str | Sequence[str],
     topology: str | None = None,
-    level: str | None = None,
     options: object | None = None,
 ) -> Result:
     """Run the requested analyses' union dependency closure over *function*.
 
     The caller supplies the program returned by ``check_program``. Analyses
     write records onto that same program; dimensions are bound by the caller.
-    The selected topology defaults to the module's coarsest level.
+    The selected topology defaults to the module's coarsest topology.
     """
-    if topology is not None and level is not None and topology != level:
-        raise ValueError("analyze: topology and level disagree")
-    topology = topology if topology is not None else level
     check_subject(module, function)
     if expr.get_metadata(function, ExecutionMeshMetadata) is None:
         raise Error("analyze needs the program returned by check_program")

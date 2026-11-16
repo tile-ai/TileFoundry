@@ -23,8 +23,8 @@ def counts(values: dict) -> tuple[tuple[str, int], ...]:
     return tuple(sorted((getattr(kind, "name", kind), value) for kind, value in values.items()))
 
 
-def level_value(held: Breakdown[int], topologies: tuple[str, ...], level: str | None):
-    return tuple(shares(held, topologies, level).items())
+def level_value(held: Breakdown[int], topologies: tuple[str, ...], topology: str | None):
+    return tuple(shares(held, topologies, topology).items())
 
 
 def is_structural_occurrence(
@@ -57,7 +57,6 @@ def local_duration_ns(
     *,
     moved: MemoryMetadata | None = None,
     topology: str | None = None,
-    level: str | None = None,
     scale: int = 1,
     units: int = 1,
 ) -> int:
@@ -66,7 +65,6 @@ def local_duration_ns(
     At the bandwidth level, one unit moves its share of the occurrence's
     footprint: one window's bytes over the *units* that window holds.
     """
-    topology = topology if topology is not None else level
     if topology is None:
         raise Error("performance: no topology was selected")
     if services.topology != topology:
@@ -318,7 +316,7 @@ def accumulate(
 class ComputeCostContext(AnalyzeContext):
     flop_groups: dict = field(default_factory=dict)
     other_groups: dict = field(default_factory=dict)
-    units: tuple[str, ...] = ()
+    topology_names: tuple[str, ...] = ()
     flops: dict[str, int] = field(default_factory=dict)
     other_ops: dict[str, int] = field(default_factory=dict)
     by_unit: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
@@ -337,14 +335,14 @@ class ComputeCostVisitor(valuation.Visitor[None]):
     ) -> None:
         if not isinstance(node, expr.Call):
             return
-        if not ctx.units:
+        if not ctx.topology_names:
             raise Error("compute-cost: visitor context is missing its cost context")
         repeats = ctx.scope.repeats_of(node, ctx.topology)
         callee = ctx.callee
         if callee is None:
             record = call_cost_record(
                 node,
-                {unit: replace(ctx, topology=unit) for unit in ctx.units},
+                {unit: replace(ctx, topology=unit) for unit in ctx.topology_names},
                 repeats.mesh_units,
                 replace(ctx, topology=None),
                 ctx.topology,
@@ -368,9 +366,10 @@ def analyze_compute_cost(function: core.Function, context: AnalyzeContext) -> No
     """Attach one-trip work per Call and multiplicity-aware totals per Function."""
     topology = context.topology
     topologies = context.topologies
-    units = tuple(each.name for each in topologies) or (topology,)
+    topology_names = tuple(each.name for each in topologies) or (topology,)
     cost_context = ComputeCostContext(
-        **vars(context), units=tuple(dict.fromkeys(unit for unit in units if unit is not None))
+        **vars(context),
+        topology_names=tuple(dict.fromkeys(name for name in topology_names if name is not None)),
     )
     ComputeCostVisitor().visit(function.body, cost_context)
     function.attach_metadata(summary(cost_context))

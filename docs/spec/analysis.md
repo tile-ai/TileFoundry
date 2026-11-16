@@ -1670,14 +1670,11 @@ def analyze(
     *,
     analysis: str | Sequence[str],
     topology: str | None = None,
-    level: str | None = None,
     options: object | None = None,
 ) -> Result: ...
 ```
 
 - constraints:
-  - `level` is an alias of `topology`; naming both with different values
-    MUST raise `ValueError`.
   - `topology` MUST name one effective Module topology. When omitted, it
     MUST default to the coarsest effective topology whose `TopologyLimits`
     states `max_physical_units`. A program may name a level the host places

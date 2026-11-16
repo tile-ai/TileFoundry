@@ -154,7 +154,7 @@ def assert_internal_contract(result: analysis.Result, scopes: tuple[analysis.Ite
             throughput,
             module_target.get_facts(target.PerformanceServiceFacts, (result.topology, active, inflight)),
             moved=expr.get_metadata(node, analysis.MemoryMetadata),
-            level=result.topology,
+            topology=result.topology,
             units=min(owner.mesh_units(result.topology), active),
         )
         record = expr.get_metadata(node, analysis.PerformanceMetadata)

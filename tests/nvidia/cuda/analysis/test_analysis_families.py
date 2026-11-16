@@ -424,7 +424,7 @@ def test_local_duration_prices_stated_rates() -> None:
         match=r"^performance: selected topology 'thread', but the target's "
         r"one-unit throughputs are stated for 'cta'$",
     ):
-        analysis.local_duration_ns(work, throughput, services, level="thread")
+        analysis.local_duration_ns(work, throughput, services, topology="thread")
 
     with pytest.raises(analysis.Error, match=r"unknown compute dtype 'f9e9m9'"):
         analysis.local_duration_ns(
@@ -439,7 +439,7 @@ def test_local_duration_prices_stated_rates() -> None:
             ),
             throughput,
             services,
-            level="cta",
+            topology="cta",
         )
 
     crossed = analysis.MemoryMetadata(
@@ -473,7 +473,7 @@ def test_local_duration_prices_stated_rates() -> None:
             throughput,
             replace(services, unit_bandwidth=()),
             moved=crossed,
-            level="cta",
+            topology="cta",
         )
         == 0
     )
@@ -482,7 +482,7 @@ def test_local_duration_prices_stated_rates() -> None:
         unit_bandwidth=((throughput.bandwidth_level, 1024_000_000_000), ("smem", 1024_000_000_000)),
     )
     assert (
-        analysis.local_duration_ns(analysis.ComputeCostMetadata(), throughput, priced, moved=crossed, level="cta")
+        analysis.local_duration_ns(analysis.ComputeCostMetadata(), throughput, priced, moved=crossed, topology="cta")
         == 8
     )
 

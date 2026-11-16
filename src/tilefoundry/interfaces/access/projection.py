@@ -26,7 +26,7 @@ def projected(
     """Every boundary in the coordinates the reader asking can address.
 
     Compose logical accesses with layout positions, restricting units
-    and boundaries to shared iterations. Without a topology level coordinates
+    and boundaries to shared iterations. Without a topology, coordinates
     stay logical; otherwise *device* supplies each mesh coordinate, keyed by
     axis name (or number when unnamed), defaulting to zero. Inputs come first.
     Unplaced, parameter-free boundaries own every iteration they answer about,
@@ -44,19 +44,19 @@ def projected(
             f"with {len(fields)}"
         )
     bindings = values_of(relations)
-    level = getattr(ctx, "topology", None)
+    topology = getattr(ctx, "topology", None)
     coordinates: dim.IslParamValues = {}
 
     def placement(value) -> "isl.map | None":
         shard = types.shard_layout_of(getattr(value, "layout", None))
-        if level is None or not isinstance(value, types.TensorType) or shard is None:
+        if topology is None or not isinstance(value, types.TensorType) or shard is None:
             return None
         placed_at = dim.layout_to_isl_map(
             tuple(value.shape),
             value.layout,
             coordinates,
             divided=lambda layer: ir_utils.divided_mesh_axes(
-                layer, topology=level, topologies=ctx.topologies
+                layer, topology=topology, topologies=ctx.topologies
             ),
         )
         return at_device(placed_at, coordinates, device or {})
@@ -75,7 +75,7 @@ def projected(
         for relation, label, access in zip(placed, where, relations, strict=True)
     )
     if (
-        level is None
+        topology is None
         and all(local is logical for local, logical in views)
         and all(not access.values for access in relations)
         and all(

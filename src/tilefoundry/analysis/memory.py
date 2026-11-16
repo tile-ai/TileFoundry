@@ -397,11 +397,11 @@ def values_in_region(
     Unsharded tensor leaves defined in the window contribute while live,
     including definitions in child regions.
     """
-    topology_levels = {name: index for index, name in enumerate(topology_names)}
-    region_levels = tuple(
-        topology_levels[getattr(topology, "name", topology)] for topology in region.mesh.topologies
+    owner_order = {name: index for index, name in enumerate(topology_names)}
+    region_indices = tuple(
+        owner_order[getattr(topology, "name", topology)] for topology in region.mesh.topologies
     )
-    outermost_region = min(region_levels)
+    outermost_region = min(region_indices)
     result = []
     for item in values:
         lifetime = item
@@ -444,7 +444,7 @@ def values_in_region(
 class MemoryContext(AnalyzeContext):
     """State carried through the memory-family expression walk."""
 
-    units: tuple[str, ...] = ()
+    topology_names: tuple[str, ...] = ()
     storage: TrafficAccounts = field(default_factory=TrafficAccounts)
     communication: TrafficAccounts = field(default_factory=TrafficAccounts)
     memory_level: str | None = None
@@ -460,7 +460,7 @@ class MemoryVisitor(valuation.Visitor[None]):
         if not isinstance(node, expr.Call):
             return
         recorded = (core.SSAValue(node),) in ctx.scope.access.accesses.get("narrow", {})
-        if not ctx.units:
+        if not ctx.topology_names:
             raise Error("memory: visitor context is missing cost contexts")
         callee = ctx.callee
         if callee is None:
@@ -468,7 +468,7 @@ class MemoryVisitor(valuation.Visitor[None]):
                 call_traffic(
                     node,
                     replace(ctx, topology=None),
-                    {unit: replace(ctx, topology=unit) for unit in ctx.units},
+                    {unit: replace(ctx, topology=unit) for unit in ctx.topology_names},
                     ctx.scope,
                     ctx.topology,
                 )
@@ -526,12 +526,12 @@ def analyze_memory(function: core.Function, context: AnalyzeContext) -> None:
         else None
     )
     memory_level = cache[1] if cache is not None and wave is not None else None
-    units = tuple(each.name for each in topologies) or (
+    topology_names = tuple(each.name for each in topologies) or (
         (topology,) if topology else ()
     )
     memory_context = MemoryContext(
         **vars(context),
-        units=tuple(dict.fromkeys(units)),
+        topology_names=tuple(dict.fromkeys(topology_names)),
         memory_level=memory_level,
         wave=wave,
     )
@@ -593,7 +593,7 @@ def analyze_memory(function: core.Function, context: AnalyzeContext) -> None:
     )
     peaks, lifetimes, status = (), (), "not_run"
     if function is context.entry:
-        peaks, lifetimes, status = place(allocation, facts, memory_context.units)
+        peaks, lifetimes, status = place(allocation, facts, memory_context.topology_names)
         occupied = {peak.memory_level for peak in peaks}
         peaks += tuple(
             MemoryLevelPeak(name, 0, 0, facts.explicit(name).capacity_bytes)
@@ -604,10 +604,10 @@ def analyze_memory(function: core.Function, context: AnalyzeContext) -> None:
     errors, advisories = memory_findings(peaks, footprint, reuse, cache, wave)
     function.attach_metadata(
         RegionMemoryMetadata(
-            topologies=memory_context.units,
+            topologies=memory_context.topology_names,
             traffic=Traffic(
-                storage=account_shares(memory_context.storage, memory_context.units),
-                communication=account_shares(memory_context.communication, memory_context.units),
+                storage=account_shares(memory_context.storage, memory_context.topology_names),
+                communication=account_shares(memory_context.communication, memory_context.topology_names),
             ),
             footprint=footprint,
             peaks=peaks,

@@ -144,7 +144,7 @@ def _predicted_ns(module, dims=None) -> int:
     result = analysis.analyze(
         *analysis.check_program(module, module.entry_function(), topology="cta", dims=dims),
         analysis=FAMILIES,
-        level="cta",
+        topology="cta",
     )
     summary = expr.get_metadata(result.function, analysis.PerformanceSummaryMetadata)
     assert summary is not None
@@ -593,7 +593,7 @@ class InvariantReuse(AnalysisCase):
             tgt.get_facts(target.ThroughputFacts),
             tgt.get_facts(target.PerformanceServiceFacts, result.topology),
             moved=expr.get_metadata(loaded, analysis.MemoryMetadata),
-            level=result.topology,
+            topology=result.topology,
         )
         timeline = expr.get_metadata(loaded, analysis.PerformanceMetadata).timeline
         assert (timeline.end_ns - timeline.start_ns) * timeline.trips == duration * 12
