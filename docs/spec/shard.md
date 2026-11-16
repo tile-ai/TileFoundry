@@ -543,8 +543,11 @@ strides by `u_i`, so they are in that topology's own numbering.
 stated per topology. `utils.flat_layout(mesh)` is those axes as one layout,
 offset included. It is the form a mesh is written and printed in. A sliced mesh
 keeps its `ComposedLayout`, its inner transform and a zero offset included. A
-slice's `ComposedLayout.offset` is where the whole mesh starts in that index,
-so `offset + layout(coord)` is the unit's index.
+slice's `ComposedLayout.offset` is where the whole mesh starts in that index.
+For a slice with no inner transform, the unit's index is
+`offset(mesh) + apply(mesh.layout.outer, coord)`. `apply(mesh.layout, coord)`
+already includes that offset. A slice with an inner transform applies its parts
+in the order of [§4](#4-composedlayout).
 
 Mesh composition uses the following rules:
 

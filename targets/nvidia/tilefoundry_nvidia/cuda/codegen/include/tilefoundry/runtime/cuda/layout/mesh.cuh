@@ -1,5 +1,7 @@
-/// A mesh: the hardware levels it names, and one CuTe layout whose values are
-/// those levels' ids. The C++ half of [shard §5](docs/spec/shard.md#5-mesh).
+/// A mesh: the hardware levels it names, and one CuTe layout whose value at a
+/// coord is the unit's index over all those levels. ``get<level>`` gives one
+/// level's mesh in that level's own numbering. The C++ half of
+/// [shard §5](docs/spec/shard.md#5-mesh).
 ///
 /// The struct carries the two fields and nothing else. Everything asked of a
 /// mesh is either a CuTe question about that layout -- ``cute::size`` /
@@ -15,8 +17,9 @@ template <TopologyLevel T0, TopologyLevel...> struct first_level {
 };
 }
 
-/// The levels, and the layout whose values are their ids. How many units
-/// a level has is the launch's, not the mesh's: one .cu is one launch, so
+/// The levels, and the layout whose values are indices over all of them. How
+/// many units a level has is the launch's, not the mesh's: one .cu is one
+/// launch, so
 /// ``topology_size<level>()`` states it and the same mesh in another
 /// translation unit is another launch's mesh.
 template <class TLayout, TopologyLevel... Topos> struct Mesh {
@@ -86,6 +89,29 @@ template <TopologyLevel... Ts> struct level_pack {
     static constexpr TopologyLevel values[] = {Ts...};
 };
 
+/// Whether ``T`` is a compile-time number above zero. ``::value`` is read
+/// only once ``T`` is known to be static.
+template <class T> CUTE_HOST_DEVICE constexpr bool static_positive() {
+    if constexpr (cute::is_static<T>::value)
+        return T::value > 0;
+    else
+        return false;
+}
+
+/// The size of level ``L``, which lies inside the level ``get`` asks for.
+/// It MUST be a compile-time number above zero; a refused size reads as one,
+/// so the refusal is the only diagnostic.
+template <TopologyLevel L> CUTE_HOST_DEVICE constexpr auto inner_size() {
+    using T = cute::remove_cvref_t<decltype(topology_size<L>())>;
+    static_assert(static_positive<T>(),
+                  "get<level>: a level inside it must have a compile-time "
+                  "positive size");
+    if constexpr (static_positive<T>())
+        return T{};
+    else
+        return cute::Int<1>{};
+}
+
 /// The units of the levels after position ``At`` in the pack: what a nest's
 /// strides carry above that level's own numbering. Only those levels'
 /// ``topology_size`` is read, so the outermost level may be dynamic.
@@ -93,25 +119,34 @@ template <int At, TopologyLevel... Topos>
 CUTE_HOST_DEVICE constexpr auto units_inside() {
     return []<size_t... Is>(std::index_sequence<Is...>) {
         return (cute::Int<1>{} * ... *
-                topology_size<level_pack<Topos...>::values[At + 1 + Is]>());
+                inner_size<level_pack<Topos...>::values[At + 1 + Is]>());
     }(std::make_index_sequence<sizeof...(Topos) - At - 1>{});
 }
 
-/// A nest with its strides divided by ``units``: that level's own numbering.
+/// One stride divided by ``Units``. A stride MUST be a compile-time number
+/// that ``Units`` divides; a refused stride comes back as it was.
+template <class Units, class S>
+CUTE_HOST_DEVICE constexpr auto own_step(S step) {
+    if constexpr (cute::is_static<S>::value) {
+        static_assert(S::value % Units::value == 0,
+                      "get<level>: a stride the units inside the level do not "
+                      "divide");
+        if constexpr (S::value % Units::value == 0)
+            return cute::Int<S::value / Units::value>{};
+        else
+            return step;
+    } else {
+        static_assert(cute::is_static<S>::value,
+                      "get<level>: a stride must be a compile-time number");
+        return step;
+    }
+}
+
+/// A nest with its strides divided by ``Units``: that level's own numbering.
 template <class Nest, class Units>
 CUTE_HOST_DEVICE constexpr auto in_own_numbering(Nest const &nest, Units) {
-    static_assert(cute::is_static<Units>::value,
-                  "get<level>: the levels inside it must have a compile-time "
-                  "size");
-    auto const strides =
-        cute::transform_leaf(cute::stride(nest), [](auto step) {
-            using S = decltype(step);
-            static_assert(
-                cute::is_static<S>::value && S::value % Units::value == 0,
-                "get<level>: a stride the units inside the level do not "
-                "divide");
-            return cute::Int<S::value / Units::value>{};
-        });
+    auto const strides = cute::transform_leaf(
+        cute::stride(nest), [](auto step) { return own_step<Units>(step); });
     return cute::make_layout(cute::shape(nest), strides);
 }
 

@@ -12,6 +12,11 @@ template <>
 CUTE_HOST_DEVICE constexpr auto topology_size<TopologyLevel::cta>() noexcept {
     return cute::Int<8>{};
 }
+/// A launch-provided size, for the case that puts it inside another level.
+template <>
+CUTE_HOST_DEVICE constexpr auto topology_size<TopologyLevel::gpu>() noexcept {
+    return 2;
+}
 }
 
 using namespace tilefoundry;
@@ -541,5 +546,56 @@ __global__ void k(float *p) {
     mma(at, bt, ct);
     p[0] = c[0];
 }
+}
+#endif
+
+#if CASE == 30 || CASE == ALL
+namespace case_30 {
+/// get<level>: a level inside it whose size is known only at run time.
+template <class D = void> __global__ void k() {
+    using grouped = cute::Layout<
+        cute::Shape<cute::Shape<cute::Int<4>>, cute::Shape<cute::Int<2>>>,
+        cute::Stride<cute::Stride<cute::Int<2>>, cute::Stride<cute::Int<1>>>>;
+    using mesh =
+        dep_t<Mesh<grouped, TopologyLevel::cta, TopologyLevel::gpu>, D>;
+    constexpr auto cta = tilefoundry::get<TopologyLevel::cta>(mesh{});
+    static_assert(int(cute::size(cta.layout)) == 4, "unreachable");
+}
+void use() { (void)&k<>; }
+}
+#endif
+
+#if CASE == 31 || CASE == ALL
+namespace case_31 {
+/// get<level>: a stride the 256 threads inside the CTA level do not divide.
+template <class D = void> __global__ void k() {
+    using grouped = cute::Layout<
+        cute::Shape<cute::Shape<cute::Int<4>>, cute::Shape<cute::Int<32>>>,
+        cute::Stride<cute::Stride<cute::Int<3>>, cute::Stride<cute::Int<1>>>>;
+    using mesh =
+        dep_t<Mesh<grouped, TopologyLevel::cta, TopologyLevel::thread>, D>;
+    constexpr auto cta = tilefoundry::get<TopologyLevel::cta>(mesh{});
+    static_assert(int(cute::size(cta.layout)) == 4, "unreachable");
+}
+void use() { (void)&k<>; }
+}
+#endif
+
+#if CASE == 32 || CASE == ALL
+namespace case_32 {
+/// get<level>: a stride known only at run time.
+template <class D = void> __global__ void k(int step) {
+    auto const layout =
+        cute::make_layout(cute::make_shape(cute::make_shape(cute::Int<4>{}),
+                                           cute::make_shape(cute::Int<32>{})),
+                          cute::make_stride(cute::make_stride(step),
+                                            cute::make_stride(cute::Int<1>{})));
+    using mesh =
+        dep_t<Mesh<decltype(layout), TopologyLevel::cta, TopologyLevel::thread>,
+              D>;
+    auto const cta = tilefoundry::get<TopologyLevel::cta>(mesh{layout});
+    (void)cta;
+}
+void use() { (void)&k<>; }
 }
 #endif

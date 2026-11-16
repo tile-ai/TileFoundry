@@ -46,6 +46,9 @@ CASES: dict[int, str | None] = {
     27: "operands must be one atom's lane fragments",
     28: "operands must be one atom's lane fragments",
     29: "operands must be one atom's lane fragments",
+    30: "get<level>: a level inside it must have a compile-time positive size",
+    31: "get<level>: a stride the units inside the level do not divide",
+    32: "get<level>: a stride must be a compile-time number",
 }
 
 _DIAGNOSTIC = re.compile(r"\n(?=\S+\(\d+\): (?!note))")

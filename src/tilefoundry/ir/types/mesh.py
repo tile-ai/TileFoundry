@@ -45,11 +45,11 @@ __all__ = [
 class Mesh:
     """Describe hardware levels, the layout of their units, and axis names.
 
-    ``layout`` runs parallel to ``topologies``: one layout per level, in
-    that level's own numbering, so a level states which of its units it
-    selects without any level above it entering the answer. A constant slice
-    wraps the whole layout in one ``ComposedLayout``. Its ``offset`` is the
-    index of the first unit over all topologies of the mesh.
+    ``layout`` holds one group of axes per topology and maps a coord to the
+    unit's index over all topologies of the mesh. ``layouts`` and ``get`` give
+    each topology's layout in its own numbering. A constant slice wraps the
+    whole layout in one ``ComposedLayout``. Its ``offset`` is the index of the
+    first unit over all topologies of the mesh.
 
     See [shard §5](docs/spec/shard.md#5-mesh).
     """
