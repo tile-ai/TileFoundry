@@ -356,9 +356,9 @@ explicit analysis; there is no ordinary `--target` option.
     ([analysis §2](./analysis.md#2-composed-analysis)).
     `--operands` MUST NOT change `source`: it is always the annotated HIR from the
     render without operand annotations.
-    It MUST be refused as an argument-combination error when no analysis flag was
-    supplied, naming that a report needs a requested root and printing the
-    `analyze` usage. Both formats MUST carry the same conclusions
+    The JSON flag with no analysis flag MUST be refused as an argument-combination
+    error. The error MUST name that a report needs a requested root. It MUST
+    print the `analyze` usage. Both formats MUST carry the same conclusions
     ([analysis §1](./analysis.md#1-authored-hir-metrics)).
   - `--operands` MUST add each operand's share of a call's traffic to that call's
     annotation. It MUST NOT change the JSON report, which carries that split either

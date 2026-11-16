@@ -81,10 +81,11 @@ relation.
 ### 2.1 IR to isl conversion
 
 Every analysis service converts IR values to isl through the functions that
-[types §11](./types.md#11-isl-interoperability) owns, and every boundary carries
+[types §11](./types.md#11-isl-interoperability) owns. Every boundary carries
 what its parameters stand for in the `values` of its `access.Relation`
-([visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation)),
-both as one `IslParamValues` dictionary from isl parameter name to IR value.
+([visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation)).
+The service side and the boundary side each use an `IslParamValues`
+dictionary from isl parameter name to IR value.
 
 - constraints:
   - A service MUST compose converted values as isl objects. It MUST NOT render

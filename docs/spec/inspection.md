@@ -309,9 +309,9 @@ This TIR runtime extent query is distinct from HIR `tf.shape_of`.
 A rendering is one of two surfaces:
 
 **Canonical** — the rendering of a function with no `DimVar` parameter. It is
-also the rendering of a Module whose Functions have no `DimVar` parameter. The
-symbolic dimensions of that Module occur in round-trippable tensor, Mesh, or
-topology geometry. A canonical rendering MUST round-trip. Printing, importing,
+also the rendering of a Module that meets two conditions. Its Functions have no
+`DimVar` parameter. Its symbolic dimensions occur in round-trippable tensor,
+Mesh, or topology geometry. A canonical rendering MUST round-trip. Printing, importing,
 and the test-side structural comparison MUST agree over
 
 - Params: shape, dtype, storage, layout.attrs, layout.shape, layout.strides, mesh identity (topology name/size, layout shape, names)

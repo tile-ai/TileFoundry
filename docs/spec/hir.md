@@ -1240,7 +1240,7 @@ class InsertSlice(Op):
     offsets: Scalar
 ```
 - constraints:
-"""  - `update` has the same rank and dtype as `dst`. The window on each axis is
+  - `update` has the same rank and dtype as `dst`. The window on each axis is
     `[offset_axis, offset_axis + update.shape[axis])`.
   - A rank-1 `dst` accepts a bare rank-0 scalar offset. A rank-N `dst` requires
     an offset tuple whose length equals the rank.

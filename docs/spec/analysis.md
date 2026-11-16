@@ -428,7 +428,7 @@ class Footprint:
   - One window is defined, and no other: every enclosing loop's induction
     variable is held at its first iteration, over one wave of units. A Call states the footprint of its own boundaries. A Function states the union of every Call below it. The union is deduplicated per buffer before any byte count.
     A `LoopRegion` MUST NOT carry a footprint.
-  - A loop start MAY depend on a unit coordinate. A loop held at its first iteration MUST be constrained to that start expression. It MUST NOT be constrained to a constant. The reached range then varies with the coordinate.
+  - A loop start MAY depend on a unit coordinate. Hold such a loop at its first iteration with that start expression. The held loop MUST NOT be constrained to a constant. The reached range then varies with the coordinate.
   - A unit coordinate MUST be eliminated by union over the wave, never by taking
     the largest single unit's count. The two differ whenever units reach
     different addresses.
@@ -740,7 +740,6 @@ of all stage peaks and of a whole-Function live-byte scan of values that no
 At each event, `rmem` counts a root once, with its greatest live member span.
 Window occupancy and persistent bytes at `gmem` and `smem` MUST count the union
 of live physical address intervals. A repeated callee region reports the maximum
-across visits.
 across visits.
 
 ```python

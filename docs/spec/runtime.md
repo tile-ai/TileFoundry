@@ -600,7 +600,8 @@ def draw_tensor(
     the declaration ([§1.3](#13-runtimedecoratorpy)).
 
 An `alias` entry renames one path *segment* or *leaf* **within the current
-scope**. The caller's already-accumulated prefix is joined onto it. The lookup order is
+scope**. The resolved path is the caller's already-accumulated prefix, then the
+resolved relative name. The lookup order is
 a path-qualified key (`f"{prefix}{name}"`) first, then a bare `name` entry,
 then identity (`f"{prefix}{name}"` unchanged). A bare entry therefore serves
 every instance at that level uniformly (e.g. `{"gamma_kv": "kv_norm.weight"}`

@@ -501,8 +501,8 @@ def equals_mesh_scope(mesh: Mesh, current: Mesh) -> bool:
     coalescing direction to leave one mode with stride one. Symbolic interval bounds MUST use the
     conservative dimension range of their difference. For an unproved bound,
     it MUST return False.
-  - A compile-time constant does not enter the IR graph. It describes the
-    device domain, not a tensor layout. A slice never becomes an IR/SSA value.
+  - A Mesh is a compile-time constant. A Mesh does not enter the IR graph.
+    It describes the device domain, not a tensor layout. A slice never becomes an IR/SSA value.
 
 Field meanings:
 

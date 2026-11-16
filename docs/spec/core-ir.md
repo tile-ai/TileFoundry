@@ -712,8 +712,7 @@ no swizzle, state `pattern.Swizzle(0, 4, 3)`; its zero-bit variant also matches
 an identity (`None`) inner. The three swizzle fields may themselves be
 patterns.
 `pattern.Mesh` rejects any supplied layout predicate that exposes
-`per_mode=False`, because each topology uses its own numbering space; an
-empty predicate table is allowed. It never changes the supplied pattern
+`per_mode=False`. An empty predicate table is allowed. It never changes the supplied pattern
 implicitly. Predicates on a surrounding `pattern.ComposedLayout` instead
 check the whole matched layout. Execution-mesh declarations may admit leading
 modes with `pattern.Star`; operand mesh declarations keep their exact axis

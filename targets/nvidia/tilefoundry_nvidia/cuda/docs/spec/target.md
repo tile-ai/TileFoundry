@@ -120,7 +120,6 @@ class Target(target.Target):
 
 A target's topology levels define the names a program may declare. The program hierarchy
 stops at those levels. Thread mesh layouts hold warp, lane, and warpgroup structure.
-thread mesh layouts.
 
 - constraints:
   - `get_facts(TopologyFacts).topologies` MUST name `("gpu", "cta", "thread")`,

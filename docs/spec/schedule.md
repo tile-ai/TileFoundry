@@ -56,8 +56,9 @@ boundary:
 
 Automatic selection and explicit `tf.schedule` use the same instruction
 lowering and emission path. An instruction declaring an `atom` uses the
-participant and fragment geometry of that atom. Other instructions issue whole
-when their write access maps collapse an axis Split across participants.
+execution mesh and fragment geometry of that atom. Other instructions issue whole
+when their write access maps collapse an axis Split across the units of the
+execution mesh.
 Otherwise, single-issue verification uses local fragments. Candidate matching
 projects logical Split axes when that projection is possible. If factored splits
 have no local logical box, it compares whole types instead.

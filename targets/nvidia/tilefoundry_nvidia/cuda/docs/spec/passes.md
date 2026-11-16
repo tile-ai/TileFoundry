@@ -117,7 +117,7 @@ def insert_default_host_entry(module: Module) -> Module:
     then one destination per tensor result leaf in tuple leaf order.
     A destination keeps the shape and dtype of the leaf, with GMEM storage and
     no layout. A destination is named `out`, else its first free `_1`, `_2`, ...
-    suffix. The declared names are reserved. A unit result adds no destination.
+    suffix. The declared names are reserved. A void result adds no destination.
     The pass MUST reject any other result type. The pass checks these when it
     builds the `Launch`. Later stages read them and do not derive them again.
     The entry's IR name is `<fn.name>_host`, with the same suffix rule on

@@ -304,8 +304,8 @@ conditions = "No validated number."
     hardware document. They are compiler inputs, not immutable hardware truth.
     A fixed-wave parallel capacity is a policy, even when its current value
     equals a device count. The `owner` of an explicit memory level is
-    different. It MUST name one topology from the Target's hardware vocabulary.
-    An allocation shared by the whole device MUST use the reserved word `target`.
+    different. It MUST name one topology from the Target's hardware vocabulary,
+    or the reserved word `target` for a whole-device allocation.
     The document states that ownership directly and MUST NOT encode it as an
     absent value.
   - Only explicit memory levels MUST record an owner. Implicit caches receive no

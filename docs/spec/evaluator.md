@@ -292,9 +292,9 @@ def common_placements(*tensors: ShardTensor) -> tuple[Placement, ...]: ...
 - A global `Partial` input that meets a local view MUST be refused. Its reduced
   value no longer holds the parts that each placement would combine
   ([runtime §1.10](./runtime.md#110-shardtensor)).
-- A handler MUST read a size on a piece from the piece or from `local_type` of
-  a type. The handler MUST NOT read that size from an attribute that states a
-  global shape. A
+- A handler that reads the size of a piece MUST read it from the piece or
+  from `local_type` of a type. Such a handler MUST NOT read that size from an
+  attribute that states a global shape. A
   mean over a split axis holds, on each placement, its sum over the global
   count, read from the input's global type.
 

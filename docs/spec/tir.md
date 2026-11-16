@@ -277,9 +277,9 @@ class Sync(Op):
 
 - `mesh` is the (possibly sliced) mesh `Sync` synchronizes. `T.sync(m)`
   synchronizes the whole mesh; `T.sync(m[1:3, :])` synchronizes the constant
-  sub-mesh selected by the slice.
+  sliced mesh that the slice selects.
 - A **mesh slice is a compile-time descriptor.** The parser evaluates `m[...]`
-  via `Mesh.__getitem__` into a sub-`Mesh`. Its `layout` is a
+  via `Mesh.__getitem__` into a sliced `Mesh`. Its `layout` is a
   **`ComposedLayout`** that records the sub-box of units (the affine "mesh
   scope" case `image(c) = offset + outer(c)`). `outer` holds the selected per-axis extents
   over the parent strides. `offset` holds the slice origin (linear thread index of
@@ -828,8 +828,8 @@ block_y, block_z, *forwarded_args)`:
   arguments.
 - **forwarded args**: the remaining `args` bind the callee's parameters, one
   each, in declaration order. Each MUST be a tensor. For a `PrimFunction`
-  callee, the count MUST equal the parameter count. Each type MUST equal its
-  parameter's type. An extent that the callee's types leave open is not
+  callee, the count MUST equal the parameter count. For that callee, each type
+  MUST equal its parameter's type. An extent that the callee's types leave open is not
   among them. It travels with the pointer that the convention expands that
   parameter into ([codegen §4.4](./codegen.md#44-signatures)). The host reads it off the
   tensor that it holds.

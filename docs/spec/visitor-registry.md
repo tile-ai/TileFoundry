@@ -154,8 +154,8 @@ class Registry[Key, Value]:
 
 - constraints:
   - `register` MUST raise `RuntimeError` on a second registration of the same
-    key. Subclasses do not inherit a parent's handler. Each concrete
-    `Op` / `Stmt` subclass MUST register itself.
+    key. Subclasses do not inherit a parent's handler. A concrete
+    `Op` / `Stmt` subclass that needs a handler MUST register its own handler.
   - `decorator` returns the `register(key)` decorator form for a registry keyed
     by a class alone. An instance with a wider key states its own registration
     function ([§6](#6-instance-3--codegen)).

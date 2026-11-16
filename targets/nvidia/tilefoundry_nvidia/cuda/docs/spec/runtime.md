@@ -412,7 +412,6 @@ layouts without recovering the source tensor.
 The entry takes tensors. It reads the transfer shape, the strides, the element types, the share that this unit owns and the move width from the operand `ShardLayout`s.
 
 - constraints:
-  - **The move width is a property of the layouts, not of the call.** It is the
   - **The move width is a property of the layouts, not of the call.** The move width is the largest power of two over which both operands run contiguously. A cap keeps the move of each side within 16 bytes. The width is `max_common_vector` of the two *projected* layouts. [§2.4.1](#241-tensor_viewshard_tensorcuh) derives those layouts statically from the shard layout and the mesh.
   - A dtype change does not force the width to one element. The wide load still holds, and the conversion happens on the way out. The cap follows the wider of the two element types.
   - Register fragments take the element path. Addressing `&frag(i)` under a loop that the compiler cannot unroll spills the fragment to local memory. That costs more than the wider move saves.

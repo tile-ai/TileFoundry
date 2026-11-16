@@ -407,7 +407,7 @@ class CallableSignature(Signature):
     `type.shape` carries (e.g. a `DimVar`). There is no separate dynamic-dim
     sentinel. `dynamic_axes` are the axes it carries
     as a `DimVar`, and only those extents travel with the pointer.
-  - a program id, a program-meta block and a launch argument have no IR
+  - a unit id, a placement block and a launch argument have no IR
     counterpart: they are hidden parameters. Each is its own class, so whoever
     writes one out dispatches on the type instead of reading the name.
   - one compiled function has three C++ conventions — the host entry, the

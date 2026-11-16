@@ -489,7 +489,7 @@ class MBarrierArriveExpectTx(Op):
     different count never completes, and that failure presents as a hang rather
     than as a wrong value.
   - This op is not paired with a `CopyAsyncBulk`, which declares its own bytes on the
-    instruction that issues the copy. It belongs to a producer that issues the copy
+    instruction that issues the copy. It belongs to a producer that executes the copy
     itself.
   - It requires the target's `mbarrier.expect_tx` capability.
   - Lowers to `mbarrier.arrive.expect_tx.shared::cta.b64`, and discards the arrival
