@@ -31,10 +31,11 @@ class CapturedInsertUpdate:
                             "smem",
                         ],
                     )
-                    row = tf.schedule(
-                        (x, row_dst, idx[r : r + 1]),
-                        op=T.copy_async(fill=0),
-                    )
+                    with threads[0:1] as _writer:
+                        row = tf.schedule(
+                            (x, row_dst, idx[r : r + 1]),
+                            op=T.copy_async(fill=0),
+                        )
                     with threads[:] as _carry:
                         tile = tf.insert_slice(tile, row, (r, 0))
                 result = tile

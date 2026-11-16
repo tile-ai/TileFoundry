@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from tests.core._corpus import case
 from tests.nvidia.cuda.analysis.sync_cases import FIXTURES, GEMM, SyncCase, _analyzed
 from tests.nvidia.cuda.schedule._support import _RetainedStatements
-from tilefoundry.ir import expr, tir
+from tilefoundry import analysis
+from tilefoundry.ir import core, expr, tir, types
 from tilefoundry.ir.tir import memory
 from tilefoundry.passes import transforms
 from tilefoundry.schedule import finalize
@@ -27,6 +29,22 @@ def _lowered(module):
 
 def _operations(module):
     return [type(op) for op in _lowered(module).operations]
+
+
+class _Issuers(core.StmtVisitor[None]):
+    """Each operation of a lowered body with the mesh of the innermost scope around it."""
+
+    def __init__(self):
+        self.meshes = []
+        self.issued = []
+
+    def visit_MeshScope(self, stmt, ctx=None):
+        self.meshes.append(stmt.mesh)
+        self.visit(stmt.body)
+        self.meshes.pop()
+
+    def visit_Evaluate(self, stmt, ctx=None):
+        self.issued.append((stmt.callable, self.meshes[-1] if self.meshes else None))
 
 
 def _loop_operations(module):
@@ -174,6 +192,77 @@ class WgmmaRegisterOperand(SyncCase):
             sync.WgmmaCommitGroup,
             sync.WgmmaWaitGroup,
         ]
+
+
+@case
+class OneThreadCpAsync(SyncCase):
+    """One thread's read of its own ``cp.async`` row takes a commit and a wait, and no barrier."""
+
+    path: Path = FIXTURES / "analysis/sync_one_thread_cp_async.py"
+
+    def guard(self, state, problems):
+        operations = _operations(state)
+        start = operations.index(tir.async_copy.CopyAsync)
+        assert operations[start : start + 4] == [
+            tir.async_copy.CopyAsync,
+            tir.async_copy.CpAsyncCommit,
+            tir.async_copy.CpAsyncWait,
+            memory.Copy,
+        ]
+        assert tir.sync.Sync not in operations
+
+
+@case
+class OneWriterRow(SyncCase):
+    """One thread lands each row through ``cp.async`` and every thread reads it.
+
+    The commit and the wait run over the whole mesh, which holds the writer, before the barrier.
+    """
+
+    path: Path = FIXTURES / "schedule/hir/staged_nested.py"
+
+    def guard(self, state, problems):
+        result = _analyzed(state)
+        issuers = _Issuers()
+        issuers.visit(finalize(result).lookup(result.function.name).body)
+        kinds = (
+            tir.async_copy.CopyAsync,
+            tir.async_copy.CpAsyncCommit,
+            tir.async_copy.CpAsyncWait,
+            tir.sync.Sync,
+            memory.Copy,
+        )
+        issued = [(type(op), mesh) for op, mesh in issuers.issued if isinstance(op, kinds)]
+        start = [kind for kind, _ in issued].index(tir.async_copy.CopyAsync)
+        assert [kind for kind, _ in issued[start : start + 5]] == list(kinds)
+        (_, writer), (_, commit), (_, wait) = issued[start : start + 3]
+        assert isinstance(writer.layout, types.ComposedLayout)
+        assert types.size(types.levels(writer)[0]) == 1
+        assert commit == wait and types.size(types.levels(wait)[0]) == wait.topologies[0].size
+
+
+@case
+class OneWriterFill(SyncCase):
+    """Lowering fills unsplit shared memory from one thread, and the family accepts it for that.
+
+    Both take the writer from ``transfer_meshes``. Without its one-thread slice every
+    thread of the half fills the whole tile, and the family refuses the program.
+    """
+
+    path: Path = FIXTURES / "schedule/hir/mesh_zeros_submesh.py"
+
+    def guard(self, state, problems):
+        result = _analyzed(state)
+        issuers = _Issuers()
+        issuers.visit(finalize(result).lookup(result.function.name).body)
+        (writer,) = [mesh for op, mesh in issuers.issued if isinstance(op, memory.Fill)]
+        assert isinstance(writer.layout, types.ComposedLayout)
+        assert types.size(types.levels(writer)[0]) == 1
+        everyone = patch(
+            "tilefoundry.passes.transforms.convert_hir_to_tir.first_thread", lambda enclosing, topologies: None
+        )
+        with everyone, pytest.raises(analysis.Error, match="two threads that issue Fill tensor write one shared"):
+            _analyzed(self.load())
 
 
 @case

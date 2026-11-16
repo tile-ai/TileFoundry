@@ -27,13 +27,15 @@ class WGMMA_B_NK:
                     (64, 16), "bf16",
                     Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), "smem",
                 ])
-                lhs = tf.schedule((a, lhs_dst), op=T.copy())
+                with threads[0, 0, 0] as _writer:
+                    lhs = tf.schedule((a, lhs_dst), op=T.copy())
                 rhs_kn = tf.transpose(weight, (1, 0))
                 rhs_dst = tf.empty(Tensor[
                     (16, 16), "bf16",
                     Layout(((2, 8), (2, 8)), ((64, 1), (128, 8))), "smem",
                 ])
-                rhs = tf.schedule((rhs_kn, rhs_dst), op=T.copy())
+                with threads[0, 0, 0] as _writer:
+                    rhs = tf.schedule((rhs_kn, rhs_dst), op=T.copy())
                 result = tf.schedule(
                     (acc, lhs, rhs),
                     op=T.tiled_mma(atom=T.cuda.sm90.Wgmma(

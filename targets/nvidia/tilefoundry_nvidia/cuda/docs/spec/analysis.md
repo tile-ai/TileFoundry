@@ -137,7 +137,11 @@ class SyncPlanMetadata(IRMetadata):
     its lexical scope's mesh when that is None. That mesh MUST lie within its
     lexical scope's mesh, as `within_scope` decides. The family places steps in
     the innermost scope that holds both accesses, before the child that holds
-    the later one. A barrier runs over the mesh of that scope. That mesh MUST
+    the later one. A barrier runs over the mesh of that scope. When that mesh
+    holds one thread, no barrier runs: the thread's own program order orders
+    its plain accesses. Only the barrier is left out. The commit and wait of a
+    group in flight and a proxy fence still run, since an asynchronous write
+    reaches even its issuing thread only through them. Otherwise the mesh MUST
     be a thread mesh that `classify` supports. Every loop around the position
     MUST have bounds that every thread sees alike. A barrier accepts constants,
     kernel parameters and their captures, and induction variables of such
@@ -191,6 +195,28 @@ class SyncPlanMetadata(IRMetadata):
     | they reach a common element and a renamed name loses its source | refused: they may reach one element |
 
     A retained call's relations are unknown.
+  - **Threads.** No step orders the threads of one issue. An instruction that
+    states no execution mesh of its own is issued by every thread of the mesh
+    it runs on, each on the operands as that thread sees them. A retained
+    call, an instruction with a required execution mesh, and one that takes
+    its execution mesh as an attribute, as `CopyAsyncTensor` does, state for
+    themselves which threads issue. For every other action, `threads.py` pairs
+    each shared memory write with itself the way **CTAs** pairs global
+    accesses, with thread coordinates in place of CTA coordinates: the second
+    side renames every thread coordinate, and only the sliced thread meshes
+    around the action keep a thread from issuing it. A copy or fill that
+    lowering adds runs in the regions `transfer_meshes` gives it. When no
+    operand's mesh splits the threads and the destination is in shared
+    memory, the innermost of them is a slice holding the first thread of the
+    enclosing mesh, and it counts as a slice around the action. A write needs
+    no relation when a layout splits it over a mesh whose positions are
+    exactly the threads that issue it, those every thread slice around it
+    holds, or every thread of the CTA without one. That layout is the
+    destination's own or, for a `Copy`, that of the one operand
+    that splits every thread axis, since `Copy` projects a plain operand
+    through it. Two different threads that reach one element are otherwise
+    decided by the rows of the **CTAs** table. The family checks **Threads**
+    after **CTAs**.
   - **Word users.** The word of warp `k` has one user, thread `W * k`: a
     `CopyAsyncTensor` is issued by whole aligned warps, as its execution mesh
     pattern states ([tir](./tir.md#copyasynctensor)), so its first issuing
@@ -198,7 +224,7 @@ class SyncPlanMetadata(IRMetadata):
   - **Refusals.** The family raises `analysis.Error` when an action or a barrier
     breaks a MUST of **Units** or **Placement**. It also raises it for a loop
     whose state does not settle within its limit, and for a pair that
-    **CTAs** refuses.
+    **CTAs** or **Threads** refuses.
 
 ## 2. Completion registry
 
