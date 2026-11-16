@@ -170,7 +170,7 @@ class Registry[Key, Value]:
 Each registry is a module-level `Registry` owned by one package, which also
 exports its registration function. A registry is declared where its question is
 answered and a handler is registered where its key is owned
-([code-organization §0.3](./code-organization.md#03-structure-rules)); no
+([develop Functions](../develop.md#functions)); no
 registry lives in a package that depends on the Ops it dispatches.
 
 | Registry | Key | Handler | Owner |

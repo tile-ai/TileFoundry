@@ -132,6 +132,11 @@ path returns the next `Dialect`; otherwise lookup MUST raise `AttributeError`.
 `dir()` and `__all__` MUST list only the current layer's records and immediate
 child namespaces.
 
+The `.pyi` stubs reflect the dialect registry, including exported types and
+nested namespaces. After changing registrations, regenerate them with
+`python -m tilefoundry.dsl regen`. The `tf/__init__.pyi` and `T/__init__.pyi`
+stubs it produces are gitignored.
+
 Registration (`register_op`, `register_type`, aliases, collisions) is specified
 in [core-ir §2.3](./core-ir.md#23-op); category organizes documentation, not
 lookup. Parser and printers MUST use the same alias records; printers select the

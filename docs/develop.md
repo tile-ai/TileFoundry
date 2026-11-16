@@ -194,6 +194,34 @@ The terms are in [shard §0](./spec/shard.md#0-terms).
 - N6: The parameter that holds a `valuation.Context` is `ctx`. `frame` is a Python stack frame.
 - N7: Lowering issues an instruction. A unit executes it.
 - A review checks N1–N7 at the Final Gate of each plan.
+- S1–S11 and C4–C6 in this section bind the Python sources in the scope of [code-organization §4](spec/code-organization.md#4-checkers), with its exceptions.
+- S10: Classes are `CapWords`; functions, methods and variables are `snake_case`; constants are `UPPER_CASE`; an exception class name ends in `Error`. Method names dispatched by reflection on a class name (`<prefix>_<ClassName>`: `visit_*`, `visit_leaf_*`, `print_*` and the pattern printer's readers) and the DSL's authored names (`S`, `P`, `B`, …) are the `ignore-names` of `pyproject.toml`. (checker: ruff `N`)
+- C4: No name starts with `_`: files, classes, functions, methods, attributes, variables, parameters and import aliases. Dunder names and a lone `_` are exempt. (checker: `scripts/code_organization_lint.py`)
+- S11: A public class or function name does not repeat its package's name: the classes and functions of package `p`, and the names `p` exports, do not contain `p`, unless the name is exactly `p` (`cost.Cost`). Module file names are not constrained. (checker: `scripts/code_organization_lint.py`)
+- `ir/types/layout_algebra.py` has a mechanically checkable public surface: every name in its `__all__` MUST have the same name in CuTe, with `is_inverse_projectable` as its sole exception. Python's missing overload dispatch requires the separately named `supports_composition`, `supports_inverse`, and `inverse` adapters in `swizzle_layout.py`; `NotProjectableError` in `layout.py` is the named Python diagnostic needed by composed application and inversion. These are explicit exceptions, not a license for unrelated helpers in the algebra modules.
+
+### Data
+
+- S8: A class that derives from a frozen dataclass and declares fields of its own is itself `@dataclass(frozen=True)`. A frozen dataclass's `__post_init__` writes only through `object.__setattr__(self, "<own field>", ...)`. (checker: `scripts/code_organization_lint.py`)
+- C5: An attribute, or an element of an attribute, is written only through the `self` / `cls` of the method that writes it. No `setattr`, `delattr`, `object.__setattr__`, `vars(x).update` or `x.__dict__` change is applied to another object; a method may change a copy of its own instance that it just made with `copy.copy(self)`. (checker: `scripts/code_organization_lint.py`)
+- C6: No `global`. A module-level container is immutable (`tuple`, `frozenset`, `MappingProxyType`); `__all__` is exempt. Mutable runtime state lives in a class instance and is written by that instance's own methods (C5). (checker: `scripts/code_organization_lint.py`)
+- S7: A `@property` body is not only `return self.<field>`; a setter body is not only `self.<field> = value`. (checker: `scripts/code_organization_lint.py`)
+
+### Construction
+
+- S2: `@classmethod` is used only for a named constructor: `from_<source>`, or `create` for a factory protocol whose subclass decides the implementation. (checker: `scripts/code_organization_lint.py`)
+- S9: A named constructor that uses only its class's layer and lower ones is a `@classmethod` `from_<source>` (S2). One that uses a higher layer is a module function `make_<name>` whose return type is defined in another module. (checker: `scripts/code_organization_lint.py`; the layer half by C2)
+- S9 recognizes its subject by name (`make_*`), so a rename evades it.
+
+### Functions
+
+- S1: No `@staticmethod`; write a module function. (checker: `scripts/code_organization_lint.py`)
+- S4: No nested function or class, unless it closes over a local of the enclosing function other than `self` / `cls`. (checker: `scripts/code_organization_lint.py`)
+- S5: No custom metaclass, `__del__`, `__import__` or `importlib.import_module`. A plugin loading point that imports by name carries a per-file ignore ([code-organization §4](spec/code-organization.md#4-checkers)). `getattr` / `hasattr` are allowed for dispatch. (checker: `scripts/code_organization_lint.py`)
+- S6: A parameter default is neither a mutable value nor a function call. (checker: ruff `B006`, `B008`)
+- Data lives in the low layer and behaviour in the high layer. A lower layer calls a higher implementation through `services` ([code-organization §3](spec/code-organization.md#3-imports-and-exports)).
+- A key with no registration raises `MissingHandlerError` where it is looked up; the tests cover the registrations. A registration is written next to its key's owner: an Op's registrations in the Op's own module, a Target's in that Target's package, a core HIR-to-TIR pairing in the `schedule` package.
+- A walk over Exprs, Stmts or types uses a `Functor`, `Visitor` or `Mutator` of [visitor-mutator](spec/visitor-mutator.md), `TypeVisitor` and `TypeMutator` included.
 
 ## 6. Writing a target
 

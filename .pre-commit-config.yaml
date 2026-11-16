@@ -59,7 +59,7 @@ repos:
         entry: python scripts/comment_hygiene_lint.py
         language: system
         files: \.(py|h|hpp|cuh|cu|cpp|cc)$
-      # docs/spec/code-organization.md §0. Both read the whole tree: an import or a
+      # docs/spec/code-organization.md and docs/develop.md (Principles). Both read the whole tree: an import or a
       # registration is checked against modules that were not staged.
       - id: code-organization
         name: code-organization
