@@ -575,8 +575,8 @@ def ceildiv(a, b) -> Expr:
     symbolic merely by participating in that arithmetic.
   - `ceildiv(a, b)` composes add, subtract and floor-divide; it is not a distinct Op.
   - `substitute_dims` and `canonicalize_dims` take any of the eight type
-    classes and return another value as it is. They are a `types.TypeMutator`
-    each. `canonicalize_dims` leaves a `TensorType` or `TupleType` with no
+    classes and return another value as it is. Each uses a
+    `types.TypeMutator` subclass. `canonicalize_dims` leaves a `TensorType` or `TupleType` with no
     `DimVar` unchanged, but normalizes a `Topology`, `Layout` or `Mesh` even
     when every entry is a constant.
   - `is_dimension`, `minimum`, `maximum` and `ceildiv` live in

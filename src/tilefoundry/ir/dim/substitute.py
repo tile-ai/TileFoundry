@@ -187,5 +187,5 @@ def checked(variable: expr.DimVar, extent: int) -> int:
 
 
 def has_symbolic_dims(value: object) -> bool:
-    """Whether anything reachable from *value* is not a static dimension."""
+    """Whether a DimVar is reachable through the supported types and dimension operations."""
     return bool(vars_by_name(value))
