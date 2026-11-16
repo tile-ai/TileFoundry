@@ -209,7 +209,7 @@ def call_traffic(
     crossing_whole: dict[str, cost.TrafficBytes] = {}
     crossing_per_unit: dict[str, dict[str, cost.TrafficBytes]] = {}
     operands: tuple[cost.TrafficBytes, ...] = ()
-    for unit, ctx in ((None, whole), *locals_by_unit.items()):
+    for topology, ctx in ((None, whole), *locals_by_unit.items()):
         try:
             cost_value = cost.Visitor().visit(node, ctx)
         except (ValueError, expr.VerifyError) as error:
@@ -220,18 +220,18 @@ def call_traffic(
         )
         by_memory_level, positional = movement(node, cost_value, ctx, type_list, scope)
         for memory_level, moved in by_memory_level:
-            if unit is None:
+            if topology is None:
                 storage_whole[memory_level] = moved
             else:
-                storage_per_unit.setdefault(memory_level, {})[unit] = moved
+                storage_per_unit.setdefault(memory_level, {})[topology] = moved
         for boundary, moved in cost_value.sent:
-            if unit is not None and finer_than(unit, boundary, locals_by_unit):
+            if topology is not None and finer_than(topology, boundary, locals_by_unit):
                 continue
-            if unit is None:
+            if topology is None:
                 crossing_whole[boundary] = moved
             else:
-                crossing_per_unit.setdefault(boundary, {})[unit] = moved
-        if unit is None:
+                crossing_per_unit.setdefault(boundary, {})[topology] = moved
+        if topology is None:
             operands = positional
     units = scope.mesh_units if scope is not None else lambda _: 1
     counted = counted or next(iter(locals_by_unit))
@@ -279,11 +279,11 @@ def occurrence_shares(
     """
     entries = []
     for name in sorted({*whole, *per_unit}):
-        unit = counted if counted is not None else name
-        if unit not in topologies:
-            raise Error(f"memory: counted topology {unit!r} is not declared")
-        moved = per_unit.get(name, {}).get(unit, cost.TrafficBytes())
-        factor = units(unit)
+        topology = counted if counted is not None else name
+        if topology not in topologies:
+            raise Error(f"memory: counted topology {topology!r} is not declared")
+        moved = per_unit.get(name, {}).get(topology, cost.TrafficBytes())
+        factor = units(topology)
         entries.append(
             (
                 name,
@@ -291,7 +291,7 @@ def occurrence_shares(
                     logical_groups=(((), whole.get(name, cost.TrafficBytes())),),
                     total=cost.TrafficBytes(moved.read * factor, moved.write * factor),
                     per_unit=tuple(
-                        per_unit.get(name, {}).get(level, cost.TrafficBytes()) for level in topologies
+                        per_unit.get(name, {}).get(each, cost.TrafficBytes()) for each in topologies
                     ),
                 ),
             )
@@ -321,8 +321,8 @@ def account_shares(
                     Spread(
                         total=accounts.total.get(name, cost.TrafficBytes()),
                         per_unit=tuple(
-                            accounts.per_unit.get(name, {}).get(unit, cost.TrafficBytes())
-                            for unit in topologies
+                            accounts.per_unit.get(name, {}).get(topology, cost.TrafficBytes())
+                            for topology in topologies
                         ),
                     ),
                 )
@@ -358,9 +358,9 @@ def add_traffic(
         for name, spread in stated.kinds:
             accumulate_logical(into.groups, name, spread, ctx)
             accumulate_traffic(into.total, name, spread.total, repeats.loop_trips)
-            for unit, moved in zip(record.topologies, spread.per_unit, strict=False):
+            for topology, moved in zip(record.topologies, spread.per_unit, strict=False):
                 accumulate_traffic(
-                    into.per_unit.setdefault(name, {}), unit, moved, repeats.loop_trips
+                    into.per_unit.setdefault(name, {}), topology, moved, repeats.loop_trips
                 )
 
 
@@ -468,7 +468,7 @@ class MemoryVisitor(valuation.Visitor[None]):
                 call_traffic(
                     node,
                     replace(ctx, topology=None),
-                    {unit: replace(ctx, topology=unit) for unit in ctx.topology_names},
+                    {topology: replace(ctx, topology=topology) for topology in ctx.topology_names},
                     ctx.scope,
                     ctx.topology,
                 )

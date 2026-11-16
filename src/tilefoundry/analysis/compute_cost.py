@@ -149,19 +149,19 @@ def inflight_bytes(call: expr.Call, scope, tgt, level: str) -> int | None:
     many threads as the finest level allows when the program states none.
     """
     facts = tgt.get_facts(target.TopologyFacts)
-    unit = facts.parallel()
-    if unit is None or not facts.topologies:
+    parallel_topology = facts.parallel()
+    if parallel_topology is None or not facts.topologies:
         return None
     op = getattr(call.target, "op", call.target)
     if getattr(expr.schema_of(type(op)), "category", None) == "async":
         moved = expr.get_metadata(call, MemoryMetadata)
-        stage = None if moved is None else shares(moved.traffic.storage, moved.topologies, unit.name).get(level)
+        stage = None if moved is None else shares(moved.traffic.storage, moved.topologies, parallel_topology.name).get(level)
         slots = max((result_copies(scope.capture_root(arg)) for arg in call.args), default=1)
         return None if stage is None else stage.total_bytes * slots
     finest = facts.topologies[-1]
     threads = finest.max_logical_units
     if scope.mesh is not None and finest.name in {item.name for item in scope.mesh.topologies}:
-        threads = min(threads, scope.mesh_units(finest.name) // scope.mesh_units(unit.name))
+        threads = min(threads, scope.mesh_units(finest.name) // scope.mesh_units(parallel_topology.name))
     return None if threads is None else threads * 16
 
 
@@ -181,7 +181,7 @@ def call_cost_record(
         logical = cost.Visitor().visit(node, whole)
     except (ValueError, expr.VerifyError) as error:
         raise Error(str(error)) from None
-    for unit, local in locals_by_unit.items():
+    for topology, local in locals_by_unit.items():
         try:
             cost_value = cost.Visitor().visit(node, local)
         except (ValueError, expr.VerifyError) as error:
@@ -190,7 +190,7 @@ def call_cost_record(
         unit_other_ops = counts(cost_value.service)
         flops_by_unit.append(unit_flops)
         other_ops_by_unit.append(unit_other_ops)
-        if unit == (asked or next(iter(locals_by_unit))):
+        if topology == (asked or next(iter(locals_by_unit))):
             total_flops = tuple((name, value * units) for name, value in unit_flops)
             total_other_ops = tuple((kind, value * units) for kind, value in unit_other_ops)
     return ComputeCostMetadata(
@@ -298,8 +298,8 @@ def accumulate(
             ctx.widen(bounded)
     add_counts(ctx.flops, domain_values(record.flops, "total"), repeats.loop_trips)
     add_counts(ctx.other_ops, domain_values(record.other_ops, "total"), repeats.loop_trips)
-    for index, unit in enumerate(record.topologies):
-        held = ctx.by_unit.setdefault(unit, {"flops": {}, "other_ops": {}})
+    for index, topology in enumerate(record.topologies):
+        held = ctx.by_unit.setdefault(topology, {"flops": {}, "other_ops": {}})
         add_counts(
             held["flops"],
             ((name, spread.at(index)) for name, spread in record.flops.kinds),
@@ -342,7 +342,7 @@ class ComputeCostVisitor(valuation.Visitor[None]):
         if callee is None:
             record = call_cost_record(
                 node,
-                {unit: replace(ctx, topology=unit) for unit in ctx.topology_names},
+                {topology: replace(ctx, topology=topology) for topology in ctx.topology_names},
                 repeats.mesh_units,
                 replace(ctx, topology=None),
                 ctx.topology,
