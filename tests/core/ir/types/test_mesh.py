@@ -127,6 +127,34 @@ def test_separate_undoes_make_mesh() -> None:
     assert types.Mesh.from_meshes(*types.separate(mesh)) == mesh
 
 
+
+def test_offset_is_the_total_index_and_get_divides_it() -> None:
+    """One offset counts over every topology; only ``get`` divides it per topology."""
+    cta, thread = types.Topology("cta", 4), types.Topology("thread", 128)
+    sliced = types.Mesh.from_meshes(
+        types.Mesh((cta,), types.Layout((4,), (1,)), ("c",)),
+        types.Mesh((thread,), types.Layout((128,), (1,)), ("t",)),
+    )[1, 32:64]
+
+    assert types.offset(sliced) == 1 * 128 + 32
+    assert types.get(sliced, "cta") == types.Mesh(
+        (cta,), types.ComposedLayout(None, 1, types.Layout((1,), (1,))), ("c",)
+    )
+    assert types.get(sliced, "thread") == types.Mesh(
+        (thread,), types.ComposedLayout(None, 32, types.Layout((32,), (1,))), ("t",)
+    )
+    assert types.get(sliced, "gpu") is None
+
+
+def test_a_slice_counts_its_unit_ids_from_its_start() -> None:
+    """Unit ids are absolute in the topology; coords count from the slice start."""
+    mesh = types.Mesh((types.Topology("thread", 128),), types.Layout((128,), (1,)), ("t",))[16:48]
+
+    ids = [placement.ids["thread"] for placement in types.Placement.from_mesh(mesh)]
+    assert ids == list(range(16, 48))
+    assert [types.mesh_coords(mesh, (unit_id,)) for unit_id in (16, 23, 47)] == [(0,), (7,), (31,)]
+    assert types.mesh_coords(mesh, (None,)) == (None,)
+
 def test_mesh_refuses_a_repeated_topology_name() -> None:
     with pytest.raises(ValueError):
         types.Mesh(

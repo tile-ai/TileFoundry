@@ -62,7 +62,7 @@ def covered_by_scope(mesh: types.Mesh, current: types.Mesh) -> bool:
     scope = {
         getattr(topology, "name", topology): level_selection(layout, start)
         for topology, layout, start in zip(
-            current.topologies, types.layouts(current), types.starts(current)
+            current.topologies, types.layouts(current), map(types.offset, types.separate(current))
         )
     }
     return all(
@@ -70,7 +70,7 @@ def covered_by_scope(mesh: types.Mesh, current: types.Mesh) -> bool:
         and level_selection(layout, start)
         == scope[getattr(topology, "name", topology)]
         for topology, layout, start in zip(
-            mesh.topologies, types.layouts(mesh), types.starts(mesh)
+            mesh.topologies, types.layouts(mesh), map(types.offset, types.separate(mesh))
         )
     )
 

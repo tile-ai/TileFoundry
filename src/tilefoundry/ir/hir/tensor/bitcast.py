@@ -67,10 +67,8 @@ def address_points(layout, count: int, logical_shape: tuple):
         else:
             unit = tuple(
                 sorted(
-                    (topology.name, start + index)
-                    for topology, start, index in zip(
-                        layout.mesh.topologies, types.starts(layout.mesh), ids, strict=True
-                    )
+                    (topology.name, unit_id)
+                    for topology, unit_id in zip(layout.mesh.topologies, ids, strict=True)
                 )
             )
         local, offset = types.local_layout_and_offset(

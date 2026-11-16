@@ -219,7 +219,7 @@ def participant_frame(mesh):
         arranged = types.layouts(mesh)
     except (IndexError, TypeError, ValueError):
         return None
-    return types.starts(mesh), tuple(layout_algebra.coalesce(reverse(layout)) for layout in arranged)
+    return tuple(map(types.offset, types.separate(mesh))), tuple(layout_algebra.coalesce(reverse(layout)) for layout in arranged)
 
 
 def physical_frames_match(left: types.Mesh, right: types.Mesh) -> bool:

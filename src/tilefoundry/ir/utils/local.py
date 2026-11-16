@@ -127,12 +127,11 @@ def participant_frame(source: types.Mesh, required: types.Mesh) -> tuple[types.M
             f"mesh layout {source_shape} does not end in participant frame "
             f"{tuple(required_layout.shape)}"
         )
+    start = types.offset(types.get(source, types.topology_names(source)[-1]))
     return (
         types.Mesh(
             source.topologies[-len(required.topologies) :],
-            required.layout
-            if types.starts(source)[-1] == 0
-            else types.ComposedLayout(None, types.starts(source)[-1], required.layout),
+            required.layout if start == 0 else types.ComposedLayout(None, start, required.layout),
             required.names,
         ),
         dropped,

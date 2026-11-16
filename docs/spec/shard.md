@@ -448,8 +448,13 @@ def layouts(mesh: Mesh) -> tuple[Layout, ...]:
     ...
 
 
-def starts(mesh: Mesh) -> tuple[int, ...]:
-    """Decode each topology level's start from the index."""
+def offset(mesh: Mesh) -> int:
+    """Return the index of the first unit the mesh covers; 0 when it is not sliced."""
+    ...
+
+
+def get(value, key):
+    """Return one mode of a layout, or the mesh of one topology of a mesh."""
     ...
 
 
@@ -459,6 +464,16 @@ def within_scope(mesh: Mesh, current: Mesh) -> bool:
 ```
 
 - constraints:
+  - `offset(mesh)` MUST return the integer `ComposedLayout.offset` of a sliced
+    mesh and 0 for an unsliced mesh. It MUST refuse an offset that is not an
+    integer. It does not decode the offset per topology.
+  - `get(mesh, topology)` MUST return the single-topology mesh of that topology,
+    or `None` when the mesh does not name it. `get(layout, i)` is the CuTe mode
+    getter. Only `get` divides the total offset into one topology's unit id.
+  - To divide a nonzero offset, every topology inside the outermost one MUST
+    have a static positive size. The outermost size MAY be symbolic. `get` MUST
+    refuse an offset that it cannot divide. It MUST refuse a mesh of several
+    topologies whose slice has an inner transform.
   - Scope comparison MUST reduce each level's layout with
     `layout_algebra.filter(layout, major="row")`, retaining the level's start. Filtering
     removes shape-one and stride-zero modes and coalesces adjacent modes after
@@ -534,9 +549,9 @@ Mesh composition uses the following rules:
   that extent; symbolic extents are deferred until dimensions are bound. A
   level stating a run is already bounded by `Mesh.__getitem__` and is not
   checked again.
-- `separate(mesh)` is the inverse construction: it returns one single-level
-  `Mesh` per topology, with that level's layout, slice start, and share of
-  the axis names. It is exported as `types.separate`.
+- `separate(mesh)` is the inverse construction: it returns `get(mesh, topology)`
+  for each topology in order. Each result has that topology's layout, its own
+  offset, and its share of the axis names. It is exported as `types.separate`.
 
 HIR `MeshRegion` applies this composition only at its body boundary. Its `args`
 are evaluated in the enclosing scope and are not recomposed merely because the
@@ -616,9 +631,10 @@ class Placement:
     change identity while holding weights narrowed for the old one.
   - `ids` is keyed by level name; `unit_ids(topologies)` answers one id per
     ordered `Topology` by lookup. A level the mapping does not name is unfixed.
-  - `Placement.from_mesh(mesh)` lists every placement of a mesh: each level's ids
-    are the values of that level's layout. Its coordinates are
-    `mesh_coords` of those ids ([§7.6](#76-local_layout)).
+  - `Placement.from_mesh(mesh)` lists every placement of a mesh. Each id is a
+    unit id within its topology: the value of that topology's layout plus the
+    offset of `get(mesh, topology)`. Its coordinates are `mesh_coords` of those
+    ids ([§7.6](#76-local_layout)).
   - an unfixed level MUST be left undivided rather than read as `0`: the device
     chooses its own `cta` and `thread`.
   - a `Placement` is host-side execution context. It MUST NOT appear in a
@@ -1016,8 +1032,9 @@ def local_layout_and_offset(shard, tensor_shape, coord) -> tuple[Layout, int]: .
     by the row-major layout of the same modes
     ([runtime §1.10](runtime.md#110-shardtensor)).
   - `mesh_coords` turns per-level unit ids into mesh coordinates, as the
-    CUDA runtime's `mesh_coords(mesh, unit_ids())` does; a level whose id is
-    `None` leaves its axes `None`.
+    CUDA runtime's `mesh_coords(mesh, unit_ids())` does. It subtracts the offset
+    of each topology's `get` before it divides the id, as the runtime
+    `level_id` does. A level whose id is `None` leaves its axes `None`.
   - the host states `tensor_shape` and `ids`, which the device reads off its
     own layout and its hardware: [§7.1.1](#711-layoutshape) factors a split
     axis, so the layout's rank is not the tensor's, and a `Placement` may leave

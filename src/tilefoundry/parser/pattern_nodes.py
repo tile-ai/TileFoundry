@@ -4104,7 +4104,7 @@ class SelectionConstructionRule:
         if not isinstance(value, MeshSelection):
             return value
         assert value.outer is not None
-        start = types.starts(value.selection)[0]
+        start = types.offset(value.selection)
         whole = start == 0 and types.size(value.outer) == value.selection.topologies[0].size
         mesh = runtime.Mesh(
             value.selection.topologies,

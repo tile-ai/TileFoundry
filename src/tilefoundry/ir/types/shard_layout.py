@@ -18,7 +18,7 @@ from .layout import (
     unflatten,
 )
 from .layout_algebra import coalesce, slice_and_offset
-from .mesh import Mesh, layouts, separate
+from .mesh import Mesh, layouts, offset, separate
 from .stride import compact_row_major, crd2idx, idx2crd
 
 __all__ = [
@@ -359,7 +359,7 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
     profile = compatible_profile(tuple(shape), tensor_shape)
     grouped = unflatten(Layout(tuple(shape), tuple(strides)), profile)
     c = int_tuple_unflatten(tuple(fixed), profile)
-    sliced, offset = slice_and_offset(
+    sliced, start = slice_and_offset(
         c, replace(address, outer=grouped) if isinstance(address, ComposedLayout) else grouped
     )
     local_shape = tuple(
@@ -409,7 +409,7 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
             for axis in remaining
         )
         sliced = ShardLayout(sliced, attrs, frame)
-    return sliced, services.normalize_dim(offset)
+    return sliced, services.normalize_dim(start)
 
 
 def local_readback(layout):
@@ -431,16 +431,18 @@ def local_readback(layout):
 def mesh_coords(mesh: Mesh, ids: tuple[int | None, ...]) -> tuple[int | None, ...]:
     """Each mesh axis's coordinate under per-level unit ids; None where a level is unfixed.
 
-    The host side of the CUDA runtime's ``mesh_coords(mesh, unit_ids())``.
+    The host side of the CUDA runtime's ``mesh_coords(mesh, unit_ids())``. A unit id
+    counts from the start of its topology, so each topology's own offset comes off
+    first, as the runtime's ``level_id`` does.
     """
     coords = []
-    for index, layout in enumerate(layouts(mesh)):
+    for index, (layout, part) in enumerate(zip(layouts(mesh), separate(mesh), strict=True)):
         flat = flatten(layout)
         unit_id = ids[index] if index < len(ids) else None
         coords.extend(
             (None,) * len(flat.shape)
             if unit_id is None
-            else idx2crd(unit_id, flat.shape, flat.strides)
+            else idx2crd(unit_id - offset(part), flat.shape, flat.strides)
         )
     return tuple(coords)
 
@@ -452,8 +454,8 @@ def local_layout_and_offset(shard: ShardLayout, tensor_shape: tuple, coord: tupl
     """
     if any(not isinstance(size, int) or isinstance(size, bool) for size in tensor_shape):
         raise ValueError("local offset requires concrete bound tensor sizes")
-    layout, offset = local_layout(shard, tensor_shape, coord)
-    return local_readback(layout), offset
+    layout, start = local_layout(shard, tensor_shape, coord)
+    return local_readback(layout), start
 
 
 def normalize_layout(layout: LayoutBase) -> LayoutBase:
@@ -476,8 +478,8 @@ def normalize_layout(layout: LayoutBase) -> LayoutBase:
 def domain_offset(coord, layout, shape):
     """CuTe domain_offset: move the pointer, or a composed layout's offset."""
     if isinstance(layout, ComposedLayout):
-        _, offset = domain_offset(coord, layout.outer, shape)
-        return ComposedLayout(layout.inner, services.normalize_dim(layout.offset + offset), layout.outer), 0
+        _, start = domain_offset(coord, layout.outer, shape)
+        return ComposedLayout(layout.inner, services.normalize_dim(layout.offset + start), layout.outer), 0
     primitive = layout.layout if isinstance(layout, ShardLayout) else layout
     grouped = unflatten(flatten(primitive), compatible_profile(primitive.shape, shape))
     return layout, crd2idx(tuple(coord), grouped.shape, grouped.strides)

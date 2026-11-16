@@ -19,7 +19,7 @@ from itertools import product
 
 from .int_tuple import product as int_tuple_product
 from .layout import apply
-from .mesh import Mesh, layouts, topology_names
+from .mesh import Mesh, layouts, offset, separate, topology_names
 from .topology import Topology
 
 __all__ = ["Placement"]
@@ -61,10 +61,16 @@ class Placement:
 
     @classmethod
     def from_mesh(cls, mesh: Mesh) -> "tuple[Placement, ...]":
-        """Every placement of *mesh*: each level's unit ids are its layout's values."""
+        """Every placement of *mesh*: each unit id is its layout's value plus its offset."""
         mesh_layouts = layouts(mesh)
+        starts = tuple(map(offset, separate(mesh)))
         names = topology_names(mesh)
         return tuple(
-            cls(dict(zip(names, map(apply, mesh_layouts, at), strict=True)))
+            cls(
+                {
+                    name: apply(level, index) + start
+                    for name, level, index, start in zip(names, mesh_layouts, at, starts, strict=True)
+                }
+            )
             for at in product(*(range(int_tuple_product(level.shape)) for level in mesh_layouts))
         )
