@@ -150,9 +150,16 @@ def local_type_of(
         The recursively projected type.
     """
     ...
+
+
+def topology_level(topology: str, topologies: tuple[Topology, ...]) -> int:
+    """Return the position of *topology* in the Module's *topologies*, coarsest first."""
+    ...
 ```
 
 - constraints:
+  - `topology_level` MUST refuse a name that *topologies* does not declare and
+    *topologies* that repeat a name. `(cta, thread)` gives cta 0 and thread 1.
   - With `topology`, `local_type_of` MUST recursively project every tensor
     leaf and rebuild `TupleType` structure. A `Split` at `topology` or a
     coarser topology level MUST divide; a finer `Split`, `Broadcast`, and
