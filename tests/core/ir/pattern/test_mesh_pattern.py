@@ -45,7 +45,7 @@ def test_mesh_pattern_matches_the_levels_it_names():
             offset=pattern.Wildcard(),
             outer=pattern.Layout(
                 ((2,), (128,)),
-                ((1,), (1,)),
+                ((384,), (1,)),
                 predicates=(pattern.Forward(per_mode=True), pattern.Injective(per_mode=True)),
             ),
         ),

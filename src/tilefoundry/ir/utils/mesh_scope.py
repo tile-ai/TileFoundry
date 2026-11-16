@@ -18,22 +18,15 @@ def flat_layout(mesh: types.Mesh) -> types.Layout | types.ComposedLayout:
     """The whole mesh as one layout, offset included: the form a mesh is written and printed in.
 
     The index runs across all topologies of the mesh. The reverse of ``nested_layout``.
-    Each topology states its own numbering, and a unit id of one topology is a
-    unit id within its parent, so an axis steps by what it states times what
-    the topologies under it hold. A sliced mesh keeps its ``ComposedLayout``.
+    A sliced mesh keeps its ``ComposedLayout``, a zero offset included.
     """
-    sizes = tuple(getattr(topology, "size", 1) for topology in mesh.topologies)
-    scales = (
-        types.compact_major(sizes, major="row")
-        if all(isinstance(one, int) for one in sizes)
-        else (1,) * len(sizes)
-    )
-    shape: list = []
-    strides: list = []
-    for layout, scale in zip(types.layouts(mesh), scales):
-        shape.extend(types.flatten(layout.shape))
-        strides.extend(step * scale for step in types.flatten(layout.strides))
-    flat = types.Layout(shape=tuple(shape), strides=tuple(strides))
+    outer = types.plain_layout(mesh.layout)
+    if outer is None:
+        raise ValueError(
+            "a mesh whose slice states an identity box states no layout of "
+            "its own, so its levels select nothing"
+        )
+    flat = types.flatten(outer)
     return replace(mesh.layout, outer=flat) if isinstance(mesh.layout, types.ComposedLayout) else flat
 
 

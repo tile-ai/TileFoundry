@@ -128,21 +128,29 @@ __global__ void k() {
     static_assert(!tilefoundry::contains(sparse_mesh{sparse_layout{}},
                                          cute::make_tuple(0, 96)));
 
-    /// A mesh naming two levels: grouped one nest per level, asked one level
-    /// at a time, each nest already in that level's own numbering.
+    /// A mesh naming two levels: grouped one nest per level, strides in the
+    /// index over both. The thread level declares 256 units and the mesh
+    /// selects 32 of them, so the CTA strides (2, 1) are stored as (512, 256).
 
     using grouped =
         cute::Layout<cute::Shape<cute::Shape<cute::Int<4>, cute::Int<2>>,
                                  cute::Shape<cute::Int<32>>>,
-                     cute::Stride<cute::Stride<cute::Int<2>, cute::Int<1>>,
+                     cute::Stride<cute::Stride<cute::Int<512>, cute::Int<256>>,
                                   cute::Stride<cute::Int<1>>>>;
     using mesh = Mesh<grouped, TopologyLevel::cta, TopologyLevel::thread>;
     constexpr auto cta = tilefoundry::get<TopologyLevel::cta>(mesh{});
     constexpr auto thread = tilefoundry::get<TopologyLevel::thread>(mesh{});
     static_assert(decltype(cta)::level_count == 1, "one level each");
     static_assert(int(cute::size(cta.layout)) == 8, "8 CTAs of their own");
+    static_assert(int(cute::get<0>(cute::stride(cta.layout))) == 2 &&
+                      int(cute::get<1>(cute::stride(cta.layout))) == 1,
+                  "the CTA strides read back in the CTAs' own numbering");
     static_assert(int(cute::size(thread.layout)) == 32, "32 threads of theirs");
     static_assert(tilefoundry::is_warped(thread), "and that is one warp");
+    static_assert(tilefoundry::contains(mesh{}, cute::make_tuple(7, 31)),
+                  "every CTA and the first warp of each");
+    static_assert(!tilefoundry::contains(mesh{}, cute::make_tuple(0, 32)),
+                  "no thread past the first warp");
 }
 #endif
 

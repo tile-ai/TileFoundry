@@ -19,7 +19,7 @@ from .layout import (
     unflatten,
 )
 from .layout_algebra import coalesce, slice_and_offset
-from .mesh import Mesh, axis_keys, offset, sub_meshes
+from .mesh import Mesh, axis_keys, get, offset, sub_meshes
 from .stride import compact_row_major, crd2idx, idx2crd
 from .topology import topology_name
 
@@ -384,21 +384,23 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
         for axis in remaining:
             if axis < len(keys):
                 held.setdefault(keys[axis][0], []).append(axis)
-        topologies = [t for t in shard.mesh.topologies if topology_name(t) in held]
-        outer = Layout(
-            tuple(tuple(mesh.shape[i] for i in group) for group in held.values()),
-            tuple(tuple(mesh.strides[i] for i in group) for group in held.values()),
-        )
-        layout = (
-            replace(shard.mesh.layout, outer=outer)
-            if isinstance(shard.mesh.layout, ComposedLayout)
-            else outer
-        )
-        shard_mesh = Mesh(
-            tuple(topologies),
-            layout,
-            tuple(shard.mesh.names[i] for i in remaining if i < len(shard.mesh.names)),
-        )
+        topologies = tuple(t for t in shard.mesh.topologies if topology_name(t) in held)
+        names = tuple(shard.mesh.names[i] for i in remaining if i < len(shard.mesh.names))
+        if len(topologies) == len(shard.mesh.topologies):
+            outer = Layout(
+                tuple(tuple(mesh.shape[i] for i in group) for group in held.values()),
+                tuple(tuple(mesh.strides[i] for i in group) for group in held.values()),
+            )
+            layout = (
+                replace(shard.mesh.layout, outer=outer)
+                if isinstance(shard.mesh.layout, ComposedLayout)
+                else outer
+            )
+            shard_mesh = Mesh(topologies, layout, names)
+        else:
+            shard_mesh = Mesh.from_meshes(
+                *(kept_axes(shard.mesh, keys, held[topology_name(t)]) for t in topologies)
+            )
         attrs = tuple(
             Split(kept[modes[axis]])
             if isinstance(shard.attrs[axis], Split)
@@ -407,6 +409,20 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
         )
         sliced = ShardLayout(sliced, attrs, shard_mesh)
     return sliced, services.normalize_dim(start)
+
+
+def kept_axes(mesh: Mesh, keys, axes) -> Mesh:
+    """The mesh axes *axes* of one topology of *mesh*, as that topology's own mesh."""
+    name = keys[axes[0]][0]
+    part = get(mesh, name)
+    first = next(axis for axis, (held, _) in enumerate(keys) if held == name)
+    own = flatten(plain_layout(part.layout))
+    kept = Layout(
+        tuple(own.shape[axis - first] for axis in axes),
+        tuple(own.strides[axis - first] for axis in axes),
+    )
+    stated = replace(part.layout, outer=kept) if isinstance(part.layout, ComposedLayout) else kept
+    return Mesh(part.topologies, stated, tuple(mesh.names[i] for i in axes if i < len(mesh.names)))
 
 
 def local_readback(layout):

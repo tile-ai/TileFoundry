@@ -77,3 +77,23 @@ def test_an_identity_box_of_units_is_refused() -> None:
     )
     with pytest.raises(NotImplementedError, match="states an identity box"):
         _mesh_layout_line(identity_box)
+
+
+def test_a_mesh_of_two_topologies_states_the_index_over_both() -> None:
+    """Type and value carry the stored strides; ``get<L>`` divides them back in C++."""
+    mesh = types.Mesh(
+        (types.Topology("cta", 2), types.Topology("thread", 128)),
+        types.Layout(((2,), (4, 32)), None),
+        ("c", "w", "t"),
+    )
+    numbers = re.compile(r"cute::Int<(-?\d+)>")
+    assert numbers.findall(stmts.mesh_type(mesh)) == ["2", "4", "32", "128", "32", "1"]
+    assert numbers.findall(_mesh_layout_line(mesh)) == ["2", "4", "32", "128", "32", "1"]
+
+
+def test_a_static_mesh_type_refuses_a_symbolic_extent() -> None:
+    """A cute::Layout type states numbers only; a DimVar there is refused, not written."""
+    blocks = expr.DimVar("blocks", 1, 64)
+    mesh = types.Mesh((types.Topology("cta", blocks),), types.Layout((blocks,), (1,)), ("b",))
+    with pytest.raises(NotImplementedError, match="not a static int"):
+        stmts.mesh_type(mesh)

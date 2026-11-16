@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from tests.core.fixtures.meshes import CT, CTA, RUN, THR
-from tilefoundry.ir import expr, types
+from tilefoundry.ir import expr, tir, types, utils
 
 
 def test_topology_and_mesh_require_explicit_extents() -> None:
@@ -78,7 +78,7 @@ def test_make_mesh_replaces_a_sliced_suffix_by_component() -> None:
     assert replaced.layout == types.ComposedLayout(
         None,
         52352,
-        types.Layout(((1, 68), (4, 8, 4)), ((68, 1), (32, 4, 1))),
+        types.Layout(((1, 68), (4, 8, 4)), ((68 * 384, 384), (32, 4, 1))),
     )
     assert types.sub_meshes(replaced) == (
         types.Mesh(
@@ -93,7 +93,7 @@ def test_mesh_with_several_levels_slices_in_device_numbering() -> None:
     assert CT[:, 128:256].layout == RUN
     assert CT[:, 128:256] == types.Mesh.from_meshes(CTA, THR[128:256])
     assert CT[1:3, 128:256].layout == types.ComposedLayout(
-        None, 1 * 384 + 128, types.Layout(((2,), (128,)), ((1,), (1,)))
+        None, 1 * 384 + 128, types.Layout(((2,), (128,)), ((384,), (1,)))
     )
 
 
@@ -144,7 +144,7 @@ def test_mesh_refuses_a_repeated_topology_name() -> None:
     with pytest.raises(ValueError):
         types.Mesh(
             (types.Topology("thread", 4), types.Topology("thread", 32)),
-            types.Layout(((4,), (32,)), ((1,), (1,))),
+            types.Layout(((4,), (32,)), ((32,), (1,))),
         )
 
 
@@ -180,3 +180,96 @@ def test_a_scope_with_gaps_is_refused(selection) -> None:
     assert not types.within_mesh_scope(selection, _FULL)
     with pytest.raises(ValueError, match="both must be continuous"):
         types.Mesh.from_meshes(types.Mesh.from_meshes(THR, selection), selection)
+
+
+_CTA4, _THREAD128 = types.Topology("cta", 4), types.Topology("thread", 128)
+
+
+def test_a_mesh_of_several_topologies_maps_a_coord_to_the_index_over_all() -> None:
+    """Stored strides are in the index over both topologies; ``layouts`` divides them back."""
+    grouped = types.Mesh((_CTA4, _THREAD128), types.Layout(((4,), (128,)), None))
+    joined = types.Mesh.from_meshes(
+        types.Mesh((_CTA4,), types.Layout((4,), (1,))),
+        types.Mesh((_THREAD128,), types.Layout((128,), (1,))),
+    )
+    assert grouped == joined
+    assert grouped.layout.strides == ((128,), (1,))
+    assert types.layouts(grouped) == (types.Layout((4,), (1,)), types.Layout((128,), (1,)))
+    assert types.apply(grouped.layout, 1 + 4 * 40) == types.crd2idx((1, 40), (4, 128), (128, 1)) == 168
+    sliced = grouped[1, 32:64]
+    assert types.offset(sliced) == 160
+    assert (types.offset(types.get(sliced, "cta")), types.offset(types.get(sliced, "thread"))) == (1, 32)
+
+
+def test_an_outer_stride_counts_every_declared_inner_unit() -> None:
+    """Thread declares 256 units and the mesh selects 32; the CTA strides scale by 256."""
+    mesh = types.Mesh.from_meshes(
+        types.Mesh((types.Topology("cta", 8),), types.Layout((4, 2), (2, 1))),
+        types.Mesh((types.Topology("thread", 256),), types.Layout((32,), (1,))),
+    )
+    assert mesh.layout.strides == ((512, 256), (1,))
+    assert types.layouts(mesh) == (types.Layout((4, 2), (2, 1)), types.Layout((32,), (1,)))
+
+
+@pytest.mark.parametrize(
+    "layout",
+    (
+        (4, 128),
+        types.Layout(((4,), (128,)), ((128,), (1,))),
+        types.ComposedLayout(None, 0, types.Layout(((4,), (128,)), ((128,), (1,)))),
+    ),
+    ids=("ungrouped", "grouped", "composed"),
+)
+def test_an_inner_topology_needs_a_static_size(layout) -> None:
+    threads = types.Topology("thread", expr.DimVar("threads", 1, 128))
+    with pytest.raises(ValueError, match="unit count of every inner topology"):
+        types.Mesh((_CTA4, threads), layout)
+
+
+def test_the_outermost_size_may_be_symbolic() -> None:
+    blocks = types.Topology("cta", expr.DimVar("blocks", 1, 64))
+    mesh = types.Mesh((blocks, _THREAD128), types.Layout(((4,), (128,)), ((128,), (1,))))
+    assert types.layouts(mesh)[0] == types.Layout((4,), (1,))
+
+
+def test_flat_layout_keeps_the_slice_wrapper() -> None:
+    whole = types.Mesh.from_meshes(types.Mesh((_CTA4,), types.Layout((4,))), types.Mesh((_THREAD128,), types.Layout((128,))))
+    assert utils.flat_layout(whole) == types.Layout((4, 128), (128, 1))
+    assert utils.flat_layout(whole[1, 32:64]) == types.ComposedLayout(None, 160, types.Layout((1, 32), (128, 1)))
+    assert utils.flat_layout(whole[0, :]) == types.ComposedLayout(None, 0, types.Layout((1, 128), (128, 1)))
+    swizzled = types.Mesh((_THREAD128,), types.ComposedLayout(types.Swizzle(1, 0, 1), 0, types.Layout((32,), (1,))))
+    assert utils.flat_layout(swizzled).inner == types.Swizzle(1, 0, 1)
+
+
+def _local_mesh(mesh: types.Mesh, coords: tuple) -> types.Mesh:
+    attrs = tuple(types.Split(0) if axis == 0 else types.Broadcast() for axis in range(len(coords)))
+    layout, _ = types.local_layout(types.ShardLayout(types.Layout((2, 4)), attrs, mesh), (2, 4), coords)
+    return layout.mesh
+
+
+def test_a_local_view_reencodes_the_mesh_it_keeps() -> None:
+    cta, thread = types.Topology("cta", 2), types.Topology("thread", 4)
+    whole = types.Mesh((cta, thread), types.Layout(((2,), (4,)), None), ("c", "t"))
+    assert _local_mesh(whole[1, 2:4], (None, 0)) == types.Mesh(
+        (cta,), types.ComposedLayout(None, 1, types.Layout((1,), (1,))), ("c",)
+    )
+    assert _local_mesh(whole[1, 2:4], (1, None)) == types.Mesh(
+        (thread,), types.ComposedLayout(None, 2, types.Layout((2,), (1,))), ("t",)
+    )
+    split = types.Mesh((cta, thread), types.Layout(((2,), (2, 2)), None), ("c", "a", "b"))
+    assert _local_mesh(split, (None, 1, None)) == types.Mesh(
+        (cta, thread), types.Layout(((2,), (2,)), ((4,), (1,))), ("c", "b")
+    )
+
+
+def test_a_constant_slice_is_proved_by_its_sub_box() -> None:
+    whole = types.Mesh.from_meshes(types.Mesh((_CTA4,), types.Layout((4,))), types.Mesh((_THREAD128,), types.Layout((128,))))
+    assert tir.sync.legal_slice_of(whole[:, :], whole)
+    assert tir.sync.legal_slice_of(whole[1:3, 32:64], whole)
+    assert not tir.sync.legal_slice_of(whole[1:3, 32:64], whole[1:3, :])
+    assert not tir.sync.legal_slice_of(
+        types.Mesh(whole.topologies, types.ComposedLayout(None, 160, types.Layout(((2,), (32,)), ((256,), (1,))))),
+        whole,
+    )
+    with pytest.raises(ValueError, match="do not divide"):
+        types.Mesh(whole.topologies, types.ComposedLayout(None, 160, types.Layout(((2,), (32,)), ((1,), (1,)))))

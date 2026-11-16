@@ -32,44 +32,16 @@ def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
 def legal_slice_of(m: types.Mesh, e: types.Mesh) -> bool:
     """Return whether *m* reconstructs as a constant slice of full mesh *e*.
 
-    Topology, names, strides, bounds, and decomposed offset must agree. The
-    final proof rebuilds the slice and compares it structurally.
+    ``types.sub_box`` decodes the box from the first and last unit of *m*. The
+    final proof rebuilds the slice and compares it structurally, names included.
     """
-    if isinstance(e.layout, types.ComposedLayout):
+    if isinstance(e.layout, types.ComposedLayout) or e.names != m.names:
         return False
-    if e.topologies != m.topologies or e.names != m.names:
+    box = types.sub_box(e, m)
+    if box is None:
         return False
-    region = m.layout
-    if not isinstance(region, types.ComposedLayout):
-        return False
-    if not isinstance(region.outer, types.Layout):
-        return False
-    outer, p = types.get(region.outer, 0), types.get(e.layout, 0)
-    if outer.strides != p.strides:
-        return False
-    sub, pshape = outer.shape, p.shape
-    if len(sub) != len(pshape):
-        return False
-    if any(not isinstance(s, int) for s in sub) or any(not isinstance(s, int) for s in pshape):
-        return False
-    if not isinstance(region.offset, int) or any(s > ps for s, ps in zip(sub, pshape)):
-        return False
-
-    rem = region.offset
-    starts = [0] * len(sub)
-    for i in sorted(range(len(sub)), key=lambda k: -p.strides[k]):
-        st = p.strides[i]
-        if not isinstance(st, int) or st <= 0:
-            return False
-        starts[i] = rem // st
-        rem -= starts[i] * st
-    if rem != 0 or any(
-        not (0 <= starts[i] and starts[i] + sub[i] <= pshape[i]) for i in range(len(sub))
-    ):
-        return False
-    key = tuple(slice(starts[i], starts[i] + sub[i]) for i in range(len(sub)))
     try:
-        return e[key] == m
+        return e[box] == m
     except (ValueError, IndexError):
         return False
 

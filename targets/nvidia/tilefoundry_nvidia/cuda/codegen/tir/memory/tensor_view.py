@@ -275,9 +275,7 @@ def render_shard_layout_value(var_name: str, sl: types.ShardLayout, dynamic_exte
     if len(topos) == 1:
         mesh_shape, mesh_strides = mesh_axes.shape, mesh_axes.strides
     else:
-        topology_layouts = types.flat_layouts(replace(sl.mesh, layout=stated))
-        mesh_shape = tuple(shape for shape, _ in topology_layouts)
-        mesh_strides = tuple(strides for _, strides in topology_layouts)
+        mesh_shape, mesh_strides = stmts.raw_groups(sl.mesh)
     scope = ", ".join(context.topology_level_str(t.name) for t in topos)
     raw_mesh_layout = cute_layout.render_layout_value(mesh_shape, mesh_strides, mesh_dim, mesh_stride)
     mesh_layout = composed_mesh_layout(raw_mesh_layout, ml_base)

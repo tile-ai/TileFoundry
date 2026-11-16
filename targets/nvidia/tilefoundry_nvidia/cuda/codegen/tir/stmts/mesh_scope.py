@@ -34,19 +34,30 @@ def validate_topology(mesh: types.Mesh, tgt) -> None:
     validate_cuda_topology_levels(tgt, (resolved(t).name for t in mesh.topologies))
 
 
-def levelwise_layout(mesh: types.Mesh) -> str:
-    """One nest per topology, each in that topology's own numbering.
+def raw_groups(mesh: types.Mesh) -> tuple[tuple, tuple]:
+    """Each topology's axes as flat (shape, strides), strides in the index over all topologies.
 
-    A mesh states one layout per level already, each in that level's own
-    numbering, so a nest is that layout written out: nothing here decides
-    where a boundary falls. The composite is a grouping, not a map: only the
-    nests are evaluated.
+    A topology stating no axes reads as one mode of one, as ``flat_layouts`` reads it.
     """
-    topology_layouts = types.flat_layouts(mesh)
-    return cute_layout.render_layout_type(
-        tuple(shape for shape, _ in topology_layouts),
-        tuple(strides for _, strides in topology_layouts),
-    )
+    stated = types.plain_layout(mesh.layout)
+    shapes, strides = [], []
+    for index in range(len(stated.shape)):
+        group = types.flatten(types.get(stated, index))
+        shape, steps = tuple(group.shape), tuple(group.strides)
+        if not shape:
+            shape, steps = (1,), (0,)
+        shapes.append(shape)
+        strides.append(steps)
+    return tuple(shapes), tuple(strides)
+
+
+def grouped_layout(mesh: types.Mesh) -> str:
+    """One nest per topology, strides in the index over all topologies.
+
+    ``get<L>`` on the C++ side divides a nest's strides back into that
+    topology's own numbering.
+    """
+    return cute_layout.render_layout_type(*raw_groups(mesh))
 
 
 def mesh_type(mesh: types.Mesh) -> str:
@@ -73,7 +84,7 @@ def mesh_type(mesh: types.Mesh) -> str:
                 "be sliced; the slice and the level boundary would both be "
                 "deciding which units these are"
             )
-        layout = levelwise_layout(mesh)
+        layout = grouped_layout(mesh)
     if base:
         layout = f"cute::ComposedLayout<cute::identity, cute::Int<{base}>, {layout}>"
     return f"tilefoundry::Mesh<{layout}, {', '.join(context.topology_level_str(t.name) for t in topos)}>"
@@ -136,4 +147,10 @@ def emit_mesh_scope(node: core.MeshScope, emitter) -> None:
     ctx.emit("}")
 
 
-__all__ = ["emit_mesh_scope", "mesh_type", "program_topologies", "validate_cuda_topology_levels"]
+__all__ = [
+    "emit_mesh_scope",
+    "mesh_type",
+    "program_topologies",
+    "raw_groups",
+    "validate_cuda_topology_levels",
+]

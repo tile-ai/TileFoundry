@@ -432,7 +432,7 @@ class Mesh:
 
     Attributes:
         topologies: attribute; Ordered topology sequence.
-        layout: attribute; One nested layout, mode i being level i.
+        layout: attribute; One nested layout, mode i being topology i, over all topologies.
         names: attribute; Human-readable layout-axis names.
     """
 
@@ -507,9 +507,10 @@ def equals_mesh_scope(mesh: Mesh, current: Mesh) -> bool:
 Field meanings:
 
 - `topologies` — the ordered device-domain descriptions (`name` + `size`)
-- `layout` — a nested `Layout` whose mode `i` is level `i`'s own layout; a
-  constant slice (`m[...]`) replaces it with a `ComposedLayout` recording the
-  sub-box ([tir §1.5](./tir.md#15-sync))
+- `layout` — a nested `Layout` whose mode `i` holds topology `i`'s axes. It maps
+  a coord to the unit's index over all topologies of the mesh. A constant slice
+  (`m[...]`) replaces it with a `ComposedLayout` recording the sub-box
+  ([tir §1.5](./tir.md#15-sync)).
 - `names` — optional human-readable names (`cta.x`, `cta.y`, …)
 
 In a kernel, `with Mesh(selection, layout=shape, names=names)` rearranges a lexical,
@@ -518,27 +519,32 @@ single-level selection.
 cover every selected unit once, with one fixed physical stride per axis.
 Composition preserves topology and offset; slicing the resulting composed mesh is rejected.
 
-Every mesh MUST state one layout per level it names. Each layout MUST use that
-level's own numbering. The mesh MUST state them as one nested `Layout` whose mode
-`i` is level `i`, a one-level mesh included. `Mesh` normalizes what was written
-into that form at construction. `Mesh` cuts one layout over all levels' axes at
-the level boundaries. Each level takes axes left to right until their extents
-multiply to its own size. `Mesh` divides the steps by what the levels under each
-level hold. An axis of
-extent one adds no units and joins the level being filled. An axis that
-straddles a boundary MUST be refused rather than divided; every axis MUST
-belong to one level, and a stride the division does not divide exactly MUST be
-refused. A one-level mesh takes every axis into its single mode, needing no
-division and no declared extent.
+Every mesh MUST state one nested `Layout` whose mode `i` holds the axes of
+topology `i`, a one-level mesh included. Its strides are in the index over all
+topologies of the mesh. A stride of topology `i` is its own stride times `u_i`.
+`u_i` is the product of the declared sizes of the topologies after `i` in this
+mesh. A size that enters `u_i` MUST be a positive static int. The outermost
+size enters no product, so it MAY be symbolic. `Mesh` normalizes what was
+written into that form at construction. `Mesh` cuts one layout over all
+topologies' axes at the topology boundaries. Each topology takes axes left to
+right until their extents multiply to its own size. An axis of extent one adds
+no units and joins the topology being filled. An axis that straddles a
+boundary MUST be refused rather than divided. Every axis MUST belong to one
+topology. A stride that `u_i` does not divide exactly MUST be refused, whether
+the layout was written grouped, ungrouped or under a `ComposedLayout`. A
+one-level mesh takes every axis into its single mode, with `u_0 = 1`.
 
 Because the layout is a nested `Layout`, the layout operations read it.
-`get(mesh.layout, i)` is level `i`'s own layout. `flatten(mesh.layout)` is every
-level's axes end to end. `int_tuple.repeat_like` against `mesh.layout.shape`
-states per axis whatever is stated per level. `utils.flat_layout(mesh)` is those
-axes as one layout over all topologies, offset included. It is the form a mesh
-is written and printed in. Each axis steps by what its level states
-times what the levels under it hold. A slice's `ComposedLayout.offset` is where
-the whole mesh starts in that numbering.
+`get(mesh.layout, i)` is the group of topology `i`, in the index over all
+topologies. `get(mesh, topology)` and `layouts(mesh)` divide that group's
+strides by `u_i`, so they are in that topology's own numbering.
+`flatten(mesh.layout)` is every topology's axes end to end.
+`int_tuple.repeat_like` against `mesh.layout.shape` states per axis whatever is
+stated per topology. `utils.flat_layout(mesh)` is those axes as one layout,
+offset included. It is the form a mesh is written and printed in. A sliced mesh
+keeps its `ComposedLayout`, its inner transform and a zero offset included. A
+slice's `ComposedLayout.offset` is where the whole mesh starts in that index,
+so `offset + layout(coord)` is the unit's index.
 
 Mesh composition uses the following rules:
 
@@ -547,9 +553,10 @@ Mesh composition uses the following rules:
   one, and MUST replace the trailing levels when the inner mesh names a suffix
   of them, keeping the levels above and their names unchanged. Level names
   overlapping in any other way MUST be rejected rather than decomposed.
-- Append concatenates the per-level layouts. When an appended mesh is
-  sliced, its per-level start is re-encoded in the combined index
-  and retained in the result's `ComposedLayout.offset`.
+- Append concatenates the per-level layouts. Each topology's own strides are
+  multiplied by its `u_i` in the result once. When an appended mesh is sliced,
+  the result's `ComposedLayout.offset` is the sum of each topology's start times
+  its `u_i`.
 - Replacing a suffix with a sliced mesh MUST preserve each retained upper level's
   start. It MUST take each replaced level's start and layout from the inner mesh.
   The combined `ComposedLayout.offset` MUST then be re-encoded in
@@ -585,8 +592,9 @@ value is consumed by a region.
     `Topology` tuple before it constructs the record. A bare string and the
     `topology=` keyword are not Mesh author forms.
   - A Mesh naming several levels may be sliced. The key addresses all level axes
-    in order. Every level retains its own layout. The slice offset is the sum of
-    each selected start times that axis's step in the index.
+    in order. The sliced layout keeps the strides in the index over all
+    topologies. The slice offset is the sum of each selected start times that
+    axis's stride.
   - Nested single-level Mesh scopes compose to exactly that shape: the axes join
     outermost first and each outer stride is scaled by the units below it.
     A value distributed at two levels at once may therefore be written either
@@ -1040,6 +1048,12 @@ def local_layout_and_offset(shard, tensor_shape, coord) -> tuple[Layout, int]: .
     `local_layout` projection and its canonical check.
   - `local_layout` MUST keep the whole tensor's strides: what one unit
     holds is the same rows the same distance apart, begun further in.
+  - The mesh of a `ShardLayout` that `local_layout` returns keeps the unfixed
+    axes. When it keeps every topology, the kept strides and the offset stay as
+    they were. When it drops a whole topology, each kept topology's axes go back
+    to its own numbering through `get`. The result is then composed again over
+    the kept topologies, its offset from their starts. The second return value
+    is the tensor address offset; this does not change it.
   - `local_layout_and_offset` counts its offset in exactly those strides. It
     takes a mesh coord, as the CUDA runtime's `local_layout_and_offset(sl, coord)`
     does; a host holding logical data passes the shard with its layout replaced

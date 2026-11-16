@@ -41,7 +41,7 @@ def test_without_a_thread_mesh_the_writer_is_the_first_thread_of_the_cta() -> No
         threads(DimVar("start", 0, 31), 1),
         types.Mesh(
             (types.Topology("cta", DimVar("blocks", 1, 64)), THREAD),
-            types.ComposedLayout(None, 16, types.Layout(((1,), (16,)), ((1,), (1,)))),
+            types.ComposedLayout(None, 16, types.Layout(((1,), (16,)), ((32,), (1,)))),
             ("b", "t"),
         ),
     ],

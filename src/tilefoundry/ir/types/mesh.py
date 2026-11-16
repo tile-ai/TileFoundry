@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from math import prod
 
 from tilefoundry import services
+from tilefoundry.ir import expr
 
 from . import layout
 from .int_tuple import compatible_profile
@@ -20,7 +21,7 @@ from .layout import (
     with_offset,
 )
 from .layout_algebra import filter, is_contiguous
-from .stride import compact_major, compact_row_major, crd2idx, idx2crd
+from .stride import compact_row_major, crd2idx, idx2crd
 from .topology import Topology, topology_name
 
 __all__ = [
@@ -84,15 +85,16 @@ class Mesh:
 
         Missing axes are full slices; integers select extent one. The result
         preserves topology and names while recording the sub-box as a
-        ``ComposedLayout``. Each level retains its own layout, while the
-        slice offset uses the device's numbering across all levels.
+        ``ComposedLayout``. The strides and the offset are both in the index
+        over all topologies of the mesh.
 
         See [shard §5](docs/spec/shard.md#5-mesh).
         """
         if isinstance(self.layout, ComposedLayout):
             raise ValueError("cannot slice an already-sliced mesh (nested slice unsupported)")
-        held_levels = layouts(self)
-        rank = sum(len(flatten(level.shape)) for level in held_levels)
+        stated = plain_layout(self.layout)
+        groups = tuple(layout.get(stated, index) for index in range(len(stated.shape)))
+        rank = sum(len(flatten(group.shape)) for group in groups)
         keys = key if isinstance(key, tuple) else (key,)
         if len(keys) > rank:
             raise ValueError(f"mesh slice has {len(keys)} indices but the mesh has {rank} axes")
@@ -101,14 +103,9 @@ class Mesh:
         sub_levels: list[Layout] = []
         total = 0
         axis = 0
-        scales = (
-            (1,)
-            if len(self.topologies) == 1
-            else compact_major(tuple(topology.size for topology in self.topologies))
-        )
-        for level, scale in zip(held_levels, scales):
-            level_shape = tuple(flatten(level.shape))
-            level_strides = tuple(flatten(level.strides))
+        for group in groups:
+            level_shape = tuple(flatten(group.shape))
+            level_strides = tuple(flatten(group.strides))
             sub_shape: list[int] = []
             for k, extent, stride in zip(
                 keys[axis : axis + len(level_shape)], level_shape, level_strides
@@ -139,7 +136,7 @@ class Mesh:
                     raise ValueError(
                         f"mesh slice index must be int or slice, got {type(k).__name__}"
                     )
-                total += start * stride * scale
+                total += start * stride
                 sub_shape.append(selected)
                 axis += 1
             sub_levels.append(Layout(tuple(sub_shape), level_strides))
@@ -208,24 +205,20 @@ class Mesh:
 
 
 def nested_layout(layout_value, topologies: tuple) -> "Layout | ComposedLayout":
-    """What a mesh was written as, with every level's axes under its own mode.
+    """What a mesh was written as, with every topology's axes under its own mode.
 
-    A mesh naming one level states that level's layout directly. One
-    naming several may state a tuple of extents or one layout over all of
-    their axes; the axes are handed to the levels left to right, each taking
-    them until their extents multiply to its own size, and each level's steps
-    are divided by what the levels under it hold. So mode ``i`` of what comes
-    back is level ``i``'s own layout, and a boundary no prefix of axes
-    lands on is refused rather than guessed.
+    A mesh naming several topologies may state a tuple of extents or one layout
+    over all of their axes. The axes go to the topologies left to right, each
+    taking them until their extents multiply to its own size; a boundary no
+    prefix of axes lands on is refused. Strides stay in the index over all
+    topologies: mode ``i`` steps by topology ``i``'s own unit id times the
+    units of the topologies inside it.
     """
     if not isinstance(layout_value, LayoutBase):
         extents = tuple(flatten(layout_value))
         layout_value = Layout(extents, compact_row_major(extents))
     if isinstance(layout_value, ComposedLayout):
-        if layout_value.outer is None or (
-            len(layout_value.outer.shape) == len(topologies)
-            and all(isinstance(mode, tuple) for mode in layout_value.outer.shape)
-        ):
+        if layout_value.outer is None:
             return layout_value
         return ComposedLayout(
             inner=layout_value.inner,
@@ -235,55 +228,94 @@ def nested_layout(layout_value, topologies: tuple) -> "Layout | ComposedLayout":
     if len(layout_value.shape) == len(topologies) and all(
         isinstance(mode, tuple) for mode in layout_value.shape
     ):
-        return layout_value
+        grouped = layout_value
+    else:
+        extents = tuple(flatten(layout_value.shape))
+        steps = tuple(flatten(layout_value.strides))
+        if len(topologies) == 1:
+            return Layout(shape=(extents,), strides=(steps,))
+        unit_scales(topologies)
+        profile = compatible_profile(extents, tuple(t.size for t in topologies))
+        grouped = unflatten(
+            Layout(extents, steps),
+            tuple(mode if isinstance(mode, tuple) else (mode,) for mode in profile),
+        )
+    for topology, scale, steps in zip(topologies, unit_scales(topologies), grouped.strides):
+        scale_strides(steps, scale, topology, divide=True)
+    return grouped
 
-    extents = tuple(flatten(layout_value.shape))
-    stated = layout_value.strides
-    steps = tuple(flatten(stated))
-    layout_flat = Layout(extents, steps)
-    if len(topologies) == 1:
-        return Layout(shape=(extents,), strides=(steps,))
-    scales: list[int] = []
-    below = 1
-    for topology in reversed(topologies):
-        scales.insert(0, below)
+
+def unit_scales(topologies: tuple) -> tuple[int, ...]:
+    """For each topology, the units of the topologies inside it in this mesh.
+
+    The outermost topology's size enters no product, so it may be symbolic.
+    Every other size MUST be a positive static int.
+    """
+    scales, below = [1], 1
+    for topology in reversed(topologies[1:]):
         count = topology.size
         if not isinstance(count, int) or isinstance(count, bool) or count < 1:
             raise ValueError(
-                f"mesh level {topology.name!r} states extent "
-                f"{count!r}; cutting one layout at the level boundaries needs "
-                "each of their unit counts"
+                f"mesh level {topology.name!r} states extent {count!r}; the index "
+                "over all topologies needs the unit count of every inner topology"
             )
         below *= count
+        scales.insert(0, below)
+    return tuple(scales)
 
-    profile = compatible_profile(extents, tuple(t.size for t in topologies))
-    grouped = unflatten(
-        layout_flat, tuple(mode if isinstance(mode, tuple) else (mode,) for mode in profile)
-    )
-    strides = []
-    for topology, scale, steps in zip(topologies, scales, grouped.strides, strict=True):
-        normalized = []
-        for step in flatten(steps):
-            if not isinstance(step, int) or isinstance(step, bool) or step % scale:
-                raise ValueError(
-                    f"mesh steps by {step!r}, which the {scale} units "
-                    f"below {topology.name!r} do not divide; its unit ids are not "
-                    "that level's"
-                )
-            normalized.append(step // scale)
-        strides.append(tuple(normalized))
-    return Layout(grouped.shape, tuple(strides))
+
+def scale_strides(strides, scale: int, topology, *, divide: bool = False):
+    """*strides* times *scale*, or divided by it exactly when *divide* is set."""
+    if isinstance(strides, tuple):
+        return tuple(scale_strides(step, scale, topology, divide=divide) for step in strides)
+    if scale == 1:
+        return strides
+    if isinstance(strides, bool):
+        raise ValueError(f"mesh steps by {strides!r}, which is not a dimension")
+    if not divide:
+        return strides * scale if isinstance(strides, int) else services.simplify_dim(
+            "mul", (strides, scale)
+        )
+    if isinstance(strides, int):
+        exact = strides % scale == 0
+    else:
+        exact = services.normalize_dim(services.simplify_dim("mod", (strides, scale))) == 0
+    if not exact:
+        raise ValueError(
+            f"mesh steps by {strides!r}, which the {scale} units inside "
+            f"{topology_name(topology)!r} do not divide; its unit ids are not that level's"
+        )
+    if isinstance(strides, int):
+        return strides // scale
+    if (
+        isinstance(strides, expr.Call)
+        and isinstance(strides.target, expr.DimMul)
+        and len(strides.args) == 2
+        and expr.static_dim_value(strides.args[-1]) == scale
+    ):
+        return strides.args[0]
+    return services.normalize_dim(services.simplify_dim("floordiv", (strides, scale)))
 
 
 def layouts(mesh: Mesh) -> tuple[Layout, ...]:
-    """Each level's layout, in that level's own numbering."""
+    """Each topology's layout, in that topology's own numbering.
+
+    The stored strides are in the index over all topologies; each group's
+    strides are divided by the units of the topologies inside it.
+    """
     stated = plain_layout(mesh.layout)
     if stated is None:
         raise ValueError(
             "a mesh whose slice states an identity box states no layout of "
             "its own, so its levels select nothing"
         )
-    return tuple(layout.get(stated, index) for index in range(len(stated.shape)))
+    groups = tuple(layout.get(stated, index) for index in range(len(stated.shape)))
+    if len(groups) == 1:
+        return groups
+    return tuple(
+        Layout(group.shape, scale_strides(group.strides, scale, topology, divide=True))
+        for group, scale, topology in zip(groups, unit_scales(mesh.topologies), mesh.topologies)
+    )
 
 
 def flat_layouts(mesh: Mesh) -> tuple[tuple[tuple, tuple], ...]:
@@ -408,12 +440,15 @@ def joined(
     *,
     sliced: bool,
 ) -> Mesh:
-    layout_value: Layout | ComposedLayout = joined_layout(parts)
+    scales = unit_scales(topologies)
+    layout_value: Layout | ComposedLayout = joined_layout(
+        tuple(
+            Layout(part.shape, scale_strides(part.strides, scale, topology))
+            for part, scale, topology in zip(parts, scales, topologies)
+        )
+    )
     if sliced:
-        sizes = tuple(topology.size for topology in topologies)
-        if not all(isinstance(size, int) for size in sizes):
-            raise ValueError("joining sliced meshes needs static topology extents")
-        total = crd2idx(starts, sizes, compact_major(sizes))
+        total = sum(start * scale for start, scale in zip(starts, scales))
         layout_value = with_offset(layout_value, total)
     return Mesh(topologies, layout_value, names)
 

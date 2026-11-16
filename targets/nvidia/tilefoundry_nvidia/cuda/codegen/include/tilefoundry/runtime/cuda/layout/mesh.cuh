@@ -81,15 +81,50 @@ template <class L> CUTE_HOST_DEVICE constexpr auto id_axes(L const &l) {
     return cute::filter(reverse(cute::flatten(plain_layout(l))));
 }
 
+/// The pack as an array, so a position reads one level as a constant.
+template <TopologyLevel... Ts> struct level_pack {
+    static constexpr TopologyLevel values[] = {Ts...};
+};
+
+/// The units of the levels after position ``At`` in the pack: what a nest's
+/// strides carry above that level's own numbering. Only those levels'
+/// ``topology_size`` is read, so the outermost level may be dynamic.
+template <int At, TopologyLevel... Topos>
+CUTE_HOST_DEVICE constexpr auto units_inside() {
+    return []<size_t... Is>(std::index_sequence<Is...>) {
+        return (cute::Int<1>{} * ... *
+                topology_size<level_pack<Topos...>::values[At + 1 + Is]>());
+    }(std::make_index_sequence<sizeof...(Topos) - At - 1>{});
+}
+
+/// A nest with its strides divided by ``units``: that level's own numbering.
+template <class Nest, class Units>
+CUTE_HOST_DEVICE constexpr auto in_own_numbering(Nest const &nest, Units) {
+    static_assert(cute::is_static<Units>::value,
+                  "get<level>: the levels inside it must have a compile-time "
+                  "size");
+    auto const strides =
+        cute::transform_leaf(cute::stride(nest), [](auto step) {
+            using S = decltype(step);
+            static_assert(
+                cute::is_static<S>::value && S::value % Units::value == 0,
+                "get<level>: a stride the units inside the level do not "
+                "divide");
+            return cute::Int<S::value / Units::value>{};
+        });
+    return cute::make_layout(cute::shape(nest), strides);
+}
+
 }
 
 /// The level's own mesh, out of a mesh that may name several.
 ///
 /// A mesh naming one level is that level's, whole. A mesh naming more states
-/// its axes grouped one nest per level, each already in that level's own
-/// numbering, and this is ``cute::get`` of the nest -- which is why it shares
-/// the name. The composite is a grouping, not a map: only the nests are
-/// evaluated, so a mesh naming several levels is asked one at a time.
+/// its axes grouped one nest per topology; the layout maps a coord to the
+/// unit's index over all topologies of the mesh. This is ``cute::get`` of the
+/// nest -- which is why it shares the name -- with its strides divided by the
+/// units of the levels inside it, so the result is in that topology's own
+/// numbering.
 template <TopologyLevel S, class L, TopologyLevel... Topos>
 CUTE_HOST_DEVICE constexpr auto get(Mesh<L, Topos...> const &mesh) {
     constexpr int at = detail::level_index<S, Topos...>();
@@ -101,7 +136,8 @@ CUTE_HOST_DEVICE constexpr auto get(Mesh<L, Topos...> const &mesh) {
         static_assert(!cute::is_composed_layout<cute::remove_cvref_t<L>>::value,
                       "get<level>: a mesh naming several levels cannot also be "
                       "sliced");
-        auto const level = cute::get<at>(mesh.layout);
+        auto const level = detail::in_own_numbering(
+            cute::get<at>(mesh.layout), detail::units_inside<at, Topos...>());
         return Mesh<cute::remove_cvref_t<decltype(level)>, S>{level};
     }
 }
