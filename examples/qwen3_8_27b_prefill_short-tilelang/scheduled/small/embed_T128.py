@@ -18,7 +18,8 @@ class SCHED_EMBED_T128:
             with Mesh(("thread",), layout=(TH,), names=("t",)) as th:
                 out = tf.zeros(Tensor[(M, H), "bf16"])
                 one = ids[cta.row:cta.row + 1]
-                row = tf.schedule((table, tf.empty(Tensor[(1, H), "bf16", (1, H), "smem"]), one), op=T.copy_async(fill=0.0))
+                with th[0:1] as _writer:
+                    row = tf.schedule((table, tf.empty(Tensor[(1, H), "bf16", (1, H), "smem"]), one), op=T.copy_async(fill=0.0))
                 ro = tf.schedule((row, tf.empty(Tensor[(1, H), "bf16", (1, H)])), op=T.copy())
                 out = tf.insert_slice(out, ro, (cta.row, 0))
             return out

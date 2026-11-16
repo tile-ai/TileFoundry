@@ -36,6 +36,7 @@ from .emission import (
     result_param,
     tensor_map_load,
 )
+from .threads import refuse_thread_overlaps
 
 DONE = -1
 UNCOMMITTED = -2
@@ -219,6 +220,16 @@ def mesh_chain(scope) -> tuple[int, ...]:
     return tuple(id(s.owner) for s in reversed(list(scope.ancestors())) if isinstance(s.owner, core.MeshRegion))
 
 
+def alone(mesh: types.Mesh | None) -> bool:
+    """Whether *mesh* holds one thread, whose own program order orders its accesses."""
+    if mesh is None or any(topology.name != "thread" for topology in mesh.topologies):
+        return False
+    try:
+        return tir.sync.participation(mesh).count == 1
+    except expr.VerifyError:
+        return False
+
+
 def region_mesh(scope) -> types.Mesh | None:
     """The mesh of the innermost ``MeshRegion`` around *scope*."""
     return next(
@@ -333,9 +344,16 @@ class Planner:
     def copy(self, position, owner, tag, source, target, scope, name: str) -> Action:
         """A ``Copy`` lowering adds for *owner* from *source* into *target*'s storage."""
         type_list = (source.type, target.type)
+        mesh = self.transferred(type_list, target.type, scope)
         return self.action(
-            position, owner, tag, memory.Copy(), (source, target), type_list, name, scope, transforms.copy_mesh(type_list)
+            position, owner, tag, memory.Copy(), (source, target), type_list, name, scope, mesh
         )
+
+    def transferred(self, type_list, destination, scope) -> types.Mesh | None:
+        """The mesh of the innermost region around a copy or fill that lowering adds in *scope*."""
+        around = [scope.mesh, *(node.owner.mesh for node in scope.ancestors() if isinstance(node.owner, core.MeshRegion))]
+        meshes = transforms.transfer_meshes(type_list, destination, around, self.context.topologies)
+        return meshes[-1] if meshes else None
 
     def action(
         self, position, owner, tag, op, args, type_list, name: str, scope, mesh, *, filled=(), result=()
@@ -496,9 +514,9 @@ class Planner:
     def fill(self, call: expr.Call, event: int, scope) -> list[Action]:
         """The one ``Fill`` lowering emits into *call*'s result."""
         type_list = (call.type, None)
+        mesh = self.transferred((call.type,), call.type, scope)
         return [self.action(
-            (event, 0), call, None, memory.Fill(), (call, None), type_list, "Fill", scope,
-            transforms.copy_mesh((call.type,)),
+            (event, 0), call, None, memory.Fill(), (call, None), type_list, "Fill", scope, mesh,
         )]
 
     def visit_Zeros(self, call: expr.Call, event: int, scope) -> list[Action]:
@@ -789,8 +807,13 @@ class Planner:
                     storage = expr.StorageKind.GMEM if access.global_roots else None
                     fence = SyncStep(StepKind.PROXY_FENCE, storage=storage)
                     state = self.plan(fence, meeting, position, state)
-                barrier = SyncStep(StepKind.BARRIER, self.barrier_mesh(meeting))
-                state = self.plan(barrier, meeting, position, state)
+                mesh = region_mesh(meeting)
+                if alone(mesh):
+                    barrier = SyncStep(StepKind.BARRIER, mesh)
+                    state = self.effect(barrier, meeting, state, self.entered[position])
+                else:
+                    barrier = SyncStep(StepKind.BARRIER, self.barrier_mesh(meeting))
+                    state = self.plan(barrier, meeting, position, state)
             same = (access.position, access.write, access.meshes, seq)
             if any(
                 (other.position, other.write, other.meshes, later) == same
@@ -1015,13 +1038,15 @@ def analyze_sync(function: core.Function, context: analysis.AnalyzeContext) -> N
 
     An asynchronous action one of whose steps has no place completes right after
     it issues instead, and the Function is planned again. The entry is refused
-    when two of its CTAs may reach one global element unordered; a retained
-    call's reaches count as unknown.
+    when two of its CTAs may reach one global element unordered, and a Function
+    when two threads may write one shared element in one issue of an action; a
+    retained call's reaches count as unknown.
     """
     in_place: frozenset = frozenset()
     planner = Planner(function, context, in_place)
     if context.entry is None or function is context.entry:
         refuse_cta_overlaps(planner)
+    refuse_thread_overlaps(planner)
     while True:
         try:
             planner.run()

@@ -1,6 +1,7 @@
 """Sparse decode with one natural-order key tile shared by QK and PV.
 
-The loader's row loop carries both shared tiles. WGMMA's factored operands
+The loader's row loop carries both shared tiles, and its first thread copies
+each row into them. WGMMA's factored operands
 retain row-major logical numbering: P is copied directly to the RS fragment,
 and Q, K, V and the mask keep natural head and key numbering.
 The register copy into the RS fragment requires redistribution; this fixture
@@ -44,7 +45,7 @@ class SparseDecode:
                     ks = tf.zeros(Tensor[(64, 64), "bf16", NATURAL, "smem"])
                     for r in range(64):
                         row_index = idx[r : r + 1]
-                        with th[0, :32] as _carry:
+                        with th[0, :1] as _carry:
                             qs_dst = tf.empty(
                                 Tensor[
                                     (1, 64), "bf16",

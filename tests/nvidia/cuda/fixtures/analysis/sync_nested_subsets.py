@@ -1,7 +1,9 @@
-"""A write in a loop on the first half of the threads, a read in a loop on the second half.
+"""A handoff in a loop on the first half of the threads, a read in a loop on the second half.
 
-Only the 64 thread mesh holds both, so the barrier between them runs there; the
-writer's loop needs its own barrier over its half alone.
+In the first half, one thread writes ``shared`` and another moves its head into
+``tile`` each round. Both threads are in that half, so the barriers between them
+run over it alone. Only the 64 thread mesh holds the mover and the readers, so
+the barrier between the halves runs there.
 """
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import cuda
@@ -16,9 +18,12 @@ class NestedSubsets:
             with Mesh(("thread",), layout=(64,), names=("t",)) as threads:
                 with threads[:32] as _producer:
                     shared = tf.empty(Tensor[(8,), "f32", (8,), "smem"])
+                    tile = tf.empty(Tensor[(4,), "f32", (4,), "smem"])
                     for _row in range(2):
-                        shared = tf.schedule((x, shared), op=T.copy())
-                    tile = shared[:4]
+                        with threads[0:1] as _writer:
+                            shared = tf.schedule((x, shared), op=T.copy())
+                        with threads[1:2] as _mover:
+                            tile = tf.schedule((shared[:4], tile), op=T.copy())
                 with threads[32:] as _consumer:
                     out = tf.empty(Tensor[(4,), "f32"])
                     for _row in range(2):
