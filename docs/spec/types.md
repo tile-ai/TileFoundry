@@ -5,7 +5,6 @@ flowchart TB
     Type["<b>Type</b><br/>(union alias)"]
     TensorType["<b>TensorType</b>"]
     TupleType["<b>TupleType</b>"]
-    UnitType["<b>UnitType</b>"]
     CallableType["<b>CallableType</b>"]
     PointerType["<b>PointerType</b>"]
 
@@ -15,7 +14,6 @@ flowchart TB
 
     TensorType -. member of .-> Type
     TupleType -. member of .-> Type
-    UnitType -. member of .-> Type
     CallableType -. member of .-> Type
     PointerType -. member of .-> Type
 
@@ -31,7 +29,7 @@ flowchart TB
 ## 1. `Type`
 
 ```python
-Type = TensorType | TupleType | UnitType | CallableType | PointerType
+Type = TensorType | TupleType | CallableType | PointerType
 ```
 
 ---
@@ -596,7 +594,8 @@ class TupleType:
         fields: attribute; Field types in result order.
     """
 
-    fields: tuple[TensorType | "TupleType" | CallableType, ...]
+    fields: tuple[TensorType | "TupleType" | CallableType, ...] = ()
+    Void: ClassVar[TupleType]  # TupleType(()), built on first access
 ```
 
 - constraints:
@@ -612,16 +611,17 @@ class TupleType:
 
 ---
 
-## 6. `UnitType`
+## 6. Void result
 
 ```python
-class UnitType:
-    """Describe the empty result type of an effect-form Op."""
+TupleType.Void == TupleType(())
 ```
 
 - constraints:
-  - the result type of an effect-form Op; produces no readable value and
-    appears in Stmt position as `Evaluate(op, args)`.
+  - `TupleType.Void` is the result type of an effect-form Op. It has no fields.
+  - An effect-form Op produces no readable value. It appears in Stmt position as `Evaluate(op, args)`.
+  - Compare a type with `TupleType.Void` by `==`. Object identity is not part of the contract.
+  - The printer writes `TupleType.Void` as `None`.
 
 ---
 
@@ -740,7 +740,7 @@ def callable_type_for_prim_function(fn) -> CallableType:
 - constraints:
   - `callable_type_for` MUST preserve parameter order and project only each
     parameter's `.type`; parameter names are not part of `CallableType`.
-  - `callable_type_for_prim_function` MUST use `UnitType` as the return type.
+  - `callable_type_for_prim_function` MUST use `TupleType.Void` as the return type.
 
 ---
 

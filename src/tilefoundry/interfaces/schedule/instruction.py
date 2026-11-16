@@ -43,7 +43,7 @@ def operand_relations(op: expr.Op, operand_types: tuple[types.TensorType, ...]) 
     args = tuple(
         expr.Var(name=f"operand{index}", type=type_) for index, type_ in enumerate(operand_types)
     )
-    call = expr.Call(target=op, args=args, type=types.UnitType())
+    call = expr.Call(target=op, args=args, type=types.TupleType.Void)
     return access.relations_of(call, RelationContext(dict(zip(map(id, args), operand_types))))
 
 
@@ -580,7 +580,7 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
             value if isinstance(value, expr.Constant) else expr.Var(param.name, type=type_)
             for value, param, type_ in zip(operands, params, tiles.tiles, strict=True)
         )
-        call = expr.Call(op, args, type=types.UnitType())
+        call = expr.Call(op, args, type=types.TupleType.Void)
         ctx = (
             replace(
                 frame,

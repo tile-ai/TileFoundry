@@ -40,7 +40,7 @@ class CopyReduceAsyncTensor(expr.Op):
 
 @typeinfer.register(CopyReduceAsyncTensor)
 def _(call, ctx):
-    return types.UnitType()
+    return types.TupleType.Void
 
 
 access.register_relation(CopyReduceAsyncTensor)(access.identity_relations)

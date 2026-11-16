@@ -116,7 +116,7 @@ class alongside the other two things the answer depends on
 
 | Instance | Op-branch handler | Stmt-branch handler | Notes |
 |---|---|---|---|
-| **typeinfer** | `(Call, TypeInferContext) -> Type` | — | Call result typing, including `UnitType` for effect Ops |
+| **typeinfer** | `(Call, TypeInferContext) -> Type` | — | Call result typing, including `TupleType.Void` for effect Ops |
 | **verify** | — | `(Stmt, verify.Context) -> None` | Effect-side constraints; for `Evaluate(op, args)`, dispatch keys on the Op class — see [§5](#5-instance-2--verify) |
 | **codegen** | `(Call, EmitContext) -> str` | `(Stmt, EmitContext) -> None` | Both sides are emitted; the key also carries the target and the position — see [§6](#6-instance-3--codegen) |
 | **cost** | `(Call, cost.Context) -> Cost` | `(Stmt, cost.Context) -> Cost` (optional) | Recursive-local logical work |

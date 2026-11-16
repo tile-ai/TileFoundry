@@ -72,8 +72,8 @@ class TiledMma(expr.Op):
 
 
 @typeinfer.register(TiledMma)
-def _(call: "expr.Call", ctx: "typeinfer.TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "expr.Call", ctx: "typeinfer.TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 @access.register_relation(TiledMma)

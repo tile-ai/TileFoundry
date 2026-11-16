@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from .layout import Layout
-from .tensor_type import TensorType, TupleType, Type, UnitType
+from .tensor_type import TensorType, TupleType, Type
 
 
 @dataclass(frozen=True)
@@ -47,10 +47,10 @@ def callable_type_for_prim_function(fn) -> CallableType:
     """``CallableType`` of a TIR ``PrimFunction`` callee.
 
     ``CallableType`` of a TIR ``PrimFunction`` callee: its parameter types
-    and a ``UnitType`` return — a prim_function returns no value, its outputs
-    are trailing params.
+    and an empty ``TupleType`` return — a prim_function returns no value, its
+    outputs are trailing params.
     """
-    return callable_type_for(fn.params, UnitType())
+    return callable_type_for(fn.params, TupleType.Void)
 
 
 __all__ = [

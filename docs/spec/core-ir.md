@@ -403,9 +403,9 @@ class Annotated:
   - `describe_value` returns one diagnostic line with the source span when
     present, the binding name or `<unnamed>`, and the Call target or Expr class.
 
-`Expr` always carries a `type`: `TensorType` / `TupleType` / `UnitType`
+`Expr` always carries a `type`: `TensorType` / `TupleType` / `TupleType.Void`
 ([types §2](./types.md#2-tensortype) / [types §4](./types.md#4-dim--symbolic-shape-dimensions)
-/ [types §6](./types.md#6-unittype)). A multi-output Op produces a single
+/ [types §6](./types.md#6-void-result)). A multi-output Op produces a single
 `Call` whose `type` is `TupleType`; consumers project one field through the
 `tuple_get_item` Op (a regular registered Op, not an `Expr` subclass).
 
@@ -663,7 +663,7 @@ An Op is **value-form** when its `Call` produces an observable
 result the IR consumes — `Call.type` is then `TensorType` or
 `TupleType`. An Op is **effect-form** when it performs an in-place
 effect (e.g. `tir.memory.Copy`) and produces no
-readable value (`UnitType`, [types §6](./types.md#6-unittype)); in Stmt position
+readable value (`TupleType.Void`, [types §6](./types.md#6-void-result)); in Stmt position
 it appears as `Evaluate(op, args)`
 ([tir §1.4](./tir.md#14-evaluate)).
 

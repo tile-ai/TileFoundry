@@ -386,9 +386,6 @@ class TupleSignature(Signature):
 
     fields: tuple[Signature, ...] = ()
 
-class UnitSignature(Signature):
-    """The C++ side of `UnitType`: nothing is passed."""
-
 class CallableSignature(Signature):
     """One calling convention of one IR function."""
 

@@ -100,7 +100,7 @@ def entry_params(frame) -> tuple[tuple[expr.Var, ...], int]:
         elif isinstance(ty, types.TupleType):
             for field in ty.fields:
                 yield from destinations(field)
-        elif not isinstance(ty, types.UnitType):
+        else:
             raise TypeError(
                 f"insert_default_host_entry: unsupported result type {ty!r} in {fn.name!r}"
             )

@@ -546,13 +546,12 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
         return result + "]"
 
     def visit_TupleType(self, value: types.TupleType, ctx=None) -> str:
+        if not value.fields:
+            return "None"
         return f"Tuple[{', '.join(self.visit(field, ctx) for field in value.fields)}]"
 
     def visit_PointerType(self, value: types.PointerType, ctx=None) -> str:
         return f"PointerType(DType.{value.dtype.name}, StorageKind.{value.storage.name})"
-
-    def visit_UnitType(self, value: types.UnitType, ctx=None) -> str:
-        return "None"
 
     def visit_DType(self, value: expr.DType, ctx=None) -> str:
         return self.dtype_str(value, ctx)

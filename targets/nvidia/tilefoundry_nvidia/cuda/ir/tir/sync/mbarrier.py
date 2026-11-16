@@ -45,8 +45,8 @@ class MBarrierInit(expr.Op):
 
 
 @typeinfer.register(MBarrierInit)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 @expr.register_op(dialect="T", category="sync", name="mbarrier_arrive_expect_tx")
@@ -69,8 +69,8 @@ class MBarrierArriveExpectTx(expr.Op):
 
 
 @typeinfer.register(MBarrierArriveExpectTx)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 @expr.register_op(dialect="T", category="sync", name="mbarrier_wait_parity")
@@ -87,8 +87,8 @@ class MBarrierWaitParity(expr.Op):
 
 
 @typeinfer.register(MBarrierWaitParity)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 @expr.register_op(dialect="T", category="sync", name="mbarrier_invalidate")
@@ -103,8 +103,8 @@ class MBarrierInvalidate(expr.Op):
 
 
 @typeinfer.register(MBarrierInvalidate)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 def barrier_access(call, ctx):

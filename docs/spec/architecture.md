@@ -92,7 +92,7 @@ The type system is what each `Expr` carries. It is split into a
 ([shard](./shard.md)).
 
 - core types: `Type` (union alias) / `TensorType` / `TupleType` /
-  `UnitType` / `DType` / `dim.*`.
+  `TupleType.Void` / `DType` / `dim.*`.
 - shard / layout sublayer: `IntTuple` / `Layout` / `ComposedLayout` /
   `Topology` / `Mesh` family / `ShardAttr` / `ShardLayout`.
   `TensorType.layout` accepts any member of the layout hierarchy.
@@ -191,7 +191,7 @@ first.
 |---|---|
 | **[architecture](./architecture.md)** (this doc) | The map: pipeline + support-network picture, IR-region overview, spec-ownership table |
 | **[core-ir](./core-ir.md)** | core_ir shared node algebra: `Module` / `Expr` / `Op` / `Call` / `Var` / `Constant` / `Tuple`. No types, no `Stmt` |
-| **[types](./types.md)** | Core type system: `Type` union / `TensorType` / `TupleType` / `UnitType` / `DType` / `dim.*` + TensorType invariants |
+| **[types](./types.md)** | Core type system: `Type` union / `TensorType` / `TupleType` / `TupleType.Void` / `DType` / `dim.*` + TensorType invariants |
 | **[shard](./shard.md)** | Shard / layout sublayer: `IntTuple` / `Layout` / `ComposedLayout` / `Mesh` family / `ShardAttr` / `ShardLayout` + shard-binding invariants |
 | **[hir](./hir.md)** | HIR dataflow IR: `Function` (`Expr` subclass), op subdirectories (math / tensor / nn / sharding), `LoopRegion`, `MeshRegion` |
 | **[tir](./tir.md)** | TIR stmt IR: `Stmt` base (tir-only), `PrimFunction`, `Sequential(Stmt)`, control-flow Stmts, effect / tile Ops in `Evaluate(op, args)` form, user `@intrinsic` Stmt generation |

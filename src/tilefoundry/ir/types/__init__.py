@@ -78,5 +78,5 @@ from .stride import (
     try_compact_major,
 )
 from .swizzle_layout import get_swizzle_portion
-from .tensor_type import ShapeDim, TensorType, TupleType, Type, UnitType
+from .tensor_type import ShapeDim, TensorType, TupleType, Type
 from .topology import Topology

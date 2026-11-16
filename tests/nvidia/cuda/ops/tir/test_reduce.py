@@ -113,13 +113,13 @@ def _replicated(shape: tuple, storage: str = "rmem"):
             id="not_rank_one",
         ),
         pytest.param(
-            (UnitType(), _replicated((1, 8)), _replicated((4,), "smem")),
+            (types.TupleType.Void, _replicated((1, 8)), _replicated((4,), "smem")),
             (0,),
             r"src: None does not match Tensor\(dtype=src_dtype",
             id="source_not_a_tensor",
         ),
         pytest.param(
-            (_split((128, 8), 0), _replicated((1, 8)), UnitType()),
+            (_split((128, 8), 0), _replicated((1, 8)), types.TupleType.Void),
             (0,),
             r"workspace: None does not match Tensor\(storage=smem",
             id="workspace_not_a_tensor",

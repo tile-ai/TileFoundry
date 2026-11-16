@@ -76,8 +76,8 @@ class Reduce(expr.Op):
 
 
 @typeinfer.register(Reduce)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 def workspace_slots(source) -> int:

@@ -23,8 +23,8 @@ class Arange(expr.Op):
 
 
 @typeinfer.register(Arange)
-def _(call, ctx) -> types.UnitType:
-    return types.UnitType()
+def _(call, ctx) -> types.TupleType:
+    return types.TupleType.Void
 
 
 access.register_relation(Arange)(access.identity_relations)

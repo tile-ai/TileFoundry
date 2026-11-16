@@ -37,8 +37,8 @@ class Copy(expr.Op):
 
 
 @typeinfer.register(Copy)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 access.register_relation(Copy)(access.identity_relations)

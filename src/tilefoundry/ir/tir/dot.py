@@ -34,8 +34,8 @@ class Dot(expr.Op):
 
 
 @typeinfer.register(Dot)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 def local_numel(ty) -> int | None:

@@ -228,7 +228,6 @@ runtime = SimpleNamespace(
     TupleGetItem=tensor.TupleGetItem,
     Unary=math.Unary,
     UnaryKind=expr.UnaryKind,
-    UnitType=types.UnitType,
     Var=expr.Var,
     DISPLAY_NAME=valuation.DISPLAY_NAME,
     compact_row_major=types.compact_row_major,

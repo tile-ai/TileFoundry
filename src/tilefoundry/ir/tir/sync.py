@@ -25,8 +25,8 @@ class Sync(expr.Op):
 
 
 @typeinfer.register(Sync)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 def legal_slice_of(m: types.Mesh, e: types.Mesh) -> bool:

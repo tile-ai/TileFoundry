@@ -1502,7 +1502,7 @@ class ScalarTypePattern(ElementPattern):
         )
         if not isinstance(
             value,
-            (runtime.TensorType, runtime.TupleType, runtime.UnitType, runtime.PointerType),
+            (runtime.TensorType, runtime.TupleType, runtime.PointerType),
         ):
             raise ParseError.from_node(match.node, context, "annotation did not resolve to IR Type")
         return value
@@ -3343,11 +3343,11 @@ class CallPattern(ElementPattern):
         elif match.branch_id == "function_ref_call":
             reference, operands, _ = build_slot_reference(match, children, context)
             args = tuple(value for name, value in children.items() if name.startswith("arg_"))
-            return runtime.Call(type=runtime.UnitType(), target=reference, args=(*operands, *args))
+            return runtime.Call(type=runtime.TupleType.Void, target=reference, args=(*operands, *args))
         elif match.branch_id == "function_call":
             callee = match.captures["callee"]
             return runtime.Call(
-                type=runtime.UnitType() if context.function.dialect == "tir" else callee.return_type,
+                type=runtime.TupleType.Void if context.function.dialect == "tir" else callee.return_type,
                 target=runtime.FunctionRef((), callee.name),
                 args=tuple(children.values()),
             )
@@ -5714,9 +5714,9 @@ class StatementPattern(ElementPattern):
                 )
             if isinstance(value, runtime.Evaluate):
                 return value
-            if not isinstance(value, runtime.Call) or not isinstance(value.type, runtime.UnitType):
+            if not isinstance(value, runtime.Call) or value.type != runtime.TupleType.Void:
                 raise ParseError.from_node(
-                    match.node, context, "TIR expression statement must be unit Call"
+                    match.node, context, "TIR expression statement must be void Call"
                 )
             return runtime.Evaluate(callable=value.target, args=value.args)
         elif match.branch_id == "none":
@@ -6021,7 +6021,7 @@ class FunctionPattern(ElementPattern):
                 None if declared_return is None else dim.canonicalize_dims(declared_return)
             )
             if body is None:
-                return_type = declared_return or runtime.UnitType()
+                return_type = declared_return or runtime.TupleType.Void
             elif context.function.role is FunctionRole.VARIANT:
                 base = context.function.base
                 assert isinstance(base, runtime.Function)

@@ -321,7 +321,7 @@ def check_types(op, type_list):
             raise TypeError(f"{op.mnemonic}.{param.name}: invalid logical fragment {t!r}")
     if matcher.solve() is not True:
         raise TypeError("AMX fragment constraints cannot be solved")
-    return types.UnitType()
+    return types.TupleType.Void
 
 
 def bound_value(value, bindings):

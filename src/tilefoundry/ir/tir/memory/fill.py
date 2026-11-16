@@ -25,8 +25,8 @@ class Fill(expr.Op):
 
 
 @typeinfer.register(Fill)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 access.register_relation(Fill)(access.identity_relations)

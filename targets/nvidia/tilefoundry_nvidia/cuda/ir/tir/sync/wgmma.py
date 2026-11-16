@@ -85,7 +85,7 @@ def verify_proxy_storage(call, ctx) -> None:
 
 
 for op in (WgmmaFence, WgmmaCommitGroup, WgmmaWaitGroup, FenceProxyAsync):
-    typeinfer.register(op)(lambda call, ctx: types.UnitType())
+    typeinfer.register(op)(lambda call, ctx: types.TupleType.Void)
     access.register_relation(op)(access.identity_relations)
 for op in (WgmmaFence, WgmmaCommitGroup, WgmmaWaitGroup):
     verify.register(op)(verify_warpgroups)

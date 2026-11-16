@@ -83,11 +83,6 @@ class TupleSignature(Signature):
 
 
 @dataclass(frozen=True)
-class UnitSignature(Signature):
-    """The C++ side of ``UnitType``: nothing is passed."""
-
-
-@dataclass(frozen=True)
 class CallableSignature(Signature):
     """One calling convention of one IR function.
 
@@ -202,7 +197,6 @@ __all__ = [
     "Signature",
     "TensorSignature",
     "TupleSignature",
-    "UnitSignature",
     "called_as",
     "program_id_params",
     "tensor_signature_of",

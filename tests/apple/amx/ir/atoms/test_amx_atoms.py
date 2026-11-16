@@ -136,8 +136,8 @@ def _check_case(declaration, attributes, c_oracle):
     assert tuple(p.name for p in schedule.call_params(op, len(active))) == tuple(p.name for p in active)
     type_list = tuple(_bound_type(param, op.bindings) for param in active)
     expressions = tuple(expr.Var(type=t, name=p.name) for p, t in zip(active, type_list, strict=True))
-    call = expr.Call(type=types.UnitType(), target=op, args=expressions)
-    assert isinstance(typeinfer.inference_type(call), types.UnitType)
+    call = expr.Call(type=types.TupleType.Void, target=op, args=expressions)
+    assert typeinfer.inference_type(call) == types.TupleType.Void
     expected, banks, locations, args = _prepare(op, active, type_list)
     before = tuple(_tensor_bytes(value.data) for value in args)
     case = f"{declaration.__name__}({attributes!r})"
