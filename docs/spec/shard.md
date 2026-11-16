@@ -130,13 +130,13 @@ The names `gpu`, `cta`, `thread`, `sm`, `group` and `lane` above are examples of
 | mesh | The units of one or more adjacent topologies, arranged by a layout on named mesh axes. | JAX | — | `Mesh(topologies, layout, names)` | `Mesh<TLayout, TopologyLevel...>` |
 | sub mesh | The part of a mesh that is one topology. It is a mesh of one topology. | CuTe sublayout, `get<I>` | `separate`, `level` (for this object), `sub-mesh` for the result of a slice | `get(mesh, topology)`, `sub_meshes(mesh)` | `get<L>(mesh)` |
 | mesh axis | One axis of a mesh. | JAX `axis_names` | `axis` alone | `mesh_axis`, `Mesh.names` | — |
-| mesh layout | The layout of a mesh. It maps a coord to the index over all topologies of the mesh. Mode `i` holds the group of topology `i`. `layouts(mesh)` and `get(mesh, topology)` divide by the product of the lower topology sizes to give the layout of the unit ids of one topology. | CuTe | `arrangement` | `Mesh.layout`, `layouts(mesh)` | `Mesh::layout` |
+| mesh layout | The layout of a mesh. It maps a coord to the index over all topologies of the mesh. Mode `i` holds the group of topology `i`. `layouts(mesh)` and `get(mesh, topology)` give the layout of one topology. They divide its strides by the product of the lower topology sizes. The result maps a coord to a unit id. | CuTe | `arrangement` | `Mesh.layout`, `layouts(mesh)` | `Mesh::layout` |
 | coord | The location of a unit on the mesh axes. | CuTe | `position` (for a location), "device numbering" | `mesh_coords`, `MeshCoord` | `mesh_coords` |
 | index | The linear number that a layout gives to a coord. The index of the layout of one topology is the unit id. | CuTe | "device numbering" | — | — |
 | offset | The index of the first unit of a sliced mesh, over all topologies of that mesh. It is one number. `get(mesh, topology)` gives a mesh of one topology with its own offset, a unit id. | CuTe | `starts` | `types.offset(mesh)` | `offset(mesh)` |
 | placement | A map from topology names to unit ids. It can name only some topologies. It tells where a process or a piece of data is. | OneFlow | `ProgramMetaData`; `placement` for a shard attr; "memory placement" | `Placement` | `Placement` |
 | topology scope | All units of one topology. | own | `scope` alone | — | — |
-| mesh scope | The units in force at one point of the program, given by one mesh: the composition of the meshes of all enclosing `with`. It is an arrangement of the topology scopes. | own | `scope` alone; `current_mesh`, `active_mesh` | `ctx.mesh_scope`, `MeshScope` | — |
+| mesh scope | The units in force at one point of the program. It is one mesh. It composes the meshes of all enclosing `with`. It is an arrangement of the topology scopes. | own | `scope` alone; `current_mesh`, `active_mesh` | `ctx.mesh_scope`, `MeshScope` | — |
 | enclosing meshes | The mesh of each enclosing `with`, outermost first. The last one is the **innermost mesh**. | own | `mesh_stack`, `opened_mesh`, `entered_mesh`, `region_mesh`, `enclosing_mesh` (singular) | `ctx.enclosing_meshes()`, `ctx.innermost_mesh()` | — |
 | execution mesh | The units that execute an instruction, as a mesh. Its ISL form is the execution domain. | existing ([tir](./tir.md)) | `participant frame`, `instruction frame`, `execution frame`, `issue mesh` | `execution_mesh`, `find_execution_mesh` | — |
 | root mesh | The mesh that a function gets from outside. | existing | — | `root_mesh` | — |
@@ -182,6 +182,7 @@ The names `gpu`, `cta`, `thread`, `sm`, `group` and `lane` above are examples of
 | memory level, cache level | Keep the prefix. |
 | memory placement, address placement | Write address. |
 | unit of measurement (`unit="byte"`) | Write measurement unit. Only `target/hardware/` and the hardware fact files can write `unit` alone. |
+| `unit: str` in analysis (a topology name, such as `cta`) | Write `topology: str`. |
 | translation unit | Write the full term. |
 | unit stride, unit step | Write stride-1, step-1. |
 
@@ -190,7 +191,8 @@ The names `gpu`, `cta`, `thread`, `sm`, `group` and `lane` above are examples of
 - One concept has one word in Python, C++ and the specs.
 - To select a word, use CuTe first, then JAX. Use a word of our own only when neither has one.
 - `level`, `scope`, `domain` and `axis` always have a qualifier: topology level, memory level, mesh scope, mesh axis. A class, function or module that handles one case only can omit it.
-- The CUDA words warp, lane, cluster and CTA occur only in `targets/nvidia` and in the classification code of sync.
+- Only `targets/nvidia` and the sync classification code use the CUDA names warp, lane, cluster and CTA in implementation code.
+- Spec examples can use the names of a specific topology or mesh axis, for example `cta`, `thread` and `lane`.
 - Do not keep an alias for an old name.
 
 ---

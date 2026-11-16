@@ -189,7 +189,7 @@ The terms are in [shard §0](./spec/shard.md#0-terms).
 - N1: A value has the name of the term that it holds: `mesh_scope`, `execution_mesh`, `unit_id`, `offset`.
 - N2: A plural name denotes multiple values: `unit_ids`, `topologies`, `enclosing_meshes`, `sub_meshes`. Preserve the order of the named topologies or enclosing meshes.
 - N3: `topology: str` is a name. `topology_level: int` is a position.
-- N4: A function that gives a part of a mesh or a layout, or arranges it again, uses the CuTe verb: `get`, `flatten`, `filter`, `offset`, `size`.
+- N4: Functions that select or rearrange a mesh or layout use CuTe verbs. Examples: `get`, `flatten`, `filter`, `offset`, `size`.
 - N5: Only these words qualify a `Mesh` value: scope, enclosing, innermost, execution, root, sub, sliced. `level`, `scope`, `domain` and `axis` always have a qualifier, unless the class, function or module handles one case only.
 - N6: The parameter that holds a `valuation.Context` is `ctx`. `frame` is a Python stack frame.
 - N7: Lowering issues an instruction. A unit executes it.
