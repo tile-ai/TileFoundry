@@ -13,6 +13,8 @@ from tilefoundry.ir import tir
 from tilefoundry_nvidia.cuda import target
 from tilefoundry_nvidia.cuda.codegen import context
 
+from .memory import emit_paired
+
 
 def tensor_expr(var, ctx: context.Context) -> str:
     base = ctx.name_for(var)
@@ -21,9 +23,9 @@ def tensor_expr(var, ctx: context.Context) -> str:
 
 @codegen.register(target.Target, codegen.Role.EMIT, tir.async_copy.CopyAsync)
 def emit_copy_async(call, ctx: context.Context) -> None:
-    src = tensor_expr(call.args[0], ctx)
-    dst = tensor_expr(call.args[1], ctx)
     if tir.async_copy.is_indexed_copy(call.args):
+        src = tensor_expr(call.args[0], ctx)
+        dst = tensor_expr(call.args[1], ctx)
         index = tensor_expr(call.args[2], ctx)
         width = tir.async_copy.indexed_width(call.args[0].type, call.args[1].type)
         mesh_type = next(reversed(ctx.mesh_aliases.values()))[0]
@@ -41,7 +43,7 @@ def emit_copy_async(call, ctx: context.Context) -> None:
             f"tilefoundry::ops::copy_async<{mesh_type}, {width}>({src}, {dst}, {index}{suffix});"
         )
         return
-    ctx.emit(f"tilefoundry::ops::copy_async({src}, {dst});")
+    emit_paired("tilefoundry::ops::copy_async", call.args[:2], ctx)
 
 
 @codegen.register(target.Target, codegen.Role.EMIT, tir.async_copy.CpAsyncCommit)

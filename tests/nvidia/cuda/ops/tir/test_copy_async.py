@@ -115,6 +115,23 @@ def test_async_copy_stage_matches_input(target: cuda.Target) -> None:
 
 @pytest.mark.parametrize("target", CUDA_TARGETS)
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_parameter_stages_by_coordinate(target: cuda.Target) -> None:
+    """A parameter staged into a shared tile of its layout keeps its rows.
+
+    CUDA holds the parameter as one flat mode. Beside the (2, 4) tile it shared
+    no run CuTe could vectorize, so the copy used to stop at compile time.
+    """
+    module = retarget(cli.load_authored_ir(f"{TIR / 'parameter_stage.py'}:ParameterStage"), target)
+    runtime = tilefoundry.compile(module, target=target)
+    a = torch.arange(8, dtype=torch.float32, device="cuda").view(2, 4)
+    out = torch.zeros_like(a)
+    runtime(a, out)
+    torch.cuda.synchronize()
+    assert torch.equal(out, a)
+
+
+@pytest.mark.parametrize("target", CUDA_TARGETS)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_async_copy_stages_two_runs(target: cuda.Target) -> None:
     """Each thread's second run lands 512 elements after its first, as the destination states."""
     module = retarget(cli.load_authored_ir(f"{TIR / 'split_stage.py'}:SplitStage"), target)

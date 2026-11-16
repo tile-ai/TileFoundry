@@ -349,6 +349,41 @@ def tensor_reference(var, ctx: context.Context) -> str:
     return f"{name}_tensor" if ctx.is_kernel_param(var) else name
 
 
+def emit_paired(op: str, operands, ctx: context.Context, rest: tuple[str, ...] = ()) -> None:
+    """Emit ``op(operands, *rest)`` for an op whose operands share one shape.
+
+    A kernel parameter is wrapped as one flat mode, so its CuTe index is a
+    memory offset while another operand counts by coordinate. Each parameter
+    with a static shape and a plain layout enters through that layout instead.
+    """
+    names, views = [], []
+    for index, var in enumerate(operands):
+        layout = getattr(var.type, "layout", None)
+        reference = tensor_reference(var, ctx)
+        if (
+            not ctx.is_kernel_param(var)
+            or not isinstance(layout, types.Layout)
+            or expr.shape_has_dim_var(var.type.shape)
+        ):
+            names.append(reference)
+            continue
+        name = f"tilefoundry_operand_{index}"
+        names.append(name)
+        view = f"cute::make_tensor({reference}.data(), {plain_layout_value(layout)})"
+        views.append(f"auto {name} = {view};")
+    call = f"{op}({', '.join((*names, *rest))});"
+    if not views:
+        ctx.emit(call)
+        return
+    ctx.emit("{")
+    ctx.indent()
+    for line in views:
+        ctx.emit(line)
+    ctx.emit(call)
+    ctx.dedent()
+    ctx.emit("}")
+
+
 def pointer_reference(pointer, ctx: context.Context) -> tuple[str, object | None]:
     """Render a TensorView pointer and return its syntactic source tensor, if any."""
     if isinstance(pointer, expr.Call) and isinstance(pointer.target, memory.PtrOf):
@@ -523,6 +558,7 @@ def emit(let: core.LetStmt, ctx: context.Context) -> None:
 
 
 __all__ = [
+    "emit_paired",
     "render_attr",
     "render_layout_value",
     "render_shard_layout_value",
