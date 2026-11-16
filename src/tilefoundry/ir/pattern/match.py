@@ -422,23 +422,17 @@ class Matcher:
     def visit_Mesh(self, pattern, subject) -> bool:
         if not isinstance(subject, types.Mesh):
             return self.fail(pattern, subject)
-        levels = types.separate(subject)
+        names = types.topology_names(subject)
         if not isinstance(pattern.topologies, tuple):
-            if not levels:
+            if not names:
                 return self.fail(pattern, subject)
-            selected = levels[-1]
-            names = tuple(getattr(level, "name", level) for level in selected.topologies)
-            return self.match(pattern.topologies, names) and self.match(
-                pattern.layout, selected.layout
+            return self.match(pattern.topologies, names[-1:]) and self.match(
+                pattern.layout, types.get(subject, names[-1]).layout
             )
-        picked = tuple(
-            level
-            for level in levels
-            if getattr(level.topologies[0], "name", level.topologies[0]) in pattern.topologies
-        )
-        found = tuple(getattr(level.topologies[0], "name", level.topologies[0]) for level in picked)
-        if len(picked) != len(pattern.topologies) or set(found) != set(pattern.topologies):
+        found = tuple(name for name in names if name in pattern.topologies)
+        if len(found) != len(pattern.topologies) or set(found) != set(pattern.topologies):
             return self.fail(pattern, subject)
+        picked = (types.get(subject, name) for name in found)
         return self.match(pattern.layout, types.Mesh.from_meshes(*picked).layout)
 
     def visit_Tensor(self, pattern, subject) -> bool:
@@ -468,10 +462,7 @@ class Matcher:
     def visit_ShardLayout(self, pattern, subject) -> bool:
         if not isinstance(subject, types.ShardLayout):
             return self.fail(pattern, subject)
-        subject_names = tuple(
-            getattr(topology, "name", topology) for topology in subject.mesh.topologies
-        )
-        if not self.match(pattern.mesh.topologies, subject_names):
+        if not self.match(pattern.mesh.topologies, types.topology_names(subject.mesh)):
             return self.fail(pattern, subject)
         return all(
             self.match(place, value)

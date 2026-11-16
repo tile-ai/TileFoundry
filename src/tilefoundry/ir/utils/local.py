@@ -5,75 +5,64 @@ from __future__ import annotations
 from typing import Optional
 
 from tilefoundry.ir import expr, types
-from tilefoundry.ir.types import int_tuple
 
 __all__ = [
-    "divided_mesh_axes",
+    "divided_axes",
+    "filter_topologies",
+    "find_execution_mesh",
     "local_type_of",
     "make_shard_tensor_type",
-    "participant_frame",
-    "participant_layout",
     "physical_layout",
     "topology_level",
-    "try_local_type_of",
 ]
 
 
-def topology_label(topology):
-    """The name of a topology, or the string itself when one was written as a string."""
-    return getattr(topology, "name", topology)
-
-
-def participant_layout(
+def filter_topologies(
     layout: types.ShardLayout, required: types.Mesh | tuple[str, ...] | None = None
 ) -> types.ShardLayout:
-    """Select participating levels while keeping their mesh axes and attrs aligned.
+    """Drop the topologies a value does not take part on, keeping mesh axes and attrs aligned.
 
-    An instruction retains all axes of its required levels, including Broadcast.
-    Outside an instruction's required levels, only Split and Partial prevent
-    omission. Without an instruction frame, retain value-varying levels too,
-    or the innermost level for an entirely broadcast value.
+    CuTe ``filter`` drops modes that do not change the index. An instruction
+    retains all axes of its required topologies, including Broadcast. Outside
+    them, only Split and Partial prevent omission. Without an instruction's
+    execution mesh, retain value-varying topologies too, or the innermost
+    topology for an entirely broadcast value.
     """
-    levels = types.separate(layout.mesh)
+    names = types.topology_names(layout.mesh)
     required_names = (
-        {topology_label(topology) for topology in required.topologies}
+        set(types.topology_names(required))
         if isinstance(required, types.Mesh)
         else None
         if required is None
         else set(required)
     )
-    if len(levels) == 1 and (
-        required_names is None or topology_label(levels[0].topologies[0]) in required_names
-    ):
+    if len(names) == 1 and (required_names is None or names[0] in required_names):
         return layout
-    attrs_by_level = []
-    offset = 0
-    for level in levels:
-        rank = len(types.flatten(level.layout).shape)
-        attrs_by_level.append(layout.attrs[offset : offset + rank])
-        offset += rank
-    if offset != len(layout.attrs):
+    keys = types.axis_keys(layout.mesh)
+    if len(keys) != len(layout.attrs):
         raise ValueError("shard attributes must have the rank of their mesh")
+    attrs_by_topology = {name: [] for name in names}
+    for attr, (name, _) in zip(layout.attrs, keys):
+        attrs_by_topology[name].append(attr)
     if required_names is None:
         required_names = {
-            topology_label(level.topologies[0])
-            for level, attrs in zip(levels, attrs_by_level, strict=True)
+            name
+            for name, attrs in attrs_by_topology.items()
             if any(not isinstance(attr, types.Broadcast) for attr in attrs)
         }
     if not required_names:
-        required_names = {topology_label(levels[-1].topologies[0])}
+        required_names = {names[-1]}
     selected = []
     selected_attrs = []
-    for level, attrs in zip(levels, attrs_by_level, strict=True):
-        name = topology_label(level.topologies[0])
+    for name, attrs in attrs_by_topology.items():
         if name in required_names:
-            selected.append(level)
+            selected.append(types.get(layout.mesh, name))
             selected_attrs.extend(attrs)
         elif any(isinstance(attr, (types.Split, types.Partial)) for attr in attrs):
             raise ValueError(f"shard attr other than Broadcast outside the kept topology {name!r}")
     if not selected:
         raise ValueError("shard layout keeps no topology")
-    if len(selected) == len(levels):
+    if len(selected) == len(names):
         return layout
     return types.ShardLayout(layout.layout, tuple(selected_attrs), types.Mesh.from_meshes(*selected))
 
@@ -95,19 +84,23 @@ def physical_layout(layout: types.ShardLayout) -> types.LayoutBase:
     )
     if not kept:
         return layout.layout
-    selected = participant_layout(layout, kept)
+    selected = filter_topologies(layout, kept)
     return types.ShardLayout(
         selected.layout, tuple(map(types.physical_attr, selected.attrs)), selected.mesh
     )
 
 
-def participant_frame(source: types.Mesh, required: types.Mesh) -> tuple[types.Mesh, int]:
-    """Find a physical suffix; its dropped count indexes the full source layout."""
-    assert len(required.topologies) == 1, "participant frames require one topology"
-    source_layout = types.flatten(source.layout)
+def find_execution_mesh(mesh: types.Mesh, required: types.Mesh) -> tuple[types.Mesh, int]:
+    """The mesh axes at the end of *mesh* that cover exactly the units of an op's execution mesh.
+
+    *required* is the execution mesh the op declares. The int is how many mesh
+    axes come before those axes, as an index into the full layout of *mesh*.
+    """
+    assert len(required.topologies) == 1, "an execution mesh has one topology"
+    source_layout = types.flatten(mesh.layout)
     required_layout = types.flatten(required.layout)
     if not isinstance(source_layout, types.Layout) or not isinstance(required_layout, types.Layout):
-        raise ValueError("tile participant meshes require concrete layouts")
+        raise ValueError("tile execution meshes require concrete layouts")
     source_shape = tuple(source_layout.shape)
     source_strides = tuple(source_layout.strides)
     stated = {types.apply(required_layout, index) for index in range(types.size(required_layout))}
@@ -124,14 +117,14 @@ def participant_frame(source: types.Mesh, required: types.Mesh) -> tuple[types.M
     )
     if dropped is None:
         raise ValueError(
-            f"mesh layout {source_shape} does not end in participant frame "
+            f"mesh layout {source_shape} does not end in execution mesh "
             f"{tuple(required_layout.shape)}"
         )
-    start = types.offset(types.get(source, types.topology_names(source)[-1]))
+    start = types.offset(types.get(mesh, types.topology_names(mesh)[-1]))
     return (
         types.Mesh(
-            source.topologies[-len(required.topologies) :],
-            required.layout if start == 0 else types.ComposedLayout(None, start, required.layout),
+            mesh.topologies[-len(required.topologies) :],
+            types.with_offset(required.layout, start),
             required.names,
         ),
         dropped,
@@ -197,17 +190,6 @@ def all_split_local_type(type: types.Type, *, refuse_indivisible: bool) -> types
     )
 
 
-def try_local_type_of(type: types.Type) -> types.Type | None:
-    """Project logical splits, returning None when a factored split has no local box.
-
-    Sequential division along logical axes can fail for factored or reordered
-    shard layouts (for example, 16 / 4 followed by 4 % 8, or 16 % 32).
-    Candidates compare the whole type when that logical projection has no
-    solution; this does not decide whether an instruction issues whole.
-    """
-    return all_split_local_type(type, refuse_indivisible=False)
-
-
 def local_type_of(
     type: types.Type, *, topology: str | None = None, topologies: tuple[types.Topology, ...] = ()
 ) -> types.Type:
@@ -266,29 +248,17 @@ def topology_level(topology: str, topologies: tuple[types.Topology, ...]) -> int
     return declared[topology]
 
 
-def divided_mesh_axes(
-    layout: types.ShardLayout, *, topology: str, topologies: tuple[types.Topology, ...]
+def divided_axes(
+    layout: types.ShardLayout, *, selected_level: int, topologies: tuple[types.Topology, ...]
 ) -> tuple[int, ...]:
-    """The mesh axes whose ``Split`` one unit of *topology* holds one part of.
+    """The mesh axes whose ``Split`` one unit at topology level *selected_level* holds one part of.
 
     A ``Split`` at that level or coarser divides; a finer one does not. This is
     the rule ``local_type_of`` divides by, stated once for whoever places a
     value's coordinates among that unit's modes.
     """
-    selected = topology_level(topology, topologies)
-    return divided_axes(layout, selected_level=selected, topologies=topologies)
-
-
-def divided_axes(
-    layout: types.ShardLayout, *, selected_level: int, topologies: tuple[types.Topology, ...]
-) -> tuple[int, ...]:
-    mesh_layout = layout.mesh.layout
-    stated = mesh_layout.outer if isinstance(mesh_layout, types.ComposedLayout) else mesh_layout
-    axis_topology_levels = types.flatten(
-        tuple(
-            int_tuple.repeat_like(mode, topology_level(topology.name, topologies))
-            for mode, topology in zip(stated.shape, layout.mesh.topologies, strict=True)
-        )
+    axis_topology_levels = tuple(
+        topology_level(name, topologies) for name, _ in types.axis_keys(layout.mesh)
     )
     return tuple(
         mesh_axis

@@ -9,75 +9,37 @@ either.
 
 from __future__ import annotations
 
-from tilefoundry import services
+from dataclasses import replace
+
 from tilefoundry.ir import expr, types
-from tilefoundry.ir.types import int_tuple, layout_algebra
 
 
-def device_layout(mesh: types.Mesh) -> types.Layout:
-    """The whole mesh's axes as the device numbers its units.
+def flat_layout(mesh: types.Mesh) -> types.Layout | types.ComposedLayout:
+    """The whole mesh as one layout, offset included: the form a mesh is written and printed in.
 
-    Each level states its own numbering, and a unit id of one level is a
+    The index runs across all topologies of the mesh. The reverse of ``nested_layout``.
+    Each topology states its own numbering, and a unit id of one topology is a
     unit id within its parent, so an axis steps by what it states times what
-    the levels under it hold. That product is the numbering a coordinate of
-    the whole mesh is read in, and the one a mesh is written down in.
+    the topologies under it hold. A sliced mesh keeps its ``ComposedLayout``.
     """
+    sizes = tuple(getattr(topology, "size", 1) for topology in mesh.topologies)
+    scales = (
+        types.compact_major(sizes, major="row")
+        if all(isinstance(one, int) for one in sizes)
+        else (1,) * len(sizes)
+    )
     shape: list = []
     strides: list = []
-    sizes = tuple(getattr(topology, "size", 1) for topology in mesh.topologies)
-    scales = types.compact_major(sizes, major="row") if all(
-        isinstance(one, int) for one in sizes
-    ) else (1,) * len(sizes)
     for layout, scale in zip(types.layouts(mesh), scales):
-        stated = layout.strides
         shape.extend(types.flatten(layout.shape))
-        strides.extend(
-            step * scale
-            for step in (
-                types.flatten(stated)
-                if stated is not None
-                else types.compact_major(tuple(types.flatten(layout.shape)))
-            )
-        )
-    return types.Layout(shape=tuple(shape), strides=tuple(strides))
-
-
-def level_selection(layout, start):
-    """One level of a scope as the units it selects: a size when they run contiguously."""
-    reduced = layout_algebra.filter(layout, major="row")
-    if layout_algebra.is_contiguous(reduced, major="row"):
-        return services.normalize_dim(types.size(reduced)), start
-    return reduced, start
-
-
-def covered_by_scope(mesh: types.Mesh, current: types.Mesh) -> bool:
-    """Whether *mesh* selects exactly the units the enclosing scope does.
-
-    Level by level, on the units each level states rather than on the axes
-    standing where it does: a scope that is part of a level -- one warp of a
-    CTA's threads -- says which units it is by where its run starts and how
-    its modes step, and a value laid out over that same run is inside it
-    however either of them wrote the axes down.
-    """
-    scope = {
-        getattr(topology, "name", topology): level_selection(layout, start)
-        for topology, layout, start in zip(
-            current.topologies, types.layouts(current), map(types.offset, types.separate(current))
-        )
-    }
-    return all(
-        getattr(topology, "name", topology) in scope
-        and level_selection(layout, start)
-        == scope[getattr(topology, "name", topology)]
-        for topology, layout, start in zip(
-            mesh.topologies, types.layouts(mesh), map(types.offset, types.separate(mesh))
-        )
-    )
+        strides.extend(step * scale for step in types.flatten(layout.strides))
+    flat = types.Layout(shape=tuple(shape), strides=tuple(strides))
+    return replace(mesh.layout, outer=flat) if isinstance(mesh.layout, types.ComposedLayout) else flat
 
 
 def storage_reaches(storage, mesh: types.Mesh, current: types.Mesh) -> bool:
     """Whether *storage* reaches across a coarser value-to-scope boundary."""
-    if current.topologies[-1].name in {topology.name for topology in mesh.topologies}:
+    if current.topologies[-1].name in types.topology_names(mesh):
         return True
     try:
         storage = expr.resolve_storage(storage)
@@ -86,36 +48,4 @@ def storage_reaches(storage, mesh: types.Mesh, current: types.Mesh) -> bool:
     return storage in {expr.StorageKind.GMEM, expr.StorageKind.SMEM}
 
 
-def states_consistent_positions(mesh: types.Mesh) -> bool:
-    """Whether the units a mesh states are the ones its levels declare."""
-    return int_tuple.product(mesh.topologies) == types.size(mesh.layout)
-
-
-def mesh_scope_matches_required_scope(current: types.Mesh, required: types.Mesh) -> bool:
-    """True iff ``current`` provides the thread participation ``required`` needs."""
-    if current.topologies[0].name != required.topologies[0].name:
-        return False
-    if not states_consistent_positions(current) or not states_consistent_positions(required):
-        return False
-    here, there = flat_layout(current), flat_layout(required)
-    if not layout_algebra.is_inverse_projectable(here):
-        return False
-    return here.shape == there.shape and here.strides == there.strides
-
-
-def flat_layout(mesh: types.Mesh) -> types.Layout:
-    stated = mesh.layout.outer if isinstance(mesh.layout, types.ComposedLayout) else mesh.layout
-    strides = stated.strides
-    return types.Layout(
-        shape=tuple(types.flatten(stated.shape)),
-        strides=tuple(types.flatten(strides)),
-    )
-
-
-__all__ = [
-    "device_layout",
-    "covered_by_scope",
-    "mesh_scope_matches_required_scope",
-    "states_consistent_positions",
-    "storage_reaches",
-]
+__all__ = ["flat_layout", "storage_reaches"]

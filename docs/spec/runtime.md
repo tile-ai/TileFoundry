@@ -397,6 +397,22 @@ A refused launch MUST raise `RuntimeError` from the call and identify the
 kernel and device error. Execution faults may surface asynchronously at the
 next device synchronization.
 
+### 1.5 `runtime/placement.py`
+
+<!-- generated: py-placement -->
+```python
+# src/tilefoundry/runtime/placement.py
+def placement_from_env(topology: str = "gpu") -> types.Placement: ...
+```
+<!-- /generated -->
+
+- constraints:
+  - `placement_from_env(topology)` MUST return `Placement({topology: LOCAL_RANK})`.
+    A launcher such as `torchrun` sets `LOCAL_RANK` before the script runs.
+  - It MUST raise `ValueError` when `LOCAL_RANK` is missing, and when it is not an
+    integer. The IR type `Placement` ([shard §5.1](./shard.md#51-placement)) does
+    not read the environment.
+
 ### 1.6 `compiler/`
 
 <!-- generated: py-compile-options -->
@@ -846,7 +862,7 @@ class ShardTensor:
 
     def reshard(self, type: types.TensorType) -> "ShardTensor": ...
 
-    def window(self, whole, shard: types.ShardLayout, placement: types.Placement): ...
+    def window(self, whole, shard: types.ShardLayout, coord: tuple): ...
 ```
 <!-- /generated -->
 

@@ -26,22 +26,25 @@ from .layout import (
     flat_shape,
     flat_stride,
     flatten,
-    rank,
+    plain_layout,
     size,
-    take,
     unflatten,
+    with_offset,
 )
 from .mesh import (
     Mesh,
     axis_keys,
     check_topology,
+    equals_mesh_scope,
     flat_layouts,
     get,
     layouts,
     offset,
-    separate,
+    selected_units,
+    sub_box,
+    sub_meshes,
     topology_names,
-    within_scope,
+    within_mesh_scope,
 )
 from .placement import Placement
 from .pointer import PointerType
@@ -75,8 +78,7 @@ from .stride import (
     compact_row_major,
     crd2idx,
     idx2crd,
-    try_compact_major,
 )
 from .swizzle_layout import get_swizzle_portion
 from .tensor_type import ShapeDim, TensorType, TupleType, Type
-from .topology import Topology
+from .topology import Topology, topology_name

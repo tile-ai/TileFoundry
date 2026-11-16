@@ -969,8 +969,8 @@ class ModuleBuildContext:
         output_count: int = 1,
     ) -> FuncContext:
         topology_scope = {
-            getattr(topology, "name", str(index)): topology
-            for index, topology in enumerate(self.topologies or ())
+            types.topology_name(topology): topology
+            for topology in (self.topologies or ())
         }
         return FuncContext(
             dialect=dialect,

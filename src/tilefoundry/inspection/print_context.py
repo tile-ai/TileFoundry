@@ -9,12 +9,12 @@ from contextlib import contextmanager
 from tilefoundry import utils
 from tilefoundry.ir import types
 
-from .mesh_utils import selection_layout, sub_box
+from .mesh_utils import selection_layout
 
 
 def box_text(parent: types.Mesh, box: tuple[slice, ...], alias: str) -> str:
     pieces: list[str] = []
-    for part, extent in zip(box, types.flatten(parent.layout).shape):
+    for part, extent in zip(box, parent.shape):
         start, stop = part.start, part.stop
         if start == 0 and stop == extent:
             pieces.append(":")
@@ -28,7 +28,7 @@ def box_text(parent: types.Mesh, box: tuple[slice, ...], alias: str) -> str:
 def slice_from_parent(parent: types.Mesh, child: types.Mesh, alias: str) -> str | None:
     if parent.names != child.names:
         return None
-    box = sub_box(parent, child)
+    box = types.sub_box(parent, child)
     if box is None or parent[box] != child:
         return None
     return box_text(parent, box, alias)
@@ -137,15 +137,9 @@ class PrintContext:
                 bound_topology = next(
                     topology for topology in bound.topologies if topology.name == target_level
                 )
-                target_geometry = next(
-                    part for part in types.separate(mesh) if part.topologies[0].name == target_level
-                )
-                bound_geometry = next(
-                    part for part in types.separate(bound) if part.topologies[0].name == target_level
-                )
                 if (
                     target_topology == bound_topology
-                    and target_geometry.layout == bound_geometry.layout
+                    and types.get(mesh, target_level).layout == types.get(bound, target_level).layout
                 ):
                     return f"{alias}.{bound_name}"
         return None
@@ -166,7 +160,7 @@ class PrintContext:
             layout = selection_layout(mesh, parent)
             if layout is not None:
                 return alias, layout
-            box = sub_box(parent, mesh)
+            box = types.sub_box(parent, mesh)
             if box is None:
                 continue
             selection = parent[box]

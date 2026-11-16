@@ -15,11 +15,13 @@ from .layout import (
     LayoutBase,
     flatten,
     normalize_strides,
+    plain_layout,
     unflatten,
 )
 from .layout_algebra import coalesce, slice_and_offset
-from .mesh import Mesh, layouts, offset, separate
+from .mesh import Mesh, axis_keys, offset, sub_meshes
 from .stride import compact_row_major, crd2idx, idx2crd
+from .topology import topology_name
 
 __all__ = [
     "B",
@@ -179,7 +181,7 @@ class ShardLayout(LayoutBase):
     @classmethod
     def from_logical(cls, shape, mesh, attrs, *, storage, owners):
         """Factor logical axes by their mesh splits, then construct default strides."""
-        mesh_shape = flatten(mesh.layout).shape
+        mesh_shape = mesh.shape
         bindings = {}
         for mesh_axis, attr in enumerate(attrs):
             if isinstance(attr, Split):
@@ -204,9 +206,7 @@ class ShardLayout(LayoutBase):
     @classmethod
     def from_modes(cls, shape, mesh, attrs, *, storage, owners):
         """Construct authored modes with the owner's compact local strides."""
-        topologies = tuple(
-            part.topologies[0].name for part in separate(mesh) for _ in flatten(part.layout).shape
-        )
+        topologies = tuple(topology for topology, _ in axis_keys(mesh))
         private = []
         for axis, attr in enumerate(attrs):
             if isinstance(attr, Split) and (
@@ -330,7 +330,7 @@ def split_target_axes(sl: "ShardLayout", tensor_shape: tuple) -> tuple:
 def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
     """Fix mesh-axis coordinates with CuTe slice; None keeps an axis."""
     address = shard.layout
-    primitive = address.outer if isinstance(address, ComposedLayout) else address
+    primitive = plain_layout(address)
     profile = compatible_profile(primitive.shape, tensor_shape)
     flat, mesh = flatten(primitive), flatten(shard.mesh.layout)
     coords = tuple(coords) + (None,) * (len(shard.attrs) - len(coords))
@@ -370,7 +370,7 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
         )
         for mode, coord in zip(profile, c, strict=True)
     )
-    inner = sliced.outer if isinstance(sliced, ComposedLayout) else sliced
+    inner = plain_layout(sliced)
     inner = unflatten(flatten(inner), compatible_profile(inner.shape, local_shape))
     sliced = (
         replace(sliced, outer=inner, offset=services.normalize_dim(sliced.offset))
@@ -380,17 +380,14 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
     kept = {old: new for new, old in enumerate(i for i, at in enumerate(fixed) if at is None)}
     remaining = [axis for axis, at in enumerate(coords) if at is None]
     if remaining:
-        groups, topologies, begin = [], [], 0
-        for topology, topology_layout in zip(shard.mesh.topologies, layouts(shard.mesh), strict=True):
-            count = len(flatten(topology_layout.shape))
-            group = [axis for axis in remaining if begin <= axis < begin + count]
-            if group:
-                topologies.append(topology)
-                groups.append(group)
-            begin += count
+        keys, held = axis_keys(shard.mesh), {}
+        for axis in remaining:
+            if axis < len(keys):
+                held.setdefault(keys[axis][0], []).append(axis)
+        topologies = [t for t in shard.mesh.topologies if topology_name(t) in held]
         outer = Layout(
-            tuple(tuple(mesh.shape[i] for i in group) for group in groups),
-            tuple(tuple(mesh.strides[i] for i in group) for group in groups),
+            tuple(tuple(mesh.shape[i] for i in group) for group in held.values()),
+            tuple(tuple(mesh.strides[i] for i in group) for group in held.values()),
         )
         layout = (
             replace(shard.mesh.layout, outer=outer)
@@ -416,7 +413,7 @@ def local_readback(layout):
     """Read a local mode tree as the host/HIR logical-axis Layout."""
     address = layout.layout if isinstance(layout, ShardLayout) else layout
     result = coalesce(address, (0,) * len(address.shape), major="row")
-    primitive = result.outer if isinstance(result, ComposedLayout) else result
+    primitive = plain_layout(result)
     shape = tuple(
         mode[0] if isinstance(mode, tuple) and len(mode) == 1 else mode for mode in primitive.shape
     )
@@ -436,8 +433,8 @@ def mesh_coords(mesh: Mesh, ids: tuple[int | None, ...]) -> tuple[int | None, ..
     first, as the runtime's ``level_id`` does.
     """
     coords = []
-    for index, (layout, part) in enumerate(zip(layouts(mesh), separate(mesh), strict=True)):
-        flat = flatten(layout)
+    for index, part in enumerate(sub_meshes(mesh)):
+        flat = flatten(part.layout)
         unit_id = ids[index] if index < len(ids) else None
         coords.extend(
             (None,) * len(flat.shape)

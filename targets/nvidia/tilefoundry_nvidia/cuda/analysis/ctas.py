@@ -304,19 +304,15 @@ def axis_numbering(mesh: types.Mesh, axis: int):
     them. A unit reads ``((unit - start) // stride) % extent`` on that axis, as
     the runtime's ``mesh_coords`` does.
     """
-    first = 0
-    for level in types.separate(mesh):
-        layout = utils.device_layout(level)
-        if axis < first + len(layout.shape):
-            break
-        first += len(layout.shape)
-    else:
+    keys = types.axis_keys(mesh)
+    if axis >= len(keys):
         return None
-    start = level.layout.offset if isinstance(level.layout, types.ComposedLayout) else 0
+    level = types.get(mesh, keys[axis][0])
+    layout, start = types.plain_layout(utils.flat_layout(level)), types.offset(level)
     extents, strides = layout.shape, layout.strides
-    if not all(isinstance(value, int) for value in (start, *extents, *strides)):
+    if not all(isinstance(value, int) for value in (*extents, *strides)):
         return None
-    return start, extents, strides, axis - first
+    return start, extents, strides, axis - [name for name, _ in keys].index(keys[axis][0])
 
 
 def unit_read(name: str, coordinate: expr.Call, unit: str) -> str | None:
@@ -343,15 +339,12 @@ def unit_guard(mesh: types.Mesh, unit: str, name: str = "cta") -> str | None:
 
     It is the runtime's ``contains``: a unit of that level the mesh's layout reaches.
     """
-    level = next(
-        (level for level in types.separate(mesh) if level.topologies[0].name == name), None
-    )
+    level = types.get(mesh, name)
     if level is None:
         return None
-    layout = utils.device_layout(level)
-    start = level.layout.offset if isinstance(level.layout, types.ComposedLayout) else 0
+    layout, start = types.plain_layout(utils.flat_layout(level)), types.offset(level)
     extents, strides = layout.shape, layout.strides
-    if not all(isinstance(value, int) for value in (start, *extents, *strides)):
+    if not all(isinstance(value, int) for value in (*extents, *strides)):
         return None
     steps = [f"p{mode}" for mode in range(len(extents))]
     held = [f"{unit} = {start}" + "".join(f" + {s} * {p}" for s, p in zip(strides, steps))]
@@ -381,7 +374,7 @@ def unit_reach(reach: Reach, suffix: str, shared, level: str = "cta"):
             continue
         if isinstance(value, expr.Call) and isinstance(value.target, dim.MeshCoord):
             axis = expr.static_dim_value(value.args[0])
-            extent = types.flatten(value.target.mesh.layout).shape[axis]
+            extent = value.target.mesh.shape[axis]
             bounds.append((f"{name}{suffix}", extent))
             if types.axis_keys(value.target.mesh)[axis][0] == level:
                 renamed = f"{name}{suffix}"

@@ -371,14 +371,9 @@ def held_in_region(value_mesh: types.Mesh, region_mesh: types.Mesh) -> bool:
     that states only an inner level; each region level is compared independently
     so sliced offsets remain in that topology's own numbering.
     """
-    value_levels = {
-        getattr(level.topologies[0], "name", level.topologies[0]): level
-        for level in types.separate(value_mesh)
-    }
-    for region_level in types.separate(region_mesh):
-        name = getattr(region_level.topologies[0], "name", region_level.topologies[0])
-        value_level = value_levels.get(name)
-        if value_level is None or not types.within_scope(value_level, region_level):
+    for region_level in types.sub_meshes(region_mesh):
+        value_level = types.get(value_mesh, types.topology_names(region_level)[0])
+        if value_level is None or not types.within_mesh_scope(value_level, region_level):
             return False
     return True
 
@@ -399,7 +394,7 @@ def values_in_region(
     """
     owner_order = {name: index for index, name in enumerate(topology_names)}
     region_indices = tuple(
-        owner_order[getattr(topology, "name", topology)] for topology in region.mesh.topologies
+        owner_order[name] for name in types.topology_names(region.mesh)
     )
     outermost_region = min(region_indices)
     result = []
@@ -434,7 +429,7 @@ def values_in_region(
                 if layout is not None
                 else None
             )
-            if layout is None or not held_in_region(ir_utils.participant_layout(layout).mesh, region.mesh):
+            if layout is None or not held_in_region(ir_utils.filter_topologies(layout).mesh, region.mesh):
                 continue
         result.append(item)
     return tuple(result)

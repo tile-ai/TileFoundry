@@ -205,7 +205,7 @@ def derive_output_shard_layout(
     for layout, state in zip(layouts, states, strict=True):
         if layout is None:
             continue
-        for part in types.separate(layout.mesh):
+        for part in types.sub_meshes(layout.mesh):
             level = part.topologies[0].name
             nonbroadcast = any(
                 attr != types.Broadcast() for (at, _), attr in state.items() if at == level
@@ -224,7 +224,7 @@ def derive_output_shard_layout(
     mesh = (
         types.Mesh.from_meshes(*(parts[level] for level in order if level in required))
         if required
-        else utils.participant_layout(next(layout for layout in layouts if layout is not None)).mesh
+        else utils.filter_topologies(next(layout for layout in layouts if layout is not None)).mesh
     )
     mesh = next(
         (layout.mesh for layout in layouts if layout is not None and layout.mesh == mesh), mesh

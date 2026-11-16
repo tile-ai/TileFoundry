@@ -39,7 +39,6 @@ __all__ = [
     "is_inverse_projectable",
     "left_inverse",
     "logical_divide",
-    "right_inverse",
     "slice",
     "slice_and_offset",
     "zipped_divide",
@@ -478,21 +477,3 @@ def left_inverse(layout: Union[Layout, ComposedLayout, Swizzle]):
     if not is_inverse_projectable(layout):
         raise NotProjectableError(f"{layout} is not inverse-projectable; no left inverse")
     return left_inverse_layout(layout)
-
-
-def right_inverse(layout: Union[Layout, ComposedLayout, Swizzle]):
-    """CuTe ``right_inverse``, dispatched (mirror of :func:`left_inverse`).
-
-    A ``Swizzle`` is an involution -- its Y and Z bit ranges do not overlap --
-    so it is its own inverse on both sides (``swizzle_layout.hpp:371``).
-    """
-    if supports_inverse(layout):
-        return inverse(layout, right_inverse)
-    if isinstance(layout, ComposedLayout):
-        check_admissible(layout)
-        return ComposedLayout(
-            inner=right_inverse_layout(layout.outer), offset=-layout.offset, outer=None
-        )
-    if not is_inverse_projectable(layout):
-        raise NotProjectableError(f"{layout} is not inverse-projectable; no right inverse")
-    return right_inverse_layout(layout)

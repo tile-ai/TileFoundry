@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from tilefoundry import services
 from tilefoundry.ir import expr
@@ -24,10 +23,10 @@ __all__ = [
     "flatten",
     "get",
     "normalize_strides",
-    "rank",
+    "plain_layout",
     "size",
-    "take",
     "unflatten",
+    "with_offset",
 ]
 
 
@@ -49,7 +48,7 @@ class Layout(LayoutBase):
     """Cute-style layout: shape + per-axis cute strides."""
 
     shape: tuple["ShapeDim", ...]
-    strides: Optional[tuple["ShapeDim", ...]] = None
+    strides: tuple["ShapeDim", ...] = None
 
     def __post_init__(self):
         """Fill in compact row-major strides when none are stated."""
@@ -197,15 +196,21 @@ def flat_stride(layout: Layout) -> tuple[int, ...]:
     return int_tuple.flatten(layout.strides)
 
 
-def apply(layout: Layout | ComposedLayout, coord: int) -> int:
+def apply(layout: Layout | ComposedLayout | Swizzle | None, coord: int) -> int:
     """``crd2idx`` of a 1-D domain coord: decompose by shape, dot with strides.
 
-    A ``ComposedLayout`` applies its components in order, so this is
+    ``None`` is the identity. A ``ComposedLayout`` applies its components in order, so this is
     ``inner(offset + outer(coord))`` — the swizzle case included, since a
     ``Swizzle`` is exactly a mapping on that index.
     """
+    if layout is None:
+        return coord
+    if isinstance(layout, Swizzle):
+        return layout(coord)
     if isinstance(layout, ComposedLayout):
-        return apply_any(layout, coord)
+        return apply(layout.inner, layout.offset + apply(layout.outer, coord))
+    if not isinstance(layout, Layout):
+        raise NotProjectableError(f"cannot apply layout of type {type(layout).__name__}")
     shape = flat_shape(layout)
     stride = flat_stride(layout)
     idx = 0
@@ -214,19 +219,6 @@ def apply(layout: Layout | ComposedLayout, coord: int) -> int:
         idx += (rem % extent) * step
         rem //= extent
     return idx
-
-
-def apply_any(layout, x: int) -> int:
-    """Apply a ``Layout`` / ``ComposedLayout`` (``None`` ≡ identity) to ``x``."""
-    if layout is None:
-        return x
-    if isinstance(layout, Swizzle):
-        return layout(x)
-    if isinstance(layout, Layout):
-        return apply(layout, x)
-    if isinstance(layout, ComposedLayout):
-        return apply_any(layout.inner, layout.offset + apply_any(layout.outer, x))
-    raise NotProjectableError(f"cannot apply layout of type {type(layout).__name__}")
 
 
 def size(layout: Layout) -> int:
@@ -261,11 +253,6 @@ def unflatten(layout: LayoutBase, profile) -> "Layout":
     )
 
 
-def rank(layout: LayoutBase) -> int:
-    """CuTe ``rank``: how many modes a layout states at its top level."""
-    return len(layout.shape)
-
-
 def get(layout: LayoutBase, index: int) -> "Layout":
     """CuTe ``get<I>``: one mode of a layout, as a layout of its own."""
     shape = layout.shape[index]
@@ -273,15 +260,6 @@ def get(layout: LayoutBase, index: int) -> "Layout":
     return Layout(
         shape=shape if isinstance(shape, tuple) else (shape,),
         strides=strides if isinstance(strides, tuple) else (strides,),
-    )
-
-
-def take(layout: LayoutBase, begin: int, end: int) -> "Layout":
-    """CuTe ``take<B, E>``: the modes in ``[begin, end)``, as a layout."""
-    strides = layout.strides
-    return Layout(
-        shape=tuple(layout.shape[begin:end]),
-        strides=tuple(strides[begin:end]),
     )
 
 
@@ -295,3 +273,13 @@ def normalize_strides(shape, strides):
     return (
         0 if isinstance(extent, int) and not isinstance(extent, bool) and extent == 1 else strides
     )
+
+
+def plain_layout(layout):
+    """The layout under a ComposedLayout; a plain layout is returned as it is."""
+    return layout.outer if isinstance(layout, ComposedLayout) else layout
+
+
+def with_offset(layout, offset):
+    """*layout* starting at *offset*; unchanged when the offset is zero."""
+    return ComposedLayout(None, offset, layout) if offset else layout

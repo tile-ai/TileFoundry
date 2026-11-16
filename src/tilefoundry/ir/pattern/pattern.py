@@ -392,9 +392,9 @@ class ShardLayout(Pattern):
         if not isinstance(topologies, tuple):
             topologies = bindings.get(
                 topologies.name,
-                tuple(getattr(level, "name", level) for level in subject.mesh.topologies[-1:]),
+                types.topology_names(subject.mesh)[-1:],
             )
-        return utils.participant_layout(subject, topologies)
+        return utils.filter_topologies(subject, topologies)
 
     @typing.override
     def tensor_layout(self, subject, matcher):
@@ -406,7 +406,7 @@ class ShardLayout(Pattern):
             return UNREADABLE
         if shard is None and isinstance(self.mesh.topologies, tuple):
             attrs = tuple(utils.attrs_by_axis(subject, mesh).values())
-            mesh = utils.participant_layout(
+            mesh = utils.filter_topologies(
                 types.ShardLayout(layout, attrs, mesh), self.mesh.topologies
             ).mesh
         attrs = tuple(utils.attrs_by_axis(subject, mesh, matcher.owners).values())

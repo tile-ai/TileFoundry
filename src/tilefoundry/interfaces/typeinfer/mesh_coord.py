@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir import dim, expr, types, utils
+from tilefoundry.ir import dim, expr, types
 
 from .context import TypeInferResults
 from .registry import register
@@ -28,7 +28,7 @@ def infer_mesh_coord(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
     if not isinstance(call.target.mesh, types.Mesh):
         ctx.error(call, "MeshCoord.mesh must be a Mesh")
     try:
-        covered = ctx.current_mesh is not None and utils.covered_by_scope(call.target.mesh, ctx.current_mesh)
+        covered = ctx.current_mesh is not None and types.equals_mesh_scope(call.target.mesh, ctx.current_mesh)
     except ValueError as error:
         ctx.error(call, str(error))
     if not covered:
@@ -38,7 +38,7 @@ def infer_mesh_coord(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
     held_shape = axes_shape(ctx.type_of(call.args[0]))
     if held_shape is None:
         ctx.error(call, "MeshCoord.axes must be an i64 scalar, vector, or tuple of scalars")
-    shape = types.flatten(call.target.mesh.layout).shape
+    shape = call.target.mesh.shape
     axes = dim.literal_axes(call.args[0])
     for axis in axes or ():
         if not 0 <= axis < len(shape):

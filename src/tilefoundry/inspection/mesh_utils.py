@@ -2,38 +2,8 @@
 
 from __future__ import annotations
 
-from math import prod
-
 from tilefoundry.ir import types
 from tilefoundry.ir.types import layout_algebra
-
-
-def sub_box(parent: types.Mesh, mesh: types.Mesh) -> tuple[slice, ...] | None:
-    """Decode the first and last unit ids into a parent's sub-box."""
-    if parent.topologies != mesh.topologies or not isinstance(parent.layout, types.Layout):
-        return None
-    if not isinstance(mesh.layout, types.ComposedLayout) or mesh.layout.inner is not None:
-        return None
-    if not isinstance(mesh.layout.outer, types.Layout):
-        return None
-    source, target = types.flatten(parent.layout), types.flatten(mesh.layout.outer)
-    strides = source.strides or types.compact_row_major(source.shape)
-    target_strides = target.strides or types.compact_row_major(target.shape)
-    offset = mesh.layout.offset
-    if not all(isinstance(one, int) for one in (*source.shape, *target.shape, *strides, *target_strides, offset)):
-        return None
-    if any(step <= 0 for step in strides) or any(step < 0 for step in target_strides):
-        return None
-    last = offset + sum((extent - 1) * step for extent, step in zip(target.shape, target_strides))
-    lower = types.idx2crd(offset, source.shape, strides)
-    upper = types.idx2crd(last, source.shape, strides)
-    if any(start > stop for start, stop in zip(lower, upper)):
-        return None
-    if types.crd2idx(lower, source.shape, strides) != offset or types.crd2idx(upper, source.shape, strides) != last:
-        return None
-    if prod(stop - start + 1 for start, stop in zip(lower, upper)) != types.size(target):
-        return None
-    return tuple(slice(start, stop + 1) for start, stop in zip(lower, upper))
 
 
 def selection_layout(mesh: types.Mesh, selection: types.Mesh) -> types.Layout | None:
@@ -51,8 +21,8 @@ def selection_layout(mesh: types.Mesh, selection: types.Mesh) -> types.Layout | 
     target = types.flatten(mesh.layout.outer)
     if types.size(source) != types.size(target):
         return None
-    steps = source.strides or types.compact_row_major(source.shape)
-    if not all(isinstance(one, int) for one in (*source.shape, *steps, *target.shape, *(target.strides or types.compact_row_major(target.shape)))):
+    steps = source.strides
+    if not all(isinstance(one, int) for one in (*source.shape, *steps, *target.shape, *target.strides)):
         return None
     reversed_source = types.Layout(tuple(reversed(source.shape)), tuple(reversed(steps)))
     try:
@@ -69,4 +39,4 @@ def selection_layout(mesh: types.Mesh, selection: types.Mesh) -> types.Layout | 
     return local
 
 
-__all__ = ["selection_layout", "sub_box"]
+__all__ = ["selection_layout"]

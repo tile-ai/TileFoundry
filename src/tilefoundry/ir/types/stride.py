@@ -10,15 +10,12 @@ from __future__ import annotations
 from tilefoundry import services
 from tilefoundry.ir import expr
 
-from .int_tuple import flatten
-
 __all__ = [
     "compact_col_major",
     "compact_major",
     "compact_row_major",
     "crd2idx",
     "idx2crd",
-    "try_compact_major",
 ]
 
 
@@ -70,16 +67,6 @@ def compact_col_major(shape: tuple, *, mul=None) -> tuple:
 def compact_row_major(shape: tuple, *, mul=None) -> tuple:
     """CuTe ``compact_row_major``: the last mode walks fastest."""
     return compact_major(shape, major="row", mul=mul)
-
-
-def try_compact_major(shape: tuple, *, major: str = "row") -> "tuple | None":
-    """:func:`compact_major`, or ``None`` where an extent is not a static int."""
-    if not all(
-        isinstance(one, int) and not isinstance(one, bool)
-        for one in flatten(shape)
-    ):
-        return None
-    return compact_major(shape, major=major)
 
 
 def idx2crd(idx: int, shape: tuple, stride: tuple) -> tuple:

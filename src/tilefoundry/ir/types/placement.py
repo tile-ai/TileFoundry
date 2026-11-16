@@ -12,15 +12,14 @@ See [shard §5](docs/spec/shard.md#5-mesh).
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import product
 
-from .int_tuple import product as int_tuple_product
-from .layout import apply
-from .mesh import Mesh, layouts, offset, separate, topology_names
-from .topology import Topology
+from .layout import apply, size
+from .mesh import Mesh, sub_meshes
+from .shard_layout import mesh_coords
+from .topology import Topology, topology_name
 
 __all__ = ["Placement"]
 
@@ -41,36 +40,22 @@ class Placement:
 
     def unit_ids(self, topologies: "tuple[Topology | str, ...]") -> tuple[int | None, ...]:
         """This invocation's unit id at each of *topologies*, in that order."""
-        return tuple(self.ids.get(getattr(topology, "name", topology)) for topology in topologies)
+        return tuple(self.ids.get(topology_name(topology)) for topology in topologies)
 
-    @classmethod
-    def from_env(cls, topology: str = "gpu") -> "Placement":
-        """The peer this process is, out of the ones a launcher started.
-
-        ``torchrun``, ``deepspeed`` and ``mpirun`` all put the local rank in
-        the environment before the script runs, which is the one moment the
-        answer is settled.
-        """
-        rank = os.environ.get("LOCAL_RANK")
-        if rank is None:
-            raise ValueError(
-                "Placement.from_env: no LOCAL_RANK in the environment; a launcher "
-                "sets it, so pass Placement({topology!r}: rank) yourself instead"
-            )
-        return cls({topology: int(rank)})
+    def coords(self, mesh: Mesh) -> tuple[int | None, ...]:
+        """This placement's coord on each mesh axis; None where its topology is not fixed."""
+        return mesh_coords(mesh, self.unit_ids(mesh.topologies))
 
     @classmethod
     def from_mesh(cls, mesh: Mesh) -> "tuple[Placement, ...]":
-        """Every placement of *mesh*: each unit id is its layout's value plus its offset."""
-        mesh_layouts = layouts(mesh)
-        starts = tuple(map(offset, separate(mesh)))
-        names = topology_names(mesh)
+        """Every placement of *mesh*: each unit id is its sub mesh's layout, offset included."""
+        parts = sub_meshes(mesh)
         return tuple(
             cls(
                 {
-                    name: apply(level, index) + start
-                    for name, level, index, start in zip(names, mesh_layouts, at, starts, strict=True)
+                    topology_name(part.topologies[0]): apply(part.layout, index)
+                    for part, index in zip(parts, at, strict=True)
                 }
             )
-            for at in product(*(range(int_tuple_product(level.shape)) for level in mesh_layouts))
+            for at in product(*(range(size(part.layout)) for part in parts))
         )

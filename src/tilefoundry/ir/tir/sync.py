@@ -151,20 +151,6 @@ class SyncScope:
     lane_mask: int
 
 
-def participant_layout(mesh: types.Mesh) -> "tuple[types.Layout, int]":
-    """The (outer layout, offset) describing which threads participate.
-
-    Every level states its own run, and which threads participate is those
-    runs read as the device numbers them: the mesh's axes, at its offset.
-    """
-    try:
-        return utils.device_layout(mesh), (
-            mesh.layout.offset if isinstance(mesh.layout, types.ComposedLayout) else 0
-        )
-    except ValueError as error:
-        raise expr.VerifyError(f"T.sync: {error}") from error
-
-
 def sync_scope(mesh: types.Mesh) -> SyncScope:
     """Derive the run of threads that one barrier over ``mesh`` synchronizes.
 
@@ -177,7 +163,10 @@ def sync_scope(mesh: types.Mesh) -> SyncScope:
             "T.sync: a mesh with a dynamic topology extent cannot be classified; "
             "only a static thread count is supported"
         )
-    outer, offset = participant_layout(mesh)
+    try:
+        outer, offset = types.plain_layout(utils.flat_layout(mesh)), types.offset(mesh)
+    except ValueError as error:
+        raise expr.VerifyError(f"T.sync: {error}") from error
     shape = outer.shape
     strides = outer.strides
     if (

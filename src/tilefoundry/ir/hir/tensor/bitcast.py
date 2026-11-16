@@ -52,7 +52,7 @@ def address_points(layout, count: int, logical_shape: tuple):
         raise ValueError(f"rmem layout address function is not injective: {layout!r}")
     for placement in types.Placement.from_mesh(layout.mesh):
         ids = placement.unit_ids(layout.mesh.topologies)
-        coordinates = types.mesh_coords(layout.mesh, ids)
+        coordinates = placement.coords(layout.mesh)
         if any(
             isinstance(attr, types.Varying) and coord != 0
             for attr, coord in zip(layout.attrs, coordinates, strict=True)
@@ -88,7 +88,7 @@ def address_table(layout, count: int, logical_shape: tuple):
     """Require one unique address per element within each Varying copy."""
     if not isinstance(layout, types.ShardLayout):
         return tuple(point[2] for point in address_points(layout, count, logical_shape))
-    layout = ir_utils.participant_layout(layout)
+    layout = ir_utils.filter_topologies(layout)
     addresses = [None] * count
     for logical, unit, full, held in address_points(layout, count, logical_shape):
         if addresses[logical] is not None:
@@ -143,8 +143,8 @@ def _(call: expr.Call, ctx) -> types.TensorType:
             ctx.error(call, "sharded bitcast requires rmem storage")
         if not isinstance(source.layout, types.ShardLayout) or not isinstance(layout, types.ShardLayout):
             ctx.error(call, "sharded bitcast requires ShardLayout at both ends")
-        source_layout = ir_utils.participant_layout(source.layout)
-        result_layout = ir_utils.participant_layout(layout)
+        source_layout = ir_utils.filter_topologies(source.layout)
+        result_layout = ir_utils.filter_topologies(layout)
         if source_layout.mesh != result_layout.mesh:
             ctx.error(call, "source and result ShardLayout must use the same mesh")
     else:

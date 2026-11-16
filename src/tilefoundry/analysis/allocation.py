@@ -252,18 +252,14 @@ def visible_at(model, value, producer):
         mesh = scope.mesh
         if mesh is None:
             return False
-        available = {getattr(held, "name", held) for held in mesh.topologies}
         axes = dim.literal_axes(value.args[0])
-        offset = 0
-        for topology, layout in zip(
-            value.target.mesh.topologies, types.layouts(value.target.mesh), strict=True
-        ):
-            width = len(types.flatten(layout.shape))
-            if axes is None or any(offset <= axis < offset + width for axis in axes):
-                if getattr(topology, "name", topology) not in available:
-                    return False
-            offset += width
-        return True
+        keys = types.axis_keys(value.target.mesh)
+        needed = (
+            set(types.topology_names(value.target.mesh))
+            if axes is None
+            else {keys[axis][0] for axis in axes if axis < len(keys)}
+        )
+        return needed <= set(types.topology_names(mesh))
     interval = model.liveness.interval_of(core.SSAValue(value))
     location = model.context.scope.snapshot.definition.locations.get(id(value))
     return (
@@ -996,7 +992,7 @@ def partial_copies(held: types.TensorType, owners: expr.StorageOwners) -> int:
     for (level, _), reduction, extent in zip(
         types.axis_keys(layout.mesh),
         types.partial_reductions_by_axis(layout),
-        types.flatten(layout.mesh.layout).shape,
+        layout.mesh.shape,
     ):
         if reduction is None or owners.private(held.storage, level):
             continue

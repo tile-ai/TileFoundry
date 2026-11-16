@@ -15,22 +15,15 @@ from .bounds import (
 from .compatible import is_unsharded_layout, types_compatible
 from .leaves import leaf_rank, leaf_span, leaves_of, result_fields, tensor_types
 from .local import (
-    divided_mesh_axes,
+    divided_axes,
+    filter_topologies,
+    find_execution_mesh,
     local_type_of,
     make_shard_tensor_type,
-    participant_frame,
-    participant_layout,
     physical_layout,
     topology_level,
-    try_local_type_of,
 )
-from .mesh_scope import (
-    covered_by_scope,
-    device_layout,
-    mesh_scope_matches_required_scope,
-    states_consistent_positions,
-    storage_reaches,
-)
+from .mesh_scope import flat_layout, storage_reaches
 from .partials import (
     attrs_by_axis,
     check_multilinear_partials,
@@ -43,6 +36,5 @@ from .sizes import (
     numel,
     shape_runtime_total,
     tensor_bytes,
-    topology_extent,
 )
 from .tiler import axis_tiler

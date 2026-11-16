@@ -110,18 +110,13 @@ def operand_types(call: expr.Call, op: expr.Op) -> tuple:
 
 
 def participants(layouts) -> types.Mesh | None:
-    """The first physical participant mesh among *layouts*, if any."""
+    """The mesh of the first physical shard layout among *layouts*, if any."""
     for layout in layouts:
         if isinstance(layout, types.ShardLayout):
             physical = ir_utils.physical_layout(layout)
             if isinstance(physical, types.ShardLayout):
-                return ir_utils.participant_layout(physical).mesh
+                return ir_utils.filter_topologies(physical).mesh
     return None
-
-
-def copy_mesh(type_list) -> types.Mesh | None:
-    """The mesh a copy between operands of *types* runs on, None for the enclosing one."""
-    return participants(type_.layout for type_ in type_list)
 
 
 def first_thread(enclosing: types.Mesh | None, topologies) -> types.Mesh | None:
@@ -146,11 +141,11 @@ def first_thread(enclosing: types.Mesh | None, topologies) -> types.Mesh | None:
                 return None
             if len(sizes) > 1 and not all(isinstance(size, int) for size in sizes):
                 return None
-        level = next(part for part in types.separate(enclosing) if part.topologies[0].name == "thread")
+        level = types.get(enclosing, "thread")
         topology = level.topologies[0]
-        if types.size(ir_utils.device_layout(level)) == 1:
+        if types.size(ir_utils.flat_layout(level)) == 1:
             return None
-        start = level.layout.offset if isinstance(level.layout, types.ComposedLayout) else 0
+        start = types.offset(level)
     return types.Mesh((topology,), types.ComposedLayout(None, start, types.Layout((1,), (1,))), ("writer",))
 
 
@@ -163,7 +158,7 @@ def transfer_meshes(type_list, destination, around, topologies) -> tuple[types.M
     write the whole of its share of *destination*. In shared memory, which
     those threads share, the first of them writes it alone.
     """
-    mesh = copy_mesh(type_list)
+    mesh = participants(type_.layout for type_ in type_list)
     held = () if mesh is None else (mesh,)
     if getattr(destination, "storage", None) is not expr.StorageKind.SMEM:
         return held
@@ -435,7 +430,7 @@ class TirBuilder:
         source_type = source.type if source_type is None else source_type
         if not isinstance(source_type, types.TensorType) or not isinstance(target.type, types.TensorType):
             raise LoweringError("copy lowering requires tensor operands")
-        sharded = copy_mesh((source_type, target.type))
+        sharded = participants((source_type.layout, target.type.layout))
         meshes = transfer_meshes(
             (source_type, target.type),
             target.type,
@@ -924,7 +919,7 @@ class StoragePlan:
                     return type_
                 layout = ir_utils.physical_layout(type_.layout)
                 if isinstance(layout, types.ShardLayout):
-                    layout = ir_utils.participant_layout(layout)
+                    layout = ir_utils.filter_topologies(layout)
                 return replace(type_, layout=layout)
 
             actual, requested = physical_type(held), physical_type(desired)
@@ -1168,6 +1163,10 @@ class IssuePlan:
             raise LoweringError(str(error)) from error
 
     def points(self, plan):
+        """The operand windows of each serial tile of *plan*, in its order.
+
+        A point is one serial tile, not a unit of the execution mesh.
+        """
         for ordered in product(*(range(plan.serial[axis]) for axis in plan.order)):
             point = dict(zip(plan.order, ordered, strict=True))
             windows = []
@@ -1646,7 +1645,6 @@ __all__ = [
     "TirScope",
     "View",
     "accepted_aliases",
-    "copy_mesh",
     "issue_owner",
     "label",
     "lowers_to_dim",

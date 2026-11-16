@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import prod
 
 from tilefoundry import services
 
@@ -13,24 +14,29 @@ from .layout import (
     Layout,
     LayoutBase,
     flatten,
+    plain_layout,
     size,
     unflatten,
+    with_offset,
 )
 from .layout_algebra import filter, is_contiguous
-from .stride import compact_major, compact_row_major, crd2idx
-from .topology import Topology
+from .stride import compact_major, compact_row_major, crd2idx, idx2crd
+from .topology import Topology, topology_name
 
 __all__ = [
     "Mesh",
     "axis_keys",
     "check_topology",
+    "equals_mesh_scope",
     "flat_layouts",
     "get",
     "layouts",
     "offset",
-    "separate",
+    "selected_units",
+    "sub_box",
+    "sub_meshes",
     "topology_names",
-    "within_scope",
+    "within_mesh_scope",
 ]
 
 
@@ -57,9 +63,9 @@ class Mesh:
             not isinstance(topology, Topology) for topology in self.topologies
         ):
             raise ValueError("a multi-level Mesh requires Topology values")
-        topology_names = tuple(getattr(topology, "name", topology) for topology in self.topologies)
-        if len(set(topology_names)) != len(topology_names):
-            raise ValueError(f"Mesh topology names must be unique, got {topology_names!r}")
+        names = tuple(map(topology_name, self.topologies))
+        if len(set(names)) != len(names):
+            raise ValueError(f"Mesh topology names must be unique, got {names!r}")
         object.__setattr__(self, "layout", nested_layout(self.layout, tuple(self.topologies)))
         for axis, extent in enumerate(flatten(self.layout.shape)):
             if extent is None:
@@ -67,6 +73,11 @@ class Mesh:
                     f"Mesh: layout axis {axis} must have an explicit extent; "
                     "None is not a ShapeDim. The rule: tilefoundry spec shard mesh"
                 )
+
+    @property
+    def shape(self) -> tuple:
+        """The extent of each mesh axis."""
+        return tuple(flatten(self.layout).shape)
 
     def __getitem__(self, key) -> "Mesh":
         """Return a constant sub-mesh selected by integers or step-1 slices.
@@ -97,10 +108,7 @@ class Mesh:
         )
         for level, scale in zip(held_levels, scales):
             level_shape = tuple(flatten(level.shape))
-            stated = level.strides
-            level_strides = (
-                tuple(flatten(stated)) if stated is not None else compact_row_major(level_shape)
-            )
+            level_strides = tuple(flatten(level.strides))
             sub_shape: list[int] = []
             for k, extent, stride in zip(
                 keys[axis : axis + len(level_shape)], level_shape, level_strides
@@ -108,7 +116,7 @@ class Mesh:
                 if not isinstance(extent, int) or not isinstance(stride, int):
                     raise ValueError(f"cannot slice mesh axis {axis} with a dynamic extent/stride")
                 if isinstance(k, int):
-                    start = k + extent if k < 0 else k
+                    start = from_end(k, extent)
                     if not (0 <= start < extent):
                         raise ValueError(
                             f"mesh slice index {k} out of range for axis {axis} (extent {extent})"
@@ -117,8 +125,8 @@ class Mesh:
                 elif isinstance(k, slice):
                     if k.step not in (None, 1):
                         raise ValueError(f"mesh slice step must be 1 (axis {axis})")
-                    start = 0 if k.start is None else (k.start + extent if k.start < 0 else k.start)
-                    stop = extent if k.stop is None else (k.stop + extent if k.stop < 0 else k.stop)
+                    start = 0 if k.start is None else from_end(k.start, extent)
+                    stop = extent if k.stop is None else from_end(k.stop, extent)
                     if not (0 <= start <= stop <= extent):
                         raise ValueError(
                             f"mesh slice {k.start}:{k.stop} out of range for axis "
@@ -154,14 +162,16 @@ class Mesh:
         result = meshes[0]
         for inner in meshes[1:]:
             here, there = topology_names(result), topology_names(inner)
+            sliced = isinstance(result.layout, ComposedLayout) or isinstance(
+                inner.layout, ComposedLayout
+            )
             if set(here).isdisjoint(there):
                 result = joined(
                     (*result.topologies, *inner.topologies),
                     (*layouts(result), *layouts(inner)),
-                    (*map(offset, separate(result)), *map(offset, separate(inner))),
+                    (*map(offset, sub_meshes(result)), *map(offset, sub_meshes(inner))),
                     (*result.names, *inner.names),
-                    sliced=isinstance(result.layout, ComposedLayout)
-                    or isinstance(inner.layout, ComposedLayout),
+                    sliced=sliced,
                 )
             elif set(here) <= set(there):
                 result = inner
@@ -174,30 +184,16 @@ class Mesh:
                     (*result.topologies[:kept], *inner.topologies),
                     (*above, *layouts(inner)),
                     (
-                        *tuple(map(offset, separate(result)))[:kept],
-                        *map(offset, separate(inner)),
+                        *tuple(map(offset, sub_meshes(result)))[:kept],
+                        *map(offset, sub_meshes(inner)),
                     ),
                     (*result.names[:named], *inner.names),
-                    sliced=isinstance(result.layout, ComposedLayout)
-                    or isinstance(inner.layout, ComposedLayout),
+                    sliced=sliced,
                 )
-                if not within_scope(result, current):
-                    parent_runs = {
-                        name: (filter(topology_layout, major="row"), start)
-                        for name, topology_layout, start in zip(
-                            here, layouts(current), map(offset, separate(current))
-                        )
-                        if name in there
-                    }
-                    inner_runs = {
-                        name: (filter(topology_layout, major="row"), start)
-                        for name, topology_layout, start in zip(
-                            there, layouts(inner), map(offset, separate(inner))
-                        )
-                    }
+                if not within_mesh_scope(result, current):
                     raise ValueError(
-                        f"replacement scope selects runs {inner_runs}, outside parent "
-                        f"scope runs {parent_runs}; both must be continuous and each "
+                        f"replacement scope selects runs {runs(inner, there)}, outside parent "
+                        f"scope runs {runs(current, there)}; both must be continuous and each "
                         "replacement selection must be contained in its parent selection"
                     )
             else:
@@ -281,13 +277,13 @@ def nested_layout(layout_value, topologies: tuple) -> "Layout | ComposedLayout":
 
 def layouts(mesh: Mesh) -> tuple[Layout, ...]:
     """Each level's layout, in that level's own numbering."""
-    stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
+    stated = plain_layout(mesh.layout)
     if stated is None:
         raise ValueError(
             "a mesh whose slice states an identity box states no layout of "
             "its own, so its levels select nothing"
         )
-    return tuple(layout.get(stated, index) for index in range(layout.rank(stated)))
+    return tuple(layout.get(stated, index) for index in range(len(stated.shape)))
 
 
 def flat_layouts(mesh: Mesh) -> tuple[tuple[tuple, tuple], ...]:
@@ -324,26 +320,55 @@ def dim_at_most(a, b) -> bool:
     return bounds is not None and bounds[0] >= 0
 
 
-def within_scope(mesh: Mesh, current: Mesh) -> bool:
-    """Whether each continuous selection is contained in the enclosing level."""
-    enclosing = dict(
-        zip(topology_names(current), zip(layouts(current), map(offset, separate(current))))
-    )
-    for name, topology_layout, start in zip(
-        topology_names(mesh), layouts(mesh), map(offset, separate(mesh))
-    ):
-        if name not in enclosing:
+def selected_units(mesh: Mesh):
+    """The unit ids a single-topology mesh selects, with its offset.
+
+    The first item is the unit count when the ids run contiguously, else the filtered layout.
+    """
+    reduced = filter(plain_layout(mesh.layout), major="row")
+    if not is_contiguous(reduced, major="row"):
+        return reduced, offset(mesh)
+    return services.normalize_dim(size(reduced)), offset(mesh)
+
+
+def runs(mesh: Mesh, names) -> dict:
+    """The units each named topology of *mesh* selects, for an error message."""
+    return {
+        topology_name(part.topologies[0]): selected_units(part)
+        for part in sub_meshes(mesh)
+        if topology_name(part.topologies[0]) in names
+    }
+
+
+def within_mesh_scope(mesh: Mesh, current: Mesh) -> bool:
+    """Whether each topology of *mesh* selects a contiguous run inside the one *current* selects.
+
+    Both runs must be contiguous; the bounds compare by the conservative range of dims.
+    """
+    scope = runs(current, topology_names(current))
+    for part in sub_meshes(mesh):
+        name = topology_name(part.topologies[0])
+        if name not in scope:
             return False
-        outer_layout, at_start = enclosing[name]
-        inner = filter(topology_layout, major="row")
-        outer = filter(outer_layout, major="row")
-        if not is_contiguous(inner, major="row") or not is_contiguous(outer, major="row"):
+        (count, start), (bound, at_start) = selected_units(part), scope[name]
+        if isinstance(count, LayoutBase) or isinstance(bound, LayoutBase):
             return False
-        if not dim_at_most(at_start, start):
-            return False
-        if not dim_at_most(start + size(inner), at_start + size(outer)):
+        if not dim_at_most(at_start, start) or not dim_at_most(start + count, at_start + bound):
             return False
     return True
+
+
+def equals_mesh_scope(mesh: Mesh, current: Mesh) -> bool:
+    """Whether each topology *mesh* names selects exactly the unit ids *current* selects for it.
+
+    Topologies of *current* that *mesh* does not name do not enter the comparison.
+    """
+    scope = runs(current, topology_names(current))
+    return all(
+        topology_name(part.topologies[0]) in scope
+        and selected_units(part) == scope[topology_name(part.topologies[0])]
+        for part in sub_meshes(mesh)
+    )
 
 
 def check_topology(mesh: Mesh) -> None:
@@ -361,7 +386,7 @@ def check_topology(mesh: Mesh) -> None:
         count = size(topology_layout)
         if isinstance(count, int) and count > declared:
             raise ValueError(
-                f"mesh level {getattr(topology, 'name', topology)!r} has {count} "
+                f"mesh level {topology_name(topology)!r} has {count} "
                 f"units, exceeding declared extent {declared}"
             )
 
@@ -389,29 +414,32 @@ def joined(
         if not all(isinstance(size, int) for size in sizes):
             raise ValueError("joining sliced meshes needs static topology extents")
         total = crd2idx(starts, sizes, compact_major(sizes))
-        if total != 0:
-            layout_value = ComposedLayout(None, total, layout_value)
+        layout_value = with_offset(layout_value, total)
     return Mesh(topologies, layout_value, names)
 
 
+def from_end(index: int, extent: int) -> int:
+    """A Python index counted from the end, as an index from the start."""
+    return index + extent if index < 0 else index
+
+
 def topology_names(mesh: Mesh) -> tuple[str, ...]:
-    return tuple(getattr(topology, "name", topology) for topology in mesh.topologies)
+    return tuple(map(topology_name, mesh.topologies))
 
 
 def axis_keys(mesh: Mesh) -> tuple[tuple[str, str | None], ...]:
     """Identify each mesh axis by its topology and authored name."""
-    stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
     keys = []
-    for topology, shape in zip(mesh.topologies, stated.shape, strict=True):
+    for topology, shape in zip(mesh.topologies, plain_layout(mesh.layout).shape, strict=True):
         for _ in flatten(shape):
             axis = len(keys)
             name = mesh.names[axis] if axis < len(mesh.names) else None
-            keys.append((getattr(topology, "name", topology), name))
+            keys.append((topology_name(topology), name))
     return tuple(keys)
 
 
-def separate(mesh: Mesh) -> tuple[Mesh, ...]:
-    """Split a mesh into one mesh per topology, retaining per-topology slices."""
+def sub_meshes(mesh: Mesh) -> tuple[Mesh, ...]:
+    """The mesh of each topology, as CuTe ``get<I>`` gives one mode at a time."""
     return tuple(get(mesh, name) for name in topology_names(mesh))
 
 
@@ -454,6 +482,35 @@ def get(value, key):
     part = parts[at]
     return Mesh(
         (value.topologies[at],),
-        ComposedLayout(None, own, part) if own else part,
+        with_offset(part, own),
         value.names[first : first + count],
     )
+
+
+def sub_box(parent: Mesh, mesh: Mesh) -> tuple[slice, ...] | None:
+    """Decode the first and last unit ids into a parent's sub-box."""
+    if parent.topologies != mesh.topologies or not isinstance(parent.layout, Layout):
+        return None
+    if not isinstance(mesh.layout, ComposedLayout) or mesh.layout.inner is not None:
+        return None
+    if not isinstance(mesh.layout.outer, Layout):
+        return None
+    source, target = flatten(parent.layout), flatten(mesh.layout.outer)
+    strides, target_strides, start = source.strides, target.strides, mesh.layout.offset
+    if not all(
+        isinstance(one, int)
+        for one in (*source.shape, *target.shape, *strides, *target_strides, start)
+    ):
+        return None
+    if any(step <= 0 for step in strides) or any(step < 0 for step in target_strides):
+        return None
+    last = start + sum((extent - 1) * step for extent, step in zip(target.shape, target_strides))
+    lower = idx2crd(start, source.shape, strides)
+    upper = idx2crd(last, source.shape, strides)
+    if any(first > stop for first, stop in zip(lower, upper)):
+        return None
+    if (crd2idx(lower, source.shape, strides), crd2idx(upper, source.shape, strides)) != (start, last):
+        return None
+    if prod(stop - first + 1 for first, stop in zip(lower, upper)) != size(target):
+        return None
+    return tuple(slice(first, stop + 1) for first, stop in zip(lower, upper))

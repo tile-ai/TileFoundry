@@ -418,7 +418,7 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
                 raise ValueError("MeshCoord mesh has no active binding to print")
             return f"tf.meshcoord({self.visit(value.args[0], ctx)}, mesh={alias})"
         axis = expr.static_dim_value(value.args[0]) if value.args else None
-        if axis is None or axis < 0 or axis >= len(types.flatten(tgt.mesh.layout).shape):
+        if axis is None or axis < 0 or axis >= len(tgt.mesh.shape):
             raise ValueError("MeshCoord requires a literal in-range axis to print")
         ref = ctx.mesh_axis_alias(tgt.mesh, axis)
         if ref is not None:
@@ -444,7 +444,7 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
         expression, so it declines a layout whose modes are grouped by tile
         axis: writing the groups in would emit a line the parser refuses.
         """
-        value = ir_utils.participant_layout(value)
+        value = ir_utils.filter_topologies(value)
         layout = value.layout
         operand = None
         if isinstance(layout, types.ComposedLayout) and isinstance(layout.outer, types.Layout):
@@ -454,8 +454,8 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
         if ctx is not None and all(isinstance(attr, types.Broadcast) for attr in value.attrs):
             current = ctx.current_mesh
             if current is not None and operand is not None:
-                current = ir_utils.participant_layout(types.ShardLayout(layout, tuple(
-                    types.Broadcast() for _ in range(len(types.flatten(current.layout).shape))
+                current = ir_utils.filter_topologies(types.ShardLayout(layout, tuple(
+                    types.Broadcast() for _ in range(len(current.shape))
                 ), current)).mesh
                 if current == value.mesh:
                     return operand + " @ {B()}"
@@ -590,11 +590,7 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
             for topology in value.topologies
         )
         topologies = f"({topologies}{',' if len(value.topologies) == 1 else ''})"
-        written = ir_utils.device_layout(value)
-        if isinstance(value.layout, types.ComposedLayout):
-            written = types.ComposedLayout(
-                inner=value.layout.inner, offset=value.layout.offset, outer=written
-            )
+        written = ir_utils.flat_layout(value)
         if isinstance(written, types.Layout) and written.strides == types.compact_row_major(written.shape):
             rendered = self.shape_tuple(written.shape, ctx)
         else:
@@ -689,7 +685,7 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
         )
 
     def visit_ShardLayout(self, value: types.ShardLayout, ctx=None) -> str:
-        value = ir_utils.participant_layout(value)
+        value = ir_utils.filter_topologies(value)
         outer, child = self.type_indent, self.type_indent + "    "
         attrs = ", ".join(self.visit(attr, ctx) for attr in value.attrs)
         if len(value.attrs) == 1:

@@ -3,22 +3,7 @@ from __future__ import annotations
 import pytest
 
 from tests.core.fixtures.meshes import CT, CTA, RUN, THR
-from tilefoundry.ir import expr, types, utils
-from tilefoundry.ir.types import int_tuple
-
-
-def test_mesh_position_consistency_is_an_explicit_predicate() -> None:
-    matching = types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,)), ("g",))
-    mismatching = types.Mesh((types.Topology("thread", 64),), types.Layout((32,), (1,)), ("g",))
-    explicit = types.Mesh((types.Topology("cta", 8),), types.Layout((8,), (1,)), ("g",))
-
-    assert int_tuple.product(matching.topologies) == 32
-    assert utils.states_consistent_positions(matching)
-    assert not utils.states_consistent_positions(mismatching)
-    assert int_tuple.product(explicit.topologies) == 8
-    assert types.size(explicit.layout) == 8
-    assert utils.states_consistent_positions(explicit)
-    assert not utils.mesh_scope_matches_required_scope(mismatching, matching)
+from tilefoundry.ir import expr, types
 
 
 def test_topology_and_mesh_require_explicit_extents() -> None:
@@ -74,7 +59,7 @@ def test_mesh_value_equality_is_by_value() -> None:
 
 def test_make_mesh_appends_a_sliced_scope_with_its_offset() -> None:
     assert types.Mesh.from_meshes(CTA, THR[128:256]).layout == RUN
-    assert not utils.covered_by_scope(types.Mesh.from_meshes(CTA, THR[0:128]), types.Mesh.from_meshes(CTA, THR[128:256]))
+    assert not types.equals_mesh_scope(types.Mesh.from_meshes(CTA, THR[0:128]), types.Mesh.from_meshes(CTA, THR[128:256]))
 
 
 def test_make_mesh_replaces_a_sliced_suffix_by_component() -> None:
@@ -95,7 +80,7 @@ def test_make_mesh_replaces_a_sliced_suffix_by_component() -> None:
         52352,
         types.Layout(((1, 68), (4, 8, 4)), ((68, 1), (32, 4, 1))),
     )
-    assert types.separate(replaced) == (
+    assert types.sub_meshes(replaced) == (
         types.Mesh(
             (types.Topology("cta", 4352),),
             types.ComposedLayout(None, 136, types.Layout((1, 68), (68, 1))),
@@ -114,7 +99,7 @@ def test_mesh_with_several_levels_slices_in_device_numbering() -> None:
 
 def test_separate_undoes_make_mesh() -> None:
     mesh = CT[1:3, 128:256]
-    assert types.separate(mesh) == (
+    assert types.sub_meshes(mesh) == (
         types.Mesh(
             (types.Topology("cta", 4),),
             types.ComposedLayout(None, 1, types.Layout((2,), (1,))),
@@ -124,7 +109,7 @@ def test_separate_undoes_make_mesh() -> None:
             types.ComposedLayout(None, 128, types.Layout((128,), (1,))),
         ),
     )
-    assert types.Mesh.from_meshes(*types.separate(mesh)) == mesh
+    assert types.Mesh.from_meshes(*types.sub_meshes(mesh)) == mesh
 
 
 
@@ -185,13 +170,13 @@ _STRIDED = types.Mesh(_TOPOLOGY, types.Layout((_CHUNKS,), (3,)))
     ids=("same", "equivalent", "contained", "exceeds", "different-topology"),
 )
 def test_symbolic_scopes_compare_by_selected_positions(inner, outer, covered, within) -> None:
-    assert utils.covered_by_scope(inner, outer) is covered
-    assert types.within_scope(inner, outer) is within
+    assert types.equals_mesh_scope(inner, outer) is covered
+    assert types.within_mesh_scope(inner, outer) is within
 
 
 @pytest.mark.parametrize("selection", (_HOLES, _STRIDED), ids=("holes", "strided"))
 def test_a_scope_with_gaps_is_refused(selection) -> None:
-    assert not types.within_scope(selection, selection)
-    assert not types.within_scope(selection, _FULL)
+    assert not types.within_mesh_scope(selection, selection)
+    assert not types.within_mesh_scope(selection, _FULL)
     with pytest.raises(ValueError, match="both must be continuous"):
         types.Mesh.from_meshes(types.Mesh.from_meshes(THR, selection), selection)

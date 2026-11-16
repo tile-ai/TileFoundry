@@ -212,7 +212,6 @@ def tensor_bytes(type: Type) -> int:
 
 def tensor_types(type: Type) -> tuple[TensorType, ...]: ...
 def bytes_by_storage(type: Type, *, umat_level: str | None = None) -> dict[str, int]: ...
-def topology_extent(type: Type, name: str) -> int | None: ...
 ```
 
 - constraints:
@@ -227,11 +226,6 @@ def topology_extent(type: Type, name: str) -> int | None: ...
   - `bytes_by_storage` MUST group their logical bytes by storage name. A `UMAT`
     leaf contributes nothing unless the caller supplies the level where it is
     materialized.
-  - `topology_extent` MUST return the one positive static layout size stated for
-    `name` by leaves whose mesh has `name` as its single topology; leaves with
-    no `ShardLayout`, a multi-topology mesh or another topology name state
-    nothing. It returns `None` when no leaf states it, and MUST raise
-    `ValueError` for a non-positive or symbolic size or for conflicting extents.
 
 ### `StorageKind` and `resolve_storage`
 

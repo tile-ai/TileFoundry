@@ -29,6 +29,7 @@ from .measure import (
     flatten_outputs,
 )
 from .module import CompiledModule, Module
+from .placement import placement_from_env
 from .prepare import prepare, prepare_into
 from .resource import (
     Absolute,

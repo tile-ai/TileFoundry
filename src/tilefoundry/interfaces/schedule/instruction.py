@@ -186,7 +186,7 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
                 outer = utils.physical_layout(outer)
             shard = outer if isinstance(outer, types.ShardLayout) else None
             address = shard.layout if shard is not None else outer
-            primitive = address.outer if isinstance(address, types.ComposedLayout) else address
+            primitive = types.plain_layout(address)
             if not isinstance(primitive, types.Layout):
                 raise ValueError(f"{name}: cannot divide {type(primitive).__name__}")
             profile = int_tuple.compatible_profile(primitive.shape, type_.shape)
@@ -274,8 +274,8 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
                     else attr
                     for attr in shard.attrs
                 )
-                source = utils.participant_layout(replace(shard, attrs=tile_attrs), participant)
-                frame, dropped = utils.participant_frame(source.mesh, participant)
+                source = utils.filter_topologies(replace(shard, attrs=tile_attrs), participant)
+                frame, dropped = utils.find_execution_mesh(source.mesh, participant)
                 tile = types.ShardLayout(tile, source.attrs[dropped:], frame)
                 rest = types.ShardLayout(
                     rest,
@@ -527,7 +527,7 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
         for declared, type_ in zip(tiles.patterns, tiles.tiles, strict=True)
     )
     if needs_frame and isinstance(participant, types.Mesh) and mesh is not None:
-        selected = utils.participant_layout(
+        selected = utils.filter_topologies(
             types.ShardLayout(
                 types.Layout(()),
                 tuple(types.Broadcast() for _ in types.flatten(mesh.layout.shape)),
@@ -536,10 +536,10 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
             participant,
         ).mesh
         try:
-            frame_mesh, _ = utils.participant_frame(selected, participant)
+            frame_mesh, _ = utils.find_execution_mesh(selected, participant)
         except ValueError as error:
             raise RefusalError(
-                f"scope {mesh!r} does not contain participant frame {participant!r}",
+                f"scope {mesh!r} does not contain execution mesh {participant!r}",
                 path=matcher.bindings,
                 op=op,
             ) from error

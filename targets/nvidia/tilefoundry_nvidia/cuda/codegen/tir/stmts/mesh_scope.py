@@ -87,7 +87,7 @@ def is_dynamic_mesh(mesh: types.Mesh) -> bool:
     """
     if any(t.size is None for t in program_topologies(mesh)):
         return True
-    return any(s is None for s in types.flatten(mesh.layout).shape)
+    return any(s is None for s in mesh.shape)
 
 
 def validate_cuda_topology_levels(tgt: target.Target, names) -> None:

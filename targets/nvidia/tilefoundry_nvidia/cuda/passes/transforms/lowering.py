@@ -178,7 +178,7 @@ class CudaLowering(transforms.Lowering):
         return self.fill(call, ctx)
 
     def default_visit_T(self, call: expr.Call, op, operands, ctx, emit=None) -> expr.Expr:
-        """Issue *op* once in its owner region, or at each point of its execution mesh.
+        """Issue *op* once in its owner region, or once at each serial tile on its execution mesh.
 
         *emit* adds one issue from the op and its operands in place of a bare
         ``Evaluate``.
@@ -273,7 +273,7 @@ class CudaLowering(transforms.Lowering):
             else type_
             for type_ in type_list
         )
-        issuers = analysis.issue_mesh(op, owner, mesh)
+        issuers = analysis.execution_mesh_of(op, owner, mesh)
         return Issue(plan, type_list, tuple(issued_operands), read_values, written, mesh, issuers)
 
     def issue_in_owner(self, call: expr.Call, op, issue: Issue, ctx, emit) -> None:
@@ -307,7 +307,7 @@ class CudaLowering(transforms.Lowering):
             self.emit_steps(call, "after", ctx)
 
     def local_operands(self, op, issue: Issue, ctx) -> list:
-        """Each operand as one point of *op*'s execution mesh sees it, in parameter order."""
+        """Each operand as a unit of *op*'s execution mesh holds it, in parameter order."""
         plan, type_list, issuers = issue.plan, issue.types, issue.issuers
         required = analysis.required_execution_mesh(op)
         for region in ctx.builder.blocks[:-1]:
@@ -318,7 +318,7 @@ class CudaLowering(transforms.Lowering):
         for (role, value), type_, rest in zip(issue.operands, type_list, plan.rests, strict=True):
             base = ctx.builder.value(ctx.storage.operand(value, type_, whole_tensor=True), ctx=ctx)
             binding_mesh = rest.mesh if isinstance(rest, types.ShardLayout) else issuers
-            frame, dropped = utils.participant_frame(binding_mesh, required)
+            frame, dropped = utils.find_execution_mesh(binding_mesh, required)
             source = types.shard_layout_of(base.type.layout)
             attrs = (
                 list(source.attrs)
@@ -349,18 +349,16 @@ class CudaLowering(transforms.Lowering):
             )
             if any(isinstance(attr, types.Split) for attr in attrs[:dropped]):
                 primitive = local.layout if isinstance(local, types.ShardLayout) else local
-                outer = primitive.outer if isinstance(primitive, types.ComposedLayout) else primitive
+                outer = types.plain_layout(primitive)
                 local_shape = tuple(prod(types.flatten(mode)) for mode in outer.shape)
-                original = address.outer if isinstance(address, types.ComposedLayout) else address
-                if not any(isinstance(mode, tuple) for mode in original.shape):
+                if not any(isinstance(mode, tuple) for mode in types.plain_layout(address).shape):
                     flat = types.flatten(outer)
                     primitive = (
                         replace(primitive, outer=flat)
                         if isinstance(primitive, types.ComposedLayout)
                         else flat
                     )
-                if expr.static_dim_value(offset) != 0:
-                    primitive = types.ComposedLayout(None, offset, primitive)
+                primitive = types.with_offset(primitive, offset)
                 local = (
                     replace(local, layout=primitive)
                     if source is not None and isinstance(local, types.ShardLayout)
@@ -377,7 +375,11 @@ class CudaLowering(transforms.Lowering):
         return locals_
 
     def issue_at_points(self, call: expr.Call, op, issue: Issue, locals_, ctx, emit) -> None:
-        """Issue *op* through *emit* at each ``IssuePlan.points`` point, in the issuing region."""
+        """Issue *op* through *emit* at each serial tile ``IssuePlan.points`` gives.
+
+        The issue runs in the issuing region. A point is the operand windows of
+        one serial tile, not a unit of the execution mesh.
+        """
         with ctx.builder.region(
             mesh=issue.issuers, binding=expr.Var(ctx.names.fresh("threads"), type=transforms.BINDING)
         ):

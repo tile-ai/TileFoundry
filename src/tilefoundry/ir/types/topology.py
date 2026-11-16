@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-__all__ = ["Topology"]
+__all__ = ["Topology", "topology_name"]
 
 
 @dataclass(frozen=True)
@@ -23,3 +23,8 @@ class Topology:
                 "a ShapeDim. The rule: "
                 "tilefoundry spec target topology-levels"
             )
+
+
+def topology_name(topology: "Topology | str") -> str:
+    """The name of a topology, or the string itself when one was written as a string."""
+    return getattr(topology, "name", topology)

@@ -27,7 +27,7 @@ _GPU, _THREAD = types.Topology("gpu", 2), types.Topology("thread", 32)
 
 
 def _mesh(topology: types.Topology, extents: tuple[int, ...], names: tuple[str, ...]) -> types.Mesh:
-    return types.Mesh((topology,), types.Layout(extents, types.try_compact_major(extents)), names)
+    return types.Mesh((topology,), types.Layout(extents, types.compact_row_major(extents)), names)
 
 
 _CASES = {

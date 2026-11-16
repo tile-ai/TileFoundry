@@ -356,7 +356,7 @@ class BareMeshAxisRule:
 
     def apply(self, value, *, match, context):
         mesh, _, axis_name = value
-        if axis_name is None and len(types.flatten(mesh.layout).shape) != 1:
+        if axis_name is None and len(mesh.shape) != 1:
             raise ParseError.from_node(
                 match.node, context, "a bare Mesh in a shard layout requires a one-axis mesh"
             )
@@ -412,8 +412,8 @@ def meshes_outermost_first(meshes, context):
     order = {name: index for index, name in enumerate(declared)}
 
     def rank(mesh):
-        topology_names = tuple(getattr(topology, "name", topology) for topology in mesh.topologies)
-        return min((order.get(name, len(order)) for name in topology_names), default=len(order))
+        names = types.topology_names(mesh)
+        return min((order.get(name, len(order)) for name in names), default=len(order))
 
     return tuple(sorted(meshes, key=rank))
 
@@ -3898,7 +3898,7 @@ def enter_mesh_coordinate(
     )
     if axis is None and node.attr in {"x", "y", "z"}:
         candidate = ("x", "y", "z").index(node.attr)
-        if candidate < len(types.flatten(mesh.layout).shape):
+        if candidate < len(mesh.shape):
             axis = candidate
     if axis is None:
         named = ", ".join(mesh.names)
@@ -3934,7 +3934,7 @@ class MeshCoordinatePattern(ElementPattern):
         note_authored_call(match.node, context)
         mesh = match.captures["mesh"]
         axis = match.captures["axis"]
-        extent = types.flatten(mesh.layout).shape[axis]
+        extent = mesh.shape[axis]
         if isinstance(extent, bool) or not isinstance(extent, int):
             raise ParseError.from_node(
                 match.node, context, "mesh coordinate requires a concrete axis extent"

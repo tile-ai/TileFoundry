@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 
 from tilefoundry import target
 from tilefoundry.interfaces import cost, valuation
-from tilefoundry.ir import core, expr
+from tilefoundry.ir import core, expr, types
 
 from .errors import Error
 from .iteration_scope import Repeats
@@ -160,7 +160,7 @@ def inflight_bytes(call: expr.Call, scope, tgt, level: str) -> int | None:
         return None if stage is None else stage.total_bytes * slots
     finest = facts.topologies[-1]
     threads = finest.max_logical_units
-    if scope.mesh is not None and finest.name in {item.name for item in scope.mesh.topologies}:
+    if scope.mesh is not None and finest.name in types.topology_names(scope.mesh):
         threads = min(threads, scope.mesh_units(finest.name) // scope.mesh_units(parallel_topology.name))
     return None if threads is None else threads * 16
 

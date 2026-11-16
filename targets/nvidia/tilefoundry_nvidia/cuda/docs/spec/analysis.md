@@ -135,7 +135,7 @@ class SyncPlanMetadata(IRMetadata):
     again. The accesses of the action stay recorded as complete.
   - **Execution mesh.** An action runs on the mesh that lowering issues it on, or on
     its lexical scope's mesh when that is None. That mesh MUST lie within its
-    lexical scope's mesh, as `within_scope` decides. The family places steps in
+    lexical scope's mesh, as `within_mesh_scope` decides. The family places steps in
     the innermost scope that holds both accesses, before the child that holds
     the later one. A barrier runs over the mesh of that scope. When that mesh
     holds one thread, no barrier runs: the thread's own program order orders

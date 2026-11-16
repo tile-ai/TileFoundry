@@ -68,7 +68,7 @@ def logical_shard_attrs(call, ctx, x_ty, group: int):
                 if not isinstance(attr, types.Split) or target != last_axis:
                     continue
                 split_extent = expr.static_dim_value(layout.layout.shape[attr.axis])
-                mesh_extent = expr.static_dim_value(types.flatten(layout.mesh.layout).shape[mesh_axis])
+                mesh_extent = expr.static_dim_value(layout.mesh.shape[mesh_axis])
                 aligned = (
                     aligned
                     and split_extent is not None

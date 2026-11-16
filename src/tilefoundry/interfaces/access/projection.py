@@ -55,8 +55,10 @@ def projected(
             tuple(value.shape),
             value.layout,
             coordinates,
-            divided=lambda layer: ir_utils.divided_mesh_axes(
-                layer, topology=topology, topologies=ctx.topologies
+            divided=lambda layer: ir_utils.divided_axes(
+                layer,
+                selected_level=ir_utils.topology_level(topology, ctx.topologies),
+                topologies=ctx.topologies,
             ),
         )
         return at_device(placed_at, coordinates, device or {})
@@ -230,7 +232,7 @@ def at_device(layout_map: "isl.map", coordinates: dim.IslParamValues, device: Ma
         axis = expr.static_dim_value(coordinates[name].args[0])
         names = target.mesh.names
         key = names[axis] if axis < len(names) and names[axis] else str(axis)
-        extent = types.flatten(target.mesh.layout).shape[axis]
+        extent = target.mesh.shape[axis]
         number = device.get(key, 0)
         if not isinstance(number, int) or isinstance(number, bool) or not 0 <= number < extent:
             raise ValueError(

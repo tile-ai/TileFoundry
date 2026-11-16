@@ -1601,8 +1601,8 @@ class Reshard(Op):
     privately. So an `rmem` Reshard with a `ShardLayout` is a view only when each
     logical element keeps its threads and its register on each thread. The box
     of an `rmem` `ShardLayout` also holds the mesh's thread numbering. That
-    numbering is the topology levels, the `device_layout`, and the mesh offset
-    (0 when the mesh states none). That box steps by `register_strides` instead of the
+    numbering is the topology levels, the plain layout of `flat_layout`, and the
+    mesh offset (0 when the mesh states none). That box steps by `register_strides` instead of the
     physical strides. So every Split keeps its mesh axis even where its physical
     stride is not 0.
     Such a value whose mesh is not static is a copy. The rule is conservative:

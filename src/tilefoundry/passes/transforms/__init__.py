@@ -13,7 +13,6 @@ from .convert_hir_to_tir import (
     TirScope,
     View,
     accepted_aliases,
-    copy_mesh,
     issue_owner,
     label,
     lowers_to_dim,

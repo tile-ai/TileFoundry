@@ -16,7 +16,6 @@ from tilefoundry import target, utils
 from tilefoundry.interfaces import access, cost
 from tilefoundry.ir import core, dim, expr, types
 from tilefoundry.ir import utils as ir_utils
-from tilefoundry.ir.types import int_tuple
 
 from .access import Access
 from .iteration_scope import IterationScope
@@ -58,7 +57,7 @@ def static_axes(mesh: types.Mesh) -> "tuple[int, tuple[int, ...], tuple[int, ...
     """A mesh's device-numbered unit ids, when every one of them is a number."""
     try:
         axes = types.flatten(mesh.layout)
-        offset = mesh.layout.offset if isinstance(mesh.layout, types.ComposedLayout) else 0
+        offset = types.offset(mesh)
     except ValueError:
         return None
     shape = tuple(expr.static_dim_value(extent) for extent in types.flatten(axes.shape))
@@ -274,7 +273,7 @@ def space_axes(
     wave_reached = boundary.view("wave", window)
     shared, partial = [], []
     reached = boundary.view("relation", -1).range()
-    shape = types.flatten(types.flatten(boundary.mesh.layout).shape)
+    shape = boundary.mesh.shape
     for axis, parameter_name in enumerate(boundary.axis_parameters):
         extent = expr.static_dim_value(shape[axis])
         unit_reached = boundary.view("unit", window, parameter_name)
@@ -297,14 +296,8 @@ def space_axes(
 
 def axis_label(mesh: types.Mesh, axis: int) -> str:
     """Name a mesh axis, falling back to its numeric index."""
-    stated = mesh.layout.outer if isinstance(mesh.layout, types.ComposedLayout) else mesh.layout
-    levels = types.flatten(
-        tuple(
-            int_tuple.repeat_like(mode, getattr(level, "name", str(level)))
-            for mode, level in zip(stated.shape, mesh.topologies, strict=True)
-        )
-    )
-    level_name = levels[axis] if axis < len(levels) else ""
+    keys = types.axis_keys(mesh)
+    level_name = keys[axis][0] if axis < len(keys) else ""
     if axis < len(mesh.names):
         name = mesh.names[axis]
         return f"{level_name}.{name}" if level_name else name
@@ -445,15 +438,10 @@ def axis_parameters_of(scope: IterationScope, mesh: types.Mesh | None) -> tuple[
         axis = expr.static_dim_value(coordinate.args[0])
         if axis is None:
             continue
-        start = 0
-        for level in types.separate(coordinate.target.mesh):
-            rank = len(types.flatten(types.flatten(level.layout).shape))
-            if level == mesh and start <= axis < start + rank:
-                names_by_axis[axis - start] = name
-            start += rank
-    return tuple(
-        names_by_axis.get(axis) for axis in range(len(types.flatten(types.flatten(mesh.layout).shape)))
-    )
+        keys = types.axis_keys(coordinate.target.mesh)
+        if axis < len(keys) and types.get(coordinate.target.mesh, keys[axis][0]) == mesh:
+            names_by_axis[axis - [level for level, _ in keys].index(keys[axis][0])] = name
+    return tuple(names_by_axis.get(axis) for axis in range(len(mesh.shape)))
 
 
 def wave_mesh(scope: IterationScope, topology: str) -> types.Mesh | None:
@@ -464,11 +452,8 @@ def wave_mesh(scope: IterationScope, topology: str) -> types.Mesh | None:
             if isinstance(ctx.owner, core.MeshRegion)
             else (ctx.mesh if ctx.parent is None else None)
         )
-        if mesh is not None:
-            for component in types.separate(mesh):
-                held = component.topologies[0]
-                if getattr(held, "name", held) == topology:
-                    return component
+        if mesh is not None and (part := types.get(mesh, topology)) is not None:
+            return part
     return None
 
 
@@ -499,7 +484,7 @@ def shared_origin(scope, tgt, definitions, topology, wave) -> bool:
     mesh = None if origin is None else wave_mesh(origin, topology)
     if mesh is None:
         return True
-    axes = tuple(range(len(types.flatten(types.flatten(mesh.layout).shape))))
+    axes = tuple(range(len(mesh.shape)))
     return shared_units(mesh, axes, wave) <= 1
 
 

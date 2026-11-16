@@ -13,7 +13,7 @@ from __future__ import annotations
 from math import prod
 
 from tilefoundry import analysis
-from tilefoundry.ir import core, dim, expr, tir, types
+from tilefoundry.ir import core, dim, expr, types, utils
 from tilefoundry.ir.tir import memory
 from tilefoundry.passes import transforms
 
@@ -82,16 +82,14 @@ def projected(type_list) -> types.Mesh | None:
 
 def held_threads(mesh: types.Mesh) -> frozenset | None:
     """The threads of one CTA that *mesh*'s thread level holds, None when they are not static."""
-    level = next(
-        (level for level in types.separate(mesh) if level.topologies[0].name == "thread"), None
-    )
+    level = types.get(mesh, "thread")
     if level is None or (
         isinstance(mesh.layout, types.ComposedLayout) and not isinstance(mesh.layout.offset, int)
     ):
         return None
     try:
-        layout, offset = tir.sync.participant_layout(level)
-    except expr.VerifyError:
+        layout, offset = types.plain_layout(utils.flat_layout(level)), types.offset(level)
+    except ValueError:
         return None
     count = types.size(layout)
     if not isinstance(count, int):

@@ -160,7 +160,7 @@ represented, including identity operations.
 For each operand layout, non-unit repeat counts name leading CuTe tile modes;
 the remaining inner modes are the instruction fragment matched against its
 operand declaration. A sharded operand's mesh layout follows the same rule:
-leading modes are issue groups and the inner modes are the participant frame.
+leading modes are issue groups and the inner modes are the execution mesh.
 
 ## 4. Access relation
 

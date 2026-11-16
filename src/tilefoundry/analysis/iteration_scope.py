@@ -26,7 +26,7 @@ from .visitor import AnalyzeContext
 def units_at(mesh: types.Mesh, topology: str, topologies: tuple[types.Topology, ...]) -> int:
     """Count mesh units at the selected topology and all coarser topologies."""
     selected = utils.topology_level(topology, topologies)
-    stated = mesh.layout.outer if isinstance(mesh.layout, types.ComposedLayout) else mesh.layout
+    stated = types.plain_layout(mesh.layout)
     units = 1
     for index, each in enumerate(mesh.topologies):
         if utils.topology_level(each.name, topologies) > selected:

@@ -30,7 +30,7 @@ from .emission import (
     copies_carry_entry,
     copies_insert_slice_base,
     copies_insert_slice_update,
-    issue_mesh,
+    execution_mesh_of,
     operand_roles,
     required_execution_mesh,
     result_param,
@@ -363,7 +363,7 @@ class Planner:
         A parameter named in *filled* is issued with the call's *result* storage,
         and also with its argument when one is given.
         """
-        if mesh is not None and (scope.mesh is None or not types.within_scope(mesh, scope.mesh)):
+        if mesh is not None and (scope.mesh is None or not types.within_mesh_scope(mesh, scope.mesh)):
             raise analysis.Error(f"sync: {name} is issued on a mesh not within its scope's")
         params = schedule.call_params(op, len(args))
         leaves = {
@@ -558,7 +558,7 @@ class Planner:
                 type_list,
                 type(op).__name__,
                 scope,
-                issue_mesh(op, transforms.issue_owner(type_list), scope.mesh),
+                execution_mesh_of(op, transforms.issue_owner(type_list), scope.mesh),
                 filled=tuple(param.name for param in produced),
                 result=core.ssa_leaves(call),
             )
@@ -959,7 +959,7 @@ class Planner:
         only needs the threads of each aligned group of *unit* to agree (PTX
         ``.aligned``), so the trip count may differ from one group to the next.
         """
-        spanned = {topology.name for topology in mesh.topologies}
+        spanned = set(types.topology_names(mesh))
         groups = None
         if unit is not None and len(mesh.topologies) == 1:
             held = tir.sync.sync_scope(mesh)

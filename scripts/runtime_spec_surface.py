@@ -37,6 +37,7 @@ REGIONS: dict[str, str] = {
     "py-function": "runtime/function.py",
     "py-decorator": "runtime/decorator.py",
     "py-loader": "runtime/loader.py",
+    "py-placement": "runtime/placement.py",
     "py-resource": "runtime/resource.py",
     "py-measure": "runtime/measure.py",
     "py-tensor": "core/tensor.py",

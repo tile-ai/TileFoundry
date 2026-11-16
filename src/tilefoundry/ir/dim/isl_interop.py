@@ -593,7 +593,7 @@ def layout_to_isl_map(
     for layer in reversed(layers):
         if not isinstance(layer, types.ShardLayout):
             continue
-        mesh_extents = types.flatten(layer.mesh.layout).shape
+        mesh_extents = layer.mesh.shape
         cuts = divided(layer)
         for mesh_axis, attr in enumerate(layer.attrs):
             if not isinstance(attr, types.Split):
@@ -609,7 +609,7 @@ def layout_to_isl_map(
         if not any(cut for *_, cut in cuts):
             continue
         whole = expr.static_dim_value(extents[mode])
-        parts = [expr.static_dim_value(types.flatten(layer.mesh.layout).shape[a]) for layer, a, _ in cuts]
+        parts = [expr.static_dim_value(layer.mesh.shape[a]) for layer, a, _ in cuts]
         if whole is None or any(part is None or part <= 0 for part in parts):
             raise ValueError(
                 f"layout mode {mode} of {shape} is split by mesh axes; placing "

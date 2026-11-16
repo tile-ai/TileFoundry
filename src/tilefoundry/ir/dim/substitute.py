@@ -231,19 +231,12 @@ def canonicalize_topology_dims(topology: object) -> object:
     return types.Topology(topology.name, size)
 
 
-def map_mesh_layout(layout, rebuild):
-    """Rebuild what a mesh stated, whether that is one layout or one per level."""
-    if isinstance(layout, tuple):
-        return tuple(rebuild(one) for one in layout)
-    return rebuild(layout)
-
-
 def canonicalize_mesh_dims(mesh: object) -> object:
     """*mesh* with its layout and topology dimensions in isl normal form."""
     if not isinstance(mesh, types.Mesh):
         return mesh
     topologies = tuple(canonicalize_topology_dims(item) for item in mesh.topologies)
-    layout = map_mesh_layout(mesh.layout, canonicalize_layout_dims)
+    layout = canonicalize_layout_dims(mesh.layout)
     if topologies == mesh.topologies and layout == mesh.layout:
         return mesh
     return types.Mesh(topologies=topologies, layout=layout, names=mesh.names)
@@ -305,7 +298,7 @@ def substitute_mesh_dims(mesh: object, bindings: Mapping[str, int]) -> object:
     if not isinstance(mesh, types.Mesh):
         return mesh
     topologies = tuple(substitute_topology_dims(item, bindings) for item in mesh.topologies)
-    layout = map_mesh_layout(mesh.layout, lambda one: substitute_layout_dims(one, bindings))
+    layout = substitute_layout_dims(mesh.layout, bindings)
     if topologies == mesh.topologies and layout == mesh.layout:
         return mesh
     return types.Mesh(topologies=topologies, layout=layout, names=mesh.names)

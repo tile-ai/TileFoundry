@@ -481,7 +481,7 @@ def verify_bound_coordinates(field: str, bound, ctx) -> None:
             continue
         mesh = node.target.mesh
         axes = dim.literal_axes(node.args[0]) if node.args else None
-        rank = len(types.flatten(mesh.layout).shape)
+        rank = len(mesh.shape)
         if axes is None or not all(0 <= axis < rank for axis in axes):
             raise expr.VerifyError(f"For.{field} reads axes {axes!r} of a mesh of rank {rank}")
         if not any(held is mesh or held == mesh for held in ctx.enclosing_meshes()):

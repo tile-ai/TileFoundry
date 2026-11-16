@@ -26,7 +26,7 @@ from tilefoundry.ir import tir
 @pytest.mark.parametrize(
     ("owner", "name", "value", "message"),
     [
-        ("tilefoundry.ir.types", "within_scope", lambda mesh, scope: False, "is issued on a mesh not within its scope's"),
+        ("tilefoundry.ir.types", "within_mesh_scope", lambda mesh, scope: False, "is issued on a mesh not within its scope's"),
         ("tilefoundry.ir.tir.sync", "classify", lambda mesh: tir.sync.SyncBarrier.GRID, "a scope that no thread mesh binds"),
         ("tilefoundry_nvidia.cuda.analysis.sync", "LOOP_LIMIT", 1, "did not settle within its limit"),
     ],

@@ -93,8 +93,7 @@ def workspace_slots(source) -> int:
     if "thread" in names:
         level = types.layouts(mesh)[names.index("thread")]
     else:
-        stated = mesh.layout.outer if isinstance(mesh.layout, types.ComposedLayout) else mesh.layout
-        level = stated
+        level = types.plain_layout(mesh.layout)
     threads = 1
     for extent in types.flatten(level).shape:
         value = expr.static_dim_value(extent)

@@ -389,7 +389,7 @@ the ones they are XORed onto
     formula unchanged.
   - A `Swizzle` is an involution (`swizzle(swizzle(offset)) == offset`), so it
     is its own left and right inverse. `bits == 0` is the identity.
-  - Swizzle-specialized `composition`, `left_inverse`, and `right_inverse`
+  - Swizzle-specialized `composition` and `left_inverse`
     MUST follow the corresponding CuTe `swizzle_layout.hpp` overloads.
     `get_swizzle_portion` returns `None` for a layout with no final swizzle;
     `Swizzle.from_active` MUST reject mask pairs that are not equal-width contiguous
@@ -458,8 +458,18 @@ def get(value, key):
     ...
 
 
-def within_scope(mesh: Mesh, current: Mesh) -> bool:
+def sub_meshes(mesh: Mesh) -> tuple[Mesh, ...]:
+    """Return get(mesh, topology) for each topology in order."""
+    ...
+
+
+def within_mesh_scope(mesh: Mesh, current: Mesh) -> bool:
     """Return whether each continuous unit set is contained in current."""
+    ...
+
+
+def equals_mesh_scope(mesh: Mesh, current: Mesh) -> bool:
+    """Return whether each topology of mesh selects the units current selects."""
     ...
 ```
 
@@ -476,14 +486,16 @@ def within_scope(mesh: Mesh, current: Mesh) -> bool:
     keeps the quotient, so its size MAY be symbolic. `get` MUST refuse an offset
     that it cannot divide. It MUST refuse a mesh of several
     topologies whose slice has an inner transform.
-  - Scope comparison MUST reduce each level's layout with
-    `layout_algebra.filter(layout, major="row")`, retaining the level's start. Filtering
+  - Scope comparison reads `selected_units(get(mesh, topology))`. It reduces
+    that sub mesh's layout with `layout_algebra.filter(layout, major="row")`
+    and keeps its offset. Filtering
     removes shape-one and stride-zero modes and coalesces adjacent modes after
     affine dimension normalization. For continuous selections,
-    `utils.covered_by_scope` MUST compare starts and normalized sizes, independent
+    `equals_mesh_scope` MUST compare offsets and normalized sizes, independent
     of mode order. Otherwise it MUST conservatively compare the filtered
-    layouts and starts for equality.
-  - `within_scope` MUST require both filtered selections to be continuous and
+    layouts and offsets for equality. It compares only the topologies that
+    `mesh` names; the other topologies of `current` do not enter it.
+  - `within_mesh_scope` MUST require both filtered selections to be continuous and
     prove containment of their half-open intervals `[start, start + size)`.
     Static continuity is `size == cosize`; symbolic continuity requires either
     coalescing direction to leave one mode with stride one. Symbolic interval bounds MUST use the
@@ -522,8 +534,9 @@ division and no declared extent.
 Because the layout is a nested `Layout`, the layout operations read it.
 `get(mesh.layout, i)` is level `i`'s own layout. `flatten(mesh.layout)` is every
 level's axes end to end. `int_tuple.repeat_like` against `mesh.layout.shape`
-states per axis whatever is stated per level. `utils.device_layout(mesh)` is those
-axes as the device numbers its units. Each axis steps by what its level states
+states per axis whatever is stated per level. `utils.flat_layout(mesh)` is those
+axes as one layout over all topologies, offset included. It is the form a mesh
+is written and printed in. Each axis steps by what its level states
 times what the levels under it hold. A slice's `ComposedLayout.offset` is where
 the whole mesh starts in that numbering.
 
@@ -551,9 +564,9 @@ Mesh composition uses the following rules:
   that extent; symbolic extents are deferred until dimensions are bound. A
   level stating a run is already bounded by `Mesh.__getitem__` and is not
   checked again.
-- `separate(mesh)` is the inverse construction: it returns `get(mesh, topology)`
+- `sub_meshes(mesh)` is the inverse construction: it returns `get(mesh, topology)`
   for each topology in order. Each result has that topology's layout, its own
-  offset, and its share of the axis names. It is exported as `types.separate`.
+  offset, and its share of the axis names. It is exported as `types.sub_meshes`.
 
 HIR `MeshRegion` applies this composition only at its body boundary. Its `args`
 are evaluated in the enclosing scope and are not recomposed merely because the
@@ -571,10 +584,6 @@ value is consumed by a region.
     parser resolves the non-empty tuple of declared topology names to the
     `Topology` tuple before it constructs the record. A bare string and the
     `topology=` keyword are not Mesh author forms.
-  - `utils.states_consistent_positions(mesh)` is true when the product of topology
-    sizes equals `size(mesh.layout)`. Mesh-scope verification asserts this
-    predicate; Mesh construction and slicing do not, so a derived slice
-    remains a record of its parent scope.
   - A Mesh naming several levels may be sliced. The key addresses all level axes
     in order. Every level retains its own layout. The slice offset is the sum of
     each selected start times that axis's step in the index.
@@ -620,8 +629,7 @@ class Placement:
 
     def unit_ids(self, topologies: tuple[Topology | str, ...]) -> tuple[int | None, ...]: ...
 
-    @classmethod
-    def from_env(cls, topology: str = "gpu") -> "Placement": ...
+    def coords(self, mesh: Mesh) -> tuple[int | None, ...]: ...
 
     @classmethod
     def from_mesh(cls, mesh: Mesh) -> tuple["Placement", ...]: ...
@@ -637,6 +645,9 @@ class Placement:
     unit id within its topology: the value of that topology's layout plus the
     offset of `get(mesh, topology)`. Its coordinates are `mesh_coords` of those
     ids ([§7.6](#76-local_layout)).
+  - `coords(mesh)` is `mesh_coords(mesh, unit_ids(mesh.topologies))`.
+  - The placement of a launched process comes from `runtime.placement_from_env`
+    ([runtime](./runtime.md)). The IR layer does not read the environment.
   - an unfixed level MUST be left undivided rather than read as `0`: the device
     chooses its own `cta` and `thread`.
   - a `Placement` is host-side execution context. It MUST NOT appear in a
@@ -1120,19 +1131,6 @@ def compact_row_major(shape: tuple, *, mul=None) -> tuple:
     ...
 
 
-def try_compact_major(shape: tuple, *, major: str = "row") -> tuple | None:
-    """Return static compact strides when possible.
-
-    Args:
-        shape: Candidate shape.
-        major: "row" (last mode fastest) or "col" (mode zero fastest).
-
-    Returns:
-        Static strides, or None for a symbolic or dynamic shape.
-    """
-    ...
-
-
 class StorageOwners:
     order: tuple[str, ...]  # Target topologies, coarse to fine.
     owner: Mapping[StorageKind, str]
@@ -1225,22 +1223,10 @@ def left_inverse(layout: Layout | ComposedLayout):
     ...
 
 
-def right_inverse(layout: Layout | ComposedLayout):
-    """Build the supported CuTe right inverse.
-
-    Args:
-        layout: Layout to invert.
-
-    Returns:
-        Its right-inverse layout.
-    """
-    ...
-
-
 ```
 
 - constraints:
-  - `compact_col_major`, `compact_row_major` and `try_compact_major` live in
+  - `compact_col_major` and `compact_row_major` live in
     `ir/types/stride.py`; `apply`, `coalesce`, `composition`, `complement`,
     `logical_divide`, `zipped_divide`, `filter`, `is_contiguous` and the inverse
     functions live in `ir/types/layout_algebra.py`, reached as
@@ -1272,8 +1258,6 @@ def right_inverse(layout: Layout | ComposedLayout):
     factor MUST yield its other factor as the local extent; other symbolic split
     relations MUST be rejected as undecidable. An unconsumed symbolic extent MAY pass through
     only when `require_static=False`; strict mode MUST reject it.
-  - `try_compact_major` MUST return `None` unless every shape entry is a
-    non-boolean integer.
   - `coalesce(layout)` MUST flatten and merge contiguous modes under CuTe's
     mode-zero-fast convention. With `trg_profile`, it MUST apply that rule at
     each profile terminal, preserve unmatched trailing modes, and reject a
