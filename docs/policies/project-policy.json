@@ -79,6 +79,43 @@
         "  - nothing new; name the existing suites that must still pass unchanged",
         "  - the test that earns its place; say which bar it clears and what breaks it"
       ]
+    },
+    {
+      "id": "vocabulary",
+      "name": "Vocabulary",
+      "description": "New code follows the terms of shard §0.",
+      "when": {
+        "path_glob": [
+          "src/**",
+          "targets/**",
+          "docs/spec/**"
+        ]
+      },
+      "final_ac": [
+        "Names added or renamed by this plan MUST use the terms of `docs/spec/shard.md` §0 and MUST NOT use a word that table forbids; the reviewer lists every new public name and its term."
+      ],
+      "rules": {
+        "implementer": [
+          {
+            "path": "docs/develop.md",
+            "section": "Naming"
+          },
+          {
+            "path": "docs/spec/shard.md",
+            "section": "0. Terms"
+          }
+        ],
+        "reviewer": [
+          {
+            "path": "docs/develop.md",
+            "section": "Naming"
+          },
+          {
+            "path": "docs/spec/shard.md",
+            "section": "0. Terms"
+          }
+        ]
+      }
     }
   ]
 }

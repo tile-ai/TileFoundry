@@ -51,8 +51,7 @@ CUTE_HOST_DEVICE auto program_ids() noexcept;
 ```
 <!-- /generated -->
 
-**Terms.** A *level* is `gpu`, `cta` or `thread`; an *instance* is one level's
-id, and a *coordinate* contains one id per level. A warp grouping is an axis
+**Terms.** Terms are those of [shard §0](../../../../../../docs/spec/shard.md#0-terms). A warp grouping is an axis
 of a thread mesh, not a level.
 
 - constraints:
@@ -140,7 +139,7 @@ CUTE_HOST_DEVICE constexpr auto make_mesh(Extents const &extents);
 ```
 <!-- /generated -->
 
-**Terms.** A *mesh* names one or more levels and carries a layout whose values are those levels' ids. A *slice* is a mesh whose layout has a constant term: it covers part of a level, starting at that term. *Warped* describes a thread mesh whose ids run a whole number of warps; its *lane* axis is one warp and its *warp* axis steps between them.
+**Terms.** Terms are those of [shard §0](../../../../../../docs/spec/shard.md#0-terms). A *slice* is a mesh whose layout has a constant term: it covers part of a level, starting at that term. *Warped* describes a thread mesh whose ids run a whole number of warps; its *lane* axis is one warp and its *warp* axis steps between them.
 
 - constraints:
   - A mesh is the levels it names and the layout whose values are their ids -- the same two facts the IR `Mesh` carries beside its axis names ([shard §5](../../../../../../docs/spec/shard.md#5-mesh)). Its instance count and shape are `cute::size` and `cute::shape` of that layout, which read through a slice on their own.
@@ -192,7 +191,7 @@ make_shard_layout(TLayout const &layout, TMesh const &mesh, Attrs const &);
 ```
 <!-- /generated -->
 
-**Terms.** A *shard layout* is a tensor layout, one *attr* per mesh axis, and the mesh those attrs are indexed against. An attr says what its mesh axis does with the tensor: `S<k>` splits tensor axis `k` across it, `B` broadcasts, and `P<R>` leaves an unreduced partial.
+**Terms.** Terms are those of [shard §0](../../../../../../docs/spec/shard.md#0-terms). An attr says what its mesh axis does with the tensor: `S<k>` splits tensor axis `k` across it, `B` broadcasts, and `P<R>` leaves an unreduced partial.
 
 - constraints:
   - `TAttrs` is a `cute::tuple` of empty tags, so the aggregate holds no attribute value: the attributes are in the type and the layout is what carries data.

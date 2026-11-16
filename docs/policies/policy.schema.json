@@ -55,11 +55,18 @@
           "items": {"type": "string", "minLength": 1},
           "description": "Plain-text acceptance criteria. These are the verifiable statements injected into matching milestone Acceptance Criteria; AC text lives here because it IS the contract, not a copy of one."
         },
+        "final_ac": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1},
+          "description": "Plain-text acceptance criteria injected once into the plan's Final Gate when any Related File of the plan matches."
+        },
         "rules": {"$ref": "#/$defs/refs_by_role"},
         "knowledge": {"$ref": "#/$defs/refs_by_role"}
       },
       "anyOf": [
         {"required": ["ac"]},
+        {"required": ["final_ac"]},
         {"required": ["rules"]},
         {"required": ["knowledge"]}
       ]

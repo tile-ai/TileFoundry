@@ -118,3 +118,22 @@ spec-code validator.
 
 Review-led spec work tracks every source comment to one final state:
 `implemented`, `verified no-op`, or `resolved by decision`.
+
+## Language
+
+Spec text is written in ASD-STE100 Simplified Technical English.
+
+- One sentence states one fact or gives one instruction.
+- An instruction has 20 words or fewer. A description has 25 words or fewer.
+- Use the active voice and the present tense.
+- One word has one meaning, and one meaning has one word. The words for meshes,
+  topologies and layouts are the terms of [shard §0](./spec/shard.md#0-terms).
+- Use a term with its defined meaning and part of speech. The defined verbs are: lowering issues; a unit executes.
+- Do not replace a defined term with a synonym.
+- Write an instruction as a command or with MUST. Write a description as a statement.
+- A noun cluster has three words or fewer.
+- Do not write history, rejected alternatives, or incidental descriptions of absent features.
+- Keep prohibitions, refusal conditions, and invariants that define the current contract.
+
+This rule applies to text that is added or changed. Existing text is rewritten
+when its section is edited.
