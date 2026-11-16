@@ -16,8 +16,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import product
 
-from .layout import apply, size
-from .mesh import Mesh, sub_meshes
+from .layout import apply, plain_layout, size
+from .mesh import Mesh, offset, sub_meshes
 from .shard_layout import mesh_coords
 from .topology import Topology, topology_name
 
@@ -48,12 +48,13 @@ class Placement:
 
     @classmethod
     def from_mesh(cls, mesh: Mesh) -> "tuple[Placement, ...]":
-        """Every placement of *mesh*: each unit id is its sub mesh's layout, offset included."""
+        """Every placement of *mesh*: each unit id is its topology's layout value plus offset."""
         parts = sub_meshes(mesh)
         return tuple(
             cls(
                 {
-                    topology_name(part.topologies[0]): apply(part.layout, index)
+                    topology_name(part.topologies[0]): apply(plain_layout(part.layout), index)
+                    + offset(part)
                     for part, index in zip(parts, at, strict=True)
                 }
             )

@@ -72,7 +72,7 @@ class ShardTensor:
                 "ShardTensor: a global Partial value holds its reduced value; "
                 "no placement's own part exists"
             )
-        return self.window(self.tensor.contiguous(), shard, placement.coords(shard.mesh))
+        return self.window(self.tensor.contiguous(), shard, placement)
 
     def to_global(self) -> "ShardTensor":
         """One global tensor, by the meaning of ``type``.
@@ -103,7 +103,7 @@ class ShardTensor:
                 parts[key] = utils.torch.empty(
                     tuple(self.type.shape), dtype=first.dtype, device=first.device
                 )
-            self.window(parts[key], shard, coord).copy_(data)
+            window_at(parts[key], shard, tuple(self.type.shape), coord).copy_(data)
         values = list(parts.values())
         if len(values) == 1:
             return ShardTensor(self.type, values[0])
@@ -122,13 +122,18 @@ class ShardTensor:
             return ShardTensor(type, self.tensor)
         return ShardTensor(type, self.to_global().tensor)
 
-    def window(self, whole, shard: types.ShardLayout, coord: tuple):
-        """The part of row-major *whole* that the unit at mesh *coord* holds.
+    def window(self, whole, shard: types.ShardLayout, placement: types.Placement):
+        """The part of row-major *whole* that *placement* holds.
 
         Host data is the logical tensor, so the cut keeps the shard's modes and
         reads them with row-major strides; the address strides may not say where
         a placement's part is, since a private Split has stride zero.
         """
-        host = replace(shard, layout=types.Layout(types.plain_layout(shard.layout).shape))
-        layout, offset = types.local_layout_and_offset(host, tuple(self.type.shape), coord)
-        return whole.as_strided(layout.shape, layout.strides, whole.storage_offset() + offset)
+        return window_at(whole, shard, tuple(self.type.shape), placement.coords(shard.mesh))
+
+
+def window_at(whole, shard: types.ShardLayout, shape: tuple, coord: tuple):
+    """The part of row-major *whole* that the unit at mesh *coord* holds, as ``window`` reads it."""
+    host = replace(shard, layout=types.Layout(types.plain_layout(shard.layout).shape))
+    layout, offset = types.local_layout_and_offset(host, shape, coord)
+    return whole.as_strided(layout.shape, layout.strides, whole.storage_offset() + offset)

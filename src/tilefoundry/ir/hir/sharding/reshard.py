@@ -83,7 +83,11 @@ def buffer_alias(call: expr.Call) -> int | None:
         flat, threads = types.flatten(physical), None
         if held.storage is expr.StorageKind.RMEM and shard is not None:
             mesh = shard.mesh
-            threads = (mesh.topologies, types.plain_layout(utils.flat_layout(mesh)), types.offset(mesh))
+            try:
+                start = types.offset(mesh)
+            except ValueError:
+                return None
+            threads = (mesh.topologies, types.plain_layout(utils.flat_layout(mesh)), start)
             sizes = (getattr(topology, "size", 1) for topology in mesh.topologies)
             if not all(
                 isinstance(value, int) for value in (*sizes, *threads[1].shape, *threads[1].strides)

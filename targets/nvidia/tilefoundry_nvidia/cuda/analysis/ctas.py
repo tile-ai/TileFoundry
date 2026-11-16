@@ -308,7 +308,11 @@ def axis_numbering(mesh: types.Mesh, axis: int):
     if axis >= len(keys):
         return None
     level = types.get(mesh, keys[axis][0])
-    layout, start = types.plain_layout(utils.flat_layout(level)), types.offset(level)
+    try:
+        start = types.offset(level)
+    except ValueError:
+        return None
+    layout = types.plain_layout(utils.flat_layout(level))
     extents, strides = layout.shape, layout.strides
     if not all(isinstance(value, int) for value in (*extents, *strides)):
         return None
@@ -342,7 +346,11 @@ def unit_guard(mesh: types.Mesh, unit: str, name: str = "cta") -> str | None:
     level = types.get(mesh, name)
     if level is None:
         return None
-    layout, start = types.plain_layout(utils.flat_layout(level)), types.offset(level)
+    try:
+        start = types.offset(level)
+    except ValueError:
+        return None
+    layout = types.plain_layout(utils.flat_layout(level))
     extents, strides = layout.shape, layout.strides
     if not all(isinstance(value, int) for value in (*extents, *strides)):
         return None
