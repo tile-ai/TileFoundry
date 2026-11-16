@@ -429,24 +429,24 @@ def local_readback(layout):
 
 
 def mesh_coords(mesh: Mesh, ids: tuple[int | None, ...]) -> tuple[int | None, ...]:
-    """Each mesh axis's coordinate under per-level program ids; None where a level is unfixed.
+    """Each mesh axis's coordinate under per-level unit ids; None where a level is unfixed.
 
     The host side of the CUDA runtime's ``mesh_coords(mesh, unit_ids())``.
     """
     coords = []
     for index, arrangement in enumerate(levels(mesh)):
         flat = flatten(arrangement)
-        program_id = ids[index] if index < len(ids) else None
+        unit_id = ids[index] if index < len(ids) else None
         coords.extend(
             (None,) * len(flat.shape)
-            if program_id is None
-            else idx2crd(program_id, flat.shape, flat.strides)
+            if unit_id is None
+            else idx2crd(unit_id, flat.shape, flat.strides)
         )
     return tuple(coords)
 
 
 def local_layout_and_offset(shard: ShardLayout, tensor_shape: tuple, coord: tuple):
-    """The logical local Layout the instance at mesh *coord* holds, and where it begins.
+    """The logical local Layout the unit at mesh *coord* holds, and where it begins.
 
     The host side of the CUDA runtime's ``local_layout_and_offset(sl, coord)``.
     """

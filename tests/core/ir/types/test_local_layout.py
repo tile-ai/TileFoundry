@@ -1,11 +1,11 @@
-"""Which part is one instance's, held against the type side's answer.
+"""Which part is one unit's, held against the type side's answer.
 
 ``local_layout`` narrows a real tensor and ``local_type_of`` narrows a Type,
 by the same rule read from the same ``ShardLayout``. They used to be checked
 against each other on every single read, which put a per-call assert on the
 weight path to guard a property of two implementations rather than of any
 input. It is that property, so it is checked here: over a matrix of layouts,
-and over every instance of each, not once per program that happens to run.
+and over every unit of each, not once per program that happens to run.
 """
 
 from __future__ import annotations
@@ -52,8 +52,8 @@ _CASES = {
 }
 
 
-def _instances(mesh: types.Mesh) -> int:
-    """How many programs the mesh spreads a tensor over."""
+def _units(mesh: types.Mesh) -> int:
+    """How many units the mesh spreads a tensor over."""
     count = 1
     for extent in types.flatten(mesh.layout).shape:
         count *= extent
@@ -61,7 +61,7 @@ def _instances(mesh: types.Mesh) -> int:
 
 
 def _elements(layout, offset: int) -> list[int]:
-    """Every element of the whole tensor's engine this instance reaches."""
+    """Every element of the whole tensor's engine this unit reaches."""
     return [
         offset
         + sum(index * stride for index, stride in zip(coord, layout.strides, strict=True))
@@ -71,28 +71,28 @@ def _elements(layout, offset: int) -> list[int]:
 
 @pytest.mark.parametrize("case", sorted(_CASES), ids=lambda name: name)
 def test_the_layout_and_the_type_narrow_the_same_way(case: str) -> None:
-    """Every instance's layout holds the extent the Type says one shard is."""
+    """Every unit's layout holds the extent the Type says one shard is."""
     shape, mesh, attrs = _CASES[case]
     held = utils.make_shard_tensor_type(shape, mesh=mesh, attrs=attrs, dtype=expr.DType.f32)
     shard = types.shard_layout_of(held.layout)
     want = tuple(utils.local_type_of(held).shape)
 
-    for program_id in range(_instances(mesh)):
-        layout, _offset = types.local_layout(shard, shape, types.mesh_coords(mesh, (program_id,)))
+    for unit_id in range(_units(mesh)):
+        layout, _offset = types.local_layout(shard, shape, types.mesh_coords(mesh, (unit_id,)))
         layout = types.local_readback(layout)
         assert tuple(layout.shape) == want, (
-            f"{case}: instance {program_id} holds {tuple(layout.shape)}, "
+            f"{case}: unit {unit_id} holds {tuple(layout.shape)}, "
             f"while one shard of {shape} is {want}"
         )
 
 
 @pytest.mark.parametrize("case", sorted(_CASES), ids=lambda name: name)
-def test_every_instance_together_tile_the_tensor(case: str) -> None:
+def test_every_unit_together_tile_the_tensor(case: str) -> None:
     """No element is held twice and none is held by nobody.
 
-    Counted over the elements each instance reaches rather than over its
+    Counted over the elements each unit reaches rather than over its
     extents, which is the property the extents alone cannot state: two
-    instances could each hold the right amount and both hold it from the same
+    units could each hold the right amount and both hold it from the same
     place, and an offset that walks off the tensor is only visible once the
     elements it lands on are named.
     """
@@ -101,15 +101,15 @@ def test_every_instance_together_tile_the_tensor(case: str) -> None:
     shard = types.shard_layout_of(held.layout)
 
     covered: Counter[int] = Counter()
-    for program_id in range(_instances(mesh)):
-        layout, offset = types.local_layout_and_offset(shard, shape, types.mesh_coords(mesh, (program_id,)))
+    for unit_id in range(_units(mesh)):
+        layout, offset = types.local_layout_and_offset(shard, shape, types.mesh_coords(mesh, (unit_id,)))
         covered.update(_elements(layout, offset))
 
     whole = 1
     for extent in shape:
         whole *= extent
     assert set(covered) == set(range(whole)), (
-        f"{case}: the instances reach {sorted(set(covered))}, not the {whole} "
+        f"{case}: the units reach {sorted(set(covered))}, not the {whole} "
         f"elements of {shape}"
     )
     times = set(covered.values())
@@ -127,7 +127,7 @@ def test_the_layout_keeps_the_whole_tensors_strides() -> None:
 
 
 def test_the_outer_axis_steps_over_what_the_inner_one_holds() -> None:
-    """32 elements over a 4x8 mesh leave one each, so instance ``i`` holds it.
+    """32 elements over a 4x8 mesh leave one each, so unit ``i`` holds it.
 
     One step of the outer axis clears the eight the inner one holds, rather
     than the whole the outer axis was already narrowed out of.

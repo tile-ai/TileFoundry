@@ -385,7 +385,7 @@ class ShardLayout(Pattern):
 
     @typing.override
     def project(self, subject, bindings: dict):
-        """Read a sharded subject through the participants this pattern's mesh names."""
+        """Read a sharded subject through the units this pattern's mesh names."""
         if not isinstance(subject, types.ShardLayout):
             return subject
         topologies = self.mesh.topologies

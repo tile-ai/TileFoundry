@@ -3,7 +3,7 @@
 The family requires gmem-to-smem matching dtypes and nonnegative wait groups.
 GPU staging through copy, commit, and wait must reproduce synchronous output.
 Both ends of the staging state the same split: ``copy_async`` moves one
-instance's share, so where that share lands in the CTA's shared tile is the
+unit's share, so where that share lands in the CTA's shared tile is the
 destination's layout to say, not something inferred from the source's offset.
 
 See [tir §2.3](docs/spec/tir.md#23-tir-ops).

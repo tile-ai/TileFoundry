@@ -1,7 +1,7 @@
 """Load both register operands of an SM80 warp MMA from shared memory.
 
 The warp collectively issues ``T.ldmatrix`` for A, whose destination fragment
-is fixed by the MMA declaration. Each participant uses ``T.copy`` for B, whose
+is fixed by the MMA declaration. Each unit uses ``T.copy`` for B, whose
 register layout is authored explicitly. The compute mesh is the second warp;
 the staged A and B tiles retain separate shared-memory arrangements.
 """

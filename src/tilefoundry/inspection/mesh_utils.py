@@ -9,7 +9,7 @@ from tilefoundry.ir.types import layout_algebra
 
 
 def sub_box(parent: types.Mesh, mesh: types.Mesh) -> tuple[slice, ...] | None:
-    """Decode the first and last physical positions into a parent's sub-box."""
+    """Decode the first and last unit ids into a parent's sub-box."""
     if parent.topologies != mesh.topologies or not isinstance(parent.layout, types.Layout):
         return None
     if not isinstance(mesh.layout, types.ComposedLayout) or mesh.layout.inner is not None:

@@ -81,7 +81,7 @@ until stmatrix runtime support exists.
 ## 3. Runtime-owned op dispatch
 
 Codegen emits one uniform runtime call, passing operand `ShardLayout`s and
-static participant geometry as template parameters. The runtime selects a
+static unit geometry as template parameters. The runtime selects a
 layout-compatible implementation at compile time. Codegen MUST NOT select a
 tier or attach tier selection to an op. See
 [runtime §2.6](./runtime.md#26-cudaops).

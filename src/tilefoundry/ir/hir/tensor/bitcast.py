@@ -51,7 +51,7 @@ def address_points(layout, count: int, logical_shape: tuple):
     if len(whole) != count:
         raise ValueError(f"rmem layout address function is not injective: {layout!r}")
     for placement in types.Placement.from_mesh(layout.mesh):
-        ids = placement.program_ids(layout.mesh.topologies)
+        ids = placement.unit_ids(layout.mesh.topologies)
         coordinates = types.mesh_coords(layout.mesh, ids)
         if any(
             isinstance(attr, types.Varying) and coord != 0

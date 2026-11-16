@@ -43,7 +43,7 @@ def insert_slice_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
 
     The window is exactly the update's own shape wherever it lands, so both
     sides answer the same size question, and only the address moves with the
-    offsets. Those extents are the ones this participant holds, folded onto the
+    offsets. Those extents are the ones this unit holds, folded onto the
     logical axes the offsets are stated against. The result states the window
     rather than the container: how big it is and how much of it this occurrence
     wrote are different numbers, and the rest was already there.

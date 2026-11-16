@@ -1,4 +1,4 @@
-"""The FSDP training example at one and two participants, with both residency policies."""
+"""The FSDP training example at one and two units, with both residency policies."""
 
 from examples.fsdp_training.model import training_program
 

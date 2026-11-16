@@ -228,7 +228,7 @@ def test_cta_thread_mesh_reduces() -> None:
     """On a composed cta×thread mesh, the warp count comes from the thread level.
 
     The dispatch used to keep one ``is_thread`` per mesh, so a cta-scoped
-    composite counted the thread level's instances as warps -- 128 here, not 4
+    composite counted the thread level's units as warps -- 128 here, not 4
     -- and the cross-warp tier indexed the workspace out of bounds, while the
     verifier demanded one slot per warp of the flattened mesh (16, not 4) and
     refused this program before it ran. The plan the levels state is the

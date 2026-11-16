@@ -63,12 +63,12 @@ def test_an_unsliced_mesh_value_stays_a_plain_layout() -> None:
 
 
 def test_a_non_contiguous_mesh_slice_is_refused() -> None:
-    """A slice that is not one run of instances has no single offset to emit."""
+    """A slice that is not one run of units has no single offset to emit."""
     with pytest.raises(expr.VerifyError, match="contiguous thread interval"):
         _mesh_layout_line(_BLOCK[:, 1:])
 
 
-def test_an_identity_participating_box_is_refused() -> None:
+def test_an_identity_box_of_units_is_refused() -> None:
     """An identity ``outer`` names no sub-box, so no offset can start in one."""
     identity_box = types.Mesh(
         (types.Topology("thread", 128),),

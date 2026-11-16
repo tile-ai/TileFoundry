@@ -59,12 +59,12 @@ def local_duration_ns(
     topology_level: str | None = None,
     level: str | None = None,
     scale: int = 1,
-    positions: int = 1,
+    units: int = 1,
 ) -> int:
     """Price one occurrence's projected work against one unit's throughputs.
 
     At the bandwidth level, one unit moves its share of the occurrence's
-    footprint: one window's bytes over the *positions* that window holds.
+    footprint: one window's bytes over the *units* that window holds.
     """
     topology_level = topology_level if topology_level is not None else level
     if topology_level is None:
@@ -111,7 +111,7 @@ def local_duration_ns(
     for memory_level, traffic in storage_traffic.items():
         crossed = traffic.total_bytes * scale
         if unique is not None and memory_level == facts.bandwidth_level:
-            crossed = -(-unique[0] // positions) * scale
+            crossed = -(-unique[0] // units) * scale
         throughput = services.bandwidth(memory_level)
         if not crossed or throughput is None:
             continue
@@ -163,14 +163,14 @@ def inflight_bytes(call: expr.Call, scope, tgt, level: str) -> int | None:
     finest = facts.topologies[-1]
     threads = finest.max_logical_units
     if scope.mesh is not None and finest.name in {item.name for item in scope.mesh.topologies}:
-        threads = min(threads, scope.mesh_positions(finest.name) // scope.mesh_positions(unit.name))
+        threads = min(threads, scope.mesh_units(finest.name) // scope.mesh_units(unit.name))
     return None if threads is None else threads * 16
 
 
 def call_cost_record(
     node: expr.Call,
     locals_by_unit: dict[str, cost.Context],
-    positions: int,
+    units: int,
     whole: cost.Context,
     asked: str | None = None,
 ) -> ComputeCostMetadata:
@@ -193,8 +193,8 @@ def call_cost_record(
         flops_by_unit.append(unit_flops)
         other_ops_by_unit.append(unit_other_ops)
         if unit == (asked or next(iter(locals_by_unit))):
-            total_flops = tuple((name, value * positions) for name, value in unit_flops)
-            total_other_ops = tuple((kind, value * positions) for kind, value in unit_other_ops)
+            total_flops = tuple((name, value * units) for name, value in unit_flops)
+            total_other_ops = tuple((kind, value * units) for kind, value in unit_other_ops)
     return ComputeCostMetadata(
         topologies=tuple(locals_by_unit),
         flops=breakdown(
@@ -345,7 +345,7 @@ class ComputeCostVisitor(valuation.Visitor[None]):
             record = call_cost_record(
                 node,
                 {unit: replace(ctx, topology_level=unit) for unit in ctx.units},
-                repeats.mesh_positions,
+                repeats.mesh_units,
                 replace(ctx, topology_level=None),
                 ctx.topology_level,
             )

@@ -6,7 +6,7 @@ CUDA-owned instructions and the device lowering of shared TIR operations.
 
 ### Supported slices and the barrier mapping
 
-The participant set MUST be a single contiguous thread interval `[base,
+The unit set MUST be a single contiguous thread interval `[base,
 base+count)`. Verify MUST reject (never broaden or split):
 
 - a non-contiguous slice (e.g. a lane subset spanning warps);
@@ -14,22 +14,22 @@ base+count)`. Verify MUST reject (never broaden or split):
   multiples of 32);
 - a dynamic / inconsistent / unsupported-topology mesh.
 
-A valid participant set maps to exactly one hardware barrier:
+A valid unit set maps to exactly one hardware barrier:
 
-| participant set | barrier |
+| unit set | barrier |
 |---|---|
 | whole block, more than one warp (`base==0`, `count==domain`) | `__syncthreads()` |
 | whole block that is one warp | `__syncwarp()` |
-| a contiguous lane subset within one warp | `__syncwarp(mask)` under a participant predicate |
-| a warp-aligned contiguous multi-warp subset | a named `bar.sync <id>, <count>` under a participant predicate |
+| a contiguous lane subset within one warp | `__syncwarp(mask)` under a unit-id predicate |
+| a warp-aligned contiguous multi-warp subset | a named `bar.sync <id>, <count>` under a unit-id predicate |
 | the full mesh over the `cta` topology (all CTAs of the grid) | the grid-wide software barrier ([runtime §2.6](./runtime.md#26-cudaops)) |
 
 Codegen MUST guard the `__syncwarp(mask)` and `bar.sync` cases with the
-participant predicate `base <= tid < base+count` (`tid =
-unit_id<thread>()`): a non-participant thread MUST NOT execute the barrier,
-and every participant MUST execute the same id and count.
+unit-id predicate `base <= tid < base+count` (`tid =
+unit_id<thread>()`): a thread outside the unit set MUST NOT execute the barrier,
+and every unit MUST execute the same id and count.
 
-The first four rows synchronize threads **within one block**; their participant
+The first four rows synchronize threads **within one block**; their unit
 set is the contiguous thread interval above. A mesh whose topologies are all the
 `cta` topology instead synchronizes **CTAs across the grid** — `unit_id<cta>`
 ranges over the launch's blocks — and maps to the grid-wide software barrier.
@@ -193,7 +193,7 @@ def variants(
   - The registered `T.tiled_mma` access relation is the sole source of the map
     from each operand axis to the operation's work axes. Atom declarations state
     operand shapes and arrangements, but MUST NOT repeat that axis map.
-  - `execution_mesh_pattern()` MUST require the declaration's exact participant
+  - `execution_mesh_pattern()` MUST require the declaration's exact unit
     count at an aligned offset. `mesh`, when present, binds the atom to one
     concrete frame and MUST match the active frame at verify.
   - `capability` MUST use the emitted instruction-family name and be present in
@@ -232,7 +232,7 @@ T.tiled_mma(acc, lhs, rhs, atom=T.cuda.sm80.Mma())
 - `TiledMma` generates its execution-mesh declaration from the atom's lane
   shape and strides, preceded by zero or more group modes captured by
   `pattern.Star`. The whole matched layout MUST be forward and injective,
-  and its offset MUST be aligned to the atom's participant count. Operand
+  and its offset MUST be aligned to the atom's unit count. Operand
   meshes retain the atom's exact lane axes.
 - The active physical mesh MUST satisfy `atom.execution_mesh_pattern()`. If the atom
   carries `mesh=...`, its affine offset and ordered lanes MUST equal the active
@@ -424,7 +424,7 @@ class StMatrix(Op):
 
 A Hopper mbarrier is a 64-bit shared-memory word carrying an arrival count, a
 transaction-byte count and a phase parity. It is not `Sync`
-([§1.5](../../../../../../docs/spec/tir.md#15-sync)): `Sync` is a whole-mesh rendezvous every participant reaches,
+([§1.5](../../../../../../docs/spec/tir.md#15-sync)): `Sync` is a whole-mesh rendezvous every unit reaches,
 while these let a producer signal completion of work the consumer did not
 perform — which is what an asynchronous copy needs, since the thread that issues
 one is not the thread that waits for it.

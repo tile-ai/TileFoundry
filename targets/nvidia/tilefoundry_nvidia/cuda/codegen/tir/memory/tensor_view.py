@@ -215,11 +215,11 @@ def render_shard_layout_value(var_name: str, sl: types.ShardLayout, dynamic_exte
     if isinstance(sl.mesh.layout, types.ComposedLayout):
         if sl.mesh.layout.outer is None:
             raise NotImplementedError(
-                "render_shard_layout_value: a sliced mesh needs its participating box "
+                "render_shard_layout_value: a sliced mesh needs its box of units "
                 "as a strided Layout; this states an identity box, with no sub-box"
             )
         mesh_base = sl.mesh.layout.offset
-        tir.sync.participation(sl.mesh)
+        tir.sync.sync_scope(sl.mesh)
     stated = sl.mesh.layout
     if isinstance(stated, types.ComposedLayout):
         stated = stated.outer
@@ -228,7 +228,7 @@ def render_shard_layout_value(var_name: str, sl: types.ShardLayout, dynamic_exte
         raise NotImplementedError(
             "render_shard_layout_value: a mesh naming several levels cannot also "
             "be sliced; the slice and the level boundary would both be deciding "
-            "which positions these are"
+            "which units these are"
         )
     ml_base = int(mesh_base)
     mesh_axes = types.flatten(stated)
@@ -339,7 +339,7 @@ def coord_ref(index_var, ctx: context.Context) -> str:
     renders as the arithmetic itself: a multiplication preserves grid output
     placement after an ordinal is converted to an element start, and an addition
     moves a window's base by a compile-time offset. A mesh coordinate reads this
-    unit's position along its axis. Other forms fail closed.
+    unit's coord along its axis. Other forms fail closed.
     """
     return CoordinateVisitor().visit(index_var, ctx)
 

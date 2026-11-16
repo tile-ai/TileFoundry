@@ -25,7 +25,7 @@ def projected(
 ) -> tuple[Relation, ...]:
     """Every boundary in the coordinates the reader asking can address.
 
-    Compose logical accesses with layout positions, restricting participants
+    Compose logical accesses with layout positions, restricting units
     and boundaries to shared iterations. Without a topology level coordinates
     stay logical; otherwise *device* supplies each mesh coordinate, keyed by
     axis name (or number when unnamed), defaulting to zero. Inputs come first.
@@ -100,7 +100,7 @@ def answered_domain(access: Relation, logical) -> "isl.set":
 
     A relation may be written to reach past its value -- a window shifted back
     to where it came from does -- and outside that it is saying nothing rather
-    than saying this participant does not iterate there.
+    than saying this unit does not iterate there.
     """
     relation = access.relation
     if not isinstance(logical, types.TensorType) or not expr.is_literal_shape(logical.shape):
@@ -114,7 +114,7 @@ def answered_domain(access: Relation, logical) -> "isl.set":
 def own_iterations(
     stated: tuple[Relation, ...], placed: tuple, answered: tuple, ninputs: int
 ) -> "isl.set | None":
-    """Which of an Op's iterations this participant performs, or None if all.
+    """Which of an Op's iterations this unit performs, or None if all.
 
     A value handed out in pieces says which iterations belong to whoever holds
     this piece, and says it only where its boundary answers at all: outside
@@ -138,7 +138,7 @@ def own_iterations(
         except isl.Error as error:
             raise ValueError(
                 f"{boundary(index, ninputs)} cannot be lined up with the space its "
-                f"Op walks, so which iterations are this participant's is not "
+                f"Op walks, so which iterations are this unit's is not "
                 f"answerable: {error}"
             ) from error
         share = allowed if share is None else share.intersect(allowed)
@@ -153,7 +153,7 @@ def own_iterations(
 
 
 def hold_to_share(access: Relation, share: "isl.set", bindings: dim.IslParamValues) -> Relation:
-    """One boundary held to the iterations its participant performs.
+    """One boundary held to the iterations its unit performs.
 
     Restricting can bring in a parameter another boundary named, so what they
     stand for comes from the whole Op rather than from this boundary alone.
@@ -163,7 +163,7 @@ def hold_to_share(access: Relation, share: "isl.set", bindings: dim.IslParamValu
     except isl.Error as error:
         raise ValueError(
             f"a boundary at {access.relation} cannot be held to the iterations "
-            f"{share} this participant performs: {error}"
+            f"{share} this unit performs: {error}"
         ) from error
     names = parameter_names(held)
     return Relation(
@@ -254,7 +254,7 @@ def place_boundary(
 ) -> "isl.map":
     """One boundary's image carried from logical axes onto the positions it has.
 
-    Held to the positions this participant was given, so which iterations are
+    Held to the positions this unit was given, so which iterations are
     its own follows from the placement rather than from a relation that may
     reach past what it was handed. A coordinate past the logical value is cut
     before placing, since a regroup would fold it onto a position it does not
@@ -368,7 +368,7 @@ def logical_coordinates(local: "types.Type", logical: "types.Type") -> dict[int,
 
     The inverse of `factored_image`: a domain is indexed by a projected Type's
     positions, and an Op reasons about the logical axes those positions came
-    from. A position a participant holds one of contributes nothing, its
+    from. A position a unit holds one of contributes nothing, its
     coordinate being fixed; the rest are recombined in the order the layout
     states them.
     """
@@ -440,8 +440,8 @@ def factored_image(reads: "Sequence[str]", local: "types.Type", logical: "types.
 
     A canonical `ShardLayout` factors a logical axis into several positions, and
     an image has to name every one of them or it cannot be composed with the
-    `Layout` that turns positions into bytes. A position a participant holds one
-    of contributes a constant, because its coordinate is the participant's
+    `Layout` that turns positions into bytes. A position a unit holds one
+    of contributes a constant, because its coordinate is the unit's
     identity rather than anything the expression varies over. The rest carry the
     expression, delinearized across them in the order the layout states.
     """

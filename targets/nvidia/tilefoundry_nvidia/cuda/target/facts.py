@@ -82,7 +82,7 @@ def parallel_units(tgt: "Target", unit: str) -> int:
     """How many of *unit* the deployment runs at once.
 
     Both the divisor a per-unit rate is the deployment peak over, and the
-    answer to how many instances of a level run together -- the same number,
+    answer to how many units of a level run together -- the same number,
     asked once. A target that never said how many cards is one card.
     """
     cards = card_count(tgt)

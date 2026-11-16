@@ -478,7 +478,7 @@ class PatternPrinter:
     def rules_PlainArrangement(self, node, name) -> tuple[str, ...]:
         return (
             "every plain arrangement is a static strided layout with no swizzle and zero "
-            "offset, and, where it is sharded, one every participant holds whole",
+            "offset, and, where it is sharded, one every unit holds whole",
         )
 
     def visit_BoxDims(self, node, name) -> str:

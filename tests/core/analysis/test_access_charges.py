@@ -3,7 +3,7 @@
 Running whole programs proves the answers agree; it does not prove any of them
 is right. What is left here is what a wrong answer would look like at readable
 dimensions: an Op nobody registered answered anyway, a boundary charged for
-coordinates its participant never had, a leaf charged at another leaf's width or
+coordinates its unit never had, a leaf charged at another leaf's width or
 level, and a packed value charged a share of a byte.
 """
 
@@ -183,7 +183,7 @@ def test_insert_read_held_to_window(
 ) -> None:
     """An insert reads its update only inside the window.
 
-    Projection cuts the read to the positions each participant was given, and
+    Projection cuts the read to the positions each unit was given, and
     its own iterations follow from that. A nested layer cuts once whether held
     directly or through an offset view.
     """
@@ -219,7 +219,7 @@ def test_insert_read_held_to_window(
             f"a boundary reached {reached} outside the {tuple(view.shape)} it was given"
         )
     assert relations[1].relation.domain().is_equal(isl.set(own)), (
-        "so the iterations left are the ones whose read this participant holds"
+        "so the iterations left are the ones whose read this unit holds"
     )
 
 

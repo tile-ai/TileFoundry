@@ -23,31 +23,31 @@ from .precision import Precision
 from .visitor import AnalyzeContext
 
 
-def positions_at(mesh: types.Mesh, unit: str, topologies: tuple[types.Topology, ...]) -> int:
-    """Count mesh positions at the selected unit and all coarser topology levels."""
-    declared = {topology.name: index for index, topology in enumerate(topologies)}
-    selected = declared[unit]
+def units_at(mesh: types.Mesh, topology: str, topologies: tuple[types.Topology, ...]) -> int:
+    """Count mesh units at the selected topology and all coarser topology levels."""
+    declared = {each.name: index for index, each in enumerate(topologies)}
+    selected = declared[topology]
     stated = mesh.layout.outer if isinstance(mesh.layout, types.ComposedLayout) else mesh.layout
-    positions = 1
-    for index, topology in enumerate(mesh.topologies):
-        if declared[topology.name] > selected:
+    units = 1
+    for index, each in enumerate(mesh.topologies):
+        if declared[each.name] > selected:
             continue
         count = types.size(types.get(stated, index))
         if not isinstance(count, int) or isinstance(count, bool) or count < 1:
             raise Error(
-                f"mesh level {topology.name!r} needs positive static extents, got {count!r}"
+                f"mesh level {each.name!r} needs positive static extents, got {count!r}"
             )
-        positions *= count
-    return positions
+        units *= count
+    return units
 
 
 @dataclass(frozen=True)
 class Repeats:
-    """Separate variant trips, all trips, executing positions, and trip precision."""
+    """Separate variant trips, all trips, executing units, and trip precision."""
 
     varying_loop_trips: int
     loop_trips: int
-    mesh_positions: int
+    mesh_units: int
     trips_precision: Precision
 
 
@@ -563,16 +563,16 @@ class IterationScope:
     def is_variant(self, value):
         return id(self.owner) in self.provenance.varies(value)
 
-    def mesh_positions(self, unit):
+    def mesh_units(self, topology):
         return (
             1
-            if self.mesh is None or unit is None
-            else positions_at(self.mesh, unit, self.topologies)
+            if self.mesh is None or topology is None
+            else units_at(self.mesh, topology, self.topologies)
         )
 
-    def active_positions(self, unit):
-        """The most positions any mesh in this scope or below it runs at *unit*."""
-        return max((self.mesh_positions(unit), *(c.active_positions(unit) for c in self.children)))
+    def active_units(self, topology):
+        """The most units any mesh in this scope or below it runs at *topology*."""
+        return max((self.mesh_units(topology), *(c.active_units(topology) for c in self.children)))
 
     def dependency_trips(self, formals):
         changing = set().union(*(self.provenance.varies(p) for p in formals))
@@ -599,7 +599,7 @@ class IterationScope:
                 if id(scope.owner) in changing:
                     varying *= scope.trips()
                 precision = precision.join(scope.trips_precision)
-        return Repeats(varying, loops, self.mesh_positions(unit), precision)
+        return Repeats(varying, loops, self.mesh_units(unit), precision)
 
     def counted(self) -> tuple[int, Precision]:
         """This scope's iteration count relative to its parent, and how exact it is.

@@ -26,7 +26,7 @@ def test_placed_kernel_writes_own_rows() -> None:
 
     One thread and one loaded module per card, which is the shape every
     mainstream runtime places in: the current device is thread-local and set
-    once, and each module knows which program it is because it was told when it
+    once, and each module knows which unit it is because it was told when it
     was loaded rather than because it asks the process.
     """
     gpu_placed_rows = Path(__file__).parents[2] / "fixtures/placed/gpu_placed_rows.py"

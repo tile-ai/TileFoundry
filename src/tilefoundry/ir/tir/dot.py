@@ -17,7 +17,7 @@ __all__ = ["Dot"]
 
 @expr.register_op(dialect="T", category="tensor")
 class Dot(expr.Op):
-    """Fused multiply-contract; every participant leaves holding the total."""
+    """Fused multiply-contract; every unit leaves holding the total."""
 
     execution_mesh = pattern.thread_execution_mesh()
 
@@ -39,7 +39,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
 
 
 def local_numel(ty) -> int | None:
-    """The elements one participant holds of *ty*, or ``None`` when undecidable."""
+    """The elements one unit holds of *ty*, or ``None`` when undecidable."""
     layout = getattr(ty, "layout", None)
     if isinstance(layout, types.ShardLayout):
         try:

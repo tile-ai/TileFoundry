@@ -29,9 +29,9 @@ class TopologyLevelFacts:
 
     ``max_logical_units`` is how many units a program may declare; ``None``
     means there is no static ceiling and the extent may be deferred to launch.
-    ``max_physical_units`` is how many machine positions the level divides over;
-    this count models execution positions independently of hardware residency
-    limits. ``from_target`` marks a level whose extent and program ids both come
+    ``max_physical_units`` is how many machine units the level divides over;
+    this count models execution units independently of hardware residency
+    limits. ``from_target`` marks a level whose extent and unit ids both come
     from the target instance rather than from a hardware document or a register
     the device can read.
     """

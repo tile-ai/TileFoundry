@@ -55,7 +55,7 @@ class ReuseAxes:
 
 
 def static_axes(mesh: types.Mesh) -> "tuple[int, tuple[int, ...], tuple[int, ...]] | None":
-    """A mesh's device-numbered positions, when every one of them is a number."""
+    """A mesh's device-numbered unit ids, when every one of them is a number."""
     try:
         axes = types.flatten(mesh.layout)
         offset = mesh.layout.offset if isinstance(mesh.layout, types.ComposedLayout) else 0
@@ -81,7 +81,7 @@ def mesh_parameters_of(
     )
 
 
-def wave_position(relation, parameters):
+def wave_index(relation, parameters):
     image = relation.range()
     mesh_names = {name for name, _ in parameters}
     for axis in reversed(range(image.dim(isl.dim_type.PARAM))):
@@ -94,13 +94,13 @@ def wave_position(relation, parameters):
         if (axis := shape.find_dim_by_name(isl.dim_type.PARAM, name)) >= 0
         and shape.involves_dims(isl.dim_type.PARAM, axis, 1)
     )
-    return linear_position(involved)
+    return linear_index(involved)
 
 
-def linear_position(
+def linear_index(
     parameters: tuple[tuple[str, expr.Call], ...],
 ) -> tuple[int, tuple[tuple[str, int], ...]] | None:
-    """The layout-image position named by mesh-coordinate parameters."""
+    """The layout index named by mesh-coordinate parameters."""
     if not parameters:
         return 0, ()
     mesh = parameters[0][1].target.mesh
@@ -121,11 +121,11 @@ def linear_position(
 
 def restrict_to_wave(
     relation: isl.map,
-    position: tuple[int, tuple[tuple[str, int], ...]],
+    unit_id: tuple[int, tuple[tuple[str, int], ...]],
     wave_units: int,
 ) -> isl.map:
-    """Constrain one layout-image position to ``[0, wave_units)``."""
-    offset, terms = position
+    """Constrain one layout index to ``[0, wave_units)``."""
+    offset, terms = unit_id
     context = relation.params()
     local = isl.local_space.from_space(context.get_space())
     lower = isl.constraint.alloc_inequality(local).set_constant_si(offset)
@@ -193,7 +193,7 @@ class MovingBoundary:
     wave_stated: bool
     mesh_parameters: tuple[tuple[str, expr.Call], ...]
     axis_parameters: tuple[str | None, ...]
-    position: tuple[int, tuple[tuple[str, int], ...]] | None
+    unit_id: tuple[int, tuple[tuple[str, int], ...]] | None
     ownership: tuple[str, ...] = ()
     loops: tuple[IterationScope, ...] = ()
 
@@ -220,9 +220,9 @@ class MovingBoundary:
         loops = self.loop_scopes
         relation = acc.relation.constrain(first_iteration(loops[: window + 1]))
         relation = relation.project(tuple(s.owner.induction_var for s in self.loops or loops))
-        if self.position is not None:
+        if self.unit_id is not None:
             relation = relation.aligned(
-                restrict_to_wave(relation.relation, self.position, self.wave_units)
+                restrict_to_wave(relation.relation, self.unit_id, self.wave_units)
             )
         if kind == "unit" and axis is not None:
             index = relation.relation.find_dim_by_name(isl.dim_type.PARAM, axis)
@@ -296,7 +296,7 @@ def space_axes(
 
 
 def axis_label(mesh: types.Mesh, axis: int) -> str:
-    """Name a mesh axis, falling back to its factual numeric position."""
+    """Name a mesh axis, falling back to its numeric index."""
     stated = mesh.layout.outer if isinstance(mesh.layout, types.ComposedLayout) else mesh.layout
     levels = types.flatten(
         tuple(
@@ -312,7 +312,7 @@ def axis_label(mesh: types.Mesh, axis: int) -> str:
 
 
 def shared_units(mesh: types.Mesh, axes: tuple[int, ...], wave: tuple[int, int]) -> int:
-    """Count wave positions after projecting out axes that do not share data."""
+    """Count wave units after projecting out axes that do not share data."""
     image = static_axes(mesh)
     if image is None:
         return 1
@@ -577,15 +577,15 @@ def moving_boundaries(
             mesh_parameters = mesh_parameters_of(
                 scope, acc.relation.relation, values=acc.relation.values
             )
-            position = (
-                wave_position(
+            unit_id = (
+                wave_index(
                     acc.relation.constrain(first_iteration(loops)).relation, mesh_parameters
                 )
                 if wave_units < declared_units and mesh_parameters
                 else None
             )
             wave_stated = not (
-                wave_units < declared_units and mesh_parameters and position is None
+                wave_units < declared_units and mesh_parameters and unit_id is None
             )
             found.append(
                 MovingBoundary(
@@ -612,7 +612,7 @@ def moving_boundaries(
                     if wave_stated
                     and shared_origin(scope, acc.target.expr, definitions, topology_level, wave)
                     else (),
-                    position=position,
+                    unit_id=unit_id,
                 )
             )
     return tuple(found)
@@ -733,20 +733,20 @@ def reached_by(
         mesh_parameters = mesh_parameters_of(
             scope, acc.relation.relation, values=acc.relation.values
         )
-        position = (
-            wave_position(acc.relation.constrain(first_iteration(loops)).relation, mesh_parameters)
+        unit_id = (
+            wave_index(acc.relation.constrain(first_iteration(loops)).relation, mesh_parameters)
             if wave_units < declared_units and mesh_parameters
             else None
         )
-        if wave_units < declared_units and mesh_parameters and position is None:
+        if wave_units < declared_units and mesh_parameters and unit_id is None:
             return None
         relation = (
             acc.relation.constrain(first_iteration(loops))
             .project(tuple(s.owner.induction_var for s in loops))
             .relation
         )
-        if position is not None:
-            relation = restrict_to_wave(relation, position, wave_units)
+        if unit_id is not None:
+            relation = restrict_to_wave(relation, unit_id, wave_units)
         result.append(
             reached_addresses(
                 acc,

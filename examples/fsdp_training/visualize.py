@@ -62,7 +62,7 @@ def describe_tensor(held):
     address = shard.layout.outer if isinstance(shard.layout, ComposedLayout) else shard.layout
     host = replace(shard, layout=Layout(address.shape))
     for placement in Placement.from_mesh(shard.mesh):
-        coordinate = mesh_coords(shard.mesh, placement.program_ids(shard.mesh.topologies))
+        coordinate = mesh_coords(shard.mesh, placement.unit_ids(shard.mesh.topologies))
         logical, logical_offset = local_layout_and_offset(host, shape, coordinate)
         selected = tags.as_strided(logical.shape, logical.strides, logical_offset)
         selected = selected.flatten().sort().values

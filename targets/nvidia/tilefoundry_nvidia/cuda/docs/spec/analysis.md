@@ -183,7 +183,7 @@ class SyncPlanMetadata(IRMetadata):
     cannot be bound this way leaves the pair unproven. Only the sliced CTA
     meshes around an access keep a CTA from running it, as the runtime's
     `contains` guard does; a mesh smaller than its topology repeats over the
-    launch. A slice whose positions are not static keeps no CTA out. For two
+    launch. A slice whose units are not static keeps no CTA out. For two
     different CTAs, the first row that holds decides a pair:
 
     | Pair | Outcome |
@@ -209,7 +209,7 @@ class SyncPlanMetadata(IRMetadata):
     operand's mesh splits the threads and the destination is in shared
     memory, the innermost of them is a slice holding the first thread of the
     enclosing mesh, and it counts as a slice around the action. A write needs
-    no relation when a layout splits it over a mesh whose positions are
+    no relation when a layout splits it over a mesh whose units are
     exactly the threads that issue it, those every thread slice around it
     holds, or every thread of the CTA without one. That layout is the
     destination's own or, for a `Copy`, that of the one operand

@@ -271,26 +271,26 @@ class Sync(Op):
 
 - constraints:
   - a mesh-scoped barrier; in Stmt position it is wrapped by `Evaluate`. The
-    participant set, barrier mapping, and named-barrier id rules are below.
+    unit set, barrier mapping, and named-barrier id rules are below.
 
-#### `mesh` — the participating threads
+#### `mesh` — the threads that execute
 
 - `mesh` is the (possibly sliced) mesh `Sync` synchronizes. `T.sync(m)`
   synchronizes the whole mesh; `T.sync(m[1:3, :])` synchronizes the constant
   sub-mesh selected by the slice.
 - A **mesh slice is a compile-time descriptor.** `m[...]` is evaluated at parse
   time via `Mesh.__getitem__` into a sub-`Mesh` whose `layout` is a
-  **`ComposedLayout`** recording the participating sub-box (the affine "mesh
+  **`ComposedLayout`** recording the sub-box of units (the affine "mesh
   scope" case `image(c) = offset + outer(c)`): the selected per-axis extents
   over the parent strides in `outer`, the slice origin (linear thread index of
-  the first participant) in `offset`, identity `inner`. An un-sliced mesh's
+  the first unit) in `offset`, identity `inner`. An un-sliced mesh's
   `layout` is a plain `Layout`. A sliced mesh is still a `Mesh`; the slice never
   becomes an IR/SSA value.
-- The **participant set** is derived through the existing layout algebra
-  (`shard.md`): the participating linear thread indices are `offset +
+- The **unit set** is derived through the existing layout algebra
+  (`shard.md`): the linear thread ids of the units are `offset +
   outer(coord)` over `outer`'s domain (the plain `layout` at `offset 0` for an
   un-sliced mesh); `base` is the minimum, `count = size(outer)`, and the block
-  domain is the product of the topology extents. `classify` / `participation`
+  domain is the product of the topology extents. `classify` / `sync_scope`
   are the single source of truth shared by verify and codegen.
 - **Legal-slice verification.** A sliced mesh is accepted only if its
   `ComposedLayout` `layout` reconstructs as a constant slice of an enclosing
@@ -300,15 +300,15 @@ class Sync(Op):
   slice cannot pass. A full mesh (plain-`Layout` `layout`) is accepted only by
   equality with an enclosing mesh.
 
-The target's verifier determines which participant sets have a supported
-barrier. Lowering MUST synchronize exactly those participants; unsupported
+The target's verifier determines which unit sets have a supported
+barrier. Lowering MUST synchronize exactly those units; unsupported
 sets MUST be rejected rather than broadened or split. Hardware barrier choice,
 identifier allocation, and cross-device occupancy requirements belong to the
 target implementation.
 
 #### Design rationale
 
-The participating threads are a compile-time constant, so the mesh and any
+The threads that execute are a compile-time constant, so the mesh and any
 slice of it is a descriptor, not an SSA value. One shared routine derives the
 barrier kind from that set, so verify and codegen cannot disagree.
 
@@ -640,7 +640,7 @@ class Dot(Op):
     walks one operand's length and indexes the other with it. Their global
     shapes may differ, and in the canonical matrix-vector call they do — a row
     of the matrix is split over the mesh while the vector is broadcast.
-  - `dst` is one cell. A contraction leaves a total and every participant leaves
+  - `dst` is one cell. A contraction leaves a total and every unit leaves
     holding it, so a wider destination is not a wider result but cells the op
     never writes.
   - An optional smem workspace stages partial results when the target's
@@ -890,7 +890,7 @@ class CopyAsync(Op):
   - `src` is gmem and `dst` is smem, with the same dtype. Each layout MUST
     admit the same width from `ASYNC_WIDTHS` and MUST walk the same tile
     mode at step 1. For a `ShardLayout`, vector width is read from the whole
-    tile arrangement; its other strides ensure every participant's start is
+    tile arrangement; its other strides ensure every unit's start is
     aligned. Two split layouts compare their tile modes only when their mesh
     and shard attrs are identical.
   - With `index`, only dim 0 is gathered: `dst[r] = src[index[r]]`.

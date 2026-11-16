@@ -70,9 +70,9 @@ def emit(let: core.LetStmt, ctx: context.Context) -> None:
 
     Shard layout shapes are global and backing storage uses their derived local
     shape, except for shared memory split across the block's *threads*: shared
-    memory belongs to the CTA, ``local()`` offsets into it by the instance's
-    own base, and a buffer sized to one instance's share is read past by every
-    instance but the first. The local shape stays right for rmem -- a thread's
+    memory belongs to the CTA, ``local()`` offsets into it by the unit's
+    own base, and a buffer sized to one unit's share is read past by every
+    unit but the first. The local shape stays right for rmem -- a thread's
     registers are its own -- and for a cta-scoped mesh, where each CTA owns its
     slice. See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """

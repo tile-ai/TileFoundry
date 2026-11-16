@@ -62,12 +62,12 @@ class Module:
     `resource.subtree(key).subtree(str(i))` for each indexed instance, handing
     every one the same
     *placement*; the base class itself resolves nothing. One process is one
-    program throughout the tree it loaded, so a child MUST NOT be given a
+    unit throughout the tree it loaded, so a child MUST NOT be given a
     placement of its own.
   - a twin with a sharded weight and no *placement* MUST refuse to read it.
-    Nothing else in the system says which of the mesh's positions this process
-    holds, and returning the whole tensor would silently give every program
-    every other program's data ([§1.10](#110-shardtensor)).
+    Nothing else in the system says which of the mesh's units this process
+    holds, and returning the whole tensor would silently give every unit
+    every other unit's data ([§1.10](#110-shardtensor)).
     Weight prefixes follow module paths, matching ir attribute addressing.
     Lifecycle: construct (structure) → `load` (remember source) → call. A
     `runtime.Module` does **not** run `prepare`; it loads straight from the
@@ -104,7 +104,7 @@ class CompiledModule(Module):
 
     def load(self, resource: Resource, *, placement: "types.Placement | None" = None) -> None: ...
 
-    def program_ids(self) -> tuple: ...
+    def unit_ids(self) -> tuple: ...
 
     def forward(self, *args): ...
 
@@ -121,7 +121,7 @@ trailing params are outputs):
 - **Pre-alloc**: `len(args) == len(type.params)` — uses the provided output
   tensors and returns them. Any other argument count raises `TypeError`.
 - **Return**: single output → bare tensor; multiple outputs → `tuple`.
-- **Program ids**: when `type.leading` is non-empty, the ids of those topology
+- **Unit ids**: when `type.leading` is non-empty, the unit ids of those topology
   levels, read from the `Placement` given to `load`, are passed ahead of the
   arguments; with no `Placement` the call raises `ValueError`.
 
@@ -793,8 +793,8 @@ def check(
     (e.g. `forward`'s `(logits, past_key_values)`); any other leaf raises
     `TypeError`. `check` flattens both results and MUST reject a candidate
     whose flattened structure, shape or dtype differs from the reference's.
-    A returned `ShardTensor` is compared as the one program's piece it holds;
-    data of more than one program raises `TypeError` ([§1.10](#110-shardtensor)).
+    A returned `ShardTensor` is compared as the one unit's piece it holds;
+    data of more than one unit raises `TypeError` ([§1.10](#110-shardtensor)).
   - every produced tensor MUST have exactly one non-empty list of predicates,
     and a path *expect* names that was not produced MUST be rejected. A result
     that flattens to nothing MUST be an error rather than a pass.
@@ -816,7 +816,7 @@ def check(
 ### 1.10 `ShardTensor`
 
 `Module.prepare` writes one canonical tensor per weight and the HIR keeps the
-global `TensorType`, so a checkpoint read hands back every program's data at
+global `TensorType`, so a checkpoint read hands back every unit's data at
 once. `ShardTensor` (in `tilefoundry.core`, exported as `tilefoundry.ShardTensor`)
 pairs a global type with its data in a global view -- one global logical
 tensor -- or a local view -- one piece per `Placement`. The two names are
@@ -851,15 +851,15 @@ class ShardTensor:
 <!-- /generated -->
 
 - constraints:
-  - a global view carries no `Placement`: the program is an argument to
-    `to_local`, so one owning tensor serves every program a host dispatches.
+  - a global view carries no `Placement`: the unit is an argument to
+    `to_local`, so one owning tensor serves every unit a host dispatches.
   - a local view holds one piece per `Placement`, each of `local_type(type)`;
     `to_local` returns the piece its placement holds.
-  - a `type` with no `ShardLayout` is every program's whole tensor, and so is
+  - a `type` with no `ShardLayout` is every unit's whole tensor, and so is
     an axis the mesh only broadcasts over. A global `Partial` value is its
-    reduced value, so `to_local` MUST refuse it: no program's own part is left.
+    reduced value, so `to_local` MUST refuse it: no unit's own part is left.
   - `to_local` on a global view is the host side of the CUDA runtime's
-    `local_tensor`: `mesh_coords` of the placement's program ids, then
+    `local_tensor`: `mesh_coords` of the placement's unit ids, then
     `local_layout_and_offset` ([shard §7.6](shard.md#76-local_layout)) of the
     shard with its layout replaced by the row-major layout of the same modes.
     Host data is logical, while the address stride of a private `Split` may be
@@ -873,12 +873,12 @@ class ShardTensor:
   - a `runtime.Module`'s public boundary takes and returns `ShardTensor`, while
     a body -- a Python reference or a launched kernel alike -- only ever
     receives the local `torch.Tensor`. A returned tensor is already one
-    program's, so it is returned as a local view: this program's piece under the
+    unit's, so it is returned as a local view: this unit's piece under the
     declared global type, never narrowed again.
   - a weight narrowed on first use is copied out of the read it came from, so
     the whole canonical tensor is released once every shard it contributes is
     held. A weight the mesh does not divide is kept as the read itself.
-  - what remembers a read weight is keyed by name, program ids and the current
+  - what remembers a read weight is keyed by name, unit ids and the current
     device together. One weight read on two cards is two tensors, and a key of
     the name alone hands a reader on one card what another card holds.
 

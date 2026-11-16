@@ -182,7 +182,7 @@ def derive_output_shard_layout(
 ):
     """Derive the output ``ShardLayout`` from the input shards and the Op's relations.
 
-    Every input is projected onto the same participating levels -- each level
+    Every input is projected onto the same executing levels -- each level
     any input distributes -- so mesh axes keep one index across the inputs.
     """
     target = getattr(ctx, "target", None)

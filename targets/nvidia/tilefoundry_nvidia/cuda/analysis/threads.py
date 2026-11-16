@@ -62,8 +62,8 @@ def projected(type_list) -> types.Mesh | None:
     """The mesh through whose split a ``Copy`` of these two operands moves each thread's slice.
 
     For a plain operand paired with a sharded one, the runtime's copy moves only
-    the slice the instance owns, projected through the sharded side
-    (``copy_impl::local_as``). The slices of different positions are disjoint
+    the slice the unit owns, projected through the sharded side
+    (``copy_impl::local_as``). The slices of different units are disjoint
     when the shard splits along every thread axis of its mesh. None otherwise.
     """
     sharded = [
@@ -103,11 +103,11 @@ def held_threads(mesh: types.Mesh) -> frozenset | None:
 def one_writer_each(mesh: types.Mesh | None, reach, threads: int | None) -> bool:
     """Whether a split over *mesh* gives each byte of *reach* one writer among its threads.
 
-    A split gives each position of *mesh* its own bytes. The threads that run
+    A split gives each unit of *mesh* its own bytes. The threads that run
     the reach are those every thread slice around it holds, or every thread of
-    the CTA. The split gives one writer each only when its positions are exactly
+    the CTA. The split gives one writer each only when its units are exactly
     those threads: a mesh that holds other threads, or fewer, repeats over them,
-    and threads that read one position write the same bytes.
+    and threads that read one unit's bytes write the same bytes.
     """
     split = None if mesh is None else held_threads(mesh)
     runners = None if threads is None else frozenset(range(threads))

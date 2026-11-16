@@ -1,7 +1,7 @@
 """Which scope a program runs in, and what that scope admits.
 
 Entering a `with Mesh(...)` composes the scope in force with the one it names;
-a value is read where the positions it is laid out over are the positions the
+a value is read where the units it is laid out over are the units the
 scope runs on. Both questions are about the mesh a statement stands inside,
 which is neither a type nor a visitor, so they live here rather than with
 either.
@@ -15,24 +15,24 @@ from tilefoundry.ir.types import int_tuple, layout_algebra
 
 
 def device_layout(mesh: types.Mesh) -> types.Layout:
-    """The whole mesh's axes as the device numbers its positions.
+    """The whole mesh's axes as the device numbers its units.
 
-    Each level states its own numbering, and a position of one level is a
-    position within its parent, so an axis steps by what it states times what
+    Each level states its own numbering, and a unit id of one level is a
+    unit id within its parent, so an axis steps by what it states times what
     the levels under it hold. That product is the numbering a coordinate of
     the whole mesh is read in, and the one a mesh is written down in.
     """
     shape: list = []
     strides: list = []
     sizes = tuple(getattr(topology, "size", 1) for topology in mesh.topologies)
-    units = types.compact_major(sizes, major="row") if all(
+    scales = types.compact_major(sizes, major="row") if all(
         isinstance(one, int) for one in sizes
     ) else (1,) * len(sizes)
-    for arrangement, unit in zip(types.levels(mesh), units):
+    for arrangement, scale in zip(types.levels(mesh), scales):
         stated = arrangement.strides
         shape.extend(types.flatten(arrangement.shape))
         strides.extend(
-            step * unit
+            step * scale
             for step in (
                 types.flatten(stated)
                 if stated is not None
@@ -43,7 +43,7 @@ def device_layout(mesh: types.Mesh) -> types.Layout:
 
 
 def level_selection(arrangement, start):
-    """One level of a scope as the positions it selects: a size when they run contiguously."""
+    """One level of a scope as the units it selects: a size when they run contiguously."""
     reduced = layout_algebra.filter(arrangement, major="row")
     if layout_algebra.is_contiguous(reduced, major="row"):
         return services.normalize_dim(types.size(reduced)), start
@@ -51,11 +51,11 @@ def level_selection(arrangement, start):
 
 
 def covered_by_scope(mesh: types.Mesh, current: types.Mesh) -> bool:
-    """Whether *mesh* selects exactly the positions the enclosing scope does.
+    """Whether *mesh* selects exactly the units the enclosing scope does.
 
-    Level by level, on the positions each level states rather than on the axes
+    Level by level, on the units each level states rather than on the axes
     standing where it does: a scope that is part of a level -- one warp of a
-    CTA's threads -- says which positions it is by where its run starts and how
+    CTA's threads -- says which units it is by where its run starts and how
     its modes step, and a value laid out over that same run is inside it
     however either of them wrote the axes down.
     """

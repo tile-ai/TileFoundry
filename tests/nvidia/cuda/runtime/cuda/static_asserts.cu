@@ -38,7 +38,7 @@ template <int... Es> __device__ auto tmesh() {
         cute::make_shape(cute::Int<Es>{}...));
 }
 
-/// One register held by the instances of a (Groups, Lanes) mesh, with Folded
+/// One register held by the units of a (Groups, Lanes) mesh, with Folded
 template <int Groups, int Lanes, int Folded>
 __device__ auto fold_cell(float *reg) {
     auto mesh = tmesh<Groups, Lanes>();

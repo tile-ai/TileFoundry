@@ -187,7 +187,7 @@ class ComputeCostMetadata(IRMetadata):
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `topologies` | The effective Module topology levels, coarsest first. | No |
-| `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written for `logical`; each level's share is the same evaluator over Types projected through authored `Split`s at or coarser than that level, and `total` is the selected unit's share times its executing mesh positions. Function accumulation multiplies `logical` by varying-loop trips, and `per_unit` and `total` by all enclosing loop trips. Retained calls carry their callee's one-execution summary. Primitive work accumulates into root totals with full repeats and into each enclosing call with repeats relative to that call scope. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written for `logical`; each level's share is the same evaluator over Types projected through authored `Split`s at or coarser than that level, and `total` is the selected unit's share times its executing mesh units. Function accumulation multiplies `logical` by varying-loop trips, and `per_unit` and `total` by all enclosing loop trips. Retained calls carry their callee's one-execution summary. Primitive work accumulates into root totals with full repeats and into each enclosing call with repeats relative to that call scope. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `other_ops` | The evaluator's non-floating-point operation counts (`integer`, `predicate`, `select`, `special`), totalled and shared the same way. These keys map directly to target one-unit operation-throughput keys; target-side service naming is unchanged. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `precision` | One-trip Call work is exact; Function work combines the precision of every enclosing loop's trip count. Coordinate-dependent maximum trip counts yield an upper bound. | No |
 
@@ -335,16 +335,16 @@ counts one slice per index as an upper bound.
 
 - constraints:
   - A Call's traffic `total` MUST equal the counted unit's share multiplied by
-    the number of positions executing its mesh scope, as for `compute-cost`.
+    the number of units executing its mesh scope, as for `compute-cost`.
     Storage MUST count the selected topology unit; communication MUST count
     the topology unit named by its boundary. An undeclared communication
     boundary MUST raise `analysis.Error`, rather than use whole movement.
   - One relation MUST answer for the whole program and for one unit, from one
-    registration; every boundary MUST be held to the iterations its participant
+    registration; every boundary MUST be held to the iterations its unit
     performs. Projecting an operand's Type is not enough, because a value nobody
     sharded projects to the whole of itself: that is what makes a broadcast
     operand cost its own size and a `Reshard` the distinct coordinates it
-    reaches rather than a full source per participant.
+    reaches rather than a full source per unit.
   - Each leaf's bytes are charged at the level that leaf sits at. A `UMAT` leaf
     in `Call.args` charges its own bytes at `rmem` and one appearing only in an
     Op attribute charges nothing, so a whole traffic amount and an `operands`
@@ -366,7 +366,7 @@ counts one slice per index as an upper bound.
     received and what it sent. A unit finer than the boundary MUST state no
     share of it -- crossing is what the units on either side do, and dividing
     the move among the units inside one states a move nobody made.
-  - A same-mesh `Reshard` resolving a `Partial` axis across multiple participants
+  - A same-mesh `Reshard` resolving a `Partial` axis across multiple units
     MUST record communication at that axis's topology boundary, even when every
     `Split` axis is unchanged. An extent-one axis contributes no communication.
   - A duration MUST take whichever of compute, storage movement and crossing is
@@ -432,9 +432,9 @@ class Footprint:
     the largest single unit's count. The two differ whenever units reach
     different addresses.
   - A program declaring more units than the target holds MUST NOT have them all
-    counted as concurrent. The wave is the first `wave_units` positions in the
+    counted as concurrent. The wave is the first `wave_units` units in the
     mesh's own linear order, taken through `Mesh.layout`'s strides.
-  - The wave count MUST be `ceil(mesh_positions(topology_level) / wave_units)`; a
+  - The wave count MUST be `ceil(mesh_units(topology_level) / wave_units)`; a
     partial last wave MUST count as a full wave. Reuse, cache capacity checks,
     and the printed `footprint` field MUST use the single-window `logical` bytes.
   - `Footprint.precision` MUST preserve direction throughout address merging
@@ -893,7 +893,7 @@ class MemoryLevelPeak:
     parameter, MUST NOT.
   - Placement MUST be settled for the addressable levels `gmem` and `smem` only,
     once per capacity domain that holds a buffer -- the whole target for a level
-    owned target-wide, one per owning position otherwise -- with two buffers in
+    owned target-wide, one per owning unit otherwise -- with two buffers in
     one domain never live in the same bytes at once. Residency at another level
     MUST NOT make a program unplaceable, and a level owned per unit of a topology
     other than the one being analysed MUST fail rather than be assumed. Domains
@@ -1000,9 +1000,9 @@ of these reuse relations states no row.
     the stated capacity-exceeding amount. `UPPER_BOUND` and `UNKNOWN`
     conclusions belong to `advisories`: exceeding capacity is not proved.
     The same directional rule applies to the Function working set.
-  - The capacity is stated per one instance of the cache's `scope`, and this
-    analysis compares one wave against one instance. A deployment that spreads
-    one wave across several instances is not modelled.
+  - The capacity is stated per one unit of the cache's `scope`, and this
+    analysis compares one wave against one unit. A deployment that spreads
+    one wave across several units is not modelled.
   - Per-unit control flow is out of scope: HIR states no conditional region, so
     two units differ only by the iteration domain a coordinate gives them.
   - This is the capacity judgement of an idealised fully associative LRU cache.
@@ -1215,7 +1215,7 @@ class ThroughputFacts:
 ```
 
 Roofline asks for `ThroughputFacts` with the query
-`(topology_level, active, inflight)`, where `active` is the most positions the
+`(topology_level, active, inflight)`, where `active` is the most units the
 Function's meshes run at that level and `inflight` is a Call's bytes in flight,
 as performance states them; the Function uses the most any of its own Calls
 keeps, so its bound stays a lower bound. A call into another definition is not
@@ -1293,7 +1293,7 @@ its full form as defined in that family's section.
   - Footprint pricing assumes ideal reuse within one wave and repeats bytes
     across windows. Counting a partial last wave as full is a pessimistic
     approximation; deduplication within one wave is optimistic. Below the
-    device's parallel topology level, each parent instance's windows are
+    device's parallel topology level, each parent unit's windows are
     counted separately, overestimating bytes when parents share data.
   - Performance local duration MUST divide one unit's share of
     `ComputeCostMetadata.flops` by `unit_flops`, of `service` by `unit_ops`, and
@@ -1307,12 +1307,12 @@ its full form as defined in that family's section.
     16 bytes per thread of the unit, as many threads as the finest level allows
     when the program states none. At `bandwidth_level`, one unit's bytes are
     the occurrence's footprint `logical` bytes, reads and writes as one count,
-    divided among the positions that window holds -- its executing positions,
+    divided among the units that window holds -- its executing units,
     capped at `active` -- and rounded up; the roofline reads the same footprint.
     Without a footprint, the share is the `bandwidth_level` entry of
-    `MemoryMetadata.traffic.storage`. A window every position writes alike then
-    costs the window over the positions, and disjoint shards cost each
-    position's own shard. Compute and movement overlap within one occurrence,
+    `MemoryMetadata.traffic.storage`. A window every unit writes alike then
+    costs the window over the units, and disjoint shards cost each
+    unit's own shard. Compute and movement overlap within one occurrence,
     so its duration is the greater of the two sides rather than their sum.
   - Traffic at a level with no stated one-unit bandwidth MUST remain visible in
     `MemoryMetadata` and MUST NOT enter a duration: an instruction throughput
@@ -1385,7 +1385,7 @@ class PerformanceSummaryMetadata(IRMetadata):
 
     Attributes:
         timeline: attribute; Whole-Function envelope from zero, in ns.
-        wave: attribute; Positions the Function's meshes run, and the level's physical units.
+        wave: attribute; Units the Function's meshes run, and the level's physical units.
     """
 
     timeline: TimelineMetadata
@@ -1408,10 +1408,10 @@ Function summary fields are:
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `timeline` | `[0, local makespan * waves)`, where the local makespan is the end of the CTA-local timeline, or zero with no work (on the entry Function, raised to the roofline `ideal_ns` when roofline ran), and `waves` is `ceil(N / P)`: `N` is the most positions the Function's meshes run at the level selected by `TopologyFacts.parallel_level` and `P` is that level's `max_physical_units`. Its duration is the prediction; `waves` is not a field. | `TopologyFacts` |
+| `timeline` | `[0, local makespan * waves)`, where the local makespan is the end of the CTA-local timeline, or zero with no work (on the entry Function, raised to the roofline `ideal_ns` when roofline ran), and `waves` is `ceil(N / P)`: `N` is the most units the Function's meshes run at the level selected by `TopologyFacts.parallel_level` and `P` is that level's `max_physical_units`. Its duration is the prediction; `waves` is not a field. | `TopologyFacts` |
 
 Occurrence intervals remain CTA-local and are not copied once per wave. The
-capacity `P` is the machine-side position count; the mapping of one CTA to one
+capacity `P` is the machine-side unit count; the mapping of one CTA to one
 SM is compiler policy. The aggregate itself is stated once in
 [target §11](./target.md#11-target-facts-projection), because `memory` reads it
 too.
@@ -1426,10 +1426,10 @@ performance root=<Module>::<Function> predicted-ns=<int> wave=<active>/<physical
 function it already states; it is not a field of `PerformanceSummaryMetadata` and
 does not appear in that record's JSON projection. `predicted-ns` is the duration of
 the summary's own envelope, not a second measurement. `wave` is the summary's
-`wave`: `active` is the most positions any mesh the Function executes runs at the
+`wave`: `active` is the most units any mesh the Function executes runs at the
 selected topology level and the coarser ones, 1 when it states no mesh, and
 `physical` is that level's `TopologyLevelFacts.max_physical_units`. Forty
-positions on a 132-unit level read `wave=40/132`, and 8192 read `wave=8192/132`.
+units on a 132-unit level read `wave=40/132`, and 8192 read `wave=8192/132`.
 It states where the program's placement reaches, not an occupancy guarantee.
 
 Every Call with a modeled duration receives this annotation, one interval whether
@@ -1469,26 +1469,26 @@ model.
     MUST NOT be dropped from `MemoryMetadata` because of it: structural means
     nothing to time, not nothing done.
   - The global total for an occurrence is its per-unit quantity multiplied by
-    the number of positions in the enclosing execution scope. This multiplier
+    the number of units in the enclosing execution scope. This multiplier
     counts copied or replicated work: an unsharded operation inside a scope is
-    performed independently by every position and therefore contributes once
-    per position to the total. The per-unit quantity already includes work
+    performed independently by every unit and therefore contributes once
+    per unit to the total. The per-unit quantity already includes work
     projected through finer levels.
   - A `MeshRegion` evaluates its boundary arguments outside the region and
-    executes its body once per enclosing position. Argument work is charged at
-    its defining site; body work is charged per enclosing position.
-  - The positions an occurrence runs on come from its Mesh layout
+    executes its body once per enclosing unit. Argument work is charged at
+    its defining site; body work is charged per enclosing unit.
+  - The units an occurrence runs on come from its Mesh layout
     ([shard §5](./shard.md#5-mesh)), counted at the selected level and capped at
     `active` for the per-unit share. A `Broadcast` shard attribute does not
     change them: attributes describe distribution, the Mesh describes which
-    positions participate.
+    units execute it.
   - Every primitive occurrence has one fixed duration. Occurrences are laid end
     to end in authored order on one local timeline, so an SSA consumer starts no
     earlier than its producers end and no two occurrences overlap.
   - A Call's scheduled duration MUST multiply every enclosing authored loop's
     trip count, including loops in which the Call is invariant. Work explicitly
     defined outside a loop MUST keep its defining scope's repetition count.
-    Mesh positions MUST NOT multiply this duration: units execute in parallel.
+    Mesh units MUST NOT multiply this duration: units execute in parallel.
   - A `LoopRegion` MUST be represented as one structured performance node. Its
     body is solved once, from the time the loop itself begins rather than from
     zero, so a body occurrence's reported `[start_ns, end_ns)` is the interval it

@@ -70,14 +70,14 @@ class PerformanceVisitor(valuation.Visitor[None]):
             ctx.target.get_facts(target.PerformanceServiceFacts, (ctx.topology_level, ctx.active, inflight)),
             moved=moved,
             topology_level=ctx.topology_level,
-            positions=min(scope.mesh_positions(ctx.topology_level), ctx.active),
+            units=min(scope.mesh_units(ctx.topology_level), ctx.active),
         )
         ctx.occurrences.append((scope, node, duration))
 
 
 def wave_count(scope, level) -> int:
-    """Whole waves of *level*'s physical units the positions *scope* runs need."""
-    return -(-scope.active_positions(level.name) // level.max_physical_units)
+    """Whole waves of *level*'s physical units the units *scope* runs need."""
+    return -(-scope.active_units(level.name) // level.max_physical_units)
 
 
 def schedule(occurrences, context, *, origin):
@@ -139,7 +139,7 @@ def analyze_performance(function: core.Function, context: AnalyzeContext) -> Non
     """Attach flat occurrence intervals and one function envelope.
 
     Rates are those of the units the function's meshes run, and the envelope
-    repeats once per wave of those positions.
+    repeats once per wave of those units.
     """
     if context.topology_level is None:
         raise Error("performance requires a resolved topology level")
@@ -149,9 +149,9 @@ def analyze_performance(function: core.Function, context: AnalyzeContext) -> Non
         raise target.UnsupportedCapabilityError(
             f"{type(context.target).__name__}: no default parallel topology level"
         )
-    positions = context.scope.active_positions(context.topology_level)
+    units = context.scope.active_units(context.topology_level)
     physical = topologies.level(context.topology_level).max_physical_units
-    active = min(positions, physical)
+    active = min(units, physical)
     performance_context = PerformanceContext(
         **vars(context),
         facts=context.target.get_facts(target.ThroughputFacts),
@@ -168,7 +168,7 @@ def analyze_performance(function: core.Function, context: AnalyzeContext) -> Non
             timeline=TimelineMetadata(
                 start_ns=0, end_ns=summary_end * wave_count(context.scope, level)
             ),
-            wave=(positions, physical),
+            wave=(units, physical),
         ))
 
 

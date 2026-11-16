@@ -190,7 +190,7 @@ def reduce_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     A reduction walks what it reads, so the source's own positions are the
     coordinates: it reads more of them than it writes, which is the whole of what
     it does, and the collapse happens on the way out. The extents walked are this
-    participant's own, a reduced axis being one a layout can split, and the
+    unit's own, a reduced axis being one a layout can split, and the
     correspondence to the result comes from both layouts, since a result
     coordinate names a logical axis and not a position.
     """

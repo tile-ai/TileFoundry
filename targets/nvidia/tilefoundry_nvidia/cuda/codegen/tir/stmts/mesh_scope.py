@@ -57,10 +57,10 @@ def mesh_type(mesh: types.Mesh) -> str:
         outer = layout_value.outer
         if not isinstance(outer, types.Layout):
             raise NotImplementedError(
-                "CUDA mesh emission: a sliced mesh needs its participating box "
+                "CUDA mesh emission: a sliced mesh needs its box of units "
                 "as a strided Layout; this states an identity box, with no sub-box"
             )
-        base = tir.sync.participation(mesh).base
+        base = tir.sync.sync_scope(mesh).base
     else:
         base = 0
     if len(topos) == 1:
@@ -71,7 +71,7 @@ def mesh_type(mesh: types.Mesh) -> str:
             raise NotImplementedError(
                 "CUDA mesh emission: a mesh naming several levels cannot also "
                 "be sliced; the slice and the level boundary would both be "
-                "deciding which positions these are"
+                "deciding which units these are"
             )
         layout = levelwise_layout(mesh)
     if base:

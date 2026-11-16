@@ -290,7 +290,7 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
         return types.TupleType(fields=tuple(inner.visit(phi, ctx) for phi in carried))
 
     def visit_MeshRegion(self, node: core.MeshRegion, ctx: TypeInferContext) -> types.Type:
-        """Type a region against the participants in force inside it.
+        """Type a region against the units in force inside it.
 
         Entering a scope composes it onto the mesh in force, so the body reads
         the whole nesting. The resulting mesh goes down on a child context, so

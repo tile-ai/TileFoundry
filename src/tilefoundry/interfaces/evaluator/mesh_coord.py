@@ -25,7 +25,7 @@ def evaluate_mesh_coord(ctx):
         (
             placement,
             utils.torch.as_tensor(
-                types.mesh_coords(mesh, placement.program_ids(mesh.topologies)),
+                types.mesh_coords(mesh, placement.unit_ids(mesh.topologies)),
                 dtype=utils.torch.int64,
                 device=axes.device,
             )[axes],

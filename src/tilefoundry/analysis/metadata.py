@@ -44,7 +44,7 @@ class Traffic:
 
     One movement is counted in both coordinates because it spends both.
     A Call's ``logical`` is authored movement, ``per_unit`` is each unit's share,
-    and ``total`` multiplies the counted share by executing mesh positions.
+    and ``total`` multiplies the counted share by executing mesh units.
     Storage counts the selected unit; communication counts the boundary's unit.
     Function accumulation multiplies logical movement by varying-loop trips
     and the other domains by all enclosing trips.
@@ -220,8 +220,8 @@ class PerformanceSummaryMetadata(expr.IRMetadata):
     """One Function's predicted time, and what reaching it took.
 
     ``timeline`` is the whole-Function envelope from zero, every wave the
-    Function's executing positions need, so its duration is the prediction.
-    ``wave`` is those positions against the physical units of the selected
+    Function's executing units need, so its duration is the prediction.
+    ``wave`` is those units against the physical units of the selected
     level. The prediction is exact for the model it states, so there is nothing
     here about how it was reached.
     """

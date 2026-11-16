@@ -359,7 +359,7 @@ def local_layout_shape(
         elif not isinstance(shape[axis], int) or isinstance(shape[axis], bool):
             raise ValueError(
                 f"local_type_of: axis {axis} has dynamic extent {shape[axis]!r} "
-                f"and mesh extent {extent} states a fixed position count; bind "
+                f"and mesh extent {extent} states a fixed unit count; bind "
                 "the axis before local projection"
             )
         elif shape[axis] % extent:

@@ -195,7 +195,7 @@ def call_traffic(
     scope: IterationScope | None = None,
     counted: str | None = None,
 ) -> MemoryMetadata:
-    """What one Call moves, whole and for one participant.
+    """What one Call moves, whole and for one unit.
 
     The same registered evaluator the work half reads, projected onto its
     movement instead of its flops. The evaluator says which way each boundary
@@ -233,16 +233,16 @@ def call_traffic(
                 crossing_per_unit.setdefault(boundary, {})[unit] = moved
         if unit is None:
             operands = positional
-    positions = scope.mesh_positions if scope is not None else lambda _: 1
+    units = scope.mesh_units if scope is not None else lambda _: 1
     counted = counted or next(iter(locals_by_unit))
     return MemoryMetadata(
         topologies=tuple(locals_by_unit),
         traffic=Traffic(
             storage=occurrence_shares(
-                storage_whole, storage_per_unit, tuple(locals_by_unit), counted, positions
+                storage_whole, storage_per_unit, tuple(locals_by_unit), counted, units
             ),
             communication=occurrence_shares(
-                crossing_whole, crossing_per_unit, tuple(locals_by_unit), None, positions
+                crossing_whole, crossing_per_unit, tuple(locals_by_unit), None, units
             ),
         ),
         operands=operands,
@@ -267,12 +267,12 @@ def occurrence_shares(
     per_unit: dict[str, dict[str, cost.TrafficBytes]],
     topologies: tuple[str, ...],
     counted: str | None,
-    positions: Callable[[str | None], int],
+    units: Callable[[str | None], int],
 ) -> "Breakdown[cost.TrafficBytes]":
     """One entry per level, each carrying the whole and every level's share.
 
     ``counted`` selects storage's unit; None counts each communication boundary
-    at its own topology. Total scales that share by its executing positions.
+    at its own topology. Total scales that share by its executing units.
     The shares run in *topologies* order, so a level a move never reached --
     a unit inside the boundary it crossed -- reads as no bytes rather than as
     a missing entry.
@@ -283,7 +283,7 @@ def occurrence_shares(
         if unit not in topologies:
             raise Error(f"memory: counted topology {unit!r} is not declared")
         moved = per_unit.get(name, {}).get(unit, cost.TrafficBytes())
-        factor = positions(unit)
+        factor = units(unit)
         entries.append(
             (
                 name,
@@ -570,7 +570,7 @@ def analyze_memory(function: core.Function, context: AnalyzeContext) -> None:
             if evidence is None:
                 available = False
                 continue
-            windows = -(-origin.mesh_positions(topology_level) // wave[0])
+            windows = -(-origin.mesh_units(topology_level) // wave[0])
             trips = prod(loop.trips() for loop in loops)
             key = (path[:-1], origin, windows * trips)
             groups[key].extend(evidence)

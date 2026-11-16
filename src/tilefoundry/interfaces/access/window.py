@@ -137,7 +137,7 @@ def reached_at(
 ) -> Relation:
     """The coordinates one operand is reached at, stated per logical axis.
 
-    An Op reasons in logical axes and a participant is indexed by the positions
+    An Op reasons in logical axes and a unit is indexed by the positions
     its layout made, so the expressions are given per axis and spread over the
     positions holding it. An axis named `free` is one whose coordinate is a value
     nobody has here because data determines it, so this may-access relation

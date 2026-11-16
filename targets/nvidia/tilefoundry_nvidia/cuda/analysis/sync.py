@@ -225,7 +225,7 @@ def alone(mesh: types.Mesh | None) -> bool:
     if mesh is None or any(topology.name != "thread" for topology in mesh.topologies):
         return False
     try:
-        return tir.sync.participation(mesh).count == 1
+        return tir.sync.sync_scope(mesh).count == 1
     except expr.VerifyError:
         return False
 
@@ -936,8 +936,8 @@ class Planner:
                 "sync: a collective step is needed in a scope that no thread mesh binds"
             )
         try:
-            size = tir.sync.participation(unit).count
-            held, needed = tir.sync.participation(mesh), tir.sync.participation(threads or mesh)
+            size = tir.sync.sync_scope(unit).count
+            held, needed = tir.sync.sync_scope(mesh), tir.sync.sync_scope(threads or mesh)
             whole = sync.whole_groups(mesh, size)
         except expr.VerifyError as error:
             raise analysis.Error(f"sync: {error}") from None
@@ -962,7 +962,7 @@ class Planner:
         spanned = {topology.name for topology in mesh.topologies}
         groups = None
         if unit is not None and len(mesh.topologies) == 1:
-            held = tir.sync.participation(mesh)
+            held = tir.sync.sync_scope(mesh)
             groups = range(held.base, held.base + held.count, unit)
 
         def fixed(coordinates: types.Mesh, axis: int) -> bool:

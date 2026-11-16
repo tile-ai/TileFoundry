@@ -1,4 +1,4 @@
-"""Meshes: hardware levels, the arrangement of their positions, and sub-mesh slices."""
+"""Meshes: hardware levels, the arrangement of their units, and sub-mesh slices."""
 
 from __future__ import annotations
 
@@ -36,10 +36,10 @@ __all__ = [
 
 @dataclass(frozen=True)
 class Mesh:
-    """Describe hardware levels, logical positions, and axis names.
+    """Describe hardware levels, the arrangement of their units, and axis names.
 
     ``layout`` runs parallel to ``topologies``: one arrangement per level, in
-    that level's own numbering, so a level states which of its positions it
+    that level's own numbering, so a level states which of its units it
     selects without any level above it entering the answer. A constant slice
     replaces one level's arrangement with a ``ComposedLayout`` whose ``offset``
     is where that level's run starts.
@@ -69,7 +69,7 @@ class Mesh:
                 )
 
     def __getitem__(self, key) -> "Mesh":
-        """Return a constant sub-mesh selected by integers or unit-step slices.
+        """Return a constant sub-mesh selected by integers or step-1 slices.
 
         Missing axes are full slices; integers select extent one. The result
         preserves topology and names while recording the sub-box as a
@@ -90,12 +90,12 @@ class Mesh:
         sub_levels: list[Layout] = []
         offset = 0
         axis = 0
-        units = (
+        scales = (
             (1,)
             if len(self.topologies) == 1
             else compact_major(tuple(topology.size for topology in self.topologies))
         )
-        for level, unit in zip(held_levels, units):
+        for level, scale in zip(held_levels, scales):
             level_shape = tuple(flatten(level.shape))
             stated = level.strides
             level_strides = (
@@ -131,7 +131,7 @@ class Mesh:
                     raise ValueError(
                         f"mesh slice index must be int or slice, got {type(k).__name__}"
                     )
-                offset += start * stride * unit
+                offset += start * stride * scale
                 sub_shape.append(selected)
                 axis += 1
             sub_levels.append(Layout(tuple(sub_shape), level_strides))
@@ -179,18 +179,18 @@ class Mesh:
                     or isinstance(inner.layout, ComposedLayout),
                 )
                 if not within_scope(result, current):
-                    parent_positions = {
+                    parent_runs = {
                         name: (filter(arrangement, major="row"), start)
                         for name, arrangement, start in zip(here, levels(current), starts(current))
                         if name in there
                     }
-                    inner_positions = {
+                    inner_runs = {
                         name: (filter(arrangement, major="row"), start)
                         for name, arrangement, start in zip(there, levels(inner), starts(inner))
                     }
                     raise ValueError(
-                        f"replacement scope selects positions {inner_positions}, outside parent "
-                        f"scope positions {parent_positions}; both must be continuous and each "
+                        f"replacement scope selects runs {inner_runs}, outside parent "
+                        f"scope runs {parent_runs}; both must be continuous and each "
                         "replacement selection must be contained in its parent selection"
                     )
             else:
@@ -240,16 +240,16 @@ def nested_levels(layout_value, topologies: tuple) -> "Layout | ComposedLayout":
     layout_flat = Layout(extents, steps)
     if len(topologies) == 1:
         return Layout(shape=(extents,), strides=(steps,))
-    units: list[int] = []
+    scales: list[int] = []
     below = 1
     for topology in reversed(topologies):
-        units.insert(0, below)
+        scales.insert(0, below)
         count = topology.size
         if not isinstance(count, int) or isinstance(count, bool) or count < 1:
             raise ValueError(
                 f"mesh level {topology.name!r} states extent "
                 f"{count!r}; cutting one arrangement at the level boundaries needs "
-                "each of their position counts"
+                "each of their unit counts"
             )
         below *= count
 
@@ -258,16 +258,16 @@ def nested_levels(layout_value, topologies: tuple) -> "Layout | ComposedLayout":
         layout_flat, tuple(mode if isinstance(mode, tuple) else (mode,) for mode in profile)
     )
     strides = []
-    for topology, unit, steps in zip(topologies, units, grouped.strides, strict=True):
+    for topology, scale, steps in zip(topologies, scales, grouped.strides, strict=True):
         normalized = []
         for step in flatten(steps):
-            if not isinstance(step, int) or isinstance(step, bool) or step % unit:
+            if not isinstance(step, int) or isinstance(step, bool) or step % scale:
                 raise ValueError(
-                    f"mesh steps by {step!r}, which the {unit} positions "
-                    f"below {topology.name!r} do not divide; its positions are not "
+                    f"mesh steps by {step!r}, which the {scale} units "
+                    f"below {topology.name!r} do not divide; its unit ids are not "
                     "that level's"
                 )
-            normalized.append(step // unit)
+            normalized.append(step // scale)
         strides.append(tuple(normalized))
     return Layout(grouped.shape, tuple(strides))
 
@@ -339,7 +339,7 @@ def within_scope(mesh: Mesh, current: Mesh) -> bool:
 
 
 def check_topology(mesh: Mesh) -> None:
-    """Reject static mesh positions beyond their declared topology extents.
+    """Reject static mesh units beyond their declared topology extents.
 
     A constant slice is already bounded by ``Mesh.__getitem__``; its shortened
     axes no longer land on full topology boundaries and are therefore accepted.
@@ -354,7 +354,7 @@ def check_topology(mesh: Mesh) -> None:
         if isinstance(count, int) and count > declared:
             raise ValueError(
                 f"mesh level {getattr(topology, 'name', topology)!r} has {count} "
-                f"positions, exceeding declared extent {declared}"
+                f"units, exceeding declared extent {declared}"
             )
 
 

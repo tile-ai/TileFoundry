@@ -24,7 +24,7 @@ _TOPOLOGIES = (Topology("gpu", GPUS), Topology("cta", CTAS), Topology("thread", 
 
 
 def _split_rows(mesh) -> ShardLayout:
-    """The rows one instance of *mesh* holds: each level cuts what is left."""
+    """The rows one unit of *mesh* holds: each level cuts what is left."""
     return ShardLayout(
         layout=Layout(shape=(ROWS, COLS), strides=(COLS, 1)),
         attrs=(Split(0), Split(0), Split(0)),

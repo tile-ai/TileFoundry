@@ -57,7 +57,7 @@ of a thread mesh, not a level.
 - constraints:
   - `unit_id<TopologyLevel::gpu>()` MUST equal the host `Placement`'s id
     ([runtime §1.10](../../../../../../docs/spec/runtime.md#110-shardtensor)).
-    Devices have no register for their position in the host's mesh.
+    Devices have no register for their coord in the host's mesh.
   - The id travels in a by-value `Placement` kernel parameter, hidden
     from the user signature. Before divergence, one thread MUST initialize
     `placement` and synchronize readers. Its `__shared__` slot belongs to
@@ -69,11 +69,11 @@ of a thread mesh, not a level.
     lists from there to `level_count`, coarsest first. Use CuTe's `rank` and
     `find` on that tuple. A missing level produces rank from `find`, so the
     following `get` MUST refuse it as `"Index out of range"`.
-  - Positions are row-major: `(8, 32)` gives `(id / 32, id % 32)`. This is
+  - Coords are row-major: `(8, 32)` gives `(id / 32, id % 32)`. This is
     opposite to CuTe order ([§2.3.1](#231-layoutcute_extcuh)).
   - One `.cu` states one launch's `topology_size<L>()`; `topology_shape<L>()`
-    includes level `T` and all levels below it. A mesh recompiled in another
-    translation unit belongs to that unit's launch.
+    includes level `L` and all levels below it. A mesh recompiled in another
+    translation unit belongs to that translation unit's launch.
 
 ### 2.3 `cuda/layout/`
 
@@ -143,8 +143,8 @@ CUTE_HOST_DEVICE constexpr auto make_mesh(Extents const &extents);
 
 - constraints:
   - A mesh is the levels it names and the layout whose values are their ids -- the same two facts the IR `Mesh` carries beside its axis names ([shard §5](../../../../../../docs/spec/shard.md#5-mesh)). Its unit count and shape are `cute::size` and `cute::shape` of that layout, which read through a slice on their own.
-  - A mesh naming several levels states its axes grouped one nest per level, each already in that level's own numbering, and `get<level>` picks the nest. A mesh that names several without that grouping is refused: no rule says which axes are whose. It cannot also be sliced -- the slice and the level boundary would both be deciding which positions these are.
-  - `mesh_coords` answers where this program sits in the mesh's own coordinates: one `idx2crd` per level, of that level's id against that level's nest, grouped the way the mesh is. The answer is congruent with `cute::shape` of the mesh's layout whether it names one level or several, so a layout over that shape indexes with it as it stands. The ids it reads are `unit_ids()`, one per level this program names, so a coord of another length is refused by name.
+  - A mesh naming several levels states its axes grouped one nest per level, each already in that level's own numbering, and `get<level>` picks the nest. A mesh that names several without that grouping is refused: no rule says which axes are whose. It cannot also be sliced -- the slice and the level boundary would both be deciding which units these are.
+  - `mesh_coords` answers where this unit sits in the mesh's own coordinates: one `idx2crd` per level, of that level's id against that level's nest, grouped the way the mesh is. The answer is congruent with `cute::shape` of the mesh's layout whether it names one level or several, so a layout over that shape indexes with it as it stands. The ids it reads are `unit_ids()`, one per level this program names, so a coord of another length is refused by name.
   - `contains` and `mesh_coords` are not the same question, and on a mesh narrower than its level not the same answer. `idx2crd` is `(id / stride) % extent`, so thread 64 of a 128-thread block is not in a 32-unit mesh and does act as its unit 0: the upper warps repeat what the lowest warp does. A slice does not repeat, so a coordinate from outside one reaching `mesh_coords` is a codegen fault. `contains` asks every level the mesh names, because a mesh grouped one nest per level is one unit per level together.
   - A thread mesh has warps only when its ids run a whole number of them. `(32,..)` stepping by one is one warp and the axis beyond it carries the warps; `(128,..)` holds four that `as_warped` splits out. Lanes shorter than a warp, repeated across warps, MUST be refused by name -- they reach neither `bar.sync`, which counts whole warps, nor one `__syncwarp`.
   - `as_warped` is idempotent: a mesh whose fastest axis is already one warp comes back unchanged.
@@ -242,7 +242,7 @@ template <class T> CUTE_HOST_DEVICE constexpr int shard_mesh_units();
 - constraints:
   - `engine` is a CuTe tensor or view, never a raw pointer: residency lives on the engine type, and `data()` drops it. Its layout MUST be the declared concrete local shard layout, using the shared register numbering for rmem; codegen MUST NOT choose a separate default engine order. Storage spans the layout codomain, including any pitch. A rank-0 address is encoded in CuTe as one singleton mode with stride zero.
   - A shard layout whose layout is a `cute::ComposedLayout` -- which is how a [`Swizzle`](../../../../../../docs/spec/shard.md#41-swizzle) reaches the device -- is projected with its function kept: `shard_layout_is_composed_v` picks that path, and `local_tensor` returns a tensor over the engine's own pointer whose layout is the same composition, this unit's origin folded into its offset. Advancing the pointer instead would run the function on a slice-relative index and hand two units one address, so the offset MUST NOT move to the engine.
-  - A composed layout takes that path even when no mesh axis splits it. The composed path reconstructs the declared function and the participant offset over the engine pointer, including when every mesh attribute broadcasts.
+  - A composed layout takes that path even when no mesh axis splits it. The composed path reconstructs the declared function and the unit offset over the engine pointer, including when every mesh attribute broadcasts.
   - `local_tensor`, `local_view_t` and `ShardTensorLike` are public: a step every op must take, and the word an op writes its own constraints in, are not implementation details. `is_shard_tensor` -- how `ShardTensorLike` is decided, which nothing outside needs -- stays in `detail`.
   - A tensor whose layout is a `ShardLayout` has distributed semantics -- it is the whole tensor, and each unit owns the slice its shard layout gives it.
   - One attr per mesh axis, against the mesh's axes flattened: a mesh naming several levels states them grouped one nest per level, and its rank is then how many levels it names rather than how many axes the attrs answer for.
@@ -488,7 +488,7 @@ which would cost one register per row element.
 
 - constraints:
   - Without workspace, one warp's butterfly finishes the contraction; with
-    workspace, warps post block-wide partials. Every participant gets the total.
+    workspace, warps post block-wide partials. Every unit gets the total.
   - Derive load width from both projected layouts, capped by alignment and
     16 bytes, as for `copy`; publish no width or tier query
     ([§2.6](#26-cudaops)).
@@ -702,7 +702,7 @@ not tensors or meshes, so they have no layout-selected tiers:
 
 | entry | input |
 | --- | --- |
-| `shuffle_xor` | one lane's value, exchange bits and participating lanes |
+| `shuffle_xor` | one lane's value, exchange bits and the lanes that execute |
 | `shuffle_elect` | calling thread's id |
 | `warp_reduce` | one lane's value, combine functor and lanes per fold |
 
@@ -755,7 +755,7 @@ __device__ inline T warp_reduce(T value);
 - constraints:
   - It elects one thread of the **CTA**, not one lane of each warp. An mbarrier
     armed for a single arrival is correct only under that reading.
-  - **It takes no width and no participating-thread count.** The elected thread
+  - **It takes no width and no count of the threads that execute.** The elected thread
     is always in the first warp, so a leading run wider than a warp elects what
     32 threads would, and electing among fewer is a different instruction rather
     than a parameter of this one.

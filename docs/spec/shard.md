@@ -221,7 +221,7 @@ Dimension substitution traverses a tensor's logical shape and layout together.
 For a `ShardLayout` it also traverses the bound `Mesh`: the Mesh layout and each
 `Topology.size` are geometry of the same program and MUST receive the same
 binding. A consumer that needs fixed geometry MUST reject any residual `DimVar`
-or dimension expression before asking `size` or `product` for a position count.
+or dimension expression before asking `size` or `product` for a unit count.
 
 ---
 
@@ -428,7 +428,7 @@ class Topology:
     size: ShapeDim
 
 class Mesh:
-    """Record a parallel device domain and its logical positions.
+    """Record a parallel device domain and its units.
 
     Attributes:
         topologies: attribute; Ordered topology sequence.
@@ -454,7 +454,7 @@ def starts(mesh: Mesh) -> tuple[int, ...]:
 
 
 def within_scope(mesh: Mesh, current: Mesh) -> bool:
-    """Return whether each continuous position set is contained in current."""
+    """Return whether each continuous unit set is contained in current."""
     ...
 ```
 
@@ -486,7 +486,7 @@ Field meanings:
 In a kernel, `with Mesh(selection, layout=shape, names=names)` rearranges a lexical,
 single-level selection.
 `layout=(shape, strides)` states selection-local numbering (row-major by default); it MUST
-cover every selected position once, with one fixed physical stride per axis.
+cover every selected unit once, with one fixed physical stride per axis.
 Composition preserves topology and offset; slicing the resulting composed mesh is rejected.
 
 Every mesh MUST state one arrangement per level it names, each in that level's
@@ -495,7 +495,7 @@ mesh included). `Mesh` normalizes what was written into that form at
 construction: one arrangement over all levels' axes is cut at the level
 boundaries, each level taking axes left to right until their extents multiply to
 its own size, with steps divided by what the levels under it hold. An axis of
-extent one adds no positions and joins the level being filled. An axis that
+extent one adds no units and joins the level being filled. An axis that
 straddles a boundary MUST be refused rather than divided; every axis MUST
 belong to one level, and a stride the division does not divide exactly MUST be
 refused. A one-level mesh takes every axis into its single mode, needing no
@@ -505,7 +505,7 @@ Because the layout is a nested `Layout`, the layout operations read it: `get(mes
 is level `i`'s own arrangement, `flatten(mesh.layout)` is every level's axes end
 to end, and `int_tuple.repeat_like` against `mesh.layout.shape` states per axis whatever is
 stated per level. `utils.device_layout(mesh)` is those axes as the device numbers its
-positions, each stepping by what its level states times what the levels under it
+units, each stepping by what its level states times what the levels under it
 hold, and a slice's `ComposedLayout.offset` is where the whole mesh starts in
 that numbering.
 
@@ -524,12 +524,12 @@ Mesh composition uses the following rules:
   inner mesh. The combined `ComposedLayout.offset` MUST then be re-encoded in
   device numbering from those per-level starts. Replacing an unsliced suffix
   and replacing the whole mesh retain their existing behavior. Every replaced
-  level MUST select a continuous position set contained in the enclosing level's
-  continuous position set. Continuity and containment MUST hold throughout the
+  level MUST select a continuous unit set contained in the enclosing level's
+  continuous unit set. Continuity and containment MUST hold throughout the
   declared dimension envelopes. A replacement or enclosing selection with holes
   MUST be rejected rather than approximated as an interval.
 - `Mesh.from_meshes(*meshes)` invokes `check_topology` on its result. For each named
-  level with a concrete declared extent, its position count MUST NOT exceed
+  level with a concrete declared extent, its unit count MUST NOT exceed
   that extent; symbolic extents are deferred until dimensions are bound. A
   level stating a run is already bounded by `Mesh.__getitem__` and is not
   checked again.
@@ -544,7 +544,7 @@ value is consumed by a region.
 - constraints:
   - `Topology` construction rejects a `None` size. `Mesh` construction rejects
     a `None` entry in its layout shape and normalizes the layout into one mode
-    per level; beyond that it performs no position-consistency check. Its
+    per level; beyond that it performs no unit-consistency check. Its
     `topologies` field is a `tuple[Topology | str, ...]`: a single-level mesh
     may temporarily name its topology by string until the parser resolves it
     from the enclosing module declaration, while a multi-level mesh MUST carry
@@ -561,20 +561,20 @@ value is consumed by a region.
     axes in order, every level retains its own arrangement, and the slice offset
     is the sum of each selected start times that axis's step in device numbering.
   - Nested single-level Mesh scopes compose to exactly that shape: the axes join
-    outermost first and each outer stride is scaled by the positions below it.
+    outermost first and each outer stride is scaled by the units below it.
     A value distributed at two levels at once may therefore be written either
     way, and both state one placement.
-  - A reader that asks for a position count by topology name reads
+  - A reader that asks for a unit count by topology name reads
     `size(mesh.layout)`. It accepts a Mesh with one topology only; a
     multi-topology Mesh is rejected rather than projecting its layout onto a
     guessed level.
-  - A reader that asks for an exact participant set at a selected topology level
+  - A reader that asks for an exact unit set at a selected topology level
     MUST take that level's projected layout as above, and MUST refuse a Mesh
     that names no such level. For both a plain `Layout` and a sliced
     `ComposedLayout`, the set is
     `{apply(layout, c) | 0 <= c < size(layout)}`; composition applies its
     retained offset and inner mapping.
-  - That participant set MUST be static, positive, inverse-projectable,
+  - That unit set MUST be static, positive, inverse-projectable,
     duplicate-free,
     and contained in `[0, selected_topology.size)`. A plain Mesh MUST cover the
     complete selected domain. A strict subdomain MUST use a sliced Mesh so its
@@ -592,7 +592,7 @@ scope-composition rules.
 
 ### 5.1 `Placement`
 
-A `Mesh` states which positions exist; it does not state which of them the
+A `Mesh` states which units exist; it does not state which of them the
 process reading a checkpoint occupies, because that is a property of the run
 rather than of the model. `Placement` states exactly that and nothing else.
 
@@ -600,7 +600,7 @@ rather than of the model. `Placement` states exactly that and nothing else.
 class Placement:
     ids: Mapping[str, int]
 
-    def program_ids(self, topologies: tuple[Topology | str, ...]) -> tuple[int | None, ...]: ...
+    def unit_ids(self, topologies: tuple[Topology | str, ...]) -> tuple[int | None, ...]: ...
 
     @classmethod
     def from_env(cls, topology_level: str = "gpu") -> "Placement": ...
@@ -610,10 +610,10 @@ class Placement:
 ```
 
 - constraints:
-  - a `Placement` MUST be data, not a callable: which program a loaded module
+  - a `Placement` MUST be data, not a callable: which unit a loaded module
     speaks for is settled at load time, so a per-call answer would let a module
     change identity while holding weights narrowed for the old one.
-  - `ids` is keyed by level name; `program_ids(topologies)` answers one id per
+  - `ids` is keyed by level name; `unit_ids(topologies)` answers one id per
     ordered `Topology` by lookup. A level the mapping does not name is unfixed.
   - `Placement.from_mesh(mesh)` lists every placement of a mesh: each level's ids
     are the values of that level's arrangement. Its coordinates are
@@ -623,8 +623,8 @@ class Placement:
   - a `Placement` is host-side execution context. It MUST NOT appear in a
     `TensorType`, a checkpoint, a `CallableSignature`, a kernel parameter, or
     a `forward` argument.
-  - one loaded module speaks for one program. A host serving several MUST build
-    one module per program, each told which it is; a module MUST NOT read the
+  - one loaded module speaks for one unit. A host serving several MUST build
+    one module per unit, each told which it is; a module MUST NOT read the
     current device (thread-local) to decide who it is.
 
 ---
@@ -732,7 +732,7 @@ Field meanings:
 
 Comparing or combining shard layouts and consuming their mesh use one projection
 that keeps mesh axes aligned with their attributes without rewriting stored types.
-It omits all-Broadcast levels except an instruction's required participant levels;
+It omits all-Broadcast levels except an instruction's required topology levels;
 levels containing Split or Partial remain part of the distribution.
 
 ### 6.1 Placement semantics
@@ -863,7 +863,7 @@ free-standing primitive layout. These narrower meanings are defined in
 Let `sl: ShardLayout`, `T: TensorType`, and `G = sl.layout.shape`.
 
 - `G` is the canonical / unsharded layout-domain shape; it MUST NOT
-  encode per-instance extents.
+  encode per-unit extents.
 - `rank(G)` MAY differ from `rank(T.shape)`.
 - `size(G) == size(T.shape)` MUST hold.
 - For any `Split(k)` in `sl.attrs`, `0 <= k < rank(G)` MUST hold.
@@ -892,7 +892,7 @@ Let `sl: ShardLayout`, `T: TensorType`, and `G = sl.layout.shape`.
 #### 7.1.2 `layout.strides`
 
 Let `sl: ShardLayout`, `S = sl.layout.strides`, and let `engine(i)`
-denote the `ShardTensor.engine` seen by instance index `i` along the
+denote the `ShardTensor.engine` seen by unit index `i` along the
 relevant mesh axis.
 
 - A typed value MUST have a concrete `S`. An annotation MAY omit its layout entirely;
@@ -907,11 +907,11 @@ relevant mesh axis.
 - For every mesh axis `a` with `sl.attrs[a] = Split(k)`,
   `S[k] ∈ {0} ∪ ℤ_{>0}` MUST hold.
 - `S[k] == 0` ⇒ mesh axis `a` contributes `0` to intra-engine offset
-  on dim `k`. Typical: allocator gives each instance a distinct
+  on dim `k`. Typical: allocator gives each unit a distinct
   `engine(i)`.
 - `S[k] > 0` ⇒ mesh axis `a` contributes `i · S[k]` elements to
   intra-engine offset on dim `k`. Typical: `engine(i)` shares one
-  base ptr across instances.
+  base ptr across units.
 - For layout dims `k` with no `Split` binding, `S[k]` follows [§3](#3-layout-pure-primitive)
   semantics, evaluated on the engine's physical storage.
 - Layouts requiring more than one stride per `Split` axis (cyclic /
@@ -950,7 +950,7 @@ using the destination storage owner ([§7.1.2](#712-layoutstrides)); symbolic
 shapes use symbolic products rather than an omitted tuple.
 
 For `storage='rmem'` on a target whose rmem owner is thread, all three
-thread-level Splits are per-instance, regardless of source storage:
+thread-level Splits are per-unit, regardless of source storage:
 
 ```
 # example
@@ -962,12 +962,12 @@ mesh   = Mesh((Topology("thread", 256),), Layout(shape=(2, 4, 32), ...))
 `shard_layout_local_shape(sl)` yields `(1, 1, 3, 1, 4)`. Each `Split`
 axis has `local_shape = 1` by construction, so
 the local offset sum
-reduces to `0` and every mesh instance receives its own engine
+reduces to `0` and every unit receives its own engine
 holding `3 × 4 = 12` elements laid out in C-order.
 
 For `storage='gmem'` with target-owned memory, all Splits are shared.
 The same sugar materializes to C-order strides over the canonical global shape — `strides = (1536, 384, 128, 4, 1)` — so the
-mesh instances write to disjoint offsets of a single underlying gmem
+units write to disjoint offsets of a single underlying gmem
 buffer.
 
 Explicit non-default strides, such as an instruction fragment, retain their
@@ -976,7 +976,7 @@ it does not replace the other written strides with defaults.
 
 ### 7.6 `local_layout`
 
-Which part of a sharded tensor one mesh instance holds, answered once and read
+Which part of a sharded tensor one unit holds, answered once and read
 by both sides of a launch.
 
 ```python
@@ -1007,14 +1007,14 @@ def local_layout_and_offset(shard, tensor_shape, coord) -> tuple[Layout, int]: .
   - `local_layout_and_offset` MUST reject unbound tensor sizes with `ValueError`
     before projecting, because its offset must be concrete. It MUST reuse the
     `local_layout` projection and its canonical check.
-  - `local_layout` MUST keep the whole tensor's strides: what one instance
+  - `local_layout` MUST keep the whole tensor's strides: what one unit
     holds is the same rows the same distance apart, begun further in.
   - `local_layout_and_offset` counts its offset in exactly those strides. It
     takes a mesh coord, as the CUDA runtime's `local_layout_and_offset(sl, coord)`
     does; a host holding logical data passes the shard with its layout replaced
     by the row-major layout of the same modes
     ([runtime §1.10](runtime.md#110-shardtensor)).
-  - `mesh_coords` turns per-level program ids into mesh coordinates, as the
+  - `mesh_coords` turns per-level unit ids into mesh coordinates, as the
     CUDA runtime's `mesh_coords(mesh, unit_ids())` does; a level whose id is
     `None` leaves its axes `None`.
   - the host states `tensor_shape` and `ids`, which the device reads off its
@@ -1228,7 +1228,7 @@ def right_inverse(layout: Layout | ComposedLayout):
   - Default strides come from `Layout(shape)` (above). A Split whose topology is
     private under `target.storage_owners` gets stride zero; compacting the
     remaining modes drops only its mesh factor and keeps its local residual
-    (extent one for a fully factored Split), so one instance has no holes. The
+    (extent one for a fully factored Split), so one unit has no holes. The
     target supplies the storage owner and the coarse-to-fine topology order; the
     owner topology and every coarser one are private, the owner `target` is
     shared. Absent memory facts mean an empty owner table.

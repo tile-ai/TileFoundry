@@ -1,7 +1,7 @@
-"""``Placement`` — which program a host invocation is speaking for.
+"""``Placement`` — which unit a host invocation is speaking for.
 
 A checkpoint states one global tensor per weight and a ``ShardLayout`` states
-how the mesh divides it. Neither says which of those positions the process
+how the mesh divides it. Neither says which of those units the process
 calling ``load`` occupies, because that is not a property of the model. A
 ``Placement`` answers exactly that one question, and nothing else: it is read
 on the host and never reaches a ``TensorType``, a checkpoint or a kernel
@@ -27,9 +27,9 @@ __all__ = ["Placement"]
 
 @dataclass(frozen=True)
 class Placement:
-    """Host-side execution context: which program this invocation is.
+    """Where this invocation runs: a unit id for each topology it names.
 
-    Data, not a callable: which program a loaded module speaks for is fixed
+    Data, not a callable: which unit a loaded module speaks for is fixed
     when it is loaded, so a placement that answered differently on a later
     call would let one module change identity while holding weights narrowed
     for the old one. A level nobody named is left unfixed -- ``cta`` and
@@ -39,8 +39,8 @@ class Placement:
 
     ids: Mapping[str, int]
 
-    def program_ids(self, topologies: "tuple[Topology | str, ...]") -> tuple[int | None, ...]:
-        """This invocation's program id at each of *topologies*, in that order."""
+    def unit_ids(self, topologies: "tuple[Topology | str, ...]") -> tuple[int | None, ...]:
+        """This invocation's unit id at each of *topologies*, in that order."""
         return tuple(self.ids.get(getattr(topology, "name", topology)) for topology in topologies)
 
     @classmethod
@@ -61,7 +61,7 @@ class Placement:
 
     @classmethod
     def from_mesh(cls, mesh: Mesh) -> "tuple[Placement, ...]":
-        """Every placement of *mesh*: each level's program ids are its arrangement's values."""
+        """Every placement of *mesh*: each level's unit ids are its arrangement's values."""
         arrangements = levels(mesh)
         names = topology_names(mesh)
         return tuple(

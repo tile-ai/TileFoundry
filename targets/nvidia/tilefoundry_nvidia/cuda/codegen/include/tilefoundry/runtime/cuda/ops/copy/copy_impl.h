@@ -137,12 +137,12 @@ struct CopyIndexedAsync {
         constexpr auto threads =
             tilefoundry::get<tilefoundry::TopologyLevel::thread>(
                 ExecutionMesh{});
-        constexpr int participants = int(cute::size(threads.layout));
+        constexpr int units = int(cute::size(threads.layout));
         const int lane = int(threadIdx.x) - tilefoundry::offset(threads);
         auto row_vectors = cute::recast<cute::uint_bit_t<bytes * 8>>(row_d);
         const int vectors_per_row = int(cute::size(row_vectors));
         const int vectors = int(cute::size<0>(rows_d)) * vectors_per_row;
-        for (int vector = lane; vector < vectors; vector += participants) {
+        for (int vector = lane; vector < vectors; vector += units) {
             const int row = vector / vectors_per_row;
             const int column = vector % vectors_per_row;
             const auto at = idx(row);

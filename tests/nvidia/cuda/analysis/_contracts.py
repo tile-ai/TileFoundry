@@ -147,7 +147,7 @@ def assert_internal_contract(result: analysis.Result, scopes: tuple[analysis.Ite
             for scope in scopes
             if id(node) in scope.snapshot.definition.locations
         )
-        active = min(owner.root.active_positions(result.topology_level), physical)
+        active = min(owner.root.active_units(result.topology_level), physical)
         inflight = analysis.inflight_bytes(node, owner, module_target, throughput.bandwidth_level)
         duration = analysis.local_duration_ns(
             cost,
@@ -155,7 +155,7 @@ def assert_internal_contract(result: analysis.Result, scopes: tuple[analysis.Ite
             module_target.get_facts(target.PerformanceServiceFacts, (result.topology_level, active, inflight)),
             moved=expr.get_metadata(node, analysis.MemoryMetadata),
             level=result.topology_level,
-            positions=min(owner.mesh_positions(result.topology_level), active),
+            units=min(owner.mesh_units(result.topology_level), active),
         )
         record = expr.get_metadata(node, analysis.PerformanceMetadata)
         if not duration:

@@ -65,7 +65,7 @@ class ShardTensor:
             axes = tuple(getattr(topology, "name", topology) for topology in shard.mesh.topologies)
             raise ValueError(
                 f"ShardTensor: {tuple(self.type.shape)} is sharded over {axes}, and "
-                f"no Placement says which program this is; pass placement= to load()"
+                f"no Placement says which unit this is; pass placement= to load()"
             )
         if any(types.partial_reductions_by_axis(shard)):
             raise ValueError(
@@ -97,7 +97,7 @@ class ShardTensor:
         first = self.tensor[0][1]
         parts: dict[tuple, utils.torch.Tensor] = {}
         for placement, data in self.tensor:
-            coord = types.mesh_coords(shard.mesh, placement.program_ids(shard.mesh.topologies))
+            coord = types.mesh_coords(shard.mesh, placement.unit_ids(shard.mesh.topologies))
             key = tuple(coord[axis] for axis in partial)
             if key not in parts:
                 parts[key] = utils.torch.empty(
@@ -131,6 +131,6 @@ class ShardTensor:
         """
         address = shard.layout.outer if isinstance(shard.layout, types.ComposedLayout) else shard.layout
         host = replace(shard, layout=types.Layout(address.shape))
-        coord = types.mesh_coords(shard.mesh, placement.program_ids(shard.mesh.topologies))
+        coord = types.mesh_coords(shard.mesh, placement.unit_ids(shard.mesh.topologies))
         layout, offset = types.local_layout_and_offset(host, tuple(self.type.shape), coord)
         return whole.as_strided(layout.shape, layout.strides, whole.storage_offset() + offset)

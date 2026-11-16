@@ -38,8 +38,8 @@ class Reach:
     ``reached`` is None when the relation is unknown: a retained call, or a value
     with no device coordinates. ``slices`` are the sliced meshes of the checked
     level around it, CTAs or threads, the only meshes that keep a unit of that
-    level from running it. ``split`` is the mesh whose positions the layout of
-    the operand gives its bytes to, one position each, None when it gives none.
+    level from running it. ``split`` is the mesh whose units the layout of
+    the operand gives its bytes to, one unit each, None when it gives none.
     """
 
     name: str
@@ -341,7 +341,7 @@ def unit_read(name: str, coordinate: expr.Call, unit: str) -> str | None:
 def unit_guard(mesh: types.Mesh, unit: str, name: str = "cta") -> str | None:
     """The condition that *unit* runs inside *mesh*'s level *name*; None when it has no statement.
 
-    It is the runtime's ``contains``: a position of that level the mesh's layout reaches.
+    It is the runtime's ``contains``: a unit of that level the mesh's layout reaches.
     """
     level = next(
         (level for level in types.separate(mesh) if level.topologies[0].name == name), None
@@ -359,13 +359,13 @@ def unit_guard(mesh: types.Mesh, unit: str, name: str = "cta") -> str | None:
     return f"exists ({', '.join(steps)} : {' and '.join(held)})"
 
 
-def instance(reach: Reach, suffix: str, shared, level: str = "cta"):
+def unit_reach(reach: Reach, suffix: str, shared, level: str = "cta"):
     """The elements one execution by unit ``__<level>`` + *suffix* reaches, its own names renamed.
 
     *level* is ``"cta"`` or ``"thread"``. Returns the set, the conditions on that
     unit (None when a coordinate cannot be bound to it), and the names whose
     source the renaming loses. A unit runs the reach only inside the sliced meshes
-    of its level around it; a slice whose positions cannot be stated adds no
+    of its level around it; a slice whose units cannot be stated adds no
     condition, which only widens the units.
     """
     relation = reach.reached.relation
@@ -418,8 +418,8 @@ def overlap(
         return Overlap.UNPROVEN
     if first.reached.relation.may_access or second.reached.relation.may_access:
         return Overlap.UNPROVEN
-    left, bound_x, free_x = instance(first, "", shared, level)
-    right, bound_y, free_y = instance(second, "_y", shared, level)
+    left, bound_x, free_x = unit_reach(first, "", shared, level)
+    right, bound_y, free_y = unit_reach(second, "_y", shared, level)
     if bound_x is None or bound_y is None:
         return Overlap.UNPROVEN
     left = left.align_params(right.get_space())

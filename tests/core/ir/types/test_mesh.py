@@ -59,7 +59,7 @@ def test_check_topology_rejects_positions_beyond_a_declared_extent() -> None:
 
     with pytest.raises(
         ValueError,
-        match="mesh level 'cta' has 256 positions, exceeding declared extent 128",
+        match="mesh level 'cta' has 256 units, exceeding declared extent 128",
     ):
         types.check_topology(oversized)
 

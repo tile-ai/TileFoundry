@@ -96,7 +96,7 @@ class Target(target.Target):
         object.__setattr__(self, "device_document", device.document)
 
     def topology_facts(self) -> target.TopologyFacts:
-        """CPU execution positions; AMX is an instruction capability."""
+        """CPU execution units; AMX is an instruction capability."""
         count = self.device.performance_core_count + self.device.efficiency_core_count
         return target.TopologyFacts(
             (target.TopologyLevelFacts("thread", count, count),),

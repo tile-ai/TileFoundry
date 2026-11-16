@@ -26,7 +26,7 @@ def called_as_entry(
 
     An id the target states reaches the card through this entry, so the entry
     is where it enters the program: its caller is the process, which is the
-    only thing that knows which program of the mesh it is running.
+    only thing that knows which unit of the mesh it is running.
     """
     return signature.CallableSignature(
         name=symbol,

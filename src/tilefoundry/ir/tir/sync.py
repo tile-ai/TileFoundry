@@ -109,7 +109,7 @@ def no_enclosing_mesh_error(m: types.Mesh, scope: "tuple[types.Mesh, ...]") -> e
 def _(call: "Call", ctx: "verify.Context") -> None:
     """Verify a Sync references an enclosing mesh or its legal constant slice.
 
-    The participant set must classify to a supported barrier; dynamic,
+    The unit set must classify to a supported barrier; dynamic,
     non-contiguous, and cross-warp-unaligned subsets are rejected.
 
     See [tir §1.5](docs/spec/tir.md#15-sync).
@@ -140,8 +140,8 @@ class SyncBarrier(Enum):
 
 
 @dataclass(unsafe_hash=True)
-class Participation:
-    """Describe a contiguous participant interval and its barrier properties."""
+class SyncScope:
+    """The contiguous run of threads one barrier synchronizes, and its barrier properties."""
 
     base: int
     count: int
@@ -165,8 +165,8 @@ def participant_layout(mesh: types.Mesh) -> "tuple[types.Layout, int]":
         raise expr.VerifyError(f"T.sync: {error}") from error
 
 
-def participation(mesh: types.Mesh) -> Participation:
-    """Derive the participating thread set of ``mesh``.
+def sync_scope(mesh: types.Mesh) -> SyncScope:
+    """Derive the run of threads that one barrier over ``mesh`` synchronizes.
 
     Raises ``VerifyError`` for a malformed mesh (dynamic extent) or an
     unsupported slice (non-contiguous / overlapping).
@@ -200,12 +200,12 @@ def participation(mesh: types.Mesh) -> Participation:
             "range is supported"
         )
     if base + count > domain:
-        raise expr.VerifyError("T.sync: participant range exceeds the block thread domain")
+        raise expr.VerifyError("T.sync: the thread run exceeds the block thread domain")
 
     full_cta = base == 0 and count == domain
     single_warp = count <= WARP_SIZE and (base // WARP_SIZE == (base + count - 1) // WARP_SIZE)
     lane_mask = (((1 << count) - 1) << (base % WARP_SIZE)) & 0xFFFFFFFF if single_warp else 0
-    return Participation(
+    return SyncScope(
         base=base,
         count=count,
         block_domain=domain,
@@ -226,7 +226,7 @@ def classify(mesh: types.Mesh) -> SyncBarrier:
         if isinstance(mesh.layout, types.ComposedLayout):
             raise expr.VerifyError("T.sync: a partial grid sync (cta mesh slice) is unsupported")
         return SyncBarrier.GRID
-    p = participation(mesh)
+    p = sync_scope(mesh)
     if p.full_cta:
         return SyncBarrier.SYNCWARP if p.count == WARP_SIZE else SyncBarrier.SYNCTHREADS
     if p.single_warp:
@@ -242,8 +242,8 @@ def classify(mesh: types.Mesh) -> SyncBarrier:
 __all__ = [
     "Sync",
     "SyncBarrier",
-    "Participation",
-    "participation",
+    "SyncScope",
+    "sync_scope",
     "classify",
     "WARP_SIZE",
 ]

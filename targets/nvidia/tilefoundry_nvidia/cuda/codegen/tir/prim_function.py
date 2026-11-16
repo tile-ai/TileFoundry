@@ -22,7 +22,7 @@ def wrap_buffer(signature: codegen.TensorSignature, ctx: context.Context) -> Non
 
     The layout is the envelope the whole dispatch range fits in, so one kernel
     covers every shape its type admits; a sharded parameter carries which part
-    of that envelope this instance holds.
+    of that envelope this unit holds.
     """
     name = signature.name
     total = utils.shape_numel_upper_bound(signature.type.shape)

@@ -48,13 +48,13 @@ CUTE_HOST_DEVICE constexpr void check_operands() {
                   "elements");
 }
 
-template <int Instances> struct StridedCopy {
+template <int Units> struct StridedCopy {
     template <class SV, class DV>
     __device__ void operator()(SV const &sv, DV &dv) const {
         const int n = int(cute::size(dv));
         const int first =
             int(tilefoundry::unit_id<tilefoundry::TopologyLevel::thread>());
-        for (int i = first; i < n; i += Instances)
+        for (int i = first; i < n; i += Units)
             dv(i) = static_cast<cute::remove_cvref_t<decltype(dv(0))>>(sv(i));
     }
 };

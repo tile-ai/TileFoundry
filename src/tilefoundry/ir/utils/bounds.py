@@ -37,7 +37,7 @@ def shape_upper_bound(shape) -> tuple[int, ...]:
 def register_strides(sl: types.ShardLayout) -> tuple[int, ...]:
     """``sl``'s strides as steps on a *register* engine, not on a shared buffer.
 
-    Registers are the distinct-engine-per-instance case of [shard
+    Registers are the distinct-engine-per-unit case of [shard
     §7.1.2](docs/spec/shard.md#712-layoutstrides): a ``Split(k)`` axis gets
     ``0``, so the projection offsets no instance along it, and the rest get
     the array's own compact steps, assigned from smallest to largest stated
