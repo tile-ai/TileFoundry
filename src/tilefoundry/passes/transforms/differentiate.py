@@ -500,7 +500,26 @@ class FunctionDifferentiator:
         ctx = autodiff.Context(module=module, function=function, memo=memo)
         active = {id(function.params[index]) for index in wrt}
         self.top = new_scope((function.body,), function.params, ctx, active)
-        self.saved = expr.Var(name="saved", type=types.TupleType(()))
+        self.names = {
+            name
+            for node in core.function_values(function)
+            for name in (getattr(node, "name", None), expr.binding_name(node))
+            if isinstance(name, str)
+        }
+        for loop in core.collect_exprs(function.body):
+            if isinstance(loop, core.LoopRegion):
+                self.names.update(var.name for var in (loop.induction_var, *loop.params))
+            elif isinstance(loop, core.MeshRegion):
+                self.names.update(var.name for var in loop.params)
+        self.saved = expr.Var(name=self.fresh("saved"), type=types.TupleType(()))
+
+    def fresh(self, base: str) -> str:
+        """*base*, or *base* with the first numeric suffix no name of this function takes."""
+        name, suffix = base, 1
+        while name in self.names:
+            name, suffix = f"{base}_{suffix}", suffix + 1
+        self.names.add(name)
+        return name
 
     def run(self) -> Derived:
         function = self.function
@@ -514,7 +533,7 @@ class FunctionDifferentiator:
             if type_ is None:
                 seeds.append(empty_like(results[index]))
                 continue
-            param = expr.Var(name=names[0] if len(names) == 1 else names[index], type=type_)
+            param = expr.Var(name=self.fresh(names[0] if len(names) == 1 else names[index]), type=type_)
             self.top.ctx.remember(param, type_)
             params.append(param)
             seeds.append(self.split(param, self.top.ctx))
@@ -671,7 +690,7 @@ class FunctionDifferentiator:
         params, args = [], []
         seed = gradient
         for path, value in leaves(gradient):
-            param = expr.Var(name=f"d{len(params)}", type=scope.ctx.type_of(value))
+            param = expr.Var(name=self.fresh(f"d{len(params)}"), type=scope.ctx.type_of(value))
             ctx.remember(param, param.type)
             params.append(param)
             args.append(value)
@@ -712,7 +731,7 @@ class FunctionDifferentiator:
                 self.accumulate(scope, arg, part)
             return
         ctx = scope.ctx.enter_region(loop)
-        index = expr.Var(name="s", type=loop.induction_var.type)
+        index = expr.Var(name=self.fresh("s"), type=loop.induction_var.type)
         ctx.remember(index, index.type)
         roots = (loop.body, *loop.yield_values)
         active = {id(param) for param, arg in zip(loop.params, loop.args) if id(arg) in scope.active}
@@ -741,14 +760,14 @@ class FunctionDifferentiator:
         params, inits = [], []
         for position in carries:
             param = loop.params[position]
-            held = expr.Var(name=f"d{param.name}", type=gradient_type(param.type))
+            held = expr.Var(name=self.fresh(f"d{param.name}"), type=gradient_type(param.type))
             ctx.remember(held, held.type)
             params.append(held)
             inits.append(self.cotangent(parts[position], held.type, scope.ctx))
         sums = []
         for position in captures:
             for path, leaf in leaves(flat(loop.params[position].type)):
-                held = expr.Var(name=f"g{loop.params[position].name}", type=gradient_type(leaf))
+                held = expr.Var(name=self.fresh(f"g{loop.params[position].name}"), type=gradient_type(leaf))
                 ctx.remember(held, held.type)
                 sums.append((position, path, leaf, held))
                 params.append(held)
@@ -853,7 +872,7 @@ class FunctionDifferentiator:
             else:
                 scope.extras.append(key)
                 outer = self.materialize(("extra", scope, len(scope.extras) - 1), scope.parent)
-            result = expr.Var(name=self.key_name(key)[0] or "saved", type=self.key_type(key))
+            result = expr.Var(name=self.fresh(self.key_name(key)[0] or "saved"), type=self.key_type(key))
             scope.region_params.append((result, outer))
         scope.remember_slot(slot, result)
         return result
@@ -880,7 +899,7 @@ class FunctionDifferentiator:
         if key[0] == "node" and any(value is param for param in loop.params[carried:]):
             position = next(i for i, param in enumerate(loop.params) if param is value)
             outer = self.materialize(("node", loop.args[position]), scope.parent)
-            result = expr.Var(name=value.name, type=self.key_type(key))
+            result = expr.Var(name=self.fresh(value.name), type=self.key_type(key))
             ctx.remember(result, result.type)
             scope.region_params.append((result, outer))
             return result
@@ -889,7 +908,7 @@ class FunctionDifferentiator:
         scope.extras.append(key)
         outer = self.materialize(("extra", scope, len(scope.extras) - 1), scope.parent)
         stacks = expr.Var(
-            name=f"stack_{self.key_name(key)[0] or 'saved'}",
+            name=self.fresh(f"stack_{self.key_name(key)[0] or 'saved'}"),
             type=stacked(held, trip, owners, located(self.key_node(key))),
         )
         ctx.remember(stacks, stacks.type)
@@ -1064,7 +1083,7 @@ class ForwardCloner(core.BindingSubstitutionCloner):
                 for index in path:
                     piece = projection(piece, index, leaf)
                 stack_type = stacked(leaf, trip, scope.ctx.resolve_target().storage_owners, "")
-                stack = expr.Var(name="stack", type=stack_type)
+                stack = expr.Var(name=self.owner.fresh(f"stack_{self.owner.key_name(key)[0] or 'v'}"), type=stack_type)
                 stacks.append(stack)
                 inits.append(build("zeros", type=stack_type))
                 corner = pack((ordinal, *(integer(0, dtype) for _ in leaf.shape)))
@@ -1076,6 +1095,7 @@ class ForwardCloner(core.BindingSubstitutionCloner):
             params=(*copied.params[:carried], *stacks, *copied.params[carried:]),
             args=(*copied.args[:carried], *inits, *copied.args[carried:]),
             yield_values=(*copied.yield_values, *updates),
+            body=updates[-1],
             type=types.TupleType(()),
         )
         self.loops[id(node)] = (loop, carried, tuple(counts))
