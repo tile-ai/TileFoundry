@@ -168,6 +168,15 @@ class ChildCall(Differentiated):
 
 
 @case
+class InactiveCall(Differentiated):
+    """No gradient reaches either call; both callees still get a forward version."""
+
+    path: Path = FIXTURES / "inactive_call.py"
+    name: str | None = "InactiveCall"
+    wrt: tuple[str, ...] = ("x",)
+
+
+@case
 class TupleParam(Differentiated):
     path: Path = FIXTURES / "tuple_param.py"
     wrt: tuple[str, ...] = ("w", "x")

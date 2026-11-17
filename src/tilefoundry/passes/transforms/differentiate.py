@@ -409,7 +409,11 @@ class FunctionDifferentiator:
         self.wrt = wrt
         self.placeholders: dict[int, tuple] = {}
         self.regions: dict[int, RegionBackward] = {}
-        self.callees: dict[int, Derived] = {}
+        self.callees: dict[int, Derived] = {
+            id(value): differ.callee(module, value.target, value)
+            for value in core.collect_exprs(function.body)
+            if isinstance(value, expr.Call) and isinstance(value.target, core.FunctionRef)
+        }
         self.saved_keys: list[tuple] = []
         memo = {}
         for node in core.function_values(function):
@@ -548,8 +552,7 @@ class FunctionDifferentiator:
 
     def reverse_call(self, scope: Scope, call: expr.Call, gradient) -> None:
         ref = call.target
-        derived = self.differ.callee(self.module, ref, call)
-        self.callees[id(call)] = derived
+        derived = self.callees[id(call)]
         ctx = scope.ctx
         parts = gradient if isinstance(call.type, types.TupleType) else (gradient,)
         cotangents = []
