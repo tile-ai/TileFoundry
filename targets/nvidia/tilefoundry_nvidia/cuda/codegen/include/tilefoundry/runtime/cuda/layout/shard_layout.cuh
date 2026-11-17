@@ -59,14 +59,15 @@ template <class A> CUTE_HOST_DEVICE constexpr bool attr_leaves_tensor_whole() {
     }
 }
 
-/// The mesh shape as the mesh states it: one entry per level when it names
+/// The mesh shape as the mesh states it: one entry per topology when it names
 /// several, and one per axis when it names one. What a coord is shaped like.
 template <class SL>
 using shard_mesh_shape_t = cute::remove_cvref_t<decltype(cute::shape(
     typename SL::mesh::layout_type{}))>;
 
 /// The same shape with the grouping taken back out, which is what the attrs
-/// are indexed against: an attr answers for one axis whichever level owns it.
+/// are indexed against: an attr answers for one axis whichever topology owns
+/// it.
 template <class SL>
 using shard_mesh_flat_t = cute::remove_cvref_t<decltype(cute::flatten(
     cute::shape(typename SL::mesh::layout_type{})))>;
@@ -104,9 +105,9 @@ template <class SL, int Axis> CUTE_HOST_DEVICE constexpr int shard_mesh_axis() {
 
 /// What tensor axis ``Axis`` is divided by: every mesh axis cutting it.
 ///
-/// Several may. Two axes of one level cut a tensor axis into a grid, and so
-/// do two levels, one taking a block of what the other left. Each division is
-/// of what the previous one left, so their extents multiply.
+/// Several may. Two axes of one topology cut a tensor axis into a grid, and so
+/// do two topologies, one taking a block of what the other left. Each division
+/// is of what the previous one left, so their extents multiply.
 template <class SL, int Axis, size_t... Is>
 CUTE_HOST_DEVICE constexpr int shard_divisor_over(std::index_sequence<Is...>) {
     using attrs_t = typename SL::attrs;
@@ -204,8 +205,8 @@ namespace detail {
 /// Whether a shard layout says one thing about each of its mesh's axes.
 ///
 /// Against the mesh's axes flattened, not its modes: a mesh naming several
-/// levels states them grouped one nest per level, and its rank is then how
-/// many levels it names rather than how many axes the attrs answer for.
+/// topologies states them grouped one nest per topology, and its rank is then
+/// how many topologies it names rather than how many axes the attrs answer for.
 template <class SL> CUTE_HOST_DEVICE constexpr bool shard_attrs_match_mesh() {
     return int(cute::tuple_size<typename SL::attrs>::value) ==
            int(cute::rank(

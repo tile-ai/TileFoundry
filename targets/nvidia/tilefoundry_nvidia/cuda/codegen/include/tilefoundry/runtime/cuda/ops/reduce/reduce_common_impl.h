@@ -181,8 +181,8 @@ __device__ float cta_combine_via_workspace(float warp_partial,
 }
 
 /// ── Layered sharded-reduce dispatch ───────────────────────────────
-/// Compile-time derivation of the reduction level and ``warps_per_group`` from
-/// the operand shard layouts, consumed by the public ``reduce`` entry.
+/// Compile-time derivation of the reduction topology and ``warps_per_group``
+/// from the operand shard layouts, consumed by the public ``reduce`` entry.
 /// Classify each mesh axis from the operand shard attributes.
 
 using detail::is_partial_attr_v;
@@ -212,45 +212,48 @@ using plan_t = reduce_dispatch_info;
 /// no ``(lanes, warps)`` at all.
 template <class TMesh> CUTE_HOST_DEVICE constexpr int lanes_of_mesh() {
     using mesh_t = cute::remove_cvref_t<TMesh>;
-    if constexpr (mesh_t::level == TopologyLevel::thread &&
+    if constexpr (mesh_t::first_topology == TopologyLevel::thread &&
                   tilefoundry::is_warped(mesh_t{}))
         return kWarpSize;
     else
         return 0;
 }
 
-/// Derive, from the (src, dst) operand ShardLayouts, the active reduction level
-/// and its ``warps_per_group``. Pure compile-time so the caller can select the
-/// tier with ``if constexpr`` — otherwise the untaken tier still instantiates
-/// and, e.g., ``CrossWarp<mean_op>`` would trip its supported-op guard.
-/// Requires a static mesh layout; each mesh axis is classified by the level it
-/// belongs to, so a composed cta×thread mesh spends the lane budget only on
-/// its thread-level axes.
+/// Derive, from the (src, dst) operand ShardLayouts, the active reduction
+/// topology and its ``warps_per_group``. Pure compile-time so the caller can
+/// select the tier with ``if constexpr`` — otherwise the untaken tier still
+/// instantiates and, e.g., ``CrossWarp<mean_op>`` would trip its supported-op
+/// guard. Requires a static mesh layout; each mesh axis is classified by the
+/// topology it belongs to, so a composed cta×thread mesh spends the lane budget
+/// only on its thread-level axes.
 template <class SrcSL, class DstSL>
 CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
     using src_attrs = typename SrcSL::attrs;
     using dst_attrs = typename DstSL::attrs;
     using mesh_t = cute::remove_cvref_t<typename SrcSL::mesh>;
-    static_assert(mesh_t::level == TopologyLevel::thread ||
-                      mesh_t::level == TopologyLevel::cta,
+    static_assert(mesh_t::first_topology == TopologyLevel::thread ||
+                      mesh_t::first_topology == TopologyLevel::cta,
                   "ops::reduce: mesh must name cta or thread");
     using m_layout_t = typename mesh_t::layout_type;
     constexpr int m_rank = cute::tuple_size<src_attrs>::value;
-    /// Levels order coarsest first, so a thread level is the last nest when
-    /// the mesh names one, and the last flat axis's level answers for it.
+    /// Topologies order coarsest first, so a thread topology is the last nest
+    /// when the mesh names one, and the last flat axis's topology answers for
+    /// it.
     constexpr bool has_thread =
-        mesh_t::template axis_level<m_rank - 1>() == TopologyLevel::thread;
+        mesh_t::template mesh_axis_topology<m_rank - 1>() ==
+        TopologyLevel::thread;
     static_assert(detail::shard_attrs_match_mesh<SrcSL>() &&
                       detail::shard_attrs_match_mesh<DstSL>(),
                   "ops::reduce: both operands need one attr per mesh axis");
     static_assert(std::is_same_v<typename SrcSL::mesh, typename DstSL::mesh>,
                   "ops::reduce: the two operands must name one mesh");
     static_assert(
-        has_thread || mesh_t::level == TopologyLevel::cta,
-        "ops::reduce: a reduce mesh's topology level must be cta or thread");
+        has_thread || mesh_t::first_topology == TopologyLevel::cta,
+        "ops::reduce: a reduce mesh's topology must be cta or thread");
 
     /// The attrs answer for the mesh's axes end to end, whatever grouping the
-    /// levels state, so extents and levels read off the flattened shape.
+    /// topologies state, so extents and topologies read off the flattened
+    /// shape.
     int m_ext[m_rank] = {};
     bool reduced[m_rank] = {};
     bool thread_axis[m_rank] = {};
@@ -264,15 +267,15 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
                   cute::remove_cvref_t<decltype(cute::get<Is>(dst_attrs{}))>,
                   shard::B>),
          ...);
-        ((thread_axis[Is] =
-              mesh_t::template axis_level<int(Is)>() == TopologyLevel::thread),
+        ((thread_axis[Is] = mesh_t::template mesh_axis_topology<int(Is)>() ==
+                            TopologyLevel::thread),
          ...);
     }(std::make_index_sequence<m_rank>{});
 
     /// How each mesh axis divides into lanes and warps. A thread-level axis
     /// spends the lane budget, fastest axis first; a cta-level axis reduces
-    /// across CTAs rather than warp lanes. The thread level's mode of a mesh
-    /// naming several levels, as a mesh of that level, states the lanes.
+    /// across CTAs rather than warp lanes. The thread topology's mode of a mesh
+    /// naming several topologies, as a mesh of that topology, states the lanes.
     int lanes_of[m_rank] = {};
     int warps_of[m_rank] = {};
     constexpr int kLanes = [] {

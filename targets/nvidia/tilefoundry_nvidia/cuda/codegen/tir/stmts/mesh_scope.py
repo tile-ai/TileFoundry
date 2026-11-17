@@ -101,7 +101,7 @@ def is_dynamic_mesh(mesh: types.Mesh) -> bool:
 def validate_cuda_topology_levels(tgt: target.Target, names) -> None:
     """Validate names at the CUDA lowering boundary.
 
-    See docs/spec/target.md § Topology levels.
+    See docs/spec/target.md § Topologies.
     """
     supported = tuple(
         topology.name for topology in tgt.get_facts(target.TopologyFacts).topologies

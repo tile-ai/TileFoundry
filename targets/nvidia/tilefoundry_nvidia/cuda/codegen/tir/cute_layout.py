@@ -3,7 +3,7 @@
 A layout is an int-tuple shape and an int-tuple stride; sub-tuples nest
 ``cute::Shape`` / ``cute::make_shape`` with them, recursively. Every emitter
 spells a layout through these two functions, so a nested mode -- an operand
-tile, a multi-level mesh -- renders everywhere a flat one does.
+tile, a multi-topology mesh -- renders everywhere a flat one does.
 """
 
 from __future__ import annotations

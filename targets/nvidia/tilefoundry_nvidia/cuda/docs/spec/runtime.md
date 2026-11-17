@@ -24,7 +24,7 @@ enum class TopologyLevel {
     gpu,
     cta,
     thread,
-    level_count,
+    topology_count,
 };
 
 template <TopologyLevel L>
@@ -38,7 +38,7 @@ CUTE_HOST_DEVICE constexpr TopologyLevel program_topology() noexcept;
 CUTE_HOST_DEVICE constexpr auto program_topologies() noexcept;
 
 struct Placement {
-    int unit_id[int(TopologyLevel::level_count)];
+    int unit_id[int(TopologyLevel::topology_count)];
 };
 
 CUTE_HOST_DEVICE Placement &placement();
@@ -51,7 +51,7 @@ CUTE_HOST_DEVICE auto unit_ids() noexcept;
 ```
 <!-- /generated -->
 
-**Terms.** The terms are those of [shard §0](../../../../../../docs/spec/shard.md#0-terms). A warp grouping is a mesh axis of a thread mesh, not a topology level.
+**Terms.** The terms are those of [shard §0](../../../../../../docs/spec/shard.md#0-terms). A warp grouping is a mesh axis of a thread mesh, not a topology.
 
 - constraints:
   - `unit_id<TopologyLevel::gpu>()` MUST equal the host `Placement`'s id
@@ -61,11 +61,11 @@ CUTE_HOST_DEVICE auto unit_ids() noexcept;
     from the user signature. Before divergence, one thread MUST initialize
     `placement` and synchronize readers. Its `__shared__` slot belongs to
     one block, so concurrent kernels cannot overwrite each other's metadata.
-  - Every length indexed by topology level MUST derive from `level_count`, including `unit_id`, `unit_ids()` and mesh coords. Refuse short coords. Do not read the id of an adjacent topology level.
-  - `program_topology()` is the coarsest named topology level. `program_topologies()` lists the levels from there to `level_count`, coarsest first. Use CuTe's `rank` and `find` on that tuple. For a missing level, `find` gives the rank. The following `get` MUST refuse it as `"Index out of range"`.
+  - Every length indexed by topology level MUST derive from `topology_count`, including `unit_id`, `unit_ids()` and mesh coords. Refuse short coords. Do not read the id of an adjacent topology.
+  - `program_topology()` is the coarsest named topology. `program_topologies()` lists the topologies from there to `topology_count`, coarsest first. Use CuTe's `rank` and `find` on that tuple. For a missing topology, `find` gives the rank. The following `get` MUST refuse it as `"Index out of range"`.
   - Coords are row-major: `(8, 32)` gives `(id / 32, id % 32)`. This is
     opposite to CuTe order ([§2.3.1](#231-layoutcute_extcuh)).
-  - One `.cu` states the `topology_size<L>()` of one launch. `topology_shape<L>()` includes level `L` and all levels below it. A mesh recompiled in another translation unit belongs to the launch of that translation unit.
+  - One `.cu` states the `topology_size<L>()` of one launch. `topology_shape<L>()` includes topology `L` and all topologies below it. A mesh recompiled in another translation unit belongs to the launch of that translation unit.
 
 ### 2.3 `cuda/layout/`
 
@@ -95,15 +95,15 @@ reverse(cute::ComposedLayout<A, O, B> const &l);
 // targets/nvidia/tilefoundry_nvidia/cuda/codegen/include/tilefoundry/runtime/cuda/layout/mesh.cuh
 template <class TLayout, TopologyLevel... Topos> struct Mesh {
     using layout_type = TLayout;
-    static constexpr int level_count;
-    static constexpr TopologyLevel level;
+    static constexpr int topology_count;
+    static constexpr TopologyLevel first_topology;
     TLayout layout;
-    /// The topology level flat axis ``I`` runs at. A mesh naming one level
-    /// answers its own level for every axis. A mesh naming several
-    /// groups its layout one nest per level, and the nest holding
-    /// flat axis ``I`` states its level.
+    /// The topology flat axis ``I`` runs at. A mesh naming one topology
+    /// answers its own topology for every axis. A mesh naming several
+    /// groups its layout one nest per topology, and the nest holding
+    /// flat axis ``I`` states its topology.
     template <int I>
-    CUTE_HOST_DEVICE static constexpr TopologyLevel axis_level();
+    CUTE_HOST_DEVICE static constexpr TopologyLevel mesh_axis_topology();
 };
 
 template <class L, TopologyLevel... Topos, class Coord>
@@ -120,22 +120,22 @@ CUTE_HOST_DEVICE constexpr bool is_warped(Mesh<L, Topos...> const &mesh);
 template <class L, TopologyLevel... Topos>
 CUTE_HOST_DEVICE constexpr auto as_warped(Mesh<L, Topos...> const &mesh);
 
-template <TopologyLevel Level, class Extents>
+template <TopologyLevel S, class Extents>
 CUTE_HOST_DEVICE constexpr auto make_mesh(Extents const &extents);
 ```
 <!-- /generated -->
 
-**Terms.** The terms are those of [shard §0](../../../../../../docs/spec/shard.md#0-terms). A *slice* is a mesh whose layout has a constant term. It covers part of a topology level, and starts at that term. A *warped* mesh is a thread mesh whose ids run a whole number of warps. Its *lane* mesh axis is one warp. Its *warp* mesh axis steps between warps.
+**Terms.** The terms are those of [shard §0](../../../../../../docs/spec/shard.md#0-terms). A *slice* is a mesh whose layout has a constant term. It covers part of a topology, and starts at that term. A *warped* mesh is a thread mesh whose ids run a whole number of warps. Its *lane* mesh axis is one warp. Its *warp* mesh axis steps between warps.
 
 - constraints:
-  - A mesh is the topology levels it names and a layout whose values are their ids. The IR `Mesh` carries the same two facts beside its mesh axis names ([shard §5](../../../../../../docs/spec/shard.md#5-mesh)). The unit count and shape of a mesh are `cute::size` and `cute::shape` of its layout. Both read through a slice on their own.
-  - A mesh that names several topology levels groups its mesh axes, one nest per level. The layout maps a coord to the index of a unit over all levels of the mesh. That index runs over `T`, the `topology_size` of each level, row-major. The nest of one level is `cute::get` of the layout at that level. Its strides stay in that index. The unit id of a level at an index is `cute::idx2crd` of the index over `T`, read at that level. The outermost level keeps the quotient, so its `topology_size` is not read. A mesh that names several levels without that grouping is refused. No rule says which mesh axes belong to which level. A slice of such a mesh counts each level from the unit id of its first unit. `contains` and `mesh_coords` read such a slice. The CUDA mesh emission does not emit it, and refuses it by name.
-  - `mesh_coords` gives the coord of this unit in the mesh. It holds one `idx2crd` per level. Each one takes the id of that level less its id at the first unit. It multiplies that by the stride of the level in `T` and reads it against the nest of that level. The grouping is the grouping of the mesh. The result is congruent with `cute::shape` of the mesh layout, whether the mesh names one level or several. A layout over that shape therefore indexes with it as it stands. It reads `unit_ids()`, one id for each level that this program names. A coord of another length is refused by name.
-  - `contains` and `mesh_coords` ask different questions. On a mesh narrower than its level, they also give different answers. `idx2crd` is `(id / stride) % extent`. Thread 64 of a 128-thread block is therefore not in a 32-unit mesh. It does act as unit 0 of that mesh. The upper warps repeat what the lowest warp does. A slice does not repeat. A coord from outside a slice that reaches `mesh_coords` is a codegen fault. `contains` asks every level that the mesh names, each against its own nest. A mesh with one nest per level is one unit per level together.
+  - A mesh is the topologies it names and a layout whose values are their ids. The IR `Mesh` carries the same two facts beside its mesh axis names ([shard §5](../../../../../../docs/spec/shard.md#5-mesh)). The unit count and shape of a mesh are `cute::size` and `cute::shape` of its layout. Both read through a slice on their own.
+  - A mesh that names several topologies groups its mesh axes, one nest per topology. The layout maps a coord to the index of a unit over all topologies of the mesh. That index runs over `T`, the `topology_size` of each topology, row-major. The nest of one topology is `cute::get` of the layout at that topology. Its strides stay in that index. The unit id of a topology at an index is `cute::idx2crd` of the index over `T`, read at that topology. The outermost topology keeps the quotient, so its `topology_size` is not read. A mesh that names several topologies without that grouping is refused. No rule says which mesh axes belong to which topology. A slice of such a mesh counts each topology from the unit id of its first unit. `contains` and `mesh_coords` read such a slice. The CUDA mesh emission does not emit it, and refuses it by name.
+  - `mesh_coords` gives the coord of this unit in the mesh. It holds one `idx2crd` per topology. Each one takes the id of that topology less its id at the first unit. It multiplies that by the stride of the topology in `T` and reads it against the nest of that topology. The grouping is the grouping of the mesh. The result is congruent with `cute::shape` of the mesh layout, whether the mesh names one topology or several. A layout over that shape therefore indexes with it as it stands. It reads `unit_ids()`, one id for each topology that this program names. A coord of another length is refused by name.
+  - `contains` and `mesh_coords` ask different questions. On a mesh narrower than its topology, they also give different answers. `idx2crd` is `(id / stride) % extent`. Thread 64 of a 128-thread block is therefore not in a 32-unit mesh. It does act as unit 0 of that mesh. The upper warps repeat what the lowest warp does. A slice does not repeat. A coord from outside a slice that reaches `mesh_coords` is a codegen fault. `contains` asks every topology that the mesh names, each against its own nest. A mesh with one nest per topology is one unit per topology together.
   - A thread mesh has warps only when its ids run a whole number of warps. `(32,..)` stepping by one is one warp. The mesh axis beyond it carries the warps. `(128,..)` holds four warps, and `as_warped` splits them out. Lanes shorter than a warp, repeated across warps, MUST be refused by name. Such lanes reach neither `bar.sync`, which counts whole warps, nor one `__syncwarp`.
   - `as_warped` is idempotent: a mesh whose fastest axis is already one warp comes back unchanged.
   - Only one shape of `cute::ComposedLayout` is a mesh: `cute::identity` over a static offset. A swizzle in the first slot, or a dynamic offset, gives a first unit that is not a compile-time number. `ops::sync` names its threads by the index of the first unit, so it refuses such a mesh by name.
-  - The offset MUST NOT be dropped. A mesh layout maps a coord to a unit *within* the mesh. Only the offset turns that into a unit of the launch. A coord read off a raw id gives every unit of a slice the box that its neighbour owns. A plain `cute::Layout` is the whole level at offset zero.
+  - The offset MUST NOT be dropped. A mesh layout maps a coord to a unit *within* the mesh. Only the offset turns that into a unit of the launch. A coord read off a raw id gives every unit of a slice the box that its neighbour owns. A plain `cute::Layout` is the whole topology at offset zero.
 
 #### 2.3.3 `layout/shard_layout.cuh`
 
@@ -231,8 +231,8 @@ template <class T> CUTE_HOST_DEVICE constexpr int shard_mesh_units();
   - A composed layout takes that path even when no mesh axis splits it. The composed path reconstructs the declared function and the unit offset over the engine pointer, including when every mesh attribute broadcasts.
   - `local_tensor`, `local_view_t` and `ShardTensorLike` are public. A step that every op takes is not an implementation detail. The word that an op writes its constraints in is not one either. `is_shard_tensor` decides `ShardTensorLike`. Nothing outside needs it, so it stays in `detail`.
   - A tensor whose layout is a `ShardLayout` has distributed semantics. It is the whole tensor. Each unit owns the slice that its shard layout gives it.
-  - A shard layout has one attr per mesh axis, counted over the flattened mesh axes. A mesh that names several levels groups its mesh axes, one nest per level. The rank of that mesh is the number of levels it names, not the number of mesh axes that the attrs cover.
-  - Several mesh axes MAY cut one tensor axis. They can be two mesh axes of one level, as a grid. They can be two levels, where one takes a block of what the other left. Each cut divides what the previous cut left. The local extent of the tensor axis is the whole extent divided by all cuts. One step of a mesh axis clears everything that the mesh axes inside it hold.
+  - A shard layout has one attr per mesh axis, counted over the flattened mesh axes. A mesh that names several topologies groups its mesh axes, one nest per topology. The rank of that mesh is the number of topologies it names, not the number of mesh axes that the attrs cover.
+  - Several mesh axes MAY cut one tensor axis. They can be two mesh axes of one topology, as a grid. They can be two topologies, where one takes a block of what the other left. Each cut divides what the previous cut left. The local extent of the tensor axis is the whole extent divided by all cuts. One step of a mesh axis clears everything that the mesh axes inside it hold.
   - The origin of the slice of a unit is read from a value that has the shape of the mesh. On each mesh axis, it holds how far one step moves the origin along the tensor. The attrs say which tensor axis a step clears, and how much of it. The tensor layout says what that costs in elements. The value is congruent with the shape of the mesh, grouping included. `mesh_coords` therefore indexes it as it stands, and reading it is `crd2idx`. The value is not the index `layout(0)` of the first unit that a sliced mesh covers.
 
 ### 2.5 `cuda/primitive/`

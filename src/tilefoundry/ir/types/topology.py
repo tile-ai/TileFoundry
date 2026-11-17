@@ -21,7 +21,7 @@ class Topology:
             raise ValueError(
                 f"Topology {self.name!r}: extent must be explicit; None is not "
                 "a ShapeDim. The rule: "
-                "tilefoundry spec target topology-levels"
+                "tilefoundry spec target topologies"
             )
 
 

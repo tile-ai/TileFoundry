@@ -12,7 +12,7 @@ template <>
 CUTE_HOST_DEVICE constexpr auto topology_size<TopologyLevel::cta>() noexcept {
     return cute::Int<8>{};
 }
-/// A launch-provided size, for the case that puts it inside another level.
+/// A launch-provided size, for the case that puts it inside another topology.
 template <>
 CUTE_HOST_DEVICE constexpr auto topology_size<TopologyLevel::gpu>() noexcept {
     return 2;
@@ -117,7 +117,7 @@ __global__ void k() {
         cute::Layout<cute::Shape<cute::Int<2>, cute::Int<32>>,
                      cute::Stride<cute::Int<64>, cute::Int<1>>>;
     using sparse_mesh = Mesh<sparse_layout, TopologyLevel::thread>;
-    /// One id per level this program names, as unit_ids() gives: cta,
+    /// One id per topology this program names, as unit_ids() gives: cta,
     /// thread.
     constexpr auto sparse_ids = cute::make_tuple(0, 0);
     static_assert(
@@ -133,8 +133,8 @@ __global__ void k() {
     static_assert(!tilefoundry::contains(sparse_mesh{sparse_layout{}},
                                          cute::make_tuple(0, 96)));
 
-    /// A mesh naming two levels: grouped one nest per level, strides in the
-    /// index over both. The thread level declares 256 units and the mesh
+    /// A mesh naming two topologies: grouped one nest per topology, strides in
+    /// the index over both. The thread topology declares 256 units and the mesh
     /// selects 32 of them, so the CTA strides step by 256 threads: (512, 256).
 
     using grouped =
@@ -149,7 +149,7 @@ __global__ void k() {
     static_assert(int(cute::size(cta)) == 8, "8 CTAs");
     static_assert(int(cute::get<0>(cute::stride(cta))) == 512 &&
                       int(cute::get<1>(cute::stride(cta))) == 256,
-                  "the CTA strides stay in the index over both levels");
+                  "the CTA strides stay in the index over both topologies");
     static_assert(int(cute::size(thread{}.layout)) == 32, "32 threads");
     static_assert(tilefoundry::is_warped(thread{}), "and that is one warp");
     static_assert(tilefoundry::contains(mesh{}, cute::make_tuple(7, 31)),
@@ -312,7 +312,7 @@ __global__ void k(float *p) {
     float a = p[0], b = 0.f;
     using wlayout =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
-    using wmesh = Mesh<wlayout, TopologyLevel::level_count>;
+    using wmesh = Mesh<wlayout, TopologyLevel::topology_count>;
     wmesh mesh{wlayout{}};
     auto sl = cute::make_layout(cute::make_shape(cute::Int<32>{}));
     auto dl = cute::make_layout(cute::make_shape(cute::Int<1>{}));
@@ -425,7 +425,7 @@ namespace case_19 {
 __global__ void k() {
     using wlayout =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
-    Mesh<wlayout, TopologyLevel::level_count> mesh{wlayout{}};
+    Mesh<wlayout, TopologyLevel::topology_count> mesh{wlayout{}};
     sync(mesh);
 }
 }
@@ -492,7 +492,7 @@ void use() { (void)&k<>; }
 #endif
 #if CASE == 26 || CASE == ALL
 namespace case_26 {
-/// The level a mesh does not name.
+/// The topology a mesh does not name.
 template <class D = void> __global__ void k() {
     using mesh = dep_t<Mesh<cute::Layout<cute::Shape<cute::Int<32>>,
                                          cute::Stride<cute::Int<1>>>,

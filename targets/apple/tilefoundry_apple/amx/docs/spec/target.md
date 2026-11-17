@@ -19,7 +19,7 @@ class Architecture(target.Architecture):
 - constraints:
   - `name` MUST be the architecture identity used by AMX compilation.
   - amx.Architecture MUST own the supported compute DTypes and instruction capabilities.
-    AMX capabilities MUST NOT introduce a separate program topology level.
+    AMX capabilities MUST NOT introduce a separate program topology.
     The modelled atom catalogue MAY be narrower than the supported compute DTypes.
   - amx.Architecture MUST own the X/Y staging and Z accumulator register files. They are
     ISA geometry, so every part carrying this coprocessor shares them and a
@@ -29,7 +29,7 @@ class Architecture(target.Architecture):
     CPU thread. This does not imply one physical AMX engine per thread.
   - Product- and frequency-dependent throughput values MUST NOT be stored on
     amx.Architecture.
-  - AMX has no CTA thread level, so amx.Architecture MUST carry no CTA thread limit.
+  - AMX has no CTA or thread topology, so amx.Architecture MUST carry no CTA thread limit.
   - No field MAY carry a default: every value comes from the installed
     document ([target §10](../../../../../../docs/spec/target.md#10-installed-hardware-resources)).
 
@@ -137,8 +137,8 @@ class Target(target.Target):
   - Declared extents MUST be positive and bounded by that limit, including the
     complete admitted range of a symbolic extent. `amx` MUST be rejected as a
     topology name. Memory execution MUST use the same `thread` vocabulary.
-  - Unsupported topology levels MUST raise an actionable error naming the
-    supported levels. `validate_program_topology` is the core Target's, which reads these Facts.
+  - Unsupported topologies MUST raise an actionable error naming the
+    supported topologies. `validate_program_topology` is the core Target's, which reads these Facts.
 
 
 ## Full instruction catalogue

@@ -1,7 +1,7 @@
-/// A mesh: the hardware levels it names, and one CuTe layout whose value at a
-/// coord is the unit's index over all those levels, ``T`` the levels' sizes
-/// row-major. A level's unit id at an index is ``idx2crd`` of it over ``T``.
-/// The C++ half of [shard §5](docs/spec/shard.md#5-mesh).
+/// A mesh: the hardware topologies it names, and one CuTe layout whose value at
+/// a coord is the unit's index over all those topologies, ``T`` the topologies'
+/// sizes row-major. A topology's unit id at an index is ``idx2crd`` of it over
+/// ``T``. The C++ half of [shard §5](docs/spec/shard.md#5-mesh).
 ///
 /// The struct carries the two fields and nothing else. Everything asked of a
 /// mesh is either a CuTe question about that layout -- ``cute::size`` /
@@ -11,41 +11,42 @@
 
 namespace detail {
 /// The pack's own first value. Reading it off ``decltype(tuple){}`` instead
-/// hands back the zeroth enumerator, which is a different level.
-template <TopologyLevel T0, TopologyLevel...> struct first_level {
+/// hands back the zeroth enumerator, which is a different topology.
+template <TopologyLevel T0, TopologyLevel...> struct first_topology_of {
     static constexpr TopologyLevel value = T0;
 };
 }
 
-/// The levels, and the layout whose values are indices over all of them. How
-/// many units a level has is the launch's, not the mesh's: one .cu is one
-/// launch, so
-/// ``topology_size<level>()`` states it and the same mesh in another
+/// The topologies, and the layout whose values are indices over all of them.
+/// How many units a topology has is the launch's, not the mesh's: one .cu is
+/// one launch, so
+/// ``topology_size<topology>()`` states it and the same mesh in another
 /// translation unit is another launch's mesh.
 template <class TLayout, TopologyLevel... Topos> struct Mesh {
     using layout_type = TLayout;
-    static constexpr int level_count = sizeof...(Topos);
-    static constexpr TopologyLevel level = detail::first_level<Topos...>::value;
+    static constexpr int topology_count = sizeof...(Topos);
+    static constexpr TopologyLevel first_topology =
+        detail::first_topology_of<Topos...>::value;
     TLayout layout;
 
-    /// The topology level flat axis ``I`` runs at. A mesh naming one level
-    /// answers its own level for every axis. A mesh naming several
-    /// groups its layout one nest per level, and the nest holding
-    /// flat axis ``I`` states its level.
+    /// The topology flat axis ``I`` runs at. A mesh naming one topology
+    /// answers its own topology for every axis. A mesh naming several
+    /// groups its layout one nest per topology, and the nest holding
+    /// flat axis ``I`` states its topology.
     template <int I>
-    CUTE_HOST_DEVICE static constexpr TopologyLevel axis_level() {
+    CUTE_HOST_DEVICE static constexpr TopologyLevel mesh_axis_topology() {
         if constexpr (sizeof...(Topos) == 1) {
-            return level;
+            return first_topology;
         } else {
-            constexpr TopologyLevel levels[] = {Topos...};
-            TopologyLevel found = level;
+            constexpr TopologyLevel topologies[] = {Topos...};
+            TopologyLevel found = first_topology;
             int first = 0;
             [&]<size_t... Ls>(std::index_sequence<Ls...>) {
                 (([&] {
                      constexpr int width =
                          int(cute::rank(cute::get<Ls>(cute::shape(TLayout{}))));
                      if (I >= first && I < first + width)
-                         found = levels[Ls];
+                         found = topologies[Ls];
                      first += width;
                  }()),
                  ...);
@@ -57,9 +58,9 @@ template <class TLayout, TopologyLevel... Topos> struct Mesh {
 
 namespace detail {
 
-/// Where ``S`` sits in the pack, and ``sizeof...`` when it names no level.
+/// Where ``S`` sits in the pack, and ``sizeof...`` when it names no topology.
 template <TopologyLevel S, TopologyLevel... Ts>
-CUTE_HOST_DEVICE constexpr int level_index() {
+CUTE_HOST_DEVICE constexpr int topology_level_of() {
     constexpr bool hit[] = {(Ts == S)...};
     for (int i = 0; i < int(sizeof...(Ts)); ++i)
         if (hit[i])
@@ -84,15 +85,15 @@ template <class L> CUTE_HOST_DEVICE constexpr auto id_axes(L const &l) {
     return cute::filter(reverse(cute::flatten(plain_layout(l))));
 }
 
-/// The mode of the mesh's layout that holds level ``S``'s axes:
+/// The mode of the mesh's layout that holds topology ``S``'s axes:
 /// ``cute::get<at>`` of the plain layout, strides in the index over all the
-/// mesh's levels. A mesh naming one level states its axes ungrouped, so its
-/// whole plain layout is that mode.
+/// mesh's topologies. A mesh naming one topology states its axes ungrouped, so
+/// its whole plain layout is that mode.
 template <TopologyLevel S, class L, TopologyLevel... Topos>
 CUTE_HOST_DEVICE constexpr auto topology_mode(Mesh<L, Topos...> const &mesh) {
-    constexpr int at = level_index<S, Topos...>();
+    constexpr int at = topology_level_of<S, Topos...>();
     static_assert(at < int(sizeof...(Topos)),
-                  "topology_mode: this mesh does not name that level");
+                  "topology_mode: this mesh does not name that topology");
     if constexpr (sizeof...(Topos) == 1)
         return plain_layout(mesh.layout);
     else if constexpr (at < int(sizeof...(Topos)))
@@ -101,7 +102,7 @@ CUTE_HOST_DEVICE constexpr auto topology_mode(Mesh<L, Topos...> const &mesh) {
         return plain_layout(mesh.layout);
 }
 
-/// The shape of ``T``, the index over the mesh's levels. The outermost
+/// The shape of ``T``, the index over the mesh's topologies. The outermost
 /// size is never read: no stride holds it, and ``idx2crd`` keeps the
 /// outermost quotient. A run-time 1 stands for it, so a translation unit
 /// need not state it.
@@ -110,14 +111,14 @@ CUTE_HOST_DEVICE constexpr auto index_shape() {
     return cute::make_shape(1, topology_size<Inner>()...);
 }
 
-/// ``stride(T)``: each level's stride in the index, row-major.
+/// ``stride(T)``: each topology's stride in the index, row-major.
 template <TopologyLevel... Topos>
-CUTE_HOST_DEVICE constexpr auto level_strides() {
+CUTE_HOST_DEVICE constexpr auto topology_strides() {
     return cute::compact_row_major(index_shape<Topos...>());
 }
 
-/// Each level's unit id at the mesh's first unit: ``idx2crd(layout(0), T)``
-/// in its two-argument form, row-major, so the outermost level keeps the
+/// Each topology's unit id at the mesh's first unit: ``idx2crd(layout(0), T)``
+/// in its two-argument form, row-major, so the outermost topology keeps the
 /// quotient. A plain layout starts at index 0, every id 0.
 template <class L, TopologyLevel... Topos>
 CUTE_HOST_DEVICE constexpr auto first_ids(Mesh<L, Topos...> const &mesh) {
@@ -129,34 +130,34 @@ CUTE_HOST_DEVICE constexpr auto first_ids(Mesh<L, Topos...> const &mesh) {
                           cute::reverse(index_shape<Topos...>())));
 }
 
-/// Level ``S``'s unit id at the mesh's first unit.
+/// Topology ``S``'s unit id at the mesh's first unit.
 template <TopologyLevel S, class L, TopologyLevel... Topos>
 CUTE_HOST_DEVICE constexpr int first_id(Mesh<L, Topos...> const &mesh) {
-    return int(cute::get<level_index<S, Topos...>()>(first_ids(mesh)));
+    return int(cute::get<topology_level_of<S, Topos...>()>(first_ids(mesh)));
 }
 
-/// A coord states one id per level this program names, coarsest first,
+/// A coord states one id per topology this program names, coarsest first,
 /// which is what ``unit_ids()`` hands back. A shorter one is missing a
-/// level rather than naming a smaller mesh, and reads a neighbour's id if
+/// topology rather than naming a smaller mesh, and reads a neighbour's id if
 /// left to index.
-template <class Coord> CUTE_HOST_DEVICE constexpr void one_id_per_level() {
+template <class Coord> CUTE_HOST_DEVICE constexpr void one_id_per_topology() {
     static_assert(cute::tuple_size<cute::remove_cvref_t<Coord>>::value ==
                       size_t(cute::rank(program_topologies())),
-                  "coord: one id per level named, as unit_ids() gives");
+                  "coord: one id per topology named, as unit_ids() gives");
 }
 
-/// Level ``S``'s id in ``coord``, counted from the mesh's first unit and
+/// Topology ``S``'s id in ``coord``, counted from the mesh's first unit and
 /// stepped by ``S``'s stride in ``T``: an index ``S``'s mode can read back.
 template <TopologyLevel S, class L, TopologyLevel... Topos, class Coord>
 CUTE_HOST_DEVICE constexpr int id_index(Mesh<L, Topos...> const &mesh,
                                         Coord const &coord) {
-    constexpr int t = level_index<S, Topos...>();
+    constexpr int t = topology_level_of<S, Topos...>();
     constexpr auto at = cute::find(program_topologies(), cute::C<S>{});
     return (int(cute::get<at>(coord)) - first_id<S>(mesh)) *
-           int(cute::get<t>(level_strides<Topos...>()));
+           int(cute::get<t>(topology_strides<Topos...>()));
 }
 
-/// Whether level ``S``'s mode reaches the id ``coord`` gives ``S``.
+/// Whether topology ``S``'s mode reaches the id ``coord`` gives ``S``.
 template <TopologyLevel S, class L, TopologyLevel... Topos, class Coord>
 CUTE_HOST_DEVICE constexpr bool covers(Mesh<L, Topos...> const &mesh,
                                        Coord const &coord) {
@@ -173,21 +174,21 @@ CUTE_HOST_DEVICE constexpr bool covers(Mesh<L, Topos...> const &mesh,
 
 /// Whether ``coord`` names a unit of ``mesh``.
 ///
-/// The coord is one id per level named, which is what ``unit_ids()``
-/// hands back. Each level the mesh names is read alone, in its own mode
-/// with its strides in the index over all the mesh's levels, and has to
+/// The coord is one id per topology named, which is what ``unit_ids()``
+/// hands back. Each topology the mesh names is read alone, in its own mode
+/// with its strides in the index over all the mesh's topologies, and has to
 /// cover its own id.
 template <class L, TopologyLevel... Topos, class Coord>
 CUTE_HOST_DEVICE constexpr bool contains(Mesh<L, Topos...> const &mesh,
                                          Coord const &coord) {
-    detail::one_id_per_level<Coord>();
+    detail::one_id_per_topology<Coord>();
     return (detail::covers<Topos>(mesh, coord) && ...);
 }
 
 /// Which unit ``coord`` acts as, in the mesh's own coordinates.
 ///
-/// One ``idx2crd`` per level through that level's mode, grouped the way the
-/// mesh is, so the answer is congruent with ``shape(mesh.layout)``.
+/// One ``idx2crd`` per topology through that topology's mode, grouped the way
+/// the mesh is, so the answer is congruent with ``shape(mesh.layout)``.
 ///
 /// Not ``contains``: ``idx2crd`` is ``(id / stride) % extent``, so thread 64
 /// of a 128-thread block acts as unit 0 of a 32-unit mesh it is not
@@ -196,7 +197,7 @@ CUTE_HOST_DEVICE constexpr bool contains(Mesh<L, Topos...> const &mesh,
 template <class L, TopologyLevel... Topos, class Coord>
 CUTE_HOST_DEVICE constexpr auto mesh_coords(Mesh<L, Topos...> const &mesh,
                                             Coord const &coord) {
-    detail::one_id_per_level<Coord>();
+    detail::one_id_per_topology<Coord>();
     if constexpr (cute::is_composed_layout<cute::remove_cvref_t<L>>::value)
         assert(contains(mesh, coord));
     if constexpr (sizeof...(Topos) > 1)
@@ -205,8 +206,8 @@ CUTE_HOST_DEVICE constexpr auto mesh_coords(Mesh<L, Topos...> const &mesh,
                 detail::id_index<Topos>(mesh, coord))...);
     else
         return detail::plain_layout(mesh.layout)
-            .get_hier_coord(
-                detail::id_index<Mesh<L, Topos...>::level>(mesh, coord));
+            .get_hier_coord(detail::id_index<Mesh<L, Topos...>::first_topology>(
+                mesh, coord));
 }
 
 /// Whether the mesh's ids say where the warps are.
@@ -263,16 +264,16 @@ CUTE_HOST_DEVICE constexpr auto as_warped(Mesh<L, Topos...> const &mesh) {
 }
 
 /// A mesh over ``extents``, row-major, as the Python ``make_mesh`` builds one.
-template <TopologyLevel Level, class Extents>
+template <TopologyLevel S, class Extents>
 CUTE_HOST_DEVICE constexpr auto make_mesh(Extents const &extents) {
-    static_assert(Level == TopologyLevel::cta || Level == TopologyLevel::thread,
-                  "make_mesh: topology level must be cta or thread");
+    static_assert(S == TopologyLevel::cta || S == TopologyLevel::thread,
+                  "make_mesh: topology must be cta or thread");
     auto layout = cute::make_layout(extents, cute::GenRowMajor{});
-    using level_t = cute::remove_cvref_t<decltype(topology_size<Level>())>;
+    using size_type = cute::remove_cvref_t<decltype(topology_size<S>())>;
     if constexpr (cute::is_static<Extents>::value &&
-                  cute::is_static<level_t>::value)
+                  cute::is_static<size_type>::value)
         static_assert(int(decltype(cute::size(layout))::value) <=
-                          int(level_t{}),
-                      "make_mesh: a mesh cannot exceed its topology level");
-    return Mesh<decltype(layout), Level>{layout};
+                          int(size_type{}),
+                      "make_mesh: a mesh cannot exceed its topology");
+    return Mesh<decltype(layout), S>{layout};
 }

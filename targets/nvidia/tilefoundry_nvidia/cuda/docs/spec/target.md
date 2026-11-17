@@ -69,19 +69,19 @@ class Target(target.Target):
     getters. These selections MUST NOT use `Target.name`, an exact-concrete-type
     table, or a second extension registration.
   - `device_count`, when given, MUST be a positive `int`. `None` admits any
-    extent at the `gpu` level. `topology_limit("gpu")` is `device_count`, or 1
+    extent at the `gpu` topology. `topology_limit("gpu")` is `device_count`, or 1
     when it is `None`.
   - `get_analyzer("sync")` returns the `sync` family ([analysis
     §1](./analysis.md#1-sync)). That family requires `memory`. Every other
     selector is the base Target's.
   - CUDA's `ThroughputFacts` and `PerformanceServiceFacts` MUST both read
     `rates(target, unit, active)`. It is the one source of CUDA rates. It gives
-    what `active` units of `unit` get through together. A query is a level name
-    or `(level, active, inflight)`. `active` counts only at `cta`. There it MUST
-    be capped at the units the deployment holds. Any other level runs all of its
-    units. A bare level runs all of its units. `inflight` is the bytes one CTA
+    what `active` units of `unit` get through together. A query is a topology name
+    or `(topology, active, inflight)`. `active` counts only at `cta`. There it MUST
+    be capped at the units the deployment holds. Any other topology runs all of its
+    units. A bare topology runs all of its units. `inflight` is the bytes one CTA
     keeps in flight for the access being priced. `ThroughputFacts` is `rates`
-    itself. It covers the whole deployment when asked about no level.
+    itself. It covers the whole deployment when asked about no topology.
     `PerformanceServiceFacts` is `rates` divided by `active`, rounding down.
     CUDA MUST name its default unit `cta`. `TopologyLimits.max_physical_units`
     MUST NOT enter this derivation.
@@ -108,7 +108,7 @@ class Target(target.Target):
     override `__repr__`.
   - The target MUST project the store the threads of one CTA cooperate in as
     `architecture.shared_memory_per_cta_bytes`. It MUST report that store as
-    belonging to the `cta` scope, even when the level being asked about is
+    belonging to the `cta` scope, even when the topology being asked about is
     `thread`.
   - The target MUST project the tensor-memory level with
     `architecture.tensor_memory_per_cta_bytes` only where the architecture
@@ -116,30 +116,30 @@ class Target(target.Target):
     architecture states `None`. A level for hardware with no such store would
     offer a plan accumulator space that does not exist.
 
-#### Topology levels
+#### Topologies
 
-A target's topology levels define the names a program may declare. The program hierarchy
-stops at those levels. Thread mesh layouts hold warp, lane, and warpgroup structure.
+A target's topologies define the names a program may declare. The program hierarchy
+stops at those topologies. Thread mesh layouts hold warp, lane, and warpgroup structure.
 
 - constraints:
   - `get_facts(TopologyFacts).topologies` MUST name `("gpu", "cta", "thread")`,
     outermost first. A program names `gpu` when its data is divided across
     cards.
-  - A topology level whose `from_target` is set takes its extent and its unit
+  - A topology whose `from_target` is set takes its extent and its unit
     ids from the target instance. It does not take them from the hardware
-    document or a register. `"gpu"` MUST be the only CUDA level that sets it.
-  - A declared program topology name MUST be one of the levels its target
+    document or a register. `"gpu"` MUST be the only CUDA topology that sets it.
+  - A declared program topology name MUST be one of the topologies its target
     states. A name outside that set MUST be refused. The refusal MUST name the
-    levels the target declares.
+    topologies the target declares.
   - `get_facts(TopologyLimits, "cta").max_logical_units` MUST be `None`. The
     CUDA grid is a launch shape, not an SM allocation, so its static extent is
     unbounded here. The `"thread"` Facts projection MUST equal
     `architecture.max_threads_per_cta`.
   - `Topology.size` MUST be an explicit `ShapeDim`. Construction with `None`
-    MUST fail for every topology level.
+    MUST fail for every topology.
   - Static declared topology extents MUST be positive integers within their
     target resource limits.
-  - Unsupported topology levels MUST fail at the generic lowering boundary.
+  - Unsupported topologies MUST fail at the generic lowering boundary.
 
 #### Instruction support and execution resources
 
@@ -355,7 +355,7 @@ class Device(target.Device):
     product. A substituted figure would not be.
   - `gmem_owner` MUST be `gpu`. Each card's global memory belongs to that card.
     A `gpu`-level `Split` on gmem is therefore private. Moving it between cards
-    is communication. The levels below `gpu` share the card's allocation.
+    is communication. The topologies below `gpu` share the card's allocation.
   - The `memory.hbm.*` facts and the `hbm_*` fields describe the device's global
     memory, whatever its technology. A product whose global memory is not HBM
     records its figures there. It names the technology in `conditions`.

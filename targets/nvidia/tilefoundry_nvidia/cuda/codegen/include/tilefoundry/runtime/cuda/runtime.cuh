@@ -30,21 +30,21 @@ inline constexpr int kWarpSize = 32;
 /// A ``false`` that only the compiler's instantiation of a template can see.
 template <class...> inline constexpr bool dependent_false_v = false;
 
-/// Program topology levels and sentinel.
+/// Program topologies and sentinel.
 enum class TopologyLevel {
     gpu,
     cta,
     thread,
-    level_count,
+    topology_count,
 };
 
-/// How many units the launch gives topology level L. One .cu is one launch,
+/// How many units the launch gives topology L. One .cu is one launch,
 /// so each states its own; a launch-provided grid states it at run time.
 template <TopologyLevel L>
 CUTE_HOST_DEVICE constexpr auto topology_size() noexcept;
 
 namespace detail {
-/// Start and every level under it, coarsest first, one constant each. A
+/// Start and every topology under it, coarsest first, one constant each. A
 /// tuple rather than a count, so that how many there are and where one
 /// sits are cute::rank and cute::find instead of arithmetic of our own.
 template <TopologyLevel Start, size_t... Is>
@@ -56,14 +56,15 @@ topologies_from(std::index_sequence<Is...>) noexcept {
 template <TopologyLevel Start>
 CUTE_HOST_DEVICE constexpr auto topologies_from() noexcept {
     return topologies_from<Start>(
-        std::make_index_sequence<size_t(int(TopologyLevel::level_count) -
+        std::make_index_sequence<size_t(int(TopologyLevel::topology_count) -
                                         int(Start))>{});
 }
 }
 
-/// Level L and every level under it, one mode each. A mesh naming several
-/// levels is indexed against this shape: an axis belongs to the level whose
-/// extents its own multiply up to, and a stride counts the levels below it.
+/// Topology L and every topology under it, one mode each. A mesh naming several
+/// topologies is indexed against this shape: an axis belongs to the topology
+/// whose extents its own multiply up to, and a stride counts the topologies
+/// below it.
 ///
 /// Each count is a dependent call, so the counts are read where the shape is
 /// asked for and not where it is written -- a translation unit states them
@@ -75,14 +76,14 @@ CUTE_HOST_DEVICE constexpr auto topology_shape() noexcept {
         []<TopologyLevel S>(cute::C<S>) { return topology_size<S>(); });
 }
 
-/// The coarsest level this program names. It names a contiguous run of them
+/// The coarsest topology this program names. It names a contiguous run of them
 /// ending at the finest, so this one end says which: a single-card program
 /// says ``cta`` and has no ``gpu`` at all.
 ///
 /// A translation unit states it by defining TILEFOUNDRY_PROGRAM_TOPOLOGY
 /// before this header, the way the target macro selects a runtime. A macro
-/// rather than a function the .cu defines, because the levels decide how long
-/// a coord is and a length is read while this header is compiled.
+/// rather than a function the .cu defines, because the topologies decide how
+/// long a coord is and a length is read while this header is compiled.
 #if !defined(TILEFOUNDRY_PROGRAM_TOPOLOGY)
 #define TILEFOUNDRY_PROGRAM_TOPOLOGY tilefoundry::TopologyLevel::cta
 #endif
@@ -91,9 +92,9 @@ CUTE_HOST_DEVICE constexpr TopologyLevel program_topology() noexcept {
     return TILEFOUNDRY_PROGRAM_TOPOLOGY;
 }
 
-/// The topology levels this program names, coarsest first.
+/// The topologies this program names, coarsest first.
 ///
-/// How many there are is cute::rank of it, and where level S sits among them
+/// How many there are is cute::rank of it, and where topology S sits among them
 /// is cute::find(program_topologies(), cute::C<S>{}) -- both are questions
 /// CuTe already answers about a tuple, so neither has a name of its own.
 CUTE_HOST_DEVICE constexpr auto program_topologies() noexcept {
@@ -105,11 +106,11 @@ CUTE_HOST_DEVICE constexpr auto program_topologies() noexcept {
  *
  * A card has no register naming which of the mesh's cards it is, so the host
  * that placed it says so. Indexed by TopologyLevel, so a slot says which
- * level it answers for; levels the device reads for itself leave theirs
- * unused. Only a program that names such a level is given one.
+ * topology it answers for; topologies the device reads for itself leave theirs
+ * unused. Only a program that names such a topology is given one.
  */
 struct Placement {
-    int unit_id[int(TopologyLevel::level_count)];
+    int unit_id[int(TopologyLevel::topology_count)];
 };
 
 /**
@@ -144,7 +145,7 @@ CUTE_HOST_DEVICE void placement(Placement const &given) {
 #endif
 }
 
-/// The unit id within topology level L.
+/// The unit id within topology L.
 template <TopologyLevel L> CUTE_HOST_DEVICE size_t unit_id() noexcept {
     static_assert(L == TopologyLevel::gpu || L == TopologyLevel::cta ||
                       L == TopologyLevel::thread,
@@ -165,14 +166,14 @@ template <TopologyLevel L> CUTE_HOST_DEVICE size_t unit_id() noexcept {
 }
 
 namespace detail {
-/// One id per level this program names, from the coarsest it names inward.
+/// One id per topology this program names, from the coarsest it names inward.
 template <TopologyLevel Start, size_t... Is>
 CUTE_HOST_DEVICE auto ids_of(std::index_sequence<Is...>) noexcept {
     return cute::make_tuple(unit_id<TopologyLevel(int(Start) + int(Is))>()...);
 }
 }
 
-/// Every level's id, indexed the way program_topologies() is.
+/// Every topology's id, indexed the way program_topologies() is.
 CUTE_HOST_DEVICE auto unit_ids() noexcept {
     return detail::ids_of<program_topology()>(
         std::make_index_sequence<size_t(cute::rank(program_topologies()))>{});

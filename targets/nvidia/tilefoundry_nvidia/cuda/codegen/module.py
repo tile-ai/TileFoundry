@@ -200,13 +200,13 @@ def topology_sizes(geometry: Geometry) -> list[dict[str, str]]:
     dims = []
     static_grid = tuple(expr.static_dim_value(value) for value in grid)
     if all(value is not None for value in static_grid):
-        dims.append({"level": topology_enumerator("cta"), "count": str(math.prod(static_grid))})
+        dims.append({"topology": topology_enumerator("cta"), "count": str(math.prod(static_grid))})
     elif static_grid[1:] != (1, 1):
         raise ValueError("codegen: only grid.x may be a host-computed dynamic expression")
     static_block = tuple(expr.static_dim_value(value) for value in block)
     if any(value is None for value in static_block):
         raise ValueError("codegen: thread topology extents must be compile-time constants")
-    dims.append({"level": topology_enumerator("thread"), "count": str(math.prod(static_block))})
+    dims.append({"topology": topology_enumerator("thread"), "count": str(math.prod(static_block))})
     return dims
 
 

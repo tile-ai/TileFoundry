@@ -45,12 +45,12 @@ template <Tier, class...> CUTE_HOST_DEVICE constexpr void reject();
 
 /// How many units a mesh covers, as a compile-time number.
 ///
-/// One level, because every tier below names threads of one block -- a
-/// barrier counts those, and a mesh naming a coarser level counts programs
+/// One topology, because every tier below names threads of one block -- a
+/// barrier counts those, and a mesh naming a coarser topology counts programs
 /// no barrier here reaches.
 template <class TMesh> CUTE_HOST_DEVICE constexpr int units() {
-    static_assert(TMesh::level_count == 1,
-                  "ops::sync: a barrier is over one topology level's "
+    static_assert(TMesh::topology_count == 1,
+                  "ops::sync: a barrier is over one topology's "
                   "units, and this mesh names several");
     return int(cute::size(typename TMesh::layout_type{}));
 }
@@ -106,14 +106,15 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr unsigned lane_mask() {
 /// Classify a mesh into its synchronization tier.
 template <class TMesh> CUTE_HOST_DEVICE constexpr Tier classify() {
     constexpr int first = first_index<TMesh>();
-    if constexpr (TMesh::level == TopologyLevel::cta) {
+    if constexpr (TMesh::first_topology == TopologyLevel::cta) {
         /// A CTA mesh based at zero covers the grid.
         return first == 0 ? Tier::grid : Tier::illegal_grid_slice;
-    } else if constexpr (TMesh::level == TopologyLevel::thread) {
+    } else if constexpr (TMesh::first_topology == TopologyLevel::thread) {
         constexpr int count = units<TMesh>();
-        /// A mesh that is every thread of its level needs no warp shape:
+        /// A mesh that is every thread of its topology needs no warp shape:
         /// whatever shape it is, one barrier for the block covers it.
-        if constexpr (first == 0 && count == int(topology_size<TMesh::level>()))
+        if constexpr (first == 0 &&
+                      count == int(topology_size<TMesh::first_topology>()))
             return count <= kWarpSize ? Tier::warp : Tier::block;
         else if constexpr (!tilefoundry::is_warped(TMesh{}))
             return Tier::illegal_warp_layout;
@@ -124,7 +125,8 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr Tier classify() {
         else
             return Tier::illegal_warp_layout;
     } else {
-        /// Exhaustive, so that what is not a level cannot be answered as one.
+        /// Exhaustive, so that what is not a topology cannot be answered as
+        /// one.
         return Tier::illegal_scope;
     }
 }
@@ -145,9 +147,8 @@ CUTE_HOST_DEVICE constexpr void reject_barrierless() {
         static_assert(dependent_false_v<Dep>,
                       "ops::sync: the mesh warp layout must be contiguous");
     else if constexpr (tier == Tier::illegal_scope)
-        static_assert(
-            dependent_false_v<Dep>,
-            "ops::sync: a mesh's topology level must be cta or thread");
+        static_assert(dependent_false_v<Dep>,
+                      "ops::sync: a mesh's topology must be cta or thread");
     else
         static_assert(dependent_false_v<Dep>,
                       "ops::sync: barrier tier is missing from dispatch");

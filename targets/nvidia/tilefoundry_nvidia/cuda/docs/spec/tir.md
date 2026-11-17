@@ -376,7 +376,7 @@ class CopyReduceAsyncTensor(Op):
     the evaluator's source already represents the sum of its parts.
   - One aligned warp participates, with the same execution-mesh declaration as
     `CopyAsyncTensor`. The capability is `cp.async.bulk.tensor` and the resource
-    is `tma_engine`. Partial state MUST NOT select instruction owner levels;
+    is `tma_engine`. Partial state MUST NOT select instruction owner topologies;
     owner selection treats Partial as Broadcast while retaining Split shard attr.
   - Cost MUST charge one source read and one destination write per unit, no
     destination read and no FLOPs. The hardware addition occurs in L2; analysis

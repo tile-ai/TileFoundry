@@ -155,7 +155,7 @@ struct GenRowMajor {};
 #define __global__
 #define __forceinline__ inline
 namespace tilefoundry {
-enum class TopologyLevel { cta, thread, level_count };
+enum class TopologyLevel { cta, thread, topology_count };
 inline constexpr int kWarpSize = 32;
 template <TopologyLevel T> constexpr auto topology_size() noexcept;
 template <class> inline constexpr bool dependent_false_v = false;

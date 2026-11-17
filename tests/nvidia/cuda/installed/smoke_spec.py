@@ -22,7 +22,7 @@ def test_spec_lists_the_documents_there_are(tf) -> None:
 
 @pytest.mark.parametrize(
     ("topic", "section", "expected"),
-    (("cuda/target", "topology-levels", "`Topology.size` MUST be an explicit `ShapeDim`"),),
+    (("cuda/target", "topologies", "`Topology.size` MUST be an explicit `ShapeDim`"),),
 )
 def test_spec_answers_askable_rules(tf, topic, section, expected) -> None:
     check_rule(tf, topic, section, expected)

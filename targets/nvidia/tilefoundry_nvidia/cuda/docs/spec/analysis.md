@@ -145,7 +145,7 @@ class SyncPlanMetadata(IRMetadata):
     be a thread mesh that `classify` supports. Every loop around the position
     MUST have bounds that every thread sees alike. A barrier accepts constants,
     kernel parameters and their captures, and induction variables of such
-    loops. It also accepts coordinates of mesh levels that its mesh does not
+    loops. It also accepts coordinates of topologies that its mesh does not
     span.
   - **Loops.** The family analyses loops to a fixed point. The head state joins
     every body end until it repeats.
