@@ -431,7 +431,10 @@ entry parameters, comma-separated. Each `--recompute` is a
 - Without `--saved`, the command writes `<Name>Forward` and `<Name>Backward` as
   one DSL file: one header, and each Module class, child slot classes included,
   once. The file MUST load: `SOURCE:<Name>Forward` and `SOURCE:<Name>Backward`
-  each select one, and printing the two again gives the same text.
+  each select one, and printing the two again gives the same text. The one
+  exception is an entry whose forward opens, at its top level, regions of more
+  than one mesh: the backward then runs ops outside every mesh, which the
+  parser refuses.
 - With `--saved`, the command writes one row per tensor the forward keeps for
   the backward: its name, global shape, bytes on one device (the local shape,
   since memory is counted per device), the layout of each mesh axis, and its
