@@ -24,6 +24,7 @@ from .int_tuple import exchange_sort, flatten_to_tuple, reverse_modes, unwrap, w
 from .layout import (
     ComposedLayout,
     Layout,
+    LayoutBase,
     NotProjectableError,
     Swizzle,
     canonical_mode,
@@ -615,6 +616,7 @@ def ceil_div(target, tiler, *, major="row"):
     Otherwise it is the IntTuple ``ceil_div`` of ``int_tuple.hpp``.
     """
     if isinstance(tiler, Layout):
+        target = target.shape if isinstance(target, LayoutBase) else target
         return complement(tiler, target, major=major).shape
     return int_tuple.ceil_div(target, tiler, major=major)
 
@@ -804,12 +806,17 @@ def downcast(layout, n: int):
         )
     if not isinstance(layout, Layout):
         return layout * n
-    shape, stride = layout.shape, layout.strides
-    if isinstance(shape, tuple):
-        return make_layout(*(downcast(Layout(s, d), n) for s, d in builtins.zip(shape, stride)))
-    if expr.static_dim_value(stride) in (1, -1):
-        return Layout(shape * n, stride)
-    return Layout(shape, stride * n)
+    if not any(expr.static_dim_value(d) == 1 for d in flatten_to_tuple(layout.strides)):
+        raise ValueError("downcast: Downcast requires adjacent elements")
+
+    def per_mode(shape, stride):
+        if isinstance(shape, tuple):
+            return make_layout(*(per_mode(s, d) for s, d in builtins.zip(shape, stride)))
+        if expr.static_dim_value(stride) in (1, -1):
+            return Layout(shape * n, stride)
+        return Layout(shape, stride * n)
+
+    return per_mode(layout.shape, layout.strides)
 
 
 def recast_layout(layout, old_bits: int, new_bits: int):
@@ -888,7 +895,7 @@ def domain_distribute(a, b: int, *, major="row"):
     """CuTe ``domain_distribute``: an ordered layout of *b* coordinates of shape *a*."""
     if major == "row":
         return reverse_modes(domain_distribute(reverse_modes(a), b, major="col"))
-    shapes = flatten_to_tuple(a)
+    shapes = flatten_to_tuple(a.shape if isinstance(a, LayoutBase) else a)
     result_shape, rest = [], b
     for extent in shapes:
         common = gcd(extent, rest)

@@ -23,7 +23,7 @@ from tilefoundry.ir import expr, types
         ),
         (types.ComposedLayout(types.Swizzle(3, 4, 3), 16, types.Layout((2, 4), (16, 1))), expr.DType.bf16, 2048),
         (types.ComposedLayout(types.Swizzle(1, 1, -1), 0, types.Layout((4,), (8,))), expr.DType.bf16, 64),
-        (types.ComposedLayout(types.Layout((4,), (3,)), 1, types.Layout((2,), (1,))), expr.DType.f32, 40),
+        (types.ComposedLayout(types.Layout((4,), (3,)), 5, types.Layout((2,), (1,))), expr.DType.f32, 76),
         (
             types.ComposedLayout(types.ComposedLayout(types.Swizzle(1, 1, -1), 2, None), 1, types.Layout((3,), (8,))),
             expr.DType.bf16,

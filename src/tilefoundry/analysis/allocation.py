@@ -1020,6 +1020,7 @@ def storage_bytes(held: types.TensorType, *, topology=None, topologies=()) -> in
                     topology=topology,
                     topologies=topologies,
                 ).shape
+                low, high = 0, prod(shape) - 1
             return bounds(layout.layout, low, high, shape)
         if isinstance(layout, types.ComposedLayout):
             if layout.outer is not None:
@@ -1035,11 +1036,13 @@ def storage_bytes(held: types.TensorType, *, topology=None, topologies=()) -> in
             steps = types.flatten_to_tuple(layout.strides)
             if not all(isinstance(value, int) for value in (*extents, *steps)):
                 raise Error(f"allocation: unresolved physical layout {layout!r}")
-            contributions = tuple(
-                (extent - 1) * stride
-                for extent, stride in zip(extents if shape is None else shape, steps, strict=True)
-            )
-            return sum(min(0, value) for value in contributions), sum(
+            extents = extents if shape is None else tuple(shape)
+            if not extents:
+                return 0, 0
+            inner = prod(extents[1:])
+            first = (low // inner * steps[0], high // inner * steps[0])
+            contributions = tuple((extent - 1) * stride for extent, stride in zip(extents[1:], steps[1:], strict=True))
+            return min(first) + sum(min(0, value) for value in contributions), max(first) + sum(
                 max(0, value) for value in contributions
             )
         if isinstance(layout, types.Swizzle):
