@@ -538,6 +538,18 @@ two from a step of their own; `differentiate` builds no step and no optimizer.
 - A `MeshRegion` stays a region in both Modules. A value inside a forward
   region that the backward reads leaves the region as an extra result; the
   backward region of the same mesh takes it, and the gradients, as arguments.
+- A `LoopRegion` with a static trip count becomes a backward loop that runs its
+  iterations in reverse. Its carries are the gradient of each forward carry and,
+  for each value the body reads from outside, the sum of that value's
+  gradients, resharded to `gradient_layout` at each iteration. A value of an
+  iteration that the backward reads is stacked: the forward loop carries one
+  stack per tensor, of the value's type with a leading axis of trip-count rows,
+  not split (`Split(a)` becomes `Split(a + 1)`), writes the row of each
+  iteration with `InsertSlice`, and returns the stacks as extra results; the
+  backward reads its row with `Slice`. The induction value is not stacked: the
+  backward computes it from its own index. A value the body reads from outside
+  is not stacked. A loop that runs no iteration passes the gradient of each
+  carry to its initial value.
 - A value that only parameters outside `wrt`, constants and `ConstTensor`
   parameters reach has no gradient and gets none; a `wrt` parameter that no
   gradient reaches gets zeros.
@@ -556,7 +568,8 @@ two from a step of their own; `differentiate` builds no step and no optimizer.
   entry. The variable is the name the author bound.
 - `saved_values` lists the items of a generated forward's `saved` with the name
   the author bound (`v<index>` when there is none), the type, and the origin:
-  `parameter`, the Op and its source line, or the call whose `saved` it is.
+  `parameter`, `carry`, the Op and its source line, or the call whose `saved`
+  it is; a stack names the trip count first (`stack of 5: ...`).
 - constraints:
   - `differentiate` MUST NOT change *module*.
   - Each refusal is a `ValueError` that names what it refuses, and the source
@@ -564,11 +577,14 @@ two from a step of their own; `differentiate` builds no step and no optimizer.
     parameter, not a floating point tensor or a tuple of them, or a
     `ConstTensor`; an Op with no rule, or a kind or an attribute its rule does
     not take (a strided `Slice`, an `IndexSelect` with `fill_value`, a `TopK`
-    off the last axis); a `LoopRegion` that a gradient reaches; a call that reaches past one child
-    slot; a callee named `backward`; a `recompute` selector without `:`, with a
-    child slot path, naming no reachable Module, a Module name two reachable
-    Modules share, no function, no value, two values of one name, a parameter,
-    or a value computed by a call rather than an Op; and a backward that
+    off the last axis); a loop that a gradient reaches whose trip count is not
+    static, that has no carry, or that carries a tuple; a loop value the
+    backward reads that is `Partial`; a call that reaches past one child slot;
+    a callee named `backward`; a `recompute` selector without `:`, with a child
+    slot path, naming no reachable Module, a Module name two reachable Modules
+    share, no function, no value, two values of one name, a parameter, a value
+    computed by a call rather than an Op, or a value inside a loop body (the
+    first version saves every value of a loop body); and a backward that
     `differentiate` generated, since a second derivative is not supported.
 
 ## 8. Directory layout

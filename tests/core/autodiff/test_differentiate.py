@@ -266,6 +266,42 @@ class Topk(Differentiated):
     wrt: tuple[str, ...] = ('x',)
 
 
+@case
+class LoopRange(Differentiated):
+    path: Path = FIXTURES / "loop_range.py"
+    wrt: tuple[str, ...] = ('x', 'w', 'h0')
+
+
+@case
+class LoopTwoCarries(Differentiated):
+    path: Path = FIXTURES / "loop_two_carries.py"
+    wrt: tuple[str, ...] = ('a0', 'b0', 'w')
+
+
+@case
+class LoopTile(Differentiated):
+    path: Path = FIXTURES / "loop_tile.py"
+    wrt: tuple[str, ...] = ('x', 'w')
+
+
+@case
+class LoopCall(Differentiated):
+    path: Path = FIXTURES / "loop_call.py"
+    wrt: tuple[str, ...] = ('keys', 'decay')
+
+
+@case
+class LoopEmpty(Differentiated):
+    path: Path = FIXTURES / "loop_empty.py"
+    wrt: tuple[str, ...] = ('x', 'w')
+
+
+@case
+class LoopSharded(Differentiated):
+    path: Path = FIXTURES / "loop_sharded.py"
+    wrt: tuple[str, ...] = ("h0", "w")
+
+
 CASES = special(Differentiated)
 
 
@@ -292,6 +328,16 @@ def test_saved_values_report_name_type_and_origin() -> None:
     assert types.shard_layout_of(rows["full"].type.layout).attrs == (B,)
 
 
+def test_a_loop_stacks_what_changes_per_step_and_keeps_one_copy_of_the_rest() -> None:
+    module = cli.load_authored_ir(str(FIXTURES / "loop_range.py"))
+    forward, _ = differentiate.differentiate(module, wrt=("x", "w", "h0"))
+    rows = differentiate.saved_values(forward)
+    stacks = [row for row in rows if row.origin.startswith("stack of 5: ")]
+    assert stacks and all(row.type.shape[0] == 5 for row in stacks)
+    assert {row.name for row in rows if row.origin == "parameter"} == {"w"}
+    assert next(row for row in rows if row.name == "w").type.shape == (3,)
+
+
 def test_hand_written_step_calls_the_generated_modules() -> None:
     """D27: the author's step calls the forward and the backward as two child slots."""
     path = FIXTURES / "step.py"
@@ -314,7 +360,8 @@ REFUSED = (
     ("const_param.py", ("w",), (), "wrt 'w' is a ConstTensor"),
     ("no_rule.py", ("x",), (), "ReLU has no autodiff rule"),
     ("unsupported_kind.py", ("x",), (), "Binary MIN has no autodiff rule"),
-    ("loop.py", ("x",), (), "LoopRegion is not differentiated"),
+    ("loop_dynamic.py", ("x",), (), "trip count is not static"),
+    ("loop_range.py", ("x",), ("LoopRange.forward:row",), "'row' is computed inside a loop"),
     ("strided_slice.py", ("x",), (), "Slice with strides (2, 1) has no autodiff rule"),
     ("filled_index_select.py", ("table",), (), "IndexSelect with a fill_value has no autodiff rule"),
     ("topk_inner_axis.py", ("x",), (), "TopK on an axis that is not the last has no autodiff rule"),

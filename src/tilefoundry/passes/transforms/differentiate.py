@@ -97,6 +97,13 @@ def select_value(module: core.Module, selector: str) -> expr.Expr:
         places = ", ".join(where(value) or "?" for value in matches.values())
         raise ValueError(f"recompute {selector!r}: {len(matches)} values are named {variable!r}: {places}")
     (value,) = matches.values()
+    for loop in core.collect_exprs(function.body):
+        inside = () if not isinstance(loop, core.LoopRegion) else (loop.body, *loop.yield_values)
+        if any(value is inner for root in inside for inner in core.collect_exprs(root)):
+            raise ValueError(
+                f"recompute {selector!r}: {variable!r} is computed inside a loop; "
+                "the first version saves every value of a loop body and recomputes none"
+            )
     produced = value.args[0] if is_projection(value) else value
     if isinstance(produced, expr.Call) and isinstance(produced.target, core.FunctionRef):
         raise ValueError(
@@ -174,6 +181,20 @@ def leaves(value, path=()):
         yield path, value
 
 
+def flat(type_: types.Type):
+    """A tuple type as nested Python tuples of its tensor types."""
+    return tuple(flat(item) for item in type_.fields) if isinstance(type_, types.TupleType) else type_
+
+
+def at(structure, path):
+    """The item of a nested gradient tuple at *path*, or ``None``."""
+    for index in path:
+        if structure is None:
+            return None
+        structure = structure[index]
+    return structure
+
+
 def placed(structure, path, value):
     """*structure* with *value* at *path*."""
     if not path:
@@ -199,11 +220,49 @@ def pack(items: tuple[expr.Expr, ...]) -> expr.Tuple:
     return expr.Tuple(elements=tuple(items), type=types.TupleType(tuple(item.type for item in items)))
 
 
-def scope_order(root: expr.Expr) -> list[expr.Expr]:
+def build(name: str, *args: expr.Expr, **attrs) -> expr.Call:
+    """``tf.<name>(*args, **attrs)`` with a placeholder type; the final inference types it."""
+    schema = expr.op_registry.lookup("tf", (), name)
+    return expr.Call(schema.builder(**attrs), args, type=types.TupleType(()))
+
+
+def integer(value: int, dtype: expr.DType) -> expr.Constant:
+    return expr.Constant(type=types.TensorType.from_scalar(dtype, storage=expr.StorageKind.UMAT), value=value)
+
+
+def trip_count(loop: core.LoopRegion) -> int:
+    """How many iterations *loop* runs; a domain that is not three integers is refused."""
+    domain = (loop.start, loop.extent, loop.step)
+    if not all(isinstance(bound, int) and not isinstance(bound, bool) for bound in domain):
+        raise ValueError(
+            f"differentiate: a loop whose trip count is not static is not differentiated{located(loop)}"
+        )
+    return len(range(*domain))
+
+
+def stacked(type_: types.Type, trip: int, owners, where_: str) -> types.Type:
+    """*type_* with a leading, unsplit axis of *trip* rows; ``Split(a)`` turns ``Split(a + 1)``."""
+    if isinstance(type_, types.TupleType):
+        return types.TupleType(tuple(stacked(item, trip, owners, where_) for item in type_.fields))
+    shape = (trip, *type_.shape)
+    shard = types.shard_layout_of(type_.layout)
+    if shard is None:
+        return types.TensorType(shape, type_.dtype, types.Layout(shape), type_.storage)
+    if any(isinstance(attr, types.Partial) for attr in shard.attrs):
+        raise ValueError(f"differentiate: a loop body value read by the backward is Partial{where_}")
+    axes = types.split_target_axes(shard, type_.shape)
+    attrs = tuple(
+        types.Split(axis + 1) if axis is not None else attr for attr, axis in zip(shard.attrs, axes)
+    )
+    layout = types.ShardLayout.from_logical(shape, shard.mesh, attrs, storage=type_.storage, owners=owners)
+    return types.TensorType(shape, type_.dtype, layout, type_.storage)
+
+
+def scope_order(*roots: expr.Expr) -> list[expr.Expr]:
     """The values of one scope, operands first; a region's body is a scope of its own."""
     order: list[expr.Expr] = []
     seen: set[int] = set()
-    stack = [(root, False)]
+    stack = [(root, False) for root in reversed(roots)]
     while stack:
         node, expanded = stack.pop()
         if expanded:
@@ -242,13 +301,17 @@ class Scope:
     nodes: dict[int, expr.Expr]
     ctx: autodiff.Context
     parent: "Scope | None" = None
-    region: core.MeshRegion | None = None
+    region: core.MeshRegion | core.LoopRegion | None = None
+    index: expr.Var | None = None
     active: set[int] = field(default_factory=set)
     gradients: dict[int, object] = field(default_factory=dict)
     slots: dict[object, expr.Expr] = field(default_factory=dict)
     region_params: list[tuple[expr.Var, expr.Expr]] = field(default_factory=list)
     extras: list[tuple] = field(default_factory=list)
     rebuilt: dict[int, expr.Expr] = field(default_factory=dict)
+
+    def activate(self, ids: set[int]) -> None:
+        self.active.update(ids)
 
     def remember_gradient(self, node: expr.Expr, gradient) -> None:
         self.gradients[id(node)] = gradient
@@ -260,9 +323,24 @@ class Scope:
         self.rebuilt[id(node)] = value
 
 
-def new_scope(body: expr.Expr, params, ctx, active: set[int], parent=None, region=None) -> Scope:
-    nodes = {id(node): node for node in (*params, *scope_order(body))}
-    return Scope(nodes=nodes, ctx=ctx, parent=parent, region=region, active=active)
+def mark_active(scope: Scope, order: list[expr.Expr]) -> None:
+    """Add to ``scope.active`` each value of *order* that reads an active value."""
+    for node in order:
+        if id(node) in scope.active:
+            continue
+        if isinstance(node, (core.MeshRegion, core.LoopRegion)):
+            children = node.args
+        elif isinstance(node, (expr.Call, expr.Tuple)):
+            children = core.expr_children(node)
+        else:
+            continue
+        if any(id(child) in scope.active for child in children):
+            scope.activate({id(node)})
+
+
+def new_scope(roots, params, ctx, active: set[int], parent=None, region=None, index=None) -> Scope:
+    nodes = {id(node): node for node in (*params, *scope_order(*roots))}
+    return Scope(nodes=nodes, ctx=ctx, parent=parent, region=region, active=active, index=index)
 
 
 @dataclass
@@ -409,6 +487,7 @@ class FunctionDifferentiator:
         self.wrt = wrt
         self.placeholders: dict[int, tuple] = {}
         self.regions: dict[int, RegionBackward] = {}
+        self.loops: dict[int, RegionBackward] = {}
         self.callees: dict[int, Derived] = {
             id(value): differ.callee(module, value.target, value)
             for value in core.collect_exprs(function.body)
@@ -420,7 +499,7 @@ class FunctionDifferentiator:
             memo[id(node)] = (node, node.type)
         ctx = autodiff.Context(module=module, function=function, memo=memo)
         active = {id(function.params[index]) for index in wrt}
-        self.top = new_scope(function.body, function.params, ctx, active)
+        self.top = new_scope((function.body,), function.params, ctx, active)
         self.saved = expr.Var(name="saved", type=types.TupleType(()))
 
     def run(self) -> Derived:
@@ -440,7 +519,7 @@ class FunctionDifferentiator:
             params.append(param)
             seeds.append(self.split(param, self.top.ctx))
         seed = tuple(seeds) if isinstance(function.return_type, types.TupleType) else seeds[0]
-        self.reverse(self.top, function.body, seed)
+        self.reverse(self.top, (function.body,), ((function.body, seed),))
         outputs = tuple(
             self.finish(self.top.gradients.get(id(function.params[index])), function.params[index].type, self.top.ctx)
             for index in self.wrt
@@ -510,17 +589,12 @@ class FunctionDifferentiator:
             left, right = (self.finish(value, type_, ctx) for value in (left, right))
         return ctx.call("add", left, right)
 
-    def reverse(self, scope: Scope, body: expr.Expr, seed) -> None:
-        """Walk *body* backward from the gradient *seed* of its value."""
-        order = scope_order(body)
-        for node in order:
-            if id(node) in scope.active:
-                continue
-            if isinstance(node, (expr.Call, expr.Tuple, core.MeshRegion, core.LoopRegion)):
-                children = node.args if isinstance(node, (core.MeshRegion, core.LoopRegion)) else core.expr_children(node)
-                if any(id(child) in scope.active for child in children):
-                    scope.active.add(id(node))
-        self.accumulate(scope, body, seed)
+    def reverse(self, scope: Scope, roots: tuple[expr.Expr, ...], seeds) -> None:
+        """Walk the values *roots* reach backward from *seeds*, ``(value, gradient)`` pairs."""
+        order = scope_order(*roots)
+        mark_active(scope, order)
+        for node, seed in seeds:
+            self.accumulate(scope, node, seed)
         for node in reversed(order):
             gradient = scope.gradients.get(id(node))
             if gradient is None or isinstance(node, expr.Var):
@@ -531,7 +605,7 @@ class FunctionDifferentiator:
             elif isinstance(node, core.MeshRegion):
                 self.reverse_region(scope, node, gradient)
             elif isinstance(node, core.LoopRegion):
-                raise ValueError(f"differentiate: a LoopRegion is not differentiated yet{located(node)}")
+                self.reverse_loop(scope, node, gradient)
             elif isinstance(node.target, core.FunctionRef):
                 self.reverse_call(scope, node, gradient)
             else:
@@ -593,7 +667,7 @@ class FunctionDifferentiator:
     def reverse_region(self, scope: Scope, region: core.MeshRegion, gradient) -> None:
         ctx = scope.ctx.enter_region(region)
         active = {id(param) for param, arg in zip(region.params, region.args) if id(arg) in scope.active}
-        inner = new_scope(region.body, region.params, ctx, active, parent=scope, region=region)
+        inner = new_scope((region.body,), region.params, ctx, active, parent=scope, region=region)
         params, args = [], []
         seed = gradient
         for path, value in leaves(gradient):
@@ -602,7 +676,7 @@ class FunctionDifferentiator:
             params.append(param)
             args.append(value)
             seed = placed(seed, path, param)
-        self.reverse(inner, region.body, seed)
+        self.reverse(inner, (region.body,), ((region.body, seed),))
         outputs = []
         for index, param in enumerate(region.params):
             for path, value in leaves(inner.gradients.get(id(param))):
@@ -622,6 +696,92 @@ class FunctionDifferentiator:
         for index, structure in result.items():
             self.accumulate(scope, region.args[index], structure)
 
+    def reverse_loop(self, scope: Scope, loop: core.LoopRegion, gradient) -> None:
+        """A backward loop running the iterations in reverse.
+
+        Its carries are the gradient of each forward carry and, for each value the
+        body reads from outside, a sum of that value's gradient over the iterations.
+        """
+        trip = trip_count(loop)
+        carried = len(loop.yield_values)
+        if not carried:
+            raise ValueError(f"differentiate: a gradient reaches a loop with no carries{located(loop)}")
+        parts = gradient if isinstance(loop.type, types.TupleType) else (gradient,)
+        if trip == 0:
+            for arg, part in zip(loop.args, parts):
+                self.accumulate(scope, arg, part)
+            return
+        ctx = scope.ctx.enter_region(loop)
+        index = expr.Var(name="s", type=loop.induction_var.type)
+        ctx.remember(index, index.type)
+        roots = (loop.body, *loop.yield_values)
+        active = {id(param) for param, arg in zip(loop.params, loop.args) if id(arg) in scope.active}
+        inner = new_scope(roots, (loop.induction_var, *loop.params), ctx, active, scope, loop, index)
+        order = scope_order(*roots)
+        while True:
+            mark_active(inner, order)
+            woken = {
+                id(param) for param, value in zip(loop.params, loop.yield_values)
+                if id(value) in inner.active and id(param) not in inner.active
+            }
+            if not woken:
+                break
+            inner.activate(woken)
+        carries = [
+            position for position in range(carried)
+            if id(loop.params[position]) in inner.active and is_float(loop.params[position].type)
+        ]
+        for position in carries:
+            if isinstance(loop.params[position].type, types.TupleType):
+                raise ValueError(f"differentiate: a loop carry of tuple type is not differentiated{located(loop)}")
+        captures = [
+            position for position in range(carried, len(loop.params))
+            if id(loop.params[position]) in inner.active and is_float(loop.params[position].type)
+        ]
+        params, inits = [], []
+        for position in carries:
+            param = loop.params[position]
+            held = expr.Var(name=f"d{param.name}", type=gradient_type(param.type))
+            ctx.remember(held, held.type)
+            params.append(held)
+            inits.append(self.cotangent(parts[position], held.type, scope.ctx))
+        sums = []
+        for position in captures:
+            for path, leaf in leaves(flat(loop.params[position].type)):
+                held = expr.Var(name=f"g{loop.params[position].name}", type=gradient_type(leaf))
+                ctx.remember(held, held.type)
+                sums.append((position, path, leaf, held))
+                params.append(held)
+                inits.append(scope.ctx.call("zeros", type=held.type))
+        self.reverse(inner, roots, [(loop.yield_values[position], held) for position, held in zip(carries, params)])
+        updates = [
+            self.cotangent(inner.gradients.get(id(loop.params[position])), held.type, ctx)
+            for position, held in zip(carries, params)
+        ]
+        for position, path, leaf, held in sums:
+            part = at(inner.gradients.get(id(loop.params[position])), path)
+            updates.append(held if part is None else ctx.call("add", held, self.finish(part, leaf, ctx)))
+        result_type = updates[0].type if len(updates) == 1 else types.TupleType(tuple(ctx.type_of(u) for u in updates))
+        node = core.LoopRegion(
+            induction_var=index, params=tuple(params), args=tuple(inits), body=updates[-1],
+            yield_values=tuple(updates), extent=trip, step=1, start=0, type=result_type,
+        )
+        scope.ctx.remember(node, result_type)
+        self.loops[id(node)] = RegionBackward(inner, node)
+
+        def result(position):
+            if len(updates) == 1:
+                return node
+            return scope.ctx.call("tuple_get_item", node, scope.ctx.constant(position))
+
+        for slot, position in enumerate(carries):
+            self.accumulate(scope, loop.args[position], result(slot))
+        structures = {}
+        for slot, (position, path, _, _) in enumerate(sums, start=len(carries)):
+            held = structures.get(position, empty_like(loop.params[position].type))
+            structures[position] = placed(held, path, result(slot))
+        for position, structure in structures.items():
+            self.accumulate(scope, loop.args[position], structure)
 
     def rebuild(self, node: expr.Expr, scope: Scope) -> expr.Expr:
         """*node* of the backward with every forward value it reads replaced by its slot."""
@@ -634,6 +794,8 @@ class FunctionDifferentiator:
             result = self.materialize(self.placeholders[id(node)], scope)
         elif id(node) in self.regions:
             result = self.rebuild_region(self.regions[id(node)], scope)
+        elif id(node) in self.loops:
+            result = self.rebuild_loop(self.loops[id(node)], scope)
         elif isinstance(node, expr.Call):
             result = replace(node, args=tuple(self.rebuild(arg, scope) for arg in node.args))
         elif isinstance(node, expr.Tuple):
@@ -654,6 +816,18 @@ class FunctionDifferentiator:
             args=(*(self.rebuild(arg, scope) for arg in node.args), *(value for _, value in inner.region_params)),
         )
 
+    def rebuild_loop(self, backward: RegionBackward, scope: Scope) -> core.LoopRegion:
+        node = backward.node
+        inner = backward.scope
+        updates = tuple(self.rebuild(value, inner) for value in node.yield_values)
+        return replace(
+            node,
+            body=updates[-1],
+            yield_values=updates,
+            params=(*node.params, *(param for param, _ in inner.region_params)),
+            args=(*(self.rebuild(arg, scope) for arg in node.args), *(value for _, value in inner.region_params)),
+        )
+
     def materialize(self, key: tuple, scope: Scope) -> expr.Expr:
         """The backward's access, in *scope*, to the forward value *key* names."""
         slot = (key[0], id(key[1]), *key[2:])
@@ -670,6 +844,8 @@ class FunctionDifferentiator:
         elif scope.parent is None:
             result = projection(self.saved, len(self.saved_keys), self.key_type(key))
             self.saved_keys.append(key)
+        elif isinstance(scope.region, core.LoopRegion):
+            result = self.materialize_in_loop(key, scope)
         else:
             if key[0] == "node" and any(value is param for param in scope.region.params):
                 index = next(i for i, param in enumerate(scope.region.params) if param is value)
@@ -682,13 +858,69 @@ class FunctionDifferentiator:
         scope.remember_slot(slot, result)
         return result
 
+    def materialize_in_loop(self, key: tuple, scope: Scope) -> expr.Expr:
+        """The backward loop's access to a forward loop value.
+
+        The induction value is computed again from the backward's own index. A
+        value the body reads from outside is one more invariant parameter. Every
+        other value differs per iteration: the forward stacks it, and the backward
+        reads the row of the iteration it is undoing.
+        """
+        loop, ctx, value = scope.region, scope.ctx, key[1]
+        trip = trip_count(loop)
+        ordinal = ctx.call("sub", ctx.constant(trip - 1, scope.index.type.dtype), scope.index)
+        if key[0] == "node" and value is loop.induction_var:
+            coordinate = ordinal
+            if loop.step != 1:
+                coordinate = ctx.call("mul", coordinate, ctx.constant(loop.step, scope.index.type.dtype))
+            if loop.start != 0:
+                coordinate = ctx.call("add", coordinate, ctx.constant(loop.start, scope.index.type.dtype))
+            return coordinate
+        carried = len(loop.yield_values)
+        if key[0] == "node" and any(value is param for param in loop.params[carried:]):
+            position = next(i for i, param in enumerate(loop.params) if param is value)
+            outer = self.materialize(("node", loop.args[position]), scope.parent)
+            result = expr.Var(name=value.name, type=self.key_type(key))
+            ctx.remember(result, result.type)
+            scope.region_params.append((result, outer))
+            return result
+        held = self.key_type(key)
+        owners = ctx.resolve_target().storage_owners
+        scope.extras.append(key)
+        outer = self.materialize(("extra", scope, len(scope.extras) - 1), scope.parent)
+        stacks = expr.Var(
+            name=f"stack_{self.key_name(key)[0] or 'saved'}",
+            type=stacked(held, trip, owners, located(value)),
+        )
+        ctx.remember(stacks, stacks.type)
+        scope.region_params.append((stacks, outer))
+        return self.row(stacks, held, ordinal, ctx)
+
+    def row(self, stacks: expr.Expr, type_: types.Type, row: expr.Expr, ctx: autodiff.Context) -> expr.Expr:
+        """Row *row*, a scalar, of the stacks of a value of *type_*, shaped as that value."""
+        if isinstance(type_, types.TupleType):
+            value = pack(tuple(
+                self.row(ctx.call("tuple_get_item", stacks, ctx.constant(index)), field, row, ctx)
+                for index, field in enumerate(type_.fields)
+            ))
+            return ctx.remember(value, type_)
+        starts = (row, *(ctx.constant(0, ctx.type_of(row).dtype) for _ in type_.shape))
+        corner = ctx.remember(pack(starts), types.TupleType(tuple(ctx.type_of(start) for start in starts)))
+        rank = len(type_.shape) + 1
+        taken = ctx.call("slice", stacks, corner, sizes=(1, *type_.shape), strides=(1,) * rank)
+        return ctx.call("reshape", taken, new_shape=tuple(type_.shape))
+
     def key_type(self, key: tuple) -> types.Type:
         if key[0] == "node":
             return key[1].type
         if key[0] == "callee":
             return self.callees[id(key[1])].saved
         _, scope, index = key
-        return self.key_type(scope.extras[index])
+        inner = self.key_type(scope.extras[index])
+        if isinstance(scope.region, core.LoopRegion):
+            owners = scope.ctx.resolve_target().storage_owners
+            return stacked(inner, trip_count(scope.region), owners, "")
+        return inner
 
     def record(self, index: int, key: tuple) -> Saved:
         name, origin = self.key_name(key)
@@ -698,13 +930,16 @@ class FunctionDifferentiator:
         """The name and the origin a saved value is reported with."""
         if key[0] == "extra":
             _, scope, index = key
-            return self.key_name(scope.extras[index])
+            name, origin = self.key_name(scope.extras[index])
+            if isinstance(scope.region, core.LoopRegion):
+                return name, f"stack of {trip_count(scope.region)}: {origin}"
+            return name, origin
         if key[0] == "callee":
             ref = key[1].target
             return f"{ref.qualified_name}.saved", f"call {ref.qualified_name}  {span_of(key[1], short=True) or ''}".rstrip()
         node = key[1]
         if isinstance(node, expr.Var):
-            return node.name, "parameter"
+            return node.name, "parameter" if any(node is param for param in self.function.params) else "carry"
         if not isinstance(node, expr.Call):
             name = type(node).__name__
         elif isinstance(node.target, core.FunctionRef):
@@ -713,7 +948,6 @@ class FunctionDifferentiator:
             kind = getattr(node.target, "kind", None)
             name = kind.value if isinstance(kind, Enum) else expr.op_registry.schema_of(type(node.target)).name
         return expr.binding_name(node), f"{name}  {span_of(node, short=True) or ''}".rstrip()
-
 
     def forward(self) -> core.Function:
         function = self.function
@@ -737,6 +971,13 @@ class FunctionDifferentiator:
         )
 
 
+def rebuild_structure(type_: types.Type, found) -> expr.Expr:
+    """The values *found*, one per tensor leaf of *type_*, packed as *type_* nests them."""
+    if isinstance(type_, types.TupleType):
+        return pack(tuple(rebuild_structure(item, found) for item in type_.fields))
+    return next(found)
+
+
 class ForwardCloner(core.BindingSubstitutionCloner):
     """A copy of the forward that also returns, last, what the backward reads."""
 
@@ -745,7 +986,11 @@ class ForwardCloner(core.BindingSubstitutionCloner):
         self.owner = owner
         self.calls: dict[int, expr.Call] = {}
         self.regions: dict[int, tuple[core.MeshRegion, int]] = {}
-        self.scopes = {id(backward.scope.region): backward.scope for backward in owner.regions.values()}
+        self.scopes = {
+            id(backward.scope.region): backward.scope
+            for backward in (*owner.regions.values(), *owner.loops.values())
+        }
+        self.loops: dict[int, tuple[core.LoopRegion, int, tuple[int, ...]]] = {}
 
     def visit_Call(self, node: expr.Call, ctx) -> expr.Expr:
         copied = super().visit_Call(node, ctx)
@@ -780,6 +1025,57 @@ class ForwardCloner(core.BindingSubstitutionCloner):
             return projection(region, 0, node.type)
         return pack(tuple(projection(region, index, item) for index, item in enumerate(results)))
 
+    def visit_LoopRegion(self, node: core.LoopRegion, ctx) -> expr.Expr:
+        """The loop with one more carry per tensor the backward reads from an iteration.
+
+        Each such carry is a stack: iteration ``(t - start) // step`` writes its
+        row, and the stacks leave the loop as extra results.
+        """
+        copied = super().visit_LoopRegion(node, ctx)
+        scope = self.scopes.get(id(node))
+        if scope is None or not scope.extras:
+            return copied
+        inner = dict(ctx)
+        inner[id(node.induction_var)] = copied.induction_var
+        inner.update((id(old), new) for old, new in zip(node.params, copied.params))
+        dtype = node.induction_var.type.dtype
+        ordinal = copied.induction_var
+        if node.start != 0:
+            ordinal = build("sub", ordinal, integer(node.start, dtype))
+        if node.step != 1:
+            ordinal = build("floor_div", ordinal, integer(node.step, dtype))
+        trip = trip_count(node)
+        carried = len(node.yield_values)
+        stacks, inits, updates, counts = [], [], [], []
+        for key in scope.extras:
+            value = self.saved_value(key, inner)
+            type_ = self.owner.key_type(key)
+            found = list(leaves(flat(type_)))
+            counts.append(len(found))
+            for path, leaf in found:
+                piece = value
+                for index in path:
+                    piece = projection(piece, index, leaf)
+                stack_type = stacked(leaf, trip, scope.ctx.resolve_target().storage_owners, "")
+                stack = expr.Var(name="stack", type=stack_type)
+                stacks.append(stack)
+                inits.append(build("zeros", type=stack_type))
+                corner = pack((ordinal, *(integer(0, dtype) for _ in leaf.shape)))
+                updates.append(build(
+                    "insert_slice", stack, build("reshape", piece, new_shape=(1, *leaf.shape)), corner
+                ))
+        loop = replace(
+            copied,
+            params=(*copied.params[:carried], *stacks, *copied.params[carried:]),
+            args=(*copied.args[:carried], *inits, *copied.args[carried:]),
+            yield_values=(*copied.yield_values, *updates),
+            type=types.TupleType(()),
+        )
+        self.loops[id(node)] = (loop, carried, tuple(counts))
+        if carried == 1:
+            return projection(loop, 0, node.type)
+        return pack(tuple(projection(loop, index, item) for index, item in enumerate(node.type.fields)))
+
     def saved_value(self, key: tuple, env) -> expr.Expr:
         """The forward value *key* names, in the scope *env* binds."""
         if key[0] == "node":
@@ -788,5 +1084,11 @@ class ForwardCloner(core.BindingSubstitutionCloner):
             return projection(self.calls[id(key[1])], self.owner.callees[id(key[1])].results, key[1].type)
         _, scope, index = key
         self.visit(scope.region, env)
+        if isinstance(scope.region, core.LoopRegion):
+            loop, carried, counts = self.loops[id(scope.region)]
+            type_ = self.owner.key_type(key)
+            first = carried + sum(counts[:index])
+            found = [projection(loop, first + offset, leaf) for offset, (_, leaf) in enumerate(leaves(flat(type_)))]
+            return rebuild_structure(type_, iter(found))
         region, results = self.regions[id(scope.region)]
         return projection(region, results + index, self.owner.key_type(key))

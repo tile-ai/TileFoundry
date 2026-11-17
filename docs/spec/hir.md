@@ -1523,6 +1523,9 @@ class RoPE(Op):
     unqualified HF convention (`apply_rotary_pos_emb` / `rotate_half`). The
     interleaved form (`rotate_every_two`, GPT-J / CodeGen) is a different Op,
     not an attribute of this one.
+  - The two halves of each `cos_cache` and `sin_cache` row MUST be equal: the
+    pair rotates by one angle. The autodiff rule relies on it; the evaluator
+    does not check it.
   - The result is `(q_rope, k_rope)`. Each branch preserves the layout of its
     corresponding `q` or `k` input.
   - On each mesh axis, a branch MAY preserve one `Partial(sum)` on its
