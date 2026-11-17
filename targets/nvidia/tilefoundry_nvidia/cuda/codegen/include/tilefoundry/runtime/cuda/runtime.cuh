@@ -62,9 +62,9 @@ CUTE_HOST_DEVICE constexpr auto topologies_from() noexcept {
 }
 
 /// Topology L and every topology under it, one mode each. A mesh naming several
-/// topologies is indexed against this shape: a mesh axis belongs to the
-/// topology whose extents its own multiply up to, and a stride counts the
-/// topologies below it.
+/// topologies is indexed against this shape. Each mode of the mesh's layout
+/// belongs to one declared topology, in the order the mesh names them. A
+/// stride counts in the index over all of those topologies.
 ///
 /// Each count is a dependent call, so the counts are read where the shape is
 /// asked for and not where it is written -- a translation unit states them

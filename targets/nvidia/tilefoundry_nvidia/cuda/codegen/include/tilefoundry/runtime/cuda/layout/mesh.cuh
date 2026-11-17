@@ -79,7 +79,7 @@ template <class L> CUTE_HOST_DEVICE constexpr auto plain_layout(L const &l) {
 /// The mesh's id axes, in the order CuTe's algebra reads them.
 ///
 /// ``reverse`` because a mesh is row-major and CuTe is not -- the reason is
-/// on ``reverse`` itself in layout/cute_ext.cuh -- and ``filter`` because an
+/// on ``reverse`` itself in layout/cute_ext.cuh -- and ``filter`` because a
 /// mesh axis of extent one, which CuTe writes as stride zero, names no id.
 template <class L> CUTE_HOST_DEVICE constexpr auto id_axes(L const &l) {
     return cute::filter(reverse(cute::flatten(plain_layout(l))));
