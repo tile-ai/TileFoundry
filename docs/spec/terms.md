@@ -98,7 +98,7 @@ The names `gpu`, `cta`, `thread`, `sm`, `group` and `lane` above are examples of
 | root mesh | The mesh that a function gets from outside. | existing | — | `root_mesh` | — |
 | instruction | A TIR op that declares an execution mesh and can be selected by scheduling. A hardware instruction is a machine instruction. | existing | `instruction` for any TIR op | `match_instruction` | — |
 | issue | One application of an instruction to one tile. Lowering writes one call statement for it. Lowering issues; a unit executes. | architecture | `issuers`, "issuing threads" (these are the execution mesh); `issue` for execute | `Issue`, `IssuePlan`, `repeat` | — |
-| context | `valuation.Context`: the environment of one function (module, function, target, topologies, mesh scope). | existing | `frame` (a Python stack frame only) | parameter `ctx` | — |
+| context | `valuation.Context`: the environment of one function (module, function, target, topologies, mesh scope). | existing | `frame` (for a `valuation.Context`) | parameter `ctx` | — |
 | wave | A set of units that run at the same time. | own | — | `wave_units` | — |
 | program | The result of one compilation (one launch). It is not a unit. | existing | `program` for a unit | `check_program` | `program_topologies()` |
 
@@ -158,6 +158,6 @@ All layout terms are as in CuTe.
 - N3: `topology: str` is a name. `topology_level: int` is a position.
 - N4: Functions that select or rearrange a mesh or layout use CuTe verbs. Examples: `get`, `flatten`, `filter`, `size`.
 - N5: Only these words qualify a `Mesh` value: scope, enclosing, innermost, execution, root, sub, sliced. `level`, `scope`, `domain` and `axis` always have a qualifier, unless the class, function or module handles one case only.
-- N6: The parameter that holds a `valuation.Context` is `ctx`. `frame` is a Python stack frame.
+- N6: The parameter that holds a `valuation.Context` is `ctx`. `frame` names only a Python stack frame or a parser lexical frame.
 - N7: Lowering issues an instruction. A unit executes it.
 - A review checks N1–N7 at the Final Gate of each plan.
