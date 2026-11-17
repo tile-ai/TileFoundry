@@ -7,7 +7,6 @@ from tilefoundry.interfaces import evaluator, schedule
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry_apple.metal.ir import tir
 
-
 torch = utils.torch
 F32, I32, U16 = expr.DType.f32, expr.DType.i32, expr.DType.u16
 
@@ -74,7 +73,8 @@ def test_matrix_evaluators():
     a = (torch.arange(128.0) % 5).reshape(2, 8, 8)
     b = (torch.arange(128.0) % 3).reshape(2, 8, 8)
     c = (torch.arange(128.0) % 7).reshape(2, 8, 8)
-    zeros = lambda: torch.zeros(2, 8, 8)
+    def zeros():
+        return torch.zeros(2, 8, 8)
     assert torch.equal(evaluate(tir.MatMul(dtype=F32), fragment(zeros()), fragment(a), fragment(b)), a @ b)
     assert torch.equal(
         evaluate(tir.Mma(dtype=F32), fragment(zeros()), fragment(a), fragment(b), fragment(c)), a @ b + c
@@ -91,12 +91,14 @@ def test_matrix_evaluators():
 
 def test_simd_evaluators():
     source = torch.arange(32, dtype=torch.int32)[None]
-    total = lambda kind, data: evaluate(
-        tir.Reduce(kind=kind, dtype=I32),
-        lanes(torch.zeros(1, 1, dtype=torch.int32), shard=tir.layout.SHARED),
-        lanes(data),
-    )
-    out = lambda: lanes(torch.zeros(1, 32, dtype=torch.int32))
+    def total(kind, data):
+        return evaluate(
+            tir.Reduce(kind=kind, dtype=I32),
+            lanes(torch.zeros(1, 1, dtype=torch.int32), shard=tir.layout.SHARED),
+            lanes(data),
+        )
+    def out():
+        return lanes(torch.zeros(1, 32, dtype=torch.int32))
     assert total(tir.ReduceKind.SUM, source).tolist() == [[496]]
     shared_total = types.TensorType((1, 1), I32, bound(tir.layout.SHARED, groups=1, width=32), expr.StorageKind.RMEM)
     in_memory = types.TensorType((1, 32), I32, types.Layout((1, 32), (32, 1)), expr.StorageKind.GMEM)
@@ -124,7 +126,8 @@ def test_simd_evaluators():
     U32 = expr.DType.u32
     wide = torch.arange(32)[None].to(torch.uint32)
     wide[0, 7] = 0xFFFFFFF0
-    out32 = lambda: lanes(torch.zeros(1, 32, dtype=torch.uint32), U32)
+    def out32():
+        return lanes(torch.zeros(1, 32, dtype=torch.uint32), U32)
     largest = evaluate(
         tir.Reduce(kind=tir.ReduceKind.MAX, dtype=U32),
         lanes(torch.zeros(1, 1, dtype=torch.uint32), U32, tir.layout.SHARED),

@@ -27,6 +27,9 @@ include = ["tilefoundry_apple", "tilefoundry_apple.*"]
     "include/tilefoundry/runtime/amx/*.h",
     "include/tilefoundry/runtime/amx/LICENSE",
 ]
+"tilefoundry_apple.metal" = [
+    "docs/spec/*.md",
+]
 "tilefoundry_apple.amx.target.hardware" = [
     "*.toml",
 ]

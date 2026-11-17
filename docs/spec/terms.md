@@ -149,7 +149,7 @@ All layout terms are as in CuTe.
 - One concept has one word in Python, C++ and the specs.
 - To select a word, use CuTe first, then JAX. Use a word of our own only when neither has one.
 - `level`, `scope`, `domain` and `axis` always have a qualifier: topology level, memory level, mesh scope, mesh axis. A class, function or module that handles one case only can omit it.
-- Only `targets/nvidia` and the sync classification code use the CUDA names warp, lane, cluster and CTA in implementation code.
+- Only `targets/nvidia` and the sync classification code use the CUDA names warp, lane, cluster and CTA in implementation code. The Metal code in `targets/apple` also uses `lane` for a thread of a SIMD group or quad group.
 - Spec examples can use the names of a specific topology or mesh axis, for example `cta`, `thread` and `lane`.
 - Do not keep an alias for an old name.
 

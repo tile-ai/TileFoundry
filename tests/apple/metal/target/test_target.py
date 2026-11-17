@@ -14,7 +14,7 @@ from tilefoundry_apple import metal
 
 
 def test_target_constructs_and_reads_back():
-    """A Target renders as Python that evaluates back to an equal Target; unknown ids are refused."""
+    """A Target renders as Python that evaluates back to itself; unknown ids are refused."""
     tgt = metal.Target("apple.m2_pro.gpu")
     assert metal.Target() == tgt
     assert (tgt.architecture_id, tgt.device_id) == ("apple.gpu8", "apple.m2_pro.gpu")
@@ -30,7 +30,7 @@ def test_target_constructs_and_reads_back():
 
 
 def test_topology_facts():
-    """Threadgroups have no static ceiling, a threadgroup holds at most 1024 threads, and each level has its owner."""
+    """Threadgroups are unbounded, one holds at most 1024 threads, and each memory has its owner."""
     tgt = metal.Target()
     facts = tgt.get_facts(target.TopologyFacts)
     assert facts.topologies == (

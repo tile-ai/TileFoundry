@@ -39,8 +39,8 @@ class PrefixKind(Enum):
 class ShuffleKind(Enum):
     """Which lane each lane reads in Shuffle and ShuffleFill."""
 
-    INDEX = "index"            # simd_shuffle: each lane names its source lane
-    BROADCAST = "broadcast"    # simd_broadcast: every lane reads one lane
+    INDEX = "index"
+    BROADCAST = "broadcast"
     XOR = "xor"
     UP = "up"
     DOWN = "down"
@@ -54,7 +54,6 @@ REDUCE_DTYPES = pattern.Switch("kind", {
     kind: expr.DType.bool if kind in VOTES else pattern.Or(*(LANE_INTS if kind in BITWISE else LANE_NUMBERS))
     for kind in ReduceKind
 })
-# A reduction the HIR already split per lane: every lane holds a partial value of its group.
 PARTIAL = MappingProxyType({
     kind: pattern.ShardLayout(pattern.Layout((G, 1), (0, 0)), (types.Split(0), types.Partial(kind.value)), LANE_GROUPS)
     for kind in (ReduceKind.SUM, ReduceKind.MIN, ReduceKind.MAX)
@@ -67,7 +66,11 @@ def native(prefix: str, names) -> tuple[expr.OpCapability, ...]:
 
 @expr.register_op(dialect="T", category="arith", namespace="metal", name="reduce")
 class Reduce(expr.Op):
-    """Combine the lanes of each group and give every lane the result (simd_sum, simd_min, ...)."""
+    """Combine the lanes of each group and give every lane the result (simd_sum, simd_min, ...).
+
+    src holds one scalar per lane, or the partial values of a reduction the HIR
+    already split per lane (PARTIAL), which a Reshard to Broadcast resolves.
+    """
 
     capability = native("simd", (kind.value for kind in ReduceKind))
     execution_mesh = LANE_GROUPS
@@ -80,7 +83,6 @@ class Reduce(expr.Op):
     dtype = expr.ParamDef(kind="attribute", annotation=expr.DType,
                           pattern=pattern.Wildcard("dtype", predicates=(REDUCE_DTYPES,)), default=expr.DType.f32)
     dst = expr.ParamDef(kind="input", effect=WRITE, pattern=shared())
-    # One scalar per lane, or the per-lane partial values a Reshard to Broadcast resolves
     src = expr.ParamDef(kind="input", effect=R, pattern=pattern.Tensor(
         shape=(G, pattern.Or(W, 1)), dtype=pattern.Wildcard("dtype"), storage=expr.StorageKind.RMEM,
         layout=pattern.Or(LANES, pattern.Switch("kind", PARTIAL))))
@@ -102,7 +104,11 @@ class Prefix(expr.Op):
 
 @expr.register_op(dialect="T", category="arith", namespace="metal", name="shuffle")
 class Shuffle(expr.Op):
-    """Each lane reads another lane of its group (simd_shuffle, simd_shuffle_up, simd_broadcast, ...)."""
+    """Each lane reads another lane of its group (simd_shuffle, simd_broadcast, ...).
+
+    With kind INDEX, sel names one source lane per lane; every other kind takes
+    one u16 for the whole call.
+    """
 
     capability = native("simd", ("shuffle", "broadcast", "shuffle_xor", "shuffle_up", "shuffle_down",
                                  "shuffle_rotate_up", "shuffle_rotate_down"))
@@ -112,7 +118,6 @@ class Shuffle(expr.Op):
     dtype = expr.ParamDef(kind="attribute", annotation=expr.DType, pattern=one_of("dtype", LANE_NUMBERS), default=expr.DType.f32)
     dst = expr.ParamDef(kind="input", effect=WRITE, pattern=lanes())
     src = expr.ParamDef(kind="input", effect=R, pattern=lanes())
-    # INDEX: one source lane per lane. Every other kind: one u16 for the whole call.
     sel = expr.ParamDef(kind="input", effect=R, pattern=pattern.Switch("kind", {
         kind: lanes(expr.DType.u16) if kind is ShuffleKind.INDEX else pattern.is_scalar_tensor(dtype=expr.DType.u16)
         for kind in ShuffleKind
@@ -121,7 +126,7 @@ class Shuffle(expr.Op):
 
 @expr.register_op(dialect="T", category="arith", namespace="metal", name="shuffle_fill")
 class ShuffleFill(expr.Op):
-    """Shift each sub-vector of modulo lanes and take the vacated lanes from fill (simd_shuffle_and_fill_up/down)."""
+    """Shift each sub-vector of modulo lanes; vacated lanes read fill (simd_shuffle_and_fill_*)."""
 
     capability = native("simd_shuffle_and_fill", ("up", "down"))
     execution_mesh = LANE_GROUPS

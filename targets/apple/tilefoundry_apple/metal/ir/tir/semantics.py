@@ -28,8 +28,6 @@ def write(ctx, result):
     return destination
 
 
-# ---- matrices -------------------------------------------------------------
-
 def move_access(call, ctx):
     shape = ctx.type_of(call.args[0]).shape
     plain = access.identity(3)
@@ -56,8 +54,6 @@ def matmul(ctx):
 def mma(ctx):
     return write(ctx, ctx.args[1].data @ ctx.args[2].data + ctx.args[3].data)
 
-
-# ---- lanes ----------------------------------------------------------------
 
 REDUCTIONS = MappingProxyType({
     ReduceKind.SUM: lambda x: x.sum(1, keepdim=True),
