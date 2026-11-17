@@ -2,7 +2,7 @@
 """Finalize policy-generated regions in an authored plan.
 
 Input is an authored plan file under the plans directory.
-Related Files select milestone acceptance criteria and final-tree gates.
+The `# <path>` lines of a milestone's Delivered blocks select its criteria and gates.
 Handwritten content is preserved; a plan that breaks the template's structure
 fails validation instead of being rewritten.
 
@@ -36,7 +36,7 @@ GATE_START, GATE_END = "<!-- final_gate:start -->", "<!-- final_gate:end -->"
 
 HEADINGS: dict[int, set[str]] = {
     2: {"Description", "Milestones", "Final Gate"},
-    4: {"Depends", "Target State Design", "Related Files"},
+    4: {"Depends", "Target State Design"},
     5: {"Delivered", "Accepted by"},
 }
 CODE_LANGS = frozenset(
@@ -49,6 +49,7 @@ COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 CITATION_RE = re.compile(r"`[^`\s]*/[^`\s]*\.[^`\s]*`")
 DECISION_RE = re.compile(r"^D(\d+)\s+.*?\s--\s+\S")
 DIFF_HEADER_RE = re.compile(r"^#\s+[A-Za-z0-9._/-]+\s*$")
+PATH_HEADER_RE = re.compile(r"^#\s+((?:[A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+|[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+)\s*$")
 SUPERSEDES_RE = re.compile(r"\bSupersedes\s+D(\d+)\b")
 
 
@@ -197,13 +198,17 @@ class Plan:
         return states
 
     def related_files(self, milestone: Section) -> list[str]:
-        section = self.find(4, "Related Files", milestone)
-        if section is None:
+        """The files *milestone* touches: each `# <path>` line of its Delivered blocks."""
+        design = self.find(4, "Target State Design", milestone)
+        delivered = None if design is None else self.find(5, "Delivered", design)
+        if delivered is None:
             return []
         out: list[str] = []
-        for item in self.bullets(section):
-            match = re.match(r"`([^`]+)`", item)
-            out.append(match.group(1) if match else item)
+        for _, body, _ in self.fences(delivered):
+            for line in body.split("\n"):
+                match = PATH_HEADER_RE.match(line)
+                if match and match.group(1) not in out:
+                    out.append(match.group(1))
         return out
 
 
@@ -243,7 +248,7 @@ def check_skeleton(plan: Plan) -> None:
             f"{plan.path}: `## Milestones` block contains no `### Milestone …` entries."
         )
     for milestone in plan.milestones():
-        for title in ("Depends", "Target State Design", "Related Files"):
+        for title in ("Depends", "Target State Design"):
             if plan.find(4, title, milestone) is None:
                 raise FinalizeError(
                     f"{plan.path}: milestone {milestone.title!r} has no `#### {title}`."

@@ -31,7 +31,7 @@
     {
       "id": "spec_impact",
       "name": "Spec impact",
-      "description": "Every source milestone names the specifications it changes among its Related Files, so the public-contract surface is declared once.",
+      "description": "Every source milestone names the specifications it changes among the paths of its Delivered blocks, so the public-contract surface is declared once.",
       "when": {
         "path_glob": [
           "src/**",
@@ -39,7 +39,7 @@
         ]
       },
       "ac": [
-        "A milestone that changes a public contract MUST list the owning `docs/spec/*.md` path in its `#### Related Files`; one that changes none lists no spec path."
+        "A milestone that changes a public contract MUST name the owning `docs/spec/*.md` path as a `# <path>` header in its `##### Delivered`; one that changes none names no spec path."
       ],
       "rules": {
         "implementer": [
