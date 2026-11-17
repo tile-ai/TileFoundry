@@ -31,7 +31,7 @@ def materialised_shape(ty) -> tuple:
     """Return the cute-side materialised shape for *ty*.
 
     Sharded Tensors are materialised at the ``ShardLayout``'s
-    per-mesh-position local shape, not the logical
+    per-unit local shape, not the logical
     ``TensorType.shape``. Elementwise helpers must iterate by the
     local count or they walk past the per-thread / per-CTA
     allocation.

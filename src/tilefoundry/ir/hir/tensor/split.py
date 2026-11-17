@@ -22,8 +22,8 @@ class Split(expr.Op):
 def reject_redistribution(ctx, call: "Call", x_ty, axis: int, parts: int) -> None:
     """Refuse dividing an axis the layout already hands out in slices.
 
-    Each participant would hold one whole part, and saying which one means
-    knowing where that participant starts. This wave carries extents and not
+    Each unit would hold one whole part, and saying which one means
+    knowing where that unit starts. This wave carries extents and not
     offsets, so the redistribution is refused at the contract the author wrote
     against rather than surfacing later as an analysis that cannot answer.
     """
@@ -31,14 +31,14 @@ def reject_redistribution(ctx, call: "Call", x_ty, axis: int, parts: int) -> Non
     if layout is None:
         return
     targets = types.split_target_axes(layout, x_ty.shape)
-    mesh = types.flatten(layout.mesh.layout).shape if layout.mesh is not None else ()
+    mesh = layout.mesh.shape if layout.mesh is not None else ()
     for mesh_axis, attr in enumerate(layout.attrs):
         divides = mesh_axis < len(mesh) and mesh[mesh_axis] > 1
         if isinstance(attr, types.Split) and divides and targets[mesh_axis] == axis:
             ctx.error(
                 call,
                 f"Split: axis {axis} is divided into {parts} parts and is "
-                "already Split across participants, so which part a participant "
+                "already Split across units, so which part a unit "
                 "holds depends on an offset this analysis does not carry; "
                 "reshard to a replicated layout before the split",
             )

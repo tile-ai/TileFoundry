@@ -23,31 +23,30 @@ from .precision import Precision
 from .visitor import AnalyzeContext
 
 
-def positions_at(mesh: types.Mesh, unit: str, topologies: tuple[types.Topology, ...]) -> int:
-    """Count mesh positions at the selected unit and all coarser topology levels."""
-    declared = {topology.name: index for index, topology in enumerate(topologies)}
-    selected = declared[unit]
-    stated = mesh.layout.outer if isinstance(mesh.layout, types.ComposedLayout) else mesh.layout
-    positions = 1
-    for index, topology in enumerate(mesh.topologies):
-        if declared[topology.name] > selected:
+def units_at(mesh: types.Mesh, topology: str, topologies: tuple[types.Topology, ...]) -> int:
+    """Count mesh units at the selected topology and all coarser topologies."""
+    selected = utils.topology_level(topology, topologies)
+    stated = types.plain_layout(mesh.layout)
+    units = 1
+    for index, each in enumerate(mesh.topologies):
+        if utils.topology_level(each.name, topologies) > selected:
             continue
         count = types.size(types.get(stated, index))
         if not isinstance(count, int) or isinstance(count, bool) or count < 1:
             raise Error(
-                f"mesh level {topology.name!r} needs positive static extents, got {count!r}"
+                f"mesh topology {each.name!r} needs positive static extents, got {count!r}"
             )
-        positions *= count
-    return positions
+        units *= count
+    return units
 
 
 @dataclass(frozen=True)
 class Repeats:
-    """Separate variant trips, all trips, executing positions, and trip precision."""
+    """Separate variant trips, all trips, executing units, and trip precision."""
 
     varying_loop_trips: int
     loop_trips: int
-    mesh_positions: int
+    mesh_units: int
     trips_precision: Precision
 
 
@@ -330,7 +329,7 @@ class ScopeAccess:
         return cache[key][1:]
 
     def projected_relations(self, call, ctx):
-        key = (id(call), ctx.topology_level)
+        key = (id(call), ctx.topology)
         if key not in self.projections:
             stated = self.relations.get(id(call))
             stated = access.relations_of(call, ctx) if stated is None else stated[1]
@@ -563,16 +562,16 @@ class IterationScope:
     def is_variant(self, value):
         return id(self.owner) in self.provenance.varies(value)
 
-    def mesh_positions(self, unit):
+    def mesh_units(self, topology):
         return (
             1
-            if self.mesh is None or unit is None
-            else positions_at(self.mesh, unit, self.topologies)
+            if self.mesh is None or topology is None
+            else units_at(self.mesh, topology, self.topologies)
         )
 
-    def active_positions(self, unit):
-        """The most positions any mesh in this scope or below it runs at *unit*."""
-        return max((self.mesh_positions(unit), *(c.active_positions(unit) for c in self.children)))
+    def active_units(self, topology):
+        """The most units any mesh in this scope or below it runs at *topology*."""
+        return max((self.mesh_units(topology), *(c.active_units(topology) for c in self.children)))
 
     def dependency_trips(self, formals):
         changing = set().union(*(self.provenance.varies(p) for p in formals))
@@ -587,7 +586,7 @@ class IterationScope:
             provenance = provenance.caller_provenance
         return count, precision
 
-    def repeats_of(self, call, unit, stop=None):
+    def repeats_of(self, call, topology, stop=None):
         varying = loops = 1
         precision = Precision.EXACT
         changing = self.provenance.varies(call)
@@ -599,7 +598,7 @@ class IterationScope:
                 if id(scope.owner) in changing:
                     varying *= scope.trips()
                 precision = precision.join(scope.trips_precision)
-        return Repeats(varying, loops, self.mesh_positions(unit), precision)
+        return Repeats(varying, loops, self.mesh_units(topology), precision)
 
     def counted(self) -> tuple[int, Precision]:
         """This scope's iteration count relative to its parent, and how exact it is.
@@ -663,7 +662,7 @@ class ScopeBuilder(valuation.Visitor[None]):
         self.seeds = {}
 
     def views_of(self, ctx):
-        logical = ctx if ctx.topology_level is None else replace(ctx, topology_level=None)
+        logical = ctx if ctx.topology is None else replace(ctx, topology=None)
         return {view: ctx if view == "unit" else logical for view in self.views}
 
     def record_node(self, node, ctx, *, forward=None, alias=None, relations=None, views=None):
@@ -716,7 +715,7 @@ class ScopeBuilder(valuation.Visitor[None]):
             self.record_node(call, ctx)
             return
         views = self.views_of(ctx)
-        logical = views["device"] if "device" in views else replace(ctx, topology_level=None)
+        logical = views["device"] if "device" in views else replace(ctx, topology=None)
         try:
             stated = access.relations_of(call, logical)
             acc.record_relations(call, stated)
@@ -761,7 +760,7 @@ class ScopeBuilder(valuation.Visitor[None]):
             region,
             parent=ctx.scope,
             domain=iteration_domain(region, ctx.scope),
-            mesh=inner.current_mesh,
+            mesh=inner.mesh_scope,
             topologies=ctx.topologies,
         )
         child.share_facts(self.snapshot, ctx.scope.snapshot.definition.locations)
@@ -847,7 +846,7 @@ class ScopeBuilder(valuation.Visitor[None]):
         )
         root.share_facts(self.snapshot)
         self.context.bind_scope(root)
-        ctx = replace(self.context, owner=self.graph, parent=None, current_mesh=root.mesh)
+        ctx = replace(self.context, owner=self.graph, parent=None, mesh_scope=root.mesh)
         for param in self.graph.params:
             self.visit(param, ctx)
         self.visit_function_body(self.graph, ctx)

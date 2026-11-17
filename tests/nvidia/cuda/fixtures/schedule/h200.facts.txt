@@ -8,7 +8,7 @@ T.arange
     start  any value (type int) (default 0)
     step   any value (type int) (default 1)
   operands
-    dst  Tensor(shape=(None,), dtype=one of {i32; i64}, storage=rmem, layout=any arrangement)
+    dst  Tensor(shape=(None,), dtype=one of {i32; i64}, storage=rmem, layout=any layout)
 
 T.binary
   target             nvidia.h200_sxm
@@ -16,9 +16,9 @@ T.binary
   parameters
     kind  any value in {BinaryKind.ADD, BinaryKind.SUB, BinaryKind.MUL, BinaryKind.DIV, BinaryKind.FLOOR_DIV, BinaryKind.MOD, BinaryKind.MIN, BinaryKind.MAX, BinaryKind.EQ, BinaryKind.NE, BinaryKind.LT, BinaryKind.LE, BinaryKind.GT, BinaryKind.GE, BinaryKind.AND, BinaryKind.OR}
   operands
-    lhs  Tensor(storage=rmem, layout=any arrangement)
-    rhs  Tensor(storage=rmem, layout=any arrangement)
-    dst  Tensor(storage=rmem, layout=any arrangement)
+    lhs  Tensor(storage=rmem, layout=any layout)
+    rhs  Tensor(storage=rmem, layout=any layout)
+    dst  Tensor(storage=rmem, layout=any layout)
 
 T.cast
   target             nvidia.h200_sxm
@@ -39,8 +39,8 @@ T.clamp
     min_val  any value (type float)
     max_val  any value (type float)
   operands
-    src  Tensor(storage=rmem, layout=any arrangement)
-    dst  Tensor(storage=rmem, layout=any arrangement)
+    src  Tensor(storage=rmem, layout=any layout)
+    dst  Tensor(storage=rmem, layout=any layout)
   between operands
     src.dtype = dst.dtype
 
@@ -50,17 +50,17 @@ T.unary
   parameters
     kind  any value in {UnaryKind.NEG, UnaryKind.ABS, UnaryKind.RSQRT, UnaryKind.CAST, UnaryKind.NOT, UnaryKind.RELU, UnaryKind.SQUARE, UnaryKind.EXP, UnaryKind.LOG, UnaryKind.CEIL, UnaryKind.ROUND, UnaryKind.EXP2, UnaryKind.LOG2}
   operands
-    src  Tensor(storage=rmem, layout=any arrangement)
-    dst  Tensor(storage=rmem, layout=any arrangement)
+    src  Tensor(storage=rmem, layout=any layout)
+    dst  Tensor(storage=rmem, layout=any layout)
 
 T.where
   target             nvidia.h200_sxm
   execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   operands
-    cond  Tensor(dtype=bool, storage=rmem, layout=any arrangement)
-    lhs   Tensor(storage=rmem, layout=any arrangement)
-    rhs   Tensor(storage=rmem, layout=any arrangement)
-    dst   Tensor(storage=rmem, layout=any arrangement)
+    cond  Tensor(dtype=bool, storage=rmem, layout=any layout)
+    lhs   Tensor(storage=rmem, layout=any layout)
+    rhs   Tensor(storage=rmem, layout=any layout)
+    dst   Tensor(storage=rmem, layout=any layout)
   between operands
     lhs.dtype = rhs.dtype
     lhs.dtype = dst.dtype
@@ -74,7 +74,7 @@ T.copy_async
   operands
     src    Tensor(dtype=dtype0, storage=gmem, layout=layout where every run: each tile axis's modes walked fastest first, contiguous ones joined; the run at step 1 and every other step a whole number of vectors) where Bits('dtype0') % 8 == 0
     dst    Tensor(dtype=dtype1, storage=smem, layout=layout where every run: each tile axis's modes walked fastest first, contiguous ones joined; the run at step 1 and every other step a whole number of vectors) where Bits('dtype1') % 8 == 0
-    index  Tensor(shape=(None,), dtype=one of {i32; i64}, layout=any arrangement) or None (default None)
+    index  Tensor(shape=(None,), dtype=one of {i32; i64}, layout=any layout) or None (default None)
   between operands
     src.dtype = dst.dtype
     src.storage != dst.storage
@@ -85,9 +85,9 @@ T.copy_async_bulk
   target capability  cp.async.bulk
   execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   operands
-    src      Tensor(storage=gmem, layout=any arrangement)
-    dst      Tensor(storage=smem, layout=any arrangement)
-    barrier  Tensor(storage=smem, layout=any arrangement)
+    src      Tensor(storage=gmem, layout=any layout)
+    dst      Tensor(storage=smem, layout=any layout)
+    barrier  Tensor(storage=smem, layout=any layout)
   between operands
     src.shape = dst.shape
     src.dtype = dst.dtype
@@ -95,20 +95,20 @@ T.copy_async_bulk
 T.copy_async_tensor
   target             nvidia.h200_sxm
   target capability  cp.async.bulk.tensor
-  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout(((*one of {1}, 32),), ((*_, 1),)))) where p0 % 32 == 0; every arrangement has no backward step; every arrangement reaches each of its own slots exactly once
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout(((*one of {1}, 32),), ((*_, 1),)))) where p0 % 32 == 0; the whole layout has no backward step; the whole layout reaches each of its own slots exactly once
   parameters
-    execution_mesh  Mesh(('thread',), ComposedLayout(None, p0, Layout(((*one of {1}, 32),), ((*_, 1),)))) where p0 % 32 == 0; every arrangement has no backward step; every arrangement reaches each of its own slots exactly once (type Mesh) or None (default None)
+    execution_mesh  Mesh(('thread',), ComposedLayout(None, p0, Layout(((*one of {1}, 32),), ((*_, 1),)))) where p0 % 32 == 0; the whole layout has no backward step; the whole layout reaches each of its own slots exactly once (type Mesh) or None (default None)
   operands
     src  Tensor:
            dtype=dtype0
            storage=storage0
            layout=switch storage0:
-               storage0=gmem: layout where every plain arrangement is a static strided layout with no swizzle and zero offset, and, where it is sharded, one every participant holds whole; every tensormap: one dim per mode of the tile, the mode at step 1 first; Bits('dtype0') * step1 % 128 == 0; Bits('dtype0') * step2 % 128 == 0; Bits('dtype0') * step3 % 128 == 0; Bits('dtype0') * step4 % 128 == 0
+               storage0=gmem: layout where every strided layout is static, with no swizzle and zero offset, and, where it is sharded, one every unit holds whole; every tensormap: one dim per mode of the tile, the mode at step 1 first; Bits('dtype0') * step1 % 128 == 0; Bits('dtype0') * step2 % 128 == 0; Bits('dtype0') * step3 % 128 == 0; Bits('dtype0') * step4 % 128 == 0
                storage0=smem: switch swizzle:
-                   swizzle=TmaSwizzle.NONE: layout where every plain arrangement is a static strided layout with no swizzle and zero offset, and, where it is sharded, one every participant holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim0 >= 1; dim0 <= 256; Bits('dtype0') * dim0 % 128 == 0; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
-                   swizzle=TmaSwizzle.SW32: ComposedLayout(Swizzle(1, 4, 3), 0, layout) where every plain arrangement is a static strided layout with no swizzle and zero offset, and, where it is sharded, one every participant holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim5 >= 1; dim5 <= 256; Bits('dtype0') * dim5 % 128 == 0; Bits('dtype0') * dim5 <= 256; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
-                   swizzle=TmaSwizzle.SW64: ComposedLayout(Swizzle(2, 4, 3), 0, layout) where every plain arrangement is a static strided layout with no swizzle and zero offset, and, where it is sharded, one every participant holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim6 >= 1; dim6 <= 256; Bits('dtype0') * dim6 % 128 == 0; Bits('dtype0') * dim6 <= 512; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
-                   swizzle=TmaSwizzle.SW128: ComposedLayout(Swizzle(3, 4, 3), 0, layout) where every plain arrangement is a static strided layout with no swizzle and zero offset, and, where it is sharded, one every participant holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim7 >= 1; dim7 <= 256; Bits('dtype0') * dim7 % 128 == 0; Bits('dtype0') * dim7 <= 1024; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
+                   swizzle=TmaSwizzle.NONE: layout where every strided layout is static, with no swizzle and zero offset, and, where it is sharded, one every unit holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim0 >= 1; dim0 <= 256; Bits('dtype0') * dim0 % 128 == 0; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
+                   swizzle=TmaSwizzle.SW32: ComposedLayout(Swizzle(1, 4, 3), 0, layout) where every strided layout is static, with no swizzle and zero offset, and, where it is sharded, one every unit holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim5 >= 1; dim5 <= 256; Bits('dtype0') * dim5 % 128 == 0; Bits('dtype0') * dim5 <= 256; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
+                   swizzle=TmaSwizzle.SW64: ComposedLayout(Swizzle(2, 4, 3), 0, layout) where every strided layout is static, with no swizzle and zero offset, and, where it is sharded, one every unit holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim6 >= 1; dim6 <= 256; Bits('dtype0') * dim6 % 128 == 0; Bits('dtype0') * dim6 <= 512; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
+                   swizzle=TmaSwizzle.SW128: ComposedLayout(Swizzle(3, 4, 3), 0, layout) where every strided layout is static, with no swizzle and zero offset, and, where it is sharded, one every unit holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim7 >= 1; dim7 <= 256; Bits('dtype0') * dim7 % 128 == 0; Bits('dtype0') * dim7 <= 1024; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
            predicates:
              Bits('dtype0') % 8 == 0
              storage0 in {gmem, smem}
@@ -116,12 +116,12 @@ T.copy_async_tensor
            dtype=dtype1
            storage=storage1
            layout=switch storage1:
-               storage1=gmem: layout where every plain arrangement is a static strided layout with no swizzle and zero offset, and, where it is sharded, one every participant holds whole; every tensormap: one dim per mode of the tile, the mode at step 1 first; Bits('dtype1') * step1 % 128 == 0; Bits('dtype1') * step2 % 128 == 0; Bits('dtype1') * step3 % 128 == 0; Bits('dtype1') * step4 % 128 == 0
+               storage1=gmem: layout where every strided layout is static, with no swizzle and zero offset, and, where it is sharded, one every unit holds whole; every tensormap: one dim per mode of the tile, the mode at step 1 first; Bits('dtype1') * step1 % 128 == 0; Bits('dtype1') * step2 % 128 == 0; Bits('dtype1') * step3 % 128 == 0; Bits('dtype1') * step4 % 128 == 0
                storage1=smem: switch swizzle:
-                   swizzle=TmaSwizzle.NONE: layout where every plain arrangement is a static strided layout with no swizzle and zero offset, and, where it is sharded, one every participant holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim0 >= 1; dim0 <= 256; Bits('dtype1') * dim0 % 128 == 0; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
-                   swizzle=TmaSwizzle.SW32: ComposedLayout(Swizzle(1, 4, 3), 0, layout) where every plain arrangement is a static strided layout with no swizzle and zero offset, and, where it is sharded, one every participant holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim5 >= 1; dim5 <= 256; Bits('dtype1') * dim5 % 128 == 0; Bits('dtype1') * dim5 <= 256; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
-                   swizzle=TmaSwizzle.SW64: ComposedLayout(Swizzle(2, 4, 3), 0, layout) where every plain arrangement is a static strided layout with no swizzle and zero offset, and, where it is sharded, one every participant holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim6 >= 1; dim6 <= 256; Bits('dtype1') * dim6 % 128 == 0; Bits('dtype1') * dim6 <= 512; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
-                   swizzle=TmaSwizzle.SW128: ComposedLayout(Swizzle(3, 4, 3), 0, layout) where every plain arrangement is a static strided layout with no swizzle and zero offset, and, where it is sharded, one every participant holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim7 >= 1; dim7 <= 256; Bits('dtype1') * dim7 % 128 == 0; Bits('dtype1') * dim7 <= 1024; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
+                   swizzle=TmaSwizzle.NONE: layout where every strided layout is static, with no swizzle and zero offset, and, where it is sharded, one every unit holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim0 >= 1; dim0 <= 256; Bits('dtype1') * dim0 % 128 == 0; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
+                   swizzle=TmaSwizzle.SW32: ComposedLayout(Swizzle(1, 4, 3), 0, layout) where every strided layout is static, with no swizzle and zero offset, and, where it is sharded, one every unit holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim5 >= 1; dim5 <= 256; Bits('dtype1') * dim5 % 128 == 0; Bits('dtype1') * dim5 <= 256; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
+                   swizzle=TmaSwizzle.SW64: ComposedLayout(Swizzle(2, 4, 3), 0, layout) where every strided layout is static, with no swizzle and zero offset, and, where it is sharded, one every unit holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim6 >= 1; dim6 <= 256; Bits('dtype1') * dim6 % 128 == 0; Bits('dtype1') * dim6 <= 512; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
+                   swizzle=TmaSwizzle.SW128: ComposedLayout(Swizzle(3, 4, 3), 0, layout) where every strided layout is static, with no swizzle and zero offset, and, where it is sharded, one every unit holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim7 >= 1; dim7 <= 256; Bits('dtype1') * dim7 % 128 == 0; Bits('dtype1') * dim7 <= 1024; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
            predicates:
              Bits('dtype1') % 8 == 0
              storage1 in {gmem, smem}
@@ -134,22 +134,22 @@ T.copy_async_tensor
 T.copy_reduce_async_tensor
   target             nvidia.h200_sxm
   target capability  cp.async.bulk.tensor
-  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout(((*one of {1}, 32),), ((*_, 1),)))) where p0 % 32 == 0; every arrangement has no backward step; every arrangement reaches each of its own slots exactly once
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout(((*one of {1}, 32),), ((*_, 1),)))) where p0 % 32 == 0; the whole layout has no backward step; the whole layout reaches each of its own slots exactly once
   parameters
     kind            add (default add)
-    execution_mesh  Mesh(('thread',), ComposedLayout(None, p0, Layout(((*one of {1}, 32),), ((*_, 1),)))) where p0 % 32 == 0; every arrangement has no backward step; every arrangement reaches each of its own slots exactly once (type Mesh) or None (default None)
+    execution_mesh  Mesh(('thread',), ComposedLayout(None, p0, Layout(((*one of {1}, 32),), ((*_, 1),)))) where p0 % 32 == 0; the whole layout has no backward step; the whole layout reaches each of its own slots exactly once (type Mesh) or None (default None)
   operands
     src  Tensor:
            dtype=dtype0
            storage=smem
            layout=switch swizzle:
-               swizzle=TmaSwizzle.NONE: layout where every plain arrangement is a static strided layout with no swizzle and zero offset, and, where it is sharded, one every participant holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim0 >= 1; dim0 <= 256; Bits('dtype0') * dim0 % 128 == 0; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
-               swizzle=TmaSwizzle.SW32: ComposedLayout(Swizzle(1, 4, 3), 0, layout) where every plain arrangement is a static strided layout with no swizzle and zero offset, and, where it is sharded, one every participant holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim5 >= 1; dim5 <= 256; Bits('dtype0') * dim5 % 128 == 0; Bits('dtype0') * dim5 <= 256; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
-               swizzle=TmaSwizzle.SW64: ComposedLayout(Swizzle(2, 4, 3), 0, layout) where every plain arrangement is a static strided layout with no swizzle and zero offset, and, where it is sharded, one every participant holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim6 >= 1; dim6 <= 256; Bits('dtype0') * dim6 % 128 == 0; Bits('dtype0') * dim6 <= 512; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
-               swizzle=TmaSwizzle.SW128: ComposedLayout(Swizzle(3, 4, 3), 0, layout) where every plain arrangement is a static strided layout with no swizzle and zero offset, and, where it is sharded, one every participant holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim7 >= 1; dim7 <= 256; Bits('dtype0') * dim7 % 128 == 0; Bits('dtype0') * dim7 <= 1024; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
+               swizzle=TmaSwizzle.NONE: layout where every strided layout is static, with no swizzle and zero offset, and, where it is sharded, one every unit holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim0 >= 1; dim0 <= 256; Bits('dtype0') * dim0 % 128 == 0; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
+               swizzle=TmaSwizzle.SW32: ComposedLayout(Swizzle(1, 4, 3), 0, layout) where every strided layout is static, with no swizzle and zero offset, and, where it is sharded, one every unit holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim5 >= 1; dim5 <= 256; Bits('dtype0') * dim5 % 128 == 0; Bits('dtype0') * dim5 <= 256; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
+               swizzle=TmaSwizzle.SW64: ComposedLayout(Swizzle(2, 4, 3), 0, layout) where every strided layout is static, with no swizzle and zero offset, and, where it is sharded, one every unit holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim6 >= 1; dim6 <= 256; Bits('dtype0') * dim6 % 128 == 0; Bits('dtype0') * dim6 <= 512; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
+               swizzle=TmaSwizzle.SW128: ComposedLayout(Swizzle(3, 4, 3), 0, layout) where every strided layout is static, with no swizzle and zero offset, and, where it is sharded, one every unit holds whole; every box: each tile axis's modes, contiguous ones joined up to 256 elements, one dim each, in increasing step; dim7 >= 1; dim7 <= 256; Bits('dtype0') * dim7 % 128 == 0; Bits('dtype0') * dim7 <= 1024; dim1 >= 1; dim1 <= 256; dim2 >= 1; dim2 <= 256; dim3 >= 1; dim3 <= 256; dim4 >= 1; dim4 <= 256
            predicates:
              Bits('dtype0') % 8 == 0
-    dst  Tensor(dtype=dtype1, storage=gmem, layout=layout where every plain arrangement is a static strided layout with no swizzle and zero offset, and, where it is sharded, one every participant holds whole; every tensormap: one dim per mode of the tile, the mode at step 1 first; Bits('dtype1') * step1 % 128 == 0; Bits('dtype1') * step2 % 128 == 0; Bits('dtype1') * step3 % 128 == 0; Bits('dtype1') * step4 % 128 == 0) where Bits('dtype1') % 8 == 0
+    dst  Tensor(dtype=dtype1, storage=gmem, layout=layout where every strided layout is static, with no swizzle and zero offset, and, where it is sharded, one every unit holds whole; every tensormap: one dim per mode of the tile, the mode at step 1 first; Bits('dtype1') * step1 % 128 == 0; Bits('dtype1') * step2 % 128 == 0; Bits('dtype1') * step3 % 128 == 0; Bits('dtype1') * step4 % 128 == 0) where Bits('dtype1') % 8 == 0
   between operands
     src.shape = dst.shape
     src.dtype = dst.dtype
@@ -199,7 +199,7 @@ T.ldmatrix
 T.stmatrix
   target             nvidia.h200_sxm
   target capability  stmatrix
-  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 8, 4),), ((*gs, 4, 1),)))) where p0 % 32 == 0; every arrangement has no backward step; every arrangement reaches each of its own slots exactly once
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 8, 4),), ((*gs, 4, 1),)))) where p0 % 32 == 0; the whole layout has no backward step; the whole layout reaches each of its own slots exactly once
   parameters
     execution_mesh  Mesh(('thread',), ComposedLayout(None, p0, Layout(((8, 4),), ((4, 1),)))) where each top-level mode has no backward step; each top-level mode reaches each of its own slots exactly once; p0 % 32 == 0 (type Mesh) or None (default None)
   operands
@@ -213,8 +213,8 @@ T.relu
   target             nvidia.h200_sxm
   execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   operands
-    src  Tensor(storage=rmem, layout=any arrangement)
-    dst  Tensor(storage=rmem, layout=any arrangement)
+    src  Tensor(storage=rmem, layout=any layout)
+    dst  Tensor(storage=rmem, layout=any layout)
   between operands
     src.shape = dst.shape
     src.dtype = dst.dtype
@@ -223,9 +223,9 @@ T.tiled_mma
   target             nvidia.h200_sxm
   target capability  wgmma.mma_async, mma.sync
   execution mesh     switch atom:
-                       atom=T.cuda.sm90.Wgmma: Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8, 4),), ((*gs, 32, 4, 1),)))) where p0 % 128 == 0; every arrangement has no backward step; every arrangement reaches each of its own slots exactly once
-                       atom=T.cuda.sm80.Mma: Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8),), ((*gs, 1, 4),)))) where p0 % 32 == 0; every arrangement has no backward step; every arrangement reaches each of its own slots exactly once
-                       atom=T.cuda.sm89.Mma: Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8),), ((*gs, 1, 4),)))) where p0 % 32 == 0; every arrangement has no backward step; every arrangement reaches each of its own slots exactly once
+                       atom=T.cuda.sm90.Wgmma: Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8, 4),), ((*gs, 32, 4, 1),)))) where p0 % 128 == 0; the whole layout has no backward step; the whole layout reaches each of its own slots exactly once
+                       atom=T.cuda.sm80.Mma: Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8),), ((*gs, 1, 4),)))) where p0 % 32 == 0; the whole layout has no backward step; the whole layout reaches each of its own slots exactly once
+                       atom=T.cuda.sm89.Mma: Mesh(('thread',), ComposedLayout(None, p0, Layout(((*g, 4, 8),), ((*gs, 1, 4),)))) where p0 % 32 == 0; the whole layout has no backward step; the whole layout reaches each of its own slots exactly once
   parameters
     atom            one of T.cuda.sm90.Wgmma, T.cuda.sm80.Mma, T.cuda.sm89.Mma (type MmaAtom)
     execution_mesh  any value (type Mesh) or None (default None)
@@ -416,15 +416,15 @@ T.mbarrier_arrive_expect_tx
   parameters
     tx_bytes  any value where tx_bytes > 0 (type int)
   operands
-    barrier  Tensor(storage=smem, layout=any arrangement)
+    barrier  Tensor(storage=smem, layout=any layout)
 
 T.mbarrier_wait_parity
   target             nvidia.h200_sxm
   target capability  mbarrier.try_wait
   execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   operands
-    barrier  Tensor(storage=smem, layout=any arrangement)
-    phase    Tensor(shape=(), layout=any arrangement)
+    barrier  Tensor(storage=smem, layout=any layout)
+    phase    Tensor(shape=(), layout=any layout)
 
 T.reduce
   target             nvidia.h200_sxm
@@ -436,4 +436,4 @@ T.reduce
   operands
     src        Tensor(dtype=src_dtype, layout=ShardLayout(Layout((*_,), (*_,)), _, Mesh(('thread',), ComposedLayout(None, mesh_offset, Layout((*mesh_shape,), (*mesh_stride,)))))) where src_dtype in {f32, f16, bf16}
     dst        Tensor(dtype=dst_dtype, layout=ShardLayout(None, _, Mesh(('thread',), ComposedLayout(None, mesh_offset, Layout((*mesh_shape,), (*mesh_stride,)))))) where dst_dtype in {f32, f16, bf16}
-    workspace  Tensor(storage=smem, layout=any arrangement) or None (default None)
+    workspace  Tensor(storage=smem, layout=any layout) or None (default None)

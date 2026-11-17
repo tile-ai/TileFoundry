@@ -33,7 +33,7 @@ class Target(target.Target):
     device: target.Device = field(init=False)
 
     device_count: int | None = field(default=None, init=False)
-    """How many cards a program of this target may name at its ``gpu`` level."""
+    """How many cards a program of this target may name at its ``gpu`` topology."""
 
 
 
@@ -72,7 +72,7 @@ class Target(target.Target):
         ):
             raise ValueError(
                 f"cuda.Target: device_count {device_count!r} must be a positive int "
-                f"or None, which admits any extent at the gpu level"
+                f"or None, which admits any extent at the gpu topology"
             )
         if architecture is None:
             architecture = target.architecture_of(
@@ -109,7 +109,7 @@ class Target(target.Target):
         object.__setattr__(self, "device_document", device.document)
 
     def topology_facts(self) -> target.TopologyFacts:
-        """The three CUDA levels, coarsest first.
+        """The three CUDA topologies, coarsest first.
 
         Only ``gpu`` comes from the target instance: how many cards a deployment
         has is stated by whoever constructs the target, and no card can read
@@ -117,17 +117,17 @@ class Target(target.Target):
         """
         return target.TopologyFacts(
             (
-                target.TopologyLevelFacts(
+                target.TopologyLimits(
                     "gpu", self.device_count, parallel_units(self, "gpu"), from_target=True
                 ),
-                target.TopologyLevelFacts("cta", None, parallel_units(self, "cta")),
-                target.TopologyLevelFacts(
+                target.TopologyLimits("cta", None, parallel_units(self, "cta")),
+                target.TopologyLimits(
                     "thread",
                     self.architecture.topology_limit("thread"),
                     parallel_units(self, "thread"),
                 ),
             ),
-            parallel_level="cta",
+            parallel_topology="cta",
         )
 
     def get_analyzer(self, selector: str) -> target.Analyzer:
@@ -149,12 +149,12 @@ class Target(target.Target):
             return target.facts_result(
                 self, facts_type, target.MemoryExecutionFacts((self.topology_facts().topologies[-1].name,))
             )
-        if facts_type is target.TopologyLevelFacts:
-            level = self.topology_facts().level(
+        if facts_type is target.TopologyLimits:
+            limits = self.topology_facts().topology(
                 query if isinstance(query, str) else None
             )
-            if level is not None:
-                return target.facts_result(self, facts_type, level)
+            if limits is not None:
+                return target.facts_result(self, facts_type, limits)
             return super().get_facts(facts_type, query)
 
         if facts_type is target.MemoryHierarchyFacts:
@@ -186,7 +186,7 @@ class Target(target.Target):
         return self.architecture.name
 
     def topology_limit(self, name: str) -> int:
-        """Return the physical parallel limit for one CUDA topology level."""
+        """Return the physical parallel limit for one CUDA topology."""
         if name == "gpu":
             return self.device_count or 1
         if name == "cta":

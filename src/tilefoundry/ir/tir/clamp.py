@@ -24,8 +24,8 @@ class Clamp(expr.Op):
 
 
 @typeinfer.register(Clamp)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 access.register_relation(Clamp)(access.identity_relations)

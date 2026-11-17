@@ -12,7 +12,7 @@ from tilefoundry.ir import clause, expr, pattern, types
 from .printer_base import PythonPrinter
 
 UNNAMED = "_"
-ARRANGEMENT = "every arrangement"
+WHOLE_LAYOUT = "the whole layout"
 BINARY_OPERATORS = MappingProxyType({
     **{op: (symbol, 1) for op, symbol in (
         ("eq", "=="), ("ne", "!="), ("lt", "<"), ("le", "<="), ("gt", ">"), ("ge", ">="),
@@ -348,7 +348,7 @@ class PatternPrinter:
         return f"Layout({shape}, {strides})"
 
     def rules_Layout(self, node, name) -> tuple[str, ...]:
-        return self.rules_of(node.positions())
+        return self.rules_of(node.mode_fields())
 
     def visit_Swizzle(self, node, name) -> str:
         return (
@@ -402,7 +402,7 @@ class PatternPrinter:
             fields.append(f"  {field}={lines[0]}")
             fields.extend(f"    {line}" for line in lines[1:])
         if node.layout is None:
-            fields.append("  layout=any arrangement")
+            fields.append("  layout=any layout")
         if all("\n" not in line for line in fields) and all(not line.startswith("    ") for line in fields):
             return "Tensor(" + ", ".join(line.strip() for line in fields) + ")"
         return "\n".join(("Tensor:", *fields))
@@ -452,14 +452,14 @@ class PatternPrinter:
         return name
 
     def rules_Forward(self, node, name) -> tuple[str, ...]:
-        subject = "each top-level mode" if node.per_mode else ARRANGEMENT
+        subject = "each top-level mode" if node.per_mode else WHOLE_LAYOUT
         return (f"{subject} has no backward step",)
 
     def visit_Injective(self, node, name) -> str:
         return name
 
     def rules_Injective(self, node, name) -> tuple[str, ...]:
-        subject = "each top-level mode" if node.per_mode else ARRANGEMENT
+        subject = "each top-level mode" if node.per_mode else WHOLE_LAYOUT
         return (f"{subject} reaches each of its own slots exactly once",)
 
     def visit_WholeVectors(self, node, name) -> str:
@@ -472,13 +472,13 @@ class PatternPrinter:
             *self.rules(node.width),
         )
 
-    def visit_PlainArrangement(self, node, name) -> str:
+    def visit_Strided(self, node, name) -> str:
         return name
 
-    def rules_PlainArrangement(self, node, name) -> tuple[str, ...]:
+    def rules_Strided(self, node, name) -> tuple[str, ...]:
         return (
-            "every plain arrangement is a static strided layout with no swizzle and zero "
-            "offset, and, where it is sharded, one every participant holds whole",
+            "every strided layout is static, with no swizzle and zero offset, and, "
+            "where it is sharded, one every unit holds whole",
         )
 
     def visit_BoxDims(self, node, name) -> str:

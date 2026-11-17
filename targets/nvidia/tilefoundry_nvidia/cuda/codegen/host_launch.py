@@ -1,4 +1,4 @@
-"""CUDA launch declarations, placement checks, and calls in CPU host entries."""
+"""CUDA launch declarations, storage checks, and calls in CPU host entries."""
 
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ def reject_unsupported_config(cfg: tir.launch.Launch) -> None:
         raise NotImplementedError("emit_host_module: launch `attrs` are not supported yet")
 
 
-def placement_line(name: str, storage) -> str:
+def storage_check_line(name: str, storage) -> str:
     """Refuse a tensor that is not where the parameter's storage says it is."""
     device_type = STORAGE_DEVICE_TYPE.get(storage)
     if device_type is None:
@@ -152,7 +152,7 @@ def one_launch(
     forwarded = forwarded_params(entry, launch, launcher)
     bound = as_this_scope_names_it(launcher, forwarded, launch)
     lines = [
-        placement_line(var.name, param.type.storage)
+        storage_check_line(var.name, param.type.storage)
         for var, param in zip(forwarded, launcher.params)
     ]
     call = f"{launcher.name}({arguments(bound, ctx)})"

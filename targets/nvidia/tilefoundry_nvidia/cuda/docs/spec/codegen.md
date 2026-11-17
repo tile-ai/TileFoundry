@@ -12,9 +12,9 @@ body does not implement multi-device execution. Skeletons retain signatures,
 parameter views, specialization dispatch and launchers, replacing statements
 with `// TODO: <fn>`.
 
-The device unit owns kernels and C-ABI launchers. A launcher asked for more
-than 48 KiB of dynamic shared memory MUST first raise its kernel's
-`cudaFuncAttributeMaxDynamicSharedMemorySize` to that size. A launcher reads
+The device unit owns kernels and C-ABI launchers. A launcher MUST first raise the
+kernel's `cudaFuncAttributeMaxDynamicSharedMemorySize` to the requested size.
+This applies when it asks for more than 48 KiB of dynamic shared memory. A launcher reads
 launch status immediately and returns the CUDA error text or null, including
 when the device refuses the raised limit. Host entries raise on an error; no
 exception crosses the C ABI and a refused launch never returns as though the
@@ -72,16 +72,16 @@ while owning register tensors are copied.
 
 CUDA emits `CopyAsyncBulk` and `LdMatrix` as the uniform runtime calls
 `tilefoundry::ops::copy_async_bulk(...)` and
-`tilefoundry::ops::ldmatrix(...)`. `CopyAsyncTensor` is a public TIR declaration, but CUDA emission MUST fail explicitly until the host can
-construct and pass encoded tensor maps; it MUST NOT substitute a bulk or
-thread-issued copy. `CopyReduceAsyncTensor` has the same boundary and MUST NOT
+`tilefoundry::ops::ldmatrix(...)`. `CopyAsyncTensor` is a public TIR declaration. CUDA emission MUST fail explicitly until the host can
+construct and pass encoded tensor maps. It MUST NOT substitute a bulk copy or a
+copy that each thread executes for itself. `CopyReduceAsyncTensor` has the same boundary and MUST NOT
 substitute a copy that drops the reduction. `StMatrix` MUST fail explicitly
 until stmatrix runtime support exists.
 
 ## 3. Runtime-owned op dispatch
 
 Codegen emits one uniform runtime call, passing operand `ShardLayout`s and
-static participant geometry as template parameters. The runtime selects a
+static unit geometry as template parameters. The runtime selects a
 layout-compatible implementation at compile time. Codegen MUST NOT select a
 tier or attach tier selection to an op. See
 [runtime §2.6](./runtime.md#26-cudaops).
@@ -94,11 +94,11 @@ Runtime headers are resolved with `importlib.resources` and included directly;
 there is no umbrella header or target-selection macro.
 
 - constraints:
-  - Each CUDA source MUST compile with `--gpu-architecture` and `--gpu-code` set
-    to its target architecture's `gpu_architecture` and `gpu_code`
-    ([target §4.1](./target.md#41-cudaarchitecture)), as per-source options
-    with `CUDA_ARCHITECTURES OFF`, so no unit's options reach another unit in
-    the same project.
+  - Each CUDA source MUST compile with `--gpu-architecture` and `--gpu-code`.
+    It MUST set them to the `gpu_architecture` and `gpu_code` of its target
+    architecture ([target §4.1](./target.md#41-cudaarchitecture)). It MUST use
+    per-source options with `CUDA_ARCHITECTURES OFF`. Then no unit's options
+    reach another unit in the same project.
   - Device headers require C++20. Set per-source `-std=c++20` instead of
     `CUDA_STANDARD 20`: older CMake versions reject that dialect and nvcc uses
     the last `-std` option.
@@ -112,8 +112,9 @@ there is no umbrella header or target-selection macro.
 ## 5. HIR skeletons
 
 Skeleton emission MUST reject an HIR device call into a direct child's function
-with implicit ConstTensor arguments, naming caller, callee and omitted weights
-and requesting explicit weight parameters or orchestration calls.
+with implicit ConstTensor arguments. The error MUST name the caller, the callee
+and the omitted weights. It MUST request explicit weight parameters or
+orchestration calls.
 
 `tilefoundry_nvidia/cuda/codegen/hir/function.py` owns HIR skeleton emission. An HIR function
 enters codegen only as the callee a `Launch` names; Python wraps any other

@@ -65,7 +65,7 @@ class CpAsyncGemm(SyncCase):
         reads = [owner for owner, _ in attached if not isinstance(owner, core.MeshRegion)]
         inside = {id(node) for node in core.collect_exprs(threads.body)}
         assert all(id(read) in inside for read in reads)
-        assert types.size(types.levels(threads.mesh)[0]) == threads.mesh.topologies[0].size
+        assert types.size(types.get(types.plain_layout(threads.mesh.layout), 0)) == threads.mesh.topologies[0].size
 
 
 @case
@@ -79,7 +79,7 @@ class NestedSubsets(SyncCase):
         regions = _thread_regions(function)
         (threads,) = [region for region in regions if not isinstance(region.mesh.layout, types.ComposedLayout)]
         producer, consumer = sorted(
-            (region for region in regions if types.size(types.levels(region.mesh)[0]) == 32),
+            (region for region in regions if types.size(types.get(types.plain_layout(region.mesh.layout), 0)) == 32),
             key=lambda region: region.mesh.layout.offset,
         )
         (loop,) = _of_kind(producer, core.LoopRegion)

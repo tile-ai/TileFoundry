@@ -212,7 +212,7 @@ test_op_case = op_case_test(CASES)
 
 
 def test_local_reshape_preserves_factored_physical_modes():
-    mesh = types.Mesh((types.Topology("gpu", 1),), types.Layout((1,)), ("rank",))
+    mesh = types.Mesh((types.Topology("gpu", 1),), types.Layout((1,)), ("g",))
     source_type = utils.make_shard_tensor_type((256, 8, 4, 128), mesh=mesh, attrs=(types.Broadcast(),))
     variable = expr.Var(name="x", type=source_type)
     sliced_call = _slice_call(

@@ -18,10 +18,10 @@ class Transpose(expr.Op):
 
 @access.register_relation(Transpose)
 def transpose_relations(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
-    """Result axis k is source axis perm[k], stated in both sides' positions.
+    """Result axis k is source axis perm[k], stated in both sides' modes.
 
     A permutation walks what it reads, so the source's own axes are the
-    coordinates and the permutation happens on the way out. Which positions those
+    coordinates and the permutation happens on the way out. Which modes those
     axes are is the reader's question, asked of every Op the same way.
     """
     perm = tuple(call.target.perm)

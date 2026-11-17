@@ -72,7 +72,7 @@ def infer_index_write(
 def reject_splits(ctx, call: "expr.Call", op_name: str, name: str, type_: types.TensorType) -> None:
     """Refuse a sharded operand here, where the author can still be told why.
 
-    Which rows a participant owns is decided by index *values*, so a split
+    Which rows a unit owns is decided by index *values*, so a split
     destination needs value binding, a payload guard whose coordinates differ
     from the destination's, and per-unit arithmetic that moves with the share --
     three things that only work together. Until they exist, a split is refused
@@ -84,7 +84,7 @@ def reject_splits(ctx, call: "expr.Call", op_name: str, name: str, type_: types.
     if any(isinstance(attr, types.Split) for attr in layout.attrs):
         ctx.error(
             call,
-            f"{op_name}: {name} is Split, and which rows a participant writes "
+            f"{op_name}: {name} is Split, and which rows a unit writes "
             "depends on the index values; reshard it to a replicated layout "
             "before the update",
         )

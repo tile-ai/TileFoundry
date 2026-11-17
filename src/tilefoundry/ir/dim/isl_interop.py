@@ -514,18 +514,18 @@ def shape_to_isl_set(shape: tuple, values: IslParamValues) -> "isl.set":
     return isl.set(prefix + f"{{ [{', '.join(dims)}] : {' and '.join(constraints)} }}")
 
 
-def mesh_coordinate(mesh, axis: int, values: IslParamValues) -> str:
+def mesh_coordinate(mesh, mesh_axis: int, values: IslParamValues) -> str:
     """The parameter standing for this unit's coordinate on one mesh axis."""
     for name, value in values.items():
         if (
             isinstance(value, expr.Call)
             and isinstance(value.target, MeshCoord)
             and value.target.mesh is mesh
-            and expr.static_dim_value(value.args[0]) == axis
+            and expr.static_dim_value(value.args[0]) == mesh_axis
         ):
             return name
     coordinate = expr.Call(
-        type=types.TensorType.from_umat_scalar(), target=MeshCoord(mesh=mesh), args=(i64_const(axis),)
+        type=types.TensorType.from_umat_scalar(), target=MeshCoord(mesh=mesh), args=(i64_const(mesh_axis),)
     )
     name = fresh_name(values, set())
     values[name] = coordinate
@@ -539,21 +539,21 @@ def layout_to_isl_map(
     *,
     divided: Callable[[types.ShardLayout], Collection[int]],
 ) -> "isl.map":
-    """Where each logical coordinate of a *shape* value sits among one unit's positions.
+    """Map each logical coordinate of a *shape* value to one unit's local layout coords.
 
-    The coordinates regroup row-major onto the flattened layout positions
+    The coordinates regroup row-major onto the coords of the flattened layout modes
     ([semantic-analysis §3.1](docs/spec/semantic-analysis.md#31-logical-shape-to-layout-domain)).
-    A position cut by the mesh axes ``divided(layer)`` names, layer by layer
+    A coord on a mode cut by the mesh axes ``divided(layer)`` names, layer by layer
     from the innermost, is split into digits -- cutting axes outermost first,
     then the residual: a divided digit is that unit's ``MeshCoord``, a parameter
-    named into *values*, and the rest is the position within.
+    named into *values*, and the rest is the local coord on that mode.
     """
     layers = [types.shard_layout_of(layout) or layout]
     if not isinstance(layers[0], (types.Layout, types.ShardLayout)):
         raise TypeError(f"layout_to_isl_map places a Layout or ShardLayout, not {type(layout).__name__}")
     while isinstance(layers[-1], types.ShardLayout) and (inner := types.shard_layout_of(layers[-1].layout)) is not None:
         layers.append(inner)
-    extents = tuple(types.flatten(layers[0].shape))
+    extents = tuple(types.flatten_to_tuple(layers[0].shape))
     coords = [f"c{axis}" for axis in range(len(shape))]
     clash = set(values) & set(coords)
     if clash:
@@ -564,64 +564,64 @@ def layout_to_isl_map(
         logical, held = math.prod(sizes[: len(shape)]), math.prod(sizes[len(shape) :])
         if logical != held:
             raise ValueError(
-                f"shape {shape} and layout positions {extents} differ in size, "
+                f"shape {shape} and layout modes {extents} differ in size, "
                 f"{logical} against {held}"
             )
         if logical == 0:
-            positions = ", ".join(f"p{index}" for index in range(len(extents)))
-            return isl.map(f"{{ [{domain}] -> [{positions}] : 1 = 0 }}")
+            modes = ", ".join(f"p{index}" for index in range(len(extents)))
+            return isl.map(f"{{ [{domain}] -> [{modes}] : 1 = 0 }}")
     axes = int_tuple.mode_axes(int_tuple.compatible_profile(layers[0].shape, tuple(shape)))
     image = ["0"] * len(extents)
     for axis, coord in enumerate(coords):
-        positions = [p for p, target in enumerate(axes)
+        modes = [p for p, target in enumerate(axes)
                      if target == axis and expr.static_dim_value(extents[p]) != 1]
         inner = 1
-        for position in reversed(positions):
+        for mode in reversed(modes):
             term = coord if inner == 1 else f"floor({coord}/{inner})"
-            if position == positions[0]:
-                image[position] = term
+            if mode == modes[0]:
+                image[mode] = term
                 break
-            extent = expr.static_dim_value(extents[position])
+            extent = expr.static_dim_value(extents[mode])
             if extent is None:
                 raise ValueError(
-                    f"layout position {position} has extent {extents[position]!r}; "
+                    f"layout mode {mode} has extent {extents[mode]!r}; "
                     "dividing a coordinate by it is not affine"
                 )
-            image[position] = f"({term}) mod {extent}"
+            image[mode] = f"({term}) mod {extent}"
             inner *= extent
     cutting: dict[int, list[tuple[types.ShardLayout, int, bool]]] = {}
     for layer in reversed(layers):
         if not isinstance(layer, types.ShardLayout):
             continue
-        mesh_extents = types.flatten(layer.mesh.layout).shape
+        mesh_extents = layer.mesh.shape
         cuts = divided(layer)
         for mesh_axis, attr in enumerate(layer.attrs):
             if not isinstance(attr, types.Split):
                 continue
             if not 0 <= attr.axis < len(extents) or mesh_axis >= len(mesh_extents):
                 raise ValueError(
-                    f"{layer!r} splits a layout position or mesh axis it does not have"
+                    f"{layer!r} splits a layout mode or mesh axis it does not have"
                 )
             cutting.setdefault(attr.axis, []).append((layer, mesh_axis, mesh_axis in cuts))
     params: list[str] = []
     guards: list[str] = []
-    for position, cuts in cutting.items():
+    for mode, cuts in cutting.items():
         if not any(cut for *_, cut in cuts):
             continue
-        whole = expr.static_dim_value(extents[position])
-        parts = [expr.static_dim_value(types.flatten(layer.mesh.layout).shape[a]) for layer, a, _ in cuts]
+        whole = expr.static_dim_value(extents[mode])
+        parts = [expr.static_dim_value(layer.mesh.shape[a]) for layer, a, _ in cuts]
         if whole is None or any(part is None or part <= 0 for part in parts):
             raise ValueError(
-                f"layout position {position} of {shape} is split by mesh axes; placing "
-                "one unit needs the position and every mesh extent cutting it static"
+                f"layout mode {mode} of {shape} is split by mesh axes; placing "
+                "one unit needs the mode extent and every mesh extent cutting it static"
             )
         if whole % math.prod(parts):
             raise ValueError(
-                f"layout position {position} extent {whole} is not divisible by its mesh "
+                f"layout mode {mode} extent {whole} is not divisible by its mesh "
                 f"extents {tuple(parts)}"
             )
         residual = whole // math.prod(parts)
-        coordinate = image[position]
+        coordinate = image[mode]
         stride = whole
         kept: list[tuple[str, int]] = []
         for order, ((layer, mesh_axis, cut), part) in enumerate(zip(cuts, parts)):
@@ -642,7 +642,7 @@ def layout_to_isl_map(
         for digit, part in reversed(kept):
             terms.append(digit if scale == 1 else f"{scale} * ({digit})")
             scale *= part
-        image[position] = " + ".join(reversed(terms)) or "0"
+        image[mode] = " + ".join(reversed(terms)) or "0"
     prefix = f"[{', '.join(params)}] -> " if params else ""
     where = f" : {' and '.join(guards)}" if guards else ""
     return isl.map(f"{prefix}{{ [{domain}] -> [{', '.join(image)}]{where} }}")

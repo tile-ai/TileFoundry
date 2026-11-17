@@ -16,7 +16,6 @@ from tilefoundry import target, utils
 from tilefoundry.interfaces import access, cost
 from tilefoundry.ir import core, dim, expr, types
 from tilefoundry.ir import utils as ir_utils
-from tilefoundry.ir.types import int_tuple
 
 from .access import Access
 from .iteration_scope import IterationScope
@@ -34,7 +33,7 @@ class ReuseAxes:
     ``time`` is the outermost loop dimension whose iterations reach the same
     addresses; ``space`` names the mesh coordinates the addresses do not vary
     with, and ``space_units`` counts the units mapping onto those addresses.
-    ``partial`` names axes with overlapping unit images but no modelled savings.
+    ``partial`` names mesh axes with overlapping unit images but no modelled savings.
     """
 
     time: int | None = None
@@ -55,17 +54,17 @@ class ReuseAxes:
 
 
 def static_axes(mesh: types.Mesh) -> "tuple[int, tuple[int, ...], tuple[int, ...]] | None":
-    """A mesh's device-numbered positions, when every one of them is a number."""
+    """The first unit's index of a mesh, its extents and strides, when all are numbers."""
     try:
-        axes = types.flatten(mesh.layout)
-        offset = mesh.layout.offset if isinstance(mesh.layout, types.ComposedLayout) else 0
-    except ValueError:
+        mesh_layout = types.flatten(types.plain_layout(mesh.layout))
+        first_index = mesh.layout(0)
+    except (TypeError, ValueError):
         return None
-    shape = tuple(expr.static_dim_value(extent) for extent in types.flatten(axes.shape))
-    strides = tuple(expr.static_dim_value(stride) for stride in types.flatten(axes.strides))
-    if any(value is None for value in (*shape, *strides, expr.static_dim_value(offset))):
+    shape = tuple(expr.static_dim_value(extent) for extent in types.flatten_to_tuple(mesh_layout.shape))
+    strides = tuple(expr.static_dim_value(stride) for stride in types.flatten_to_tuple(mesh_layout.strides))
+    if any(value is None for value in (*shape, *strides, expr.static_dim_value(first_index))):
         return None
-    return offset, shape, strides
+    return first_index, shape, strides
 
 
 def mesh_parameters_of(
@@ -81,7 +80,7 @@ def mesh_parameters_of(
     )
 
 
-def wave_position(relation, parameters):
+def wave_index(relation, parameters):
     image = relation.range()
     mesh_names = {name for name, _ in parameters}
     for axis in reversed(range(image.dim(isl.dim_type.PARAM))):
@@ -94,42 +93,42 @@ def wave_position(relation, parameters):
         if (axis := shape.find_dim_by_name(isl.dim_type.PARAM, name)) >= 0
         and shape.involves_dims(isl.dim_type.PARAM, axis, 1)
     )
-    return linear_position(involved)
+    return linear_index(involved)
 
 
-def linear_position(
+def linear_index(
     parameters: tuple[tuple[str, expr.Call], ...],
 ) -> tuple[int, tuple[tuple[str, int], ...]] | None:
-    """The layout-image position named by mesh-coordinate parameters."""
+    """The layout index named by mesh-coordinate parameters."""
     if not parameters:
         return 0, ()
     mesh = parameters[0][1].target.mesh
     image = static_axes(mesh)
     if image is None:
         return None
-    offset, shape, strides = image
+    first_index, shape, strides = image
     terms: list[tuple[str, int]] = []
     for name, coordinate in parameters:
         if coordinate.target.mesh != mesh or not coordinate.args:
             return None
-        axis = expr.static_dim_value(coordinate.args[0])
-        if axis is None or not 0 <= axis < len(shape):
+        mesh_axis = expr.static_dim_value(coordinate.args[0])
+        if mesh_axis is None or not 0 <= mesh_axis < len(shape):
             return None
-        terms.append((name, strides[axis]))
-    return offset, tuple(terms)
+        terms.append((name, strides[mesh_axis]))
+    return first_index, tuple(terms)
 
 
 def restrict_to_wave(
     relation: isl.map,
-    position: tuple[int, tuple[tuple[str, int], ...]],
+    unit_id: tuple[int, tuple[tuple[str, int], ...]],
     wave_units: int,
 ) -> isl.map:
-    """Constrain one layout-image position to ``[0, wave_units)``."""
-    offset, terms = position
+    """Constrain one layout index to ``[0, wave_units)``."""
+    first_index, terms = unit_id
     context = relation.params()
     local = isl.local_space.from_space(context.get_space())
-    lower = isl.constraint.alloc_inequality(local).set_constant_si(offset)
-    upper = isl.constraint.alloc_inequality(local).set_constant_si(wave_units - 1 - offset)
+    lower = isl.constraint.alloc_inequality(local).set_constant_si(first_index)
+    upper = isl.constraint.alloc_inequality(local).set_constant_si(wave_units - 1 - first_index)
     for name, stride in terms:
         axis = context.find_dim_by_name(isl.dim_type.PARAM, name)
         if axis < 0:
@@ -193,7 +192,7 @@ class MovingBoundary:
     wave_stated: bool
     mesh_parameters: tuple[tuple[str, expr.Call], ...]
     axis_parameters: tuple[str | None, ...]
-    position: tuple[int, tuple[tuple[str, int], ...]] | None
+    unit_id: tuple[int, tuple[tuple[str, int], ...]] | None
     ownership: tuple[str, ...] = ()
     loops: tuple[IterationScope, ...] = ()
 
@@ -220,9 +219,9 @@ class MovingBoundary:
         loops = self.loop_scopes
         relation = acc.relation.constrain(first_iteration(loops[: window + 1]))
         relation = relation.project(tuple(s.owner.induction_var for s in self.loops or loops))
-        if self.position is not None:
+        if self.unit_id is not None:
             relation = relation.aligned(
-                restrict_to_wave(relation.relation, self.position, self.wave_units)
+                restrict_to_wave(relation.relation, self.unit_id, self.wave_units)
             )
         if kind == "unit" and axis is not None:
             index = relation.relation.find_dim_by_name(isl.dim_type.PARAM, axis)
@@ -274,13 +273,13 @@ def space_axes(
     wave_reached = boundary.view("wave", window)
     shared, partial = [], []
     reached = boundary.view("relation", -1).range()
-    shape = types.flatten(types.flatten(boundary.mesh.layout).shape)
-    for axis, parameter_name in enumerate(boundary.axis_parameters):
-        extent = expr.static_dim_value(shape[axis])
+    shape = boundary.mesh.shape
+    for mesh_axis, parameter_name in enumerate(boundary.axis_parameters):
+        extent = expr.static_dim_value(shape[mesh_axis])
         unit_reached = boundary.view("unit", window, parameter_name)
         if extent is not None and extent > 1 and unit_reached is not None:
             if wave_reached.is_equal(unit_reached):
-                shared.append(axis)
+                shared.append(mesh_axis)
         if parameter_name is None:
             continue
         parameter = reached.find_dim_by_name(isl.dim_type.PARAM, parameter_name)
@@ -291,54 +290,48 @@ def space_axes(
         )
         deltas = by_unit.apply_range(by_unit.reverse()).deltas()
         if not deltas.is_subset(deltas.fix_val(isl.dim_type.SET, 0, 0)):
-            partial.append(axis)
+            partial.append(mesh_axis)
     return tuple(shared), tuple(partial)
 
 
-def axis_label(mesh: types.Mesh, axis: int) -> str:
-    """Name a mesh axis, falling back to its factual numeric position."""
-    stated = mesh.layout.outer if isinstance(mesh.layout, types.ComposedLayout) else mesh.layout
-    levels = types.flatten(
-        tuple(
-            int_tuple.repeat_like(mode, getattr(level, "name", str(level)))
-            for mode, level in zip(stated.shape, mesh.topologies, strict=True)
-        )
-    )
-    level_name = levels[axis] if axis < len(levels) else ""
-    if axis < len(mesh.names):
-        name = mesh.names[axis]
-        return f"{level_name}.{name}" if level_name else name
-    return f"{level_name}[{axis}]" if level_name else f"[{axis}]"
+def axis_label(mesh: types.Mesh, mesh_axis: int) -> str:
+    """Name a mesh axis, falling back to its numeric index."""
+    keys = ir_utils.axis_keys(mesh)
+    topology = keys[mesh_axis][0] if mesh_axis < len(keys) else ""
+    if mesh_axis < len(mesh.names):
+        name = mesh.names[mesh_axis]
+        return f"{topology}.{name}" if topology else name
+    return f"{topology}[{mesh_axis}]" if topology else f"[{mesh_axis}]"
 
 
-def shared_units(mesh: types.Mesh, axes: tuple[int, ...], wave: tuple[int, int]) -> int:
-    """Count wave positions after projecting out axes that do not share data."""
+def shared_units(mesh: types.Mesh, mesh_axes: tuple[int, ...], wave: tuple[int, int]) -> int:
+    """Count wave units after projecting out mesh axes that do not share data."""
     image = static_axes(mesh)
     if image is None:
         return 1
-    offset, shape, strides = image
-    dimensions = ", ".join(f"d{axis}" for axis in range(len(shape)))
+    first_index, shape, strides = image
+    dimensions = ", ".join(f"d{mesh_axis}" for mesh_axis in range(len(shape)))
     points = isl.set(f"{{ [{dimensions}] }}")
     local = isl.local_space.from_space(points.get_space())
-    for axis, extent in enumerate(shape):
-        lower = isl.constraint.alloc_inequality(local).set_coefficient_si(isl.dim_type.SET, axis, 1)
+    for mesh_axis, extent in enumerate(shape):
+        lower = isl.constraint.alloc_inequality(local).set_coefficient_si(isl.dim_type.SET, mesh_axis, 1)
         upper = (
             isl.constraint.alloc_inequality(local)
-            .set_coefficient_si(isl.dim_type.SET, axis, -1)
+            .set_coefficient_si(isl.dim_type.SET, mesh_axis, -1)
             .set_constant_si(extent - 1)
         )
         points = points.add_constraint(lower).add_constraint(upper)
     wave_units, declared_units = wave
     if wave_units < declared_units:
-        lower = isl.constraint.alloc_inequality(local).set_constant_si(offset)
-        upper = isl.constraint.alloc_inequality(local).set_constant_si(wave_units - 1 - offset)
-        for axis, stride in enumerate(strides):
-            lower = lower.set_coefficient_si(isl.dim_type.SET, axis, stride)
-            upper = upper.set_coefficient_si(isl.dim_type.SET, axis, -stride)
+        lower = isl.constraint.alloc_inequality(local).set_constant_si(first_index)
+        upper = isl.constraint.alloc_inequality(local).set_constant_si(wave_units - 1 - first_index)
+        for mesh_axis, stride in enumerate(strides):
+            lower = lower.set_coefficient_si(isl.dim_type.SET, mesh_axis, stride)
+            upper = upper.set_coefficient_si(isl.dim_type.SET, mesh_axis, -stride)
         points = points.add_constraint(lower).add_constraint(upper)
-    for axis in reversed(range(len(shape))):
-        if axis not in axes:
-            points = points.project_out(isl.dim_type.SET, axis, 1)
+    for mesh_axis in reversed(range(len(shape))):
+        if mesh_axis not in mesh_axes:
+            points = points.project_out(isl.dim_type.SET, mesh_axis, 1)
     units = utils.cardinality(points)
     return units if units is not None and units > 1 else 1
 
@@ -346,15 +339,15 @@ def shared_units(mesh: types.Mesh, axes: tuple[int, ...], wave: tuple[int, int])
 def reuse_axes(boundary: MovingBoundary, wave: tuple[int, int]) -> ReuseAxes:
     """Name reuse axes and how many units share this boundary's addresses."""
     time = time_axis(boundary)
-    axes, partial = space_axes(boundary, wave)
-    units = shared_units(boundary.mesh, axes, wave) if boundary.mesh and axes else 1
+    mesh_axes, partial = space_axes(boundary, wave)
+    units = shared_units(boundary.mesh, mesh_axes, wave) if boundary.mesh and mesh_axes else 1
     if units <= 1:
-        axes = ()
-    partial = partial if time is None and not axes else ()
+        mesh_axes = ()
+    partial = partial if time is None and not mesh_axes else ()
     return ReuseAxes(
-        partial=tuple(axis_label(boundary.mesh, axis) for axis in partial),
+        partial=tuple(axis_label(boundary.mesh, mesh_axis) for mesh_axis in partial),
         time=time,
-        space=tuple(axis_label(boundary.mesh, axis) for axis in axes) if boundary.mesh else (),
+        space=tuple(axis_label(boundary.mesh, mesh_axis) for mesh_axis in mesh_axes) if boundary.mesh else (),
         space_units=units,
     )
 
@@ -393,7 +386,7 @@ def missing_boundaries(
         output = ctx.local_type_of(call)
     except ValueError:
         return (ReachedAddresses(core.SSAValue(call, 0), None, None, None, Precision.LOWER_BOUND),)
-    output_count = len(output.fields) if isinstance(output, types.TupleType) else 1
+    output_count = len(ir_utils.result_fields(output))
     missing_inputs = (
         ReachedAddresses(
             core.SSAValue(call.args[index], 0), None, None, None, Precision.LOWER_BOUND
@@ -419,7 +412,7 @@ def uncounted_boundaries(
         output = ctx.local_type_of(call)
     except ValueError:
         return (ReachedAddresses(core.SSAValue(call, 0), None, None, None, precision),)
-    output_count = len(output.fields) if isinstance(output, types.TupleType) else 1
+    output_count = len(ir_utils.result_fields(output))
     return (
         *(ReachedAddresses(core.SSAValue(arg, 0), None, None, None, precision) for arg in call.args),
         *(
@@ -442,21 +435,16 @@ def axis_parameters_of(scope: IterationScope, mesh: types.Mesh | None) -> tuple[
         for name, value in acc.relation.values.items()
     }
     for name, coordinate in mesh_parameters_of(scope, values=values):
-        axis = expr.static_dim_value(coordinate.args[0])
-        if axis is None:
+        mesh_axis = expr.static_dim_value(coordinate.args[0])
+        if mesh_axis is None:
             continue
-        start = 0
-        for level in types.separate(coordinate.target.mesh):
-            rank = len(types.flatten(types.flatten(level.layout).shape))
-            if level == mesh and start <= axis < start + rank:
-                names_by_axis[axis - start] = name
-            start += rank
-    return tuple(
-        names_by_axis.get(axis) for axis in range(len(types.flatten(types.flatten(mesh.layout).shape)))
-    )
+        keys = ir_utils.axis_keys(coordinate.target.mesh)
+        if mesh_axis < len(keys) and ir_utils.topology_mesh(coordinate.target.mesh, keys[mesh_axis][0]) == mesh:
+            names_by_axis[mesh_axis - [topology for topology, _ in keys].index(keys[mesh_axis][0])] = name
+    return tuple(names_by_axis.get(mesh_axis) for mesh_axis in range(len(mesh.shape)))
 
 
-def wave_mesh(scope: IterationScope, topology_level: str) -> types.Mesh | None:
+def wave_mesh(scope: IterationScope, topology: str) -> types.Mesh | None:
     """Find the enclosing mesh, including the definition's checked outer mesh."""
     for ctx in scope.ancestors():
         mesh = (
@@ -464,11 +452,8 @@ def wave_mesh(scope: IterationScope, topology_level: str) -> types.Mesh | None:
             if isinstance(ctx.owner, core.MeshRegion)
             else (ctx.mesh if ctx.parent is None else None)
         )
-        if mesh is not None:
-            for component in types.separate(mesh):
-                topology = component.topologies[0]
-                if getattr(topology, "name", topology) == topology_level:
-                    return component
+        if mesh is not None and (part := ir_utils.topology_mesh(mesh, topology)) is not None:
+            return part
     return None
 
 
@@ -484,7 +469,7 @@ def one_time_fill(loops, operands: tuple[cost.TrafficBytes, ...]) -> bool:
     return not loops and all(item.read == 0 for item in operands)
 
 
-def shared_origin(scope, tgt, definitions, topology_level, wave) -> bool:
+def shared_origin(scope, tgt, definitions, topology, wave) -> bool:
     """A material definition made by multiple wave units is not shared data.
 
     Registered storage-sharing edges have already resolved the origin, so a
@@ -496,11 +481,11 @@ def shared_origin(scope, tgt, definitions, topology_level, wave) -> bool:
         if isinstance(tgt, expr.Call) and core.SSAValue(tgt) not in scope.provenance.snapshot
         else None,
     )
-    mesh = None if origin is None else wave_mesh(origin, topology_level)
+    mesh = None if origin is None else wave_mesh(origin, topology)
     if mesh is None:
         return True
-    axes = tuple(range(len(types.flatten(types.flatten(mesh.layout).shape))))
-    return shared_units(mesh, axes, wave) <= 1
+    mesh_axes = tuple(range(len(mesh.shape)))
+    return shared_units(mesh, mesh_axes, wave) <= 1
 
 
 def moving_boundaries(
@@ -514,9 +499,9 @@ def moving_boundaries(
 
     Definition-time source entries already name each boundary's material result.
     """
-    whole = replace(ctx, topology_level=None, topologies=())
+    whole = replace(ctx, topology=None, topologies=())
     wave_units, declared_units = wave
-    topology_level = ctx.topology_level or ctx.target.get_facts(target.TopologyFacts).parallel_level
+    topology = ctx.topology or ctx.target.get_facts(target.TopologyFacts).parallel_topology
     definitions = {
         value_id: scope
         for definition in ctx.definitions.values()
@@ -532,7 +517,7 @@ def moving_boundaries(
     found: list[MovingBoundary] = []
     for path, (call, _) in root.access.accesses.get("narrow", {}).items():
         scope = root.at(path[:1])
-        mesh = wave_mesh(scope, topology_level)
+        mesh = wave_mesh(scope, topology)
         axis_parameters = axis_parameters_of(scope, mesh)
         _, loops = scope.access_environment(path)
         moved = expr.get_metadata(call, MemoryMetadata)
@@ -577,15 +562,15 @@ def moving_boundaries(
             mesh_parameters = mesh_parameters_of(
                 scope, acc.relation.relation, values=acc.relation.values
             )
-            position = (
-                wave_position(
+            unit_id = (
+                wave_index(
                     acc.relation.constrain(first_iteration(loops)).relation, mesh_parameters
                 )
                 if wave_units < declared_units and mesh_parameters
                 else None
             )
             wave_stated = not (
-                wave_units < declared_units and mesh_parameters and position is None
+                wave_units < declared_units and mesh_parameters and unit_id is None
             )
             found.append(
                 MovingBoundary(
@@ -610,9 +595,9 @@ def moving_boundaries(
                     mesh_parameters=mesh_parameters,
                     axis_parameters=axis_parameters
                     if wave_stated
-                    and shared_origin(scope, acc.target.expr, definitions, topology_level, wave)
+                    and shared_origin(scope, acc.target.expr, definitions, topology, wave)
                     else (),
-                    position=position,
+                    unit_id=unit_id,
                 )
             )
     return tuple(found)
@@ -625,7 +610,7 @@ def uncounted_movements(
     ctx: cost.Context,
 ) -> tuple[tuple[IterationScope, ReachedAddresses], ...]:
     """Keep completeness evidence that has no countable moving boundary."""
-    whole = replace(ctx, topology_level=None, topologies=())
+    whole = replace(ctx, topology=None, topologies=())
     found: list[tuple[IterationScope, ReachedAddresses]] = []
     for path, (call, _) in root.access.accesses.get("narrow", {}).items():
         scope = root.at(path[:1])
@@ -733,20 +718,20 @@ def reached_by(
         mesh_parameters = mesh_parameters_of(
             scope, acc.relation.relation, values=acc.relation.values
         )
-        position = (
-            wave_position(acc.relation.constrain(first_iteration(loops)).relation, mesh_parameters)
+        unit_id = (
+            wave_index(acc.relation.constrain(first_iteration(loops)).relation, mesh_parameters)
             if wave_units < declared_units and mesh_parameters
             else None
         )
-        if wave_units < declared_units and mesh_parameters and position is None:
+        if wave_units < declared_units and mesh_parameters and unit_id is None:
             return None
         relation = (
             acc.relation.constrain(first_iteration(loops))
             .project(tuple(s.owner.induction_var for s in loops))
             .relation
         )
-        if position is not None:
-            relation = restrict_to_wave(relation, position, wave_units)
+        if unit_id is not None:
+            relation = restrict_to_wave(relation, unit_id, wave_units)
         result.append(
             reached_addresses(
                 acc,
@@ -908,28 +893,28 @@ def reuse_windows(root, *, memory_level, wave, ctx, capacity):
 def wave_of(
     module: core.Module,
     tgt: target.Target,
-    topology_level: str | None,
+    topology: str | None,
     *,
     topologies: tuple[Topology, ...] | None = None,
 ) -> tuple[int, int] | None:
     """Return ``(wave_units, declared_units)``, or ``None`` when unstated."""
     try:
         facts = tgt.get_facts(target.TopologyFacts)
-        level = facts.parallel() if topology_level is None else facts.level(topology_level)
-        if level is None or level.max_physical_units is None:
+        limits = facts.parallel() if topology is None else facts.topology(topology)
+        if limits is None or limits.max_physical_units is None:
             return None
         declared_units = expr.static_dim_value(
             (
-                module.resolve_topology(level.name)
+                module.resolve_topology(limits.name)
                 if topologies is None
-                else next(item for item in topologies if item.name == level.name)
+                else next(item for item in topologies if item.name == limits.name)
             ).size
         )
     except (target.UnsupportedCapabilityError, ValueError):
         return None
     if declared_units is None:
         return None
-    return min(declared_units, level.max_physical_units), declared_units
+    return min(declared_units, limits.max_physical_units), declared_units
 
 
 def cached_level(facts: target.MemoryHierarchyFacts) -> tuple[str, str, int] | None:

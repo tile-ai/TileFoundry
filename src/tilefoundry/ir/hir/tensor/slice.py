@@ -117,9 +117,9 @@ def require_affine_window(call, ctx, source, tiled, steps):
 def steps_of(shape, tile):
     """The step each flattened source mode takes inside its tile."""
     if tile is None:
-        return (1,) * len(types.flatten(shape))
+        return (1,) * len(types.flatten_to_tuple(shape))
     if isinstance(tile, types.Layout):
-        return tuple(types.flatten(tile.strides))
+        return tuple(types.flatten_to_tuple(tile.strides))
     return tuple(x for s, t in zip(shape, tile, strict=True) for x in steps_of(s, t))
 
 
@@ -147,13 +147,13 @@ def window_tiler(call, ctx, source):
     require_affine_window(call, ctx, source, tiled, mode_steps)
     flat = types.flatten(window)
     axes = int_tuple.mode_axes(profile)
-    kept = tuple(i for i, (before, after) in enumerate(zip(types.flatten(primitive.shape), flat.shape, strict=True))
+    kept = tuple(i for i, (before, after) in enumerate(zip(types.flatten_to_tuple(primitive.shape), flat.shape, strict=True))
                  if expr.static_dim_value(before) == 1 or expr.static_dim_value(after) != 1
                  or axes.count(axes[i]) == 1)
     if splits.difference(kept):
         mode = next(iter(splits.difference(kept)))
         refuse_window(call, ctx, int_tuple.mode_axes(profile)[mode], source)
-    positions = {old: new for new, old in enumerate(kept)}
+    mode_indices = {old: new for new, old in enumerate(kept)}
     if len(kept) != len(flat.shape):
         axes = int_tuple.mode_axes(profile)
         def modes(values, axis):
@@ -164,7 +164,7 @@ def window_tiler(call, ctx, source):
     if isinstance(source, types.ShardLayout):
         window = types.flatten(window) if not any(isinstance(x, tuple) for x in primitive.shape) else window
         window = replace(source, layout=window, attrs=tuple(
-            types.Split(positions[attr.axis]) if isinstance(attr, types.Split) else attr for attr in source.attrs
+            types.Split(mode_indices[attr.axis]) if isinstance(attr, types.Split) else attr for attr in source.attrs
         ))
     return window
 
@@ -244,10 +244,12 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     try:
         new_layout = window_tiler(call, ctx, source)
         if composed is not None:
-            _, moved = types.domain_offset(starts.elements, composed.outer, x_ty.shape)
+            outer = composed.outer.layout if isinstance(composed.outer, types.ShardLayout) else composed.outer
+            grouped = types.unflatten(types.flatten(outer), int_tuple.compatible_profile(outer.shape, x_ty.shape))
+            _, moved = types.domain_offset(tuple(starts.elements), grouped)
             shifted = composed
             if expr.static_dim_value(moved) is not None:
-                shifted, _ = types.domain_offset(starts.elements, composed, x_ty.shape)
+                shifted, _ = types.domain_offset(tuple(starts.elements), replace(composed, outer=grouped))
             new_layout = replace(new_layout, layout=replace(shifted, outer=new_layout.layout)) if shard is not None else replace(shifted, outer=new_layout)
     except ValueError as error:
         ctx.error(call, str(error))

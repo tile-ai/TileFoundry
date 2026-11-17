@@ -85,14 +85,14 @@ def scope_mesh_value(mesh, ctx) -> "str | None":
 
 @codegen.register(target.Target, codegen.Role.EMIT, dim.MeshCoord)
 def mesh_coord_value(call: expr.Call, ctx) -> str:
-    """This unit's coordinate along one static axis of its enclosing mesh."""
-    axis = expr.static_dim_value(call.args[0])
-    if axis is None:
-        raise NotImplementedError("CUDA MeshCoord requires a static axis")
+    """This unit's coordinate along one static mesh axis of its enclosing mesh."""
+    mesh_axis = expr.static_dim_value(call.args[0])
+    if mesh_axis is None:
+        raise NotImplementedError("CUDA MeshCoord requires a static mesh axis")
     mesh = scope_mesh_value(call.target.mesh, ctx)
     if mesh is None:
         raise ValueError("CUDA MeshCoord requires its enclosing mesh binding")
-    return f"cute::get<{axis}>(cute::flatten(tilefoundry::mesh_coords({mesh}, tilefoundry::program_ids())))"
+    return f"cute::get<{mesh_axis}>(cute::flatten(tilefoundry::mesh_coords({mesh}, tilefoundry::unit_ids())))"
 
 
 def render_mesh_type(mesh, ctx=None) -> str:
@@ -144,14 +144,14 @@ def render_shard_layout_type(sl: types.ShardLayout, ctx=None) -> str:
     return f"tilefoundry::ShardLayout<{layout_str}, cute::tuple<{attrs_str}>, {mesh_str}>"
 
 
-def composed_mesh_layout(positions: str, base: int) -> str:
+def composed_mesh_layout(layout: str, base: int) -> str:
     """A mesh layout value expression, its slice origin folded in.
 
     [runtime §2.3.2](targets/nvidia/tilefoundry_nvidia/cuda/docs/spec/runtime.md#232-layoutmeshcuh).
     """
     if not base:
-        return positions
-    return f"cute::make_composed_layout(cute::identity{{}}, cute::Int<{base}>{{}}, {positions})"
+        return layout
+    return f"cute::make_composed_layout(cute::identity{{}}, cute::Int<{base}>{{}}, {layout})"
 
 
 def shard_engine_layout(shard: types.ShardLayout, storage: expr.StorageKind) -> types.LayoutBase:
@@ -160,7 +160,7 @@ def shard_engine_layout(shard: types.ShardLayout, storage: expr.StorageKind) -> 
     Global memory and CTA-shared storage retain their declared address steps.
     Registers use the same local extents and numbering as the emitted shard.
     """
-    physical = types.flatten(shard.layout)
+    physical = types.flatten(types.plain_layout(shard.layout))
     if storage is expr.StorageKind.RMEM:
         return types.Layout(types.shard_layout_local_shape(shard), utils.register_strides(shard))
     if storage is expr.StorageKind.GMEM or (
@@ -183,7 +183,7 @@ def static_dim(value, what):
 
 def mesh_dim(d):
     if d is None:
-        return "tilefoundry::program_dim<tilefoundry::TopologyScope::cta>()"
+        return "tilefoundry::topology_size<tilefoundry::TopologyLevel::cta>()"
     return static_dim(d, "mesh layout dim")
 
 
@@ -195,7 +195,7 @@ def render_shard_layout_value(var_name: str, sl: types.ShardLayout, dynamic_exte
     """Render a shard layout as runtime C++ preamble and value expression.
 
     Static values retain the type produced by the type renderer. Runtime
-    dimension mappings supply dynamic globals and ``program_dim<cta>()``
+    dimension mappings supply dynamic globals and ``topology_size<cta>()``
     supplies a launch-provided mesh extent. Missing or unmapped dynamic values
     raise instead of falling back to an envelope bound. A sliced mesh reaches
     the value the same way it reaches the type: through the mesh layout directly.
@@ -215,23 +215,23 @@ def render_shard_layout_value(var_name: str, sl: types.ShardLayout, dynamic_exte
     if isinstance(sl.mesh.layout, types.ComposedLayout):
         if sl.mesh.layout.outer is None:
             raise NotImplementedError(
-                "render_shard_layout_value: a sliced mesh needs its participating box "
+                "render_shard_layout_value: a sliced mesh needs its box of units "
                 "as a strided Layout; this states an identity box, with no sub-box"
             )
         mesh_base = sl.mesh.layout.offset
-        tir.sync.participation(sl.mesh)
+        tir.sync.sync_scope(sl.mesh)
     stated = sl.mesh.layout
     if isinstance(stated, types.ComposedLayout):
         stated = stated.outer
     topos = stmts.program_topologies(sl.mesh)
     if len(topos) > 1 and mesh_base:
         raise NotImplementedError(
-            "render_shard_layout_value: a mesh naming several levels cannot also "
-            "be sliced; the slice and the level boundary would both be deciding "
-            "which positions these are"
+            "render_shard_layout_value: a mesh naming several topologies cannot also "
+            "be sliced; the slice and the topology boundary would both be deciding "
+            "which units these are"
         )
     ml_base = int(mesh_base)
-    mesh_axes = types.flatten(stated)
+    mesh_axes = types.flatten(types.plain_layout(stated))
     topo = topos[0]
 
     def global_dim(d):
@@ -275,12 +275,10 @@ def render_shard_layout_value(var_name: str, sl: types.ShardLayout, dynamic_exte
     if len(topos) == 1:
         mesh_shape, mesh_strides = mesh_axes.shape, mesh_axes.strides
     else:
-        arrangements = types.flattened_levels(replace(sl.mesh, layout=stated))
-        mesh_shape = tuple(shape for shape, _ in arrangements)
-        mesh_strides = tuple(strides for _, strides in arrangements)
-    scope = ", ".join(context.topology_scope_str(t.name) for t in topos)
-    positions = cute_layout.render_layout_value(mesh_shape, mesh_strides, mesh_dim, mesh_stride)
-    mesh_layout = composed_mesh_layout(positions, ml_base)
+        mesh_shape, mesh_strides = stmts.raw_groups(sl.mesh)
+    scope = ", ".join(context.topology_enumerator(t.name) for t in topos)
+    raw_mesh_layout = cute_layout.render_layout_value(mesh_shape, mesh_strides, mesh_dim, mesh_stride)
+    mesh_layout = composed_mesh_layout(raw_mesh_layout, ml_base)
 
     attrs = ", ".join(render_attr(a) for a in sl.attrs)
     sl_layout = render_layout_value(
@@ -337,9 +335,9 @@ def coord_ref(index_var, ctx: context.Context) -> str:
     Integer literals become static coordinates; rank-zero scalars use their
     native names; one-element offset tensors read element zero. Dim arithmetic
     renders as the arithmetic itself: a multiplication preserves grid output
-    placement after an ordinal is converted to an element start, and an addition
+    address after an ordinal is converted to an element start, and an addition
     moves a window's base by a compile-time offset. A mesh coordinate reads this
-    unit's position along its axis. Other forms fail closed.
+    unit's coord along its mesh axis. Other forms fail closed.
     """
     return CoordinateVisitor().visit(index_var, ctx)
 

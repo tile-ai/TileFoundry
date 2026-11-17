@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
-from tilefoundry.ir import core, expr, types
+from tilefoundry.ir import core, expr, types, utils
 
 
 @dataclass
@@ -16,7 +16,7 @@ class Context:
     target: "Target | None" = None
     topologies: "tuple[Topology, ...] | None" = None
     caller_context: Context | None = field(default=None, repr=False, compare=False)
-    current_mesh: types.Mesh | None = None
+    mesh_scope: types.Mesh | None = None
     loops: tuple[tuple[expr.Expr, object, object, object], ...] = ()
     loop_aliases: dict[int, expr.Expr] = field(default_factory=dict, repr=False, compare=False)
 
@@ -39,8 +39,8 @@ class Context:
         if isinstance(region, core.LoopRegion):
             loop = (region.induction_var, region.start, region.extent, region.step)
             return replace(inner, loops=(*self.loops, loop), owner=region, parent=self)
-        mesh = types.Mesh.from_meshes(self.current_mesh, region.mesh) if self.current_mesh else region.mesh
-        return replace(inner, current_mesh=mesh, owner=region, parent=self)
+        mesh = utils.from_meshes(self.mesh_scope, region.mesh) if self.mesh_scope else region.mesh
+        return replace(inner, mesh_scope=mesh, owner=region, parent=self)
 
     def __post_init__(self):
         if self.module is not None:
@@ -68,7 +68,7 @@ class Context:
         return self.enter_reference(call.target)
 
     def enter_reference(self, ref):
-        """The environment of the function *ref* names from this frame's Module.
+        """The environment of the function *ref* names from this context's Module.
 
         Each Module the path passes through may declare its own target and
         topologies; undeclared ones inherit from the Module before it.
@@ -112,12 +112,12 @@ class Context:
         meshes = [
             ctx.owner.mesh for ctx in self.ancestors() if isinstance(ctx.owner, (core.MeshRegion, core.MeshScope))
         ]
-        if meshes or self.current_mesh is None:
+        if meshes or self.mesh_scope is None:
             return tuple(reversed(meshes))
-        return (self.current_mesh,)
+        return (self.mesh_scope,)
 
-    def enclosing_mesh(self):
-        """The nearest authored mesh, or the definition's external mesh."""
+    def innermost_mesh(self):
+        """The innermost enclosing mesh, or the root mesh when no `with` encloses this point."""
         return next(iter(reversed(self.enclosing_meshes())), None)
 
     def resolve_target(self):

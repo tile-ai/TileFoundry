@@ -52,18 +52,18 @@ def row_count(node) -> object:
 
 
 def row_limit(offsets: tuple, extents: tuple, limit: int | None) -> tuple:
-    """The most the row window may extend, at the position holding the rows.
+    """The most the row window may extend, at the mode holding the rows.
 
-    A window is stated per logical axis and projected onto positions, so the
-    ceiling has to land on the one position that varies over the rows -- the same
+    A window is stated per logical axis and projected onto modes, so the
+    ceiling has to land on the one mode that varies over the rows -- the same
     one the extent did.
     """
     if limit is None:
         return ()
     placed = [None] * len(extents)
-    for position, extent in enumerate(extents):
-        if extent is not offsets[position] and not isinstance(extent, int):
-            placed[position] = limit
+    for mode, extent in enumerate(extents):
+        if extent is not offsets[mode] and not isinstance(extent, int):
+            placed[mode] = limit
     return tuple(placed)
 
 
@@ -74,7 +74,7 @@ def cache_update_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     How many rows move is ``s`` and where they land is ``cur_pos``; only the
     first is a quantity, and it is the same one wherever the second points. The
     two controls are rank-0, so their own boundaries reach one number each.
-    Everything is said in the cache's own axes: which positions those are is the
+    Everything is said in the cache's own axes: which modes those are is the
     reader's question, and answering it here would be answering it twice.
     """
     cache = tuple(ctx.type_of(call.args[0]).shape)
@@ -152,13 +152,13 @@ def divided_axes(type_) -> set[int]:
     """Which logical axes a layout really hands out in slices.
 
     A `Split` over a mesh axis of one gives the whole axis to the only
-    participant there is, so it divides nothing.
+    unit there is, so it divides nothing.
     """
     layout = types.shard_layout_of(type_.layout)
     if layout is None:
         return set()
     targets = types.split_target_axes(layout, type_.shape)
-    mesh = types.flatten(layout.mesh.layout).shape if layout.mesh is not None else ()
+    mesh = layout.mesh.shape if layout.mesh is not None else ()
     return {
         targets[mesh_axis]
         for mesh_axis, attr in enumerate(layout.attrs)
@@ -172,22 +172,22 @@ def divided_axes(type_) -> set[int]:
 def reject_split_rows(ctx, call: "expr.Call", cache_ty, new_ty) -> None:
     """Refuse an update whose two sides do not own the same thing.
 
-    `cur_pos` is stated against the whole row axis, so a participant holding a
+    `cur_pos` is stated against the whole row axis, so a unit holding a
     slice of it would need its own offset to say which of its rows the update
     covers. Both sides are asked, because splitting the rows of `new` while the
     cache stays whole is the same question from the other end.
 
     Every other axis may be split, and the corpus does split the batch -- but
     only when both sides agree on it. One side sharded and the other not means
-    a participant writes rows it does not hold, or holds rows nobody wrote.
+    a unit writes rows it does not hold, or holds rows nobody wrote.
     """
     held, supplied = divided_axes(cache_ty), divided_axes(new_ty)
     if 1 in held or 1 in supplied:
         ctx.error(
             call,
-            "CacheUpdate: the row axis is Split across participants, and "
+            "CacheUpdate: the row axis is Split across units, and "
             "cur_pos is stated against the whole of it, so which rows a "
-            "participant writes depends on an offset the projection does "
+            "unit writes depends on an offset the projection does "
             "not carry; reshard before the update",
         )
     disagreed = held ^ supplied
@@ -196,7 +196,7 @@ def reject_split_rows(ctx, call: "expr.Call", cache_ty, new_ty) -> None:
         ctx.error(
             call,
             f"CacheUpdate: axis {axis} is Split on one side and not the other, "
-            "so a participant would write rows it does not hold; give cache and "
+            "so a unit would write rows it does not hold; give cache and "
             "new the same layout before the update",
         )
 
@@ -234,10 +234,10 @@ __all__ = ["CacheUpdate"]
 
 
 def by_logical_axis(local, logical) -> list:
-    """One extent per logical axis of a value, folding the positions it factored."""
+    """One extent per logical axis of a value, folding the modes it factored."""
     extents = [1] * len(logical.shape)
-    for position, owner in enumerate(access.logical_axes_of(local, logical)):
-        extents[owner] *= local.shape[position]
+    for mode, owner in enumerate(access.logical_axes_of(local, logical)):
+        extents[owner] *= local.shape[mode]
     return extents
 
 

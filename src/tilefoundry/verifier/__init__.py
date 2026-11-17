@@ -2,7 +2,7 @@
 
 from .verify import (
     input_params,
-    reached_frames,
+    reached_contexts,
     verify_function,
     verify_module,
     verify_prim_function,

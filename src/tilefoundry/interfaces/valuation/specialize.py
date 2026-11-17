@@ -129,7 +129,7 @@ class InstantiateDimensionCloner(core.ExprCloner):
         """Clone the chosen implementation once.
 
         Calls keep their references, because a name does not change; the
-        functions they reach are cloned from the collector's frames.
+        functions they reach are cloned from the collector's contexts.
 
         The clone records its origin and the extents it was rebuilt at. Neither takes part in
         equality, so two functions specialised from different origins are equal when they are
@@ -175,7 +175,7 @@ class InstantiateDimensionCloner(core.ExprCloner):
             None
             if node.topologies is None
             else tuple(
-                dim.substitute_topology_dims(topology, self.dims) for topology in node.topologies
+                dim.substitute_dims(topology, self.dims) for topology in node.topologies
             )
         )
         functions = tuple(self.functions.get(id(fn), fn) for fn in node.functions)
@@ -210,7 +210,7 @@ class InstantiateDimensionCloner(core.ExprCloner):
             args=tuple(self.visit(arg) for arg in region.args),
             params=tuple(self.visit(param) for param in region.params),
             body=self.visit(region.body),
-            mesh=dim.substitute_mesh_dims(region.mesh, self.dims),
+            mesh=dim.substitute_dims(region.mesh, self.dims),
             type=dim.substitute_dims(region.type, self.dims),
         )
 
@@ -290,12 +290,8 @@ def substitute_op_dims(target: object, dims: Mapping[str, int]) -> object:
         if param.kind != "attribute":
             continue
         value = getattr(target, param.name, None)
-        if isinstance(value, types.TensorType):
+        if isinstance(value, (types.TensorType, types.LayoutBase, types.Mesh)):
             rebuilt = dim.substitute_dims(value, dims)
-        elif isinstance(value, types.LayoutBase):
-            rebuilt = dim.substitute_layout_dims(value, dims)
-        elif isinstance(value, types.Mesh):
-            rebuilt = dim.substitute_mesh_dims(value, dims)
         elif dim.is_dimension(value):
             rebuilt = dim.substitute_shape_entry(value, dims)
         elif isinstance(value, tuple) and value and all(dim.is_dimension(item) for item in value):
@@ -315,7 +311,7 @@ def substitute_op_dims(target: object, dims: Mapping[str, int]) -> object:
     return type(target)(**attributes)
 
 
-def residual_dims(fn: core.Function, frame=None) -> tuple[str, ...]:
+def residual_dims(fn: core.Function, ctx=None) -> tuple[str, ...]:
     """Every dimension still stated as a range anywhere *fn* reaches.
 
     Signature, body, the shape-valued attributes its operations carry, the
@@ -324,17 +320,17 @@ def residual_dims(fn: core.Function, frame=None) -> tuple[str, ...]:
     block length the caller never mentions -- and a scan that stopped at the
     signature would call such a function concrete while it still holds a range.
     """
-    return tuple(dim_vars_reached(fn, frame))
+    return tuple(dim_vars_reached(fn, ctx))
 
 
-def dim_vars_reached(fn: core.Function, frame=None) -> dict[str, object]:
+def dim_vars_reached(fn: core.Function, ctx=None) -> dict[str, object]:
     """The declarations behind `residual_dims`, by name.
 
     Same traversal, keeping the `DimVar` rather than only its name, for a caller
     that has to restate the bounds a dimension was declared with.
     """
     found: dict[str, object] = {}
-    DimVarCollector(found).visit_function(fn, frame)
+    DimVarCollector(found).visit_function(fn, ctx)
     return found
 
 
@@ -388,32 +384,32 @@ class DimVarCollector(core.ExprVisitor[None]):
         if body is not None:
             self.visit(body, ctx)
 
-    def visit_function(self, fn: core.Function, frame=None) -> None:
+    def visit_function(self, fn: core.Function, ctx=None) -> None:
         if id(fn) in self.active_functions:
             self.cycles.append("/".join((*self.path, fn.name)))
             return
-        key = (id(fn), id(frame.module) if frame is not None else 0)
+        key = (id(fn), id(ctx.module) if ctx is not None else 0)
         if key in self.seen_functions:
             return
         self.seen_functions.add(key)
         self.active_functions.add(id(fn))
-        self.functions.append((fn, frame))
+        self.functions.append((fn, ctx))
         self.path.append(fn.name)
         previous_memo, self.memo = self.memo, {}
         try:
-            if frame is not None:
-                self.record(dim.vars_by_name(frame.topologies))
+            if ctx is not None:
+                self.record(dim.vars_by_name(ctx.topologies))
             for param in fn.params:
                 self.record(dim.vars_by_name(param.type))
             self.record(dim.vars_by_name(fn.return_type))
             if self.dims is None:
                 for variant in fn.variants:
-                    self.visit_function(variant, frame)
+                    self.visit_function(variant, ctx)
                 chosen = fn
             else:
                 chosen = variant_for(fn, self.dims)
             if chosen.body is not None:
-                self.visit(chosen.body, frame)
+                self.visit(chosen.body, ctx)
             elif not chosen.variants:
                 self.missing_bodies.append((fn.name, "/".join(self.path)))
         finally:
@@ -421,13 +417,13 @@ class DimVarCollector(core.ExprVisitor[None]):
             self.path.pop()
             self.active_functions.remove(id(fn))
 
-    def visit_Call(self, node: expr.Call, frame=None) -> None:
-        self.collect_expr(node, frame)
+    def visit_Call(self, node: expr.Call, ctx=None) -> None:
+        self.collect_expr(node, ctx)
         self.collect_bounds(node)
-        self.visit_children(node, frame)
+        self.visit_children(node, ctx)
         target = node.target
         if isinstance(target, core.FunctionRef):
-            inner = (Context() if frame is None else frame).callee_context(node)
+            inner = (Context() if ctx is None else ctx).callee_context(node)
             self.visit_function(inner.function, inner)
         else:
             staging: dict[str, object] = {}

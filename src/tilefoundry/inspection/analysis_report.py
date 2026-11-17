@@ -49,7 +49,7 @@ def render_analysis(result: analysis.Result, *, operands: bool = False) -> Analy
                        for identity, statement in rendered.statements.items()})
     data = report_data(
         module=result.module, function=result.function, analyses=result.analyses,
-        topology_level=result.topology_level, executed=result.executed,
+        topology=result.topology, executed=result.executed,
         metadata_types=result.metadata_types, labels=labels, functions=result.functions, printer=printer,
     )
     selected = frozenset(selected_types_)
@@ -117,7 +117,7 @@ def result_json(result: analysis.Result) -> str:
             module=result.module,
             function=result.function,
             analyses=result.analyses,
-            topology_level=result.topology_level,
+            topology=result.topology,
             executed=result.executed,
             metadata_types=result.metadata_types,
             functions=result.functions,

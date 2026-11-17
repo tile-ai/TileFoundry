@@ -8,18 +8,18 @@ from dataclasses import dataclass, replace
 from tilefoundry.ir import types
 from tilefoundry.ir.types import layout_algebra
 
-from .constraint import strided_arrangement
+from .constraint import strided_layout
 from .match import matched
 from .pattern import Predicate, Sequence, Tensor, Wildcard
 
 
-def arrangement(subject, *, allow_partial=False) -> types.Layout | None:
+def static_strided_layout(subject, *, allow_partial=False) -> types.Layout | None:
     """Read the static strided layout beneath shard and composition wrappers."""
-    subject = strided_arrangement(subject, allow_partial=allow_partial)
+    subject = strided_layout(subject, allow_partial=allow_partial)
     if subject is None:
         return None
-    extents = tuple(types.flatten(subject.shape))
-    strides = tuple(types.flatten(subject.strides))
+    extents = tuple(types.flatten_to_tuple(subject.shape))
+    strides = tuple(types.flatten_to_tuple(subject.strides))
     if any(type(number) is not int for number in (*extents, *strides)):
         return None
     if any(extent <= 0 for extent in extents):
@@ -46,13 +46,13 @@ def is_ranked_tensor(**fields) -> Tensor:
     return Tensor(predicates=(Ranked(),), **fields)
 
 
-def arrangements(layout: types.Layout, per_mode: bool) -> tuple[types.Layout, ...]:
+def mode_layouts(layout: types.Layout, per_mode: bool) -> tuple[types.Layout, ...]:
     if per_mode:
         return tuple(
-            types.Layout(tuple(types.flatten(shape)), tuple(types.flatten(steps)))
+            types.Layout(tuple(types.flatten_to_tuple(shape)), tuple(types.flatten_to_tuple(steps)))
             for shape, steps in zip(layout.shape, layout.strides)
         )
-    return (types.Layout(tuple(types.flatten(layout.shape)), tuple(types.flatten(layout.strides))),)
+    return (types.Layout(tuple(types.flatten_to_tuple(layout.shape)), tuple(types.flatten_to_tuple(layout.strides))),)
 
 
 @dataclass(frozen=True)
@@ -63,12 +63,12 @@ class Forward(Predicate):
 
     @typing.override
     def holds(self, subject, bindings: dict) -> bool:
-        held = arrangement(subject)
+        held = static_strided_layout(subject)
         if held is None:
             return False
         return all(
-            all(step >= 0 for step in types.flatten(part.strides))
-            for part in arrangements(held, self.per_mode)
+            all(step >= 0 for step in types.flatten_to_tuple(part.strides))
+            for part in mode_layouts(held, self.per_mode)
         )
 
 
@@ -80,12 +80,12 @@ class Injective(Predicate):
 
     @typing.override
     def holds(self, subject, bindings: dict) -> bool:
-        held = arrangement(subject)
+        held = static_strided_layout(subject)
         if held is None:
             return False
         return all(
             layout_algebra.is_inverse_projectable(part)
-            for part in arrangements(held, self.per_mode)
+            for part in mode_layouts(held, self.per_mode)
         )
 
 
@@ -104,7 +104,7 @@ def row_major_groups_for_cute(layout: types.Layout) -> types.Layout:
 
 
 def vector_widths(layout, element_bits: int, widths: tuple[int, ...]) -> tuple[int, ...]:
-    """Every requested byte width that divides every run in an arrangement."""
+    """Every requested byte width that divides every run in a layout."""
     if not widths:
         return ()
     widest = widths[-1]
@@ -112,16 +112,17 @@ def vector_widths(layout, element_bits: int, widths: tuple[int, ...]) -> tuple[i
     inner = getattr(stated, "inner", None)
     if inner is not None and hasattr(inner, "base"):
         widest = min(widest, 1 << inner.base)
-    held = arrangement(layout)
+    held = static_strided_layout(layout)
     if held is None:
         return ()
     grouped = layout_algebra.coalesce(
         row_major_groups_for_cute(held),
         (0,) * len(held.shape),
+        major="col",
     )
     runs = tuple(
         sorted(
-            zip(types.flatten(grouped.shape), types.flatten(grouped.strides)),
+            zip(types.flatten_to_tuple(grouped.shape), types.flatten_to_tuple(grouped.strides)),
             key=lambda run: run[1],
         )
     )
@@ -160,8 +161,8 @@ class WholeVectors(Predicate):
 
 
 @dataclass(frozen=True)
-class PlainArrangement(Predicate):
-    """Require an arrangement with no transform and no nonzero offset."""
+class Strided(Predicate):
+    """Require a layout with no transform and no nonzero offset."""
 
     allow_partial: bool = False
 
@@ -172,7 +173,7 @@ class PlainArrangement(Predicate):
             stated.inner is not None or stated.offset != 0
         ):
             return False
-        return arrangement(subject, allow_partial=self.allow_partial) is not None
+        return static_strided_layout(subject, allow_partial=self.allow_partial) is not None
 
 
 @dataclass(frozen=True)
@@ -194,7 +195,7 @@ def box_runs(
     """Read box runs by tile axis, ordered by increasing step."""
     runs: list[Run] = []
     for axis, (extents, steps) in enumerate(zip(layout.shape, layout.strides)):
-        modes = tuple(enumerate(zip(types.flatten(extents), types.flatten(steps))))
+        modes = tuple(enumerate(zip(types.flatten_to_tuple(extents), types.flatten_to_tuple(steps))))
         for mode, (extent, step) in reversed(modes):
             if extent == 1:
                 continue
@@ -223,9 +224,9 @@ class BoxDims(Predicate):
     allow_partial: bool = False
 
     def reading(self, subject, captures) -> tuple[tuple | None, str | None]:
-        layout = arrangement(subject, allow_partial=self.allow_partial)
+        layout = static_strided_layout(subject, allow_partial=self.allow_partial)
         if layout is None:
-            return None, f"{subject!r} is no static strided arrangement"
+            return None, f"{subject!r} is no static strided layout"
         width = getattr(captures.get(self.dtype), "bit_width", None)
         if type(width) is not int:
             return None, f"the element it arranges is not bound as {self.dtype}"
@@ -276,13 +277,13 @@ class TensorMap(Predicate):
     dtype: str
 
     def reading(self, subject) -> tuple[tuple | None, str | None]:
-        layout = arrangement(subject)
+        layout = static_strided_layout(subject)
         if layout is None:
             return None, f"{subject!r} is no static strided tensor a tensormap describes"
         modes = [
             (extent, step)
             for extents, steps in zip(layout.shape, layout.strides)
-            for extent, step in zip(types.flatten(extents), types.flatten(steps))
+            for extent, step in zip(types.flatten_to_tuple(extents), types.flatten_to_tuple(steps))
             if extent > 1
         ]
         unit = [mode for mode in modes if mode[1] == 1]
@@ -308,11 +309,11 @@ __all__ = [
     "BoxDims",
     "Forward",
     "Injective",
-    "PlainArrangement",
     "Ranked",
+    "Strided",
     "TensorMap",
     "WholeVectors",
-    "arrangement",
     "is_ranked_tensor",
     "is_scalar_tensor",
+    "static_strided_layout",
 ]

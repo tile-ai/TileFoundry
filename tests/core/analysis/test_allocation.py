@@ -23,7 +23,7 @@ from tilefoundry.ir import expr, types
         ),
         (types.ComposedLayout(types.Swizzle(3, 4, 3), 16, types.Layout((2, 4), (16, 1))), expr.DType.bf16, 2048),
         (types.ComposedLayout(types.Swizzle(1, 1, -1), 0, types.Layout((4,), (8,))), expr.DType.bf16, 64),
-        (types.ComposedLayout(types.Layout((4,), (3,)), 5, types.Layout((2,), (1,))), expr.DType.f32, 40),
+        (types.ComposedLayout(types.Layout((4,), (3,)), 5, types.Layout((2,), (1,))), expr.DType.f32, 76),
         (
             types.ComposedLayout(types.ComposedLayout(types.Swizzle(1, 1, -1), 2, None), 1, types.Layout((3,), (8,))),
             expr.DType.bf16,
@@ -37,7 +37,7 @@ def test_smem_capacity_covers_the_applied_layout(layout, dtype, capacity):
     held = types.TensorType(shape, dtype, layout, expr.StorageKind.SMEM)
     assert analysis.storage_bytes(held) == capacity
     addresses = {
-        (types.apply(layout, coordinate) * dtype.bit_width + bit) // 8
+        (layout(coordinate) * dtype.bit_width + bit) // 8
         for coordinate in range(prod(shape))
         for bit in range(dtype.bit_width)
     }
@@ -60,9 +60,9 @@ def test_smem_capacity_counts_only_the_selected_units_coordinates(level, capacit
     held = types.TensorType(
         (2, 4, 3), expr.DType.f32, types.ShardLayout(layout, (types.Split(0), types.Split(1)), mesh), expr.StorageKind.SMEM
     )
-    assert analysis.storage_bytes(held, topology_level=level, topologies=topologies) == capacity
+    assert analysis.storage_bytes(held, topology=level, topologies=topologies) == capacity
     addresses = {
-        types.apply(layout, block + 2 * lane + 8 * column) * 4 + byte
+        layout((block, lane, column)) * 4 + byte
         for block in range(2 if level is None else 1)
         for lane in range(lanes)
         for column in range(3)

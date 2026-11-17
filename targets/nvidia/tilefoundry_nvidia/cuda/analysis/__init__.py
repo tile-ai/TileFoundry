@@ -6,7 +6,7 @@ from .emission import (
     copies_carry_entry,
     copies_insert_slice_base,
     copies_insert_slice_update,
-    issue_mesh,
+    execution_mesh_of,
     operand_roles,
     required_execution_mesh,
     result_param,

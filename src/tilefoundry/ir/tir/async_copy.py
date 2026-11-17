@@ -107,8 +107,8 @@ class CopyAsync(expr.Op):
 
 
 @typeinfer.register(CopyAsync)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 @access.register_relation(CopyAsync)
@@ -162,8 +162,8 @@ class CpAsyncCommit(expr.Op):
 
 
 @typeinfer.register(CpAsyncCommit)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 @expr.register_op(dialect="T", category="async", name="cp_async_wait")
@@ -181,8 +181,8 @@ class CpAsyncWait(expr.Op):
 
 
 @typeinfer.register(CpAsyncWait)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 __all__ = [

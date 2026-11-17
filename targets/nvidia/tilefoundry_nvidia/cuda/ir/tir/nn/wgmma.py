@@ -84,7 +84,7 @@ def canonical_smem_layout(layout, element_bytes: int, major: Major, *, b_operand
         outer = types.Layout(outer.shape[::-1], outer.strides[::-1])
     width = SWIZZLE_BYTES[swizzle] // element_bytes
     tiles = (width, 8) if major is Major.MN else (8, 16 // element_bytes)
-    outer = layout_algebra.logical_divide(outer, tuple(types.Layout((tile,), (1,)) for tile in tiles), major="row")
+    outer = layout_algebra.logical_divide(outer, tuple(types.Layout(tile, 1) for tile in tiles), major="row")
     if b_operand:
         outer = types.Layout(outer.shape[::-1], outer.strides[::-1])
     return replace(layout, outer=outer) if isinstance(layout, types.ComposedLayout) else outer

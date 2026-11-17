@@ -28,8 +28,8 @@ class Where(expr.Op):
 
 
 @typeinfer.register(Where)
-def _(call, ctx) -> types.UnitType:
-    return types.UnitType()
+def _(call, ctx) -> types.TupleType:
+    return types.TupleType.Void
 
 
 @access.register_relation(Where)

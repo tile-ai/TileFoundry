@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the Python source rules of docs/spec/code-organization.md §0.
+"""Check the Python source rules of docs/spec/code-organization.md and docs/develop.md (Principles).
 
 Rules checked here: S1, S2, S4, S5, S7, S8, S9, S11, C3, C4, C5, C6, C10, C11.
 Every rule applies to every Python file of the repository. The configuration in

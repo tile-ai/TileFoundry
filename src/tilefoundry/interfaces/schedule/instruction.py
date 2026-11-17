@@ -43,7 +43,7 @@ def operand_relations(op: expr.Op, operand_types: tuple[types.TensorType, ...]) 
     args = tuple(
         expr.Var(name=f"operand{index}", type=type_) for index, type_ in enumerate(operand_types)
     )
-    call = expr.Call(target=op, args=args, type=types.UnitType())
+    call = expr.Call(target=op, args=args, type=types.TupleType.Void)
     return access.relations_of(call, RelationContext(dict(zip(map(id, args), operand_types))))
 
 
@@ -161,12 +161,12 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
             f"order {order} is not a permutation of iteration dimensions", path=bindings, op=op
         )
     declaration = getattr(op, "atom", op)
-    participant = (
+    required_execution_mesh = (
         declaration.execution_mesh
         if isinstance(declaration, type)
         else getattr(declaration, "required_execution_mesh", getattr(declaration, "execution_mesh", None))
     )
-    if not isinstance(participant, types.Mesh):
+    if not isinstance(required_execution_mesh, types.Mesh):
         return Projection(params, writes, patterns, whole_types, (), repeat, order, single_shape)
     if not fragments:
         inner_types = tuple(
@@ -186,7 +186,7 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
                 outer = utils.physical_layout(outer)
             shard = outer if isinstance(outer, types.ShardLayout) else None
             address = shard.layout if shard is not None else outer
-            primitive = address.outer if isinstance(address, types.ComposedLayout) else address
+            primitive = types.plain_layout(address)
             if not isinstance(primitive, types.Layout):
                 raise ValueError(f"{name}: cannot divide {type(primitive).__name__}")
             profile = int_tuple.compatible_profile(primitive.shape, type_.shape)
@@ -199,7 +199,7 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
             except ValueError as error:
                 first = 0
                 for axis, (mode, size) in enumerate(zip(profile, shape, strict=True)):
-                    widths = types.flatten(mode)
+                    widths = types.flatten_to_tuple(mode)
                     count = prod(widths) // size
                     for index, prefix in enumerate(accumulate(widths, lambda x, y: x * y)):
                         if count % prefix and prefix % count:
@@ -224,8 +224,8 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
                 strides=tuple(
                     original if extent == 1 else stride
                     for extent, original, stride in zip(
-                        types.flatten(primitive.shape),
-                        types.flatten(primitive.strides),
+                        types.flatten_to_tuple(primitive.shape),
+                        types.flatten_to_tuple(primitive.strides),
                         flat.strides,
                         strict=True,
                     )
@@ -235,7 +235,7 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
             kept = tuple(
                 i
                 for i, (before, after) in enumerate(
-                    zip(types.flatten(primitive.shape), flat.shape, strict=True)
+                    zip(types.flatten_to_tuple(primitive.shape), flat.shape, strict=True)
                 )
                 if before == 1 or after != 1 or layout_axes.count(layout_axes[i]) == 1
             )
@@ -274,9 +274,9 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
                     else attr
                     for attr in shard.attrs
                 )
-                source = utils.participant_layout(replace(shard, attrs=tile_attrs), participant)
-                frame, dropped = utils.participant_frame(source.mesh, participant)
-                tile = types.ShardLayout(tile, source.attrs[dropped:], frame)
+                source = utils.filter_topologies(replace(shard, attrs=tile_attrs), required_execution_mesh)
+                execution_mesh, dropped = utils.find_execution_mesh(source.mesh, required_execution_mesh)
+                tile = types.ShardLayout(tile, source.attrs[dropped:], execution_mesh)
                 rest = types.ShardLayout(
                     rest,
                     tuple(
@@ -340,7 +340,7 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
                 if iteration_axis not in shared:
                     continue
                 mode = types.get(physical, axis)
-                active = tuple(width for width in types.flatten(mode.shape) if width != 1)
+                active = tuple(width for width in types.flatten_to_tuple(mode.shape) if width != 1)
                 expected = shared[iteration_axis][1]
                 try:
                     int_tuple.compatible_profile(active, expected)
@@ -361,13 +361,13 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
             rest_attrs = (
                 list(rest.attrs)
                 if isinstance(rest, types.ShardLayout)
-                else [types.Broadcast()] * len(types.flatten(rest_mesh.layout.shape))
+                else [types.Broadcast()] * len(types.flatten_to_tuple(rest_mesh.layout.shape))
             )
             logical_axes = int_tuple.mode_axes(physical.shape)
             flat = types.flatten(physical)
             for axis, (_, _, source_mesh, bound) in bindings_on_axes:
                 modes = [i for i, a in enumerate(logical_axes) if a == axis and flat.shape[i] != 1]
-                shift = len(rest_attrs) - len(types.flatten(source_mesh.layout.shape))
+                shift = len(rest_attrs) - len(types.flatten_to_tuple(source_mesh.layout.shape))
                 for mesh_axis, mode in bound:
                     rest_attrs[mesh_axis + shift] = types.Split(modes[mode])
             rests[index] = types.ShardLayout(physical, tuple(rest_attrs), rest_mesh)
@@ -383,7 +383,7 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
         )
         bind_masks.append(
             int_tuple.unflatten(
-                tuple(index in bound for index in range(len(types.flatten(physical.shape)))),
+                tuple(index in bound for index in range(len(types.flatten_to_tuple(physical.shape)))),
                 physical.shape,
             )
         )
@@ -470,7 +470,7 @@ def admit_fields(op, operands, mesh, matcher, *, target=None):
             raise pattern_refusal(matcher, op, param.name)
 
 
-def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection=None):
+def check_call(op, operands, mesh, *, ctx, repeat=None, order=None, projection=None):
     """Match whole fields, project atom tiles, then check one closed declaration.
 
     Operands may be types for candidate admission or typed expressions for
@@ -497,11 +497,11 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
     matcher = pattern.Matcher(
         dict(getattr(atom, "bindings", {})),
         mesh=mesh,
-        owners=frame.target.storage_owners
-        if frame is not None and frame.target is not None
+        owners=ctx.target.storage_owners
+        if ctx is not None and ctx.target is not None
         else expr.StorageOwners((), {}),
     )
-    admit_fields(op, whole, mesh, matcher, target=None if frame is None else frame.target)
+    admit_fields(op, whole, mesh, matcher, target=None if ctx is None else ctx.target)
     try:
         tiles = (
             projection
@@ -517,33 +517,33 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
     except ValueError as error:
         raise RefusalError(str(error), path=matcher.bindings, op=op) from error
     declaration = getattr(op, "atom", op)
-    participant = getattr(
+    required_execution_mesh = getattr(
         declaration, "required_execution_mesh", getattr(declaration, "execution_mesh", None)
     )
-    needs_frame = any(
+    needs_execution_mesh = any(
         isinstance(declared, pattern.Tensor)
         and isinstance(declared.layout, pattern.ShardLayout)
         and types.shard_layout_of(type_.layout) is None
         for declared, type_ in zip(tiles.patterns, tiles.tiles, strict=True)
     )
-    if needs_frame and isinstance(participant, types.Mesh) and mesh is not None:
-        selected = utils.participant_layout(
+    if needs_execution_mesh and isinstance(required_execution_mesh, types.Mesh) and mesh is not None:
+        selected = utils.filter_topologies(
             types.ShardLayout(
                 types.Layout(()),
-                tuple(types.Broadcast() for _ in types.flatten(mesh.layout.shape)),
+                tuple(types.Broadcast() for _ in types.flatten_to_tuple(mesh.layout.shape)),
                 mesh,
             ),
-            participant,
+            required_execution_mesh,
         ).mesh
         try:
-            frame_mesh, _ = utils.participant_frame(selected, participant)
+            execution_mesh, _ = utils.find_execution_mesh(selected, required_execution_mesh)
         except ValueError as error:
             raise RefusalError(
-                f"scope {mesh!r} does not contain participant frame {participant!r}",
+                f"scope {mesh!r} does not contain execution mesh {required_execution_mesh!r}",
                 path=matcher.bindings,
                 op=op,
             ) from error
-        matcher.use_mesh(frame_mesh)
+        matcher.use_mesh(execution_mesh)
     view = getattr(atom, "match_view", None)
     for param, declared, type_ in zip(params, tiles.patterns, tiles.tiles, strict=True):
         match_type = type_ if view is None else view(param.name, type_)
@@ -556,13 +556,13 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
                 and matcher.mesh is not None
             ):
                 states = utils.attrs_by_axis(match_type, matcher.mesh, matcher.owners)
-                for axis, (required, (key, held)) in enumerate(
+                for mesh_axis, (required, (key, held)) in enumerate(
                     zip(declared.layout.attrs, states.items())
                 ):
-                    level = key[0]
+                    topology = key[0]
                     if required == types.Broadcast() and isinstance(held, types.Varying):
                         refusal = RefusalError(
-                            f"{refusal.reason}; mesh axis {axis} ({level}) is Varying; "
+                            f"{refusal.reason}; mesh axis {mesh_axis} ({topology}) is Varying; "
                             f"reshard({param.name}, @ {{B()}}) to declare equal values",
                             path=refusal.path,
                             op=op,
@@ -580,31 +580,31 @@ def check_call(op, operands, mesh, *, frame, repeat=None, order=None, projection
             value if isinstance(value, expr.Constant) else expr.Var(param.name, type=type_)
             for value, param, type_ in zip(operands, params, tiles.tiles, strict=True)
         )
-        call = expr.Call(op, args, type=types.UnitType())
-        ctx = (
+        call = expr.Call(op, args, type=types.TupleType.Void)
+        verify_ctx = (
             replace(
-                frame,
+                ctx,
                 memo={
                     id(arg): (arg, type_) for arg, type_ in zip(args, tiles.tiles, strict=True)
                 },
-                current_mesh=mesh,
+                mesh_scope=mesh,
             )
-            if isinstance(frame, verify.Context)
+            if isinstance(ctx, verify.Context)
             else verify.Context(
-                module=None if frame is None else frame.module, function=None if frame is None else frame.function, target=None if frame is None else frame.target, topologies=None if frame is None else frame.topologies, current_mesh=mesh
+                module=None if ctx is None else ctx.module, function=None if ctx is None else ctx.function, target=None if ctx is None else ctx.target, topologies=None if ctx is None else ctx.topologies, mesh_scope=mesh
             )
         )
         try:
-            handler(call, ctx)
+            handler(call, verify_ctx)
         except expr.VerifyError as error:
             raise RefusalError(str(error), path=matcher.bindings, op=op) from error
     return dict(matcher.bindings), tiles
 
 
-def verify_call(op, args, mesh, *, frame):
+def verify_call(op, args, mesh, *, ctx):
     """Verify one scheduled TIR call; a schedule refusal becomes a ``VerifyError``."""
     try:
-        check_call(op, args, mesh, frame=frame)
+        check_call(op, args, mesh, ctx=ctx)
     except RefusalError as error:
         raise expr.VerifyError(str(error)) from error
 

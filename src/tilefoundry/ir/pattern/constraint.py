@@ -10,7 +10,7 @@ from tilefoundry.ir import types
 from .match import named
 
 
-def strided_arrangement(layout, *, allow_partial=False):
+def strided_layout(layout, *, allow_partial=False):
     """Read a strided address layout beneath permitted value-state wrappers."""
     if isinstance(layout, types.ShardLayout):
         if not all(
@@ -79,16 +79,14 @@ class SameConstraint(Constraint):
         return f"{self.left}.{self.field} = {self.right}.{self.field}"
 
 
-def read_mode(tensor: types.TensorType, arrangement=None, *, allow_partial=False):
-    layout = strided_arrangement(
-        tensor.layout if arrangement is None else arrangement, allow_partial=allow_partial
-    )
+def read_mode(tensor: types.TensorType, stated=None, *, allow_partial=False):
+    layout = strided_layout(tensor.layout if stated is None else stated, allow_partial=allow_partial)
     if layout is None:
-        return None, f"{tensor.layout!r} is no strided arrangement"
+        return None, f"{tensor.layout!r} is no strided layout"
     shape, strides = tuple(layout.shape), tuple(layout.strides)
     extents = tuple(tensor.shape)
     if len(shape) != len(extents) or any(
-        prod(types.flatten(group)) != extent for group, extent in zip(shape, extents)
+        prod(types.flatten_to_tuple(group)) != extent for group, extent in zip(shape, extents)
     ):
         return None, (
             f"{layout!r} is not one group of modes per axis of the {extents} tile it arranges"
@@ -96,11 +94,11 @@ def read_mode(tensor: types.TensorType, arrangement=None, *, allow_partial=False
     unit = []
     for axis, (group, steps) in enumerate(zip(shape, strides)):
         walked = tuple(
-            step for extent, step in zip(types.flatten(group), types.flatten(steps)) if extent > 1
+            step for extent, step in zip(types.flatten_to_tuple(group), types.flatten_to_tuple(steps)) if extent > 1
         )
         unit += [
-            (axis, position, position == len(walked) - 1)
-            for position, step in enumerate(walked)
+            (axis, mode, mode == len(walked) - 1)
+            for mode, step in enumerate(walked)
             if step == 1
         ]
     if len(unit) != 1:
@@ -125,7 +123,7 @@ class SameModesConstraint(Constraint):
         return None if any(not isinstance(value, types.TensorType) for value in held) else held
 
     def readings(self, pair: tuple[types.TensorType, types.TensorType]):
-        """Read below one shared shard frame only after proving it is the same."""
+        """Read below one shared shard mesh only after proving it is the same."""
         left, right = (value.layout for value in pair)
         if (
             isinstance(left, types.ShardLayout)
@@ -133,12 +131,12 @@ class SameModesConstraint(Constraint):
             and left.attrs == right.attrs
             and left.mesh == right.mesh
         ):
-            arrangements = (left.layout, right.layout)
+            stated_layouts = (left.layout, right.layout)
         else:
-            arrangements = (None, None)
+            stated_layouts = (None, None)
         return tuple(
-            read_mode(value, arrangement, allow_partial=self.allow_partial)
-            for value, arrangement in zip(pair, arrangements)
+            read_mode(value, stated, allow_partial=self.allow_partial)
+            for value, stated in zip(pair, stated_layouts)
         )
 
     def holds(self, operands: dict) -> bool:
@@ -192,5 +190,5 @@ __all__ = [
     "DistinctConstraint",
     "SameConstraint",
     "SameModesConstraint",
-    "strided_arrangement",
+    "strided_layout",
 ]

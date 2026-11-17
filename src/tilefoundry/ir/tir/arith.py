@@ -5,7 +5,7 @@ Dispatched by kind enum. ``BinaryKind`` and ``UnaryKind`` are owned by
 without remapping.
 
 ``Binary`` / ``Unary`` are ``Op`` subclasses (not ``Stmt``); in Stmt
-position they are invoked as ``Evaluate(op, args)`` (unit-typed, no
+position they are invoked as ``Evaluate(op, args)`` (void result, no
 result value), matching the TIR convention shared with
 ``tir.memory.Copy``.
 """
@@ -35,8 +35,8 @@ class Binary(expr.Op):
 
 
 @typeinfer.register(Binary)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 access.register_relation(Binary)(access.identity_relations)
@@ -76,8 +76,8 @@ class Unary(expr.Op):
 
 
 @typeinfer.register(Unary)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 access.register_relation(Unary)(access.identity_relations)

@@ -249,7 +249,7 @@ def _memory_report(case, program, report):
 
 
 def _tir_checks(lowered, source):
-    functions = tuple(frame.function for frame in valuation.collect_functions(lowered).values())
+    functions = tuple(ctx.function for ctx in valuation.collect_functions(lowered).values())
     found = []
     for function in functions:
         _assert_live_smem_views_do_not_overlap(function, source)
@@ -472,7 +472,7 @@ class PhysicalSlots(ScheduleCase):
                     offset = slot.args[0].value
                     assert offset % 16 == 0
                     placed = {
-                        offset + (types.apply(held.layout, index) * held.dtype.bit_width + bit) // 8
+                        offset + (held.layout(index) * held.dtype.bit_width + bit) // 8
                         for index in range(prod(types.flatten(held.layout).shape))
                         for bit in range(held.dtype.bit_width)
                     }
@@ -657,7 +657,7 @@ class TmaPeakOverCapacity(ScheduleCase):
         result = analysis.analyze(*checked, analysis=("memory", "sync"))
         records = inspection.render_analysis(result).data["functions"][0]["function_records"]
         assert records["memory"]["errors"] == [
-            "smem placement peak 228.00KiB exceeds capacity 227.00KiB"
+            "smem peak 228.00KiB exceeds capacity 227.00KiB"
         ]
         assert records["sync"]["errors"] == []
 
@@ -731,9 +731,9 @@ class ModuleInstances(ScheduleCase):
 
     def retained_shapes(self, lowered):
         verifier.verify_module(lowered)
-        frames = valuation.collect_functions(lowered)
-        assert len(frames) == 4
-        assert all(isinstance(frame.function, core.PrimFunction) for frame in frames.values())
+        contexts = valuation.collect_functions(lowered)
+        assert len(contexts) == 4
+        assert all(isinstance(ctx.function, core.PrimFunction) for ctx in contexts.values())
         layers, mm = lowered.children["layers"], lowered.children["mm"]
         assert len(layers) == 3
         assert all(element is mm for element in layers)
@@ -1295,7 +1295,7 @@ EXPECTED = {
         },
     ),
     "hir/split_copy_fewer_threads": dict(
-        sync_refusal="two threads that issue Copy dst write one shared memory element",
+        sync_refusal="two threads that execute Copy dst write one shared memory element",
         smem_peak=512,
         candidates_refusal="source has no unscheduled candidate site",
     ),

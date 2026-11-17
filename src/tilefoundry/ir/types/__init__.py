@@ -3,7 +3,8 @@
 The layer above ``ir.expr``: it reads dimensions through ``ir.expr.dim`` and the
 ``services`` and never imports ``ir.dim``. ``int_tuple`` and ``layout_algebra`` are
 exported as namespaces because their function names (``product``, ``filter``,
-``slice``) would collide. See [types](docs/spec/types.md) and [shard](docs/spec/shard.md).
+``slice``) would collide. ``get`` and ``domain_offset`` are the ones of ``layout``.
+See [types](docs/spec/types.md) and [shard](docs/spec/shard.md).
 """
 
 from __future__ import annotations
@@ -15,34 +16,33 @@ from .callable_type import (
     callable_type_for,
     callable_type_for_prim_function,
 )
-from .int_tuple import IntTuple
+from .int_tuple import IntTuple, flatten_to_tuple
 from .layout import (
     ComposedLayout,
     Layout,
     LayoutBase,
     NotProjectableError,
     Swizzle,
-    apply,
-    flat_shape,
-    flat_stride,
+    coshape,
+    cosize,
+    depth,
+    domain_offset,
     flatten,
     get,
+    plain_layout,
     rank,
+    select,
     size,
     take,
     unflatten,
 )
-from .mesh import (
-    Mesh,
-    axis_keys,
-    check_topology,
-    flattened_levels,
-    levels,
-    separate,
-    starts,
-    topology_names,
-    within_scope,
+from .layout_algebra import (
+    make_composed_layout,
+    make_layout,
+    make_layout_like,
+    make_ordered_layout,
 )
+from .mesh import Mesh, check_topology, topology_sizes
 from .placement import Placement
 from .pointer import PointerType
 from .shard_layout import (
@@ -57,7 +57,6 @@ from .shard_layout import (
     V,
     Varying,
     combine_attrs,
-    domain_offset,
     local_layout,
     local_layout_and_offset,
     local_readback,
@@ -70,13 +69,17 @@ from .shard_layout import (
     split_target_axes,
 )
 from .stride import (
+    LayoutLeft,
+    LayoutRight,
     compact_col_major,
     compact_major,
+    compact_order,
     compact_row_major,
+    crd2crd,
     crd2idx,
     idx2crd,
-    try_compact_major,
 )
-from .swizzle_layout import get_swizzle_portion
-from .tensor_type import ShapeDim, TensorType, TupleType, Type, UnitType
-from .topology import Topology
+from .swizzle_layout import get_nonswizzle_portion, get_swizzle_portion, make_swizzle
+from .tensor_type import ShapeDim, TensorType, TupleType, Type
+from .topology import Topology, topology_name
+from .visitor import TypeFunctor, TypeMutator, TypeVisitor

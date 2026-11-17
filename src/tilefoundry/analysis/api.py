@@ -37,7 +37,7 @@ class Result:
     module: core.Module
     function: core.Function
     analyses: tuple[str, ...]
-    topology_level: str | None
+    topology: str | None
     executed: tuple[str, ...]
     metadata_types: tuple[type[expr.IRMetadata], ...]
     functions: tuple[core.Function, ...]
@@ -110,34 +110,36 @@ def build_context(
     module: core.Module,
     function: core.Function,
     *,
-    topology_level: str | None = None,
+    topology: str | None = None,
     options: object | None = None,
 ) -> tuple[AnalyzeContext, ...]:
     """Build one local scope tree per definition in a previously checked program."""
     check_subject(module, function)
     topologies = module.effective_topologies()
-    if topology_level is None:
-        topology_level = topologies[0].name if topologies else None
+    if topology is None:
+        topology = topologies[0].name if topologies else None
 
     contexts, definitions = [], {}
-    frames = tuple(valuation.definitions(valuation.Context(module, function), postorder=True))
-    for frame in frames:
+    definition_contexts = tuple(
+        valuation.definitions(valuation.Context(module, function), postorder=True)
+    )
+    for ctx in definition_contexts:
         context = AnalyzeContext(
-            module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies,
-            owner=frame.function,
-            topology_level=topology_level,
+            module=ctx.module, function=ctx.function, target=ctx.target, topologies=ctx.topologies,
+            owner=ctx.function,
+            topology=topology,
             options=options,
             entry=function,
             definitions=definitions,
         )
         builder = ScopeBuilder(
-            frame.module,
-            frame.function,
+            ctx.module,
+            ctx.function,
             ctx=context,
-            is_root=frame.function is function,
+            is_root=ctx.function is function,
         )
         builder.build()
-        definitions[id(frame.function)] = context.scope
+        definitions[id(ctx.function)] = context.scope
         contexts.append(context)
     return tuple(contexts)
 
@@ -147,37 +149,33 @@ def analyze(
     function: core.Function,
     *,
     analysis: str | Sequence[str],
-    topology_level: str | None = None,
-    level: str | None = None,
+    topology: str | None = None,
     options: object | None = None,
 ) -> Result:
     """Run the requested analyses' union dependency closure over *function*.
 
     The caller supplies the program returned by ``check_program``. Analyses
     write records onto that same program; dimensions are bound by the caller.
-    The selected topology defaults to the module's coarsest level.
+    The selected topology defaults to the module's coarsest topology.
     """
-    if topology_level is not None and level is not None and topology_level != level:
-        raise ValueError("analyze: topology_level and level disagree")
-    topology_level = topology_level if topology_level is not None else level
     check_subject(module, function)
     if expr.get_metadata(function, ExecutionMeshMetadata) is None:
         raise Error("analyze needs the program returned by check_program")
     roots = normalize_roots(analysis)
     result_module = module
     closure = analyzer_closure(module.resolve_target(), roots)
-    if topology_level is None:
+    if topology is None:
         topologies = module.effective_topologies()
-        topology_level = topologies[0].name if topologies else None
-    check_analyses(module, function, closure, topology_level=topology_level)
+        topology = topologies[0].name if topologies else None
+    check_analyses(module, function, closure, topology=topology)
     contexts = build_context(
         module,
         function,
-        topology_level=topology_level,
+        topology=topology,
         options=options,
     )
     context = contexts[-1]
-    functions = tuple(frame.function for frame in valuation.definitions(context))
+    functions = tuple(ctx.function for ctx in valuation.definitions(context))
 
     order: list[type[expr.IRMetadata]] = []
     written_records: set[tuple] = set()
@@ -205,7 +203,7 @@ def analyze(
         module=result_module,
         function=function,
         analyses=roots,
-        topology_level=topology_level,
+        topology=topology,
         executed=tuple(algorithm.selector for algorithm in closure),
         metadata_types=tuple(item for item in order if item in surviving),
         functions=functions,

@@ -7,8 +7,8 @@ namespace copy_impl {
 /// The slice of a plain operand that pairs with one shard operand.
 ///
 /// An operand with no shard layout of its own is not therefore whole for
-/// every instance: when the other operand is sharded, the plain side moves
-/// exactly the slice that instance owns, projected through the shard side's
+/// every unit: when the other operand is sharded, the plain side moves
+/// exactly the slice that unit owns, projected through the shard side's
 /// layout, whose shape refines the shared logical domain. The projection's
 /// window and origin are row-major logical steps, and the plain layout is
 /// reversed before they index it, so CuTe's first-mode-fastest decode reads
@@ -22,7 +22,7 @@ CUTE_HOST_DEVICE auto local_as(T &&t,
                                                                  sl.mesh_value};
     auto const [window, origin] = tilefoundry::detail::local_layout_and_offset(
         as_logical,
-        tilefoundry::mesh_coords(sl.mesh_value, tilefoundry::program_ids()));
+        tilefoundry::mesh_coords(sl.mesh_value, tilefoundry::unit_ids()));
     auto const plain = reverse(cute::flatten(t.layout()));
     return cute::make_tensor(t.data() + plain(origin),
                              cute::composition(plain, window));
@@ -134,15 +134,17 @@ struct CopyIndexedAsync {
             bytes == 4 || bytes == 8 || bytes == 16,
             "indexed copy_async needs an aligned 4, 8, or 16 byte row vector");
         constexpr int V = bytes / int(sizeof(value_type));
-        constexpr auto threads =
-            tilefoundry::get<tilefoundry::TopologyScope::thread>(
+        constexpr auto threads = tilefoundry::detail::topology_mode<
+            tilefoundry::TopologyLevel::thread>(ExecutionMesh{});
+        constexpr int units = int(cute::size(threads));
+        const int lane =
+            int(threadIdx.x) -
+            tilefoundry::detail::first_id<tilefoundry::TopologyLevel::thread>(
                 ExecutionMesh{});
-        constexpr int participants = int(cute::size(threads.layout));
-        const int lane = int(threadIdx.x) - tilefoundry::offset(threads);
         auto row_vectors = cute::recast<cute::uint_bit_t<bytes * 8>>(row_d);
         const int vectors_per_row = int(cute::size(row_vectors));
         const int vectors = int(cute::size<0>(rows_d)) * vectors_per_row;
-        for (int vector = lane; vector < vectors; vector += participants) {
+        for (int vector = lane; vector < vectors; vector += units) {
             const int row = vector / vectors_per_row;
             const int column = vector % vectors_per_row;
             const auto at = idx(row);

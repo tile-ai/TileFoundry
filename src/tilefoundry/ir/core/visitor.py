@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any, Callable
 
-from tilefoundry.ir import expr
+from tilefoundry.ir import expr, types
 
 from .evaluate import Evaluate
 from .for_stmt import For
@@ -34,7 +34,6 @@ from .stmt import Stmt
 from .while_stmt import While
 
 __all__ = [
-    "TypeFunctor",
     "ExprVisitor",
     "ExprWalker",
     "ExprCollector",
@@ -193,30 +192,12 @@ def stmt_expr_fields(stmt: Stmt) -> tuple[str, ...]:
             )
 
 
-class TypeFunctor[T]:
-    """Dispatch read-only operations over IR type and layout values.
+class ExprVisitor[T](expr.Visitor[T], types.TypeVisitor[T]):
+    """Read-only Expr traversal with identity-based DAG memoization over every node shape.
 
-    Types are immutable value objects rather than expressions, so they need a
-    separate dispatch surface.  Keeping this visitor independent from the
-    expression visitor prevents printers and analysis consumers from growing
-    parallel ``isinstance`` ladders for the same type family.
+    It does not visit ``node.type``. A type handed to ``visit`` explicitly goes to
+    the ``TypeVisitor`` handlers, outside the Expr memo and the root.
     """
-
-    def visit(self, value: Any, ctx: Any = None) -> T:
-        return self.dispatch_visit(value, ctx)
-
-    def dispatch_visit(self, value: Any, ctx: Any) -> T:
-        method = getattr(self, f"visit_{type(value).__name__}", None)
-        if method is not None:
-            return method(value, ctx)
-        return self.default_visit(value, ctx)
-
-    def default_visit(self, value: Any, ctx: Any) -> T:
-        raise NotImplementedError(f"no type visit routine for {type(value).__name__}")
-
-
-class ExprVisitor[T](expr.Visitor[T]):
-    """Read-only Expr traversal with identity-based DAG memoization over every node shape."""
 
     def __init__(
         self,
@@ -234,6 +215,12 @@ class ExprVisitor[T](expr.Visitor[T]):
         super().__init__(memo=memo)
         self.root_expr = root_function
         self.visit_other_functions = visit_other_functions
+
+    def visit(self, node: Any, ctx: Any = None) -> T:
+        """An Expr through the memoized dispatch; a type through the type handlers."""
+        if isinstance(node, types.TypeFunctor.type_values):
+            return types.TypeFunctor.dispatch_visit(self, node, ctx)
+        return super().visit(node, ctx)
 
     def visit_operands(self, node: expr.Expr, ctx: Any) -> tuple[T, ...]:
         """Visit value children from the fixed `expr_children` table."""

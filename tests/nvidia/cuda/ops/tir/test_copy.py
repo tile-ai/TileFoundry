@@ -79,14 +79,14 @@ def test_copy_crossings_round_trip_exactly() -> None:
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_plain_window_round_trips_fragments() -> None:
-    """A copy with one plain and one sharded operand moves the instance's slice.
+    """A copy with one plain and one sharded operand moves the unit's slice.
 
     ``local_tensor`` projects each operand through its own shard layout, so a
-    plain operand used to stay whole for every instance: the gmem->rmem leg
+    plain operand used to stay whole for every unit: the gmem->rmem leg
     read the window's first 40 elements into every fragment, and the rmem->gmem
     leg tiled the fragment across the whole window (or, vectorized, read it out
     of bounds -- the tutorial's ``Invalid __local__ read of size 2``). The
-    plain side is the slice the shard side's layout hands this instance.
+    plain side is the slice the shard side's layout hands this unit.
     """
     RegisterRoundTrip = cli.load_authored_ir(f"{OPS / 'register_round_trip.py'}:RegisterRoundTrip")
     rm = tilefoundry.compile(RegisterRoundTrip, target=_CUDA)

@@ -12,7 +12,7 @@ template <class TLayout, class TAttrs, class TMesh> struct ShardLayout {
     TMesh mesh_value;
 };
 
-/// Per-axis shard attributes.
+/// Per-mesh-axis shard attributes.
 namespace shard {
 template <int Axis> struct S {
     static constexpr int axis = Axis;
@@ -44,7 +44,7 @@ template <class R> struct is_partial_attr<shard::P<R>> : std::true_type {};
 template <class A>
 inline constexpr bool is_partial_attr_v = is_partial_attr<A>::value;
 
-/// Whether a mesh-axis attr leaves each instance the whole tensor.
+/// Whether a mesh-axis attr leaves each unit the whole tensor.
 template <class A> CUTE_HOST_DEVICE constexpr bool attr_leaves_tensor_whole() {
     if constexpr (is_split_attr_v<A>) {
         return false;
@@ -59,14 +59,16 @@ template <class A> CUTE_HOST_DEVICE constexpr bool attr_leaves_tensor_whole() {
     }
 }
 
-/// The mesh shape as the mesh states it: one entry per level when it names
-/// several, and one per axis when it names one. What a coord is shaped like.
+/// The mesh shape as the mesh states it: one entry per topology when it names
+/// several, and one per mesh axis when it names one. What a coord is shaped
+/// like.
 template <class SL>
 using shard_mesh_shape_t = cute::remove_cvref_t<decltype(cute::shape(
     typename SL::mesh::layout_type{}))>;
 
 /// The same shape with the grouping taken back out, which is what the attrs
-/// are indexed against: an attr answers for one axis whichever level owns it.
+/// are indexed against: an attr answers for one mesh axis whichever topology
+/// owns it.
 template <class SL>
 using shard_mesh_flat_t = cute::remove_cvref_t<decltype(cute::flatten(
     cute::shape(typename SL::mesh::layout_type{})))>;
@@ -104,9 +106,9 @@ template <class SL, int Axis> CUTE_HOST_DEVICE constexpr int shard_mesh_axis() {
 
 /// What tensor axis ``Axis`` is divided by: every mesh axis cutting it.
 ///
-/// Several may. Two axes of one level cut a tensor axis into a grid, and so
-/// do two levels, one taking a block of what the other left. Each division is
-/// of what the previous one left, so their extents multiply.
+/// Several may. Two mesh axes of one topology cut a tensor axis into a grid,
+/// and so do two topologies, one taking a block of what the other left. Each
+/// division is of what the previous one left, so their extents multiply.
 template <class SL, int Axis, size_t... Is>
 CUTE_HOST_DEVICE constexpr int shard_divisor_over(std::index_sequence<Is...>) {
     using attrs_t = typename SL::attrs;
@@ -128,8 +130,8 @@ template <class SL, int Axis> CUTE_HOST_DEVICE constexpr int shard_divisor() {
 
 /// How much of tensor axis ``Axis`` one step of mesh axis ``Ax`` steps over.
 ///
-/// The axes cutting one tensor axis are ordered outermost first, so a step of
-/// one of them clears everything the axes inside it hold.
+/// The mesh axes cutting one tensor axis are ordered outermost first, so a step
+/// of one of them clears everything the mesh axes inside it hold.
 template <class SL, size_t Ax, int Axis, size_t... Is>
 CUTE_HOST_DEVICE constexpr int shard_inner_over(std::index_sequence<Is...>) {
     using attrs_t = typename SL::attrs;
@@ -204,15 +206,16 @@ namespace detail {
 /// Whether a shard layout says one thing about each of its mesh's axes.
 ///
 /// Against the mesh's axes flattened, not its modes: a mesh naming several
-/// levels states them grouped one nest per level, and its rank is then how
-/// many levels it names rather than how many axes the attrs answer for.
+/// topologies states them grouped one nest per topology, and its rank is then
+/// how many topologies it names rather than how many mesh axes the attrs answer
+/// for.
 template <class SL> CUTE_HOST_DEVICE constexpr bool shard_attrs_match_mesh() {
     return int(cute::tuple_size<typename SL::attrs>::value) ==
            int(cute::rank(
                cute::flatten(cute::shape(typename SL::mesh::layout_type{}))));
 }
 
-/// A shard layout no mesh axis splits: every instance holds the whole tensor.
+/// A shard layout no mesh axis splits: every unit holds the whole tensor.
 template <class SL>
 CUTE_HOST_DEVICE constexpr bool shard_layout_is_full_broadcast() {
     static_assert(shard_attrs_match_mesh<SL>(),
@@ -227,9 +230,9 @@ CUTE_HOST_DEVICE constexpr bool shard_layout_is_full_broadcast() {
     }(std::make_index_sequence<cute::tuple_size<attrs_t>::value>{});
 }
 
-/// The layout one mesh instance holds: each tensor axis narrowed by what
-/// cuts it, keeping the whole tensor's own strides. Every instance holds
-/// the same shape, so this does not depend on which instance it is.
+/// The layout one mesh unit holds: each tensor axis narrowed by what
+/// cuts it, keeping the whole tensor's own strides. Every unit holds
+/// the same shape, so this does not depend on which unit it is.
 template <class L, class A, class M>
 CUTE_HOST_DEVICE constexpr auto local_layout(ShardLayout<L, A, M> const &sl) {
     constexpr int t_rank =
@@ -243,7 +246,7 @@ CUTE_HOST_DEVICE constexpr auto local_layout(ShardLayout<L, A, M> const &sl) {
 }
 
 /// What ``cute::slice_and_offset`` is to a Layout, this is to a ShardLayout:
-/// the instance at ``coord`` holds this layout, beginning this many elements
+/// the unit at ``coord`` holds this layout, beginning this many elements
 /// into the whole tensor's engine.
 ///
 /// The offset is a layout over the mesh applied to ``coord``: the attrs give

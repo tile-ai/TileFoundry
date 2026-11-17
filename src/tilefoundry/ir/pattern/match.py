@@ -6,7 +6,7 @@ import copy
 from dataclasses import dataclass, field
 from typing import ClassVar
 
-from tilefoundry.ir import dim, expr, types
+from tilefoundry.ir import dim, expr, types, utils
 from tilefoundry.ir.types import int_tuple
 
 from .solve import UNKNOWN, Unknown, failing, solve
@@ -363,8 +363,8 @@ class Matcher:
         if pattern.shape is not None or pattern.strides is not None:
             if not isinstance(structural, types.Layout):
                 return self.fail(pattern, subject)
-            extents = tuple(types.flatten(structural.shape))
-            strides = tuple(types.flatten(structural.strides))
+            extents = tuple(types.flatten_to_tuple(structural.shape))
+            strides = tuple(types.flatten_to_tuple(structural.strides))
             if any(type(number) is not int for number in (*extents, *strides)):
                 return self.fail(pattern, subject)
             if any(number <= 0 for number in extents):
@@ -379,7 +379,7 @@ class Matcher:
                 ):
                     return False
             else:
-                places = pattern.positions()
+                places = pattern.mode_fields()
                 profile, actual, values = (
                     (pattern.shape, structural.shape, extents)
                     if pattern.shape is not None
@@ -422,24 +422,18 @@ class Matcher:
     def visit_Mesh(self, pattern, subject) -> bool:
         if not isinstance(subject, types.Mesh):
             return self.fail(pattern, subject)
-        levels = types.separate(subject)
+        names = utils.topology_names(subject)
         if not isinstance(pattern.topologies, tuple):
-            if not levels:
+            if not names:
                 return self.fail(pattern, subject)
-            selected = levels[-1]
-            names = tuple(getattr(level, "name", level) for level in selected.topologies)
-            return self.match(pattern.topologies, names) and self.match(
-                pattern.layout, selected.layout
+            return self.match(pattern.topologies, names[-1:]) and self.match(
+                pattern.layout, utils.topology_mesh(subject, names[-1]).layout
             )
-        picked = tuple(
-            level
-            for level in levels
-            if getattr(level.topologies[0], "name", level.topologies[0]) in pattern.topologies
-        )
-        found = tuple(getattr(level.topologies[0], "name", level.topologies[0]) for level in picked)
-        if len(picked) != len(pattern.topologies) or set(found) != set(pattern.topologies):
+        found = tuple(name for name in names if name in pattern.topologies)
+        if len(found) != len(pattern.topologies) or set(found) != set(pattern.topologies):
             return self.fail(pattern, subject)
-        return self.match(pattern.layout, types.Mesh.from_meshes(*picked).layout)
+        picked = (utils.topology_mesh(subject, name) for name in found)
+        return self.match(pattern.layout, utils.from_meshes(*picked).layout)
 
     def visit_Tensor(self, pattern, subject) -> bool:
         if not isinstance(subject, types.TensorType):
@@ -468,10 +462,7 @@ class Matcher:
     def visit_ShardLayout(self, pattern, subject) -> bool:
         if not isinstance(subject, types.ShardLayout):
             return self.fail(pattern, subject)
-        subject_names = tuple(
-            getattr(topology, "name", topology) for topology in subject.mesh.topologies
-        )
-        if not self.match(pattern.mesh.topologies, subject_names):
+        if not self.match(pattern.mesh.topologies, utils.topology_names(subject.mesh)):
             return self.fail(pattern, subject)
         return all(
             self.match(place, value)

@@ -136,7 +136,7 @@ def gather_relations(
     """Read source slices selected by index, then write the gathered result."""
     out_shape = (*source.shape[:axis], index.shape[0], *source.shape[axis + 1 :])
     rank = len(out_shape)
-    carried = {position: f"d{position}" for position in range(rank)}
+    carried = {mode: f"d{mode}" for mode in range(rank)}
     return iterating(
         out_shape,
         (
@@ -158,7 +158,7 @@ def matmul_relations(
     asked by rather than something existential inside an image, and the result is
     accumulated over it. Reading an operand at the result's own coordinates would
     claim a shape it does not have the moment the summed and kept axes differ in
-    extent. Which positions any of these coordinates are is the reader's
+    extent. Which modes any of these coordinates are is the reader's
     question; the result's own extents follow from the operands.
     """
     a_m, a_k, b_n, b_k = axes

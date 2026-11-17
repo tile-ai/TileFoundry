@@ -19,7 +19,7 @@ class Architecture(target.Architecture):
 - constraints:
   - `name` MUST be the architecture identity used by AMX compilation.
   - amx.Architecture MUST own the supported compute DTypes and instruction capabilities.
-    AMX capabilities MUST NOT introduce a separate program topology level.
+    AMX capabilities MUST NOT introduce a separate program topology.
     The modelled atom catalogue MAY be narrower than the supported compute DTypes.
   - amx.Architecture MUST own the X/Y staging and Z accumulator register files. They are
     ISA geometry, so every part carrying this coprocessor shares them and a
@@ -29,7 +29,7 @@ class Architecture(target.Architecture):
     CPU thread. This does not imply one physical AMX engine per thread.
   - Product- and frequency-dependent throughput values MUST NOT be stored on
     amx.Architecture.
-  - AMX has no CTA thread level, so amx.Architecture MUST carry no CTA thread limit.
+  - AMX has no CTA or thread topology, so amx.Architecture MUST carry no CTA thread limit.
   - No field MAY carry a default: every value comes from the installed
     document ([target §10](../../../../../../docs/spec/target.md#10-installed-hardware-resources)).
 
@@ -61,32 +61,32 @@ class AppleM2Pro(target.Device):
 
 - constraints:
   - AppleM2Pro MUST describe one package and MUST NOT carry a machine count.
-  - `sm_count` MUST be the number of independent AMX units, which is the
-    parallel-unit count a makespan divides work over. It MUST NOT be read as a
-    core count: the performance cores outnumber the units and share them, so it
+  - `sm_count` MUST be the number of independent AMX units. This is the
+    parallel-unit count that a makespan divides work over. It MUST NOT be read as a
+    core count. The performance cores outnumber the units and share them. It
     MUST NOT exceed `performance_core_count`.
   - Cache and core facts MUST distinguish the performance core from the
-    efficiency core, and every value MUST come from the installed document
+    efficiency core. Every value MUST come from the installed document
     ([target §10](../../../../../../docs/spec/target.md#10-installed-hardware-resources)). No field MAY carry a default.
   - A core-level tile's resident footprint MUST be bounded by
     `l1d_bytes_per_performance_core`. The AMX register files bound one atom
-    instance instead, which the storage filter enforces rather than a per-tile
-    capacity, so the two MUST NOT be conflated.
+    instance instead. The storage filter enforces this bound rather than a per-tile
+    capacity. The two bounds MUST NOT be conflated.
   - `unified_memory_owner` MUST be `target`; both the `host` and `gmem`
     explicit levels project that one target-wide ownership fact.
-  - `throughput_for` MUST be keyed by execution unit as well as DType, because
-    the AMX coprocessor and the core's NEON pipes have separate measured rates.
+  - `throughput_for` MUST be keyed by execution unit as well as DType.
+    The AMX coprocessor and the core's NEON pipes have separate measured rates.
   - A tile's traffic MUST be charged against
     `unified_memory_bandwidth_bytes_per_second`, which unified memory backs.
   - `throughput_for` MUST return a measured per-unit throughput recorded in the
-    installed document, and MUST raise an actionable error for a unit or compute
-    DType with no measured entry rather than return an estimate.
+    installed document. It MUST raise an actionable error for a unit or compute
+    DType with no measured entry. It MUST NOT return an estimate.
   - `performance_amx_f16` and `performance_host_lane_events` MUST read their
     available or unavailable entries from the installed document. Estimates MUST
     state their sources and assumptions separately from measured throughput and
     MUST NOT populate `throughput_for`'s measured-rate map.
   - Generic `thread` PerformanceServiceFacts MUST leave rates unknown while
-    placement between performance and efficiency cores is unspecified. Existing
+    core selection between performance and efficiency cores is unspecified. Existing
     P-core observations and estimates MUST NOT be projected as equal rates for
     all CPU threads. Stored AMX rates and unit-count estimates MUST NOT be
     multiplied by the CPU thread count.
@@ -120,7 +120,7 @@ class Target(target.Target):
 
 - constraints:
   - `device` and `architecture` MUST accept an installed document ID, a
-    document path, or a concrete value, on the same terms as
+    document path, or a concrete value. The terms are the same as
     [target §4](../../../../../nvidia/tilefoundry_nvidia/cuda/docs/spec/target.md#4-cudatarget). An omitted architecture MUST be read from the device
     document's sole compatibility declaration.
   - `amx.Target()` MUST select the installed `apple.amx` and `apple.m2_pro`
@@ -129,16 +129,16 @@ class Target(target.Target):
   - `amx.Target.from_installed()` MUST contain one value per device document whose
     sole compatible architecture document is available. Its `identity` MUST be
     that device document's ID.
-  - `get_facts(TopologyFacts).topologies` MUST contain only `thread`, with logical
-    and physical execution-position limits equal to performance plus efficiency
+  - `get_facts(TopologyFacts).topologies` MUST contain only `thread`. Its logical
+    and physical execution-unit limits MUST equal performance plus efficiency
     core counts (12 for the installed AppleM2 Pro). It MUST NOT set `from_target`.
-    `parallel_level` MUST be `thread`. These limits describe program workers,
+    `parallel_topology` MUST be `thread`. These limits describe program workers,
     not independent AMX matrix engines.
   - Declared extents MUST be positive and bounded by that limit, including the
     complete admitted range of a symbolic extent. `amx` MUST be rejected as a
     topology name. Memory execution MUST use the same `thread` vocabulary.
-  - Unsupported topology levels MUST raise an actionable error naming the
-    supported levels. `validate_program_topology` is the core Target's, which reads these Facts.
+  - Unsupported topologies MUST raise an actionable error naming the
+    supported topologies. `validate_program_topology` is the core Target's, which reads these Facts.
 
 
 ## Full instruction catalogue

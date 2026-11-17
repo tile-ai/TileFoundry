@@ -9,7 +9,7 @@ from tests.core.ops.ir.op_case import Cost, OpCase, check_op_case
 from tilefoundry import core
 from tilefoundry.dsl import *
 from tilefoundry.interfaces import cost, evaluator, typeinfer
-from tilefoundry.ir import dim, expr, types
+from tilefoundry.ir import dim, expr, types, utils
 from tilefoundry.ir.hir import tensor
 
 _COORD_MESH = types.Mesh((Topology("thread", 4),), types.Layout((4,), (1,)), ("t",))
@@ -64,7 +64,7 @@ def test_arange_rejects_unsupported_attributes(op, message):
 
 
 def test_bound_mesh_coord_is_scalar() -> None:
-    inferred = typeinfer.TypeInferVisitor().visit(_coord(), typeinfer.TypeInferContext(current_mesh=_COORD_MESH))
+    inferred = typeinfer.TypeInferVisitor().visit(_coord(), typeinfer.TypeInferContext(mesh_scope=_COORD_MESH))
     assert inferred.shape == ()
     assert inferred.dtype == DType.i64
     assert inferred.layout == types.Layout(())
@@ -78,9 +78,9 @@ def test_unbound_mesh_coord_rejected() -> None:
 
 def test_inner_mesh_coord_binds_multilevel() -> None:
     cta = types.Mesh((Topology("cta", 2),), types.Layout((2,), (1,)), ("c",))
-    current = types.Mesh.from_meshes(cta, _COORD_MESH)
+    current = utils.from_meshes(cta, _COORD_MESH)
     assert (
-        typeinfer.TypeInferVisitor().visit(_coord(), typeinfer.TypeInferContext(current_mesh=current)) == _COORD_INDEX
+        typeinfer.TypeInferVisitor().visit(_coord(), typeinfer.TypeInferContext(mesh_scope=current)) == _COORD_INDEX
     )
 
 

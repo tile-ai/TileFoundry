@@ -162,7 +162,7 @@ def report_data(
     module: core.Module,
     function: core.Function,
     analyses: tuple[str, ...],
-    topology_level: str | None,
+    topology: str | None,
     executed: tuple[str, ...],
     metadata_types: tuple[type[expr.IRMetadata], ...],
     labels: Mapping[int, str] | None = None,
@@ -177,9 +177,9 @@ def report_data(
     selected = frozenset(selected_types(module, analyses, metadata_types))
     target = module.resolve_target()
     owners = {
-        id(candidate): frame.module.name
-        for frame in valuation.collect_functions(module).values()
-        for candidate in (frame.function, *getattr(frame.function, "variants", ()))
+        id(candidate): context.module.name
+        for context in valuation.collect_functions(module).values()
+        for candidate in (context.function, *getattr(context.function, "variants", ()))
     }
     rows = []
     for body in functions or (function,):
@@ -208,7 +208,7 @@ def report_data(
     return {
         "target": target.identity,
         "module": module.name,
-        "topology": topology_level,
+        "topology": topology,
         "requested": list(analyses),
         "executed": list(executed),
         "functions": rows,
@@ -216,7 +216,7 @@ def report_data(
 
 
 def totals_of(held: "analysis.Breakdown | analysis.Spread | None") -> dict[str, object]:
-    """Each kind's whole-program amount, without any level's share."""
+    """Each kind's whole-program amount, without any topology's share."""
     if held is None:
         return {}
     if isinstance(held, analysis.Spread):

@@ -1,7 +1,7 @@
 """Shared memory that two threads may write in one issue of an action.
 
-An instruction without an execution mesh is issued by every thread of the mesh it
-runs on, each on the operands as that thread sees them, and no step orders the
+An instruction without an execution mesh is executed by every thread of the mesh
+it runs on, each on the operands as that thread sees them, and no step orders the
 threads of one issue. The ``sync`` family refuses a Function in which two such
 threads may write one shared memory element in the same issue, unless the
 operand's layout gives each of its bytes to one of the threads that run it. See
@@ -13,7 +13,7 @@ from __future__ import annotations
 from math import prod
 
 from tilefoundry import analysis
-from tilefoundry.ir import core, dim, expr, tir, types
+from tilefoundry.ir import core, dim, expr, types, utils
 from tilefoundry.ir.tir import memory
 from tilefoundry.passes import transforms
 
@@ -22,12 +22,12 @@ from .emission import required_execution_mesh
 
 
 def issued_op(planner, action):
-    """The instruction every issuing thread runs on its own for *action*, or None.
+    """The instruction every executing thread runs on its own for *action*, or None.
 
-    A retained call orders its own accesses. An instruction with a required
-    execution mesh is issued once for each point of it, and one that takes its
-    execution mesh as an attribute states for itself which threads of that mesh
-    issue it, as ``CopyAsyncTensor`` does.
+    None for a retained call, which orders its own accesses. None for an
+    instruction with a required execution mesh, and for one that takes its
+    execution mesh as an attribute, as ``CopyAsyncTensor`` does: each states for
+    itself which threads execute it.
     """
     owner, tag = action.owner, action.tag
     if isinstance(owner, core.LoopRegion) or tag in ("base", "update"):
@@ -62,9 +62,9 @@ def projected(type_list) -> types.Mesh | None:
     """The mesh through whose split a ``Copy`` of these two operands moves each thread's slice.
 
     For a plain operand paired with a sharded one, the runtime's copy moves only
-    the slice the instance owns, projected through the sharded side
-    (``copy_impl::local_as``). The slices of different positions are disjoint
-    when the shard splits along every thread axis of its mesh. None otherwise.
+    the slice the unit owns, projected through the sharded side
+    (``copy_impl::local_as``). The slices of different units are disjoint
+    when the shard splits along every mesh axis of its thread topology. None otherwise.
     """
     sharded = [
         type_
@@ -74,40 +74,42 @@ def projected(type_list) -> types.Mesh | None:
     if len(type_list) != 2 or len(sharded) != 1:
         return None
     layout = sharded[0].layout
-    axes = zip(layout.attrs, types.axis_keys(layout.mesh), strict=True)
-    on_threads = [attr for attr, (level, _) in axes if level == "thread"]
+    mesh_axes = zip(layout.attrs, utils.axis_keys(layout.mesh), strict=True)
+    on_threads = [attr for attr, (topology, _) in mesh_axes if topology == "thread"]
     split = bool(on_threads) and all(isinstance(attr, types.Split) for attr in on_threads)
     return layout.mesh if split else None
 
 
 def held_threads(mesh: types.Mesh) -> frozenset | None:
-    """The threads of one CTA that *mesh*'s thread level holds, None when they are not static."""
-    level = next(
-        (level for level in types.separate(mesh) if level.topologies[0].name == "thread"), None
-    )
-    if level is None or (
+    """The threads of one CTA that *mesh*'s thread topology holds, None when they are not static."""
+    names = utils.topology_names(mesh)
+    if "thread" not in names or (
         isinstance(mesh.layout, types.ComposedLayout) and not isinstance(mesh.layout.offset, int)
     ):
         return None
+    thread = names.index("thread")
     try:
-        arrangement, offset = tir.sync.participant_layout(level)
-    except expr.VerifyError:
+        layout = types.plain_layout(utils.unit_layout(mesh, thread))
+    except ValueError:
         return None
-    count = types.size(arrangement)
+    first_unit_id = utils.first_unit_ids(mesh)[thread]
+    if layout is None or not isinstance(first_unit_id, int):
+        return None
+    count = types.size(layout)
     if not isinstance(count, int):
         return None
-    held = [offset + types.apply(arrangement, index) for index in range(count)]
+    held = [first_unit_id + layout(index) for index in range(count)]
     return frozenset(held) if all(isinstance(thread, int) for thread in held) else None
 
 
 def one_writer_each(mesh: types.Mesh | None, reach, threads: int | None) -> bool:
     """Whether a split over *mesh* gives each byte of *reach* one writer among its threads.
 
-    A split gives each position of *mesh* its own bytes. The threads that run
+    A split gives each unit of *mesh* its own bytes. The threads that run
     the reach are those every thread slice around it holds, or every thread of
-    the CTA. The split gives one writer each only when its positions are exactly
+    the CTA. The split gives one writer each only when its units are exactly
     those threads: a mesh that holds other threads, or fewer, repeats over them,
-    and threads that read one position write the same bytes.
+    and threads that read one unit's bytes write the same bytes.
     """
     split = None if mesh is None else held_threads(mesh)
     runners = None if threads is None else frozenset(range(threads))
@@ -119,18 +121,18 @@ def one_writer_each(mesh: types.Mesh | None, reach, threads: int | None) -> bool
     return split is not None and split == runners
 
 
-def thread_level(value) -> bool:
-    """Whether *value* is a coordinate of a thread axis."""
+def thread_coordinate(value) -> bool:
+    """Whether *value* is a coordinate of a mesh axis of the thread topology."""
     if not (isinstance(value, expr.Call) and isinstance(value.target, dim.MeshCoord)):
         return False
-    axis = expr.static_dim_value(value.args[0])
-    return axis is not None and types.axis_keys(value.target.mesh)[axis][0] == "thread"
+    mesh_axis = expr.static_dim_value(value.args[0])
+    return mesh_axis is not None and utils.axis_keys(value.target.mesh)[mesh_axis][0] == "thread"
 
 
 def refuse_thread_overlaps(planner) -> None:
     """Refuse the planner's Function when two threads may write one shared element in one issue.
 
-    Each shared memory write of an action that every issuing thread runs on its
+    Each shared memory write of an action that every executing thread runs on its
     own pairs with itself, unless its layout, or a split operand a ``Copy``
     projects it through, gives each of its bytes one writer among the threads
     that run it. Both executions see the same values for everything but thread
@@ -152,12 +154,12 @@ def refuse_thread_overlaps(planner) -> None:
             ):
                 continue
             verdict = overlap(
-                reach, reach, lambda value: not thread_level(value), threads, "thread"
+                reach, reach, lambda value: not thread_coordinate(value), threads, "thread"
             )
             if verdict is not None:
                 what = "write" if verdict is Overlap.CONFLICT else "may write"
                 raise analysis.Error(
-                    f"sync: two threads that issue {reach.name} {what} one shared memory "
+                    f"sync: two threads that execute {reach.name} {what} one shared memory "
                     "element at once, which no step orders"
                 )
 

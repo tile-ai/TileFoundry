@@ -165,7 +165,7 @@ def test_matmul_carries_operand_shard(lhs, rhs, shape, attrs):
     out = infer_call(_MM, lhs, rhs)
     assert out.shape == shape
     assert out.layout.attrs == attrs
-    assert math.prod(types.flatten(out.layout.shape)) == math.prod(shape), (
+    assert math.prod(types.flatten_to_tuple(out.layout.shape)) == math.prod(shape), (
         "the result's layout domain holds the result, not an operand"
     )
 
@@ -250,7 +250,7 @@ CASES = (
                 cost.TrafficBytes(read=1 * 4 * 3 * 4),
                 cost.TrafficBytes(write=1 * 1 * 3 * 4),
             ),
-            topology_level="cta",
+            topology="cta",
             topologies=(_CTA,),
         ),
     ),
@@ -272,7 +272,7 @@ CASES = (
                 cost.TrafficBytes(read=3 * 2 * 4),
                 cost.TrafficBytes(write=4 * 3 * 4),
             ),
-            topology_level="cta",
+            topology="cta",
             topologies=(_CTA,),
         ),
     ),
@@ -290,7 +290,7 @@ CASES = (
                 cost.TrafficBytes(read=2 * 6 * 4),
                 cost.TrafficBytes(write=4 * 6 * 4),
             ),
-            topology_level="cta",
+            topology="cta",
             topologies=(_CTA,),
         ),
     ),

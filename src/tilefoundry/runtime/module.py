@@ -56,8 +56,8 @@ class Module:
 
         Weight
         values are read lazily by each runtime function on first use, and
-        *placement* -- which program of the mesh this process is -- reaches
-        every child unchanged, because one process is one program throughout
+        *placement* -- which unit of the mesh this process is -- reaches
+        every child unchanged, because one process is one unit throughout
         the tree it loaded.
         """
         for key, child in self.children.items():
@@ -85,30 +85,30 @@ class CompiledModule(Module):
         self.placement: "types.Placement | None" = None
 
     def load(self, resource: Resource, *, placement: "types.Placement | None" = None) -> None:
-        """Remember which program this is; a compiled entry holds no weights."""
+        """Remember which unit this is; a compiled entry holds no weights."""
         self.placement = placement
         super().load(resource, placement=placement)
 
-    def program_ids(self) -> tuple:
+    def unit_ids(self) -> tuple:
         """The ids the entry needs told, ahead of its own arguments.
 
-        A level no register on the device answers for has to be told, so its
-        id travels with the call; each leading parameter states which level it
-        carries, which is how a ``Placement`` is keyed. A program whose levels
+        A topology no register on the device answers for has to be told, so its
+        id travels with the call; each leading parameter states which topology it
+        carries, which is how a ``Placement`` is keyed. A program whose topologies
         are all answered on the device is called as it was written.
         """
         if not self.type.leading:
             return ()
-        topology_levels = tuple(p.topology_level for p in self.type.leading)
+        topologies = tuple(p.topology for p in self.type.leading)
         if self.placement is None:
             raise ValueError(
-                f"{self.type.name}: needs the ids of {topology_levels} and no Placement "
-                f"says which program this is; pass placement= to load()"
+                f"{self.type.name}: needs the ids of {topologies} and no Placement "
+                f"says which unit this is; pass placement= to load()"
             )
-        return tuple(int(self.placement.ids[topology_level]) for topology_level in topology_levels)
+        return tuple(int(self.placement.ids[topology]) for topology in topologies)
 
     def forward(self, *args):
-        leading = self.program_ids()
+        leading = self.unit_ids()
         n_in = self.type.input_count
         if len(args) == len(self.type.params):
             outs = args[n_in:]

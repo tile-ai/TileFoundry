@@ -18,8 +18,8 @@ def test_topology_limits_are_target_facts_and_base_validation_is_inherited() -> 
     amx_value = amx.Target()
 
     amx_levels = amx_value.get_facts(target.TopologyFacts)
-    assert amx_levels.topologies == (target.TopologyLevelFacts("thread", 12, 12),)
-    assert amx_levels.parallel() == amx_levels.level("thread")
+    assert amx_levels.topologies == (target.TopologyLimits("thread", 12, 12),)
+    assert amx_levels.parallel() == amx_levels.topology("thread")
     services = amx_value.get_facts(target.PerformanceServiceFacts, "thread")
-    assert services.unit == "thread"
+    assert services.topology == "thread"
     assert services.unit_flops == services.unit_ops == services.unit_bandwidth == ()

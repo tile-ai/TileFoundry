@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from tilefoundry.ir import expr, types
 
+from .mesh_scope import axis_keys
+
 __all__ = [
     "attrs_by_axis",
     "check_multilinear_partials",
@@ -21,35 +23,35 @@ def attrs_by_axis(
     mesh: types.Mesh | None = None,
     owners: expr.StorageOwners | None = None,
 ) -> dict[tuple[str, int], types.ShardAttr]:
-    """Read mesh-axis states keyed by level and ordinal.
+    """Read mesh-axis states keyed by topology and ordinal.
 
-    See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics).
 
     Args:
         type_: Tensor whose plain layout reads as Varying.
-        mesh: Frame to read; defaults to the tensor's shard mesh.
+        mesh: Shard mesh to read; defaults to the tensor's shard mesh.
         owners: Target facts used to normalize shared copies. None reads attrs
             as written; empty facts instead normalize Broadcast and Varying alike.
 
     Returns:
-        States in frame order; omitted shard axes and levels read as Broadcast.
+        States in mesh axis order; omitted shard axes and topologies read as Broadcast.
     """
     shard = types.shard_layout_of(type_.layout)
     stated, counts = {}, {}
     if shard is not None:
-        for axis, (level, _) in enumerate(types.axis_keys(shard.mesh)):
-            ordinal = counts.get(level, 0)
-            counts[level] = ordinal + 1
-            stated[level, ordinal] = (
-                shard.attrs[axis] if axis < len(shard.attrs) else types.Broadcast()
+        for mesh_axis, (topology, _) in enumerate(axis_keys(shard.mesh)):
+            ordinal = counts.get(topology, 0)
+            counts[topology] = ordinal + 1
+            stated[topology, ordinal] = (
+                shard.attrs[mesh_axis] if mesh_axis < len(shard.attrs) else types.Broadcast()
             )
     keys = stated
     if mesh is not None:
         keys, counts = {}, {}
-        for level, _ in types.axis_keys(mesh):
-            ordinal = counts.get(level, 0)
-            counts[level] = ordinal + 1
-            keys[level, ordinal] = None
+        for topology, _ in axis_keys(mesh):
+            ordinal = counts.get(topology, 0)
+            counts[topology] = ordinal + 1
+            keys[topology, ordinal] = None
     result = {}
     for key in keys:
         attr = stated.get(key, types.Broadcast()) if shard is not None else types.Varying()
@@ -68,7 +70,7 @@ def reject_partials(
 ) -> None:
     """Reject Partial states that do not commute with this operation.
 
-    See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics).
 
     Args:
         name: Operand name used in the diagnostic.
@@ -76,13 +78,13 @@ def reject_partials(
         commutes_with: Partial reduction kinds the operation preserves.
 
     Raises:
-        ValueError: An axis carries a noncommuting Partial state.
+        ValueError: A mesh axis carries a noncommuting Partial state.
     """
-    for axis, reduction in enumerate(types.partial_reductions_by_axis(layout)):
+    for mesh_axis, reduction in enumerate(types.partial_reductions_by_axis(layout)):
         if reduction is None or reduction in commutes_with:
             continue
         raise ValueError(
-            f"{name} carries Partial({reduction}) on mesh axis {axis}, "
+            f"{name} carries Partial({reduction}) on mesh axis {mesh_axis}, "
             f"which does not commute; insert reshard({name}, @ {{B()}}) before this consumer"
         )
 
@@ -96,9 +98,9 @@ def check_multilinear_partials(
 ) -> None:
     """Check Partial combinations using each operand's precomputed states.
 
-    See [shard §6.1](docs/spec/shard.md#61-placement-semantics).
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics).
     Plain operands merge states from existing meshes before checking keys;
-    the state at a shared key depends only on storage and topology level.
+    the state at a shared key depends only on storage and topology.
 
     Args:
         operands: Operand names and types in combination order.
@@ -124,12 +126,12 @@ def check_multilinear_partials(
         for (_, type_), layout in zip(operands, layouts)
     )
     for (name, _), source in zip(operands, states):
-        for axis, (key, attr) in enumerate(source.items()):
+        for mesh_axis, (key, attr) in enumerate(source.items()):
             if not isinstance(attr, types.Partial):
                 continue
             if anchor is not None and name != anchor:
                 raise ValueError(
-                    f"{name} carries {attr!r} on mesh axis {axis}; "
+                    f"{name} carries {attr!r} on mesh axis {mesh_axis}; "
                     f"reshard({name}, @ {{B()}}) before this consumer"
                 )
             state = None
@@ -139,7 +141,7 @@ def check_multilinear_partials(
                     state = held if state is None else types.combine_attrs(kind, state, held)
                 except ValueError as error:
                     raise ValueError(
-                        f"{name} carries Partial({attr.reduction}) on mesh axis {axis}; "
+                        f"{name} carries Partial({attr.reduction}) on mesh axis {mesh_axis}; "
                         f"operand {other_name}: operands do not commute: {error}"
                     ) from error
 
@@ -161,13 +163,13 @@ def require_matching_partial_state(
         ValueError: Destination and update carry different Partial states.
     """
     dst_partials = [
-        (axis, reduction)
-        for axis, reduction in enumerate(types.partial_reductions_by_axis(dst.layout))
+        (mesh_axis, reduction)
+        for mesh_axis, reduction in enumerate(types.partial_reductions_by_axis(dst.layout))
         if reduction is not None
     ]
     update_partials = [
-        (axis, reduction)
-        for axis, reduction in enumerate(types.partial_reductions_by_axis(update.layout))
+        (mesh_axis, reduction)
+        for mesh_axis, reduction in enumerate(types.partial_reductions_by_axis(update.layout))
         if reduction is not None
     ]
     dst_layout = types.shard_layout_of(dst.layout)
@@ -179,16 +181,16 @@ def require_matching_partial_state(
             and update_layout.mesh == dst_layout.mesh
             and update_layout.attrs == dst_layout.attrs
         ):
-            axis, reduction = dst_partials[0]
+            mesh_axis, reduction = dst_partials[0]
             raise ValueError(
-                f"{dst_name} carries a Partial({reduction}) on mesh axis {axis}; "
+                f"{dst_name} carries a Partial({reduction}) on mesh axis {mesh_axis}; "
                 f"{update_name} must carry the identical per-mesh-axis state. "
                 f"Insert reshard({update_name}, @ {{B()}}) or match {dst_name} before this consumer"
             )
     elif update_partials:
-        axis, reduction = update_partials[0]
+        mesh_axis, reduction = update_partials[0]
         raise ValueError(
-            f"{update_name} carries Partial({reduction}) on mesh axis {axis}, "
+            f"{update_name} carries Partial({reduction}) on mesh axis {mesh_axis}, "
             f"but {dst_name} is complete; insert reshard({update_name}, @ {{B()}}) before this consumer"
         )
 
@@ -208,19 +210,19 @@ def require_uniform_partial_slices(
     Raises:
         ValueError: An input lacks the Partial state required by the output.
     """
-    for axis, output_attr in enumerate(output.attrs):
+    for mesh_axis, output_attr in enumerate(output.attrs):
         if not isinstance(output_attr, types.Partial):
             continue
         for index, type_ in enumerate(inputs):
             layout = types.shard_layout_of(type_.layout)
             input_attr = (
-                layout.attrs[axis]
-                if layout is not None and layout.mesh == output.mesh and axis < len(layout.attrs)
+                layout.attrs[mesh_axis]
+                if layout is not None and layout.mesh == output.mesh and mesh_axis < len(layout.attrs)
                 else None
             )
             if input_attr != output_attr:
                 raise ValueError(
                     f"input {index} does not carry {output_attr!r} on mesh axis "
-                    f"{axis}; every input must carry the same Partial state: "
+                    f"{mesh_axis}; every input must carry the same Partial state: "
                     f"reshard the Partial inputs with @ {{B()}} before {op_name}"
                 )

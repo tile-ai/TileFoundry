@@ -47,9 +47,9 @@ class Pass(ABC):
 ```
 
 - constraints:
-  - `run(module)` returns the resulting `Module`. `Module` is mutable, and a
+  - `run(module)` returns the resulting `Module`. `Module` is mutable. A
     pass MAY rewrite the Module tree in place (`Module.replace_functions`) and
-    return the same object; child Modules are shared by identity. The default
+    return the same object. Child Modules are shared by identity. The default
     `FunctionPass.run` / `PrimFuncPass.run` return the input unchanged when no
     function changed, and otherwise a `dataclasses.replace` copy.
   - Passes MUST NOT depend on global state. All configuration enters
@@ -108,9 +108,9 @@ class PrimFuncPass(Pass):
 
 Transform passes use the visitor / mutator base classes from
 [visitor-mutator](./visitor-mutator.md) rather than hand-written `isinstance`
-dispatch. A transform `PrimFuncPass` wraps a `StmtExprMutator` subclass:
-`run_prim_func` runs the mutator over `fn.body`, returns `fn` when the returned
-body is the same object, and otherwise `replace(fn, body=new_body)`. The
+dispatch. A transform `PrimFuncPass` wraps a `StmtExprMutator` subclass.
+`run_prim_func` runs the mutator over `fn.body`. It returns `fn` when the returned
+body is the same object. Otherwise it returns `replace(fn, body=new_body)`. The
 visit-and-rewrite contract, including the `visit_Evaluate` entry form for TIR
 effect Ops, is owned by
 [visitor-mutator §7](./visitor-mutator.md#7-visitor-entry-forms-for-evaluate).
@@ -142,7 +142,7 @@ class PassManager:
 a `tilefoundry.dump.Scope` and `Flags.PASS_IR` is enabled, each pass writes
 `before.txt` / `after.txt` under `<scope-root>/{NN}_{pass_name}/`. Otherwise
 `dump(...)` is a no-op. The before/after representations MUST be passed as
-no-argument producers, so `repr` is evaluated only when `PASS_IR` is enabled in
+no-argument producers. Then `repr` is evaluated only when `PASS_IR` is enabled in
 an active scope.
 
 ## 6. Top-level API
@@ -176,8 +176,8 @@ codegen → toolchain link → loader, and returns a `runtime.Module`
 explicit Target that disagrees with the declared one is an error.
 
 `compile` runs `passes.default_pipeline(module, options.passes)` over the
-Module, then `build`, which hands `options.codegen` to `codegen.link_program`;
-both run inside a `dump.Scope` opened with `options.dump`, which only narrows
+Module. Then it runs `build`, which hands `options.codegen` to `codegen.link_program`.
+Both steps run inside a `dump.Scope` opened with `options.dump`. That scope only narrows
 the scope already active. The pass list is [§7.2](#72-target-pass-points). The
 `jit` convenience, which also accepts a bare Function, and its cache contract
 are owned by [runtime §1.6](./runtime.md#16-compiler).
@@ -187,10 +187,11 @@ are owned by [runtime §1.6](./runtime.md#16-compiler).
 `typeinfer` and `verify` are not standalone pipeline stages, and there is no
 `TypeInferPass`. The parser already runs eager typeinfer
 ([parser](./parser.md)), so a `Module` entering the pipeline has `Expr.type`
-filled. After each pass, `PassManager` rechecks the pass's **dirty scope**: every
-function on the Module's call paths whose object identity was not on them before
-the pass, and every function reaching one of those by calls or launches at any
-depth, variants included; a reference that does not resolve raises.
+filled. After each pass, `PassManager` rechecks the pass's **dirty scope**. The
+dirty scope contains every function on the Module's call paths whose object identity
+was not on them before the pass. It also contains every function that reaches one of
+those by calls or launches at any depth, variants included. A reference that does not
+resolve raises.
 Rechecking is per whole function.
 
 - HIR: `verify_function`, then type inference with ranges, which refreshes
@@ -234,51 +235,53 @@ class ConvertHIRToTIR(ModulePass):
   - `analyses` names the analysis families the pass's visitor reads; a
     subclass whose visitor reads more names them too. `tilefoundry schedule
     finalize` runs exactly these on the pass `Target.resolve` gives.
-  - Whether a Call is a dimension, the instruction it issues and its operand
-    types, the mesh that owns a copy or an instruction, and the accepted
-    aliases lowering executes come from the module-level functions of
-    `passes/transforms/convert_hir_to_tir.py`. A target analysis that follows
+  - The module-level functions of `passes/transforms/convert_hir_to_tir.py`
+    give whether a Call is a dimension. They give the instruction a Call issues and
+    its operand types. They give the mesh that owns a copy or an instruction. They
+    give the accepted aliases that lowering applies. A target analysis that follows
     lowering imports the same functions.
   - The visitor lowers each HIR node in its `visit_<Node>`. `visit_Call` lowers
-    a Call that `lowers_to_dim` accepts as a dimension; for any other Call it
-    lowers the values its storage's dimensions read, then its operands, and
-    dispatches a retained call to `visit_callee`, else to `visit_<HIR op>`, else
-    to `visit_T`, which dispatches the selected TIR op to `visit_T_<Name>`, else
-    to `default_visit_T`. `visit_<HIR op>` and the Expr visits share one name
-    space, so the visitor MUST NOT define a visit for an HIR op whose class name
-    is also an Expr class (for example `ShapeOf`).
+    a Call that `lowers_to_dim` accepts as a dimension. For any other Call, it
+    lowers the values that its storage's dimensions read. Then it lowers its
+    operands. Then it dispatches a retained call to `visit_callee`, else to
+    `visit_<HIR op>`, else to `visit_T`. That visit dispatches the selected TIR op
+    to `visit_T_<Name>`, else to `default_visit_T`. `visit_<HIR op>` and the Expr
+    visits share one name space. The visitor MUST NOT define a visit for an HIR op
+    with an Expr class name (for example `ShapeOf`).
   - The core visitor lowers mesh regions, retained calls, the views
-    `TupleGetItem`, `Slice`, `Reshape` and `Bitcast`, a `Reshard` whose result
-    has an accepted VIEW alias, and `Empty`; any other `Reshard` goes to
-    `visit_T`, and an unscheduled `IndexSelect` raises `LoweringError`. Its
+    `TupleGetItem`, `Slice`, `Reshape` and `Bitcast`. It also lowers a `Reshard`
+    whose result has an accepted VIEW alias, and `Empty`. Any other `Reshard` goes to
+    `visit_T`. An unscheduled `IndexSelect` raises `LoweringError`. Its
     `default_visit_T` raises `LoweringError` naming the Call, the TIR op and the
-    Target, and a node without a visit raises `LoweringError` naming the node
+    Target. A node without a visit raises `LoweringError` naming the node
     and the Target. A target visitor overrides the visits it changes and
     implements the rest: loops, `InsertSlice`, `Zeros`, `FullLike` and
     instruction issue.
-  - Entering the function body, and in `on_region_start` any region's body,
-    the core visitor first lowers the children `LivenessMetadata.orders` lists
-    for it, in that order ([analysis §1.2.2](./analysis.md#122-memory)), so
-    statements follow the events the analysis planned with. A target visitor
+  - On entry to the function body, the core visitor first lowers the children
+    that `LivenessMetadata.orders` lists for it, in that order
+    ([analysis §1.2.2](./analysis.md#122-memory)). It does the same for any region's
+    body in `on_region_start`. Statements then follow the events that the analysis
+    planned with. A target visitor
     that lowers loops enters each loop's body through `on_region_start` inside
     the loop's builder region.
   - The pass lowers the device root: the callee of the `Launch` in `Module.entry`
     when that entry is a CPU host, otherwise `Module.entry` itself. It returns the
     Module unchanged under `passes.Options(lower=False)` or when the Module has no
     HIR function. When lowering HIR from a CPU host root, exactly one `Launch` MUST
-    resolve to an HIR function; otherwise `LoweringError` names the host and the
+    resolve to an HIR function. Otherwise `LoweringError` names the host and the
     number of such launches.
-  - Address placement comes only from `MemoryMetadata`: integer shared-memory
+  - Address assignment comes only from `MemoryMetadata`: integer shared-memory
     addresses are byte offsets, and every analyzed offset becomes one concrete
-    buffer view. Multiple offsets bind one view per offset and one tuple of
-    those views outside the outermost enclosing HIR loop; each consuming scope
+    buffer view. Multiple offsets bind one view per offset. They also bind one tuple of
+    those views outside the outermost enclosing HIR loop. Each consuming scope
     binds the selected stage `stages[index]` once. The index is the linear
     iteration ordinal
     from outermost to innermost, modulo the number of buffers, when inner loop
     trip counts are constant. Otherwise selection uses a rank-0 integer register
-    counter modulo the number of buffers. It is initialized to zero before the
-    outermost staged loop and incremented after all uses in each completed
-    innermost staged iteration; all uses in one iteration see the same slot.
+    counter modulo the number of buffers. Lowering initializes the counter to zero
+    before the outermost staged loop. It increments the counter after all uses in
+    each completed innermost staged iteration. All uses in one iteration see the
+    same slot.
     Instruction-generated loops do not enter this index.
     An adopted update window is written at its producer. `InsertSlice` skips
     copying only when the update's alias names that HIR destination, resolved
@@ -287,13 +290,13 @@ class ConvertHIRToTIR(ModulePass):
     entry alias raises `LoweringError`. A accepted semantic alias identifies its
     destination as `BufferAlias.target: SSAValue`. Lowering MUST select the
     flattened target leaf, including nested tuple paths, before binding storage.
-    Lowering MUST execute accepted ties at
-    every storage level: a tied carry reuses its initial storage; otherwise it
+    Lowering MUST apply accepted ties at
+    every storage level. A tied carry reuses its initial storage. An untied carry
     copies the initial into independent phi storage before the loop. An accepted
     yield-to-phi alias binds the producer output to phi storage, including rmem.
-    The backedge needs no copy when the yield has that tie or its tied
-    InsertSlice destination resolves through captures to the phi; otherwise
-    lowering MUST copy yield to phi. A tied InsertSlice returns destination
+    The backedge needs no copy when the yield has that tie. It also needs no copy
+    when its tied InsertSlice destination resolves through captures to the phi.
+    Otherwise lowering MUST copy yield to phi. A tied InsertSlice returns destination
     storage; an untied one MUST copy destination to result before writing the
     update window. An update without an adopted WINDOW alias MUST be copied
     into the result window. Allocation's peak-estimation storage links do not imply
@@ -316,8 +319,8 @@ class ConvertHIRToTIR(ModulePass):
     meshes from the shared valuation visitor/context. Planning stores references
     to those contexts rather than constructing a separate region tree. TIR
     statement builders retain their own emitted scopes and destinations.
-  - Generated region bindings MUST be reserved in lexical pre-order before
-    statement emission, so an outer `scope` index precedes its nested indices.
+  - Lowering MUST reserve generated region bindings in lexical pre-order before
+    statement emission. An outer `scope` index then precedes its nested indices.
     The root region reserves `cta`; all other mesh regions, including zero-only
     regions, reserve `scope` names.
     Every HIR `MeshRegion` becomes one `MeshScope`, with its arguments evaluated
@@ -325,7 +328,7 @@ class ConvertHIRToTIR(ModulePass):
     the current scope, retaining unit axes. An instruction issued on the enclosing
     scope's mesh is emitted directly; another declared mesh opens a nested
     `MeshScope`. Meshes compare after resolving layouts, preserving unit axes.
-    IR and type mesh names are retained; lowering MUST NOT rebuild mesh frames.
+    IR and type mesh names are retained; lowering MUST NOT rebuild meshes.
     Adjacent scopes are not merged. A view is bound in each consuming scope,
     never at its definition; its sharding refers to that scope's mesh.
     Storage declarations follow their HIR definition's scope and position.
@@ -360,30 +363,30 @@ class ConvertHIRToTIR(ModulePass):
     A non-affine access retains a partner ComposedLayout's composition; without
     that composition it raises LoweringError naming the relation. Existing
     refusals, including duplicate output storage, retain their text.
-    Only `gmem` and `smem` have physical address placements. Optional `rmem`
+    Only `gmem` and `smem` have physical address assignments. Optional `rmem`
     IN_PLACE sharing is a live-byte peak estimate: each result retains its own
     typed AllocTensor. Semantic views, forwards, InsertSlice destinations and
     carry ties share register storage. Placed `smem` views MUST state their dtype
-    explicitly at the analyzed byte offset; TensorView does not reinterpret a
+    explicitly at the analyzed byte offset. TensorView does not reinterpret a
     typed pointer's dtype. Loop coordinates in those relations MUST bind to their
     own induction values in the visit context.
     Shared register storage is declared at the outermost definition among its
     users, retaining the HIR tensor type and declared mesh.
-    Staged storage retains its placement outside the outermost HIR loop.
+    Staged storage retains its declaration site outside the outermost HIR loop.
     Each return-type leaf becomes a new external output parameter with that
     leaf's type; `umat` becomes `gmem`, retaining its layout. A non-tensor leaf
     raises `LoweringError` naming its position and type. Outputs use the analyzed
     storage without a producer-kind whitelist or a structural HIR storage trace.
     Repeated output storage roots and leaves without a proved address raise
     `LoweringError`. Retained-call arguments and destinations MUST be Tensor or
-    TensorView objects over the caller's analyzed storage, except that a returned
-    call result uses the caller's output parameter. Along a return address chain,
-    objects produced by writes and their VIEW/FORWARD results MUST be views of
-    that return leaf's output parameter. Input objects and read-only views taken
+    TensorView objects over the caller's analyzed storage. The exception is a returned
+    call result. It uses the caller's output parameter. Along a return address chain,
+    the objects that writes produce MUST be views of that return leaf's output
+    parameter. Their VIEW/FORWARD results MUST be views of it too. Input objects and read-only views taken
     directly from them MUST retain the input parameter. A read-only return emits
     no write or copy; overlap between input and output remains the caller's job.
-    If a callee writes into a formal but the caller cannot place its result on
-    that actual's storage, lowering MUST retain the `cannot be placed on its output`
+    Consider a callee that writes into a formal. If the caller cannot place its
+    result on that actual's storage, lowering MUST retain the `cannot be placed on its output`
     refusal.
     Each external output's address is the caller's responsibility; host entry,
     automatic runtime outputs and the codegen signature add no alias contract.
@@ -401,25 +404,26 @@ class ConvertHIRToTIR(ModulePass):
 
 Scheduled lowering MUST retain loops and produce one `PrimFunction` per reached
 definition, preserving shared child definitions. Each lowered function's
-parameters are its inputs, its scratch, then its outputs. The scratch list is
-decided from memory analysis before emission (`scratch_buffers`): one `gmem`
-buffer per allocation root the function owns that is neither an input nor an
-output nor an alias, then, per call site, the parameters that call forwards to
-its callee's scratch; two calls of one definition forward separate buffers.
+parameters are its inputs, its scratch, then its outputs. Lowering
+decides the scratch list (`scratch_buffers`) from memory analysis before emission.
+The list has one `gmem` buffer for each allocation root that the function owns.
+The root is neither an input nor an output nor an alias. Then, for each call site, it
+has the parameters that the call forwards to its callee's scratch. Two calls of one
+definition forward separate buffers.
 Emission only reads this list and MUST NOT append scratch. Lowering MUST NOT
 rewrite a host function after it lowers the device functions. Tensor parameters retain their
 HIR types, and output parameters follow the return-leaf rule above, including
 `ShardLayout`. Default and explicit compact row-major layouts denote the same
 physical layout. A returned retained call MUST receive the caller's output
-parameter directly when it satisfies the same placement rule as `Empty`.
+parameter directly when it satisfies the same address rule as `Empty`.
 Call boundaries MAY create matching views of
 existing buffers, but MUST NOT insert copies, scheduling, or storage transfers.
 The original destination remains the call's result after passing its view.
 
 A callee output MAY be in on-chip memory. An smem return MUST copy into the smem
 output buffer supplied by its caller. Other callee returns not bound to that
-output buffer MUST fail with `LoweringError` naming the callee and call path and
-requiring an explicit HIR `tf.schedule` copy. Lowering MUST NOT repair such an
+output buffer MUST fail with `LoweringError`. The error names the callee and call path.
+It requires an explicit HIR `tf.schedule` copy. Lowering MUST NOT repair such an
 input or schedule logical HIR automatically. Existing root output copying is
 unchanged. Codegen does not support these retained TIR calls and MUST refuse them
 with `no codegen handler for Op <type>` when emission reaches one.
@@ -448,13 +452,13 @@ def for_target(module: core.Module, point: PassPoint) -> list[ModulePass]: ...
 
 - constraints:
   - `passes.for_target` MUST collect PrimFunction targets from each function and
-    HIR targets from the corresponding `collect_functions` frame. A frame with
-    no Target MUST contribute no target. It MUST order
+    HIR targets from the corresponding `collect_functions` context. A context
+    with no Target MUST contribute no target. It MUST order
     targets by registered name and preserve registration order within a target.
-  - A pass class MUST be registered at most once per point; a duplicate MUST
+  - A pass class MUST be registered at most once per point. A duplicate MUST
     raise `ValueError` naming the Target and pass.
   - Finalize, compile and scaffold MUST run the same pass list
-    (`passes.default_pipeline`): `BEFORE_LOWER` target passes,
+    (`passes.default_pipeline`). The list is, in order: `BEFORE_LOWER` target passes,
     `InsertHostEntryPass`, `ConvertHIRToTIR`, `AFTER_LOWER` target passes,
     `BEFORE_CODEGEN` target passes. Scaffold passes
     `passes.Options(lower=False)` here and `codegen.Options(emit="skeleton")` to

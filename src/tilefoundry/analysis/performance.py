@@ -32,7 +32,7 @@ class PerformanceContext(AnalyzeContext):
 
     facts: target.ThroughputFacts | None = None
     active: int = 1
-    parallel: target.TopologyLevelFacts | None = None
+    parallel: target.TopologyLimits | None = None
     occurrences: list[tuple[IterationScope, expr.Call, int]] = field(default_factory=list)
 
 
@@ -67,17 +67,17 @@ class PerformanceVisitor(valuation.Visitor[None]):
         duration = local_duration_ns(
             cost,
             ctx.facts,
-            ctx.target.get_facts(target.PerformanceServiceFacts, (ctx.topology_level, ctx.active, inflight)),
+            ctx.target.get_facts(target.PerformanceServiceFacts, (ctx.topology, ctx.active, inflight)),
             moved=moved,
-            topology_level=ctx.topology_level,
-            positions=min(scope.mesh_positions(ctx.topology_level), ctx.active),
+            topology=ctx.topology,
+            units=min(scope.mesh_units(ctx.topology), ctx.active),
         )
         ctx.occurrences.append((scope, node, duration))
 
 
-def wave_count(scope, level) -> int:
-    """Whole waves of *level*'s physical units the positions *scope* runs need."""
-    return -(-scope.active_positions(level.name) // level.max_physical_units)
+def wave_count(scope, topology) -> int:
+    """Whole waves of *topology*'s physical units the units *scope* runs need."""
+    return -(-scope.active_units(topology.name) // topology.max_physical_units)
 
 
 def schedule(occurrences, context, *, origin):
@@ -97,7 +97,7 @@ def schedule(occurrences, context, *, origin):
     for scope, call, duration in occurrences:
         if not duration:
             continue
-        trips = scope.repeats_of(call, context.topology_level, stop=origin).loop_trips
+        trips = scope.repeats_of(call, context.topology, stop=origin).loop_trips
         scheduled = duration * trips
         serialize_boundary = (
             (len(scope.loop_scopes) - len(origin.loop_scopes)) >= 4
@@ -139,24 +139,24 @@ def analyze_performance(function: core.Function, context: AnalyzeContext) -> Non
     """Attach flat occurrence intervals and one function envelope.
 
     Rates are those of the units the function's meshes run, and the envelope
-    repeats once per wave of those positions.
+    repeats once per wave of those units.
     """
-    if context.topology_level is None:
-        raise Error("performance requires a resolved topology level")
+    if context.topology is None:
+        raise Error("performance requires a resolved topology")
     topologies = context.target.get_facts(target.TopologyFacts)
-    level = topologies.parallel()
-    if level is None or level.max_physical_units is None:
+    topology = topologies.parallel()
+    if topology is None or topology.max_physical_units is None:
         raise target.UnsupportedCapabilityError(
-            f"{type(context.target).__name__}: no default parallel topology level"
+            f"{type(context.target).__name__}: no default parallel topology"
         )
-    positions = context.scope.active_positions(context.topology_level)
-    physical = topologies.level(context.topology_level).max_physical_units
-    active = min(positions, physical)
+    units = context.scope.active_units(context.topology)
+    physical = topologies.topology(context.topology).max_physical_units
+    active = min(units, physical)
     performance_context = PerformanceContext(
         **vars(context),
         facts=context.target.get_facts(target.ThroughputFacts),
         active=active,
-        parallel=level,
+        parallel=topology,
     )
     PerformanceVisitor().visit(function.body, performance_context)
     total_cursor = schedule(performance_context.occurrences, context, origin=context.scope.root)
@@ -166,9 +166,9 @@ def analyze_performance(function: core.Function, context: AnalyzeContext) -> Non
         summary_end = max(summary_end, roofline.ideal_ns)
     function.attach_metadata(PerformanceSummaryMetadata(
             timeline=TimelineMetadata(
-                start_ns=0, end_ns=summary_end * wave_count(context.scope, level)
+                start_ns=0, end_ns=summary_end * wave_count(context.scope, topology)
             ),
-            wave=(positions, physical),
+            wave=(units, physical),
         ))
 
 

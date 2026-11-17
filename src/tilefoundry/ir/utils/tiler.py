@@ -1,4 +1,4 @@
-"""Per-mode tiles of a placement, without splitting a placement mode."""
+"""Per-mode tiles of a shard layout, without splitting a shard layout mode."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ __all__ = ["axis_tiler"]
 
 
 def axis_tiler(profile, sizes, *, steps=None, splits=()):
-    """Build row-major per-mode tiles without splitting a placement mode."""
-    position = 0
+    """Build row-major per-mode tiles without splitting a shard layout mode."""
+    next_mode = 0
 
     def tile(mode, span, step):
-        nonlocal position
-        extents = int_tuple.flatten(mode)
+        nonlocal next_mode
+        extents = int_tuple.flatten_to_tuple(mode)
         tiles = [None] * len(extents)
         for index in reversed(range(len(extents))):
             extent = extents[index]
@@ -27,24 +27,24 @@ def axis_tiler(profile, sizes, *, steps=None, splits=()):
                 count, mode_step = span, step
                 n, c = expr.static_dim_value(extent), expr.static_dim_value(count)
                 if n is not None and c is not None and c and (c - 1) * mode_step >= n:
-                    raise ValueError(f"tile exceeds outermost mode {position} (extent {extent})")
-            if position + index in splits and not (int_tuple.compatible(count, 1) or int_tuple.compatible(count, extent)):
-                raise ValueError(f"tile splits placement mode {position + index} (extent {extent})")
-            tiles[index] = types.Layout((count,), (mode_step,))
+                    raise ValueError(f"tile exceeds outermost mode {next_mode} (extent {extent})")
+            if next_mode + index in splits and not (int_tuple.compatible(count, 1) or int_tuple.compatible(count, extent)):
+                raise ValueError(f"tile splits shard layout mode {next_mode + index} (extent {extent})")
+            tiles[index] = types.Layout(count, mode_step)
             if index:
                 span = int_tuple.shape_div(span, count)
                 step = int_tuple.shape_div(step, extent)
-        position += len(extents)
+        next_mode += len(extents)
         return int_tuple.unflatten(tuple(tiles), mode)
 
     result = []
     for mode, count, step in zip(profile, sizes, steps or (1,) * len(profile), strict=True):
         if count is None:
-            position += len(int_tuple.flatten(mode))
+            next_mode += len(int_tuple.flatten_to_tuple(mode))
             result.append(None)
         elif expr.static_dim_value(count) == 0:
-            position += len(int_tuple.flatten(mode))
-            result.append(types.Layout((0,), (step,)))
+            next_mode += len(int_tuple.flatten_to_tuple(mode))
+            result.append(types.Layout(0, step))
         else:
             result.append(tile(mode, count, step))
     return tuple(result)

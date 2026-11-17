@@ -8,7 +8,7 @@ T.arange
     start  any value (type int) (default 0)
     step   any value (type int) (default 1)
   operands
-    dst  Tensor(shape=(None,), dtype=one of {i32; i64}, storage=rmem, layout=any arrangement)
+    dst  Tensor(shape=(None,), dtype=one of {i32; i64}, storage=rmem, layout=any layout)
 
 T.binary
   target             apple.m2_pro
@@ -16,9 +16,9 @@ T.binary
   parameters
     kind  any value in {BinaryKind.ADD, BinaryKind.SUB, BinaryKind.MUL, BinaryKind.DIV, BinaryKind.FLOOR_DIV, BinaryKind.MOD, BinaryKind.MIN, BinaryKind.MAX, BinaryKind.EQ, BinaryKind.NE, BinaryKind.LT, BinaryKind.LE, BinaryKind.GT, BinaryKind.GE, BinaryKind.AND, BinaryKind.OR}
   operands
-    lhs  Tensor(storage=rmem, layout=any arrangement)
-    rhs  Tensor(storage=rmem, layout=any arrangement)
-    dst  Tensor(storage=rmem, layout=any arrangement)
+    lhs  Tensor(storage=rmem, layout=any layout)
+    rhs  Tensor(storage=rmem, layout=any layout)
+    dst  Tensor(storage=rmem, layout=any layout)
 
 T.cast
   target             apple.m2_pro
@@ -39,8 +39,8 @@ T.clamp
     min_val  any value (type float)
     max_val  any value (type float)
   operands
-    src  Tensor(storage=rmem, layout=any arrangement)
-    dst  Tensor(storage=rmem, layout=any arrangement)
+    src  Tensor(storage=rmem, layout=any layout)
+    dst  Tensor(storage=rmem, layout=any layout)
   between operands
     src.dtype = dst.dtype
 
@@ -152,8 +152,8 @@ T.unary
   parameters
     kind  any value in {UnaryKind.NEG, UnaryKind.ABS, UnaryKind.RSQRT, UnaryKind.CAST, UnaryKind.NOT, UnaryKind.RELU, UnaryKind.SQUARE, UnaryKind.EXP, UnaryKind.LOG, UnaryKind.CEIL, UnaryKind.ROUND, UnaryKind.EXP2, UnaryKind.LOG2}
   operands
-    src  Tensor(storage=rmem, layout=any arrangement)
-    dst  Tensor(storage=rmem, layout=any arrangement)
+    src  Tensor(storage=rmem, layout=any layout)
+    dst  Tensor(storage=rmem, layout=any layout)
 
 T.amx.vecfp_v2
   target             apple.m2_pro
@@ -261,10 +261,10 @@ T.where
   target             apple.m2_pro
   execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   operands
-    cond  Tensor(dtype=bool, storage=rmem, layout=any arrangement)
-    lhs   Tensor(storage=rmem, layout=any arrangement)
-    rhs   Tensor(storage=rmem, layout=any arrangement)
-    dst   Tensor(storage=rmem, layout=any arrangement)
+    cond  Tensor(dtype=bool, storage=rmem, layout=any layout)
+    lhs   Tensor(storage=rmem, layout=any layout)
+    rhs   Tensor(storage=rmem, layout=any layout)
+    dst   Tensor(storage=rmem, layout=any layout)
   between operands
     lhs.dtype = rhs.dtype
     lhs.dtype = dst.dtype
@@ -1050,8 +1050,8 @@ T.relu
   target             apple.m2_pro
   execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
   operands
-    src  Tensor(storage=rmem, layout=any arrangement)
-    dst  Tensor(storage=rmem, layout=any arrangement)
+    src  Tensor(storage=rmem, layout=any layout)
+    dst  Tensor(storage=rmem, layout=any layout)
   between operands
     src.shape = dst.shape
     src.dtype = dst.dtype
@@ -1066,4 +1066,4 @@ T.reduce
   operands
     src        Tensor(dtype=src_dtype, layout=ShardLayout(Layout((*_,), (*_,)), _, Mesh(('thread',), ComposedLayout(None, mesh_offset, Layout((*mesh_shape,), (*mesh_stride,)))))) where src_dtype in {f32, f16, bf16}
     dst        Tensor(dtype=dst_dtype, layout=ShardLayout(None, _, Mesh(('thread',), ComposedLayout(None, mesh_offset, Layout((*mesh_shape,), (*mesh_stride,)))))) where dst_dtype in {f32, f16, bf16}
-    workspace  Tensor(storage=smem, layout=any arrangement) or None (default None)
+    workspace  Tensor(storage=smem, layout=any layout) or None (default None)

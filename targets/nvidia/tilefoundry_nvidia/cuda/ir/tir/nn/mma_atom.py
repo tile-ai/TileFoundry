@@ -7,7 +7,6 @@ from enum import Enum
 from functools import partial
 
 from tilefoundry.ir import core, expr, pattern, types
-from tilefoundry.ir.types import layout_algebra
 
 MISS = object()
 
@@ -198,43 +197,10 @@ class FromAtom(pattern.Pattern):
         return getattr(declaration, self.role)
 
 
-def reversed_modes(modes):
-    if isinstance(modes, tuple):
-        return tuple(reversed_modes(mode) for mode in reversed(modes))
-    return modes
-
-
-def reverse(layout: types.Layout) -> types.Layout:
-    return types.Layout(
-        reversed_modes(tuple(layout.shape)),
-        reversed_modes(tuple(layout.strides)),
-    )
-
-
-def participant_frame(mesh):
-    if isinstance(mesh.layout, types.ComposedLayout) and mesh.layout.inner is not None:
-        return None
-
-    try:
-        arranged = types.levels(mesh)
-    except (IndexError, TypeError, ValueError):
-        return None
-    return types.starts(mesh), tuple(layout_algebra.coalesce(reverse(layout)) for layout in arranged)
-
-
-def physical_frames_match(left: types.Mesh, right: types.Mesh) -> bool:
-    """Compare affine offsets and ordered participant lanes."""
-    if left.topologies != right.topologies:
-        return False
-    a, b = participant_frame(left), participant_frame(right)
-    return a is not None and b is not None and a == b
-
-
 __all__ = [
     "AtomPattern",
     "FromAtom",
     "MmaAtom",
-    "physical_frames_match",
     "execution_mesh_pattern",
     "rmem_fragment",
 ]

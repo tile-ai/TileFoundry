@@ -3,7 +3,7 @@
 A `Target` is the immutable capability context compilation and the compiler
 algorithms read. Architecture describes compilation identity and instruction
 structure. Device describes fixed product resources. A target is a value that
-answers questions about hardware; it does not own the operations that ask, and it
+answers questions about hardware. It does not own the operations that ask. It
 answers only by projecting the facts an asking algorithm declared.
 
 ## 1. `Target`
@@ -47,17 +47,17 @@ def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]: ...
 
 - constraints:
   - A custom Target MUST use one of two modes. A document-backed product adds
-    complete Architecture and Device documents to an existing Target class; it
+    complete Architecture and Device documents to an existing Target class. It
     MUST NOT add a product-specific Target subclass. A new backend implements
-    the Target interface directly and answers its hardware through `get_facts`;
-    it need not expose Architecture, Device, or hardware documents.
-  - Injecting bare Architecture or Device values into an existing
-    document-backed Target is not a supported mode: it bypasses document schema
+    the Target interface directly and answers its hardware through `get_facts`.
+    It need not expose Architecture, Device, or hardware documents.
+  - Do not inject bare Architecture or Device values into an existing
+    document-backed Target. This mode bypasses document schema
     validation and the `facts_result` projection boundary.
   - `bind(target, base)` MUST register a subclass implementation under the exact
     `(Target class, base class)` pair. An implementation that is not a subclass of
-    `base` MUST raise `TypeError`; a second binding for the pair MUST raise
-    `ValueError` naming the Target, base, and existing implementation.
+    `base` MUST raise `TypeError`. A second binding for the pair MUST raise
+    `ValueError`. The error MUST name the Target, base, and existing implementation.
   - `resolve(base, *args)` MUST call `create(self, *args)` on the implementation
     bound to `(type(self), base)`, or on `base` when unbound. Bindings MUST live
     at implementation class definitions; the Target layer MUST NOT import
@@ -68,7 +68,7 @@ def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]: ...
     only requested Facts, so a backend reuses them by answering `get_facts`, not
     by inheriting a backend-specific analysis base class. A missing Facts
     projection MUST fail when the selected analyzer requests it.
-  - `facts_result`, `FactsError`, `TopologyFacts`, `TopologyLevelFacts`,
+  - `facts_result`, `FactsError`, `TopologyFacts`, `TopologyLimits`,
     `MemoryExecutionFacts`, `MemoryHierarchyFacts`, `ThroughputFacts`, and
     `PerformanceServiceFacts` MUST be importable from `tilefoundry.target`.
   - `name` MUST be a non-empty class variable declared directly by every
@@ -83,7 +83,7 @@ def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]: ...
   - `registered()` MUST expose one read-only `name -> class` view. The
     view MAY be used for inspection but MUST NOT construct a Target.
   - `identity` MUST name one concrete Target value. It MUST be the device
-    document ID for a document-backed Target and the registered class `name`
+    document ID for a document-backed Target. It MUST be the registered class `name`
     for a Target with no device document.
   - `from_installed()` MUST return every value of that registered class which can be
     constructed in the current environment. A class with no hardware documents
@@ -94,12 +94,13 @@ def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]: ...
   - Target values MUST remain immutable hardware values. Their getters select
     immutable descriptors and Facts, and a subclass inherits those selections
     unless it overrides or refuses them.
-  - `get_facts(TopologyFacts)` MUST list every topology level the Target
-    admits, coarsest first, as the `TopologyLevelFacts` of each. A Target that
+  - `get_facts(TopologyFacts)` MUST list every topology the Target
+    admits, coarsest first, as the `TopologyLimits` of each. A Target that
     states none MUST answer the empty tuple: it runs one program per call.
-  - `validate_program_topology` MUST reject a level outside
-    `get_facts(TopologyFacts)` and any resolved static extent that is not
-    positive or exceeds that level's finite `max_logical_units`. The shared
+  - `validate_program_topology` MUST reject a topology outside
+    `get_facts(TopologyFacts)`. It MUST reject any resolved static extent that is not
+    positive. It MUST reject any resolved static extent that exceeds the finite
+    `max_logical_units` of its topology. The shared
     program check MUST use this method rather than reproduce a backend's
     topology limits.
   - A provider MAY import `Analyzer` from `tilefoundry.target`. Codegen base
@@ -108,7 +109,7 @@ def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]: ...
     program's tensor arguments. The base implementation returns `"cpu"`; a
     backend for another device type MUST override it. CLI input generation MUST
     use this answer and reject an unavailable non-CPU device.
-  - A missing getter capability MUST raise `UnsupportedCapabilityError` naming the
+  - A missing getter capability MUST raise `UnsupportedCapabilityError`. The error MUST name the
     concrete Target class, its registration name, and the requested selector or
     Facts type.
   - Target values MUST NOT own code emission, linking, loading, or the public
@@ -125,9 +126,9 @@ class Architecture:
 ```
 
 - constraints:
-  - `Architecture` is a Target-level marker for the architecture-side value
-    passed into a Facts projection and for its Python reconstruction support;
-    it is not a provider extension point.
+  - `Architecture` is a Target-level marker. It marks the architecture-side value
+    passed into a Facts projection and its Python reconstruction support.
+    It is not a provider extension point.
   - A document-backed Target MUST accept direct values only through its
     backend-specific concrete Architecture type. A further product adds a
     document of that backend's schema; a further backend implements `Target`
@@ -135,7 +136,7 @@ class Architecture:
   - Concrete backend architecture values MUST be immutable; `name` MUST be the
     stable architecture identity.
   - `max_threads_per_cta` MUST describe the architecture's static CTA thread
-    limit when the architecture has a CTA thread level.
+    limit when the architecture has a CTA thread topology.
 
 ### 1.2 `Device`
 
@@ -148,8 +149,8 @@ class Device:
 ```
 
 - constraints:
-  - `Device` is a Target-level marker for the device-side value passed into a
-    Facts projection and for its Python reconstruction support; it is not a
+  - `Device` is a Target-level marker. It marks the device-side value passed into a
+    Facts projection and its Python reconstruction support. It is not a
     provider extension point.
   - A document-backed Target MUST accept direct values only through its
     backend-specific concrete Device type. A further product adds a document
@@ -175,11 +176,11 @@ def load() -> Mapping[str, type[Target]]: ...
 
 - constraints:
   - `load()` MUST import each `tilefoundry.targets` entry point once. Each
-    `<name>` MUST point to `tilefoundry_<vendor>.<name>`; importing it MUST
-    complete target, operation, visitor, evaluator and pass registrations, and
-    MUST register a Target named `<name>`, or `load()` raises `LoadError`.
+    `<name>` MUST point to `tilefoundry_<vendor>.<name>`. Importing it MUST
+    complete target, operation, visitor, evaluator and pass registrations.
+    Importing it MUST register a Target named `<name>`. Otherwise `load()` raises `LoadError`.
   - A backend MUST ship as `tilefoundry-<vendor>` with only the top-level package
-    `tilefoundry_<vendor>` and depend on `tilefoundry==V` at its own version `V`.
+    `tilefoundry_<vendor>`. It MUST depend on `tilefoundry==V` at its own version `V`.
     `load()` MUST reject other top-level packages.
   - A load failure MUST raise `LoadError` naming the entry point or
     distribution and cause. A failed load MUST allow retry; a successful load
@@ -188,9 +189,9 @@ def load() -> Mapping[str, type[Target]]: ...
     available from `tilefoundry.target`; other backends MUST export target values
     from `tilefoundry_<vendor>`.
   - Importing `tilefoundry` MUST call `load()` once at the end of core
-    initialization (`tilefoundry/bootstrap.py`); CLI, DSL lookup, stub generation
-    and spec discovery use those registrations without loading again. A plugin
-    package already in `sys.modules` is skipped: a user who imports a plugin
+    initialization (`tilefoundry/bootstrap.py`). CLI, DSL lookup, stub generation
+    and spec discovery use those registrations. They do not load again. Loading
+    skips a plugin package already in `sys.modules`. A user who imports a plugin
     first has that package complete its own registrations after core
     initialization returns.
   - A plugin MUST install its specifications as package data under `docs/spec/`.
@@ -230,22 +231,22 @@ class Target(tilefoundry.target.Target):
   classes.
 - `cpu.Target()` MUST be the omitted-target policy for `core.PrimFunction` /
   `@prim_func` and `jit()`.
-- There MUST be no global string-to-Target resolver: a registered name yields a
-  class only through `registered()` and never constructs a value.
+- There MUST be no global string-to-Target resolver. A registered name yields a
+  class only through `registered()`. It never constructs a value.
 - A `Target` belongs to a `core.Module` rather than an authored HIR `core.Function`.
   Target inheritance and its declaration rules are defined by
   [core-ir `target-inheritance`](./core-ir.md#target-inheritance).
 - Analyze MUST obtain the Target from `Module.resolve_target()` and nowhere
-  else. It does not accept a bare `Function`, does not default an undeclared
-  Target (hardware-dependent results measured against an undeclared device are
-  silently wrong), and does not read `Module.metadata["target"]`, which is the
-  codegen boundary's own record ([passes §6](./passes.md#6-top-level-api)).
+  else. It does not accept a bare `Function`. It does not default an undeclared
+  Target, because hardware-dependent results for an undeclared device are
+  silently wrong. It does not read `Module.metadata["target"]`, the
+  record of the codegen boundary ([passes §6](./passes.md#6-top-level-api)).
 - The compile boundary resolves no default: `build` reports a Module that
   declares no Target ([passes §6](./passes.md#6-top-level-api)) rather than
   compiling against a guess. `cpu.Target()` is the authoring surface's
   omitted-target value, not one the compile supplies.
-- A TIR `core.PrimFunction` retains its own `target`: it MUST be the exact Target
-  instance resolved from its Module, and no later stage rewrites it. It selects
+- A TIR `core.PrimFunction` retains its own `target`. It MUST be the exact Target
+  instance resolved from its Module. No later stage rewrites it. It selects
   the bound emission classes that emit it. A synthesized host entry carries a
   `cpu.Target()`.
 - Device Functions MUST be grouped by equal Target values in source order.
@@ -292,23 +293,23 @@ conditions = "No validated number."
     omit `value`, record `status = "unavailable"`, and state the reason in
     `conditions`. The string `"unavailable"` MUST NOT be used as a value, so no
     caller can read a placeholder as a number.
-  - `origin` MUST name how the value was obtained: `vendor` from the vendor's
-    published figure, `measured` on the described host, `reference` from a cited
-    third party, `derived` from other facts, or `estimated` where it is a
-    reading that no source states. A value not measured on the described host
-    MUST NOT be recorded as `measured`; a reading rather than a citation MUST be
-    recorded as `estimated`. `derived` and `estimated` MUST state how in
+  - `origin` MUST name how the value was obtained. `vendor` is the vendor's
+    published figure. `measured` is a value measured on the described host.
+    `reference` is a value from a cited third party. `derived` is a value from
+    other facts. `estimated` is a reading that no source states. A value not
+    measured on the described host MUST NOT be recorded as `measured`. A reading
+    rather than a citation MUST be recorded as `estimated`. `derived` and `estimated` MUST state how in
     `conditions`.
   - Compiler policy and a program's Topology extents MUST NOT appear in a
-    hardware document. They are compiler inputs, not immutable hardware truth:
-    a fixed-wave parallel capacity is a policy even when its current value
-    equals a device count. An explicit memory level's `owner` is
-    different: it MUST name one topology from the Target's hardware vocabulary,
-    or the reserved word `target` for an allocation shared by the whole device.
+    hardware document. They are compiler inputs, not immutable hardware truth.
+    A fixed-wave parallel capacity is a policy, even when its current value
+    equals a device count. The `owner` of an explicit memory level is
+    different. It MUST name one topology from the Target's hardware vocabulary,
+    or the reserved word `target` for a whole-device allocation.
     The document states that ownership directly and MUST NOT encode it as an
     absent value.
   - Only explicit memory levels MUST record an owner. Implicit caches receive no
-    program residency and MUST NOT add an owner leaf merely to make their
+    program residency. An implicit cache MUST NOT add an owner leaf merely to make its
     capacity scope look like a Target topology.
 
 ### 10.2 Registry and resolution
@@ -321,54 +322,54 @@ conditions = "No validated number."
     cross-backend document table, search path, overlay, or partial document.
     Built-in package documents MAY be scanned lazily, but resolution MUST NOT
     depend on a previously constructed Target instance.
-  - A schema name carries a version. Requiring a leaf a previous version did not
-    MUST take a new version, because a document written against the old one no
-    longer loads and the failure is otherwise a missing fact rather than a
-    contract that moved.
+  - A schema name carries a version. A schema that requires a leaf its previous version did not
+    MUST take a new version. A document written against the old version no
+    longer loads. Without a new version, the failure is a missing fact, not a
+    moved contract.
   - A Target's schema mapping is fixed by its class. A complete document MAY be
-    adopted as another product only when its schema is in that mapping; adding
-    another schema is adding a backend, not adding a hardware product.
+    adopted as another product only when its schema is in that mapping.
+    Adding another schema adds a backend, not a hardware product.
   - Explicitly registered documents MUST be routed to the one registered Target
     class that declares their schema in its own `HardwareSpec`. An inherited
     reference to another Target's `HardwareSpec` MUST NOT claim that schema.
-    Removing such a document MUST discard its resolved cache entry as well as
-    its ID, without changing the Target's built-in package data.
+    Removing such a document MUST discard its ID and its resolved cache entry.
+    It MUST NOT change the Target's built-in package data.
   - An adopted device document MUST NOT become available until its declared
     architecture document is present in the same `HardwareSpec`. Explicit
     registration MUST reject that incomplete pair and name the architecture
     document required first.
   - Device document IDs and every provider Target identity share one uniqueness
-    boundary. A collision MUST fail before persistent registration and name the
-    existing Target value; it MUST NOT choose one source by load order.
+    boundary. A collision MUST fail before persistent registration. The failure MUST name the
+    existing Target value. Registration MUST NOT choose one source by load order.
   - A schema MAY validate the documents of several products when they state the
-    same fact paths, and MUST build one value type from all of them. A product is
-    what its document records, so a schema MUST NOT select a type by the identity
+    same fact paths. Such a schema MUST build one value type from all of them. A product is
+    what its document records. A schema MUST NOT select a type by the identity
     a document declares.
   - A typed schema MUST validate exact fact paths, value types, units, required
-    fields, and cross-field invariants, and MUST reject any leaf the document
-    carries that the schema does not model, so a misspelled key cannot become
+    fields, and cross-field invariants. It MUST reject any leaf the document
+    carries that the schema does not model. A misspelled key then cannot become
     an unused fact.
-  - Units MUST be normalized while constructing the typed value: algorithms see
-    canonical integers such as bytes and bytes per second, never source strings
+  - The schema MUST normalize units while it constructs the typed value. Algorithms see
+    canonical integers such as bytes and bytes per second. They never see source strings
     or unit conversion.
-  - A schema MAY model a leaf as optional, which yields the recorded number or
-    `None` for a leaf recorded unavailable. The leaf MUST still be declared: a
-    document says either what the value is or that there is none, and a missing
-    key MUST remain an error rather than becoming an absent value.
+  - A schema MAY model a leaf as optional. An optional leaf yields the recorded number, or
+    `None` for a leaf recorded unavailable. The leaf MUST still be declared. A
+    document says either what the value is or that there is none. A missing
+    key MUST remain an error and MUST NOT become an absent value.
   - Resolution MUST retain each document's ID and content digest on the
-    composed value, so a compiled artifact can name the exact resources it was
+    composed value. A compiled artifact can then name the exact resources it was
     built against. Editing any recorded value or its evidence MUST change the
     digest.
   - A Target constructor MUST accept a custom document through a filesystem
-    path. The document MUST be complete, retain its declared ID and digest, and
-    MUST NOT enter that Target's available-ID namespace, so it can neither
+    path. The document MUST be complete and MUST retain its declared ID and digest.
+    It MUST NOT enter that Target's available-ID namespace. It can then neither
     shadow nor replace an available resource.
-  - Unknown IDs, unsupported schemas, unmodelled or malformed facts, malformed
-    envelopes, duplicate document IDs, and incompatible pairs MUST each raise
-    their own actionable diagnostic rather than one shared parse failure.
+  - These cases MUST each raise their own actionable diagnostic, not one shared parse
+    failure: unknown IDs, unsupported schemas, unmodelled or malformed facts, malformed
+    envelopes, duplicate document IDs, and incompatible pairs.
   - Reporting the resources behind a target MUST name both documents and their
     digests. A target composed from a directly supplied value has no document to
-    report and MUST say so rather than name the installed resource it resembles.
+    report. It MUST say so. It MUST NOT name the installed resource it resembles.
 
 ## 11. Target Facts projection
 
@@ -385,14 +386,14 @@ class Target:
     ) -> FactsT: ...
 
 
-class TopologyLevelFacts:
-    """The program-side and machine-side unit counts for one topology level.
+class TopologyLimits:
+    """The program-side and machine-side unit counts for one topology.
 
     Attributes:
-        name: Topology level being stated.
+        name: Topology being stated.
         max_logical_units: Maximum units a program may declare, or None.
-        max_physical_units: Machine positions the level divides over, or None.
-        from_target: Whether the target instance supplies extent and program ids.
+        max_physical_units: Machine units the topology divides over, or None.
+        from_target: Whether the target instance supplies extent and unit ids.
     """
 
     name: str
@@ -402,11 +403,11 @@ class TopologyLevelFacts:
 
 
 class TopologyFacts:
-    topologies: tuple[TopologyLevelFacts, ...]
-    parallel_level: str | None = None
+    topologies: tuple[TopologyLimits, ...]
+    parallel_topology: str | None = None
 
-    def level(self, name: str | None) -> TopologyLevelFacts | None: ...
-    def parallel(self) -> TopologyLevelFacts | None: ...
+    def topology(self, name: str | None) -> TopologyLimits | None: ...
+    def parallel(self) -> TopologyLimits | None: ...
 
 
 class MemoryExecutionFacts:
@@ -414,15 +415,15 @@ class MemoryExecutionFacts:
 ```
 
 - constraints:
-  - `MemoryExecutionFacts.topologies` MUST list the Target's execution levels
+  - `MemoryExecutionFacts.topologies` MUST list the Target's execution topologies
     admitted for synchronous Copy and Fill. Each name MUST occur in
     `TopologyFacts.topologies`. An empty list admits no memory execution scope.
     Shared instruction matching MUST specialize the memory mesh wildcard from
     this projection before checking operands.
   - `max_logical_units` is the program-side declaration limit.
-    `max_physical_units` is the machine-side count of positions the level
+    `max_physical_units` is the machine-side count of units the topology
     divides over, independently of hardware residency limits.
-  - `parallel_level`, when present, MUST name an entry in `topologies`.
+  - `parallel_topology`, when present, MUST name an entry in `topologies`.
     `parallel()` MUST return that entry. An empty aggregate MUST use `None` and
     return `None` from `parallel()`.
   - A subclass MUST inherit its base Target's projections through normal Python
@@ -437,9 +438,9 @@ class MemoryExecutionFacts:
     validate its own private query type. There is no common query base or
     mandatory public program-view type.
   - A returned value that is not an instance of the requested Facts type MUST
-    fail at the projection boundary, not inside the consuming algorithm.
+    fail at the projection boundary. It MUST NOT fail inside the consuming algorithm.
   - Projection MUST be a read. It MUST NOT analyze IR, build a constraint model,
-    solve, export a plan, or mutate the Target, the IR, or runtime
+    solve, or export a plan. It MUST NOT mutate the Target, the IR, or runtime
     state. It only converts what the specification already records.
   - There MUST be no public Facts registration step or global Target Facts
     table. A custom Target provider registers only its Target class.

@@ -8,7 +8,7 @@ from tilefoundry.ir.hir import sharding
 
 
 def _check_split_extents_match_mesh(sl: types.ShardLayout) -> None:
-    mesh_shape = types.flatten(sl.mesh.layout.shape)
+    mesh_shape = types.flatten_to_tuple(sl.mesh.layout.shape)
     assert len(sl.attrs) == len(mesh_shape), (
         f"attrs len {len(sl.attrs)} != mesh rank {len(mesh_shape)}"
     )

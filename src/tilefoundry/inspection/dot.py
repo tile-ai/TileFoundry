@@ -79,7 +79,7 @@ def hir_function_to_dot(fn: core.Function) -> str:
                 emit_edge(node_id(arg), nid, f"arg[{index}]" if len(node.args) > 1 else "")
 
         def visit_MeshRegion(self, node: core.MeshRegion, current=None) -> None:
-            alias = ctx.scope_name(node.mesh)
+            alias = ctx.mesh_name(node.mesh)
             ctx.push_mesh(node.mesh, alias)
             try:
                 self.visit(node.body, current)

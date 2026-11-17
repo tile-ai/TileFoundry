@@ -67,13 +67,13 @@ class TiledMma(expr.Op):
     )
 
     def execution_mesh_pattern(self):
-        """The atom's lane frame, preceded by independent group modes."""
+        """The atom's execution mesh of lanes, preceded by independent group modes."""
         return self.atom.execution_mesh_pattern(groups=True)
 
 
 @typeinfer.register(TiledMma)
-def _(call: "expr.Call", ctx: "typeinfer.TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "expr.Call", ctx: "typeinfer.TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 @access.register_relation(TiledMma)

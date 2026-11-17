@@ -7,7 +7,7 @@
 
 namespace reduce_impl {
 
-/// Fold what this instance holds, and stop.
+/// Fold what this unit holds, and stop.
 template <class Op, class Axes> struct Plain {
     template <class SrcT, class DstT>
     __device__ void operator()(SrcT const &src, DstT &dst) const {

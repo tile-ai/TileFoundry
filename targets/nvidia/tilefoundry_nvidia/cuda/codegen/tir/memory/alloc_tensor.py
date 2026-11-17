@@ -15,7 +15,6 @@ from __future__ import annotations
 from tilefoundry import codegen
 from tilefoundry.ir import core, expr, types, utils
 from tilefoundry.ir.tir import memory
-from tilefoundry.ir.types import layout_algebra
 from tilefoundry_nvidia.cuda import target
 from tilefoundry_nvidia.cuda.codegen import context
 
@@ -49,7 +48,7 @@ def emit_plain_alloc(
             f"AllocTensor for {name!r} has unmaterialized storage (storage=umat); "
             "a memory-resident tensor must carry a concrete StorageKind"
         )
-    total = int(utils.upper_bound(layout_algebra.cosize(engine_layout)))
+    total = int(utils.upper_bound(types.cosize(engine_layout)))
 
     layout = render_layout_value(engine_layout, literal, literal)
     cpp_type = ctx.dtype_to_cpp(var.type.dtype.name)
@@ -70,9 +69,9 @@ def emit(let: core.LetStmt, ctx: context.Context) -> None:
 
     Shard layout shapes are global and backing storage uses their derived local
     shape, except for shared memory split across the block's *threads*: shared
-    memory belongs to the CTA, ``local()`` offsets into it by the instance's
-    own base, and a buffer sized to one instance's share is read past by every
-    instance but the first. The local shape stays right for rmem -- a thread's
+    memory belongs to the CTA, ``local()`` offsets into it by the unit's
+    own base, and a buffer sized to one unit's share is read past by every
+    unit but the first. The local shape stays right for rmem -- a thread's
     registers are its own -- and for a cta-scoped mesh, where each CTA owns its
     slice. See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """

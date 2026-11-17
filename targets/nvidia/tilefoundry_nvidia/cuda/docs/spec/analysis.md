@@ -99,8 +99,8 @@ class SyncPlanMetadata(IRMetadata):
     plan orders whole allocations, not stages or windows.
   - **Global memory roots.** An access to global memory touches the
     allocation root of its value. A Function other than the entry touches an
-    unknown root for a value it returns, and any Function for a global value
-    the memory family did not record. Unknown roots match all roots.
+    unknown root for a value it returns. Any Function touches an unknown root
+    for a global value that the memory family did not record. Unknown roots match all roots.
   - **Order.** A later access conflicts with an earlier one and follows it
     after steps, as this table states:
 
@@ -109,13 +109,13 @@ class SyncPlanMetadata(IRMetadata):
     | Conflict | one of the two writes and their bytes overlap | one of the two writes, one of the two goes through the async proxy, and their roots match | the earlier access is in flight |
     | Conflict in one group | as above | as above | only when one of the two writes and they share no non-None `chain` |
     | No conflict | the earlier access is complete, and both are operands of instructions without an execution mesh, with one `ShardLayout` that splits along each mesh axis whose threads share shared memory | - | - |
-    | Steps | a commit and a wait for an earlier group effect, a proxy fence for an async access after a generic one, then a barrier over a scope whose mesh chain is a prefix of the later access's | as for shared memory, with a proxy fence over global memory | a commit and a wait for the group of the earlier access, and no barrier |
+    | Steps | a commit and a wait for an earlier group effect. A proxy fence for an async access after a generic one. Then a barrier over a scope whose mesh chain is a prefix of the later access's | as for shared memory, with a proxy fence over global memory | a commit and a wait for the group of the earlier access, and no barrier |
 
-    A proxy fence runs on every thread of its scope before the barrier, so
-    the threads that made the generic accesses publish them before the async
-    access issues. An async access needs no fence before a later generic one:
-    the completion of a tensor-map copy is followed by an implicit
-    generic-async proxy fence (PTX `cp.async.bulk`).
+    A proxy fence runs on every thread of its scope before the barrier.
+    The threads that made the generic accesses publish them before the async
+    access issues. An async access needs no fence before a later generic one.
+    An implicit generic-async proxy fence follows the completion of a
+    tensor-map copy (PTX `cp.async.bulk`).
   - **Group fence.** A `fence` effect needs the fence of its group before the
     action in two cases. First, its registers have no access yet. Second, an
     access to its registers since the last fence is not an effect of that group
@@ -125,7 +125,7 @@ class SyncPlanMetadata(IRMetadata):
     register storage runs on the threads that hold its value. See
     [hir Reshard](../../../../../../docs/spec/hir.md#reshard).
   - **Units.** An action with a `unit` effect MUST run in a scope whose mesh is
-    whole, aligned units that hold the issuing threads. Every loop around that
+    whole, aligned units. These units hold the threads of the execution mesh. Every loop around that
     scope MUST have bounds that the threads of each unit see alike. Such a
     bound is one that a barrier accepts, or a thread coordinate that reads one
     value across each unit. A step of that group needs the same from its scope.
@@ -133,19 +133,19 @@ class SyncPlanMetadata(IRMetadata):
     place when such an effect can be in flight at the return. Then its group's
     commit and wait run under the tag `"after"`. The family plans the Function
     again. The accesses of the action stay recorded as complete.
-  - **Placement.** An action runs on the mesh that lowering issues it on, or on
+  - **Execution mesh.** An action runs on the mesh that lowering issues it on, or on
     its lexical scope's mesh when that is None. That mesh MUST lie within its
-    lexical scope's mesh, as `within_scope` decides. The family places steps in
+    lexical scope's mesh, as `within_mesh_scope` decides. The family places steps in
     the innermost scope that holds both accesses, before the child that holds
     the later one. A barrier runs over the mesh of that scope. When that mesh
     holds one thread, no barrier runs: the thread's own program order orders
     its plain accesses. Only the barrier is left out. The commit and wait of a
-    group in flight and a proxy fence still run, since an asynchronous write
-    reaches even its issuing thread only through them. Otherwise the mesh MUST
+    group in flight and a proxy fence still run. An asynchronous write reaches
+    even its executing thread only through them. Otherwise the mesh MUST
     be a thread mesh that `classify` supports. Every loop around the position
     MUST have bounds that every thread sees alike. A barrier accepts constants,
     kernel parameters and their captures, and induction variables of such
-    loops. It also accepts coordinates of mesh levels that its mesh does not
+    loops. It also accepts coordinates of topologies that its mesh does not
     span.
   - **Loops.** The family analyses loops to a fixed point. The head state joins
     every body end until it repeats.
@@ -154,36 +154,37 @@ class SyncPlanMetadata(IRMetadata):
     on return. A retained call also reads and writes unknown shared memory
     bytes, unless the callee has a plan in which no action touches shared
     memory. These effects complete as a `cp.async` group. An access that
-    conflicts with them waits for every `cp.async` group in flight. Unless the
-    callee has a plan whose `global_async` is False, the call also reads and
-    writes unknown global memory through the async proxy, the callee's own
-    temporaries included.
-  - **Barrier words.** A Function with a `CopyAsyncTensor` load from global to
-    shared memory, or a retained call whose callee plan has `barriers`, gets
-    `barriers = (offset, count)`: one 8-byte mbarrier word per warp of the CTA,
-    `count = ceil(threads / W)` with `W` the target's
-    `architecture.max_threads_per_warp`, at `offset`, the entry's shared-memory peak
-    rounded up to 8. Only the entry places shared memory, so every Function it
+    conflicts with them waits for every `cp.async` group in flight. The call
+    also reads and writes unknown global memory through the async proxy, the
+    callee's own temporaries included. This does not hold when the callee has
+    a plan whose `global_async` is False.
+  - **Barrier words.** A Function gets `barriers = (offset, count)` when it has a
+    `CopyAsyncTensor` load from global to shared memory. It gets them too when
+    it has a retained call whose callee plan has `barriers`. The words are one
+    8-byte mbarrier word per warp of the CTA. `count = ceil(threads / W)`,
+    with `W` the `architecture.max_threads_per_warp` of the target. The words
+    are at `offset`, the entry's shared-memory peak rounded up to 8. Only the entry places shared memory, so every Function it
     reaches shares the offset. Words that end above the target's capacity
-    refuse nothing, as a peak above it refuses nothing. When the placed peak
-    fits the capacity and the words do not, `errors` says so; a peak already
-    above capacity is the memory family's error, and an unknown capacity adds
-    none. `SyncPlanMetadata` is a structured record of the `sync` report
+    refuse nothing, as a peak above it refuses nothing. `errors` says
+    so when the placed peak fits the capacity and the words do not. A peak
+    already above capacity is the memory family's error. An unknown capacity
+    adds none. `SyncPlanMetadata` is a structured record of the `sync` report
     family, so a JSON report that requests `sync` carries it.
   - **CTAs.** No step orders two CTAs of one launch. In an entry launched on
     more than one CTA, `ctas.py` pairs the global memory reads and writes of
-    its actions where one of the two goes through the async proxy, one of the
-    two writes and their roots match; each pairs with itself too. Each side is
+    its actions. Two accesses form a pair when one of the two goes through the
+    async proxy, one of the two writes, and their roots match. Each access
+    pairs with itself too. Each side is
     the device access relation of its action, constrained by the loops around
     it. The second side renames every coordinate except the entry's own
     parameters and module dimensions, so two iterations of one action pair as
-    well. Each execution runs in one physical CTA of the launch, and every CTA
+    well. Each execution runs in one physical CTA of the launch. Every CTA
     coordinate its relation names is the coordinate that CTA reads, as the
-    runtime's `mesh_coords` reads it; the two CTAs differ. A coordinate that
+    runtime's `mesh_coords` reads it. The two CTAs differ. A coordinate that
     cannot be bound this way leaves the pair unproven. Only the sliced CTA
     meshes around an access keep a CTA from running it, as the runtime's
-    `contains` guard does; a mesh smaller than its topology repeats over the
-    launch. A slice whose positions are not static keeps no CTA out. For two
+    `contains` guard does. A mesh smaller than its topology repeats over the
+    launch. A slice whose units are not static keeps no CTA out. For two
     different CTAs, the first row that holds decides a pair:
 
     | Pair | Outcome |
@@ -196,33 +197,33 @@ class SyncPlanMetadata(IRMetadata):
 
     A retained call's relations are unknown.
   - **Threads.** No step orders the threads of one issue. An instruction that
-    states no execution mesh of its own is issued by every thread of the mesh
-    it runs on, each on the operands as that thread sees them. A retained
-    call, an instruction with a required execution mesh, and one that takes
-    its execution mesh as an attribute, as `CopyAsyncTensor` does, state for
-    themselves which threads issue. For every other action, `threads.py` pairs
-    each shared memory write with itself the way **CTAs** pairs global
-    accesses, with thread coordinates in place of CTA coordinates: the second
-    side renames every thread coordinate, and only the sliced thread meshes
-    around the action keep a thread from issuing it. A copy or fill that
-    lowering adds runs in the regions `transfer_meshes` gives it. When no
-    operand's mesh splits the threads and the destination is in shared
-    memory, the innermost of them is a slice holding the first thread of the
-    enclosing mesh, and it counts as a slice around the action. A write needs
-    no relation when a layout splits it over a mesh whose positions are
-    exactly the threads that issue it, those every thread slice around it
-    holds, or every thread of the CTA without one. That layout is the
-    destination's own or, for a `Copy`, that of the one operand
-    that splits every thread axis, since `Copy` projects a plain operand
-    through it. Two different threads that reach one element are otherwise
+    states no execution mesh of its own is executed by every thread of its mesh.
+    Each thread uses the operands as it sees them. Some actions state for
+    themselves which threads execute. These are a retained call, an instruction
+    with a required execution mesh, and one that takes its execution mesh as an
+    attribute, as `CopyAsyncTensor` does. For every other
+    action, `threads.py` pairs each shared memory write with itself. It does so
+    the way **CTAs** pairs global accesses, with thread coordinates in place of
+    CTA coordinates. The second side renames every thread coordinate. Only the
+    sliced thread meshes around the action keep a thread from executing it. A copy or fill that
+    lowering adds runs in the regions `transfer_meshes` gives it. Take the case
+    where no operand's mesh splits the threads and the destination is in
+    shared memory. Then the innermost of them is a slice holding the first
+    thread of the enclosing mesh. It counts as a slice around the action. A write needs
+    no relation when a layout splits it over a mesh whose units are
+    exactly the threads that execute it. These are the threads that every
+    thread slice around it holds, or every thread of the CTA without one. That
+    layout is the destination's own. For a `Copy`, it is the layout of the
+    operand that splits every mesh axis of the thread topology. `Copy` projects
+    a plain operand through it. Two different threads that reach one element are otherwise
     decided by the rows of the **CTAs** table. The family checks **Threads**
     after **CTAs**.
-  - **Word users.** The word of warp `k` has one user, thread `W * k`: a
-    `CopyAsyncTensor` is issued by whole aligned warps, as its execution mesh
-    pattern states ([tir](./tir.md#copyasynctensor)), so its first issuing
+  - **Word users.** The word of warp `k` has one user, thread `W * k`. Whole
+    aligned warps execute a `CopyAsyncTensor`, as its execution mesh pattern
+    states ([tir](./tir.md#copyasynctensor)). So its first executing
     thread starts a warp. The plan orders no word.
   - **Refusals.** The family raises `analysis.Error` when an action or a barrier
-    breaks a MUST of **Units** or **Placement**. It also raises it for a loop
+    breaks a MUST of **Units** or **Execution mesh**. It also raises it for a loop
     whose state does not settle within its limit, and for a pair that
     **CTAs** or **Threads** refuses.
 
@@ -269,11 +270,11 @@ def completion_of(issued: Issued, *, key: type | None = None) -> tuple[Effect, .
   - A handler answers one `Effect` for each read and each write of the issued
     parameters. `effects` builds them in parameter order, with the reads of a
     parameter first. A handler sees the parameter types.
-  - `Mechanism.ON_RETURN` means the effect is complete for the issuing threads
-    once the statement returns. `Mechanism.GROUP` means it completes when those
-    threads wait on the `group` that holds it.
+  - `Mechanism.ON_RETURN` means the effect is complete for the threads of the
+    execution mesh once the statement returns. `Mechanism.GROUP` means it
+    completes when those threads wait on the `group` that holds it.
   - `proxy` is the path the effect takes to shared memory. A `unit` is the
-    mesh of one set of threads that issue the instruction together. These
+    mesh of one set of threads that execute the instruction together. These
     threads also run the steps of its group together. A `fence` effect on
     registers needs the fence of its group after any other access to those
     registers. An earlier effect with the same non-None `chain` is the

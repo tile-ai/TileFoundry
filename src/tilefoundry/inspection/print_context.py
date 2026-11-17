@@ -8,13 +8,14 @@ from contextlib import contextmanager
 
 from tilefoundry import utils
 from tilefoundry.ir import types
+from tilefoundry.ir import utils as ir_utils
 
-from .mesh_utils import selection_layout, sub_box
+from .mesh_utils import selection_layout
 
 
 def box_text(parent: types.Mesh, box: tuple[slice, ...], alias: str) -> str:
     pieces: list[str] = []
-    for part, extent in zip(box, types.flatten(parent.layout).shape):
+    for part, extent in zip(box, parent.shape):
         start, stop = part.start, part.stop
         if start == 0 and stop == extent:
             pieces.append(":")
@@ -28,7 +29,7 @@ def box_text(parent: types.Mesh, box: tuple[slice, ...], alias: str) -> str:
 def slice_from_parent(parent: types.Mesh, child: types.Mesh, alias: str) -> str | None:
     if parent.names != child.names:
         return None
-    box = sub_box(parent, child)
+    box = ir_utils.sub_box(parent, child)
     if box is None or parent[box] != child:
         return None
     return box_text(parent, box, alias)
@@ -48,7 +49,7 @@ class PrintContext:
         self.imports: set[str] = set()
         self.dim_declarations: dict[str, tuple[object, str]] = {}
         self.mesh_bindings: list[tuple[types.Mesh, str]] = []
-        self.used_scope_names: set[str] = set()
+        self.used_mesh_names: set[str] = set()
         self.topologies = ()
         self.target = target
         self.value_printer = value_printer
@@ -90,27 +91,27 @@ class PrintContext:
             lines.append("")
         return lines
 
-    def scope_name(self, mesh: types.Mesh, preferred: str | None = None) -> str:
+    def mesh_name(self, mesh: types.Mesh, preferred: str | None = None) -> str:
         base = preferred or (mesh.topologies[0].name if mesh.topologies else "mesh")
         base = base if base.isidentifier() else "mesh"
         name = base
         suffix = 2
-        while name in self.used_scope_names:
+        while name in self.used_mesh_names:
             name = f"{base}_{suffix}"
             suffix += 1
-        self.used_scope_names.add(name)
+        self.used_mesh_names.add(name)
         return name
 
     def push_mesh(self, mesh: types.Mesh, name: str) -> None:
         self.mesh_bindings.append((mesh, name))
-        self.used_scope_names.add(name)
+        self.used_mesh_names.add(name)
 
     def pop_mesh(self) -> None:
         self.mesh_bindings.pop()
 
     @property
-    def current_mesh(self) -> types.Mesh | None:
-        return types.Mesh.from_meshes(*(mesh for mesh, _ in self.mesh_bindings)) if self.mesh_bindings else None
+    def mesh_scope(self) -> types.Mesh | None:
+        return ir_utils.from_meshes(*(mesh for mesh, _ in self.mesh_bindings)) if self.mesh_bindings else None
 
     def mesh_alias(self, mesh: types.Mesh) -> str | None:
         for bound, name in reversed(self.mesh_bindings):
@@ -118,34 +119,29 @@ class PrintContext:
                 return name
         return None
 
-    def mesh_axis_alias(self, mesh: types.Mesh, axis: int) -> str | None:
+    def mesh_axis_alias(self, mesh: types.Mesh, mesh_axis: int) -> str | None:
         """Name one mesh axis through an active scope binding, if one dominates it."""
         names = mesh.names
-        if axis >= len(names):
+        if mesh_axis >= len(names):
             return None
-        target_level, target_name = types.axis_keys(mesh)[axis]
+        target_topology_name, target_name = ir_utils.axis_keys(mesh)[mesh_axis]
         target_topology = next(
-            (topology for topology in mesh.topologies if topology.name == target_level), None
+            (topology for topology in mesh.topologies if topology.name == target_topology_name), None
         )
         for binding_index in range(len(self.mesh_bindings) - 1, -1, -1):
             bound, alias = self.mesh_bindings[binding_index]
             if not bound.names or target_name not in bound.names:
                 continue
-            for bound_level, bound_name in types.axis_keys(bound):
-                if bound_name != target_name or bound_level != target_level:
+            for bound_topology_name, bound_name in ir_utils.axis_keys(bound):
+                if bound_name != target_name or bound_topology_name != target_topology_name:
                     continue
                 bound_topology = next(
-                    topology for topology in bound.topologies if topology.name == target_level
-                )
-                target_geometry = next(
-                    part for part in types.separate(mesh) if part.topologies[0].name == target_level
-                )
-                bound_geometry = next(
-                    part for part in types.separate(bound) if part.topologies[0].name == target_level
+                    topology for topology in bound.topologies if topology.name == target_topology_name
                 )
                 if (
                     target_topology == bound_topology
-                    and target_geometry.layout == bound_geometry.layout
+                    and ir_utils.topology_mesh(mesh, target_topology_name).layout
+                    == ir_utils.topology_mesh(bound, target_topology_name).layout
                 ):
                     return f"{alias}.{bound_name}"
         return None
@@ -166,7 +162,7 @@ class PrintContext:
             layout = selection_layout(mesh, parent)
             if layout is not None:
                 return alias, layout
-            box = sub_box(parent, mesh)
+            box = ir_utils.sub_box(parent, mesh)
             if box is None:
                 continue
             selection = parent[box]
@@ -190,9 +186,9 @@ class TirPrintContext(PrintContext):
         self.reserved_names = set()
         self.valuation = None
 
-    def bind_function(self, frame, target) -> None:
-        """Take the call-path frame and target of the PrimFunction about to print."""
-        self.valuation = frame
+    def bind_function(self, ctx, target) -> None:
+        """Take the call-path context and target of the PrimFunction about to print."""
+        self.valuation = ctx
         self.target = target
 
     @contextmanager
@@ -202,8 +198,8 @@ class TirPrintContext(PrintContext):
         Imports stay file-wide; mesh bindings and allocated names belong to this
         definition. A generated suffix cannot consume a later authored name.
         """
-        previous = self.mesh_bindings, self.used_scope_names, self.binding_names, self.reserved_names
-        self.mesh_bindings, self.used_scope_names = [], set()
+        previous = self.mesh_bindings, self.used_mesh_names, self.binding_names, self.reserved_names
+        self.mesh_bindings, self.used_mesh_names = [], set()
         self.binding_names = {}
         self.reserved_names = {
             binding.name for binding in bindings
@@ -214,7 +210,7 @@ class TirPrintContext(PrintContext):
                 self.binding_name(binding)
             yield
         finally:
-            self.mesh_bindings, self.used_scope_names, self.binding_names, self.reserved_names = previous
+            self.mesh_bindings, self.used_mesh_names, self.binding_names, self.reserved_names = previous
 
     def binding_name(self, binding) -> str:
         known = self.binding_names.get(id(binding))
@@ -222,12 +218,12 @@ class TirPrintContext(PrintContext):
             return known
         base = identifier(binding.name)
         name, suffix = base, 2
-        while name in self.used_scope_names or (
+        while name in self.used_mesh_names or (
             name in self.reserved_names and name != binding.name
         ):
             name = f"{base}_{suffix}"
             suffix += 1
-        self.used_scope_names.add(name)
+        self.used_mesh_names.add(name)
         self.binding_names[id(binding)] = name
         return name
 

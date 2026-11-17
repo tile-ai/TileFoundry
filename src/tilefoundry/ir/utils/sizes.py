@@ -9,7 +9,7 @@ from tilefoundry.ir import expr, types
 from .bounds import upper_bound
 from .leaves import tensor_types
 
-__all__ = ["bytes_by_storage", "numel", "shape_runtime_total", "tensor_bytes", "topology_extent"]
+__all__ = ["bytes_by_storage", "numel", "shape_runtime_total", "tensor_bytes"]
 
 
 def numel(type: types.Type) -> int:
@@ -60,25 +60,6 @@ def bytes_by_storage(type: types.Type, *, umat_level: str | None = None) -> dict
             memory_level = str(tensor.storage)
         result[memory_level] = result.get(memory_level, 0) + tensor_bytes(tensor)
     return result
-
-
-def topology_extent(type: types.Type, name: str) -> int | None:
-    """The one logical extent *type* states for topology *name*, if any."""
-    extents: set[int] = set()
-    for tensor in tensor_types(type):
-        layout = types.shard_layout_of(tensor.layout)
-        if layout is None:
-            continue
-        names = tuple(topology.name for topology in layout.mesh.topologies)
-        if len(names) != 1 or names[0] != name:
-            continue
-        count = types.size(types.flatten(layout.mesh.layout))
-        if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
-            raise ValueError(f"topology_extent: {name!r} needs a positive static layout size")
-        extents.add(count)
-    if len(extents) > 1:
-        raise ValueError(f"one value references conflicting {name!r} extents {sorted(extents)}")
-    return next(iter(extents), None)
 
 
 def shape_runtime_total(shape, dim_var_expr: dict[str, str]) -> object:

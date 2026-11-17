@@ -21,7 +21,7 @@ class AnalyzeContext(typeinfer.TypeInferContext):
     scope: IterationScope | None = None
     definitions: dict[int, IterationScope] = field(default_factory=dict)
     caller_context: AnalyzeContext | None = field(default=None, repr=False)
-    topology_level: str | None = None
+    topology: str | None = None
 
     def bind_scope(self, scope):
         """Make *scope* the one this context answers queries from."""
@@ -31,12 +31,12 @@ class AnalyzeContext(typeinfer.TypeInferContext):
         return expr.type
 
     def local_type_of(self, expr):
-        if self.topology_level is None:
+        if self.topology is None:
             return expr.type
-        key = ("analysis_local", id(expr), self.topology_level, self.topologies)
+        key = ("analysis_local", id(expr), self.topology, self.topologies)
         if key not in self.instantiated_memo:
             self.instantiated_memo[key] = ir_utils.local_type_of(
-                expr.type, topology_level=self.topology_level, topologies=self.topologies
+                expr.type, topology=self.topology, topologies=self.topologies
             )
         return self.instantiated_memo[key]
 
@@ -51,12 +51,12 @@ class AnalyzeContext(typeinfer.TypeInferContext):
 
     def enter_call(self, call):
         inner = super().enter_call(call)
-        frame = inner.callee_context()
-        if frame is not None:
-            arguments, instance = inner.call_bindings(frame)
+        ctx = inner.callee_context()
+        if ctx is not None:
+            arguments, instance = inner.call_bindings(ctx)
             self.scope.attach(
                 call_site=call,
-                callee=self.definitions[id(frame.function)],
+                callee=self.definitions[id(ctx.function)],
                 arguments=arguments,
                 instance=instance,
             )
@@ -66,10 +66,10 @@ class AnalyzeContext(typeinfer.TypeInferContext):
     def callee_scope(self):
         return self.scope.attachment(self.call_site)
 
-    def call_bindings(self, frame):
+    def call_bindings(self, ctx):
         """Prepare arguments and instance coordinates for the visitor's explicit attach."""
         target = self.call_site.target
-        formals = tuple(p for p in frame.function.params if not (target.name is None and p.is_const))
+        formals = tuple(p for p in ctx.function.params if not (target.name is None and p.is_const))
         actuals = target.arguments(self.call_site.args)
         arguments = {id(p): arg for p, arg in zip(formals, actuals, strict=True)}
         if not target.path:

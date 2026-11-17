@@ -37,7 +37,7 @@ def shape_upper_bound(shape) -> tuple[int, ...]:
 def register_strides(sl: types.ShardLayout) -> tuple[int, ...]:
     """``sl``'s strides as steps on a *register* engine, not on a shared buffer.
 
-    Registers are the distinct-engine-per-instance case of [shard
+    Registers are the distinct-engine-per-unit case of [shard
     §7.1.2](docs/spec/shard.md#712-layoutstrides): a ``Split(k)`` axis gets
     ``0``, so the projection offsets no instance along it, and the rest get
     the array's own compact steps, assigned from smallest to largest stated
@@ -46,13 +46,7 @@ def register_strides(sl: types.ShardLayout) -> tuple[int, ...]:
     """
     local = types.shard_layout_local_shape(sl, require_static=False)
     split_axes = {int(a.axis) for a in sl.attrs if isinstance(a, types.Split)}
-    physical = types.flatten(sl.layout)
-    order = sorted(range(len(local)), key=lambda axis: int(upper_bound(physical.strides[axis])))
-    strides: list[int] = [0] * len(local)
-    step = 1
-    for axis in order:
-        width = int(upper_bound(local[axis]))
-        if axis not in split_axes and width != 1:
-            strides[axis] = step
-            step *= width
-    return tuple(strides)
+    physical = types.flatten(types.plain_layout(sl.layout))
+    ranked = sorted(range(len(local)), key=lambda axis: int(upper_bound(physical.strides[axis])))
+    widths = tuple(1 if axis in split_axes else int(upper_bound(local[axis])) for axis in range(len(local)))
+    return types.compact_order(widths, tuple(map(ranked.index, range(len(local)))))

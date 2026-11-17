@@ -41,11 +41,11 @@ def _matmul_records(
     """Both halves of each occurrence's MatMul record."""
     records = []
 
-    def visit(frame):
-        for node in core.collect_exprs(frame.function.body):
+    def visit(ctx):
+        for node in core.collect_exprs(ctx.function.body):
             if not isinstance(node, expr.Call):
                 continue
-            child = frame.callee_context(node)
+            child = ctx.callee_context(node)
             if child is not None:
                 visit(child)
             elif isinstance(node.target, nn.MatMul):
@@ -227,8 +227,8 @@ class MoEMegaKernelBranches(CrossModuleCase):
         expected = {"routed_expert": ((120,), 0), "shared_expert": ((12,), 120)}
         reached = {
             fn.name: _placed_primitives(fn)
-            for frame in valuation.collect_functions(analysis.check_program(state, state.entry_function())[0]).values()
-            for fn in (frame.function,)
+            for ctx in valuation.collect_functions(analysis.check_program(state, state.entry_function())[0]).values()
+            for fn in (ctx.function,)
         }
 
         for branch, (shape, offset) in expected.items():
@@ -326,12 +326,12 @@ def test_retained_calls_match_acceptance_values(
     assert moved.traffic.storage.of("gmem").total.total_bytes == traffic
     assert (region.peak_bytes, region.persistent_bytes) == (peak, persistent)
     assert len(result.functions) == 2
-    frames = tuple(valuation.definitions(valuation.Context(result.module, result.function)))
+    contexts = tuple(valuation.definitions(valuation.Context(result.module, result.function)))
     sites = [
         (call, child)
-        for frame in frames
-        for call in core.collect_exprs(frame.function.body)
-        if isinstance(call, expr.Call) and (child := frame.callee_context(call)) is not None
+        for ctx in contexts
+        for call in core.collect_exprs(ctx.function.body)
+        if isinstance(call, expr.Call) and (child := ctx.callee_context(call)) is not None
     ]
     assert len(sites) == occurrences
     if kind == "stacked":
@@ -350,7 +350,7 @@ def test_derived_size_ignores_instance_count():
     for count in (3, 28):
         root = _stacked_program(count)
         checked, function = analysis.check_program(root, root.entry_function())
-        functions = tuple(frame.function for frame in valuation.collect_functions(checked).values())
+        functions = tuple(ctx.function for ctx in valuation.collect_functions(checked).values())
         sizes.append((sum(len(core.collect_exprs(body.body)) for body in functions), len(functions)))
         assert sum(isinstance(node, core.LoopRegion) for node in core.collect_exprs(function.body)) == 1
         with pytest.raises(analysis.Error, match="derived body nodes.*node budget"):
@@ -366,7 +366,7 @@ def test_qwen_stack_shares_layer_definition():
     root = QWEN_CASE.build()
     checked, _function = analysis.check_program(root, root.lookup("decoder_layer"), dims={"ctx_len": 128})
     assert (
-        sum(len(core.collect_exprs(frame.function.body)) for frame in valuation.collect_functions(checked).values())
+        sum(len(core.collect_exprs(ctx.function.body)) for ctx in valuation.collect_functions(checked).values())
         <= 10_000
     )
 
@@ -489,12 +489,12 @@ def test_repeated_callee_shares_placement():
         and node.type.storage is StorageKind.SMEM
     ]
     assert len(temporaries) == 2
-    frame = valuation.Context(analyzed.module, analyzed.function)
+    ctx = valuation.Context(analyzed.module, analyzed.function)
     calls = [
         child
         for node in core.collect_exprs(analyzed.function.body)
         if isinstance(node, expr.Call)
-        and (child := frame.callee_context(node)) is not None
+        and (child := ctx.callee_context(node)) is not None
         and child.function is derived
     ]
     assert len(calls) == 2
@@ -570,11 +570,11 @@ def test_callee_alias_placement_agrees():
     )
     analyzed = analysis.analyze(*analysis.check_program(root, function), analysis="memory")
     derived = next(fn for fn in analyzed.functions if fn.name == "helper")
-    frame = valuation.Context(analyzed.module, analyzed.function)
+    ctx = valuation.Context(analyzed.module, analyzed.function)
     reached = [
         child.function
         for node in core.collect_exprs(analyzed.function.body)
-        if isinstance(node, expr.Call) and (child := frame.callee_context(node)) is not None
+        if isinstance(node, expr.Call) and (child := ctx.callee_context(node)) is not None
     ]
     assert reached == [derived, derived]
     buffers = [

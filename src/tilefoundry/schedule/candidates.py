@@ -27,16 +27,16 @@ def candidates(
     """Report instructions for a program ``check_program`` returned."""
     tgt = module.resolve_target()
     contexts = {}
-    frames = tuple(valuation.definitions(valuation.Context(module, entry)))
-    for frame in frames:
-        mesh = expr.get_metadata(frame.function, analysis.ExecutionMeshMetadata)
+    definition_contexts = tuple(valuation.definitions(valuation.Context(module, entry)))
+    for ctx in definition_contexts:
+        mesh = expr.get_metadata(ctx.function, analysis.ExecutionMeshMetadata)
         contexts.update(
             valuation.index_contexts(
-                frame.function,
+                ctx.function,
                 typeinfer.TypeInferContext(
-                    module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies,
-                    owner=frame.function,
-                    current_mesh=None if mesh is None else mesh.mesh,
+                    module=ctx.module, function=ctx.function, target=ctx.target, topologies=ctx.topologies,
+                    owner=ctx.function,
+                    mesh_scope=None if mesh is None else mesh.mesh,
                 ),
             )
         )
@@ -45,7 +45,7 @@ def candidates(
     pattern_printer = inspection.PatternPrinter()
     rows = []
     calls = []
-    for call in (call for frame in frames for call in core.collect_exprs(frame.function.body)):
+    for call in (call for ctx in definition_contexts for call in core.collect_exprs(ctx.function.body)):
         if (
             not isinstance(call, expr.Call)
             or expr.is_dim_op_call(call)
@@ -58,9 +58,9 @@ def candidates(
         if call.type.storage is expr.StorageKind.UMAT and call.type.shape == ():
             continue
         calls.append(call)
-        context = contexts[id(call)]
-        frame, mesh = context, context.current_mesh
-        level = None if mesh is None else mesh.topologies[-1].name
+        ctx = contexts[id(call)]
+        mesh = ctx.mesh_scope
+        topology = None if mesh is None else mesh.topologies[-1].name
         usable, refused = [], []
         for op_type, capability in declared:
             if op_type not in instructions:
@@ -73,7 +73,7 @@ def candidates(
                     if capability.attribute is not None:
                         attributes[capability.attribute] = capability.declaration
                     try:
-                        instances.extend(hir.schedule.match_instruction(op_type, attributes, type_list, mesh, frame=frame))
+                        instances.extend(hir.schedule.match_instruction(op_type, attributes, type_list, mesh, ctx=ctx))
                     except (schedule.RefusalError, ValueError, TypeError) as error:
                         rejection = error
                 if not instances:
@@ -104,7 +104,7 @@ def candidates(
             {
                 "line": expr.value_label(call) or expr.schema_of(type(call.target)).name,
                 "op": expr.get_registered_name(call.target),
-                "scope": "whole program" if level is None else f"per {level}",
+                "scope": "whole program" if topology is None else f"per {topology}",
                 "operands": operands,
                 "candidates": usable,
                 "refused": refused,

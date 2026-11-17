@@ -2,18 +2,19 @@
 
 The derived-visitor pattern: every `analysis` / `verify` / `codegen` walker is
 one template, **base visitor + custom Context + per-class registry**. This spec
-defines the template, the generic `Registry` every instance is built on, and the
-instances (`typeinfer` / `verify` / `codegen` / `cost`, with the access-relation
-and evaluator registries beside them). Each registry is owned by one interface
-package under `tilefoundry.interfaces` (the code-generation registry by
-`tilefoundry.codegen`); a key with no entry raises `MissingHandlerError` where
-it is looked up ([§3.1](#31-registry-instances)).
+defines the template and the generic `Registry`. Every instance is built on the
+generic one. The instances are `typeinfer` / `verify` / `codegen` / `cost`, with
+the access-relation and evaluator registries beside them. One interface
+package under `tilefoundry.interfaces` owns each registry. The package
+`tilefoundry.codegen` owns the code-generation registry. A key with no entry
+raises `MissingHandlerError` where it is looked up
+([§3.1](#31-registry-instances)).
 
 The split:
 
 - **`typeinfer`** dispatches on any Expr-producing `Op`'s `Call` —
   HIR value Ops plus TIR-owned Expr Ops (`tir.memory.{AllocTensor,PtrOf,Span,
-  TensorView}`) and the unit-typed TIR effect Ops. It
+  TensorView}`) and the TIR effect Ops with a void result. It
   fills / refreshes `Expr.type`.
 - **`verify`** dispatches on TIR `Stmt` (control-flow / binding /
   `Evaluate`) plus cross-function invariants (`Evaluate(FunctionRef)`
@@ -116,15 +117,15 @@ class alongside the other two things the answer depends on
 
 | Instance | Op-branch handler | Stmt-branch handler | Notes |
 |---|---|---|---|
-| **typeinfer** | `(Call, TypeInferContext) -> Type` | — | Call result typing, including `UnitType` for effect Ops |
+| **typeinfer** | `(Call, TypeInferContext) -> Type` | — | Call result typing, including `TupleType.Void` for effect Ops |
 | **verify** | — | `(Stmt, verify.Context) -> None` | Effect-side constraints; for `Evaluate(op, args)`, dispatch keys on the Op class — see [§5](#5-instance-2--verify) |
 | **codegen** | `(Call, EmitContext) -> str` | `(Stmt, EmitContext) -> None` | Both sides are emitted; the key also carries the target and the position — see [§6](#6-instance-3--codegen) |
 | **cost** | `(Call, cost.Context) -> Cost` | `(Stmt, cost.Context) -> Cost` (optional) | Recursive-local logical work |
 
-Generic control-flow / binding Stmts (`For` / `If` / `While` / `LetStmt` /
-`Sequential` / `MeshScope` / `Return`) are recursed by the visitor base's
-`generic_visit`; the verifier's program visitor has a dedicated method for each
-of them and `Evaluate`, and requires a registry entry for any other Stmt
+The visitor base's `generic_visit` recurses the generic control-flow / binding
+Stmts (`For` / `If` / `While` / `LetStmt` / `Sequential` / `MeshScope` /
+`Return`). The verifier's program visitor has a dedicated method for each of
+them and `Evaluate`. It requires a registry entry for any other Stmt
 ([§5](#5-instance-2--verify)). Their semantic rules are owned by
 [tir](./tir.md) / [hir](./hir.md).
 
@@ -153,24 +154,25 @@ class Registry[Key, Value]:
 
 - constraints:
   - `register` MUST raise `RuntimeError` on a second registration of the same
-    key; subclasses do not inherit a parent's handler, so each concrete
-    `Op` / `Stmt` subclass registers itself.
+    key. Subclasses do not inherit a parent's handler. A concrete
+    `Op` / `Stmt` subclass that needs a handler MUST register its own handler.
   - `decorator` returns the `register(key)` decorator form for a registry keyed
     by a class alone. An instance with a wider key states its own registration
     function ([§6](#6-instance-3--codegen)).
-  - `require` returns the entry, or raises `MissingHandlerError` naming the
-    registry and the whole key; a caller for which a miss is an error MUST use
-    it. `get` takes its default as a required argument, so a legal miss states
-    its answer where it is asked. There is no implicit `None`:
-    the verifier's visitor and `cost.Visitor` take `get`, and a typeinfer or evaluator
+  - `require` returns the entry. It raises `MissingHandlerError` naming the
+    registry and the whole key. A caller for which a miss is an error MUST use
+    this method.
+  - `get` takes its default as a required argument, so a legal miss states
+    its answer where it is asked. There is no implicit `None`.
+    The verifier's visitor and `cost.Visitor` take `get`. A typeinfer or evaluator
     miss reaches `ctx.error` or `EvalError` naming the Op.
 
 ### 3.1 Registry instances
 
 Each registry is a module-level `Registry` owned by one package, which also
-exports its registration function. A registry is declared where its question is
-answered and a handler is registered where its key is owned
-([code-organization §0.3](./code-organization.md#03-structure-rules)); no
+exports its registration function. Declare a registry where its question is
+answered. Register a handler where its key is owned
+([develop Functions](../develop.md#functions)). No
 registry lives in a package that depends on the Ops it dispatches.
 
 | Registry | Key | Handler | Owner |
@@ -209,29 +211,30 @@ def _(call: Call, ctx: cost.Context) -> Cost: ...
 - constraints:
   - `tilefoundry/bootstrap.py`, imported by `tilefoundry/__init__.py`, imports
     the packages that register implementations and calls `target.load()`. A key
-    with no entry raises `MissingHandlerError` where it is looked up; the tests
-    cover the typeinfer rule of every `tf` and `T` Op and the evaluator, cost and
-    access rules of every `tf` Op. A verify rule is optional by design
-    ([§5](#5-instance-2--verify)), a codegen key exists only for the targets that
-    emit the node ([§6](#6-instance-3--codegen)), and most Ops alias no operand.
+    with no entry raises `MissingHandlerError` where it is looked up. The tests
+    cover the typeinfer rule of every `tf` and `T` Op. They also cover the
+    evaluator, cost and access rules of every `tf` Op. A verify rule is optional
+    by design ([§5](#5-instance-2--verify)). A codegen key exists only for the
+    targets that emit the node ([§6](#6-instance-3--codegen)). Most Ops alias no
+    operand.
   - The `evaluator` registry holds the reference semantics of HIR Ops and of the
     TIR Ops a `tf.schedule` selects
-    ([evaluator §3](./evaluator.md#3-the-evaluator-registry-and-the-eval-context));
-    the two kinds are distinct classes, so they never share a key.
+    ([evaluator §3](./evaluator.md#3-the-evaluator-registry-and-the-eval-context)).
+    The two kinds are distinct classes, so they never share a key.
 
 ### 3.2 Services
 
 A lower layer that needs an implementation living above it calls a service
-function. The function is declared in `tilefoundry.services`, which sits at the
-bottom of the layer order and imports no IR; the implementing package registers
-its implementation at import, keyed by the function itself.
+function. The function is declared in `tilefoundry.services`. That package sits
+at the bottom of the layer order and imports no IR. The implementing package
+registers its implementation at import, keyed by the function itself.
 
 ```python
 def evaluate(target: object, *args: object, context: object | None = None) -> object: ...
 def prepare(module: object, raw: object, out_dir: str, *, device: str = "cpu") -> None: ...
 def render(expr: object) -> str: ...
 def report_json(result: object) -> str: ...
-def verify_call(op: object, args: tuple, mesh: object, *, frame: object) -> None: ...
+def verify_call(op: object, args: tuple, mesh: object, *, ctx: object) -> None: ...
 def describe_refusal(instruction: str, path: tuple, reason: object) -> str: ...
 def refusal_reason(refusal: object, parameter: str | None) -> object: ...
 def builtin_analyzer(selector: str) -> object: ...
@@ -244,24 +247,29 @@ def converter(base: object, weight_name: str) -> object: ...
 
 - constraints:
   - A service function MUST resolve its implementation through
-    `services.registry.require(<the function>)`; calling one that nothing
-    implements raises `MissingHandlerError`.
-  - The implementations are: `evaluate` in `interfaces/evaluator`
-    ([evaluator §2](./evaluator.md#2-parameters-and-inputs)); `prepare` in
-    `runtime/prepare.py`; `render` in the TIR printer of `inspection`;
-    `report_json`, the report data of one `analysis.Result` as JSON text, in the
-    analysis report of `inspection`, so `analyze` can write `analysis.json`
-    without importing `inspection`; `describe_refusal` and `refusal_reason` in the pattern printer of
-    `inspection`; `verify_call` in `interfaces/schedule`, which turns a
-    `schedule.RefusalError` into a `VerifyError`; `builtin_analyzer` in
-    `analysis/registry.py`; `simplify_dim` in `ir/dim/simplify.py`;
-    `normalize_dim` and `dim_range` in `ir/dim/isl_interop.py`.
+    `services.registry.require(<the function>)`. A call to a function that
+    nothing implements raises `MissingHandlerError`.
+  - The implementations are:
+    - `evaluate` in `interfaces/evaluator`
+      ([evaluator §2](./evaluator.md#2-parameters-and-inputs)).
+    - `prepare` in `runtime/prepare.py`.
+    - `render` in the TIR printer of `inspection`.
+    - `report_json` in the analysis report of `inspection`. It returns the report
+      data of one `analysis.Result` as JSON text. So `analyze` can write
+      `analysis.json` without importing `inspection`.
+    - `describe_refusal` and `refusal_reason` in the pattern printer of
+      `inspection`.
+    - `verify_call` in `interfaces/schedule`. It turns a
+      `schedule.RefusalError` into a `VerifyError`.
+    - `builtin_analyzer` in `analysis/registry.py`.
+    - `simplify_dim` in `ir/dim/simplify.py`.
+    - `normalize_dim` and `dim_range` in `ir/dim/isl_interop.py`.
   - `Function.__call__`, `Module.__call__` and `core.LoadedModule.__call__` call
     `services.evaluate`, and `Module.prepare` calls `services.prepare`, so
     `ir/core` evaluates and prepares without importing the layers above it.
   - `Function.specialize`, `PrimFunction.specialize` and `Function.converter`
-    call `services.specialize` and `services.converter`, which `parser` implements
-    (the decorators that parse a variant or a weight converter), so `ir/core`
+    call `services.specialize` and `services.converter`. `parser` implements
+    them as the decorators that parse a variant or a weight converter. So `ir/core`
     declares the authoring methods without importing `parser`.
 
 ## 4. Instance 1 — `typeinfer`
@@ -281,7 +289,7 @@ class Context:
     target: Target | None = None
     topologies: tuple[Topology, ...] | None = None
     caller_context: valuation.Context | None = None
-    current_mesh: Mesh | None = None
+    mesh_scope: Mesh | None = None
     loops: tuple[tuple[Expr, object, object, object], ...] = ()
     loop_aliases: dict[int, Expr] = field(default_factory=dict)
     call_site: Call | None = None
@@ -297,7 +305,7 @@ class Context:
     def capture_root(self, expr: Expr) -> Expr: ...
     def ancestors(self) -> Iterator[valuation.Context]: ...
     def enclosing_meshes(self) -> tuple[Mesh, ...]: ...
-    def enclosing_mesh(self) -> Mesh | None: ...
+    def innermost_mesh(self) -> Mesh | None: ...
     def resolve_target(self) -> Target | None: ...
 
 
@@ -336,15 +344,15 @@ Lexical parent links and caller links MUST remain distinct.
   - `enter_region` returns a context whose `owner` is the region and whose
     `parent` is the outer context. An HIR `LoopRegion` or `MeshRegion` records
     its captures; a `LoopRegion` appends to `loops`. A `MeshRegion` or TIR
-    `MeshScope` composes its mesh into `current_mesh`. A TIR `For` only enters
-    the lexical region chain: `loops`, `loop_aliases`, and `current_mesh` stay
+    `MeshScope` composes its mesh into `mesh_scope`. A TIR `For` only enters
+    the lexical region chain: `loops`, `loop_aliases`, and `mesh_scope` stay
     unchanged.
   - `ancestors()` yields contexts from the innermost to the definition root.
     `enclosing_meshes()` returns the mesh of each `MeshRegion` or `MeshScope`
     owner in that chain, outermost first. When the chain has none, it returns
-    `(current_mesh,)`, the definition's external mesh, or `()` when that is
-    `None`; an authored mesh is not prefixed with the external one.
-    `enclosing_mesh()` is the last element of `enclosing_meshes()`, or `None`.
+    `(mesh_scope,)`, the definition's external mesh. It returns `()` when that
+    is `None`. An authored mesh is not prefixed with the external one.
+    `innermost_mesh()` is the last element of `enclosing_meshes()`, or `None`.
 
 `valuation.Context` carries the current Module, function, effective target, and
 whole topology hierarchy directly. A shared definition carries no parent or
@@ -355,12 +363,12 @@ inherited execution context ([core-ir §1](./core-ir.md#1-module)).
     `call_site` identifies the Call.
     Shared call resolution MUST implement [core-ir §2.1](./core-ir.md#21-call).
     An Op call has no called environment; a `FunctionRef` call requires the
-    frame's Module ([core-ir §1.4](./core-ir.md#14-function-references)).
+    context's Module ([core-ir §1.4](./core-ir.md#14-function-references)).
     `valuation.definitions(context, postorder=False)` visits reached HIR
     definitions once through the shared dispatch; postorder visits dependencies
     before callers. Ordinary Call visits do not enter the called body.
   - Crossing a Function boundary uses `dataclasses.replace` so a context
-    subclass retains its analysis-specific state. It also retains `current_mesh`:
+    subclass retains its analysis-specific state. It also retains `mesh_scope`:
     a callee inherits the call site's mesh, and a region in its body composes
     with it using the usual nested-region rules.
   - `resolve_target` MUST return the context's effective Target, or
@@ -375,13 +383,14 @@ inherited execution context ([core-ir §1](./core-ir.md#1-module)).
     Module execution context. Crossing a Function
     boundary MUST preserve the same table object. It stores Types only and never introduces
     a derived Function into the IR.
-  - `TypeInferContext.type_of` only looks up `memo`: a type stored on the node
-    by an earlier walk is never an input, and a value this inference has not
+  - `TypeInferContext.type_of` only looks up `memo`. A type stored on the node
+    by an earlier walk is never an input. A value this inference has not
     visited or bound is an error through `ctx.error`. It never starts a
     traversal or infers a type on demand. Only a caller that runs a typeinfer
-    rule itself binds that rule's inputs in `memo`. A shared access relation
-    asks the context it is given: inference passes its own, and code that reads
-    typed IR passes its stage's context (analysis its `AnalyzeContext`).
+    rule itself binds that rule's inputs in `memo`.
+  - A shared access relation asks the context it is given. Inference passes its
+    own context. Code that reads typed IR passes its stage's context (analysis
+    its `AnalyzeContext`).
   - `verify.Context.type_of` and `cost.Context.type_of` read IR that is already
     typed, so they return `expr.type`; `cost.Context` reads a selected type
     first.
@@ -397,8 +406,8 @@ def register(cls: type, *, target: type[Target] | None = None) -> Callable[[Call
 
 - constraints:
   - handler signature is `(call: Call, ctx: TypeInferContext) -> Type | TypeInferResults`.
-  - Without `target` a handler is keyed by its Op class and answers everywhere;
-    with `target` it is keyed `(target, op_cls)` and answers only where
+  - Without `target` a handler is keyed by its Op class and answers everywhere.
+    With `target` it is keyed `(target, op_cls)`. It answers only where
     `ctx.resolve_target()` is of that Target type.
     A bare `Type` states no value range; `register` normalizes it to
     `TypeInferResults(type)` without changing the other registries.
@@ -438,26 +447,26 @@ def inference_type(expr: Expr, ctx: TypeInferContext | None = None, *, ranges=Fa
     `(type(ctx.resolve_target()), type(target))` first, then
     `typeinfer.registry` by `type(target)`; an Op with neither entry routes
     through `ctx.error`. Handlers read operand types through `ctx.type_of`, which sees
-    the current scope's memo bindings. A `Function` binds parameters into a new visitor memo and walks
-    its body in a replaced child context ([hir §1.1](./hir.md#11-function)); repeated calls to the same
-    callee with equal argument types and call-site mesh scopes reuse the result
-    in `instantiated_memo`.
+    the current scope's memo bindings. A `Function` binds parameters into a new visitor memo.
+    It walks its body in a replaced child context ([hir §1.1](./hir.md#11-function)).
+    Repeated calls to the same callee with equal argument types and call-site
+    mesh scopes reuse the result in `instantiated_memo`.
   - `visit_leaf_Tuple` derives a structural `TupleType` directly from its
     already-derived operands, never the Tuple node's stamped `.type`.
   - `visit_LoopRegion` and `visit_MeshRegion` derive all `args` outside the
-    region, verify isolation, and bind each parameter to its argument's type; a
+    region, verify isolation, and bind each parameter to its argument's type. A
     type stored on a parameter is never read as a constraint. An owning visitor
     stores that type on every parameter, including captures the body does not
     read; a non-owning one stores nothing.
-  - `visit_LoopRegion` rejects more yields than parameters, seeds a new visitor
-    with induction and all entry bindings, visits body and yields once, and
+  - `visit_LoopRegion` rejects more yields than parameters. It seeds a new visitor
+    with induction and all entry bindings. It visits body and yields once. It
     checks each yield with `types_compatible(entry_type, yield_type)`. The
     result is the carried entry types ([hir §1.2](./hir.md#12-loopregion)). It
     overrides the complete node visit; the base has no per-kind operand hook.
   - `visit_MeshRegion` composes the region mesh with the enclosing HIR
-    `current_mesh`, checks the resulting topology, and visits the body with a
+    `mesh_scope` and checks the resulting topology. It visits the body with a
     new visitor seeded from the region's entry bindings, in a replaced child
-    context, so a rule reading `ctx.type_of` inside the body sees the types
+    context. So a rule reading `ctx.type_of` inside the body sees the types
     derived in it. The region result type is the body's type.
   - `visit_leaf_ShapeOf` returns the node's declared rank-0 i32 type.
   - `inference_type` creates a fresh non-owning visitor and returns the inferred
@@ -475,11 +484,11 @@ The visitor and its context share the current scope's memo;
 
 ### 4.1 Access relation service — `access_relation`
 
-One registry over the Op classes says where each Op reads and writes, and every
-reader asks it. Typeinfer asks it to derive the result's Type, the loop
-footprint asks it for the bytes one authored loop touches, and the movement
-family asks it how much crossed each boundary. There is no second registry and
-no fallback: a boundary nobody can price is a boundary nobody can measure.
+One registry over the Op classes says where each Op reads and writes. Every
+reader asks it. Typeinfer asks it to derive the result's Type. The loop
+footprint asks it for the bytes one authored loop touches. The movement family
+asks it how much crossed each boundary. There is no second registry and no
+fallback. A boundary nobody can price is a boundary nobody can measure.
 
 ```python
 # tilefoundry.interfaces.access
@@ -514,76 +523,77 @@ def register_relation(op_cls: type) -> Callable[[Callable], Callable]: ...
 
 - constraints:
   - A handler has the shape `(call, ctx) -> tuple[access.Relation, ...]`. It MUST NOT read
-    the Call's own Type: typeinfer asks it in order to derive that Type, so a
-    handler that asked back would be asking for its own answer. It MAY read its
+    the Call's own Type. Typeinfer asks the handler to derive that Type, so a
+    handler that asked back would ask for its own answer. It MAY read its
     operands' Types, its Op's attributes, and the values its parameters bind.
-  - `access.Relation` is the only carrier, and an Op's relations are one flat
-    tuple of them with no record around it. A boundary MUST NOT be a bare
-    `isl.map` or `isl.multi_aff`: those say where a boundary reaches and nothing
+  - `access.Relation` is the only carrier. An Op's relations are one flat
+    tuple of them, with no record around it. A boundary MUST NOT be a bare
+    `isl.map` or `isl.multi_aff`. Those say where a boundary reaches and nothing
     about what its parameters stand for, so whoever restricts one guesses.
     `relations_of` MUST refuse a handler answer that is not a tuple of
-    `access.Relation`, and every helper that builds a boundary hands one over
+    `access.Relation`. Every helper that builds a boundary hands one over
     already stated. A function handed to `access.Relation` is kept as the
     relation it is.
   - When `access.Relation.may_access` is True, each coordinate accesses one
-    element of its image, chosen by data. Whether the boundary reads or writes
-    is determined by its position in the tuple. `reached_elements` MUST count
-    at most one element per coordinate, taking the minimum of the image size
+    element of its image, chosen by data. The position of a boundary in the
+    tuple determines whether it reads or writes. `reached_elements` MUST count
+    at most one element per coordinate. It takes the minimum of the image size
     and the coordinate count.
   - Every `access.Relation.relation` is a relation from the Op's **whole
-    iteration space** to the coordinates that boundary reaches, stated in the
-    axes the value was written in. Every boundary of one Op shares that space; a
-    boundary MAY be partial in it, which is one relation empty somewhere rather
-    than a second space. There is no separate domain field: what an Op walks is
-    the union of its boundary domains.
+    iteration space** to the coordinates that boundary reaches. It is stated in
+    the axes the value was written in. Every boundary of one Op shares that
+    space. A boundary MAY be partial in that space. A partial boundary is one
+    relation empty somewhere, not a second space. There is no separate domain
+    field. What an Op walks is the union of its boundary domains.
   - A coordinate an Op only learns at run time is a **parameter** of the
-    relation, mapped in `values` with the operand element or dimension it is,
-    so whoever restricts the relation binds it rather than guessing. A
-    parameter nobody binds is a hole and MUST be refused; one name MUST be one
-    value across the whole Op, and collecting an Op's `values` MUST refuse a
+    relation. `values` maps it to the operand element or dimension it is.
+    Whoever restricts the relation binds the parameter and does not guess. A
+    parameter nobody binds is a hole and MUST be refused. One name MUST be one
+    value across the whole Op. Collecting an Op's `values` MUST refuse a
     name bound to two values. A handler MAY name each boundary's parameters on
-    its own; `iterating` MUST first rename them by object identity, so one value
-    is one name and two values are two, equating and merging two names one
-    boundary gives one value, without a rename capturing another name. A value
-    that cannot keep its name gets a fresh `p<number>` that no parameter and no
-    coordinate of the Op uses. Renaming MUST return new relations and leave the
-    stated ones, and their `values`, as they were, since one relation can be
-    reused by another Op. A relation composed or restricted from others MUST
-    carry exactly the parameters it names, taken from those `values`; the
-    caller that composes it picks them, and construction refuses a parameter
-    left without one.
+    its own. `iterating` MUST first rename them by object identity. The rename
+    gives one value one name and two values two names. It equates and merges two
+    names that one boundary gives to one value. No rename captures another name.
+    A value that cannot keep its name gets a fresh `p<number>` that no parameter
+    and no coordinate of the Op uses. Renaming MUST return new relations. It
+    MUST leave the stated ones, and their `values`, as they were. One relation
+    can be reused by another Op. A relation composed or restricted from others
+    MUST carry exactly the parameters it names, taken from those `values`. The
+    caller that composes it picks them. Construction refuses a parameter left
+    without one.
   - The tuple has one relation per argument, in argument order, and then one
-    per result: one for a single value, one per field of a `TupleType` result,
-    in field order. Position is the only record of where the arguments end, so
-    a reader that holds the Call takes the first `len(call.args)` as the
-    arguments' and the rest as the result's; a reader without a Call is handed
-    that count by its caller. Before any Type is derived, construction holds
-    parameter closure, `iterating` the shared iteration arity, and
-    `relations_of` the tuple form and at least one relation after the
-    arguments. Projection adds what needs the derived Type: one relation per
-    result field, each image at the rank its value was written in, and each
-    projected relation reaching a countable number of elements.
+    per result. A single value has one relation. A `TupleType` result has one
+    per field, in field order. Position is the only record of where the
+    arguments end. A reader that holds the Call takes the first
+    `len(call.args)` as the arguments' and the rest as the result's. The caller
+    hands that count to a reader without a Call. Before any Type is derived,
+    construction holds parameter closure. `iterating` holds the shared
+    iteration arity. `relations_of` holds the tuple form and at least one
+    relation after the arguments. Projection adds what needs the derived Type.
+    It adds one relation per result field. It puts each image at the rank its
+    value was written in. Each projected relation reaches a countable number of
+    elements.
   - How much a boundary moves MUST NOT be a second field. It is what the
     relation reaches over the coordinates its Op iterates, counted from the
-    relation's own image; reaching the same element from many coordinates is one
-    element moved, so an inner iteration axis costs nothing. A projection or a
-    count that cannot be derived MUST fail closed rather than fall back on a
+    relation's own image. Reaching the same element from many coordinates is one
+    element moved. An inner iteration axis costs nothing. A projection or a
+    count that cannot be derived MUST fail closed. It MUST NOT fall back on a
     stated number.
   - `relations_of` answers in logical axes only. `projected` carries every
-    boundary from logical axes onto the positions the reader addresses, by
-    composing with the layout the value ended up with, and holds every boundary
-    to the iterations this participant performs; `local_relations_of` is
+    boundary from logical axes onto the coords the reader addresses. `projected`
+    composes with the layout the value ended up with. `projected` also holds every
+    boundary to the iterations this unit performs. `local_relations_of` is
     `projected` over `relations_of`. A value nobody divided is addressed whole
-    by every participant, so leaving one boundary unheld would charge one
-    participant what all of them read.
-  - A boundary whose value is not read or written at any coordinate MUST be
-    stated as an empty relation at that value's own rank; `access.unread`
-    builds one. An Op whose result follows from its operands' Types alone --
-    a rank, a shape, a view of the same value -- MUST register
-    `readnone_relations(result_shape)`, where `result_shape` derives the
-    result's shape from the operand Types; every boundary of it is then empty
-    at the rank of the value it describes, the result's own rank on the output
-    side.
+    by every unit. So leaving one boundary unheld would charge one unit what
+    all of them read.
+  - A boundary never read or written MUST be
+    stated as an empty relation at its value's own rank. `access.unread`
+    builds one. An Op whose result follows from its operands' Types alone MUST
+    register `readnone_relations(result_shape)`. Examples are a rank, a shape,
+    and a view of the same value. `result_shape` derives the result's shape
+    from the operand Types. Every boundary of it is then empty at the rank of
+    the value it describes. On the output side, that rank is the result's own
+    rank.
 
 A second registry in the same package states which operand a view re-addresses:
 
@@ -594,10 +604,10 @@ def aliased_operand(call: Call) -> int | None: ...
 ```
 
 - constraints:
-  - A handler has the shape `(call: Call) -> int | None` and returns the
+  - A handler has the shape `(call: Call) -> int | None`. It returns the
     position of the input whose bytes the Call's result re-addresses, or `None`
-    for a new value. `aliased_operand` answers `None` for an Op with no handler:
-    the registry is partial, and an unregistered Op is a value of its own.
+    for a new value. `aliased_operand` answers `None` for an Op with no handler.
+    The registry is partial, and an unregistered Op is a value of its own.
 
 ## 5. Instance 2 — `verify`
 
@@ -607,17 +617,17 @@ field):
 ```python
 # tilefoundry.interfaces.verify
 @dataclass
-class Context(TypeInferContext):   # inherits current_mesh and the region chain
+class Context(TypeInferContext):   # inherits mesh_scope and the region chain
     """The context a per-stmt verify handler is annotated against."""
 ```
 
 - constraints:
-  - Where a statement stands is the shared region chain
-    ([§4](#4-instance-1--typeinfer)): the verifier enters each TIR `MeshScope`
+  - The shared region chain ([§4](#4-instance-1--typeinfer)) says where a
+    statement stands. The verifier enters each TIR `MeshScope`
     and `For` with `enter_region`. A handler reads the composed
-    `current_mesh`, each enclosing mesh through `enclosing_meshes()`, or the
-    innermost through `enclosing_mesh()`. A context built without a region
-    chain answers `(current_mesh,)`.
+    `mesh_scope`, each enclosing mesh through `enclosing_meshes()`, or the
+    innermost through `innermost_mesh()`. A context built without a region
+    chain answers `(mesh_scope,)`.
 
 Registry + registration function, both exported by `tilefoundry.interfaces.verify`:
 
@@ -627,23 +637,24 @@ verify.register: Callable[[type], Callable[[Callable], Callable]]   # the regist
 ```
 
 - constraints:
-  - handler signature is `(node, ctx: verify.Context) -> None`; failure routes
-    through `ctx.error(node, msg)`, which raises `VerifyError`.
+  - A handler has the signature `(node, ctx: verify.Context) -> None`. A failure
+    goes through `ctx.error(node, msg)`, which raises `VerifyError`.
 
 **`Evaluate(op, args)` dispatch.** TIR effect-form Ops
 (`Copy` / `Fill` / `ReLU` / `Reduce` and target instructions such as the CUDA
 `TiledMma`) appear in
 Stmt position as `Evaluate(callable=op, args)`. The verify path keys
-on the Op class, not on `Evaluate` itself: `verify.register`
+on the Op class, not on `Evaluate` itself. `verify.register`
 takes the **Op class**. The verifier's `visit_Evaluate` passes
-device-instruction Ops to the `verify_call` service ([§3.2](#32-services)), which runs the same `check_call` used by
-ScheduleOp inference, candidate admission, and lowering.
-That check owns declaration matching and invokes any registered leaf verifier;
-a missing leaf handler MUST NOT bypass the declared constraints. Refusals from
-the common check are reported as `VerifyError` by the verifier.
-The registry key is the Op class; the handler input shape is owned by the
-registry implementation. The stable IR shape is `Evaluate(op, args)`;
-the stable IR does not wrap a value-form `Call` inside `Evaluate`. See
+device-instruction Ops to the `verify_call` service ([§3.2](#32-services)).
+That service runs the same `check_call` that ScheduleOp inference, candidate
+admission, and lowering use.
+That check owns declaration matching and invokes any registered leaf verifier.
+A missing leaf handler MUST NOT bypass the declared constraints. The verifier
+reports refusals from the common check as `VerifyError`.
+The registry key is the Op class. The registry implementation owns the handler
+input shape. The stable IR shape is `Evaluate(op, args)`.
+The stable IR does not wrap a value-form `Call` inside `Evaluate`. See
 [visitor-mutator §7](./visitor-mutator.md#7-visitor-entry-forms-for-evaluate)
 for the matching visitor entry-form contract and
 [tir §1.4](./tir.md#14-evaluate) for the wrapper definition.
@@ -664,9 +675,9 @@ Visitor:
 `verify_shape_of`, `verify_value_layouts` and `input_params` are the public whole-program entry
 points of `tilefoundry.verifier`. The package sits above `ir.hir` and `ir.tir`
 and reads both, so neither IR layer owns the driver. `verify_prim_function`
-runs one program visitor over a `PrimFunction` body; the visitor lives beside
-the rules and entry points in `verifier/verify.py` and is not exported by the
-package.
+runs one program visitor over a `PrimFunction` body. The visitor lives beside
+the rules and entry points in `verifier/verify.py`. The package does not export
+it.
 
 ```python
 # tilefoundry.verifier.verify
@@ -675,22 +686,22 @@ class Visitor(StmtExprVisitor[None]):
     def visit_Sequential(self, stmt, ctx): ...        # also LetStmt, For, While, If, MeshScope, Return, Evaluate
     def generic_visit(self, stmt, ctx): ...           # any other Stmt: its verify.registry entry, then its Expr fields
     def visit_Var(self, var, ctx): ...                # every use must be visible
-    def visit_Call(self, call, ctx): ...              # AllocTensor placement and embedded ShardLayout meshes
+    def visit_Call(self, call, ctx): ...              # AllocTensor call position and embedded ShardLayout meshes
 ```
 
 - constraints:
   - One visit covers a statement's own rules and every use in its Expr fields
     ([visitor-mutator §5](./visitor-mutator.md#5-stmtvisitort--stmtexprvisitort--stmtmutator)).
-    Another Stmt, such as an intrinsic, is a leaf: after its registered rule,
-    each field `stmt_expr_fields` names goes through the same use rules, so a
-    non-IR value is refused by name;
-    `For` and `MeshScope` bodies are visited in `ctx.enter_region(stmt)`.
-    Effect Ops go through `check_call` with `ctx.current_mesh`.
+    Another Stmt, such as an intrinsic, is a leaf. After its registered rule,
+    each field `stmt_expr_fields` names goes through the same use rules. The
+    verifier refuses a non-IR value by name.
+    The visitor visits `For` and `MeshScope` bodies in `ctx.enter_region(stmt)`.
+    Effect Ops go through `check_call` with `ctx.mesh_scope`.
 
 **Unregistered semantics.** The built-in control-flow / binding Stmts and
-`Evaluate` have dedicated methods; their semantic constraints (e.g.
-`For.step != 0`, `If.cond` is `bool`, `LetStmt` binding rules) are owned by
-[tir](./tir.md). Any other Stmt subclass without a `verify.register` entry is
+`Evaluate` have dedicated methods. [tir](./tir.md) owns their constraints.
+Examples are `For.step != 0`, `If.cond` of type `bool`, and `LetStmt`
+binding rules. Any other Stmt subclass without a `verify.register` entry is
 rejected with `no verify_stmt registered for <Stmt>`.
 
 ## 6. Instance 3 — `codegen`
@@ -700,10 +711,9 @@ The concrete `EmitContext` interface is owned by
 registry-dispatch contract that consumes that context.
 
 One registry, shared by every target, in the module `tilefoundry.codegen.registry`.
-A generated line depends on three things at once — whose language it is written
-in, which position of a call it is written at, and which class is being asked
-about — so all three are the key:
-
+A generated line depends on three things. The first is the language it is
+written in. The second is the position of a call it is written at. The third is
+the class being asked about. All three are the key:
 ```python
 class Role(Enum):
     """Which position of a call a code-generation handler answers for.
@@ -731,33 +741,34 @@ def register(
 
 - constraints:
   - There is one code-generation registry. A target is a dimension of its key,
-    never a registry of its own: a translation unit that writes a call to a
-    function of another target MUST reach that target's answer without
-    importing its code generator.
+    never a registry of its own. A translation unit that writes a call to
+    another target's function MUST reach that target's answer. It MUST NOT
+    import that target's code generator.
   - The target a key names is the one whose language the answer is written in.
-    For a call that is the **callee's**: how a call to it is spelled is its own
-    convention, and the calling scope fills in only the names it already holds.
-  - `LAUNCH` keys on `tir.launch.Launch`: the CPU host target's `EMIT` handler
-    for `Launch` forwards to the `LAUNCH` handler of the callee's target, which
-    states how its function is launched ([codegen](./codegen.md)).
+    For a call, that target is the **callee's**. The callee's own convention
+    spells a call to it. The calling scope fills in only the names it already
+    holds.
+  - `LAUNCH` keys on `tir.launch.Launch`. The CPU host target's `EMIT` handler
+    for `Launch` forwards to the `LAUNCH` handler of the callee's target. That
+    handler states how its function is launched ([codegen](./codegen.md)).
   - `EMIT` keys on a node class: `type[Op]` for an Op reached through its
     `Call`, or `type[Stmt]`. `CALLEE` and `CALLER` key on a signature class
-    ([codegen §4.4](./codegen.md#44-signatures)); they read one signature from
-    opposite ends, which is why they are one key apart rather than two
-    registries apart.
+    ([codegen §4.4](./codegen.md#44-signatures)). They read one signature from
+    opposite ends. So they are one key apart, not two registries apart.
   - A miss is an error naming the whole key. Codegen has no fallback
-    emission: a node or signature nothing answers for MUST NOT be written. The
-    registry is partial by design: an Op has an entry only for the targets that
+    emission. A node or signature nothing answers for MUST NOT be written. The
+    registry is partial by design. An Op has an entry only for the targets that
     emit it ([§3.1](#31-registry-instances)).
 
 Handler signatures:
 
-- `EMIT`: `(node, ctx: EmitContext) -> None` — writes its lines through
-  `ctx.emit`, and reaches its operands through the context rather than
-  returning a fragment. `node` is the `Call` for an Op, the Stmt itself
-  otherwise. The exception is `Launch`: its `EMIT` handler and the `LAUNCH`
-  handler it forwards to take `(entry, stmt, ctx)`, the host entry and the
-  `Evaluate` statement, and return the launch's text rather than writing it.
+- `EMIT`: `(node, ctx: EmitContext) -> None`. It writes its lines through
+  `ctx.emit`. It reaches its operands through the context and does not return a
+  fragment. `node` is the `Call` for an Op and the Stmt itself
+  otherwise. `Launch` is the exception. Its `EMIT` handler and the `LAUNCH`
+  handler it forwards to take `(entry, stmt, ctx)`. These arguments are the host
+  entry and the `Evaluate` statement. Both handlers return the launch's text and
+  do not write it.
 - `CALLEE`: `(signature: Signature, ctx: EmitContext) -> tuple[str, ...]` —
   the C++ parameters this one logical parameter declares. Any derived name it
   invents there is its own and is never parsed back.
@@ -788,9 +799,9 @@ class Visitor:  # codegen.Visitor
 ```
 
 - constraints:
-  - the two entries exist because a Stmt is reached by its own class and an Op
-    through the `Call` carrying it; `target` is the key's first dimension, not
-    diagnostic text. A leaf `Expr` has no emission of its own and raises.
+  - A Stmt is reached by its own class. An Op is reached through the `Call`
+    carrying it. So the visitor has two entries. `target` is the key's first
+    dimension, not diagnostic text. A leaf `Expr` has no emission of its own and raises.
 
 User extension path — adding a new Stmt `MyIntrinsic`:
 
@@ -806,7 +817,7 @@ The visitor / pass pipeline / parser do not change.
 ## 7. Instance 4 — `cost`
 
 Cost evaluation is a recursive-local analysis. A handler receives selected
-candidate Types through `cost.Context`; it does not select hardware resources.
+candidate Types through `cost.Context`. It does not select hardware resources.
 `cost.Context`, `TrafficBytes` and `Cost` live in `tilefoundry.interfaces.cost`,
 with the registry, the registration function `cost.register` and
 `cost.Visitor`.
@@ -858,12 +869,12 @@ class Context(TypeInferContext):
     Attributes:
         selected_types: attribute; selected ``id(expr)`` to ``Type`` mapping.
         selected_output_type: attribute; selected output type, when supplied.
-        topology_level: attribute; topology window to project through, or None for types as written.
+        topology: attribute; topology window to project through, or None for types as written.
     """
 
     selected_types: Mapping[int, Type] = field(default_factory=dict)
     selected_output_type: Type | None = None
-    topology_level: str | None = None
+    topology: str | None = None
 
     def local_type_of(self, expr: Expr) -> Type: ...  # read expr.type, then project
     def local_output_type(self, call: Call) -> Type: ...
@@ -878,60 +889,60 @@ class Visitor(valuation.Visitor[Cost]):
 ```
 
 - constraints:
-  - every `tf` Op MUST have one registered evaluator
-    ([§3.1](#31-registry-instances)); an Op with
+  - Every `tf` Op MUST have one registered evaluator
+    ([§3.1](#31-registry-instances)). An Op with
     none MUST fail `cost.Visitor.visit_Call` with the Op name and source
     location.
-  - an evaluator is written in its Op's own file and registered with
-    `cost.register(Op)` when that file is imported; shared construction helpers
+  - An evaluator is registered with `cost.register(Op)` when the file of its Op
+    is imported. Shared construction helpers
     (`elementwise`, `cost.operation`, `traffic` and the like) live in
     `interfaces/cost`. The work an Op asks for follows from its own semantics
-    and its operand types, so it is the same on every backend; registering
-    evaluators from a target package would make one backend's presence decide
-    whether any consumer can cost a program at all.
+    and its operand types, so it is the same on every backend. A target package
+    does not register evaluators, because that would make one backend's presence
+    decide whether any consumer can cost a program.
   - `flops` MUST group leaf-local floating-point work by compute `DType`. Work
     that is not floating point MUST NOT appear there under the dtype of its
-    result: a comparison producing `bool` is not `bool` FLOPs, and pricing it as
+    result. A comparison producing `bool` is not `bool` FLOPs. Pricing it as
     such puts work on a pipe it never went down.
-  - `service` MUST group that work by the kind of service the machine provides,
-    named for the operation rather than for a machine: `integer`, `predicate`,
+  - `service` MUST group that work by the kind of service the machine provides.
+    Name each kind for the operation, not for a machine: `integer`, `predicate`,
     `select`, `special`. A comparison MUST record
-    `predicate`, a selection MUST record `select`, an operation over whole
-    numbers MUST record `integer`, and an operation the machine answers on its
-    special-function unit -- `rsqrt`, `exp`, `log`, `exp2`, `log2` -- MUST
-    record `special` rather than one FLOP each: that unit publishes its own
-    rate, a fraction of the float pipe's, so counting them as arithmetic prices
+    `predicate`. A selection MUST record `select`. An operation over whole
+    numbers MUST record `integer`. An operation the machine answers on its
+    special-function unit MUST record `special`, not one FLOP each. Examples
+    are `rsqrt`, `exp`, `log`, `exp2`, `log2`. That unit publishes its own
+    rate, a fraction of the float pipe's. Counting them as arithmetic prices
     them too fast.
     Counts MUST be non-negative integers and MUST NOT be booleans. An operation
     MUST record its work once, under `flops` or under `service` but not both.
-    An evaluator MUST NOT invent a kind no target states a rate for, because a
-    consumer that cannot price a kind refuses rather than substituting zero.
+    An evaluator MUST NOT invent a kind no target states a rate for. A
+    consumer that cannot price a kind refuses and does not substitute zero.
   - `TrafficBytes.total_bytes` and `Cost.bytes` MUST be read-only derived
     properties and MUST NOT be accepted as constructor fields.
   - `traffic` MUST carry exactly one `TrafficBytes` per operand of the call, in
-    argument order with the result last. Only which of its directions is nonzero
-    is read: a nonzero `read` says that boundary is read and a nonzero `write`
-    says it is written. `bytes` is derived: every operand's traffic in either
-    direction.
-  - an evaluator MUST NOT name a memory level. Which level an operand's bytes
-    move at follows from that operand's Type, and is the consumer's to read;
-    reporting a length that disagrees with the call's operand count MUST fail
+    argument order with the result last. Only which direction is nonzero
+    is read. A nonzero `read` says that boundary is read. A nonzero `write`
+    says it is written. `bytes` is derived. It is every operand's traffic in
+    either direction.
+  - An evaluator MUST NOT name a memory level. Which level an operand's bytes
+    move at follows from that operand's Type. The consumer reads that level.
+    A report of a length that disagrees with the call's operand count MUST fail
     naming the call and both counts.
-  - an evaluator says which way each boundary moves and whether the operation
-    materialises anything; **how much** crosses is not its answer. A consumer
+  - An evaluator says which way each boundary moves and whether the operation
+    materialises anything. It does not say **how much** crosses. A consumer
     takes every amount from the Op's access relations
     ([§4.1](#41-access-relation-service--access_relation)) in the window it is
-    asking about, and an Op with no registered relation MUST fail closed rather
-    than have its evaluator's number read as the amount.
-  - so an operation that only re-describes or re-indexes existing elements
-    reports no direction on those boundaries and moves nothing, while the
-    numbers that place a window are read like any other operand: a `Reshape`
-    moves nothing, a `Slice` moves nothing of its tensor source or result and
-    reads the numbers placing it, and a `Transpose` reads and writes because its
+    asking about. An Op with no registered relation MUST fail closed. The
+    consumer MUST NOT read the evaluator's number as the amount.
+  - An operation that only re-describes or re-indexes existing elements
+    reports no direction on those boundaries and moves nothing. The numbers
+    that place a window are read like any other operand. A `Reshape`
+    moves nothing. A `Slice` moves nothing of its tensor source or result and
+    reads the numbers placing it. A `Transpose` reads and writes because its
     evaluator materialises the permutation.
-  - With no `topology_level`, `cost.Context.local_type_of` MUST return the selected
+  - With no `topology`, `cost.Context.local_type_of` MUST return the selected
     Type as written. With one, it MUST apply `local_type_of` using the context's
-    topology hierarchy and MUST reject unresolved or non-concrete local extents
+    topology hierarchy. It MUST reject unresolved or non-concrete local extents
     at the point where the evaluator requires them.
 
 ## 8. Shared helpers
@@ -943,8 +954,8 @@ def error(self, node: Expr | Stmt, msg: str) -> NoReturn: ...   # node: the offe
 ```
 
 - constraints:
-  - provided by `TypeInferContext` and every Context that inherits it; raises
-    `VerifyError` with a stable format.
+  - `TypeInferContext` and every Context that inherits it provide this helper.
+    It raises `VerifyError` with a stable format.
 
 ### 8.2 Other helpers
 
@@ -956,12 +967,12 @@ Registrations (`typeinfer.register`, `cost.register`, `codegen.register`, and
 the other registration functions of [§3.1](#31-registry-instances))
 are import-time side effects. `ir/hir/__init__.py`, `ir/tir/__init__.py`, and
 each target package's `__init__.py` import every Op category, subpackage and
-module, so every registration runs.
+module. So every registration runs.
 
-`import tilefoundry` imports `bootstrap`, which imports the implementing packages,
-and loads the targets; every registry is fully populated before the import
-returns. Re-imports are idempotent (Python caches the module;
-`Registry.register` does not re-run the import-time body).
+`import tilefoundry` imports `bootstrap`. This module imports the implementing packages
+and loads the targets. Every registry is fully populated before the import
+returns. A re-import is idempotent. Python caches the module.
+`Registry.register` does not re-run the import-time body.
 
 ## 10. Defining a new extensible analysis
 
@@ -988,9 +999,9 @@ register = registry.decorator()                  # register a handler for one Op
 The registry lives in the interface package of the analysis
 ([§3.1](#31-registry-instances)).
 
-Pick `type[Op]` for an analysis that walks `Call`s, `type[Stmt]` for
-one that walks effect Stmts; declare both registries if both are
-needed.
+Use `type[Op]` for an analysis that walks `Call`s. Use `type[Stmt]` for
+an analysis that walks effect Stmts. Declare both registries if the analysis
+needs both.
 
 ### Step 3 — derive a Visitor that holds the registry explicitly
 
@@ -1010,10 +1021,10 @@ class AliasVisitor(ExprVisitor[None]):
 def _(call: Call, ctx: LivenessContext) -> None: ...
 ```
 
-These are the steps the instances in this spec follow. A new analysis is a peer
-of them: no existing visitor / registry / dispatch code changes. Callers own
+The instances in this spec follow these steps. A new analysis is a peer
+of them. No existing visitor, registry or dispatch code changes. Callers own
 their `Registry`, `Visitor` subclass (built on
-[visitor-mutator](./visitor-mutator.md)), and `Context` dataclass; nothing
+[visitor-mutator](./visitor-mutator.md)), and `Context` dataclass. Nothing
 auto-binds them.
 
 
@@ -1025,18 +1036,18 @@ order. The target-neutral pairings are registered in `schedule/pairings.py`.
 Used as a decorator, it registers one callback per HIR operation:
 `callback(call, instruction_type) -> (attributes, operand_types)`. A second
 callback is an error. A registration without a decorated callback retains the
-existing callback; an operation without one uses the default mapping.
+existing callback. An operation without a callback uses the default mapping.
 
 The default maps READ operands in input order and WRITE operands to `call.type`,
 and copies same-named attributes. A non-default HIR attribute with no
 instruction parameter counterpart raises a `ValueError` naming the HIR field
 and instruction. `instruction_from_hir` applies the same check to automatic
-lowering through `sole_candidate`. Reshard supplies source/result types;
-IndexSelect supplies source/result/index and maps `fill_value` to `fill`;
-MatMul supplies the result as acc and describes lhs/rhs bytes as M,K and K,N,
-permuting shape and strides for KM/NK. It does not invent an accumulator layout.
+lowering through `sole_candidate`. Reshard supplies source/result types.
+IndexSelect supplies source/result/index and maps `fill_value` to `fill`.
+MatMul supplies the result as acc and describes lhs/rhs bytes as M,K and K,N.
+MatMul permutes shape and strides for KM/NK. MatMul does not invent an accumulator layout.
 
 Target capability records supply an open atom class to the instruction
-matcher. Its frozen result records contain the constructed instruction and
-full ordered matcher path; [schedule](./schedule.md) owns acceptance and
+matcher. The matcher's frozen result records contain the constructed instruction and
+full ordered matcher path. [schedule](./schedule.md) owns acceptance and
 [inspection](./inspection.md) owns path and refusal rendering.

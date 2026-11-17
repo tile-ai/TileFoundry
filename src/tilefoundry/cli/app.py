@@ -168,10 +168,10 @@ def build_parser() -> argparse.ArgumentParser:
         analyze.add_argument(f"--{selector}", action="store_true", help=EVIDENCE[selector])
     analyze.add_argument(
         "--topology",
-        metavar="LEVEL",
+        metavar="TOPOLOGY",
         help=(
-            "topology level whose unit the per-unit figures describe; defaults "
-            "to the module's coarsest declared level"
+            "topology whose unit the per-unit figures describe; defaults "
+            "to the module's coarsest declared topology"
         ),
     )
     analyze.add_argument(

@@ -34,7 +34,7 @@ def insert_default_host_entry(module: core.Module) -> core.Module:
     runs_on = entry.target if isinstance(entry, core.PrimFunction) else module.resolve_target()
     if isinstance(runs_on, cpu.Target):
         return module
-    functions = tuple(frame.function for frame in valuation.collect_functions(module).values())
+    functions = tuple(ctx.function for ctx in valuation.collect_functions(module).values())
     if all(isinstance(fn, core.PrimFunction) for fn in functions):
         return module
     if all(isinstance(fn, core.Function) for fn in functions):
@@ -74,19 +74,19 @@ def fresh_name(stem: str, taken: set[str]) -> str:
     return candidate
 
 
-def entry_params(frame) -> tuple[tuple[expr.Var, ...], int]:
+def entry_params(ctx) -> tuple[tuple[expr.Var, ...], int]:
     """The declared inputs, the lowered scratch, then one GMEM destination per tensor result leaf.
 
     The scratch is the list lowering will declare for the function of
-    *frame*. An HIR result has a type and no name, so each destination is
+    *ctx*. An HIR result has a type and no name, so each destination is
     named ``out``; every name avoids the ones before it. Also returns the
     number of destinations.
     """
-    fn = frame.function
+    fn = ctx.function
     taken = {param.name for param in fn.params}
     scratch = tuple(
         expr.Var(fresh_name(param.name, taken), type=param.type)
-        for param in transforms.scratch_buffers(frame)
+        for param in transforms.scratch_buffers(ctx)
     )
 
     def destinations(ty):
@@ -100,7 +100,7 @@ def entry_params(frame) -> tuple[tuple[expr.Var, ...], int]:
         elif isinstance(ty, types.TupleType):
             for field in ty.fields:
                 yield from destinations(field)
-        elif not isinstance(ty, types.UnitType):
+        else:
             raise TypeError(
                 f"insert_default_host_entry: unsupported result type {ty!r} in {fn.name!r}"
             )
@@ -110,11 +110,11 @@ def entry_params(frame) -> tuple[tuple[expr.Var, ...], int]:
     return (*inputs, *scratch, *outputs), len(outputs)
 
 
-def host_entry_for(frame, ref: core.FunctionRef, fn: core.Function, taken: set[str]) -> core.PrimFunction:
+def host_entry_for(ctx, ref: core.FunctionRef, fn: core.Function, taken: set[str]) -> core.PrimFunction:
     """Launch one Module entry with its declared inputs and flattened destinations."""
-    params, output_count = entry_params(frame)
-    grid = (product(tuple(t.size for t in frame.topologies if t.name == "cta")), 1, 1)
-    block = (product(tuple(t.size for t in frame.topologies if t.name == "thread")), 1, 1)
+    params, output_count = entry_params(ctx)
+    grid = (product(tuple(t.size for t in ctx.topologies if t.name == "cta")), 1, 1)
+    block = (product(tuple(t.size for t in ctx.topologies if t.name == "thread")), 1, 1)
     launch = tir.launch.launch_call(
         fn, params, grid, block, ref=ref, dynamic_smem=smem_peak(fn)
     )
@@ -141,15 +141,15 @@ def entries_for_hir_functions(module: core.Module) -> core.Module:
     taken = {fn.name for fn in module.functions}
     entries = []
     root = None
-    for ref, frame in valuation.collect_functions(module).items():
-        fn = frame.function
+    for ref, ctx in valuation.collect_functions(module).items():
+        fn = ctx.function
         if (
             isinstance(fn, core.Function)
-            and frame.module.entry == fn.name
+            and ctx.module.entry == fn.name
             and not any(isinstance(segment, int) for segment in ref.path)
             and launchable(fn.return_type)
         ):
-            entry = host_entry_for(frame, ref, fn, taken)
+            entry = host_entry_for(ctx, ref, fn, taken)
             entries.append(entry)
             if ref.path == () and ref.name == module.entry:
                 root = entry

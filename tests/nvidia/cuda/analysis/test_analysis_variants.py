@@ -27,7 +27,7 @@ def _report(module, *, analysis=("memory",)) -> dict:
         module=result.module,
         function=result.function,
         analyses=result.analyses,
-        topology_level=result.topology_level,
+        topology=result.topology,
         executed=result.executed,
         metadata_types=result.metadata_types,
     )
@@ -99,7 +99,7 @@ def test_working_set_overflow_reported(
     diagnosis = [
         "l2 working set 1.50MiB at the first iteration of a 1-unit wave exceeds capacity 1.00MiB"
     ]
-    assert memory["errors"] == ["rmem placement peak 1.50MiB exceeds capacity 256.00KiB"] + (
+    assert memory["errors"] == ["rmem peak 1.50MiB exceeds capacity 256.00KiB"] + (
         diagnosis if category == "errors" else []
     )
     assert memory["advisories"] == (diagnosis if category == "advisories" else [])

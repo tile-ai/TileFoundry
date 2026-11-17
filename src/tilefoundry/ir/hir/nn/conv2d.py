@@ -138,7 +138,7 @@ def require_group_aligned_output_split(call, ctx, weight, bias, groups: int) -> 
     """A split of the output channels must not cut across a group.
 
     A shard straddling a boundary reads two groups where its neighbour reads
-    one, and nothing here can tell those participants apart: a projection knows
+    one, and nothing here can tell those units apart: a projection knows
     a shard's extent and not its offset. Twelve channels in three groups over
     four shards would report one footprint for all four where the real ones are
     1, 2, 2 and 1 groups, so it is refused where the author can align it.
@@ -165,7 +165,7 @@ def require_group_aligned_output_split(call, ctx, weight, bias, groups: int) -> 
                 ctx.error(
                     call,
                     f"{name} splits {channels} output channels {shards} ways "
-                    f"across {groups} groups of {per_group}, so a participant "
+                    f"across {groups} groups of {per_group}, so a unit "
                     "can straddle a group boundary and no projection here can "
                     "say which; align the split to the group size",
                 )

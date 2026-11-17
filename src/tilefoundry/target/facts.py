@@ -1,7 +1,7 @@
 """The Facts aggregates a Target projects, and the validation of what it returns.
 
 Each aggregate is the narrow hardware record one consumer asks for, and none
-names a backend: the topology limits and the memory-execution levels that
+names a backend: the topology limits and the memory execution topologies that
 several consumers share, the memory hierarchy graph, and the throughput rates
 and parallel capacity the analysis families divide work by. What a consumer
 cannot see it cannot depend on, so these types are the record of how much
@@ -24,14 +24,14 @@ FactsT = TypeVar("FactsT")
 
 
 @dataclasses.dataclass(frozen=True)
-class TopologyLevelFacts:
-    """The program-side and machine-side unit counts for one topology level.
+class TopologyLimits:
+    """The program-side and machine-side unit counts for one topology.
 
     ``max_logical_units`` is how many units a program may declare; ``None``
     means there is no static ceiling and the extent may be deferred to launch.
-    ``max_physical_units`` is how many machine positions the level divides over;
-    this count models execution positions independently of hardware residency
-    limits. ``from_target`` marks a level whose extent and program ids both come
+    ``max_physical_units`` is how many machine units the topology divides over;
+    this count models execution units independently of hardware residency
+    limits. ``from_target`` marks a topology whose extent and unit ids both come
     from the target instance rather than from a hardware document or a register
     the device can read.
     """
@@ -44,34 +44,34 @@ class TopologyLevelFacts:
 
 @dataclasses.dataclass(frozen=True)
 class TopologyFacts:
-    """The topology levels one Target admits, coarsest first.
+    """The topologies one Target admits, coarsest first.
 
     The names a program may declare are exactly the names listed here, so the
-    level vocabulary of a backend has one place to be stated.
+    topology vocabulary of a backend has one place to be stated.
     """
 
-    topologies: tuple[TopologyLevelFacts, ...]
-    parallel_level: str | None = None
+    topologies: tuple[TopologyLimits, ...]
+    parallel_topology: str | None = None
 
     def __post_init__(self) -> None:
-        if self.parallel_level is not None and self.level(self.parallel_level) is None:
+        if self.parallel_topology is not None and self.topology(self.parallel_topology) is None:
             raise ValueError(
-                f"parallel topology level {self.parallel_level!r} is not among "
-                f"{tuple(level.name for level in self.topologies)}"
+                f"parallel topology {self.parallel_topology!r} is not among "
+                f"{tuple(limits.name for limits in self.topologies)}"
             )
 
-    def level(self, name: str | None) -> TopologyLevelFacts | None:
-        """Return the facts for *name*, or ``None`` when it is not stated."""
-        return next((level for level in self.topologies if level.name == name), None)
+    def topology(self, name: str | None) -> TopologyLimits | None:
+        """Return the limits for *name*, or ``None`` when it is not stated."""
+        return next((limits for limits in self.topologies if limits.name == name), None)
 
-    def parallel(self) -> TopologyLevelFacts | None:
-        """Return the default parallel level, or ``None`` for an empty aggregate."""
-        return self.level(self.parallel_level)
+    def parallel(self) -> TopologyLimits | None:
+        """Return the default parallel topology, or ``None`` for an empty aggregate."""
+        return self.topology(self.parallel_topology)
 
 
 @dataclasses.dataclass(frozen=True)
 class MemoryExecutionFacts:
-    """Topology levels that may execute synchronous memory operations."""
+    """Topologies that may execute synchronous memory operations."""
 
     topologies: tuple[str, ...]
 
@@ -119,9 +119,9 @@ class MemoryRelationKind(Enum):
 class ExplicitMemoryLevelFacts:
     """A level a program places values in by name.
 
-    ``scope`` is the topology level ``capacity_bytes`` is stated per, so a
+    ``scope`` is the topology ``capacity_bytes`` is stated per, so a
     per-CTA and a per-device capacity are not accidentally compared. ``owner``
-    is the topology level whose units own separate values, or ``"target"`` when
+    is the topology whose units own separate values, or ``"target"`` when
     every unit shares the target-wide allocation.
     """
 
@@ -234,7 +234,7 @@ class PerformanceServiceFacts:
     unit_flops: tuple[tuple[expr.DType, int], ...]
     unit_ops: tuple[tuple[str, int], ...]
     unit_bandwidth: tuple[tuple[str, int], ...]
-    unit: str
+    topology: str
 
     def flops(self, dtype: expr.DType) -> int | None:
         """What one unit gets through of *dtype*, or ``None`` when unstated."""
@@ -287,6 +287,6 @@ __all__ = [
     "PerformanceServiceFacts",
     "ThroughputFacts",
     "TopologyFacts",
-    "TopologyLevelFacts",
+    "TopologyLimits",
     "facts_result",
 ]

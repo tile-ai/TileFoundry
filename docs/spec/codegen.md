@@ -1,9 +1,9 @@
 # TileFoundry Spec — Codegen
 
-Codegen turns verified, lowered `core.PrimFunction`s into a loadable artifact:
-it emits per-target source, assembles each target's translation unit, and links
-the units into one host-callable shared library. Loading that artifact as a
-`runtime.Module` is owned by [runtime](./runtime.md).
+Codegen turns verified, lowered `core.PrimFunction`s into a loadable artifact.
+It emits per-target source. It assembles the translation unit of each target.
+It links the units into one host-callable shared library.
+[runtime](./runtime.md) owns the loading of that artifact as a `runtime.Module`.
 
 ```mermaid
 flowchart LR
@@ -34,11 +34,11 @@ flowchart LR
   `LinkableModule`.
 - The link step compiles every `LinkableModule` with its own toolchain and
   links them into one `LinkedModule` ([§4.3](#43-linkedmodule)).
-- Codegen does not run passes, does not load or launch device code, and does
-  not own the user-facing entry points (`compile` / `build` / `jit`), which are
-  owned by [runtime §1.6](./runtime.md#16-compiler).
+- Codegen does not run passes. Codegen does not load or launch device code.
+  [runtime §1.6](./runtime.md#16-compiler) owns the user-facing entry points
+  (`compile` / `build` / `jit`). Codegen does not own them.
 - **Host / device boundary.** A host unit invokes device code through its
-  exported C ABI and MUST NOT depend on device-only types. The target-owned
+  exported C ABI. A host unit MUST NOT depend on device-only types. The target-owned
   launcher reports refused launches to the host; no exception crosses that ABI.
 
 Target packages own generator behavior, runtime type mappings and device
@@ -80,8 +80,8 @@ class LinkableModule:
     Bindings select classes, never strings.
   - A factory writes each function twice: once as the declaration a caller sees,
     without entering the body, and once as the definition, by walking it.
-  - A second unequal device Target group MUST fail before any factory emits;
-    multiple device architectures in one linked artifact are unsupported.
+  - A second unequal device Target group MUST fail before any factory emits.
+    One linked artifact supports one device architecture only.
   - EmitContext and Linkable/Linked products MAY be subclassed through bindings.
     The compile-wide `codegen.Context` and `LinkableFunction` have no resolution
     hook in this interface.
@@ -95,9 +95,9 @@ def handler(call: Call, ctx: EmitContext) -> None: ...
 A handler is registered inside a concrete generator against its own target;
 dispatch is owned by
 [visitor-registry §6](./visitor-registry.md#6-instance-3--codegen). A handler
-receives the `Call` (the wrapped Op inside `Evaluate`) plus an `EmitContext`,
-and MUST emit through `ctx.emit(...)`; raw `print` / direct file writes are
-prohibited.
+receives the `Call` (the wrapped Op inside `Evaluate`) and an `EmitContext`.
+A handler MUST emit through `ctx.emit(...)`. Raw `print` and direct file writes
+are prohibited.
 
 ### 2.3 `EmitContext`
 
@@ -135,10 +135,10 @@ class Context(EmitContext):  # codegen.cpu.Context
 ```
 
 - constraints:
-  - One context spans one whole compile rather than one translation unit: the
-    symbol table it carries is read by every emitter, and the boundary of the
-    unit being written is drawn by `capture`. There MUST NOT be a second
-    per-unit context object.
+  - One context spans one whole compile, not one translation unit. Every
+    emitter reads the symbol table of the context. `capture` draws the boundary
+    of the unit being written. There MUST NOT be a second per-unit context
+    object.
   - `signature_of` answers from `symbols` ([§4.4](#44-signatures)) and from
     nowhere else; it MUST raise when the function has no row there.
   - `emit_node` dispatches `Evaluate(op, args)` by the wrapped Op class; all
@@ -153,17 +153,16 @@ class Context(EmitContext):  # codegen.cpu.Context
     otherwise core uses its own statement visitor or reports a missing handler
     naming the node type and Target. Target-specific scalar calls use the same
     registry.
-  - `exported` is set while a parameter list another translation unit will read
-    is being written. A target whose types are its own MUST answer with what
-    plain C states while it is set, because that is all the reading unit can
-    spell.
-  - `local_value` and `local_extent` are what the writing scope calls the value
-    and the extent it passes; a scope that holds something richer than a plain
-    parameter — a host entry holding a runtime tensor — states so by overriding
-    them. They are the only place a caller's own vocabulary enters a call.
-  - A target subclass owns the type strings and hardware counters only it can
-    state; a handler MUST reach them through the context rather than reading
-    the IR for them. Other helpers MAY be added per target.
+  - `exported` is set while codegen writes a parameter list that another
+    translation unit reads. While it is set, a target with its own types MUST
+    answer with what plain C states. The reading unit can spell only plain C.
+  - `local_value` and `local_extent` name the value and the extent that the
+    writing scope passes. A scope that holds more than a plain parameter
+    overrides them. A host entry that holds a runtime tensor is an example. They
+    are the only place where a caller's own vocabulary enters a call.
+  - A target subclass owns the type strings and hardware counters that only it
+    can state. A handler MUST reach them through the context. A handler MUST NOT
+    read the IR for them. Other helpers MAY be added per target.
 
 ### 2.4 Effect Op dispatch
 
@@ -199,9 +198,9 @@ class LinkableFunction:
 ```
 
 - constraints:
-  - `declaration` and `definition` MUST both be written from the one
-    `CallableSignature` ([§4.4](#44-signatures)) that the compile settled for
-    this function, so the two cannot state different parameters.
+  - `declaration` and `definition` MUST both come from the one
+    `CallableSignature` ([§4.4](#44-signatures)) of this function. The compile
+    settles that signature. Thus the two cannot state different parameters.
 
 ### 4.2 `LinkableModule`
 
@@ -238,13 +237,14 @@ class LinkableModule:
     `<target>_<index>.<language>`. `HostLinkableModule.link` MUST name its output
     `host.cpp`. Backend subclasses
     MUST own their language, compiler options, and runtime include paths.
-  - `preamble` MUST carry what the unit states outside any function: includes,
-    macros, unit-level template specializations, and device state emitted only
-    where a function used it. It is a field because it is settled only once
-    every function of the unit has been walked.
-  - `source` is a read-only property and MUST be the only place a translation
-    unit is assembled: the preamble, then every declaration, then every
-    definition. A generator MUST NOT emit the unit a second time alongside
+  - `preamble` MUST carry what the unit states outside any function. This is
+    includes, macros, unit-level template specializations, and device state.
+    It MUST carry device state only where a function uses it. It is a
+    field because codegen settles it only after it walks every function of the
+    unit.
+  - `source` is a read-only property. It MUST be the only place that
+    assembles a translation unit. It assembles the preamble, then every
+    declaration, then every definition. A generator MUST NOT emit the unit a second time alongside
     `functions`.
 
 A `LinkableModule` is a build artifact, not a runtime object and not a
@@ -287,9 +287,9 @@ class LinkedModule:
   - `LinkedFunction.name` MUST be the dotted registration name;
     `signature` MUST retain the host C++ calling convention and its C++ name
     ([§4.4](#44-signatures)). `LinkedFunction.create` builds this pair from a resolved `FunctionSymbol`.
-  - `LinkedModule.functions` MUST list all CPU hosts on the Module's call paths,
-    with the `Module.entry` host first when present; the loader binds the first
-    ([runtime §1.4](./runtime.md#14-runtimeloaderpy)).
+  - `LinkedModule.functions` MUST list all CPU hosts on the Module's call paths.
+    It MUST put the `Module.entry` host first when present. The loader binds the
+    first host ([runtime §1.4](./runtime.md#14-runtimeloaderpy)).
   - MUST carry the assembled host + device source — the diagnostic source the
     runtime exposes as `runtime.Module.source` ([runtime](./runtime.md)).
 
@@ -318,8 +318,9 @@ class CMakeProject:
 ```
 
 - constraints:
-  - `link_program` MUST emit one `LinkableModule` per device context group and
-    combine all selected CPU entries into one host group and one `host.cpp`.
+  - `link_program` MUST emit one `LinkableModule` per device context group.
+    It MUST combine all selected CPU entries into one host group and
+    one `host.cpp`.
   - `link_modules` MUST create one `CMakeProject`, invoke each module's
     `link(project)`, then call `host.resolve(LinkedModule, project, functions)`.
     The default `LinkedModule.create` MUST call `project.build(functions)`; it
@@ -346,9 +347,9 @@ output directory ([cli](./cli.md#scaffold)).
 ### 4.4 Signatures
 
 A signature is what one IR `Type` becomes once its function is compiled to
-C++. The two layers differ: an IR function returns a value, where a C++ entry
-writes into trailing parameters, and a call may carry ids the IR never
-declared. So codegen states the C++ side as its own family, mirroring
+C++. The two layers differ. An IR function returns a value, but a C++ entry
+writes into trailing parameters. A call may carry ids that the IR never
+declares. So codegen states the C++ side as its own family, which mirrors
 `Type` ([types §7](./types.md#7-callabletype)).
 
 ```python
@@ -364,13 +365,13 @@ class TensorSignature(Signature):
     @property
     def dynamic_axes(self) -> tuple[int, ...]: ...
 
-class ProgramIdSignature(Signature):
-    """The id of one topology level, told to a program that cannot read it."""
+class UnitIdSignature(Signature):
+    """The unit id of one topology, told to a program that cannot read it."""
 
     name: str
-    topology_level: str
+    topology: str
 
-class ProgramMetaSignature(Signature):
+class PlacementSignature(Signature):
     """The block of ids a kernel hands to the runtime it was compiled against."""
 
     name: str
@@ -385,9 +386,6 @@ class TupleSignature(Signature):
     """The C++ side of a `TupleType`."""
 
     fields: tuple[Signature, ...] = ()
-
-class UnitSignature(Signature):
-    """The C++ side of `UnitType`: nothing is passed."""
 
 class CallableSignature(Signature):
     """One calling convention of one IR function."""
@@ -405,11 +403,11 @@ class CallableSignature(Signature):
     `len(params) - output_count`; `input_params` / `output_params` are the
     corresponding slices; `all_params` is `leading + params + trailing`, the
     order the C++ declaration lists.
-  - a `TensorSignature` reuses the IR type system instead of restating it: a
-    dynamic dim is whatever `type.shape` carries (e.g. a `DimVar`), and there
-    is no separate dynamic-dim sentinel. `dynamic_axes` are the axes it carries
+  - A `TensorSignature` reuses the IR type system. A dynamic dim is whatever
+    `type.shape` carries (e.g. a `DimVar`). There is no separate dynamic-dim
+    sentinel. `dynamic_axes` are the axes it carries
     as a `DimVar`, and only those extents travel with the pointer.
-  - a program id, a program-meta block and a launch argument have no IR
+  - a unit id, a placement block and a launch argument have no IR
     counterpart: they are hidden parameters. Each is its own class, so whoever
     writes one out dispatches on the type instead of reading the name.
   - one compiled function has three C++ conventions — the host entry, the
@@ -438,28 +436,29 @@ class CallableSignature(Signature):
     identities. Target conventions receive the resolved symbol and target;
     they MAY append target-owned suffixes but MUST NOT reconstruct paths.
     CPU functions use the mangled root.
-  - parameters codegen inserts (`tilefoundry_meta`,
-    `tilefoundry_<level>_program_id`) and unit-owned state MUST carry the
+  - parameters codegen inserts (`tilefoundry_placement`,
+    `tilefoundry_<topology>_unit_id`) and unit-owned state MUST carry the
     `tilefoundry_` prefix. Their spellings belong to their respective targets.
   - host wrappers use `export_name(root, fn)` registration names, registering
     through `Function::SetGlobal` with override enabled.
-  - user parameter names are used verbatim. They MUST be C identifiers, MUST
-    NOT be C++ keywords or start with `tilefoundry_`, and MUST NOT collide with
-    another parameter or derived view name (`<name>_tensor`, each dynamic
-    `<name>_shape_<axis>`, or a sharded parameter's `<name>_mesh`). Errors name
+  - User parameter names are used verbatim. They MUST be C identifiers. They
+    MUST NOT be C++ keywords. They MUST NOT start with `tilefoundry_`. They MUST
+    NOT collide with another parameter. They MUST NOT collide with a derived
+    view name (`<name>_tensor`, each dynamic `<name>_shape_<axis>`, or a sharded
+    parameter's `<name>_mesh`). Errors name
     the function path and parameter.
-  - the entry the loader is handed ([§4.3](#43-linkedmodule)) is a fourth
-    value of the same shape: its `name` is the TVM FFI registration name, which
-    the loader combines with the `LinkedFunction`'s `signature` to obtain it,
-    and each `leading` entry is a `ProgramIdSignature` whose `topology_level`
-    names the level whose id the host must supply, because that caller reads
-    the id out of a `Placement` ([shard §5](./shard.md#5-mesh)) instead of writing
-    a C++ declaration.
+  - The entry that the loader receives ([§4.3](#43-linkedmodule)) is a fourth
+    value of the same shape. Its `name` is the TVM FFI registration name. The
+    loader combines it with the `signature` of the `LinkedFunction` to obtain
+    the entry. Each `leading` entry is a `UnitIdSignature`. Its `topology`
+    names the topology whose unit id the host supplies. That caller reads the id
+    out of a `Placement` ([shard §5](./shard.md#5-mesh)). It does not write a
+    C++ declaration.
 
 ```python
-def program_id_params(
+def unit_id_params(
     module: core.Module, target: Target
-) -> tuple[ProgramIdSignature, ...]:
+) -> tuple[UnitIdSignature, ...]:
     """The ids a call into *module* has to carry for *target* to run it."""
     ...
 
@@ -480,24 +479,26 @@ per compile and holds it as `codegen.Context.symbols`. A `FunctionSymbol` pairs 
 function with its `symbol`, `export_name`, `owner`, `target` and `callable`.
 
 - constraints:
-  - `program_id_params` is the one place that asks which levels supply their
-    own program ids: the levels whose `TopologyFacts` entry is `from_target`
-    ([target §1](./target.md#1-target)), intersected with the levels
-    the module's program names. A level stated that way has no register the
-    device can read, so its id arrives with the call.
-  - `FunctionSymbolTable.by_function` states one `FunctionSymbol` per function
-    in the tree, CPU and device, variants included, and `callables` its
-    `CallableSignature`, both keyed by `id(fn)`, so a call site holds its
-    callee and never asks which module the callee lives in. A symbol's
+  - `unit_id_params` is the one place that asks which topology levels supply
+    their own unit ids. These are the topology levels whose `TopologyFacts`
+    entry is `from_target` ([target §1](./target.md#1-target)). The result keeps
+    only the topology levels that the module's program names. A topology level
+    stated that way has no register that the device can read. Its id arrives
+    with the call.
+  - `FunctionSymbolTable.by_function` holds one `FunctionSymbol` per function
+    in the tree, CPU and device, variants included. `callables` holds the
+    `CallableSignature` of each function. Both are keyed by `id(fn)`. Thus a
+    call site holds its callee and never asks which module the callee lives in. A symbol's
     `callable` comes from `called_as` with the Target's callee convention.
     A prototype's variants are selected inside its kernel
     ([§5](#5-specialization-dispatch)).
-  - a row is what a caller must write and nothing about what an emitter
-    produced. The `symbols` an emitter reads through `EmitContext`
-    (`Context.for_group`) hold, for each function a Launch names whose caller or
-    callee is in the group, the launcher convention (`trailing=LAUNCH_ABI`) in place of the callee one; the
-    kernel's own convention is not in the table. Each Launch statement's
-    launcher signature is also kept in `Context.launch_callables`.
+  - A row is what a caller must write. A row holds nothing about what an emitter
+    produced. The `symbols` that an emitter reads through `EmitContext`
+    (`Context.for_group`) hold launcher conventions. A launcher convention
+    (`trailing=LAUNCH_ABI`) exists for each function that a Launch names and
+    whose caller or callee is in the group. It replaces the callee convention. The kernel's own
+    convention is not in the table. `Context.launch_callables` also keeps the
+    launcher signature of each Launch statement.
 
 ## 5. Specialization dispatch
 
@@ -507,11 +508,10 @@ variant runs is decided on the device.
 - constraints:
   - The variants of one prototype MUST agree on launch geometry. A translation
     unit states its program dimensions once for every kernel in it
-    ([target](./target.md)), so variants that disagreed could not share one
-    unit -- and they have nothing else to disagree about that a launch could
-    express.
-  - Because the geometry is one, the host MUST NOT choose between variants: it
-    writes the one call the symbol table names ([§4.4](#44-signatures)). There
+    ([target](./target.md)). Thus variants that disagree on geometry cannot
+    share one unit. A launch can express no other difference between variants.
+  - The geometry is one. The host MUST NOT choose between variants. The host
+    writes the one call that the symbol table names ([§4.4](#44-signatures)). There
     is no host-side chain over N launchers and no per-variant launcher.
   - The prototype's kernel holds every variant as a branch, taken on the extent
     the call already carries -- the parameter the open axis expands into. A

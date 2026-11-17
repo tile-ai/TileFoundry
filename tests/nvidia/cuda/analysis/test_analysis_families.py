@@ -172,11 +172,11 @@ class CrossScopePerformance(FamilyCase):
         timed = []
         context = analysis.build_context(cross_scope.module, cross_scope.function)[-1]
         for call in _calls(cross_scope.function):
-            frame = context.callee_context(call)
+            ctx = context.callee_context(call)
             occurrence = expr.get_metadata(call, analysis.PerformanceMetadata)
-            if frame is None or occurrence is None:
+            if ctx is None or occurrence is None:
                 continue
-            for primitive in _calls(frame.function):
+            for primitive in _calls(ctx.function):
                 record = expr.get_metadata(primitive, analysis.PerformanceMetadata)
                 if record is None:
                     continue
@@ -348,13 +348,13 @@ def test_capacity_overflow_reports_error() -> None:
 
     tight_memory = analysis.analyze(*analysis.check_program(tight, split), analysis="memory")
     tight_record = expr.get_metadata(tight_memory.function, analysis.RegionMemoryMetadata)
-    assert tight_record.errors == ("smem placement peak 206.25KiB exceeds capacity 103.12KiB",)
-    assert '#   error="smem placement peak 206.25KiB exceeds capacity 103.12KiB"' in inspection.render_text(
+    assert tight_record.errors == ("smem peak 206.25KiB exceeds capacity 103.12KiB",)
+    assert '#   error="smem peak 206.25KiB exceeds capacity 103.12KiB"' in inspection.render_text(
         inspection.render_analysis(tight_memory)
     )
     assert inspection.render_analysis(tight_memory).data["functions"][0]["function_records"]["memory"][
         "errors"
-    ] == ["smem placement peak 206.25KiB exceeds capacity 103.12KiB"]
+    ] == ["smem peak 206.25KiB exceeds capacity 103.12KiB"]
 
     tight_performance = analysis.analyze(*analysis.check_program(tight, split), analysis="performance")
     assert (
@@ -421,10 +421,10 @@ def test_local_duration_prices_stated_rates() -> None:
 
     with pytest.raises(
         analysis.Error,
-        match=r"^performance: selected topology level 'thread', but the target's "
+        match=r"^performance: selected topology 'thread', but the target's "
         r"one-unit throughputs are stated for 'cta'$",
     ):
-        analysis.local_duration_ns(work, throughput, services, level="thread")
+        analysis.local_duration_ns(work, throughput, services, topology="thread")
 
     with pytest.raises(analysis.Error, match=r"unknown compute dtype 'f9e9m9'"):
         analysis.local_duration_ns(
@@ -439,7 +439,7 @@ def test_local_duration_prices_stated_rates() -> None:
             ),
             throughput,
             services,
-            level="cta",
+            topology="cta",
         )
 
     crossed = analysis.MemoryMetadata(
@@ -473,7 +473,7 @@ def test_local_duration_prices_stated_rates() -> None:
             throughput,
             replace(services, unit_bandwidth=()),
             moved=crossed,
-            level="cta",
+            topology="cta",
         )
         == 0
     )
@@ -482,7 +482,7 @@ def test_local_duration_prices_stated_rates() -> None:
         unit_bandwidth=((throughput.bandwidth_level, 1024_000_000_000), ("smem", 1024_000_000_000)),
     )
     assert (
-        analysis.local_duration_ns(analysis.ComputeCostMetadata(), throughput, priced, moved=crossed, level="cta")
+        analysis.local_duration_ns(analysis.ComputeCostMetadata(), throughput, priced, moved=crossed, topology="cta")
         == 8
     )
 

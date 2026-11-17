@@ -101,7 +101,7 @@ def assert_reported_contract(report: dict) -> None:
     def nonnegative(value: object) -> None:
         """Every quantity these four families report is a count, so none is below zero.
 
-        Work, moved bytes, placement peaks and a bound are all counts of something that
+        Work, moved bytes, memory peaks and a bound are all counts of something that
         happened or has to happen. A negative one is not a small answer but a
         derivation that ran backwards -- a projection dividing what it should have
         multiplied, or a difference taken the wrong way round -- and it would then be
@@ -131,7 +131,7 @@ def assert_internal_contract(result: analysis.Result, scopes: tuple[analysis.Ite
     """
     module_target = result.module.resolve_target()
     throughput = module_target.get_facts(target.ThroughputFacts)
-    physical = module_target.get_facts(target.TopologyFacts).level(result.topology_level).max_physical_units
+    physical = module_target.get_facts(target.TopologyFacts).topology(result.topology).max_physical_units
     for function, node in (
         (function, node2) for function in result.functions for node2 in core.collect_exprs(function.body)
     ):
@@ -147,15 +147,15 @@ def assert_internal_contract(result: analysis.Result, scopes: tuple[analysis.Ite
             for scope in scopes
             if id(node) in scope.snapshot.definition.locations
         )
-        active = min(owner.root.active_positions(result.topology_level), physical)
+        active = min(owner.root.active_units(result.topology), physical)
         inflight = analysis.inflight_bytes(node, owner, module_target, throughput.bandwidth_level)
         duration = analysis.local_duration_ns(
             cost,
             throughput,
-            module_target.get_facts(target.PerformanceServiceFacts, (result.topology_level, active, inflight)),
+            module_target.get_facts(target.PerformanceServiceFacts, (result.topology, active, inflight)),
             moved=expr.get_metadata(node, analysis.MemoryMetadata),
-            level=result.topology_level,
-            positions=min(owner.mesh_positions(result.topology_level), active),
+            topology=result.topology,
+            units=min(owner.mesh_units(result.topology), active),
         )
         record = expr.get_metadata(node, analysis.PerformanceMetadata)
         if not duration:

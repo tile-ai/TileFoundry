@@ -30,7 +30,6 @@ from .visitor import (
     StmtExprVisitor,
     StmtMutator,
     StmtVisitor,
-    TypeFunctor,
     collect_exprs,
     expr_children,
     function_values,

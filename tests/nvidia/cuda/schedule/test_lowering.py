@@ -104,7 +104,7 @@ def test_lowering_reports_smem_overflow(
     module = cli.load_authored_ir(str(four_stage))
     result = analysis.analyze(*analysis.check_program(module, module.entry_function()), analysis=("memory",))
     mem = expr.get_metadata(result.function, analysis.RegionMemoryMetadata)
-    assert "smem placement peak 256.00KiB exceeds capacity 227.00KiB" in mem.errors
+    assert "smem peak 256.00KiB exceeds capacity 227.00KiB" in mem.errors
     verifier.verify_prim_function(entry_function(cli.load_authored_ir(str(out))))
 
 

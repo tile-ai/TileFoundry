@@ -33,7 +33,7 @@ template <class T> struct ShuffleXor {
 /// Elect exactly one thread of the CTA.
 struct Elect {
     __device__ bool operator()() const {
-        const size_t tid = program_id<TopologyScope::thread>();
+        const size_t tid = unit_id<TopologyLevel::thread>();
         if (tid >= size_t(kWarpSize))
             return false;
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900

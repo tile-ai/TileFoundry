@@ -135,8 +135,8 @@ def parse_authored(
             context = replace(context, target=target, hardware_context=target_hardware_context(target))
     else:
         topology_scope = {
-            getattr(topology, "name", str(index)): topology
-            for index, topology in enumerate(topologies or ())
+            types.topology_name(topology): topology
+            for topology in (topologies or ())
         }
         context = FuncContext(
             dialect=dialect,

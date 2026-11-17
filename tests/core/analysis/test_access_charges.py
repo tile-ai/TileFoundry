@@ -3,7 +3,7 @@
 Running whole programs proves the answers agree; it does not prove any of them
 is right. What is left here is what a wrong answer would look like at readable
 dimensions: an Op nobody registered answered anyway, a boundary charged for
-coordinates its participant never had, a leaf charged at another leaf's width or
+coordinates its unit never had, a leaf charged at another leaf's width or
 level, and a packed value charged a share of a byte.
 """
 
@@ -20,6 +20,7 @@ from tilefoundry.dsl import *
 from tilefoundry.interfaces import access, cost, schedule
 from tilefoundry.ir import core, dim, expr, pattern, types, utils
 from tilefoundry.ir.hir import tensor
+from tilefoundry.ir.tir import memory as tir_memory
 
 B, S, H, D = 1, 5, 2, 3
 
@@ -105,6 +106,30 @@ def test_unstated_op_relation_refused() -> None:
             del access.relation_registry.entries[Unstated]
 
 
+
+def test_void_result_keeps_its_boundary() -> None:
+    """An effect Op with no result still states one boundary for it.
+
+    The relation after the arguments walks the iteration space; it is not a value,
+    so it holds against ``TupleType.Void`` as one boundary. That boundary has no
+    tensor leaf, so movement refuses to charge it rather than call it zero.
+    """
+    held = TensorType.from_shape((4, 8), DType.f32)
+    call = expr.Call(
+        type=TupleType.Void,
+        target=tir_memory.Copy(),
+        args=(expr.Var(type=held, name="src"), expr.Var(type=held, name="dst")),
+    )
+    assert len(access.local_relations_of(call, cost.Context())) == 3
+    cost.registry.entries[tir_memory.Copy] = lambda call, ctx: cost.Cost(
+        {}, (cost.TrafficBytes(read=128), cost.TrafficBytes(write=128), cost.TrafficBytes())
+    )
+    try:
+        with pytest.raises(analysis.Error, match="boundary 2 reaches coordinates nothing here can charge"):
+            analysis.call_traffic(call, cost.Context(), {"cta": cost.Context()})
+    finally:
+        del cost.registry.entries[tir_memory.Copy]
+
 _CTA2 = Topology("cta", 2)
 _CTA2_MESH = Mesh((_CTA2,), Layout((2,), (1,)), ("c",))
 _I64 = TensorType.from_shape((), DType.i64)
@@ -158,7 +183,7 @@ def test_insert_read_held_to_window(
 ) -> None:
     """An insert reads its update only inside the window.
 
-    Projection cuts the read to the positions each participant was given, and
+    Projection cuts the read to the positions each unit was given, and
     its own iterations follow from that. A nested layer cuts once whether held
     directly or through an offset view.
     """
@@ -168,7 +193,7 @@ def test_insert_read_held_to_window(
         args=(expr.Var(type=destination, name="dst"), expr.Var(type=update, name="update"), offsets),
     )
     topologies = (_CTA4, _THREAD2) if level == "thread" else (_CTA2,)
-    ctx = cost.Context(topology_level=level, topologies=topologies)
+    ctx = cost.Context(topology=level, topologies=topologies)
 
     stated = access.relations_of(call, ctx)
     reads = stated[1].relation
@@ -194,7 +219,7 @@ def test_insert_read_held_to_window(
             f"a boundary reached {reached} outside the {tuple(view.shape)} it was given"
         )
     assert relations[1].relation.domain().is_equal(isl.set(own)), (
-        "so the iterations left are the ones whose read this participant holds"
+        "so the iterations left are the ones whose read this unit holds"
     )
 
 

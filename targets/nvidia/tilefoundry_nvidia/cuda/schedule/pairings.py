@@ -22,7 +22,7 @@ def matrix_type(type_, reverse):
             return replace(layout, outer=permuted(layout.outer))
         shard = layout if isinstance(layout, types.ShardLayout) else None
         local = shard.layout if shard is not None else layout
-        axes = int_tuple.mode_axes(int_tuple.compatible_profile(tuple(prod(types.flatten(mode)) for mode in local.shape), type_.shape))
+        axes = int_tuple.mode_axes(int_tuple.compatible_profile(tuple(prod(types.flatten_to_tuple(mode)) for mode in local.shape), type_.shape))
         order = tuple(
             index
             for axis in reversed(range(len(type_.shape)))
@@ -35,9 +35,9 @@ def matrix_type(type_, reverse):
         )
         if shard is None:
             return result
-        positions = {old: new for new, old in enumerate(order)}
+        modes = {old: new for new, old in enumerate(order)}
         attrs = tuple(
-            types.Split(positions[attr.axis]) if isinstance(attr, types.Split) else attr for attr in shard.attrs
+            types.Split(modes[attr.axis]) if isinstance(attr, types.Split) else attr for attr in shard.attrs
         )
         return replace(shard, layout=result, attrs=attrs)
 

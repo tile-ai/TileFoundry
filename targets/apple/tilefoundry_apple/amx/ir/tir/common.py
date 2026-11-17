@@ -321,7 +321,7 @@ def check_types(op, type_list):
             raise TypeError(f"{op.mnemonic}.{param.name}: invalid logical fragment {t!r}")
     if matcher.solve() is not True:
         raise TypeError("AMX fragment constraints cannot be solved")
-    return types.UnitType()
+    return types.TupleType.Void
 
 
 def bound_value(value, bindings):
@@ -369,39 +369,15 @@ def z_matrix_layout(lanes, xybytes, zbytes):
     return pattern.Layout((lanes, (ratio, lanes // ratio)), (64 // xybytes, (64 // zbytes, 1)))
 
 
-def mode_offsets(shape, strides, index):
-    if isinstance(shape, int):
-        return index * strides
-    result = 0
-    for extent, stride in zip(shape, strides):
-        size = prod(flatten(extent))
-        result += mode_offsets(extent, stride, index % size)
-        index //= size
-    return result
-
-
-def flatten(x):
-    return tuple(v for item in x for v in flatten(item)) if isinstance(x, tuple) else (x,)
-
-
 def layout_offsets(t):
-    shape = t.shape
+    """The byte address of each element of *t*, in row-major order of its logical shape."""
     layout = t.layout
-    count = prod(shape)
-    result = []
-    for flat in range(count):
-        coords = []
-        left = flat
-        for dim in reversed(shape):
-            coords.append(left % dim)
-            left //= dim
-        coords.reverse()
-        result.append(
-            sum(mode_offsets(s, st, c) for s, st, c in zip(layout.shape, layout.strides, coords))
-            * t.dtype.bit_width
-            // 8
-        )
-    return tuple(result)
+    return tuple(
+        types.crd2idx(types.idx2crd(index, t.shape), layout.shape, layout.strides)
+        * t.dtype.bit_width
+        // 8
+        for index in range(prod(t.shape))
+    )
 
 
 def encode(op):
@@ -412,7 +388,7 @@ def infer(call, ctx):
     return check_types(call.target, tuple(ctx.type_of(a) for a in call.args))
 
 
-def placements(op, type_list):
+def operand_addresses(op, type_list):
     """Byte starts of logical elements; arithmetic is exclusively in evaluator semantics."""
     n = op.mnemonic
     out = {}
@@ -870,16 +846,14 @@ __all__ = [
     "encode_operand",
     "extract_source_layout",
     "extract_source_shape",
-    "flatten",
     "infer",
     "instruction_versions",
     "int_matrix_layout",
     "int_vector_layout",
     "layout_offsets",
-    "mode_offsets",
+    "operand_addresses",
     "operand_types",
     "packed_input_layout",
-    "placements",
     "validate",
     "vector_input_layout",
     "vector_layout",

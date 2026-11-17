@@ -23,13 +23,13 @@ from tilefoundry.ir import core, expr
 from tilefoundry_nvidia.cuda import target as cuda_target
 
 from .abi import (
-    PROGRAM_META,
-    PROGRAM_META_CTYPE,
+    PLACEMENT,
+    PLACEMENT_CTYPE,
     check_parameter_names,
     kernel_arguments,
     kernel_signature,
 )
-from .context import Context, topology_scope_str
+from .context import Context, topology_enumerator
 from .hir import device_functions
 from .templates import render
 
@@ -40,32 +40,32 @@ DEFAULT_DYNAMIC_SMEM = 48 * 1024
 
 def reject_omitted_child_weights(module: core.Module) -> None:
     """Reject device calls that depend on implicit child-owner weight injection."""
-    frames = valuation.collect_functions(module)
-    selectors = {id(frame.function): ref.qualified_name for ref, frame in frames.items()}
+    contexts = valuation.collect_functions(module)
+    selectors = {id(ctx.function): ref.qualified_name for ref, ctx in contexts.items()}
 
     class Check(core.ExprVisitor[None]):
-        def default_visit_leaf(self, node, operands, frame):
+        def default_visit_leaf(self, node, operands, ctx):
             return None
 
-        def visit_Call(self, call, frame):
-            self.visit_operands(call, frame)
-            inner = frame.callee_context(call) if frame is not None else None
+        def visit_Call(self, call, ctx):
+            self.visit_operands(call, ctx)
+            inner = ctx.callee_context(call) if ctx is not None else None
             if inner is None or call.target.name is not None:
                 return
             callee = inner.function
             weights = [param.name for param in callee.params if param.is_const]
             if weights:
                 raise ValueError(
-                    f"CUDA skeleton: {selectors[id(frame.function)]} calls "
+                    f"CUDA skeleton: {selectors[id(ctx.function)]} calls "
                     f"{selectors[id(callee)]} with omitted weights {weights}; "
                     "declare the weights as parameters or call from orchestration"
                 )
 
-    for frame in frames.values():
-        if isinstance(frame.function, core.Function):
-            for function in (frame.function, *frame.function.variants):
+    for ctx in contexts.values():
+        if isinstance(ctx.function, core.Function):
+            for function in (ctx.function, *ctx.function.variants):
                 if function.body is not None:
-                    Check().visit(function.body, frame)
+                    Check().visit(function.body, ctx)
 
 
 def emit_function(fn: core.ModuleFunction, ctx: Context) -> codegen.LinkableFunction:
@@ -110,7 +110,7 @@ def write_kernel_body(
 ) -> None:
     """What the kernel was told, then what it was written to do."""
     if kernel.leading:
-        ctx.emit(f"tilefoundry::program_meta({PROGRAM_META.name});")
+        ctx.emit(f"tilefoundry::placement({PLACEMENT.name});")
     ctx.emit_node(fn)
 
 
@@ -149,24 +149,24 @@ def define_launcher(
 def tell_the_block(launcher: codegen.CallableSignature, ctx: Context) -> None:
     """Gather the ids the launcher was told into the block the kernel takes.
 
-    Which levels these are is the signature's answer, so the launcher states no
-    level of its own: one line per id the convention put in front.
+    Which topologies these are is the signature's answer, so the launcher states no
+    topology of its own: one line per id the convention put in front.
     """
     if not launcher.leading:
         return
-    ctx.emit(f"{PROGRAM_META_CTYPE} {PROGRAM_META.name}{{}};")
+    ctx.emit(f"{PLACEMENT_CTYPE} {PLACEMENT.name}{{}};")
     for signature in launcher.leading:
-        scope = topology_scope_str(signature.topology_level)
+        enumerator = topology_enumerator(signature.topology)
         ctx.emit(
-            f"{PROGRAM_META.name}.program_id[int({scope})] = static_cast<int>({signature.name});"
+            f"{PLACEMENT.name}.unit_id[int({enumerator})] = static_cast<int>({signature.name});"
         )
 
 
 def one_geometry(kernels: tuple[core.ModuleFunction, ...], ctx: Context) -> Geometry:
     """The geometry this unit runs at, which every kernel in it states the same.
 
-    A unit specializes ``program_dim`` once, so two kernels launched at
-    different geometries cannot share one: they are two units.
+    A translation unit specializes ``topology_size`` once, so two kernels launched
+    at different geometries cannot share one: they are two translation units.
     """
     by_kernel = {fn.name: launched_at(fn, ctx) for fn in kernels}
     distinct = set(by_kernel.values())
@@ -189,10 +189,10 @@ def launched_at(fn: core.ModuleFunction, ctx: Context) -> Geometry:
     return geometry
 
 
-def program_dimensions(geometry: Geometry) -> list[dict[str, str]]:
-    """One instance count per level: what ``program_dim`` states for this unit.
+def topology_sizes(geometry: Geometry) -> list[dict[str, str]]:
+    """One unit count per topology: what ``topology_size`` states for this translation unit.
 
-    ``program_shape`` is derived from these, so a unit specializes the counts
+    ``topology_shape`` is derived from these, so a translation unit specializes the counts
     and nothing else. A launch-provided grid has no count here; the runtime
     states that one when it is asked.
     """
@@ -200,13 +200,13 @@ def program_dimensions(geometry: Geometry) -> list[dict[str, str]]:
     dims = []
     static_grid = tuple(expr.static_dim_value(value) for value in grid)
     if all(value is not None for value in static_grid):
-        dims.append({"scope": topology_scope_str("cta"), "count": str(math.prod(static_grid))})
+        dims.append({"topology": topology_enumerator("cta"), "count": str(math.prod(static_grid))})
     elif static_grid[1:] != (1, 1):
         raise ValueError("codegen: only grid.x may be a host-computed dynamic expression")
     static_block = tuple(expr.static_dim_value(value) for value in block)
     if any(value is None for value in static_block):
         raise ValueError("codegen: thread topology extents must be compile-time constants")
-    dims.append({"scope": topology_scope_str("thread"), "count": str(math.prod(static_block))})
+    dims.append({"topology": topology_enumerator("thread"), "count": str(math.prod(static_block))})
     return dims
 
 
@@ -269,12 +269,12 @@ class CudaLinkableModule(codegen.LinkableModule):
         geometry = one_geometry(kernels, ctx)
         preamble = render(
             "cuda_preamble.cu.j2",
-            program_topology=topology_scope_str(
+            program_topology=topology_enumerator(
                 ctx.codegen_context.topology_domains[id(kernels[0])].topologies[0].name
                 if ctx.codegen_context.topology_domains[id(kernels[0])].topologies
                 else "cta"
             ),
-            program_dims=program_dimensions(geometry),
+            topology_sizes=topology_sizes(geometry),
             dynamic_cta=expr.static_dim_value(geometry[0][0]) is None,
             grid_barrier_state=ctx.needs_grid_barrier_state,
         )

@@ -152,7 +152,7 @@ def module(
                     )
                     verifier.verify_function(function, module=result)
                 elif isinstance(function, core.PrimFunction):
-                    verifier.verify_prim_function(function, frame=valuation.Context(result, function))
+                    verifier.verify_prim_function(function, ctx=valuation.Context(result, function))
             return result
         except Exception:
             consume_module_context(context)

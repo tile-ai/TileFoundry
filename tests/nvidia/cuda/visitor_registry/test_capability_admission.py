@@ -52,7 +52,7 @@ def _verify(function: core.PrimFunction, tgt: target.Target) -> None:
     module = core.Module(
         name="admission", functions=(function,), entry=function.name, target=tgt
     )
-    verifier.verify_prim_function(function, frame=valuation.Context(module, function))
+    verifier.verify_prim_function(function, ctx=valuation.Context(module, function))
 
 
 _REFUSED = [
@@ -96,7 +96,7 @@ def test_selected_atom_only_checked() -> None:
     """The SM80 atom is admitted on sm_89, although the same op also declares WGMMA."""
     module = retarget(cli.load_authored_ir(MM_HANDWRITTEN), SM89)
     for function in module.functions:
-        verifier.verify_prim_function(function, frame=valuation.Context(module, function))
+        verifier.verify_prim_function(function, ctx=valuation.Context(module, function))
 
 
 class _MmaSite(core.StmtVisitor[None]):
@@ -120,10 +120,10 @@ def test_open_wgmma_refused_on_sm89() -> None:
     )
     site = _MmaSite()
     site.visit(device.body, verify.Context(target=SM89))
-    args, frame = site.site
-    mesh = frame.current_mesh
+    args, ctx = site.site
+    mesh = ctx.mesh_scope
     operands = tuple(arg.type for arg in args)
     with pytest.raises(
         schedule.RefusalError, match="needs wgmma.mma_async, which nvidia.rtx_6000_ada does not list"
     ):
-        hir.schedule.match_instruction(nn.TiledMma, {"atom": nn.Wgmma}, operands, mesh, frame=frame)
+        hir.schedule.match_instruction(nn.TiledMma, {"atom": nn.Wgmma}, operands, mesh, ctx=ctx)

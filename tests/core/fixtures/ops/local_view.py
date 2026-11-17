@@ -1,14 +1,14 @@
-"""Participant-local QKV slicing and reshape across broadcast and split layouts."""
+"""Unit-local QKV slicing and reshape across broadcast and split layouts."""
 
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import cuda
 
 
-def program(participants):
-    target = cuda.Target("nvidia.h200_sxm", device_count=participants)
-    gpu = Topology("gpu", participants)
-    mesh = Mesh((gpu,), Layout((participants,)), ("rank",))
-    attr = Broadcast() if participants == 1 else Split(0)
+def program(units):
+    target = cuda.Target("nvidia.h200_sxm", device_count=units)
+    gpu = Topology("gpu", units)
+    mesh = Mesh((gpu,), Layout((units,)), ("g",))
+    attr = Broadcast() if units == 1 else Split(0)
     layout = ShardLayout.from_logical(
         (256, 8, 4, 128), mesh, (attr,), storage="gmem", owners=target.storage_owners
     )

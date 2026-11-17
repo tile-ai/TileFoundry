@@ -11,7 +11,7 @@ from .projection import affine_term, factored_image, logical_axes_of
 from .relation import Relation
 
 
-def at_most(extent: str, limits: tuple, position: int) -> list[str]:
+def at_most(extent: str, limits: tuple, mode: int) -> list[str]:
     """The most a window may extend on one axis, when the Op guarantees one.
 
     A runtime extent with no stated ceiling is a window a reader can only union
@@ -19,18 +19,18 @@ def at_most(extent: str, limits: tuple, position: int) -> list[str]:
     saying it here is what keeps one relation answering both how much this
     occurrence moves and how much the axis it walks ever holds.
     """
-    limit = limits[position] if position < len(limits) else None
+    limit = limits[mode] if mode < len(limits) else None
     return [] if limit is None else [f"{extent} <= {limit}"]
 
 
 def placed_window(
     offsets: tuple, extents: tuple, rank: int, limits: tuple = (), within: tuple = ()
 ) -> tuple:
-    """What a window reaches among a value's own positions, and what it leaves.
+    """What a window reaches among a value's own coords, and what it leaves.
 
-    One domain for both, the value's own positions, so the two answer about the
-    same coordinates: the window is where the offsets put it, and what is left
-    alone is every position it does not cover -- a difference, not a flag. An
+    One domain for both, the value's own coordinate space, so the two answer about
+    the same coordinates: the window is where the offsets put it, and what is left
+    alone is every coord it does not cover -- a difference, not a flag. An
     offset or an extent only known later is a parameter bound to the value it is,
     kept inside whatever the Op guarantees about it, and a window begins and ends
     inside what it is placed in -- so one covering the whole of something leaves
@@ -39,24 +39,24 @@ def placed_window(
     domain = ", ".join(f"d{index}" for index in range(rank))
     guards: list[str] = []
     values: dim.IslParamValues = {}
-    for position in range(rank):
-        begin, bound_begin = affine_term(offsets[position], f"o{position}")
-        extent, bound_extent = affine_term(extents[position], f"e{position}")
+    for mode in range(rank):
+        begin, bound_begin = affine_term(offsets[mode], f"o{mode}")
+        extent, bound_extent = affine_term(extents[mode], f"e{mode}")
         values.update(bound_begin)
         values.update(bound_extent)
         if bound_begin:
             guards.append(f"0 <= {begin}")
         if bound_extent:
             guards.append(f"1 <= {extent}")
-            guards.extend(at_most(extent, limits, position))
-        if (bound_begin or bound_extent) and position < len(within):
-            whole, bound_whole = affine_term(within[position], f"w{position}")
+            guards.extend(at_most(extent, limits, mode))
+        if (bound_begin or bound_extent) and mode < len(within):
+            whole, bound_whole = affine_term(within[mode], f"w{mode}")
             values.update(bound_whole)
             guards.append(f"{begin} + {extent} <= {whole}")
         if begin == "0":
-            guards.append(f"0 <= d{position} < {extent}")
+            guards.append(f"0 <= d{mode} < {extent}")
             continue
-        guards.append(f"{begin} <= d{position} < {begin} + {extent}")
+        guards.append(f"{begin} <= d{mode} < {begin} + {extent}")
     prefix = declared(values)
     where = f" : {' and '.join(guards)}" if guards else ""
     reached = isl.map(f"{prefix}{{ [{domain}] -> [{domain}]{where} }}")
@@ -71,22 +71,22 @@ def normalised_rows(local: "types.Type", logical: "types.Type", first: int) -> t
     Normalising needs the whole of what it normalises before any of it can be
     written, so the axes from `first` on are not coordinates the Op is asked by:
     they are free in the images. Returns the extents walked, one name per
-    position of `local`, and the guards bounding the free ones.
+    mode of `local`, and the guards bounding the free ones.
     """
     belongs = logical_axes_of(local, logical)
     extents: list = []
     names: list[str] = []
     guards: list[str] = []
-    for position, owner in enumerate(belongs):
-        extent = local.shape[position]
+    for mode, owner in enumerate(belongs):
+        extent = local.shape[mode]
         if owner < first:
             names.append(f"d{len(extents)}")
             extents.append(extent)
         elif expr.static_dim_value(extent) == 1:
             names.append("0")
         else:
-            names.append(f"j{position}")
-            guards.append(f"0 <= j{position} < {extent}")
+            names.append(f"j{mode}")
+            guards.append(f"0 <= j{mode} < {extent}")
     return tuple(extents), tuple(names), tuple(guards)
 
 
@@ -104,7 +104,7 @@ def control_space(rank: int, ctx, arg) -> "tuple[str, str, str]":
     """The domain, image and reach of one control operand's own coordinates.
 
     A tuple of numbers is indexed flat, one leaf however its fields are nested.
-    A lone scalar's legal index set is the single point, at whatever positions
+    A lone scalar's legal index set is the single point, at whatever coords
     its own view gives it.
     """
     domain = ", ".join(f"d{index}" for index in range(rank))
@@ -118,7 +118,7 @@ def control_space(rank: int, ctx, arg) -> "tuple[str, str, str]":
 def control_read(rank: int, ctx, arg) -> Relation:
     """The control numbers one operand carries, each read once.
 
-    The domain is the result's positions like every other boundary, because a
+    The domain is the result's coordinate space like every other boundary, because a
     reader applies one execution domain to all of them and a boundary with a rank
     of its own is one it cannot answer. What it reaches is one point per number,
     so a reader counts the numbers rather than believing an empty set.
@@ -137,9 +137,9 @@ def reached_at(
 ) -> Relation:
     """The coordinates one operand is reached at, stated per logical axis.
 
-    An Op reasons in logical axes and a participant is indexed by the positions
+    An Op reasons in logical axes and a unit indexes coords over the modes
     its layout made, so the expressions are given per axis and spread over the
-    positions holding it. An axis named `free` is one whose coordinate is a value
+    modes holding it. An axis named `free` is one whose coordinate is a value
     nobody has here because data determines it, so this may-access relation
     covers every coordinate that axis could legally name instead of guessing one.
     That keeps the answer bounded, and countable, without a carrier a reader has
@@ -152,13 +152,13 @@ def reached_at(
     image = factored_image(stated, local, logical)
     values: dim.IslParamValues = {}
     guards: list[str] = []
-    for position, owner in enumerate(belongs):
-        if owner not in free or local.shape[position] == 1:
+    for mode, owner in enumerate(belongs):
+        if owner not in free or local.shape[mode] == 1:
             continue
-        extent, bound = affine_term(local.shape[position], f"n{position}")
+        extent, bound = affine_term(local.shape[mode], f"n{mode}")
         values.update(bound)
-        image[position] = f"g{position}"
-        guards.append(f"0 <= g{position} < {extent}")
+        image[mode] = f"g{mode}"
+        guards.append(f"0 <= g{mode} < {extent}")
     domain = ", ".join(f"d{index}" for index in range(rank))
     where = f" : {' and '.join(guards)}" if guards else ""
     return Relation(
@@ -182,7 +182,7 @@ def window_source(
     A window covers the operand's shape wherever it lands, so the coordinate read
     is the one reached shifted back to where the window starts. The shift is per
     logical axis, because that is what an offset is stated against, and only then
-    spread over the positions this operand's own layout made -- which are not the
+    spread over the modes this operand's own layout made -- which are not the
     result's. An axis whose extent is given holds the read to it, because an
     operand supplying more than the window takes is not read past it; an axis
     given ``None`` is covered whole and asks for no such guard.

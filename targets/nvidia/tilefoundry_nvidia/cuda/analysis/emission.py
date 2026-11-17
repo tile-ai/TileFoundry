@@ -38,8 +38,9 @@ def result_param(params: Sequence[expr.ParamDef]) -> expr.ParamDef:
 def required_execution_mesh(op: expr.Op):
     """The execution mesh *op* declares, or None when lowering issues it once.
 
-    With a declared mesh, lowering issues *op* once for every point
-    ``IssuePlan.points`` enumerates; without one, once in its owner region.
+    With a declared mesh, lowering issues *op* once at every serial tile
+    ``IssuePlan.points`` enumerates; a point is that tile's operand windows, not
+    a unit of the execution mesh. Without one, once in its owner region.
     """
     declaration = getattr(op, "atom", op)
     if isinstance(declaration, type):
@@ -47,17 +48,19 @@ def required_execution_mesh(op: expr.Op):
     return getattr(declaration, "required_execution_mesh", None)
 
 
-def issue_mesh(op: expr.Op, owner: types.Mesh | None, enclosing: types.Mesh | None) -> types.Mesh | None:
-    """The mesh lowering issues *op* on, None for the enclosing one.
+def execution_mesh_of(
+    op: expr.Op, owner: types.Mesh | None, mesh_scope: types.Mesh | None
+) -> types.Mesh | None:
+    """The mesh lowering issues *op* on, None for the enclosing mesh scope.
 
     An instruction without an execution mesh is issued on its owner; one with
-    an execution mesh on the participant frame of that mesh within the owner, or
-    within *enclosing* when nothing owns it.
+    an execution mesh on the mesh axes ``find_execution_mesh`` finds for it within
+    the owner, or within *mesh_scope* when nothing owns it.
     """
     required = required_execution_mesh(op)
     if required is None:
         return owner
-    return utils.participant_frame(owner or enclosing, required)[0]
+    return utils.find_execution_mesh(owner or mesh_scope, required)[0]
 
 
 def tied(aliases: Sequence[analysis.BufferAlias], kind: analysis.AliasKind, target: core.SSAValue) -> bool:
@@ -107,7 +110,7 @@ __all__ = [
     "copies_carry_entry",
     "copies_insert_slice_base",
     "copies_insert_slice_update",
-    "issue_mesh",
+    "execution_mesh_of",
     "operand_roles",
     "required_execution_mesh",
     "result_param",

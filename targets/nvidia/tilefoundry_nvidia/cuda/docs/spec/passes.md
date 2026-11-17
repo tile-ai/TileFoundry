@@ -34,9 +34,9 @@ class CudaLowering(Lowering):
     pass names both families in `analyses`: a caller prepares the Module with
     `analyze(module, entry, analysis=("memory", "sync"))` and passes the result
     to `finalize`; `tilefoundry schedule finalize` reads `analyses`.
-  - Which copies the loop and `InsertSlice` visits add, which parameters a
-    Call's arguments supply and the mesh an instruction is issued on come from
-    `cuda/analysis/emission.py`, which the `sync` family also reads.
+  - `cuda/analysis/emission.py` decides which copies the loop and `InsertSlice`
+    visits add. It also decides which parameters a Call's arguments supply and
+    which mesh an instruction is issued on. The `sync` family also reads it.
   - The visitor emits the steps a node's `SyncMetadata` holds for a tag, in
     order, where that tag's statements are lowered:
 
@@ -62,13 +62,13 @@ class CudaLowering(Lowering):
   - `CopyAsyncTensor` and `CopyReduceAsyncTensor` register no asynchronous
     completion group: their effects complete on return, the shared operand
     through the async proxy ([analysis §2](./analysis.md#2-completion-registry)).
-    Their emitters MUST finish each copy before the operation ends: an mbarrier
-    wait for a load, a full bulk wait (not `.read`) for a store or reduction,
-    each followed by a meeting of the issuing threads.
+    Their emitters MUST finish each copy before the operation ends. A load
+    needs an mbarrier wait. A store or reduction needs a full bulk wait (not
+    `.read`). The threads of the execution mesh meet after each wait.
   - `visit_T_CopyAsyncTensor` lowers a load from global to shared memory to
-    `CopyAsyncTensorTx` wherever `default_visit_T` would issue the load, with
-    the words `SyncPlanMetadata.barriers` places as `barrier`: `count` words of
-    8 bytes from `offset`. A store is lowered by `default_visit_T`.
+    `CopyAsyncTensorTx` wherever `default_visit_T` would issue the load. It
+    passes as `barrier` the words that `SyncPlanMetadata.barriers` places:
+    `count` words of 8 bytes from `offset`. `default_visit_T` lowers a store.
 
 ### 7.3 `insert_default_host_entry`
 
@@ -104,31 +104,32 @@ def insert_default_host_entry(module: Module) -> Module:
   - A CPU entry MUST pass through unchanged.
   - When the root Module entry receives a host entry, the pass sets `Module.entry`
     to that host entry.
-  - With no CPU entry, an all-HIR tree MUST gain one CPU entry per Module
-    whose `entry` is set, whose result leaves are all GMEM or UMAT, and whose
-    call path crosses no indexed slot, root and children alike: Python begins a kernel
-    invocation only by entering one ([hir §1.1](../../../../../../docs/spec/hir.md#11-function),
-    [core-ir §1](../../../../../../docs/spec/core-ir.md#1-module)). Any other function gets no entry.
-    The tree's resolved Target MUST be CUDA. Each entry launches the Module
-    entry by its root-relative call path
+  - With no CPU entry, an all-HIR tree MUST gain one CPU entry per eligible
+    Module. A Module is eligible when its `entry` is set, all its result leaves
+    are GMEM or UMAT, and its call path crosses no indexed slot. This holds for
+    the root and the children alike. Python begins a kernel invocation only by
+    entering a CPU entry ([hir §1.1](../../../../../../docs/spec/hir.md#11-function),
+    [core-ir §1](../../../../../../docs/spec/core-ir.md#1-module)). Any other
+    function gets no entry. The tree's resolved Target MUST be CUDA.
+    Each entry launches the Module entry by its root-relative call path
     ([core-ir §1](../../../../../../docs/spec/core-ir.md#1-module)) at the owner's
-    effective topology and forwards its own parameters: the declared inputs,
-    then one destination per tensor result leaf in tuple leaf order. A
-    destination keeps the leaf's shape and dtype, with GMEM storage and no
-    layout, and is named `out`, else its first free `_1`, `_2`, ... suffix,
-    with the declared names reserved. A unit result adds none; any other
-    result type MUST be rejected. The pass checks these when it builds the
-    `Launch`, so later stages read them and do not derive them again. The
-    entry's IR name is `<fn.name>_host`, with the same suffix rule on collisions; its emitted C++
-    and registration names follow the HIR callee's path
-    ([codegen §4.4](../../../../../../docs/spec/codegen.md#44-signatures)).
+    effective topology. It forwards its own parameters: the declared inputs,
+    then one destination per tensor result leaf in tuple leaf order.
+    A destination keeps the shape and dtype of the leaf, with GMEM storage and
+    no layout. A destination is named `out`, else its first free `_1`, `_2`, ...
+    suffix. The declared names are reserved. A void result adds no destination.
+    The pass MUST reject any other result type. The pass checks these when it
+    builds the `Launch`. Later stages read them and do not derive them again.
+    The entry's IR name is `<fn.name>_host`, with the same suffix rule on
+    collisions. Its emitted C++ and registration names follow the HIR callee's
+    path ([codegen §4.4](../../../../../../docs/spec/codegen.md#44-signatures)).
   - An entry whose call path crosses an indexed slot MUST receive no host
     entry; indexed entry references await #235.
-  - An HIR entry with an rmem or smem result leaf MUST receive no host entry,
-    because a host cannot pass that storage.
-  - Each synthesized `Launch` MUST state the entry function's analyzed
-    shared-memory peak as `dynamic_smem`, and 0 when it carries no memory
-    analysis. When the entry's `SyncPlanMetadata.barriers` is `(offset, count)`,
+  - An HIR entry with an rmem or smem result leaf MUST receive no host entry.
+    A host cannot pass that storage.
+  - Each synthesized `Launch` MUST state `dynamic_smem` as the analyzed
+    shared-memory peak of the entry function. It MUST state 0 when that
+    function has no memory analysis. When the entry's `SyncPlanMetadata.barriers` is `(offset, count)`,
     it states `offset + 8 * count` instead.
   - Mixed HIR/TIR device trees MUST be rejected.
   - A TIR Module MUST pass through unchanged; it supplies its own CPU entry.

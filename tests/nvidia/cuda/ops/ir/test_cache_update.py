@@ -39,7 +39,7 @@ def test_cache_update_cost_per_level() -> None:
     cta_ctx = cost.Context(
         selected_types=selected_types,
         selected_output_type=update.type,
-        topology_level="cta",
+        topology="cta",
         topologies=(_CTA,),
     )
     assert cta_ctx.local_type_of(update.args[3]).shape == (1, 4, 4, 8)
@@ -53,9 +53,9 @@ def test_cache_update_cost_per_level() -> None:
     )
 
     result = analysis.analyze(
-        *analysis.check_program(_KVCacheAppend, entry, topology_level="cta"),
+        *analysis.check_program(_KVCacheAppend, entry, topology="cta"),
         analysis=("compute-cost", "memory"),
-        topology_level="cta",
+        topology="cta",
     )
     analysed_update = next(
         node
@@ -64,7 +64,7 @@ def test_cache_update_cost_per_level() -> None:
     )
     record = expr.get_metadata(analysed_update, analysis.ComputeCostMetadata)
     moved = expr.get_metadata(analysed_update, analysis.MemoryMetadata)
-    assert result.topology_level == "cta"
+    assert result.topology == "cta"
     assert record is not None
     assert record.flops.kinds == ()
     row_bytes = _WINDOW_BYTES // 4

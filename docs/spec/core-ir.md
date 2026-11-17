@@ -2,11 +2,8 @@
 
 Defines the shared node algebra — `Module` / `Expr` / `IRMetadata` / `Op` /
 `Call` / `Var` / `Constant` / `Tuple` — that both HIR and TIR consume.
-`core_ir` is the shared node algebra layer, not a standalone IR: HIR and TIR
-each extend it with their own `Function` container and their own `Op` / `Stmt`
-subclasses. Types carried by `Expr.type` are defined in [types](./types.md);
-the distributed layout layer is [shard](./shard.md); `Stmt` is not here — it
-lives only in [tir §1](./tir.md#1-tir-stmt-hierarchy) as a TIR-only base class.
+`core_ir` is the shared node algebra layer. It is not a standalone IR. HIR and TIR each extend it with their own `Function` container and their own `Op` / `Stmt`
+subclasses. The [types](./types.md) spec defines the types that `Expr.type` carries. The [shard](./shard.md) spec defines the distributed layout layer. `Stmt` is not in this spec. It lives only in [tir §1](./tir.md#1-tir-stmt-hierarchy) as a TIR-only base class.
 
 ```mermaid
 flowchart TB
@@ -74,50 +71,28 @@ class Module:
     its specialization variants are finalized. Variants may be added to a base
     only while authoring, before the base enters a `Module`; adding one after
     sealing is an error ([hir §1.1](./hir.md#11-function)).
-  - a `Module` is the execution domain of the functions it owns: it, not they,
-    declares the `Target` and the ordered `Topology` hierarchy. It is a static
-    definition, not an invocation: owning a `Function`, attaching a child, or
-    declaring a `Target` or hierarchy never begins or counts one (Python-to-HIR
-    entry and HIR-to-HIR device calls: [hir §1.1](./hir.md#11-function)).
+  - a `Module` is the execution domain of the functions it owns. The Module, not the functions, declares the `Target` and the ordered `Topology` hierarchy. A Module is a static definition, not an invocation. Owning a `Function`, attaching a child, or declaring a `Target` or hierarchy never begins or counts an invocation. Python-to-HIR entry and HIR-to-HIR device calls are specified in [hir §1.1](./hir.md#11-function).
   - `children` maps instance slot keys to a `Module` (a single slot) or a
     non-empty tuple of `Module`s (an indexed slot). Definitions and function
     bodies remain shared; placing a definition creates no copy and no parent
     backlink ([§1.3](#13-modulelist)).
-  - a child MAY declare its own Target; holding it does not type its bodies
-    again. A call of a child function is typed from the callee body under the
-    callee's effective Target with the call's own argument types
-    ([hir §1.1](./hir.md#11-function)); that writes the caller's `Call.type`
-    and nothing in the child.
-  - `owns(function)` MUST use identity and accept the Module's direct functions
-    and their specialization variants. With `derived=True`, it MUST also follow
-    a rebuilt function's recorded origin
-    ([hir §2](./hir.md#2-function-specialization-api)) for the whole chain, not
-    only its first edge — a rebuild may itself be rebuilt; equal copies and
-    same-name functions from another Module MUST remain unowned.
+  - a child MAY declare its own Target. Holding the child does not type its bodies again. A call of a child function gets its type from the callee body. This typing uses the callee's effective Target and the call's own argument types ([hir §1.1](./hir.md#11-function)). The typing writes the caller's `Call.type` and nothing in the child.
+  - `owns(function)` MUST use identity. It MUST accept the Module's direct functions and their specialization variants. With `derived=True`, the check MUST also follow a rebuilt function's recorded origin ([hir §2](./hir.md#2-function-specialization-api)). It MUST follow the whole chain, not only the first edge, because a rebuild may itself be rebuilt. Equal copies and same-name functions from another Module MUST remain unowned.
 
 - `parse_module` (see [parser §2](./parser.md#2-syntax-and-rules)) returns a `Module`.
 - A bare `@func` / `@prim_func` returns a `Function` / `PrimFunction`; only the
   compile entry (`normalize_to_module`) wraps it in an implicit single-function
   `Module` whose `entry` names that function.
-- Same-module calls resolve through the Module's declared prototypes, not Python
-  closures: a call MUST name a prototype declared earlier in the same `@module`,
-  and a bare function's body MUST NOT call another function.
+- Same-module calls resolve through the Module's declared prototypes, not Python closures. A call MUST name a prototype declared earlier in the same `@module`. A bare function's body MUST NOT call another function.
 - `topologies` is the execution domain's complete ordered hierarchy.
-  `with Mesh(("cta",), layout=...)` inside a function body names one of the
-  effective levels and creates a lexical mesh binding.
+  `with Mesh(("cta",), layout=...)` inside a function body names one of the effective topologies and creates a lexical mesh binding.
 
 **Effective context.** `target` and `topologies` record what a Module
-*declares*, not what it resolves to; a visitor carries the effective
-declarations in its current `valuation.Context`, without copying them onto
-shared definitions or Functions.
+*declares*, not what it resolves to. A visitor carries the effective declarations in its current `valuation.Context`. It does not copy them onto shared definitions or Functions.
 
 - constraints:
-  - `topologies = None` declares nothing and inherits the nearest instance
-    declaration; `topologies = ()` declares an explicitly topology-free domain;
-    an explicit tuple replaces the inherited hierarchy whole rather than
-    extending it. A declared tuple MUST NOT repeat a level name.
-  - `resolve_topology(name)` returns the single declared level with that exact
-    name and MUST fail, naming the available levels, when there is none.
+  - `topologies = None` declares nothing and inherits the nearest instance declaration. `topologies = ()` declares an explicitly topology-free domain. An explicit tuple replaces the inherited hierarchy whole. It does not extend the hierarchy. A declared tuple MUST NOT repeat a topology name.
+  - `resolve_topology(name)` returns the single declared topology with that exact name. It MUST fail when there is none. The failure MUST name the available topologies.
   - `metadata` carries target / compiler-option configuration, never
     semantic topology / mesh information.
   - A `children` key is the class-body attribute name. `Module.name` remains
@@ -134,13 +109,7 @@ shared definitions or Functions.
     [parser §3](./parser.md#3-implementation-overview)). Function, child and
     method names MUST be disjoint at one Module's own level
     ([§1.1](#11-function-access)).
-  - `weights` is a derived property, not a stored field: each access unions
-    every function's `ConstTensor` params (`Var.is_const`), in (function
-    order, param order); the same name in two functions MUST carry an
-    identical `TensorType`, or the access raises. The IR has no `states` field
-    or persistent-state concept — a tensor that must survive across steps
-    (e.g. a KV cache) is an ordinary `Tensor` param the caller passes in and
-    receives back ([runtime §1.3](./runtime.md#13-runtimedecoratorpy)).
+  - `weights` is a derived property, not a stored field. Each access unions every function's `ConstTensor` params (`Var.is_const`), in (function order, param order). The same name in two functions MUST carry an identical `TensorType`, or the access raises. The IR has no `states` field or persistent-state concept. A tensor that must survive across steps (e.g. a KV cache) is an ordinary `Tensor` param. The caller passes it in and receives it back ([runtime §1.3](./runtime.md#13-runtimedecoratorpy)).
 
 #### Target inheritance
 
@@ -148,14 +117,10 @@ A Module's target declaration belongs to its execution domain and is resolved
 by the visitor from the callee declaration or the inherited caller context.
 
 - constraints:
-  - `resolve_target()` MUST return the exact instance this Module declared; it
-    MUST NOT reconstruct or replace an equal value, and inherited context
-    belongs to the visitor's `valuation.Context`, not the shared Module.
+  - `resolve_target()` MUST return the exact instance this Module declared. It MUST NOT reconstruct or replace an equal value. Inherited context belongs to the visitor's `valuation.Context`, not the shared Module.
   - Callee context inheritance and call compatibility follow
     [hir §1.1](./hir.md#11-function).
-  - `resolve_target()` on a Module with no declaration MUST be refused, so a
-    root Module MUST declare one, for example with `target=cpu.Target()`. Declaring
-    a Module does not require a target: a shared definition inherits context
+  - `resolve_target()` on a Module with no declaration MUST be refused. A root Module MUST declare a target, for example with `target=cpu.Target()`. Declaring a Module does not require a target. A shared definition inherits context
     when a visitor enters it through a caller.
   - A Target declaration MUST be a constructed Target instance; a string MUST
     be refused rather than resolved or constructed.
@@ -167,15 +132,10 @@ step.
 
 - constraints:
   - When `entry` is present, it MUST name a function in `functions`.
-    `entry_function()` MUST return that function, and `tilefoundry.build(...)`
-    and the emitter MUST start there. Other functions enter the output only when
+    `entry_function()` MUST return that function. `tilefoundry.build(...)` and the emitter MUST start there. Other functions enter the output only when
     reachable from `entry`.
   - When `entry` is omitted (`None`), the Module MUST have no default step.
-    `entry_function()` and an unqualified evaluator call MUST be refused,
-    naming the Module's functions and explaining that one is selected by name.
-    Each function remains reachable by name. A Module that composes children in
-    an orchestration method has no single step to nominate; that host Python
-    method is invoked by name rather than selected as an evaluator target.
+    `entry_function()` and an unqualified evaluator call MUST be refused. The refusal MUST name the Module's functions and explain that the caller selects one by name. Each function remains reachable by name. A Module that composes children in an orchestration method has no single step to nominate. The caller invokes that host Python method by name and does not select it as an evaluator target.
 
 ### 1.1 Function access
 
@@ -183,38 +143,29 @@ A `Module` mirrors the model it describes: a caller reaches a kernel, a child
 component, or an orchestration step through the same attribute surface.
 
 Each `name` maps to at most one entry among `Module.functions`,
-`Module.children`, and `Module.methods` (MUST be disjoint at one Module's own
-level; construction raises `ValueError` otherwise). Within `functions`,
-shape-specialization variants live inside that entry's `Function.variants`
-([hir.md §1.1](./hir.md#11-function)), never as separate same-name entries.
+`Module.children`, and `Module.methods`. The names in these three MUST be disjoint at one Module's own level. Construction raises `ValueError` otherwise. Within `functions`, shape-specialization variants live inside the `Function.variants` of that entry ([hir.md §1.1](./hir.md#11-function)). They are never separate same-name entries.
 
 - constraints:
-  - `mod.lookup(name)` returns the function named `name`; it raises unless
-  exactly one function matches, searches only this Module's own `functions`,
-  and returns the `Function` / `PrimFunction` node itself. A `FunctionRef`
+  - `mod.lookup(name)` returns the function named `name`. It raises unless exactly one function matches. It searches only this Module's own `functions`. It returns the `Function` / `PrimFunction` node itself. A `FunctionRef`
   resolves by [§1.4](#14-function-references).
   - `mod.entry_function()` returns the function named by `entry`.
   - Python attribute access `mod.<name>` resolves, in order, a function, a
-  child module, or a method named `<name>`, and MUST raise `AttributeError`
-  when none match or when more than one same-kind entry shares the name. A
-  **function** name resolves to the `Function` / `PrimFunction` node itself,
-  like `lookup`; an HIR `Function` is callable as one
+  child module, or a method named `<name>`. It MUST raise `AttributeError` when none match or when more than one same-kind entry shares the name. A **function** name resolves to the `Function` / `PrimFunction` node itself, like `lookup`. An HIR `Function` is callable as one
   `interfaces.evaluator.evaluate` step. A `Module` is likewise callable when it declares
   an `entry`, with one argument for every declared parameter. A **child module** name resolves to that child
   `Module` for a non-indexed slot or its tuple of `Module`s for an indexed slot.
   A **method** name
   resolves to the class-body function bound like an instance method
   (`m.forward(...)`). Names beginning with `_` are never functions, modules, or
-  methods and resolve by normal attribute rules. This lets a module read like
-  the model it mirrors — `decoder.layer0.attention`.
+  methods and resolve by normal attribute rules. A module then reads like the model it mirrors: `decoder.layer0.attention`.
 
 ### 1.2 Definition call paths
 
 `tilefoundry.interfaces.valuation.collect_functions(root)` enumerates each declared
 function once by identity, in DFS first-instance order. It returns a
 `dict[FunctionRef, valuation.Context]`, including HIR Functions and PrimFunctions,
-keyed by the root-relative reference ([§1.4](#14-function-references)). The frame records the current Module,
-function, effective target, and effective topologies; shared definitions use the first
+keyed by the root-relative reference ([§1.4](#14-function-references)). The context records the current Module,
+function, effective target, and effective topologies. Shared definitions use the first
 path for generated names, including indexed segments such as `layers.0.run`.
 
 ### 1.3 `ModuleList`
@@ -273,19 +224,13 @@ class FunctionRef(Expr):
     ([tir §2.1](./tir.md#21-functionref)). It holds names only: no Module, no
     callee object and no type (`type` is always `None`).
   - `path` is relative to the caller's Module; an empty path stays in it. A
-    `str` segment enters a child slot; an `int` segment selects one instance;
-    a `None` segment marks a run-time index the call gives as a leading
-    operand. The parser builds the path from the authored slot
-    names and subscripts, left to right, folding an integer scalar constant
-    subscript into an `int` segment; index rules are in [§1.3](#13-modulelist).
+    `str` segment enters a child slot. An `int` segment selects one instance. A `None` segment marks a run-time index. The call gives that index as a leading operand. The parser builds the path from the authored slot names and subscripts, left to right. It folds an integer scalar constant subscript into an `int` segment. Index rules are in [§1.3](#13-modulelist).
   - `name` is the canonical `name` of a function in the reached Module; `None`
     names that Module's entry. It names a prototype, never a variant: dispatch
     picks the variant.
   - `core.resolve(scope, ref)` is the only resolver; verify, the evaluator and
-    codegen use it from the current frame's Module `scope`, so rebuilt module
-    trees remain authoritative. Each `str` segment MUST
-    select a child slot, and `name` MUST select exactly one function in the
-    reached Module; it MUST NOT search descendants by an unqualified name.
+    codegen use it from the current context's Module `scope`, so rebuilt module
+    trees remain authoritative. Each `str` segment MUST select a child slot. `name` MUST select exactly one function in the reached Module. Resolution MUST NOT search descendants by an unqualified name.
     Failures MUST include the complete path; same-named functions in different
     child modules are distinct functions.
   - `qualified_name` is the dotted spelling (`layers.0.run`, `*` for a
@@ -333,9 +278,7 @@ class SourceSpanMetadata(IRMetadata):
     fields and an optional `resolve(ctx)` interpretation. The default returns
     the same record. Analysis supplies the context; environment-dependent
     records use that context's bound Scope. Core MUST NOT import analysis to
-    interpret metadata. Text and JSON rendering belong to inspection
-    ([inspection §2.8](./inspection.md#28-record-comment-forms)); a record
-    MUST NOT carry a rendering, a key name, or a family name of its own.
+    interpret metadata. Text and JSON rendering belong to inspection ([inspection §2.8](./inspection.md#28-record-comment-forms)). A record MUST NOT carry a rendering, a key name, or a family name of its own.
   - `BindingMetadata` is the authored SSA label. The parser maps explicit DSL
     `loc=` syntax and inferred assignment names to this metadata; there is no
     parallel `Expr.loc` field.
@@ -364,10 +307,7 @@ class Expr:
     introduced per Op (value-producing Ops appear as `Call` nodes).
   - `type` and `metadata` may be updated by the authorised typing and analysis
     passes; expression equality remains structural and metadata is excluded.
-  - `metadata` contains only `IRMetadata` values and contains at most one value
-    of each exact concrete metadata class; invalid entries or duplicate classes
-    raise `VerifyError`, including `SourceSpanMetadata` or `BindingMetadata`
-    context when it is available.
+  - `metadata` contains only `IRMetadata` values. It contains at most one value of each exact concrete metadata class. Invalid entries or duplicate classes raise `VerifyError`. The error includes `SourceSpanMetadata` or `BindingMetadata` context when it is available.
   - `metadata` MUST NOT participate in expression equality, hashing, or repr.
 
 ```python
@@ -403,19 +343,12 @@ class Annotated:
   - `describe_value` returns one diagnostic line with the source span when
     present, the binding name or `<unnamed>`, and the Call target or Expr class.
 
-`Expr` always carries a `type`: `TensorType` / `TupleType` / `UnitType`
+`Expr` always carries a `type`: `TensorType` / `TupleType`, with `TupleType.Void` for no result
 ([types §2](./types.md#2-tensortype) / [types §4](./types.md#4-dim--symbolic-shape-dimensions)
-/ [types §6](./types.md#6-unittype)). A multi-output Op produces a single
-`Call` whose `type` is `TupleType`; consumers project one field through the
+/ [types §6](./types.md#6-void-result)). A multi-output Op produces a single `Call` whose `type` is `TupleType`. Consumers project one field through the
 `tuple_get_item` Op (a regular registered Op, not an `Expr` subclass).
 
-Dialect-specific `Expr` subclasses are owned by their dialect specs, not
-here: HIR owns `Function`, `LoopRegion`, and `MeshRegion`
-([hir §1](./hir.md#1-hir-expr-constructs)),
-and TIR owns its TIR-specific `Expr` constructs ([tir](./tir.md)). The similarly-shaped TIR statement keeps the name
-`MeshScope` ([tir §1.2](./tir.md#12-structural-stmts-ircore)) on purpose,
-not by oversight: it binds a `Var` over a `Sequential` body, whereas
-`MeshRegion` folds a region into one value.
+Dialect specs own the dialect-specific `Expr` subclasses, not this spec. HIR owns `Function`, `LoopRegion`, and `MeshRegion` ([hir §1](./hir.md#1-hir-expr-constructs)). TIR owns its TIR-specific `Expr` constructs ([tir](./tir.md)). The similarly-shaped TIR statement keeps the name `MeshScope` ([tir §1.2](./tir.md#12-structural-stmts-ircore)). It binds a `Var` over a `Sequential` body. `MeshRegion` folds a region into one value.
 
 ### 2.1 `Call`
 
@@ -439,14 +372,14 @@ class Call(Expr):
   - A named reference supplies every parameter in the current instance: the
     direct call `helper(x)` is `FunctionRef((), "helper")`. An instance entry
     call (`name` is `None`) supplies only the entry's non-ConstTensor
-    parameters; implicit constants come from that instance's resource path:
-    `child(x)` is `FunctionRef(("child",), None)`, `layers[2](x)` is
-    `FunctionRef(("layers", 2), None)`, and `layers[i](x)` is
+    parameters. Implicit constants come from that instance's resource path.
+    `child(x)` is `FunctionRef(("child",), None)`. `layers[2](x)` is
+    `FunctionRef(("layers", 2), None)`. `layers[i](x)` is
     `FunctionRef(("layers", None), None)` with `i` as the first operand.
   - Generic traversal visits `args` only; it MUST NOT traverse the definitions
     a `FunctionRef` names.
-  - a value-form `Call` has a non-`Unit` result type and is anchored by `LetStmt` in TIR; a Stmt-position effect
-    invocation is `Evaluate(op, args)`.
+  - a value-form `Call` has a result type other than `TupleType.Void`. TIR anchors it with `LetStmt`.
+    A Stmt-position effect invocation is `Evaluate(op, args)`.
   - A `Call` MUST NOT appear as a top-level Stmt directly.
   - Normally, `len(args)` MUST equal the number of `kind="input"` ParamDefs on
     `target`. A sole input annotated `Tuple[T]` describes a variadic sequence,
@@ -491,9 +424,7 @@ class Tuple(Expr):
 
 - constraints:
   - `Tuple` is an `Expr` in the IR graph, distinct from the `TupleType` it carries.
-  - `Var.is_const` MUST be preserved for HIR function parameters and MUST mark
-    an external constant tensor parameter without embedding a tensor payload or
-    changing its `TensorType`.
+  - `Var.is_const` MUST be preserved for HIR function parameters. It MUST mark an external constant tensor parameter. It MUST NOT embed a tensor payload or change the parameter's `TensorType`.
 
 ### 2.3 `Op`
 
@@ -588,11 +519,7 @@ def register_type(*, dialect: str, namespace: str) -> Callable[[type], type]:
 ```
 
 - constraints:
-  - `register_op` MUST require explicit `dialect` and `category`; a module path
-    MUST NOT supply either. `namespace` is a dot-separated path, empty at the
-    dialect root; an omitted `name` uses the lowercase class name.
-    The schema MUST retain the namespace path; printers MUST emit the full
-    dialect, namespace and name so the printed call resolves to that record.
+  - `register_op` MUST require explicit `dialect` and `category`. A module path MUST NOT supply either. `namespace` is a dot-separated path, empty at the dialect root. An omitted `name` uses the lowercase class name. The schema MUST retain the namespace path. Printers MUST emit the full dialect, namespace and name, so the printed call resolves to that record.
   - `register_type` MUST place the class under its exact class name without
     building an `OpSchema`.
   - A duplicate key or a record/namespace collision MUST raise `ValueError`
@@ -662,9 +589,7 @@ from `parameters_of(type(op))`.
 An Op is **value-form** when its `Call` produces an observable
 result the IR consumes — `Call.type` is then `TensorType` or
 `TupleType`. An Op is **effect-form** when it performs an in-place
-effect (e.g. `tir.memory.Copy`) and produces no
-readable value (`UnitType`, [types §6](./types.md#6-unittype)); in Stmt position
-it appears as `Evaluate(op, args)`
+effect (e.g. `tir.memory.Copy`) and produces no readable value (`TupleType.Void`, [types §6](./types.md#6-void-result)). In Stmt position, an effect-form Op appears as `Evaluate(op, args)`
 ([tir §1.4](./tir.md#14-evaluate)).
 
 ### 2.4 `Printable` and `PrinterBase`
@@ -684,9 +609,7 @@ class Printable(ABC):
 ```
 
 - constraints:
-  - Both live in `ir/core/inspection.py` and import no printer, so an IR value
-    can print itself without an `ir` to `inspection` dependency, and a concrete
-    printer depends on these interfaces rather than on the value's class.
+  - Both live in `ir/core/inspection.py` and import no printer. An IR value can print itself without an `ir` to `inspection` dependency. A concrete printer depends on these interfaces, not on the value's class.
   - `PrinterBase.print` is a printer's one public entry. A printer hands a
     `Printable` itself and the caller's `ctx`; it does not recognise a value by
     a method name it happens to have.
@@ -718,11 +641,9 @@ The implementation is split by responsibility under `ir/pattern/`:
   `pattern.Sequence`, `pattern.Switch`, `pattern.Range`, `pattern.Layout`,
   `pattern.Swizzle`, `pattern.ComposedLayout`, `pattern.Mesh`,
   `pattern.ShardLayout`, `pattern.Tensor`, `pattern.Wildcard` and
-  `pattern.Star`; the computed-condition base `pattern.Predicate`; and the
-  integer `pattern.Term` expressions and Boolean `pattern.Formula` predicates
-  written over named bindings.
-- `predicates.py` defines the named arrangement predicates `pattern.Forward`,
-  `pattern.Injective`, `pattern.WholeVectors`, `pattern.PlainArrangement`,
+  `pattern.Star`. It also defines the computed-condition base `pattern.Predicate`, the integer `pattern.Term` expressions, and the Boolean `pattern.Formula` predicates written over named bindings.
+- `predicates.py` defines the named layout predicates `pattern.Forward`,
+  `pattern.Injective`, `pattern.WholeVectors`, `pattern.Strided`,
   `pattern.BoxDims` and `pattern.TensorMap`, and the tensor predicate
   `pattern.Ranked`. It also owns the `pattern.is_ranked_tensor(**fields)` and
   `pattern.is_scalar_tensor(**fields)` factories.
@@ -738,10 +659,7 @@ The implementation is split by responsibility under `ir/pattern/`:
 - `utils.py` owns specialization naming, dimension lookup, and the shared
   execution-mesh and variant helpers.
 
-`Pattern.match(subject, captures=None)` is the public facade: it creates one
-`pattern.Matcher`, which dispatches along the pattern class's MRO and owns the
-bindings, matched-node memo, deferred predicates, and branch rollback for that
-match. Nested patterns stay in that matcher instead of creating their own
+`Pattern.match(subject, captures=None)` is the public facade. It creates one `pattern.Matcher` for that match. The matcher dispatches along the pattern class's MRO. It owns the bindings, matched-node memo, deferred predicates, and branch rollback. Nested patterns stay in that matcher instead of creating their own
 capture dictionaries. Effect-Op verification reuses one matcher across all
 operands of a call, so later operands see bindings established by earlier ones.
 
@@ -751,8 +669,7 @@ name must match the same value. Named wildcards form integer `Term`
 expressions with `+`, `-`, `*`, `//`, and `%`; comparisons form a `Formula`,
 and `&`, `|`, and `~` combine formulas. `In`, `Table`, `Bits`, `ForAll`,
 `Sum`, and `Count` cover membership, lookup, dtype width, and tuple captures.
-Python truth testing and chained comparisons are rejected; callers must use
-the formula operators rather than `and`, `or`, or Python `in`.
+Python truth testing and chained comparisons are rejected. Callers must use the formula operators, not `and`, `or`, or Python `in`.
 
 `Predicate.holds(subject, bindings)` returns true, false, or `None` when names
 needed by the predicate remain unbound. Ground formulas are evaluated at the
@@ -781,11 +698,10 @@ supported composed or sharded forms. `Forward()` and `Injective()` express the
 corresponding computed properties; they are not implicit.
 When both structural fields are present, they are matched as paired CuTe modes
 while preserving their authored nesting. A `pattern.Star(p)` in the same
-position of both fields consumes zero or more modes and applies `p` to every
-consumed mode; each tuple may contain at most one star. Bindings below a star
+position of both fields consumes zero or more modes and applies `p` to every consumed mode. Each tuple may contain at most one star. Bindings below a star
 are tuples, and a name may not occur both below and outside a star.
 `pattern.Layout.from_layout(layout, ...)` constructs the exact bare or composed
-pattern for an authored arrangement, preserving its nested structure and the
+pattern for an authored layout, preserving its nested structure and the
 explicitly supplied predicate table. `Forward(per_mode=True)` and
 `Injective(per_mode=True)` check each top-level mode independently.
 `ComposedLayout(None, 0, L)` and `L` are equivalent for both `pattern.Layout`
@@ -795,16 +711,13 @@ unconstrained and therefore admits any inner, including a swizzle. To require
 no swizzle, state `pattern.Swizzle(0, 4, 3)`; its zero-bit variant also matches
 an identity (`None`) inner. The three swizzle fields may themselves be
 patterns.
-`pattern.Mesh` rejects any supplied arrangement predicate that exposes
-`per_mode=False`, because each mesh level uses its own numbering space; an
-empty predicate table is allowed. It never changes the supplied pattern
+`pattern.Mesh` rejects any supplied layout predicate that exposes
+`per_mode=False`. An empty predicate table is allowed. It never changes the supplied pattern
 implicitly. Predicates on a surrounding `pattern.ComposedLayout` instead
 check the whole matched layout. Execution-mesh declarations may admit leading
-modes with `pattern.Star`; operand mesh declarations keep their exact axis
-structure because shard attrs refer to those axes.
-A wildcard in `pattern.Mesh.topologies` selects the innermost execution level
-and binds its one-name tuple. Reusing that wildcard in an operand mesh requires
-the same level; valid topology names and extents come from the module's Target
+modes with `pattern.Star`; operand mesh declarations keep their exact mesh axis
+structure because shard attrs refer to those mesh axes.
+A wildcard in `pattern.Mesh.topologies` selects the innermost execution topology and binds its one-name tuple. Reusing that wildcard in an operand mesh requires the same topology. Valid topology names and extents come from the module's Target
 Facts, as specified in [target §11](./target.md#11-target-facts-projection).
 `pattern.ShardLayout` names the same `layout`, `attrs`, and `mesh` fields as
 `ShardLayout`: `layout` and `mesh` are nested patterns, while `attrs` remains
@@ -816,18 +729,14 @@ Two consumer surfaces:
 - **Parser dispatch** — `ParamDef.pattern` ([§2.3](#23-op)) is matched against an
   argument's `Expr.type` during parameter checking. Subclasses used:
   `pattern.Tensor(shape?, dtype?, storage?, layout?)` (any rank), and
-  `pattern.And(parts)` (conjunction). Two factories construct
-  convenience patterns: `is_scalar_tensor(**fields)` returns
-  `pattern.Tensor(shape=(), **fields)` for rank-0 tensors;
-  `is_ranked_tensor(**fields)` returns a `pattern.Tensor` with a `Ranked`
-  predicate and MUST reject rank-0.
+  `pattern.And(parts)` (conjunction). Two factories construct convenience patterns. `is_scalar_tensor(**fields)` returns `pattern.Tensor(shape=(), **fields)` for rank-0 tensors. `is_ranked_tensor(**fields)` returns a `pattern.Tensor` with a `Ranked` predicate. That pattern MUST reject rank-0.
   A tensor rank is stated by giving `shape` that many positions; wildcard
   positions constrain only the sequence length. An omitted shape admits any
   rank. During selection, `umat` satisfies any concrete storage requirement
-  because its placement is undecided; lowering MUST materialize it before TIR. During effect-Op verification,
-  input patterns match in `ParamDef` order against one shared capture
-  environment, so a later operand can require a value captured by an earlier
-  operand.
+  because its storage is undecided; lowering MUST materialize it before TIR.
+  During effect-Op verification, input patterns match in `ParamDef` order against
+  one shared capture environment. A later operand can therefore require a value
+  captured by an earlier operand.
 - **Specialization dispatch** — patterns appearing in
   `core.Function.specializations` ([hir.md §1.1](./hir.md#11-function))
   and `core.PrimFunction.specializations` describe which runtime
@@ -922,6 +831,5 @@ class ReduceKind(enum.Enum):
 ```
 
 - constraints:
-  - These enums MUST be the single shared kind vocabulary carried by HIR and
-    TIR generic operations; lowering MUST preserve a kind without remapping it.
+  - These enums MUST be the single shared kind vocabulary carried by HIR and TIR generic operations. Lowering MUST preserve a kind without remapping it.
   - The member names and string values above are the complete built-in sets.

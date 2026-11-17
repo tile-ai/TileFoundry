@@ -3,7 +3,7 @@
 A layout is an int-tuple shape and an int-tuple stride; sub-tuples nest
 ``cute::Shape`` / ``cute::make_shape`` with them, recursively. Every emitter
 spells a layout through these two functions, so a nested mode -- an operand
-tile, a multi-level mesh -- renders everywhere a flat one does.
+tile, a multi-topology mesh -- renders everywhere a flat one does.
 """
 
 from __future__ import annotations
@@ -11,9 +11,19 @@ from __future__ import annotations
 
 def nest_types(values, tag):
     return ", ".join(
-        f"{tag}<{nest_types(value, tag)}>" if isinstance(value, tuple) else f"cute::Int<{value}>"
+        f"{tag}<{nest_types(value, tag)}>" if isinstance(value, tuple) else static_int(value)
         for value in values
     )
+
+
+def static_int(value) -> str:
+    """``cute::Int`` of a static int; a type cannot state any other entry."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise NotImplementedError(
+            f"CUDA layout type: entry {value!r} is not a static int, and a "
+            "cute::Layout type states only compile-time numbers"
+        )
+    return f"cute::Int<{value}>"
 
 
 def nest_values(values, render, tag):

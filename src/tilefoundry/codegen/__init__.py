@@ -15,10 +15,10 @@ from .scalar_expr import render_dim_call, render_scalar_expr
 from .signature import (
     CallableSignature,
     LaunchSignature,
-    ProgramIdSignature,
-    ProgramMetaSignature,
+    PlacementSignature,
     Signature,
     TensorSignature,
+    UnitIdSignature,
     tensor_signature_of,
 )
 from .visitor import Visitor

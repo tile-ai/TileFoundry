@@ -27,7 +27,7 @@ template <class Op, class Axes> struct CrossWarp {
 
         constexpr int kCells = kept_cells<Axes, decltype(s)>();
         constexpr int kSpan = reduced_span<Axes, decltype(s)>();
-        const int tid = int(program_id<TopologyScope::thread>());
+        const int tid = int(unit_id<TopologyLevel::thread>());
         const int lane = tid % kWarpSize;
         const int warp_id = tid / kWarpSize;
         CUTE_UNROLL

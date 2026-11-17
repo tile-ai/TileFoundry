@@ -22,8 +22,8 @@ def check_input_reachability(op, operand_types, mesh):
         layout = types.shard_layout_of(utils.physical_layout(layout))
         if layout is None:
             continue
-        projected = utils.participant_layout(layout)
-        if not utils.covered_by_scope(projected.mesh, mesh):
+        projected = utils.filter_topologies(layout)
+        if not utils.equals_mesh_scope(projected.mesh, mesh):
             raise ValueError(
                 f"input {index} is laid out more finely than the scope it runs in; write it inside that scope, or reshard it back first"
             )

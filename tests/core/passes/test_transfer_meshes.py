@@ -26,12 +26,12 @@ def threads(start, count):
 def test_the_writer_is_the_first_thread_of_the_innermost_thread_mesh() -> None:
     mesh = writer(BLOCKS, threads(16, 16), threads(0, 32))
     assert mesh.topologies == (THREAD,)
-    assert (mesh.layout.offset, types.size(types.levels(mesh)[0])) == (16, 1)
+    assert (mesh.layout.offset, types.size(types.get(types.plain_layout(mesh.layout), 0))) == (16, 1)
 
 
 def test_without_a_thread_mesh_the_writer_is_the_first_thread_of_the_cta() -> None:
     mesh = writer(BLOCKS)
-    assert (mesh.layout.offset, types.size(types.levels(mesh)[0])) == (0, 1)
+    assert (mesh.layout.offset, types.size(types.get(types.plain_layout(mesh.layout), 0))) == (0, 1)
 
 
 @pytest.mark.parametrize(
@@ -41,7 +41,7 @@ def test_without_a_thread_mesh_the_writer_is_the_first_thread_of_the_cta() -> No
         threads(DimVar("start", 0, 31), 1),
         types.Mesh(
             (types.Topology("cta", DimVar("blocks", 1, 64)), THREAD),
-            types.ComposedLayout(None, 16, types.Layout(((1,), (16,)), ((1,), (1,)))),
+            types.ComposedLayout(None, 16, types.Layout(((1,), (16,)), ((32,), (1,)))),
             ("b", "t"),
         ),
     ],

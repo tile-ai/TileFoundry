@@ -37,6 +37,7 @@ REGIONS: dict[str, str] = {
     "py-function": "runtime/function.py",
     "py-decorator": "runtime/decorator.py",
     "py-loader": "runtime/loader.py",
+    "py-placement": "runtime/placement.py",
     "py-resource": "runtime/resource.py",
     "py-measure": "runtime/measure.py",
     "py-tensor": "core/tensor.py",
@@ -154,9 +155,9 @@ struct GenRowMajor {};
 #define __global__
 #define __forceinline__ inline
 namespace tilefoundry {
-enum class TopologyScope { cta, thread, scope_count };
+enum class TopologyLevel { cta, thread, topology_count };
 inline constexpr int kWarpSize = 32;
-template <TopologyScope T> constexpr auto program_dim() noexcept;
+template <TopologyLevel T> constexpr auto topology_size() noexcept;
 template <class> inline constexpr bool dependent_false_v = false;
 """
 

@@ -37,9 +37,9 @@ class Reach:
 
     ``reached`` is None when the relation is unknown: a retained call, or a value
     with no device coordinates. ``slices`` are the sliced meshes of the checked
-    level around it, CTAs or threads, the only meshes that keep a unit of that
-    level from running it. ``split`` is the mesh whose positions the layout of
-    the operand gives its bytes to, one position each, None when it gives none.
+    topology around it, CTAs or threads, the only meshes that keep a unit of that
+    topology from running it. ``split`` is the mesh whose units the layout of
+    the operand gives its bytes to, one unit each, None when it gives none.
     """
 
     name: str
@@ -62,16 +62,16 @@ class Reaches:
     """The reads and writes of a planner's actions on *storage*, with their device relations.
 
     *storage* is global memory, whose reaches carry their allocation roots, or
-    shared memory. *level* names the units whose sliced meshes each reach keeps:
+    shared memory. *topology* names the units whose sliced meshes each reach keeps:
     CTAs, or the threads of one CTA.
     """
 
     def __init__(
-        self, planner, storage: expr.StorageKind = expr.StorageKind.GMEM, level: str = "cta"
+        self, planner, storage: expr.StorageKind = expr.StorageKind.GMEM, topology: str = "cta"
     ):
         self.planner = planner
         self.storage = storage
-        self.level = level
+        self.topology = topology
         self.scope = planner.root
         self.summary = planner.summary
 
@@ -154,21 +154,21 @@ class Reaches:
         ]
 
     def slices(self, node) -> tuple:
-        """The sliced meshes of the level's regions around *node*; only these guard who runs it.
+        """The sliced meshes of the topology's regions around *node*; only these guard who runs it.
 
         Lowering guards a region by its mesh only when that mesh is a slice
-        (``mesh_scope.emit_mesh_scope``); any other mesh repeats over the level.
+        (``mesh_scope.emit_mesh_scope``); any other mesh repeats over the topology.
         """
         return tuple(
             scope.owner.mesh
             for scope in node.ancestors()
             if isinstance(scope.owner, core.MeshRegion)
             and isinstance(scope.owner.mesh.layout, types.ComposedLayout)
-            and any(topology.name == self.level for topology in scope.owner.mesh.topologies)
+            and any(topology.name == self.topology for topology in scope.owner.mesh.topologies)
         )
 
     def added(self, action) -> tuple:
-        """The sliced mesh of the level that lowering guards a copy or fill it adds with.
+        """The sliced mesh of the topology that lowering guards a copy or fill it adds with.
 
         Lowering runs each copy and fill it adds inside the regions
         ``transfer_meshes`` gives, the innermost being the action's mesh; it
@@ -176,7 +176,7 @@ class Reaches:
         """
         mesh = action.mesh
         sliced = mesh is not None and isinstance(mesh.layout, types.ComposedLayout)
-        if sliced and any(topology.name == self.level for topology in mesh.topologies):
+        if sliced and any(topology.name == self.topology for topology in mesh.topologies):
             return (mesh,)
         return ()
 
@@ -297,75 +297,87 @@ class Reaches:
         return self.copied(action, at, sides)
 
 
-def axis_numbering(mesh: types.Mesh, axis: int):
-    """The numbering of the level of *mesh* that holds *axis*, or None when it is not static.
+def mesh_axis_numbering(mesh: types.Mesh, mesh_axis: int):
+    """The unit ids of the topology that holds *mesh_axis* of *mesh*, or None when not static.
 
-    Returns the level's start, extents and strides, and the axis's index among
-    them. A unit reads ``((unit - start) // stride) % extent`` on that axis, as
-    the runtime's ``mesh_coords`` does.
+    Returns the topology's first unit id, the extents and strides of its
+    ``unit_layout``, and the mesh axis's index among them. A unit reads
+    ``((unit - first_unit_id) // stride) % extent`` on that mesh axis, as the runtime's
+    ``mesh_coords`` does.
     """
-    first = 0
-    for level in types.separate(mesh):
-        layout = utils.device_layout(level)
-        if axis < first + len(layout.shape):
-            break
-        first += len(layout.shape)
-    else:
+    keys = utils.axis_keys(mesh)
+    if mesh_axis >= len(keys):
         return None
-    start = level.layout.offset if isinstance(level.layout, types.ComposedLayout) else 0
+    numbering = topology_numbering(mesh, keys[mesh_axis][0])
+    if numbering is None:
+        return None
+    return (*numbering, mesh_axis - [name for name, _ in keys].index(keys[mesh_axis][0]))
+
+
+def topology_numbering(mesh: types.Mesh, name: str):
+    """Topology *name*'s first unit id, and the extents and strides of its ``unit_layout``.
+
+    None when *mesh* does not name it or they are not static.
+    """
+    names = utils.topology_names(mesh)
+    if name not in names:
+        return None
+    t = names.index(name)
+    try:
+        layout = types.plain_layout(utils.unit_layout(mesh, t))
+    except ValueError:
+        return None
+    if layout is None:
+        return None
+    layout = types.flatten(layout)
+    first_unit_id = utils.first_unit_ids(mesh)[t]
     extents, strides = layout.shape, layout.strides
-    if not all(isinstance(value, int) for value in (start, *extents, *strides)):
+    if not all(isinstance(value, int) for value in (first_unit_id, *extents, *strides)):
         return None
-    return start, extents, strides, axis - first
+    return first_unit_id, extents, strides
 
 
 def unit_read(name: str, coordinate: expr.Call, unit: str) -> str | None:
     """The condition that *unit* reads *name* as *coordinate*; None when it has no statement.
 
-    *unit* numbers a CTA of the launch or a thread of a CTA, on the level that
-    holds the coordinate's axis. Every unit reads it: a mesh smaller than its
+    *unit* numbers a CTA of the launch or a thread of a CTA, on the topology that
+    holds the coordinate's mesh axis. Every unit reads it: a mesh smaller than its
     topology repeats.
     """
-    axis = expr.static_dim_value(coordinate.args[0])
-    numbering = None if axis is None else axis_numbering(coordinate.target.mesh, axis)
+    mesh_axis = expr.static_dim_value(coordinate.args[0])
+    numbering = None if mesh_axis is None else mesh_axis_numbering(coordinate.target.mesh, mesh_axis)
     if numbering is None:
         return None
-    start, extents, strides, index = numbering
+    first_unit_id, extents, strides, index = numbering
     if extents[index] == 1:
         return f"{name} = 0"
     if strides[index] <= 0:
         return None
-    return f"{name} = floor(({unit} - {start}) / {strides[index]}) mod {extents[index]}"
+    return f"{name} = floor(({unit} - {first_unit_id}) / {strides[index]}) mod {extents[index]}"
 
 
 def unit_guard(mesh: types.Mesh, unit: str, name: str = "cta") -> str | None:
-    """The condition that *unit* runs inside *mesh*'s level *name*; None when it has no statement.
+    """The condition that *unit* runs inside topology *name* of *mesh*; None without a statement.
 
-    It is the runtime's ``contains``: a position of that level the mesh's layout reaches.
+    It is the runtime's ``contains``: a unit of that topology the mesh's layout reaches.
     """
-    level = next(
-        (level for level in types.separate(mesh) if level.topologies[0].name == name), None
-    )
-    if level is None:
+    numbering = topology_numbering(mesh, name)
+    if numbering is None:
         return None
-    layout = utils.device_layout(level)
-    start = level.layout.offset if isinstance(level.layout, types.ComposedLayout) else 0
-    extents, strides = layout.shape, layout.strides
-    if not all(isinstance(value, int) for value in (start, *extents, *strides)):
-        return None
-    steps = [f"p{position}" for position in range(len(extents))]
-    held = [f"{unit} = {start}" + "".join(f" + {s} * {p}" for s, p in zip(strides, steps))]
+    first_unit_id, extents, strides = numbering
+    steps = [f"p{mode}" for mode in range(len(extents))]
+    held = [f"{unit} = {first_unit_id}" + "".join(f" + {s} * {p}" for s, p in zip(strides, steps))]
     held += [f"0 <= {p} < {e}" for p, e in zip(steps, extents)]
     return f"exists ({', '.join(steps)} : {' and '.join(held)})"
 
 
-def instance(reach: Reach, suffix: str, shared, level: str = "cta"):
-    """The elements one execution by unit ``__<level>`` + *suffix* reaches, its own names renamed.
+def unit_reach(reach: Reach, suffix: str, shared, topology: str = "cta"):
+    """The elements one execution by unit ``__<topology>`` + *suffix* reaches, names renamed.
 
-    *level* is ``"cta"`` or ``"thread"``. Returns the set, the conditions on that
+    *topology* is ``"cta"`` or ``"thread"``. Returns the set, the conditions on that
     unit (None when a coordinate cannot be bound to it), and the names whose
     source the renaming loses. A unit runs the reach only inside the sliced meshes
-    of its level around it; a slice whose positions cannot be stated adds no
+    of its topology around it; a slice whose units cannot be stated adds no
     condition, which only widens the units.
     """
     relation = reach.reached.relation
@@ -380,12 +392,12 @@ def instance(reach: Reach, suffix: str, shared, level: str = "cta"):
         if value is not None and shared(value):
             continue
         if isinstance(value, expr.Call) and isinstance(value.target, dim.MeshCoord):
-            axis = expr.static_dim_value(value.args[0])
-            extent = types.flatten(value.target.mesh.layout).shape[axis]
+            mesh_axis = expr.static_dim_value(value.args[0])
+            extent = value.target.mesh.shape[mesh_axis]
             bounds.append((f"{name}{suffix}", extent))
-            if types.axis_keys(value.target.mesh)[axis][0] == level:
+            if utils.axis_keys(value.target.mesh)[mesh_axis][0] == topology:
                 renamed = f"{name}{suffix}"
-                bindings.append((renamed, unit_read(renamed, value, f"__{level}{suffix}")))
+                bindings.append((renamed, unit_read(renamed, value, f"__{topology}{suffix}")))
         elif not (
             isinstance(value, expr.Var) and any(s.owner.induction_var is value for s in reach.loops)
         ):
@@ -395,19 +407,19 @@ def instance(reach: Reach, suffix: str, shared, level: str = "cta"):
         rel = rel.intersect_params(isl.set(f"[{name}] -> {{ : 0 <= {name} < {extent} }}"))
     if any(condition is None for _, condition in bindings):
         return rel.range(), None, free
-    guards = (unit_guard(mesh, f"__{level}{suffix}", level) for mesh in reach.slices)
+    guards = (unit_guard(mesh, f"__{topology}{suffix}", topology) for mesh in reach.slices)
     bindings += [(None, guard) for guard in guards if guard is not None]
     return rel.range(), bindings, free
 
 
 def overlap(
-    first: Reach, second: Reach, shared, launch: int | None, level: str = "cta"
+    first: Reach, second: Reach, shared, launch: int | None, topology: str = "cta"
 ) -> Overlap | None:
     """Why executions of *first* and *second* by two different units may reach one element.
 
     None when they are the same reduction or provably reach no common element.
-    Each execution runs in one unit of *level*, ``__<level>`` and ``__<level>_y``,
-    below *launch* and inside the runs it keeps to; every coordinate of that level
+    Each execution runs in one unit of *topology*, ``__<topology>`` and ``__<topology>_y``,
+    below *launch* and inside the runs it keeps to; every coordinate of that topology
     a relation names is the coordinate that unit reads, and the two units differ.
     """
     if first.reduction is not None and first.reduction == second.reduction:
@@ -418,15 +430,15 @@ def overlap(
         return Overlap.UNPROVEN
     if first.reached.relation.may_access or second.reached.relation.may_access:
         return Overlap.UNPROVEN
-    left, bound_x, free_x = instance(first, "", shared, level)
-    right, bound_y, free_y = instance(second, "_y", shared, level)
+    left, bound_x, free_x = unit_reach(first, "", shared, topology)
+    right, bound_y, free_y = unit_reach(second, "_y", shared, topology)
     if bound_x is None or bound_y is None:
         return Overlap.UNPROVEN
     left = left.align_params(right.get_space())
     right = right.align_params(left.get_space())
     both = left.intersect(right)
     limit = "" if launch is None else f" < {launch}"
-    unit, other = f"__{level}", f"__{level}_y"
+    unit, other = f"__{topology}", f"__{topology}_y"
     conditions = [
         f"0 <= {unit}{limit}",
         f"0 <= {other}{limit}",
@@ -478,4 +490,4 @@ def refuse_cta_overlaps(planner) -> None:
                 )
 
 
-__all__ = ["Overlap", "Reaches", "axis_numbering", "overlap", "refuse_cta_overlaps"]
+__all__ = ["Overlap", "Reaches", "mesh_axis_numbering", "overlap", "refuse_cta_overlaps"]

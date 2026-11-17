@@ -63,7 +63,7 @@ def whole_groups(mesh: types.Mesh, size: int) -> bool:
     ``execution_mesh_pattern(WARPGROUP, groups=True)`` matches only a layout
     whose every group is laid out as ``WARPGROUP``.
     """
-    held = tir.sync.participation(mesh)
+    held = tir.sync.sync_scope(mesh)
     return held.base % size == 0 and held.count % size == 0
 
 
@@ -72,8 +72,8 @@ def verify_warpgroups(call, ctx) -> None:
 
     The threads are those of the innermost mesh scope, whatever CTAs run it.
     """
-    mesh = ctx.enclosing_mesh()
-    if mesh is None or not whole_groups(mesh, tir.sync.participation(nn.WARPGROUP).count):
+    mesh = ctx.innermost_mesh()
+    if mesh is None or not whole_groups(mesh, tir.sync.sync_scope(nn.WARPGROUP).count):
         ctx.error(call, f"{type(call.target).__name__} needs whole warpgroups, got {mesh}")
 
 
@@ -85,7 +85,7 @@ def verify_proxy_storage(call, ctx) -> None:
 
 
 for op in (WgmmaFence, WgmmaCommitGroup, WgmmaWaitGroup, FenceProxyAsync):
-    typeinfer.register(op)(lambda call, ctx: types.UnitType())
+    typeinfer.register(op)(lambda call, ctx: types.TupleType.Void)
     access.register_relation(op)(access.identity_relations)
 for op in (WgmmaFence, WgmmaCommitGroup, WgmmaWaitGroup):
     verify.register(op)(verify_warpgroups)

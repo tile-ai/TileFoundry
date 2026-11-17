@@ -55,8 +55,8 @@ def is_induction_var_singleton_reshape(node) -> bool:
 def carry_sharded_reshape(layout: types.ShardLayout, new_shape: tuple):
     """Carry static sharding across an aligned view reshape.
 
-    Layout positions may merge or divide at exact factor boundaries. A divided
-    Split position must preserve a mesh-sized Split factor; singleton axes and
+    Layout modes may merge or divide at exact factor boundaries. A divided
+    Split mode must preserve a mesh-sized Split factor; singleton axes and
     mesh-only states carry freely. Unrepresentable alignment returns ``None``.
 
     See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
@@ -71,7 +71,7 @@ def carry_sharded_reshape(layout: types.ShardLayout, new_shape: tuple):
     axis_strides = axis_layout.strides
     n_axis = len(axis_shape)
 
-    mesh_shape = types.flatten(layout.mesh.layout).shape
+    mesh_shape = layout.mesh.shape
     split_mesh_extent: dict[int, int] = {}
     for mesh_axis_idx, attr in enumerate(layout.attrs):
         if isinstance(attr, types.Split) and mesh_axis_idx < len(mesh_shape):
@@ -83,19 +83,19 @@ def carry_sharded_reshape(layout: types.ShardLayout, new_shape: tuple):
             i += 1
         return i
 
-    new_positions: list[tuple[int, int, int | None]] = []
+    new_modes: list[tuple[int, int, int | None]] = []
     old_to_new: dict[int, int] = {}
     ci = 0
     pending: tuple[int, int, int | None] | None = None
     for dim_value in new_shape:
         d = int(dim_value)
         if d == 1:
-            new_positions.append((1, 0, None))
+            new_modes.append((1, 0, None))
             continue
         prod = 1
         while prod < d:
             if pending is not None:
-                cs, stride, old_pos = pending
+                cs, stride, old_mode = pending
                 pending = None
             else:
                 ci = next_nonunit(ci)
@@ -103,13 +103,13 @@ def carry_sharded_reshape(layout: types.ShardLayout, new_shape: tuple):
                     return None
                 cs = int(axis_shape[ci])
                 stride = axis_strides[ci]
-                old_pos = ci
+                old_mode = ci
                 ci += 1
             new_prod = prod * cs
             if new_prod <= d:
-                if old_pos is not None:
-                    old_to_new[old_pos] = len(new_positions)
-                new_positions.append((cs, stride, old_pos))
+                if old_mode is not None:
+                    old_to_new[old_mode] = len(new_modes)
+                new_modes.append((cs, stride, old_mode))
                 prod = new_prod
                 continue
 
@@ -119,19 +119,19 @@ def carry_sharded_reshape(layout: types.ShardLayout, new_shape: tuple):
             if cs % needed != 0:
                 return None
             residual = cs // needed
-            mesh_ext = split_mesh_extent.get(old_pos) if old_pos is not None else None
+            mesh_ext = split_mesh_extent.get(old_mode) if old_mode is not None else None
             if mesh_ext is not None and needed % mesh_ext != 0:
                 return None
             base_stride = stride * residual
             if mesh_ext is not None and needed != mesh_ext:
                 outer_residual = needed // mesh_ext
-                old_to_new[old_pos] = len(new_positions)
-                new_positions.append((mesh_ext, base_stride * outer_residual, old_pos))
-                new_positions.append((outer_residual, base_stride, None))
+                old_to_new[old_mode] = len(new_modes)
+                new_modes.append((mesh_ext, base_stride * outer_residual, old_mode))
+                new_modes.append((outer_residual, base_stride, None))
             else:
-                if old_pos is not None:
-                    old_to_new[old_pos] = len(new_positions)
-                new_positions.append((needed, base_stride, old_pos))
+                if old_mode is not None:
+                    old_to_new[old_mode] = len(new_modes)
+                new_modes.append((needed, base_stride, old_mode))
             pending = (residual, stride, None)
             prod = d
     if pending is not None or next_nonunit(ci) < n_axis:
@@ -146,8 +146,8 @@ def carry_sharded_reshape(layout: types.ShardLayout, new_shape: tuple):
         else:
             new_attrs.append(attr)
 
-    out_shape = tuple(s for s, _, _ in new_positions)
-    out_strides = tuple(st for _, st, _ in new_positions)
+    out_shape = tuple(s for s, _, _ in new_modes)
+    out_strides = tuple(st for _, st, _ in new_modes)
     new_layout = types.Layout(shape=out_shape, strides=out_strides)
     return types.ShardLayout(layout=new_layout, attrs=tuple(new_attrs), mesh=layout.mesh)
 

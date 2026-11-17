@@ -1,4 +1,4 @@
-"""Enumerate tables and coordinates from [shard §6.1](docs/spec/shard.md#61-placement-semantics)."""
+"""Enumerate tables and coords from [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics)."""
 
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ def _check_chunk(cases):
                 shape=SHAPE, dtype=expr.DType.f32, layout=layout, storage=storage
             )
             actual = utils.local_type_of(
-                tensor, topology_level=LEVELS[selected], topologies=topologies
+                tensor, topology=LEVELS[selected], topologies=topologies
             )
             if attrs:
                 logical_axes = types.int_tuple.mode_axes(
@@ -138,7 +138,7 @@ def _check_chunk(cases):
     return failures
 
 
-def test_placement_semantics():
+def test_shard_attr_semantics():
     """Literal table indices are types.B, types.V, types.S, types.P.
 
     Coordinate cases run in separate processes.

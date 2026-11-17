@@ -2,7 +2,7 @@
 
 The original C emulator uses AArch64 scalar/SIMD and FP control assembly, but
 never emits AMX instructions. It is intentionally not a portable C reference.
-Operand encoding and placement below must remain independent of the Evaluator.
+Operand encoding and addresses below must remain independent of the Evaluator.
 """
 
 import ctypes
@@ -214,7 +214,7 @@ def _relative_bytes(type):
 def _oracle_locations(op, role, type):
     """C-side packing from public relative layouts and named physical selectors.
 
-    Intentionally does not call evaluator/common placements or layout_offsets.
+    Intentionally does not call evaluator/common operand_addresses or layout_offsets.
     """
     bank = op.register_roles[role]
     if bank == "extract_source":
@@ -317,7 +317,7 @@ def _prepare(op, params, types):
     machine = _Machine(op.generation)
     banks = {name: getattr(machine, name) for name in ("x", "y", "z", "memory")}
     banks["lifecycle"] = bytearray(1)
-    placements = {}
+    addresses = {}
     assigned = set()
     for i, (param, type) in enumerate(zip(params, types)):
         bank, locations = _oracle_locations(op, param.name, type)
@@ -333,10 +333,10 @@ def _prepare(op, params, types):
             if key not in assigned:
                 banks[bank][address] = value
                 assigned.add(key)
-        placements[param.name] = (bank, locations)
+        addresses[param.name] = (bank, locations)
     args = []
     for param, type in zip(params, types):
-        bank, locations = placements[param.name]
+        bank, locations = addresses[param.name]
         raw = bytearray(banks[bank][address] for address in locations)
         tensor = (
             torch.frombuffer(raw, dtype=evaluator.to_torch_dtype(type.dtype)).clone()
@@ -344,7 +344,7 @@ def _prepare(op, params, types):
             else torch.empty(0, dtype=evaluator.to_torch_dtype(type.dtype))
         )
         args.append(evaluator.TensorValue(core.ShardTensor(type, tensor.reshape(tuple(type.shape)))))
-    return machine, banks, placements, tuple(args)
+    return machine, banks, addresses, tuple(args)
 
 
 def _c_operand(op):

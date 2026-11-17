@@ -1,4 +1,4 @@
-"""Verify HIR and TIR functions, bindings, calls, and contextual placement.
+"""Verify HIR and TIR functions, bindings, calls, and the call scope of each call.
 
 The checked rule set is defined by
 [tir §1.3](docs/spec/tir.md#13-primfunction).
@@ -11,6 +11,7 @@ from contextlib import ExitStack, contextmanager
 from tilefoundry import services, utils
 from tilefoundry.interfaces import valuation, verify
 from tilefoundry.ir import core, dim, expr, pattern, tir, types
+from tilefoundry.ir import utils as ir_utils
 from tilefoundry.ir.tir import memory
 from tilefoundry.target import cpu
 
@@ -253,11 +254,11 @@ def input_params(op_type: type) -> tuple:
     return tuple(param for param in expr.schema_of(op_type).signature if param.kind == "input")
 
 
-def verify_prim_function(fn: core.PrimFunction, *, frame: valuation.Context | None = None) -> None:
+def verify_prim_function(fn: core.PrimFunction, *, ctx: valuation.Context | None = None) -> None:
     """Per [tir §1.3](docs/spec/tir.md#13-primfunction)'s rule list.
 
-    *frame* is the Module, target and topologies that declare *fn*; a variant
-    is checked in the frame of its prototype. With no frame, a ``Launch``
+    *ctx* is the Module, target and topologies that declare *fn*; a variant
+    is checked in the context of its prototype. With no context, a ``Launch``
     callee is not resolved, and an ``Evaluate(FunctionRef)`` is rejected
     because it requires module context.
     """
@@ -275,14 +276,14 @@ def verify_prim_function(fn: core.PrimFunction, *, frame: valuation.Context | No
                 f"PrimFunction {fn.name!r}: specialization subject {pat.dim_var!r} "
                 "cannot be derived from parameters"
             )
-        verify_prim_function(variant, frame=frame)
+        verify_prim_function(variant, ctx=ctx)
 
-    ctx = verify.Context()
-    if frame is not None:
-        ctx = verify.Context(
-            module=frame.module, function=fn, target=frame.target, topologies=frame.topologies
+    verify_ctx = verify.Context()
+    if ctx is not None:
+        verify_ctx = verify.Context(
+            module=ctx.module, function=fn, target=ctx.target, topologies=ctx.topologies
         )
-    Visitor(fn).visit(fn.body, ctx)
+    Visitor(fn).visit(fn.body, verify_ctx)
 
 
 def verify_param_homogeneity(fn: core.PrimFunction) -> None:
@@ -438,7 +439,7 @@ class Visitor(core.StmtExprVisitor[None]):
             verify_value_layouts(stmt.callable)
             verify_function_call(stmt, self.function, ctx)
         else:
-            services.verify_call(stmt.callable, stmt.args, ctx.current_mesh, frame=ctx)
+            services.verify_call(stmt.callable, stmt.args, ctx.mesh_scope, ctx=ctx)
 
     def visit_Var(self, var, ctx):
         if id(var) not in self.visible:
@@ -480,10 +481,10 @@ def verify_bound_coordinates(field: str, bound, ctx) -> None:
         if not (isinstance(node, expr.Call) and isinstance(node.target, dim.MeshCoord)):
             continue
         mesh = node.target.mesh
-        axes = dim.literal_axes(node.args[0]) if node.args else None
-        rank = len(types.flatten(mesh.layout).shape)
-        if axes is None or not all(0 <= axis < rank for axis in axes):
-            raise expr.VerifyError(f"For.{field} reads axes {axes!r} of a mesh of rank {rank}")
+        mesh_axes = dim.literal_axes(node.args[0]) if node.args else None
+        rank = len(mesh.shape)
+        if mesh_axes is None or not all(0 <= mesh_axis < rank for mesh_axis in mesh_axes):
+            raise expr.VerifyError(f"For.{field} reads mesh axes {mesh_axes!r} of a mesh of rank {rank}")
         if not any(held is mesh or held == mesh for held in ctx.enclosing_meshes()):
             raise expr.VerifyError(
                 f"For.{field} reads a coordinate of {mesh!r}, which no enclosing MeshScope binds"
@@ -498,7 +499,7 @@ def iter_op_attrs(op):
 
 def assert_mesh_in_scope(mesh: types.Mesh, ctx, fn):
     scope = ctx.enclosing_meshes()
-    if any(mesh == m for m in scope) or (scope and mesh == types.Mesh.from_meshes(*scope)):
+    if any(mesh == m for m in scope) or (scope and mesh == ir_utils.from_meshes(*scope)):
         return
     for p in fn.params:
         if isinstance(p.type, types.TensorType) and isinstance(p.type.layout, types.ShardLayout):
@@ -520,12 +521,12 @@ def verify_shape_of(node: core.ShapeOf) -> None:
         raise expr.VerifyError(f"ShapeOf.type must be rank-0 i32 scalar TensorType, got {node.type}")
 
 
-def callee_frame(ref, frame):
-    """The function *ref* names from *frame*, and the frame of the Module that declares it."""
+def resolve_callee(ref, ctx):
+    """The function *ref* names from *ctx*, and the context of the Module that declares it."""
     try:
-        if frame is None:
+        if ctx is None:
             raise ValueError(f"symbol {ref.qualified_name!r}: a function reference requires a module context")
-        inner = frame.enter_reference(ref)
+        inner = ctx.enter_reference(ref)
     except ValueError as error:
         raise expr.VerifyError(str(error)) from error
     return inner.function, inner
@@ -537,16 +538,16 @@ def verify_function_call(stmt: core.Evaluate, fn, ctx):
     if ctx.module is None:
         raise expr.VerifyError(
             f"{label} requires module context; "
-            f"call verify_prim_function(fn, frame=...) or verify_module(...)"
+            f"call verify_prim_function(fn, ctx=...) or verify_module(...)"
         )
     try:
         ref.check_indices(tuple(ctx.type_of(index) for index in ref.indices(stmt.args)))
     except ValueError as error:
         raise expr.VerifyError(str(error)) from error
-    callee, frame = callee_frame(ref, ctx)
+    callee, callee_ctx = resolve_callee(ref, ctx)
     if not isinstance(callee, core.PrimFunction):
         raise expr.VerifyError(f"{label}: callee {callee.name!r} is not a PrimFunction")
-    assert_no_path_back(frame, fn, f"{label}: recursion not allowed")
+    assert_no_path_back(callee_ctx, fn, f"{label}: recursion not allowed")
     params = tuple(param for param in callee.params if ref.name is not None or not param.is_const)
     verify_call_arguments(ref.arguments(stmt.args), params, label, ctx)
 
@@ -626,7 +627,7 @@ def verify_launch_extent(extent, extent_params, ref_name) -> None:
 
 
 def verify_launch(stmt: core.Evaluate, fn, ctx):
-    """Check host launches before target-specific placement validation.
+    """Check host launches before the target checks each execution mesh.
 
     The launch is ``Evaluate(Launch(...), (FunctionRef(callee), grid_x, grid_y,
     grid_z, block_x, block_y, block_z, *forwarded))``. An HIR callee's arguments
@@ -659,7 +660,7 @@ def verify_launch(stmt: core.Evaluate, fn, ctx):
             raise expr.VerifyError(f"Launch of {ref.name!r}: forwarded arg[{i}] must be a tensor")
     if ctx.module is None:
         return
-    callee, _ = callee_frame(ref, ctx)
+    callee, _ = resolve_callee(ref, ctx)
     if isinstance(callee, core.Function):
         return
     if isinstance(callee.target, cpu.Target):
@@ -679,27 +680,27 @@ def verify_launch(stmt: core.Evaluate, fn, ctx):
             )
 
 
-def assert_no_path_back(frame, root, recursion):
-    """Refuse a path from the function of *frame* back to *root*.
+def assert_no_path_back(ctx, root, recursion):
+    """Refuse a path from the function of *ctx* back to *root*.
 
     A reference names a prototype, so reaching the prototype of a variant
     *root* is a path back to *root*.
     """
     try:
-        reached = (frame.function, *(inner.function for inner in reached_frames(frame)))
+        reached = (ctx.function, *(inner.function for inner in reached_contexts(ctx)))
     except ValueError as error:
         raise expr.VerifyError(str(error)) from error
     if any(function is root or any(variant is root for variant in function.variants) for function in reached):
         raise expr.VerifyError(recursion)
 
 
-def reached_frames(frame):
-    """Every frame the function of *frame* reaches by calls and launches, at any depth, once each.
+def reached_contexts(ctx):
+    """Every context the function of *ctx* reaches by calls and launches, at any depth, once each.
 
-    Each reference resolves from the frame of the function that states it; a
+    Each reference resolves from the context of the function that states it; a
     reference that does not resolve raises.
     """
-    visited, pending = set(), [frame]
+    visited, pending = set(), [ctx]
     while pending:
         current = pending.pop()
         for ref in function_references(current.function):
@@ -759,11 +760,11 @@ def verify_module(fns) -> None:
     if not isinstance(fns, core.Module):
         root = core.Module("<functions>", ())
         root.replace_functions(fns)
-    frames = valuation.collect_functions(root)
-    owners = {id(root): root, **{id(frame.module): frame.module for frame in frames.values()}}
+    contexts = valuation.collect_functions(root)
+    owners = {id(root): root, **{id(ctx.module): ctx.module for ctx in contexts.values()}}
     groups = tuple(node.functions for node in owners.values())
-    for frame in frames.values():
-        f = frame.function
+    for ctx in contexts.values():
+        f = ctx.function
         if isinstance(f, core.Function):
             verify_function(f)
             if f.specializations:
@@ -778,7 +779,7 @@ def verify_module(fns) -> None:
                     f"module function must be callable"
                 )
         elif isinstance(f, core.PrimFunction):
-            verify_prim_function(f, frame=frame)
+            verify_prim_function(f, ctx=ctx)
         else:
             raise expr.VerifyError(f"verify_module: unknown function type {type(f).__name__}")
 
@@ -797,7 +798,7 @@ def verify_module(fns) -> None:
 
 __all__ = [
     "input_params",
-    "reached_frames",
+    "reached_contexts",
     "verify_function",
     "verify_module",
     "verify_prim_function",

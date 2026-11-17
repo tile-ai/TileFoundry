@@ -1,4 +1,4 @@
-"""Internal values and solver results for physical memory placement."""
+"""Internal values and solver results for physical memory address assignment."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ from .visitor import AnalyzeContext
 
 
 class SolverOptions(Protocol):
-    """Placement limits consumed independently of the memory front end."""
+    """Address assignment limits consumed independently of the memory front end."""
 
     timeout_seconds: float
     workers: int
@@ -252,18 +252,14 @@ def visible_at(model, value, producer):
         mesh = scope.mesh
         if mesh is None:
             return False
-        available = {getattr(held, "name", held) for held in mesh.topologies}
-        axes = dim.literal_axes(value.args[0])
-        offset = 0
-        for topology, layout in zip(
-            value.target.mesh.topologies, types.levels(value.target.mesh), strict=True
-        ):
-            width = len(types.flatten(layout.shape))
-            if axes is None or any(offset <= axis < offset + width for axis in axes):
-                if getattr(topology, "name", topology) not in available:
-                    return False
-            offset += width
-        return True
+        mesh_axes = dim.literal_axes(value.args[0])
+        keys = ir_utils.axis_keys(value.target.mesh)
+        needed = (
+            set(ir_utils.topology_names(value.target.mesh))
+            if mesh_axes is None
+            else {keys[mesh_axis][0] for mesh_axis in mesh_axes if mesh_axis < len(keys)}
+        )
+        return needed <= set(ir_utils.topology_names(mesh))
     interval = model.liveness.interval_of(core.SSAValue(value))
     location = model.context.scope.snapshot.definition.locations.get(id(value))
     return (
@@ -486,7 +482,7 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
             self.context,
             scope=scope,
             owner=scope.owner,
-            current_mesh=scope.mesh,
+            mesh_scope=scope.mesh,
             call_site=node if isinstance(node, expr.Call) else None,
         )
 
@@ -725,16 +721,16 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
         facts = context.target.get_facts(target.MemoryHierarchyFacts)
         quantities = {}
         persistent = set()
-        placement = cost.Context(
+        cost_ctx = cost.Context(
             module=context.module,
             function=context.function,
             target=context.target,
-            topology_level=context.topology_level,
+            topology=context.topology,
             topologies=context.topologies,
         )
         for lifetime in liveness.intervals:
             key = lifetime.value
-            leaves = ir_utils.leaves_of(placement.local_type_of(key.expr))
+            leaves = ir_utils.leaves_of(cost_ctx.local_type_of(key.expr))
             if not leaves:
                 continue
             held = leaves[key.index]
@@ -837,7 +833,7 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
                     size = max(
                         amount // copies,
                         storage_bytes(
-                            leaf, topology_level=ctx.topology_level, topologies=ctx.topologies
+                            leaf, topology=ctx.topology, topologies=ctx.topologies
                         ),
                     )
                     if copies > 1:
@@ -929,7 +925,7 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
                 )
             )
         update = self.by_value.get(core.SSAValue(node.args[1]))
-        relations = ctx.scope.access.projected_relations(node, replace(ctx, topology_level=None))
+        relations = ctx.scope.access.projected_relations(node, replace(ctx, topology=None))
         if update is not None and len(relations) > len(node.args):
             mapping = (
                 relations[1]
@@ -993,23 +989,23 @@ def partial_copies(held: types.TensorType, owners: expr.StorageOwners) -> int:
     if layout is None:
         return 1
     copies = 1
-    for (level, _), reduction, extent in zip(
-        types.axis_keys(layout.mesh),
+    for (topology, _), reduction, extent in zip(
+        ir_utils.axis_keys(layout.mesh),
         types.partial_reductions_by_axis(layout),
-        types.flatten(layout.mesh.layout).shape,
+        layout.mesh.shape,
     ):
-        if reduction is None or owners.private(held.storage, level):
+        if reduction is None or owners.private(held.storage, topology):
             continue
         amount = expr.static_dim_value(extent)
         if amount is None:
             raise Error(
-                f"allocation: Partial copies at level {level!r} need a static extent, got {extent!r}"
+                f"allocation: Partial copies at topology {topology!r} need a static extent, got {extent!r}"
             )
         copies *= amount
     return copies
 
 
-def storage_bytes(held: types.TensorType, *, topology_level=None, topologies=()) -> int:
+def storage_bytes(held: types.TensorType, *, topology=None, topologies=()) -> int:
     """A unit's safe arena span, including holes and all reachable swizzle phases."""
     if not expr.is_literal_shape(held.shape):
         raise Error(f"allocation: unresolved physical shape {held.shape!r}")
@@ -1018,12 +1014,13 @@ def storage_bytes(held: types.TensorType, *, topology_level=None, topologies=())
 
     def bounds(layout, low, high, shape=None):
         if isinstance(layout, types.ShardLayout):
-            if topology_level is not None:
+            if topology is not None:
                 shape = ir_utils.local_type_of(
                     replace(held, layout=layout),
-                    topology_level=topology_level,
+                    topology=topology,
                     topologies=topologies,
                 ).shape
+                low, high = 0, prod(shape) - 1
             return bounds(layout.layout, low, high, shape)
         if isinstance(layout, types.ComposedLayout):
             if layout.outer is not None:
@@ -1035,16 +1032,17 @@ def storage_bytes(held: types.TensorType, *, topology_level=None, topologies=())
                 return low + offset, high + offset
             return bounds(layout.inner, low + offset, high + offset)
         if isinstance(layout, types.Layout):
-            flat = types.flatten(layout)
-            if not all(isinstance(value, int) for value in (*flat.shape, *flat.strides)):
+            extents = types.flatten_to_tuple(layout.shape)
+            steps = types.flatten_to_tuple(layout.strides)
+            if not all(isinstance(value, int) for value in (*extents, *steps)):
                 raise Error(f"allocation: unresolved physical layout {layout!r}")
-            contributions = tuple(
-                (extent - 1) * stride
-                for extent, stride in zip(
-                    flat.shape if shape is None else shape, flat.strides, strict=True
-                )
-            )
-            return sum(min(0, value) for value in contributions), sum(
+            extents = extents if shape is None else tuple(shape)
+            if not extents:
+                return 0, 0
+            inner = prod(extents[1:])
+            first = (low // inner * steps[0], high // inner * steps[0])
+            contributions = tuple((extent - 1) * stride for extent, stride in zip(extents[1:], steps[1:], strict=True))
+            return min(first) + sum(min(0, value) for value in contributions), max(first) + sum(
                 max(0, value) for value in contributions
             )
         if isinstance(layout, types.Swizzle):
@@ -1198,7 +1196,7 @@ def solve_allocation(
     *,
     memory_level: str,
 ) -> AllocationResult:
-    """Return the first feasible whole-function placement for one level."""
+    """Return the first feasible whole-function address assignment for one level."""
     summary = summary.resolve(ctx)
     groups = defaultdict(list)
     for value in summary.values:
@@ -1297,7 +1295,7 @@ def solve_allocation(
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         status_name = solver.status_name(status).lower()
         raise Error(
-            f"allocation: no feasible {memory_level} placement was found "
+            f"allocation: no feasible {memory_level} address assignment was found "
             f"({status_name}); {len(values)} roots conflict with "
             f"{len(interference)} interference constraints"
         )

@@ -339,7 +339,7 @@ class PlainLayoutPattern(ElementPattern):
 
 @dataclass(frozen=True)
 class MeshAxisBindingRule:
-    STATEMENT: ClassVar[str] = "A placement axis resolves to a lexical Mesh binding."
+    STATEMENT: ClassVar[str] = "A mesh axis of a shard layout resolves to a lexical Mesh binding."
 
     def apply(self, value, *, match, context):
         mesh, binding, _ = value
@@ -352,20 +352,20 @@ class MeshAxisBindingRule:
 
 @dataclass(frozen=True)
 class BareMeshAxisRule:
-    STATEMENT: ClassVar[str] = "A bare Mesh placement names a one-axis mesh."
+    STATEMENT: ClassVar[str] = "A bare Mesh in a shard layout names a mesh with one mesh axis."
 
     def apply(self, value, *, match, context):
         mesh, _, axis_name = value
-        if axis_name is None and len(types.flatten(mesh.layout).shape) != 1:
+        if axis_name is None and len(mesh.shape) != 1:
             raise ParseError.from_node(
-                match.node, context, "bare Mesh placement requires a one-axis mesh"
+                match.node, context, "a bare Mesh in a shard layout requires a mesh with one mesh axis"
             )
         return value
 
 
 @dataclass(frozen=True)
 class MeshAxisNameRule:
-    STATEMENT: ClassVar[str] = "A named placement axis exists in its lexical Mesh."
+    STATEMENT: ClassVar[str] = "A named mesh axis of a shard layout exists in its lexical Mesh."
 
     def apply(self, value, *, match, context):
         mesh, binding, axis_name = value
@@ -375,7 +375,7 @@ class MeshAxisNameRule:
             return mesh, mesh.names.index(axis_name)
         except ValueError as error:
             raise ParseError.from_node(
-                match.node, context, f"Mesh {binding!r} has no axis {axis_name!r}"
+                match.node, context, f"Mesh {binding!r} has no mesh axis {axis_name!r}"
             ) from error
 
 
@@ -407,24 +407,24 @@ class MeshAxisPattern(ElementPattern):
 
 
 def meshes_outermost_first(meshes, context):
-    """Order placement meshes according to the module's topology declaration."""
+    """Order shard layout meshes according to the module's topology declaration."""
     declared = tuple(context.function.topologies) if context.function is not None else ()
     order = {name: index for index, name in enumerate(declared)}
 
-    def rank(mesh):
-        levels = tuple(getattr(topology, "name", topology) for topology in mesh.topologies)
-        return min((order.get(level, len(order)) for level in levels), default=len(order))
+    def topology_level(mesh):
+        names = utils.topology_names(mesh)
+        return min((order.get(name, len(order)) for name in names), default=len(order))
 
-    return tuple(sorted(meshes, key=rank))
+    return tuple(sorted(meshes, key=topology_level))
 
 
 @dataclasses.dataclass(frozen=True)
 class PlacedLayout:
-    """A placement written as sugar: the shape the author wrote, and where it goes.
+    """A shard layout written as sugar: the shape the author wrote, and where it goes.
 
     The two are separate answers and neither reproduces the other. ``shape`` is
     the extent tuple as written, before any mesh axis divides it, which is what
-    a Tensor type states. ``layout`` is the placement that sugar implies, whose
+    a Tensor type states. ``layout`` is the shard layout that sugar implies, whose
     own shape is the divided one. Reading a logical shape back off the layout
     gives the divided shape instead, which is a different type.
     """
@@ -522,9 +522,9 @@ def value_states() -> AstPattern[Any]:
 @dataclass(frozen=True)
 class ValueStatesFormRule:
     STATEMENT: ClassVar[str] = (
-        "Layout states are either a single B() or one or more axis @ P(nonempty string) "
-        "or axis @ V() "
-        "entries; empty states, axis @ B(), and mixing B() with other entries are rejected."
+        "Layout states are one B() alone, or one or more mesh axis @ P(nonempty string) "
+        "or mesh axis @ V() entries. Empty states are rejected. A mesh axis @ B() entry is "
+        "rejected. B() mixed with other entries is rejected."
     )
 
     def apply(self, value, *, node, context):
@@ -540,7 +540,7 @@ class ValueStatesFormRule:
         ):
             return value
         raise ParseError.from_node(
-            node, context, 'layout states must be {B()} or {axis @ P("reduction") | axis @ V(), ...}'
+            node, context, 'layout states must be {B()} or {mesh_axis @ P("reduction") | mesh_axis @ V(), ...}'
         )
 
 
@@ -566,7 +566,7 @@ def layout_sugar_parts(node: object):
 
 
 def value_state_parts(node: ast.AST):
-    """Read ``axis @ P("reduction")`` or ``axis @ V()`` as axis node and state."""
+    """Read ``mesh_axis @ P("reduction")`` or ``mesh_axis @ V()`` as mesh axis node and state."""
     if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.MatMult):
         return None
     call = node.right
@@ -583,7 +583,7 @@ def value_state_parts(node: ast.AST):
 
 
 @dataclass(frozen=True)
-class PlacementCandidate:
+class ShardLayoutCandidate:
     shape: tuple
     strides: tuple | None
     splits: tuple[tuple[object, int, int], ...]
@@ -594,7 +594,7 @@ class PlacementCandidate:
     composed: types.ComposedLayout | None = None
 
 
-def placement_meshes(value: PlacementCandidate, context: MatchContext, match):
+def shard_layout_meshes(value: ShardLayoutCandidate, context: MatchContext, match):
     referenced_ids = {id(entry[0]) for entry in (*value.splits, *value.states)}
     if not referenced_ids:
         return ()
@@ -603,7 +603,7 @@ def placement_meshes(value: PlacementCandidate, context: MatchContext, match):
     meshes = tuple(dict.fromkeys(entry[0] for entry in (*value.splits, *value.states)))
     if len(meshes) != len(referenced_ids):
         raise ParseError.from_node(
-            match.node, context, "placement references a non-lexical Mesh binding"
+            match.node, context, "shard layout references a non-lexical Mesh binding"
         )
     return meshes
 
@@ -621,77 +621,77 @@ class LayoutStrideRankRule:
 
 
 @dataclass(frozen=True)
-class PlacementMeshResolutionRule:
-    STATEMENT: ClassVar[str] = "A placement's mesh must be a lexical mesh binding."
+class ShardLayoutMeshResolutionRule:
+    STATEMENT: ClassVar[str] = "A shard layout's mesh must be a lexical mesh binding."
 
     def apply(self, value, *, match, context):
-        placement_meshes(value, context, match)
+        shard_layout_meshes(value, context, match)
         return value
 
 
 @dataclass(frozen=True)
-class PlacementLevelRule:
-    STATEMENT: ClassVar[str] = "A placement's meshes cannot name the same topology level."
+class ShardLayoutTopologyRule:
+    STATEMENT: ClassVar[str] = "A shard layout's meshes cannot name the same topology."
 
     def apply(self, value, *, match, context):
-        meshes = placement_meshes(value, context, match)
-        levels = [topology.name for mesh in meshes for topology in mesh.topologies]
-        if len(levels) != len(set(levels)):
-            duplicates = sorted(name for name in set(levels) if levels.count(name) > 1)
+        meshes = shard_layout_meshes(value, context, match)
+        topology_names = [topology.name for mesh in meshes for topology in mesh.topologies]
+        if len(topology_names) != len(set(topology_names)):
+            duplicates = sorted(name for name in set(topology_names) if topology_names.count(name) > 1)
             raise ParseError.from_node(
                 match.node,
                 context,
-                f"a layout can split one level once; two of these meshes name {duplicates}",
+                f"a layout can split one topology once; two of these meshes name {duplicates}",
             )
         return value
 
 
 @dataclass(frozen=True)
 class MeshAxisBoundOnceRule:
-    STATEMENT: ClassVar[str] = "A placement binds each mesh axis at most once."
+    STATEMENT: ClassVar[str] = "A shard layout binds each mesh axis at most once."
 
     def apply(self, value, *, match, context):
         seen: set[tuple[int, int]] = set()
-        for mesh, axis, *_ in (*value.splits, *value.states):
-            key = (id(mesh), axis)
+        for mesh, mesh_axis, *_ in (*value.splits, *value.states):
+            key = (id(mesh), mesh_axis)
             if key in seen:
                 raise ParseError.from_node(match.node, context, "mesh axis is bound more than once")
             seen.add(key)
         return value
 
 
-def placement_scope(context):
+def shard_layout_scope(context):
     if context.function is None or context.situation == "mesh_layout":
         return None
-    return authored_infer_context(context).current_mesh
+    return authored_infer_context(context).mesh_scope
 
 
 @dataclass(frozen=True)
-class PlacementScopeRule:
+class ShardLayoutScopeRule:
     STATEMENT: ClassVar[str] = (
-        "A placement requires and covers the current mesh scope, or the function "
-        "mesh in a signature; each referenced axis must "
-        "map uniquely to an axis of that scope. Unstated axes are Broadcast."
+        "A shard layout requires and covers the current mesh scope, or the function "
+        "mesh in a signature. Each referenced mesh axis must "
+        "map uniquely to a mesh axis of that scope. Unstated mesh axes are Broadcast."
     )
 
     def apply(self, value, *, match, context):
         if not value.splits and not value.states and not value.states_written:
             return value
-        mesh = placement_scope(context)
+        mesh = shard_layout_scope(context)
         if mesh is None:
             raise ParseError.from_node(
-                match.node, context, "placement requires a current mesh scope"
+                match.node, context, "shard layout requires a current mesh scope"
             )
-        keys = types.axis_keys(mesh)
+        keys = utils.axis_keys(mesh)
         attrs = [runtime.Broadcast() for _ in keys]
         for source, source_axis, *state in (*value.splits, *value.states):
-            key = types.axis_keys(source)[source_axis]
-            targets = [axis for axis, held in enumerate(keys) if held == key]
+            key = utils.axis_keys(source)[source_axis]
+            targets = [mesh_axis for mesh_axis, held in enumerate(keys) if held == key]
             if len(targets) != 1:
                 raise ParseError.from_node(
                     match.node,
                     context,
-                    "placement axis does not map uniquely to the current mesh scope",
+                    "mesh axis of a shard layout does not map uniquely to the current mesh scope",
                 )
             if len(state) == 1:
                 attr = runtime.Split(state[0])
@@ -703,11 +703,11 @@ class PlacementScopeRule:
 
 
 @dataclass(frozen=True)
-class PlacementConstructionRule:
-    """Materialize the candidate only after placement invariants have run."""
+class ShardLayoutConstructionRule:
+    """Materialize the candidate only after shard layout invariants have run."""
 
     STATEMENT: ClassVar[str] = (
-        "A placement must construct a valid shard layout. Without splits, partials "
+        "Shard layout sugar must construct a valid shard layout. Without splits, partials "
         "or stated strides, it uses row-major strides; Broadcast states do not "
         "affect this default. A composed operand is retained directly without "
         "canonical split decomposition."
@@ -746,24 +746,24 @@ class PlacementConstructionRule:
 
 
 @dataclass(frozen=True)
-class PlacementAnswerRule:
-    """A placement answers both halves: the shape written, and where it goes."""
+class ShardLayoutAnswerRule:
+    """Shard layout sugar answers both halves: the shape written, and where it goes."""
 
     STATEMENT: ClassVar[str] = (
-        "Placement sugar states both the shape as written and the layout it implies."
+        "Shard layout sugar states both the shape as written and the layout it implies."
     )
 
     def apply(self, value, *, match, context):
         if not isinstance(value, PlacedLayout):
-            raise ParseError.from_node(match.node, context, "placement did not answer a placement")
+            raise ParseError.from_node(match.node, context, "shard layout sugar did not answer a shard layout")
         if not isinstance(value.shape, tuple):
-            raise ParseError.from_node(match.node, context, "placement shape is not a tuple")
+            raise ParseError.from_node(match.node, context, "shard layout shape is not a tuple")
         if not isinstance(value.layout, runtime.LayoutBase):
-            raise ParseError.from_node(match.node, context, "placement did not carry a LayoutBase")
+            raise ParseError.from_node(match.node, context, "shard layout did not carry a LayoutBase")
         return value
 
 
-def placement_operand_syntax():
+def shard_layout_operand_syntax():
     return ChoicePattern(
         AstNodePattern(
             ast.Tuple,
@@ -773,10 +773,10 @@ def placement_operand_syntax():
     )
 
 
-def placement_parts(node: ast.AST) -> tuple[ast.AST, tuple[ast.AST, ...]] | None:
+def shard_layout_parts(node: ast.AST) -> tuple[ast.AST, tuple[ast.AST, ...]] | None:
     if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.MatMult):
         return None
-    left = placement_parts(node.left)
+    left = shard_layout_parts(node.left)
     if left is None:
         extent = node.left
         axes: tuple[ast.AST, ...] = ()
@@ -799,14 +799,14 @@ def enter_placed_layout(
     dims_node, strides_node = parts
     children: list[AstChild] = []
     bindings: list[tuple[str, int]] = []
-    found_placement = False
+    found_shard_layout = False
     for tensor_axis, item in enumerate(dims_node.elts):
-        placement = placement_parts(item)
+        parts = shard_layout_parts(item)
         extent_node = item
         axis_nodes: tuple[ast.AST, ...] = ()
-        if placement is not None:
-            found_placement = True
-            extent_node, axis_nodes = placement
+        if parts is not None:
+            found_shard_layout = True
+            extent_node, axis_nodes = parts
         extent_context = context.child(situation="layout_extent", role="layout_extent")
         if DimExprPattern().match(extent_node, extent_context) is None:
             return None
@@ -842,7 +842,7 @@ def enter_placed_layout(
                     "layout_strides",
                 )
             )
-    if not allow_plain and not found_placement and strides_node is None:
+    if not allow_plain and not found_shard_layout and strides_node is None:
         return None
     return dataclasses.replace(
         matched,
@@ -859,12 +859,12 @@ def enter_placed_layout(
 
 
 class PlacedLayoutPattern(ElementPattern):
-    """The one placement production, including dimensions, strides, and states."""
+    """The one shard layout production, including dimensions, strides, and states."""
 
     element_name = "placed_layout"
     syntax = LazyPattern(
         lambda: BindPattern(
-            placement_operand_syntax(),
+            shard_layout_operand_syntax(),
             enter_placed_layout,
         )
     )
@@ -882,31 +882,31 @@ class PlacedLayoutPattern(ElementPattern):
             (*children[child_name], tensor_axis)
             for child_name, tensor_axis in match.captures["bindings"]
         )
-        return PlacementCandidate(shape, strides, splits, ())
+        return ShardLayoutCandidate(shape, strides, splits, ())
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         LayoutStrideRankRule(),
         MeshAxisBoundOnceRule(),
-        PlacementMeshResolutionRule(),
-        PlacementLevelRule(),
-        PlacementScopeRule(),
-        PlacementConstructionRule(),
-        PlacementAnswerRule(),
+        ShardLayoutMeshResolutionRule(),
+        ShardLayoutTopologyRule(),
+        ShardLayoutScopeRule(),
+        ShardLayoutConstructionRule(),
+        ShardLayoutAnswerRule(),
     )
 
 
-def bind_placement_operand(node, context, matched):
+def bind_shard_layout_operand(node, context, matched):
     return enter_placed_layout(node, context, matched, allow_plain=True)
 
 
-class PlacementOperandPattern(PlacedLayoutPattern):
-    """Parse placement dimensions before the enclosing state rules construct them."""
+class ShardLayoutOperandPattern(PlacedLayoutPattern):
+    """Parse shard layout dimensions before the enclosing state rules construct them."""
 
-    element_name = "placement_operand"
+    element_name = "shard_layout_operand"
     syntax = LazyPattern(
         lambda: BindPattern(
-            placement_operand_syntax(),
-            bind_placement_operand,
+            shard_layout_operand_syntax(),
+            bind_shard_layout_operand,
         )
     )
     RULES = ()
@@ -914,16 +914,16 @@ class PlacementOperandPattern(PlacedLayoutPattern):
 @dataclass(frozen=True)
 class StatedLayoutOperandRule:
     STATEMENT: ClassVar[str] = (
-        "States attach to placement dimensions, a plain Layout, or a ComposedLayout "
+        "States attach to shard layout dimensions, a plain Layout, or a ComposedLayout "
         "whose outer is a plain Layout."
     )
 
     def apply(self, value, *, match, context):
         operand, states = value
-        if isinstance(operand, PlacementCandidate):
+        if isinstance(operand, ShardLayoutCandidate):
             return dataclasses.replace(operand, states=states, states_written=True)
         if isinstance(operand, types.ComposedLayout):
-            return PlacementCandidate(
+            return ShardLayoutCandidate(
                 operand.shape,
                 None,
                 (),
@@ -933,9 +933,9 @@ class StatedLayoutOperandRule:
             )
         if not isinstance(operand, types.Layout):
             raise ParseError.from_node(
-                match.node, context, "layout states require a Layout or placement operand"
+                match.node, context, "layout states require a Layout or shard layout operand"
             )
-        return PlacementCandidate(
+        return ShardLayoutCandidate(
             operand.shape,
             operand.strides,
             (),
@@ -951,9 +951,9 @@ def bind_stated_layout(node, context, matched):
         state = value_state_parts(item)
         if state is None:
             continue
-        axis, kind, reduction = state
+        mesh_axis, kind, reduction = state
         name = f"state_{index}"
-        children.append(AstChild(name, MeshAxisPattern(), axis, "mesh_axis", "mesh_axis"))
+        children.append(AstChild(name, MeshAxisPattern(), mesh_axis, "mesh_axis", "mesh_axis"))
         states.append((name, kind, reduction))
     return dataclasses.replace(
         matched,
@@ -978,7 +978,7 @@ class StatedLayoutPattern(ElementPattern):
                         "operand",
                         ChoicePattern(
                             ComposedLayoutSugarPattern(),
-                            PlacementOperandPattern(),
+                            ShardLayoutOperandPattern(),
                             StaticValuePattern(),
                         ),
                         "layout",
@@ -1025,7 +1025,7 @@ class ComposedLayoutOffsetRule:
 
 @dataclass(frozen=True)
 class ComposedLayoutOuterRule:
-    STATEMENT: ClassVar[str] = "A composed layout's outer is a plain Layout without mesh placement."
+    STATEMENT: ClassVar[str] = "A composed layout's outer is a plain Layout without a shard layout."
 
     def apply(self, value, *, match, context):
         outer = value["outer"]
@@ -1033,7 +1033,7 @@ class ComposedLayoutOuterRule:
             outer = outer.layout
         if not isinstance(outer, types.Layout):
             raise ParseError.from_node(
-                match.node, context, "composed layout outer must be a Layout without mesh placement"
+                match.node, context, "composed layout outer must be a Layout without a shard layout"
             )
         return {**value, "outer": outer}
 
@@ -1437,7 +1437,7 @@ class TensorPattern(ElementPattern):
     def construct(self, match, children, context):
         """One layout, from one slot.
 
-        A shape slot's placement sugar states a layout, and so does a layout
+        A shape slot's shard layout sugar states a layout, and so does a layout
         slot. Accepting both at once meant one silently replaced the other, so
         the arity branches keep them apart: a stated layout slot takes a plain
         shape beside it.
@@ -1502,7 +1502,7 @@ class ScalarTypePattern(ElementPattern):
         )
         if not isinstance(
             value,
-            (runtime.TensorType, runtime.TupleType, runtime.UnitType, runtime.PointerType),
+            (runtime.TensorType, runtime.TupleType, runtime.PointerType),
         ):
             raise ParseError.from_node(match.node, context, "annotation did not resolve to IR Type")
         return value
@@ -3343,11 +3343,11 @@ class CallPattern(ElementPattern):
         elif match.branch_id == "function_ref_call":
             reference, operands, _ = build_slot_reference(match, children, context)
             args = tuple(value for name, value in children.items() if name.startswith("arg_"))
-            return runtime.Call(type=runtime.UnitType(), target=reference, args=(*operands, *args))
+            return runtime.Call(type=runtime.TupleType.Void, target=reference, args=(*operands, *args))
         elif match.branch_id == "function_call":
             callee = match.captures["callee"]
             return runtime.Call(
-                type=runtime.UnitType() if context.function.dialect == "tir" else callee.return_type,
+                type=runtime.TupleType.Void if context.function.dialect == "tir" else callee.return_type,
                 target=runtime.FunctionRef((), callee.name),
                 args=tuple(children.values()),
             )
@@ -3892,26 +3892,26 @@ def enter_mesh_coordinate(
     mesh = context.lexical_scope.lookup(node.value.id)
     if not isinstance(mesh, runtime.Mesh):
         return None
-    axis = next(
+    mesh_axis = next(
         (index for index, name in enumerate(mesh.names) if name == node.attr),
         None,
     )
-    if axis is None and node.attr in {"x", "y", "z"}:
+    if mesh_axis is None and node.attr in {"x", "y", "z"}:
         candidate = ("x", "y", "z").index(node.attr)
-        if candidate < len(types.flatten(mesh.layout).shape):
-            axis = candidate
-    if axis is None:
+        if candidate < len(mesh.shape):
+            mesh_axis = candidate
+    if mesh_axis is None:
         named = ", ".join(mesh.names)
         return PatternFailure(
             "mesh_coordinate",
             node,
-            f"mesh {node.value.id!r} has no axis {node.attr!r}; its axes are: {named}",
+            f"mesh {node.value.id!r} has no mesh axis {node.attr!r}; its mesh axes are: {named}",
         )
     return dataclasses.replace(
         matched,
         pattern_id="expression.mesh_coordinate",
         branch_id="mesh_coordinate",
-        captures={**matched.captures, "mesh": mesh, "axis": axis},
+        captures={**matched.captures, "mesh": mesh, "mesh_axis": mesh_axis},
     )
 
 
@@ -3933,17 +3933,17 @@ class MeshCoordinatePattern(ElementPattern):
             raise ParseError.from_node(match.node, context, "mesh coordinate lacks context")
         note_authored_call(match.node, context)
         mesh = match.captures["mesh"]
-        axis = match.captures["axis"]
-        extent = types.flatten(mesh.layout).shape[axis]
+        mesh_axis = match.captures["mesh_axis"]
+        extent = mesh.shape[mesh_axis]
         if isinstance(extent, bool) or not isinstance(extent, int):
             raise ParseError.from_node(
-                match.node, context, "mesh coordinate requires a concrete axis extent"
+                match.node, context, "mesh coordinate requires a concrete mesh axis extent"
             )
-        cache_key = (id(mesh), axis)
+        cache_key = (id(mesh), mesh_axis)
         cached = context.function.state.mesh_coordinates.get(cache_key)
         if cached is not None:
             return cached
-        index = constant(axis)
+        index = constant(mesh_axis)
         coordinate = infer_call(runtime.MeshCoord(mesh=mesh), (index,), context)
         coordinate.attach_metadata(expr.RangeMetadata(0, extent))
         context.function.state.cache_mesh_coordinate(cache_key, coordinate)
@@ -4005,12 +4005,12 @@ def finish_mesh_context(mesh, match, context):
 
 @dataclass(frozen=True)
 class SelectionLevelRule:
-    STATEMENT: ClassVar[str] = "A mesh selection names exactly one topology level."
+    STATEMENT: ClassVar[str] = "A mesh selection names exactly one topology."
 
     def apply(self, value, *, match, context):
         if isinstance(value, MeshSelection) and len(value.selection.topologies) != 1:
             raise ParseError.from_node(
-                match.node, context, "a mesh selection selects one topology level"
+                match.node, context, "a mesh selection selects one topology"
             )
         return value
 
@@ -4025,12 +4025,12 @@ class SelectionSizeRule:
     def apply(self, value, *, match, context):
         if not isinstance(value, MeshSelection):
             return value
-        source = types.flatten(types.levels(value.selection)[0])
+        source = types.flatten(types.plain_layout(value.selection.layout))
         layout = value.layout
         message = None
         if types.size(layout) != types.size(source):
             message = (
-                "mesh selection layout must hold the same number of positions as its selection"
+                "mesh selection layout must hold the same number of units as its selection"
             )
         elif not all(isinstance(one, int) and one > 0 for one in (*source.shape, *layout.shape)):
             message = "a mesh selection requires positive static extents"
@@ -4060,7 +4060,7 @@ class SelectionCoverRule:
         }
         if indices != set(range(types.size(layout))):
             raise ParseError.from_node(
-                match.node, context, "mesh selection layout must cover each selected position once"
+                match.node, context, "mesh selection layout must cover each selected unit once"
             )
         return value
 
@@ -4069,25 +4069,25 @@ class SelectionCoverRule:
 class SelectionStrideRule:
     """Composition uses AssertionError to reject indivisible mode strides."""
 
-    STATEMENT: ClassVar[str] = "Each new mesh selection axis maps to one fixed physical stride."
+    STATEMENT: ClassVar[str] = "Each new mesh axis of a mesh selection maps to one fixed physical stride."
 
     def apply(self, value, *, match, context):
         if not isinstance(value, MeshSelection):
             return value
-        source = types.flatten(types.levels(value.selection)[0])
+        source = types.flatten(types.plain_layout(value.selection.layout))
         try:
             outer = layout_algebra.composition(source, value.layout, major="row")
         except (AssertionError, ValueError, TypeError) as error:
             raise ParseError.from_node(
                 match.node,
                 context,
-                "a mesh selection axis does not map to one stride of the selection",
+                "a mesh axis of a mesh selection does not map to one stride of the selection",
             ) from error
         if outer.shape != value.layout.shape:
             raise ParseError.from_node(
                 match.node,
                 context,
-                "a mesh selection axis does not map to one stride of the selection",
+                "a mesh axis of a mesh selection does not map to one stride of the selection",
             )
         return dataclasses.replace(value, outer=outer)
 
@@ -4095,20 +4095,20 @@ class SelectionStrideRule:
 @dataclass(frozen=True)
 class SelectionConstructionRule:
     STATEMENT: ClassVar[str] = (
-        "A checked selection constructs a Mesh with its topology, sliced at its offset "
-        "unless it holds its whole level, enters its execution scope, and defines its "
-        "lexical binding."
+        "A checked selection constructs a Mesh with its topology. The Mesh starts at the "
+        "first index of the selection, unless the selection holds its whole topology. The "
+        "Mesh enters its execution scope and defines its lexical binding."
     )
 
     def apply(self, value, *, match, context):
         if not isinstance(value, MeshSelection):
             return value
         assert value.outer is not None
-        start = types.starts(value.selection)[0]
-        whole = start == 0 and types.size(value.outer) == value.selection.topologies[0].size
+        first_index = value.selection.layout(0)
+        whole = first_index == 0 and types.size(value.outer) == value.selection.topologies[0].size
         mesh = runtime.Mesh(
             value.selection.topologies,
-            value.outer if whole else types.ComposedLayout(None, start, value.outer),
+            value.outer if whole else types.ComposedLayout(None, first_index, value.outer),
             value.names,
         )
         return finish_mesh_context(mesh, match, context)
@@ -4360,7 +4360,7 @@ def note_authored_call(node, context):
     """
     if context.function is None or context.function.dialect != "hir":
         return
-    if authored_infer_context(context).current_mesh is not None:
+    if authored_infer_context(context).mesh_scope is not None:
         return
     state = context.function.state
     if state.opened_mesh:
@@ -4446,13 +4446,13 @@ def enter_mesh_scope(context, mesh, match):
             reject_unscoped_call(state.unscoped_call, context)
         state.open_mesh()
     try:
-        entered_mesh = runtime.make_mesh(infer.current_mesh, mesh) if infer.current_mesh else mesh
+        mesh_scope = runtime.make_mesh(infer.mesh_scope, mesh) if infer.mesh_scope else mesh
     except ValueError as error:
         raise ParseError.from_node(match.node, context, str(error)) from error
     context.lexical_scope.push_frame()
     context.lexical_scope.define(
         TYPE_INFER_CONTEXT,
-        dataclasses.replace(infer, current_mesh=entered_mesh, parent=infer),
+        dataclasses.replace(infer, mesh_scope=mesh_scope, parent=infer),
     )
 
 
@@ -5521,11 +5521,11 @@ class TupleAssignmentPattern(ElementPattern):
 
 
 def resolved_mesh(value, match, context):
-    """Name the levels a Mesh written in a function body says it divides.
+    """Name the topologies a Mesh written in a function body says it divides.
 
     A Mesh is a value wherever it is written, so one bound in the body has to
-    arrive as complete as one a `with` opens: it names its levels by string, and
-    the module is what says which levels those are.
+    arrive as complete as one a `with` opens: it names its topologies by string, and
+    the module is what says which topologies those are.
     """
     if not isinstance(value, runtime.Mesh) or context.function is None:
         return value
@@ -5714,9 +5714,9 @@ class StatementPattern(ElementPattern):
                 )
             if isinstance(value, runtime.Evaluate):
                 return value
-            if not isinstance(value, runtime.Call) or not isinstance(value.type, runtime.UnitType):
+            if not isinstance(value, runtime.Call) or value.type != runtime.TupleType.Void:
                 raise ParseError.from_node(
-                    match.node, context, "TIR expression statement must be unit Call"
+                    match.node, context, "TIR expression statement must be void Call"
                 )
             return runtime.Evaluate(callable=value.target, args=value.args)
         elif match.branch_id == "none":
@@ -6004,8 +6004,8 @@ class FunctionPattern(ElementPattern):
         converter = context.function.converter
         if context.function.dialect == "hir":
             if body is not None and context.function.mesh is not None:
-                outer_mesh = authored_infer_context(context).current_mesh
-                if not isinstance(outer_mesh, runtime.Mesh):
+                root_mesh = authored_infer_context(context).mesh_scope
+                if not isinstance(root_mesh, runtime.Mesh):
                     raise ParseError.from_node(
                         match.node, context, "function mesh could not be resolved"
                     )
@@ -6016,12 +6016,12 @@ class FunctionPattern(ElementPattern):
                     body,
                     {id(old): new for old, new in zip(params, region_params, strict=True)},
                 )
-                body = scoped_region(outer_mesh, body, params=region_params, args=params)
+                body = scoped_region(root_mesh, body, params=region_params, args=params)
             declared_return = (
                 None if declared_return is None else dim.canonicalize_dims(declared_return)
             )
             if body is None:
-                return_type = declared_return or runtime.UnitType()
+                return_type = declared_return or runtime.TupleType.Void
             elif context.function.role is FunctionRole.VARIANT:
                 base = context.function.base
                 assert isinstance(base, runtime.Function)

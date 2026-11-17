@@ -1,4 +1,4 @@
-"""Meshes: hardware levels, the arrangement of their positions, and sub-mesh slices."""
+"""Meshes: topologies, the layout of their units, and sliced meshes."""
 
 from __future__ import annotations
 
@@ -6,43 +6,35 @@ from dataclasses import dataclass
 
 from tilefoundry import services
 
-from . import layout
-from .int_tuple import compatible_profile
+from .int_tuple import compatible_profile, flatten_to_tuple, unflatten, wrap
 from .layout import (
     ComposedLayout,
     Layout,
     LayoutBase,
+    domain_offset,
     flatten,
     get,
+    plain_layout,
+    rank,
     size,
-    unflatten,
 )
-from .layout_algebra import filter, is_contiguous
-from .stride import compact_major, compact_row_major, crd2idx, idx2crd
-from .topology import Topology
+from .layout import unflatten as layout_unflatten
+from .layout_algebra import make_composed_layout, make_layout
+from .stride import compact_row_major
+from .topology import Topology, topology_name
 
-__all__ = [
-    "Mesh",
-    "axis_keys",
-    "check_topology",
-    "flattened_levels",
-    "levels",
-    "separate",
-    "starts",
-    "topology_names",
-    "within_scope",
-]
+__all__ = ["Mesh", "check_topology", "topology_sizes"]
 
 
 @dataclass(frozen=True)
 class Mesh:
-    """Describe hardware levels, logical positions, and axis names.
+    """Describe topologies, the layout of their units, and mesh axis names.
 
-    ``layout`` runs parallel to ``topologies``: one arrangement per level, in
-    that level's own numbering, so a level states which of its positions it
-    selects without any level above it entering the answer. A constant slice
-    replaces one level's arrangement with a ``ComposedLayout`` whose ``offset``
-    is where that level's run starts.
+    ``layout`` holds one mode per topology and maps a coord to the unit's index
+    over all topologies of the mesh, ``T = make_layout(sizes)``. Topology ``t``'s
+    mode is ``get(plain_layout(layout), t)``, its strides in that index. A constant
+    slice wraps the whole layout in one ``ComposedLayout``; the index of the first
+    unit is ``layout(0)``.
 
     See [shard §5](docs/spec/shard.md#5-mesh).
     """
@@ -52,367 +44,178 @@ class Mesh:
     names: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        """Normalize the layout to one arrangement per level and refuse an unnamed extent."""
+        """Group the layout one mode per topology and refuse an unnamed extent."""
         if len(self.topologies) > 1 and any(
             not isinstance(topology, Topology) for topology in self.topologies
         ):
-            raise ValueError("a multi-level Mesh requires Topology values")
-        topology_names = tuple(getattr(topology, "name", topology) for topology in self.topologies)
-        if len(set(topology_names)) != len(topology_names):
-            raise ValueError(f"Mesh topology names must be unique, got {topology_names!r}")
-        object.__setattr__(self, "layout", nested_levels(self.layout, tuple(self.topologies)))
-        for axis, extent in enumerate(flatten(self.layout.shape)):
+            raise ValueError("a multi-topology Mesh requires Topology values")
+        names = tuple(map(topology_name, self.topologies))
+        if len(set(names)) != len(names):
+            raise ValueError(f"Mesh topology names must be unique, got {names!r}")
+        object.__setattr__(self, "layout", nested_layout(self.layout, tuple(self.topologies)))
+        for mesh_axis, extent in enumerate(flatten_to_tuple(self.layout.shape)):
             if extent is None:
                 raise ValueError(
-                    f"Mesh: layout axis {axis} must have an explicit extent; "
+                    f"Mesh: mesh axis {mesh_axis} must have an explicit extent; "
                     "None is not a ShapeDim. The rule: tilefoundry spec shard mesh"
                 )
+        check_strides(self)
+
+    @property
+    def shape(self) -> tuple:
+        """The extent of each mesh axis."""
+        return flatten_to_tuple(self.layout.shape)
 
     def __getitem__(self, key) -> "Mesh":
-        """Return a constant sub-mesh selected by integers or unit-step slices.
+        """Return a constant sliced mesh selected by integers or step-1 slices.
 
-        Missing axes are full slices; integers select extent one. The result
-        preserves topology and names while recording the sub-box as a
-        ``ComposedLayout``. Each level retains its own arrangement, while the
-        slice offset uses the device's numbering across all levels.
+        Missing mesh axes are full slices; integers select extent one. The box is
+        ``make_layout`` of the selected extents with the mesh's strides, moved to
+        its first coord by CuTe ``domain_offset``; the index that leaves becomes the
+        ``ComposedLayout`` offset. Topologies and names are kept.
 
         See [shard §5](docs/spec/shard.md#5-mesh).
         """
         if isinstance(self.layout, ComposedLayout):
             raise ValueError("cannot slice an already-sliced mesh (nested slice unsupported)")
-        held_levels = levels(self)
-        rank = sum(len(flatten(level.shape)) for level in held_levels)
+        stated = plain_layout(self.layout)
+        profile = tuple(flatten_to_tuple(mode) for mode in wrap(stated.shape))
+        extents = flatten_to_tuple(stated.shape)
+        strides = flatten_to_tuple(stated.strides)
+        count = len(extents)
         keys = key if isinstance(key, tuple) else (key,)
-        if len(keys) > rank:
-            raise ValueError(f"mesh slice has {len(keys)} indices but the mesh has {rank} axes")
-        keys = keys + (slice(None),) * (rank - len(keys))
-
-        sub_levels: list[Layout] = []
-        offset = 0
-        axis = 0
-        units = (
-            (1,)
-            if len(self.topologies) == 1
-            else compact_major(tuple(topology.size for topology in self.topologies))
-        )
-        for level, unit in zip(held_levels, units):
-            level_shape = tuple(flatten(level.shape))
-            stated = level.strides
-            level_strides = (
-                tuple(flatten(stated)) if stated is not None else compact_row_major(level_shape)
-            )
-            sub_shape: list[int] = []
-            for k, extent, stride in zip(
-                keys[axis : axis + len(level_shape)], level_shape, level_strides
-            ):
-                if not isinstance(extent, int) or not isinstance(stride, int):
-                    raise ValueError(f"cannot slice mesh axis {axis} with a dynamic extent/stride")
-                if isinstance(k, int):
-                    start = k + extent if k < 0 else k
-                    if not (0 <= start < extent):
-                        raise ValueError(
-                            f"mesh slice index {k} out of range for axis {axis} (extent {extent})"
-                        )
-                    selected = 1
-                elif isinstance(k, slice):
-                    if k.step not in (None, 1):
-                        raise ValueError(f"mesh slice step must be 1 (axis {axis})")
-                    start = 0 if k.start is None else (k.start + extent if k.start < 0 else k.start)
-                    stop = extent if k.stop is None else (k.stop + extent if k.stop < 0 else k.stop)
-                    if not (0 <= start <= stop <= extent):
-                        raise ValueError(
-                            f"mesh slice {k.start}:{k.stop} out of range for axis "
-                            f"{axis} (extent {extent})"
-                        )
-                    selected = stop - start
-                    if selected == 0:
-                        raise ValueError(f"mesh slice selects an empty range on axis {axis}")
-                else:
+        if len(keys) > count:
+            raise ValueError(f"mesh slice has {len(keys)} indices but the mesh has {count} mesh axes")
+        keys = keys + (slice(None),) * (count - len(keys))
+        starts, selected = [], []
+        for mesh_axis, (k, extent, stride) in enumerate(zip(keys, extents, strides)):
+            if not isinstance(extent, int) or not isinstance(stride, int):
+                raise ValueError(f"cannot slice mesh axis {mesh_axis} with a dynamic extent/stride")
+            if isinstance(k, int):
+                start = from_end(k, extent)
+                if not (0 <= start < extent):
                     raise ValueError(
-                        f"mesh slice index must be int or slice, got {type(k).__name__}"
+                        f"mesh slice index {k} out of range for mesh axis {mesh_axis} (extent {extent})"
                     )
-                offset += start * stride * unit
-                sub_shape.append(selected)
-                axis += 1
-            sub_levels.append(Layout(tuple(sub_shape), level_strides))
-
-        return Mesh(
-            topologies=self.topologies,
-            layout=ComposedLayout(
-                inner=None,
-                offset=offset,
-                outer=joined_layout(tuple(sub_levels)),
-            ),
-            names=self.names,
-        )
-
-    @classmethod
-    def from_meshes(cls, *meshes: Mesh) -> Mesh:
-        """Compose nested mesh scopes, preserving slices in device numbering."""
-        if not meshes:
-            raise ValueError("make_mesh requires at least one mesh")
-        result = meshes[0]
-        for inner in meshes[1:]:
-            here, there = topology_names(result), topology_names(inner)
-            if set(here).isdisjoint(there):
-                result = joined(
-                    (*result.topologies, *inner.topologies),
-                    (*levels(result), *levels(inner)),
-                    (*starts(result), *starts(inner)),
-                    (*result.names, *inner.names),
-                    sliced=isinstance(result.layout, ComposedLayout)
-                    or isinstance(inner.layout, ComposedLayout),
-                )
-            elif set(here) <= set(there):
-                result = inner
-            elif len(there) < len(here) and here[-len(there) :] == there:
-                current = result
-                kept = len(here) - len(there)
-                above = levels(result)[:kept]
-                named = sum(len(flatten(level.shape)) for level in above)
-                result = joined(
-                    (*result.topologies[:kept], *inner.topologies),
-                    (*above, *levels(inner)),
-                    (*starts(result)[:kept], *starts(inner)),
-                    (*result.names[:named], *inner.names),
-                    sliced=isinstance(result.layout, ComposedLayout)
-                    or isinstance(inner.layout, ComposedLayout),
-                )
-                if not within_scope(result, current):
-                    parent_positions = {
-                        name: (filter(arrangement, major="row"), start)
-                        for name, arrangement, start in zip(here, levels(current), starts(current))
-                        if name in there
-                    }
-                    inner_positions = {
-                        name: (filter(arrangement, major="row"), start)
-                        for name, arrangement, start in zip(there, levels(inner), starts(inner))
-                    }
+                stop = start + 1
+            elif isinstance(k, slice):
+                if k.step not in (None, 1):
+                    raise ValueError(f"mesh slice step must be 1 (mesh axis {mesh_axis})")
+                start = 0 if k.start is None else from_end(k.start, extent)
+                stop = extent if k.stop is None else from_end(k.stop, extent)
+                if not (0 <= start <= stop <= extent):
                     raise ValueError(
-                        f"replacement scope selects positions {inner_positions}, outside parent "
-                        f"scope positions {parent_positions}; both must be continuous and each "
-                        "replacement selection must be contained in its parent selection"
+                        f"mesh slice {k.start}:{k.stop} out of range for mesh axis "
+                        f"{mesh_axis} (extent {extent})"
                     )
+                if stop == start:
+                    raise ValueError(f"mesh slice selects an empty range on mesh axis {mesh_axis}")
             else:
-                shared = sorted(set(here) & set(there))
-                unnamed = sorted(set(here) - set(there))
-                raise ValueError(
-                    f"{shared} named again while {unnamed} is not; a scope either "
-                    "replaces the levels in force or adds levels below them"
-                )
-        check_topology(result)
-        return result
+                raise ValueError(f"mesh slice index must be int or slice, got {type(k).__name__}")
+            starts.append(start)
+            selected.append(stop - start)
+        box = make_layout(unflatten(tuple(selected), profile), unflatten(strides, profile))
+        box, index = domain_offset(unflatten(tuple(starts), profile), box)
+        return Mesh(self.topologies, make_composed_layout(None, index, box), self.names)
 
 
-def nested_levels(layout_value, topologies: tuple) -> "Layout | ComposedLayout":
-    """What a mesh was written as, with every level's axes under its own mode.
+def nested_layout(layout_value, topologies: tuple) -> "Layout | ComposedLayout":
+    """What a mesh was written as, with every topology's mesh axes under its own mode.
 
-    A mesh naming one level states that level's arrangement directly. One
-    naming several may state a tuple of extents or one arrangement over all of
-    their axes; the axes are handed to the levels left to right, each taking
-    them until their extents multiply to its own size, and each level's steps
-    are divided by what the levels under it hold. So mode ``i`` of what comes
-    back is level ``i``'s own arrangement, and a boundary no prefix of axes
-    lands on is refused rather than guessed.
+    A mesh naming several topologies may state a tuple of extents or one layout
+    over all of their mesh axes. The mesh axes go to the topologies left to right, each
+    taking them until their extents multiply to its own size (CuTe ``unflatten``);
+    a boundary no prefix of mesh axes lands on is refused. A mesh naming one topology
+    holds all mesh axes as its one mode (CuTe ``make_layout`` of the flat layout).
+    Strides stay in the index over all topologies.
     """
     if not isinstance(layout_value, LayoutBase):
-        extents = tuple(flatten(layout_value))
-        layout_value = Layout(extents, compact_row_major(extents))
+        layout_value = make_layout(flatten_to_tuple(layout_value))
     if isinstance(layout_value, ComposedLayout):
-        if layout_value.outer is None or (
-            len(layout_value.outer.shape) == len(topologies)
-            and all(isinstance(mode, tuple) for mode in layout_value.outer.shape)
-        ):
+        if layout_value.outer is None:
             return layout_value
-        return ComposedLayout(
-            inner=layout_value.inner,
-            offset=layout_value.offset,
-            outer=nested_levels(layout_value.outer, topologies),
+        return make_composed_layout(
+            layout_value.inner, layout_value.offset, nested_layout(layout_value.outer, topologies)
         )
-    if len(layout_value.shape) == len(topologies) and all(
-        isinstance(mode, tuple) for mode in layout_value.shape
+    if rank(layout_value) == len(topologies) and all(
+        isinstance(mode, tuple) for mode in wrap(layout_value.shape)
     ):
         return layout_value
-
-    extents = tuple(flatten(layout_value.shape))
-    stated = layout_value.strides
-    steps = tuple(flatten(stated))
-    layout_flat = Layout(extents, steps)
+    flat = Layout(flatten_to_tuple(layout_value.shape), flatten_to_tuple(layout_value.strides))
     if len(topologies) == 1:
-        return Layout(shape=(extents,), strides=(steps,))
-    units: list[int] = []
-    below = 1
-    for topology in reversed(topologies):
-        units.insert(0, below)
+        return make_layout(flat)
+    profile = compatible_profile(flat.shape, topology_sizes(topologies))
+    return layout_unflatten(flat, tuple(wrap(mode) for mode in profile))
+
+
+def topology_sizes(topologies: tuple) -> tuple:
+    """The size of each topology: the shape of ``T``, the index over all of them.
+
+    The outermost topology's size enters no stride of ``T``, so it may be symbolic.
+    Every other size MUST be a positive static int.
+    """
+    for topology in topologies[1:]:
         count = topology.size
         if not isinstance(count, int) or isinstance(count, bool) or count < 1:
             raise ValueError(
-                f"mesh level {topology.name!r} states extent "
-                f"{count!r}; cutting one arrangement at the level boundaries needs "
-                "each of their position counts"
+                f"mesh topology {topology.name!r} states extent {count!r}; the index "
+                "over all topologies needs the unit count of every inner topology"
             )
-        below *= count
-
-    profile = compatible_profile(extents, tuple(t.size for t in topologies))
-    grouped = unflatten(
-        layout_flat, tuple(mode if isinstance(mode, tuple) else (mode,) for mode in profile)
-    )
-    strides = []
-    for topology, unit, steps in zip(topologies, units, grouped.strides, strict=True):
-        normalized = []
-        for step in flatten(steps):
-            if not isinstance(step, int) or isinstance(step, bool) or step % unit:
-                raise ValueError(
-                    f"mesh steps by {step!r}, which the {unit} positions "
-                    f"below {topology.name!r} do not divide; its positions are not "
-                    "that level's"
-                )
-            normalized.append(step // unit)
-        strides.append(tuple(normalized))
-    return Layout(grouped.shape, tuple(strides))
+    return tuple(getattr(topology, "size", None) for topology in topologies)
 
 
-def levels(mesh: Mesh) -> tuple[Layout, ...]:
-    """Each level's arrangement, in that level's own numbering."""
-    stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
-    if stated is None:
-        raise ValueError(
-            "a mesh whose slice states an identity box states no arrangement of "
-            "its own, so its levels select nothing"
-        )
-    return tuple(get(stated, index) for index in range(layout.rank(stated)))
+def check_strides(mesh: Mesh) -> None:
+    """Refuse a topology stride that is not a multiple of that topology's stride in ``T``.
 
-
-def flattened_levels(mesh: Mesh) -> tuple[tuple[tuple, tuple], ...]:
-    """Each level's arrangement as flat (shape, strides) int-tuples.
-
-    A level stating no axes reads as one mode of one, so a consumer
-    subscripting the levels still has something to pick.
+    Topology ``t``'s unit id is ``idx2crd(index, sizes)[t]``; a stride between two
+    multiples of ``stride(T)[t]`` would reach units of the topologies inside it. A
+    mode of extent 1 never steps, so its stride is not read.
     """
-    arrangements = []
-    for level in levels(mesh):
-        shape = tuple(flatten(level.shape))
-        strides = tuple(flatten(level.strides))
-        if not shape:
-            shape, strides = (1,), (0,)
-        arrangements.append((shape, strides))
-    return tuple(arrangements)
-
-
-def starts(mesh: Mesh) -> tuple[int, ...]:
-    """Where each level's run starts, decoded from the device-numbered offset."""
-    offset = mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0
-    if not isinstance(offset, int):
-        return (0,) * len(mesh.topologies)
-    if len(mesh.topologies) == 1:
-        return (offset,)
-    sizes = tuple(topology.size for topology in mesh.topologies)
-    if any(not isinstance(one, int) for one in sizes):
-        return (0,) * len(sizes)
-    return tuple(idx2crd(offset, sizes, compact_major(sizes)))
-
-
-def dim_at_most(a, b) -> bool:
-    """Prove ``a <= b`` from the conservative range of their difference."""
-    if isinstance(a, int) and isinstance(b, int):
-        return a <= b
-    bounds = services.dim_range(services.simplify_dim("sub", (b, a)))
-    return bounds is not None and bounds[0] >= 0
-
-
-def within_scope(mesh: Mesh, current: Mesh) -> bool:
-    """Whether each continuous selection is contained in the enclosing level."""
-    enclosing = dict(zip(topology_names(current), zip(levels(current), starts(current))))
-    for name, arrangement, start in zip(topology_names(mesh), levels(mesh), starts(mesh)):
-        if name not in enclosing:
-            return False
-        outer_arrangement, at_start = enclosing[name]
-        inner = filter(arrangement, major="row")
-        outer = filter(outer_arrangement, major="row")
-        if not is_contiguous(inner, major="row") or not is_contiguous(outer, major="row"):
-            return False
-        if not dim_at_most(at_start, start):
-            return False
-        if not dim_at_most(start + size(inner), at_start + size(outer)):
-            return False
-    return True
+    stated = plain_layout(mesh.layout)
+    if len(mesh.topologies) == 1 or stated is None:
+        return
+    units = compact_row_major(topology_sizes(mesh.topologies))
+    for t, (topology, unit) in enumerate(zip(mesh.topologies, units)):
+        mode = flatten(get(stated, t))
+        for extent, stride in zip(flatten_to_tuple(mode.shape), flatten_to_tuple(mode.strides)):
+            if extent == 1 or unit in (0, 1):
+                continue
+            if isinstance(stride, bool):
+                raise ValueError(f"mesh steps by {stride!r}, which is not a dimension")
+            if isinstance(stride, int):
+                multiple = stride % unit == 0
+            else:
+                multiple = services.normalize_dim(services.simplify_dim("mod", (stride, unit))) == 0
+            if not multiple:
+                raise ValueError(
+                    f"mesh topology {topology.name!r} steps by {stride!r}, which is not a "
+                    f"multiple of its unit {unit} in the index over all topologies"
+                )
 
 
 def check_topology(mesh: Mesh) -> None:
-    """Reject static mesh positions beyond their declared topology extents.
+    """Refuse a mesh whose topology modes do not fit their topologies.
 
-    A constant slice is already bounded by ``Mesh.__getitem__``; its shortened
-    axes no longer land on full topology boundaries and are therefore accepted.
+    Topology ``t``'s mode MUST NOT hold more units than its static size states,
+    ``size(get(P, t)) <= sizes[t]``, and its strides MUST be multiples of
+    ``stride(T)[t]``.
     """
-    if isinstance(mesh.layout, ComposedLayout):
+    check_strides(mesh)
+    stated = plain_layout(mesh.layout)
+    if stated is None:
         return
-    for topology, arrangement in zip(mesh.topologies, levels(mesh)):
+    for t, topology in enumerate(mesh.topologies):
         declared = getattr(topology, "size", None)
         if not isinstance(declared, int) or isinstance(declared, bool):
             continue
-        count = size(arrangement)
+        count = size(get(stated, t))
         if isinstance(count, int) and count > declared:
             raise ValueError(
-                f"mesh level {getattr(topology, 'name', topology)!r} has {count} "
-                f"positions, exceeding declared extent {declared}"
+                f"mesh topology {topology_name(topology)!r} has {count} "
+                f"units, exceeding declared extent {declared}"
             )
 
 
-def joined_layout(levels: tuple[Layout, ...]) -> Layout:
-    if len(levels) == 1:
-        return levels[0]
-    return Layout(
-        shape=tuple(tuple(flatten(level.shape)) for level in levels),
-        strides=tuple(tuple(flatten(level.strides)) for level in levels),
-    )
-
-
-def joined(
-    topologies: tuple[Topology, ...],
-    levels: tuple[Layout, ...],
-    starts: tuple[int, ...],
-    names: tuple[str, ...],
-    *,
-    sliced: bool,
-) -> Mesh:
-    layout_value: Layout | ComposedLayout = joined_layout(levels)
-    if sliced:
-        sizes = tuple(topology.size for topology in topologies)
-        if not all(isinstance(size, int) for size in sizes):
-            raise ValueError("joining sliced meshes needs static topology extents")
-        offset = crd2idx(starts, sizes, compact_major(sizes))
-        if offset != 0:
-            layout_value = ComposedLayout(None, offset, layout_value)
-    return Mesh(topologies, layout_value, names)
-
-
-def topology_names(mesh: Mesh) -> tuple[str, ...]:
-    return tuple(getattr(topology, "name", topology) for topology in mesh.topologies)
-
-
-def axis_keys(mesh: Mesh) -> tuple[tuple[str, str | None], ...]:
-    """Identify each mesh axis by its topology level and authored name."""
-    stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
-    keys = []
-    for topology, shape in zip(mesh.topologies, stated.shape, strict=True):
-        for _ in flatten(shape):
-            axis = len(keys)
-            name = mesh.names[axis] if axis < len(mesh.names) else None
-            keys.append((getattr(topology, "name", topology), name))
-    return tuple(keys)
-
-
-def separate(mesh: Mesh) -> tuple[Mesh, ...]:
-    """Split a mesh into one mesh per topology, retaining per-level slices."""
-    sliced = isinstance(mesh.layout, ComposedLayout)
-    names_at = 0
-    separated: list[Mesh] = []
-    for topology, level, start in zip(mesh.topologies, levels(mesh), starts(mesh)):
-        axis_count = len(flatten(level.shape))
-        names = mesh.names[names_at : names_at + axis_count]
-        layout_value: Layout | ComposedLayout = level
-        if sliced and start != 0:
-            layout_value = ComposedLayout(None, start, level)
-        separated.append(Mesh((topology,), layout_value, names))
-        names_at += axis_count
-    return tuple(separated)
+def from_end(index: int, extent: int) -> int:
+    """A Python index counted from the end, as an index from the start."""
+    return index + extent if index < 0 else index

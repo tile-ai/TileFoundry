@@ -1,7 +1,7 @@
 """TileFoundry top-level package.
 
 Re-exports the stable public API from `tilefoundry.ir.*` for convenience.
-[code-organization §1](docs/spec/code-organization.md#1-directory-skeleton) is
+[code-organization §1](docs/spec/code-organization.md#1-source-tree) is
 authoritative on physical layout.
 """
 

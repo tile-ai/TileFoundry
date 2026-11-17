@@ -21,7 +21,7 @@ from typing import Literal as TypingLiteral
 from tilefoundry import services
 from tilefoundry import target as tilefoundry_target
 from tilefoundry.interfaces import typeinfer, valuation
-from tilefoundry.ir import core, dim, expr, types
+from tilefoundry.ir import core, dim, expr, types, utils
 from tilefoundry.ir import pattern as ir_pattern
 from tilefoundry.ir.hir import math, sharding, tensor
 from tilefoundry.ir.tir import memory
@@ -228,11 +228,10 @@ runtime = SimpleNamespace(
     TupleGetItem=tensor.TupleGetItem,
     Unary=math.Unary,
     UnaryKind=expr.UnaryKind,
-    UnitType=types.UnitType,
     Var=expr.Var,
     DISPLAY_NAME=valuation.DISPLAY_NAME,
     compact_row_major=types.compact_row_major,
-    make_mesh=types.Mesh.from_meshes,
+    make_mesh=utils.from_meshes,
     dim_expr=dim.as_dimension,
     normalize_dim=services.normalize_dim,
     static_dim_value=expr.static_dim_value,
@@ -710,23 +709,23 @@ class LexicalScope:
     def __init__(
         self,
         frames: tuple[Mapping[str, object], ...] | None = None,
-        mesh_bindings: tuple[set[str], ...] | None = None,
+        mesh_names: tuple[set[str], ...] | None = None,
     ):
         source = frames or ({},)
         self.frames = [dict(frame) for frame in source]
-        self.mesh_bindings = [
-            set(names) for names in (mesh_bindings or tuple(set() for _ in source))
+        self.mesh_names = [
+            set(names) for names in (mesh_names or tuple(set() for _ in source))
         ]
-        if len(self.frames) != len(self.mesh_bindings):
+        if len(self.frames) != len(self.mesh_names):
             raise ValueError("lexical frames and mesh bindings must have the same length")
 
     def define(self, name: str, value: object) -> None:
         self.frames[-1][name] = value
-        self.mesh_bindings[-1].discard(name)
+        self.mesh_names[-1].discard(name)
 
     def define_mesh(self, name: str, value: object) -> None:
         self.frames[-1][name] = value
-        self.mesh_bindings[-1].add(name)
+        self.mesh_names[-1].add(name)
 
     def lookup(self, name: str) -> object | None:
         for frame in reversed(self.frames):
@@ -735,7 +734,7 @@ class LexicalScope:
         return None
 
     def lookup_mesh(self, name: str) -> object | None:
-        for frame, mesh_names in reversed(tuple(zip(self.frames, self.mesh_bindings))):
+        for frame, mesh_names in reversed(tuple(zip(self.frames, self.mesh_names))):
             if name in frame:
                 return frame[name] if name in mesh_names else None
         return None
@@ -743,17 +742,17 @@ class LexicalScope:
     def fork(self) -> LexicalScope:
         return LexicalScope(
             tuple(self.frames) + ({},),
-            tuple(self.mesh_bindings) + (set(),),
+            tuple(self.mesh_names) + (set(),),
         )
 
     def push_frame(self) -> None:
         self.frames.append({})
-        self.mesh_bindings.append(set())
+        self.mesh_names.append(set())
 
     def pop_frame(self) -> dict[str, object]:
         if len(self.frames) == 1:
             raise RuntimeError("cannot pop the root lexical frame")
-        self.mesh_bindings.pop()
+        self.mesh_names.pop()
         return self.frames.pop()
 
     def items(self):
@@ -970,8 +969,8 @@ class ModuleBuildContext:
         output_count: int = 1,
     ) -> FuncContext:
         topology_scope = {
-            getattr(topology, "name", str(index)): topology
-            for index, topology in enumerate(self.topologies or ())
+            types.topology_name(topology): topology
+            for topology in (self.topologies or ())
         }
         return FuncContext(
             dialect=dialect,
@@ -1284,7 +1283,7 @@ class MatchContext:
             TYPE_INFER_CONTEXT,
             AuthoredInferContext(
                 module=function.module,
-                current_mesh=resolved_mesh,
+                mesh_scope=resolved_mesh,
                 parser_target=function.target,
             ),
         )
@@ -1433,7 +1432,7 @@ class DeclarationOrderError(ParseError):
 
 
 def resolve_mesh_topologies_at(topologies, declared, node, context):
-    """Resolve mesh levels and anchor declaration errors to *node*."""
+    """Resolve mesh topologies and anchor declaration errors to *node*."""
     try:
         return resolve_mesh_topologies(topologies, declared)
     except KeyError as error:

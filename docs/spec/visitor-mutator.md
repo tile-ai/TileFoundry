@@ -58,13 +58,24 @@ Statement visitors keep a context-free `visit(stmt)` entry.
 - **Runtime class name wins.** With both `visit_Call` and `visit_Expr`
   defined, `visit_Call` handles a `Call`; base-class overrides are not consulted.
 - **Fallback to `default_visit(node, ctx)`.** `expr.Functor.default_visit` raises
-  `NotImplementedError`; a visitor or mutator must explicitly implement a
-  node's behavior or call its child traversal/rebuild helper.
+  `NotImplementedError`. A visitor or mutator MUST implement the behavior of a
+  node explicitly, or call its child traversal or rebuild helper.
 - **No Op-level dispatch here.** A `Call(target=Add)` reaches `visit_Call`;
   per-Op dispatch belongs to the registries under `tilefoundry.interfaces`
   ([visitor-registry](./visitor-registry.md)).
-- **Types.** `core.TypeFunctor[T]` is the same `visit_<ClassName>` dispatch over
+- **Types.** `types.TypeFunctor[T]` is the same `visit_<ClassName>` dispatch over
   type and layout values (no memo; `default_visit` raises `NotImplementedError`).
+  `types.TypeVisitor[T]` walks the eight type classes (`TensorType`, `TupleType`,
+  `PointerType`, `Layout`, `ComposedLayout`, `ShardLayout`, `Mesh`, `Topology`)
+  by their stated fields only. Each shape, stride, offset and size entry goes to
+  `visit_dim`. A dtype, a storage, a shard attr, a name, a `Swizzle`, a string
+  topology and `None` are leaves.
+  `types.TypeMutator` is the same walk that rebuilds. A value none of whose parts
+  changed comes back as itself. A `Mesh` is built once, after its topologies and
+  layout. All three live in `ir/types/visitor.py`.
+  `ExprVisitor` also inherits `TypeVisitor`. It does not visit `node.type`. A
+  type handed to `visit` goes to the type handlers, outside the Expr memo and
+  root.
 
 ## 3. `ExprVisitor[T]`
 
@@ -159,7 +170,7 @@ class ExprCloner(ExprVisitor[Expr]):                   # memoized identity-prese
 `BindingSubstitutionCloner` is the binding-aware specialization. It replaces
 `Var` values from an identity-keyed environment and extends that environment
 for `LoopRegion` induction and carried bindings. It inherits
-`ExprCloner`'s identity memo: sharing within one clone is preserved, while a
+`ExprCloner`'s identity memo, so sharing within one clone is preserved. A
 caller that needs independent copies MUST use a fresh instance for each copy.
 `expr_operands(expr)` exposes value/dataflow operands without entering a
 `Function` body; `function_values(function)` includes the Function, its
@@ -174,8 +185,8 @@ detection via `new_expr is old_expr`, and valid identity-keyed caches
 
 An Expr visitor `visit_Call` override that needs recursive children MUST call
 `visit_operands(call, ctx)`. An Expr cloner override that needs the generic
-identity-preserving rebuild MUST call `default_visit(call, ctx)`; it may return
-the original node directly only after it has explicitly handled the children.
+identity-preserving rebuild MUST call `default_visit(call, ctx)`. It MAY return
+the original node directly only after it handles the children explicitly.
 
 ## 5. `StmtVisitor[T]` / `StmtExprVisitor[T]` / `StmtMutator`
 
@@ -270,7 +281,7 @@ position, instead of `Evaluate(op, args)`, is malformed IR
 
 ## 8. Implementation location
 
-- Public exports of `ir.core`: `TypeFunctor`, `ExprVisitor`, `ExprWalker`,
+- Public exports of `ir.core`: `ExprVisitor`, `ExprWalker`,
   `ExprCollector`, `collect_exprs`, `ExprCloner`, `BindingSubstitutionCloner`,
   `expr_children`, `stmt_expr_fields`, `function_values`, `StmtVisitor`, `StmtExprVisitor`,
   `StmtMutator`, `StmtExprMutator`, `walk_prim_function`,

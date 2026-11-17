@@ -115,7 +115,7 @@ def layer_norm_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     row = access.Relation(isl.map(f"{{ [{domain}] -> [{', '.join(names)}]{where} }}"))
     belongs = access.logical_axes_of(x, x)
     suffix = (
-        ", ".join(names[position] for position, owner in enumerate(belongs) if owner >= axis) or "0"
+        ", ".join(names[mode] for mode, owner in enumerate(belongs) if owner >= axis) or "0"
     )
     across = access.Relation(isl.map(f"{{ [{domain}] -> [{suffix}]{where} }}"))
     return access.iterating(

@@ -10,11 +10,11 @@ from tilefoundry_nvidia.cuda.codegen.tir import cute_layout
 
 
 def resolved(topology: types.Topology | str) -> types.Topology:
-    """*topology* as a ``Topology``, never a bare level name."""
+    """*topology* as a ``Topology``, never a bare topology name."""
     if isinstance(topology, str):
         raise RuntimeError(
-            f"CUDA mesh emission: mesh level {topology!r} is still a bare name; "
-            f"lowering resolves each level to a Topology stating its extent"
+            f"CUDA mesh emission: mesh topology {topology!r} is still a bare name; "
+            f"lowering resolves each topology to a Topology stating its extent"
         )
     return topology
 
@@ -24,29 +24,36 @@ def program_topologies(mesh: types.Mesh) -> tuple[types.Topology, ...]:
 
 
 def validate_topology(mesh: types.Mesh, tgt) -> None:
-    """Validate that the target supports every program topology level.
+    """Validate that the target supports every program topology.
 
-    Each program topology level a mesh binds must be one this target
-    supports; finer levels (e.g. warp) belong in the mesh layout, not as a
-    program topology level. Defense-in-depth alongside the declared-topology
+    Each program topology a mesh binds must be one this target
+    supports; finer groupings (e.g. warp) belong in the mesh layout, not as a
+    program topology. Defense-in-depth alongside the declared-topology
     check at lowering entry.
     """
     validate_cuda_topology_levels(tgt, (resolved(t).name for t in mesh.topologies))
 
 
-def levelwise_layout(mesh: types.Mesh) -> str:
-    """One nest per topology level, each in that level's own numbering.
+def raw_groups(mesh: types.Mesh) -> tuple[tuple, tuple]:
+    """Each topology's mesh axes as flat (shape, strides), strides in the index over all topologies.
 
-    A mesh states one arrangement per level already, each in that level's own
-    numbering, so a nest is that arrangement written out: nothing here decides
-    where a boundary falls. The composite is a grouping, not a map: only the
-    nests are evaluated.
+    A topology stating no mesh axes reads as one mode of one.
     """
-    arrangements = types.flattened_levels(mesh)
-    return cute_layout.render_layout_type(
-        tuple(shape for shape, _ in arrangements),
-        tuple(strides for _, strides in arrangements),
-    )
+    stated = types.plain_layout(mesh.layout)
+    shapes, strides = [], []
+    for index in range(len(stated.shape)):
+        group = types.get(stated, index)
+        shape, steps = types.flatten_to_tuple(group.shape), types.flatten_to_tuple(group.strides)
+        if not shape:
+            shape, steps = (1,), (0,)
+        shapes.append(shape)
+        strides.append(steps)
+    return tuple(shapes), tuple(strides)
+
+
+def grouped_layout(mesh: types.Mesh) -> str:
+    """One nest per topology, strides in the index over all topologies."""
+    return cute_layout.render_layout_type(*raw_groups(mesh))
 
 
 def mesh_type(mesh: types.Mesh) -> str:
@@ -57,37 +64,38 @@ def mesh_type(mesh: types.Mesh) -> str:
         outer = layout_value.outer
         if not isinstance(outer, types.Layout):
             raise NotImplementedError(
-                "CUDA mesh emission: a sliced mesh needs its participating box "
+                "CUDA mesh emission: a sliced mesh needs its box of units "
                 "as a strided Layout; this states an identity box, with no sub-box"
             )
-        base = tir.sync.participation(mesh).base
+        base = tir.sync.sync_scope(mesh).base
     else:
         base = 0
     if len(topos) == 1:
-        shape, strides = types.flattened_levels(mesh)[0]
+        flat = types.flatten(types.plain_layout(mesh.layout))
+        shape, strides = flat.shape or (1,), flat.strides or (0,)
         layout = cute_layout.render_layout_type(shape, strides)
     else:
         if base:
             raise NotImplementedError(
-                "CUDA mesh emission: a mesh naming several levels cannot also "
-                "be sliced; the slice and the level boundary would both be "
-                "deciding which positions these are"
+                "CUDA mesh emission: a mesh naming several topologies cannot also "
+                "be sliced; the slice and the topology boundary would both be "
+                "deciding which units these are"
             )
-        layout = levelwise_layout(mesh)
+        layout = grouped_layout(mesh)
     if base:
         layout = f"cute::ComposedLayout<cute::identity, cute::Int<{base}>, {layout}>"
-    return f"tilefoundry::Mesh<{layout}, {', '.join(context.topology_scope_str(t.name) for t in topos)}>"
+    return f"tilefoundry::Mesh<{layout}, {', '.join(context.topology_enumerator(t.name) for t in topos)}>"
 
 
 def is_dynamic_mesh(mesh: types.Mesh) -> bool:
     """A launch-provided (dynamic) CTA mesh.
 
-    A launch-provided (dynamic) CTA mesh: its topology size or a layout axis
+    A launch-provided (dynamic) CTA mesh: its topology size or a mesh axis
     extent is ``None`` and only known at launch time.
     """
     if any(t.size is None for t in program_topologies(mesh)):
         return True
-    return any(s is None for s in types.flatten(mesh.layout).shape)
+    return any(s is None for s in mesh.shape)
 
 
 def validate_cuda_topology_levels(tgt: target.Target, names) -> None:
@@ -96,13 +104,13 @@ def validate_cuda_topology_levels(tgt: target.Target, names) -> None:
     See docs/spec/target.md § Topology levels.
     """
     supported = tuple(
-        level.name for level in tgt.get_facts(target.TopologyFacts).topologies
+        topology.name for topology in tgt.get_facts(target.TopologyFacts).topologies
     )
     for name in names:
         if name not in supported:
             raise ValueError(
                 f"cuda target supports {{{', '.join(supported)}}} "
-                f"topology levels; got {name!r}"
+                f"topologies; got {name!r}"
             )
 
 
@@ -126,7 +134,7 @@ def emit_mesh_scope(node: core.MeshScope, emitter) -> None:
             ctx.emit(f"using {alias} = {mesh_type_str};")
             ctx.emit(f"constexpr {alias} {name}_mesh{{}};")
         if is_slice:
-            ctx.emit(f"if (tilefoundry::contains({name}_mesh, tilefoundry::program_ids())) {{")
+            ctx.emit(f"if (tilefoundry::contains({name}_mesh, tilefoundry::unit_ids())) {{")
             ctx.indent()
         emitter.visit(node.body)
         if is_slice:
@@ -136,4 +144,10 @@ def emit_mesh_scope(node: core.MeshScope, emitter) -> None:
     ctx.emit("}")
 
 
-__all__ = ["emit_mesh_scope", "mesh_type", "program_topologies", "validate_cuda_topology_levels"]
+__all__ = [
+    "emit_mesh_scope",
+    "mesh_type",
+    "program_topologies",
+    "raw_groups",
+    "validate_cuda_topology_levels",
+]

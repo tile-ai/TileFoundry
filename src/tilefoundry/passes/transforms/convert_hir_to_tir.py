@@ -77,7 +77,7 @@ def cut(base, starts, sizes, loops=()) -> expr.Call:
 
 def addresses(shape, layout):
     """The isl map from coordinates of *shape* to addresses of *layout*."""
-    flat = types.flatten(layout)
+    flat = types.flatten(types.plain_layout(layout))
     coordinates = ir_dim.layout_to_isl_map(tuple(shape), flat, {}, divided=lambda _: ())
     offset = layout.offset if isinstance(layout, types.ComposedLayout) else 0
     linear = " + ".join(f"{stride} * p{axis}" for axis, stride in enumerate(flat.strides)) or "0"
@@ -109,36 +109,31 @@ def operand_types(call: expr.Call, op: expr.Op) -> tuple:
     return schedule.candidate_operands(call, type(op))[1]
 
 
-def participants(layouts) -> types.Mesh | None:
-    """The first physical participant mesh among *layouts*, if any."""
+def physical_shard_mesh(layouts) -> types.Mesh | None:
+    """The mesh of the first physical shard layout among *layouts*, if any."""
     for layout in layouts:
         if isinstance(layout, types.ShardLayout):
             physical = ir_utils.physical_layout(layout)
             if isinstance(physical, types.ShardLayout):
-                return ir_utils.participant_layout(physical).mesh
+                return ir_utils.filter_topologies(physical).mesh
     return None
-
-
-def copy_mesh(type_list) -> types.Mesh | None:
-    """The mesh a copy between operands of *types* runs on, None for the enclosing one."""
-    return participants(type_.layout for type_ in type_list)
 
 
 def first_thread(enclosing: types.Mesh | None, topologies) -> types.Mesh | None:
     """A slice holding the first thread of *enclosing*, or of the CTA when there is none.
 
-    None when that level holds one thread already, or when the first thread has
-    no constant position: *enclosing* is a slice whose start is not a number, or
-    one over several levels whose sizes are not all numbers, so its start cannot
-    be split into the start of each level.
+    None when that topology holds one thread already, or when the first thread has
+    no constant index: *enclosing* is a slice whose offset is not a number, or
+    one over several topologies whose sizes are not all numbers, so its index of
+    the first unit cannot be split into the first unit id of each topology.
     """
-    if enclosing is not None and "thread" not in types.topology_names(enclosing):
+    if enclosing is not None and "thread" not in ir_utils.topology_names(enclosing):
         enclosing = None
     if enclosing is None:
         topology = next((one for one in topologies or () if one.name == "thread"), None)
         if topology is None or topology.size == 1:
             return None
-        start = 0
+        first_unit_id = 0
     else:
         if isinstance(enclosing.layout, types.ComposedLayout):
             sizes = [topology.size for topology in enclosing.topologies]
@@ -146,12 +141,12 @@ def first_thread(enclosing: types.Mesh | None, topologies) -> types.Mesh | None:
                 return None
             if len(sizes) > 1 and not all(isinstance(size, int) for size in sizes):
                 return None
-        level = next(part for part in types.separate(enclosing) if part.topologies[0].name == "thread")
-        topology = level.topologies[0]
-        if types.size(ir_utils.device_layout(level)) == 1:
+        thread = ir_utils.topology_names(enclosing).index("thread")
+        topology = enclosing.topologies[thread]
+        if types.size(types.get(types.plain_layout(enclosing.layout), thread)) == 1:
             return None
-        start = level.layout.offset if isinstance(level.layout, types.ComposedLayout) else 0
-    return types.Mesh((topology,), types.ComposedLayout(None, start, types.Layout((1,), (1,))), ("writer",))
+        first_unit_id = ir_utils.first_unit_ids(enclosing)[thread]
+    return types.Mesh((topology,), types.ComposedLayout(None, first_unit_id, types.Layout((1,), (1,))), ("writer",))
 
 
 def transfer_meshes(type_list, destination, around, topologies) -> tuple[types.Mesh, ...]:
@@ -163,14 +158,14 @@ def transfer_meshes(type_list, destination, around, topologies) -> tuple[types.M
     write the whole of its share of *destination*. In shared memory, which
     those threads share, the first of them writes it alone.
     """
-    mesh = copy_mesh(type_list)
+    mesh = physical_shard_mesh(type_.layout for type_ in type_list)
     held = () if mesh is None else (mesh,)
     if getattr(destination, "storage", None) is not expr.StorageKind.SMEM:
         return held
-    if mesh is not None and "thread" in types.topology_names(mesh):
+    if mesh is not None and "thread" in ir_utils.topology_names(mesh):
         return held
     enclosing = next(
-        (one for one in around if one is not None and "thread" in types.topology_names(one)), None
+        (one for one in around if one is not None and "thread" in ir_utils.topology_names(one)), None
     )
     writer = first_thread(enclosing, topologies)
     return held if writer is None else (*held, writer)
@@ -181,7 +176,7 @@ def issue_owner(type_list) -> types.Mesh | None:
 
     ``Partial`` attributes count as ``Broadcast`` here.
     """
-    return participants(
+    return physical_shard_mesh(
         replace(
             type_.layout,
             attrs=tuple(
@@ -298,9 +293,9 @@ class TirBuilder:
         type_ = desired or ir_utils.leaves_of(node.type)[leaf.index]
         buffers = getattr(node.target, "buffers", 1) if isinstance(node, expr.Call) else 1
         owner = (
-            ctx.storage.placement[id(node)][0]
+            ctx.storage.declaration_sites[id(node)][0]
             if buffers > 1
-            else ctx.storage.placement.get(id(node), (None, (), None))[2]
+            else ctx.storage.declaration_sites.get(id(node), (None, (), None))[2]
             if type_.storage is expr.StorageKind.RMEM
             else None
         )
@@ -351,7 +346,7 @@ class TirBuilder:
             )
             stages = expr.Var(ctx.names.fresh(f"{stem}_stages"), type=types.TupleType(tuple(field.type for field in fields)))
             self.bind(stages, expr.Tuple(fields, type=stages.type))
-            loops = ctx.storage.placement[id(node)][1]
+            loops = ctx.storage.declaration_sites[id(node)][1]
             if any(
                 expr.static_dim_value(bound) is None
                 for loop in loops[1:]
@@ -361,7 +356,7 @@ class TirBuilder:
                 if key not in self.stage_counters:
                     counter = expr.Var(ctx.names.fresh("stage_counter"), type=BINDING)
                     one = expr.Var(ctx.names.fresh("stage_one"), type=BINDING)
-                    with ctx.builder.region(owner=ctx.storage.placement[id(node)][0]):
+                    with ctx.builder.region(owner=ctx.storage.declaration_sites[id(node)][0]):
                         for value, number in ((counter, 0), (one, 1)):
                             ctx.builder.bind(
                                 value,
@@ -435,7 +430,7 @@ class TirBuilder:
         source_type = source.type if source_type is None else source_type
         if not isinstance(source_type, types.TensorType) or not isinstance(target.type, types.TensorType):
             raise LoweringError("copy lowering requires tensor operands")
-        sharded = copy_mesh((source_type, target.type))
+        sharded = physical_shard_mesh((source_type.layout, target.type.layout))
         meshes = transfer_meshes(
             (source_type, target.type),
             target.type,
@@ -518,7 +513,7 @@ class StoragePlan:
         values = (*self.function.params, *core.collect_exprs(self.function.body))
         memo = {id(node): (node, node.type) for node in values}
         ctx = typeinfer.TypeInferContext(
-            module=self.context.module, function=self.function, target=self.context.target, topologies=self.context.topologies, owner=self.function, current_mesh=self.mesh, memo=memo
+            module=self.context.module, function=self.function, target=self.context.target, topologies=self.context.topologies, owner=self.function, mesh_scope=self.mesh, memo=memo
         )
         return valuation.index_contexts(self.function, ctx)
 
@@ -746,8 +741,8 @@ class StoragePlan:
         for node in core.collect_exprs(self.function.body):
             if not (isinstance(node, expr.Call) and isinstance(node.target, core.FunctionRef)):
                 continue
-            frame = self.regions[id(node)].callee_context(node)
-            child = StoragePlan(frame.function, frame, frame.current_mesh).scratch[0]
+            callee_ctx = self.regions[id(node)].callee_context(node)
+            child = StoragePlan(callee_ctx.function, callee_ctx, callee_ctx.mesh_scope).scratch[0]
             calls[id(node)] = tuple(expr.Var(names.fresh(param.name), type=param.type) for param in child)
             params.extend(calls[id(node)])
         return tuple(params), roots, calls
@@ -804,12 +799,12 @@ class StoragePlan:
         return None
 
     @cached_property
-    def placement(self):
+    def declaration_sites(self):
         """Place genuinely shared registers at their outermost HIR definition.
 
         Region results share their body's storage; ties and views follow the
         same storage trace as outputs. Allocation's peak-estimation buffers
-        are not physical register sharing and do not determine placement.
+        are not physical register sharing and do not determine declaration sites.
         """
         locations = {}
         for key, region in self.regions.items():
@@ -871,7 +866,7 @@ class StoragePlan:
                     continue
                 for value in self.answers[member].relation.values.values():
                     dimensions[id(value)] = value
-                for loop in self.placement[id(member.expr)][1]:
+                for loop in self.declaration_sites[id(member.expr)][1]:
                     if expr.static_dim_value(loop.start) != 0:
                         dimensions[id(loop.start)] = loop.start
         return tuple(dimensions.values())
@@ -924,7 +919,7 @@ class StoragePlan:
                     return type_
                 layout = ir_utils.physical_layout(type_.layout)
                 if isinstance(layout, types.ShardLayout):
-                    layout = ir_utils.participant_layout(layout)
+                    layout = ir_utils.filter_topologies(layout)
                 return replace(type_, layout=layout)
 
             actual, requested = physical_type(held), physical_type(desired)
@@ -988,8 +983,12 @@ class StoragePlan:
             if isinstance(window.type.layout, types.ShardLayout)
             else window.type.layout
         )
-        placement = desired.layout
-        layout = replace(placement, layout=address) if isinstance(placement, types.ShardLayout) else address
+        shard_layout = desired.layout
+        layout = (
+            replace(shard_layout, layout=address)
+            if isinstance(shard_layout, types.ShardLayout)
+            else address
+        )
         type_ = replace(window.type, layout=layout)
         return expr.Call(memory.TensorView(layout=layout, shape=tuple(type_.shape)), (pointer,), type=type_)
 
@@ -1164,6 +1163,10 @@ class IssuePlan:
             raise LoweringError(str(error)) from error
 
     def points(self, plan):
+        """The operand windows of each serial tile of *plan*, in its order.
+
+        A point is one serial tile, not a unit of the execution mesh.
+        """
         for ordered in product(*(range(plan.serial[axis]) for axis in plan.order)):
             point = dict(zip(plan.order, ordered, strict=True))
             windows = []
@@ -1176,9 +1179,9 @@ class IssuePlan:
                     selected = tuple(
                         (width, stride)
                         for width, stride, bound in zip(
-                            types.flatten(mode.shape),
-                            types.flatten(mode.strides),
-                            types.flatten(mask),
+                            types.flatten_to_tuple(mode.shape),
+                            types.flatten_to_tuple(mode.strides),
+                            types.flatten_to_tuple(mask),
                             strict=True,
                         )
                         if not bound
@@ -1356,7 +1359,7 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
             id(param): expr.Var(param.name, type=param.type, is_const=param.is_const)
             for param in self.context.function.params
         }
-        storage = StoragePlan(self.context.function, self.context, self.context.current_mesh)
+        storage = StoragePlan(self.context.function, self.context, self.context.mesh_scope)
         self.context = LoweringContext(
             **{**vars(self.context), "memo": self.memo},
             parameters=physical,
@@ -1466,15 +1469,15 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
 
     def visit_callee(self, call: expr.Call, operands, ctx) -> expr.Expr | View:
         """Call the retained function *call* names, lowering it once."""
-        frame = ctx.callee_context(call)
-        lowering = self.callees.get(id(frame.function))
+        callee_ctx = ctx.callee_context(call)
+        lowering = self.callees.get(id(callee_ctx.function))
         if lowering is None:
             lowering = type(self)(
-                typeinfer.TypeInferContext(module=frame.module, function=frame.function, target=frame.target, topologies=frame.topologies, owner=frame.function, current_mesh=ctx.current_mesh),
+                typeinfer.TypeInferContext(module=callee_ctx.module, function=callee_ctx.function, target=callee_ctx.target, topologies=callee_ctx.topologies, owner=callee_ctx.function, mesh_scope=ctx.mesh_scope),
                 self.callees,
             )
             lowering.run()
-            self.callees[id(frame.function)] = lowering
+            self.callees[id(callee_ctx.function)] = lowering
         destination = ctx.result(call)
         scratch = ctx.storage.scratch[2][id(call)]
         target = call.target
@@ -1553,13 +1556,13 @@ class Lowering(valuation.Visitor[expr.Expr | View]):
         )
 
 
-def scratch_buffers(frame) -> tuple[expr.Var, ...]:
-    """The scratch parameters the lowered *frame* function declares, in order.
+def scratch_buffers(ctx) -> tuple[expr.Var, ...]:
+    """The scratch parameters the function of the lowered *ctx* declares, in order.
 
     A synthesized host entry declares and forwards the same list, so it never
     has to be rewritten after lowering.
     """
-    return StoragePlan(frame.function, frame).scratch[0]
+    return StoragePlan(ctx.function, ctx).scratch[0]
 
 
 def device_root(module):
@@ -1597,7 +1600,7 @@ class ConvertHIRToTIR(pass_base.ModulePass):
 
     def run(self, module: core.Module) -> core.Module:
         if not self.options.lower or not any(
-            isinstance(frame.function, core.Function) for frame in valuation.collect_functions(module).values()
+            isinstance(ctx.function, core.Function) for ctx in valuation.collect_functions(module).values()
         ):
             return module
         function = device_root(module)
@@ -1642,7 +1645,6 @@ __all__ = [
     "TirScope",
     "View",
     "accepted_aliases",
-    "copy_mesh",
     "issue_owner",
     "label",
     "lowers_to_dim",

@@ -7,5 +7,6 @@ emission and build setup to the CUDA target.
 
 - constraints:
   - CUDA Targets without `device_count` MUST support skeleton projects.
-  - The project MUST place its CPU entry unit in `host.cpp` and its device
-    units in `device_<i>.cu` directly in the requested output directory.
+  - The project MUST place its CPU entry unit in `host.cpp`.
+    It MUST place its device units in `device_<i>.cu`.
+    Both locations MUST be directly in the requested output directory.

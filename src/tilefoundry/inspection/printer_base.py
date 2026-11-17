@@ -93,7 +93,7 @@ def ceildiv_operands(value: expr.Call) -> tuple[object, object] | None:
     return added.args[0], divisor
 
 
-class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
+class PythonPrinter(core.PrinterBase, expr.Functor[str], types.TypeFunctor[str]):
     """Render the Python DSL with one dispatch root for expressions and types."""
 
     def print_SSAValue(self, value):
@@ -417,34 +417,34 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
             if alias is None:
                 raise ValueError("MeshCoord mesh has no active binding to print")
             return f"tf.meshcoord({self.visit(value.args[0], ctx)}, mesh={alias})"
-        axis = expr.static_dim_value(value.args[0]) if value.args else None
-        if axis is None or axis < 0 or axis >= len(types.flatten(tgt.mesh.layout).shape):
-            raise ValueError("MeshCoord requires a literal in-range axis to print")
-        ref = ctx.mesh_axis_alias(tgt.mesh, axis)
+        mesh_axis = expr.static_dim_value(value.args[0]) if value.args else None
+        if mesh_axis is None or mesh_axis < 0 or mesh_axis >= len(tgt.mesh.shape):
+            raise ValueError("MeshCoord requires a literal in-range mesh_axis to print")
+        ref = ctx.mesh_axis_alias(tgt.mesh, mesh_axis)
         if ref is not None:
             return ref
         if alias is None:
             raise ValueError("MeshCoord mesh has no active binding to print")
-        if axis < len(tgt.mesh.names):
-            axis_name = tgt.mesh.names[axis]
-        elif axis < 3:
-            axis_name = ("x", "y", "z")[axis]
+        if mesh_axis < len(tgt.mesh.names):
+            mesh_axis_name = tgt.mesh.names[mesh_axis]
+        elif mesh_axis < 3:
+            mesh_axis_name = ("x", "y", "z")[mesh_axis]
         else:
-            raise ValueError("unnamed MeshCoord axes above z cannot be printed")
-        return f"{alias}.{axis_name}"
+            raise ValueError("unnamed MeshCoord mesh axes above z cannot be printed")
+        return f"{alias}.{mesh_axis_name}"
 
     def visit_program_call(self, value: expr.Call, ctx=None) -> str:
         raise NotImplementedError(f"{type(self).__name__} cannot render program calls")
 
 
     def shard_surface(self, value: types.ShardLayout, ctx=None, *, storage=None) -> str | None:
-        """Render placement sugar only when every mesh axis has a scope binding.
+        """Render shard layout sugar only when every mesh axis has a scope binding.
 
         The sugar states one extent per tensor axis, each a dimension
         expression, so it declines a layout whose modes are grouped by tile
         axis: writing the groups in would emit a line the parser refuses.
         """
-        value = ir_utils.participant_layout(value)
+        value = ir_utils.filter_topologies(value)
         layout = value.layout
         operand = None
         if isinstance(layout, types.ComposedLayout) and isinstance(layout.outer, types.Layout):
@@ -452,10 +452,10 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
         elif isinstance(layout, types.Layout):
             operand = self.layout_surface(layout, ctx)
         if ctx is not None and all(isinstance(attr, types.Broadcast) for attr in value.attrs):
-            current = ctx.current_mesh
+            current = ctx.mesh_scope
             if current is not None and operand is not None:
-                current = ir_utils.participant_layout(types.ShardLayout(layout, tuple(
-                    types.Broadcast() for _ in range(len(types.flatten(current.layout).shape))
+                current = ir_utils.filter_topologies(types.ShardLayout(layout, tuple(
+                    types.Broadcast() for _ in range(len(current.shape))
                 ), current)).mesh
                 if current == value.mesh:
                     return operand + " @ {B()}"
@@ -546,13 +546,12 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
         return result + "]"
 
     def visit_TupleType(self, value: types.TupleType, ctx=None) -> str:
+        if not value.fields:
+            return "None"
         return f"Tuple[{', '.join(self.visit(field, ctx) for field in value.fields)}]"
 
     def visit_PointerType(self, value: types.PointerType, ctx=None) -> str:
         return f"PointerType(DType.{value.dtype.name}, StorageKind.{value.storage.name})"
-
-    def visit_UnitType(self, value: types.UnitType, ctx=None) -> str:
-        return "None"
 
     def visit_DType(self, value: expr.DType, ctx=None) -> str:
         return self.dtype_str(value, ctx)
@@ -591,11 +590,7 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
             for topology in value.topologies
         )
         topologies = f"({topologies}{',' if len(value.topologies) == 1 else ''})"
-        written = ir_utils.device_layout(value)
-        if isinstance(value.layout, types.ComposedLayout):
-            written = types.ComposedLayout(
-                inner=value.layout.inner, offset=value.layout.offset, outer=written
-            )
+        written = ir_utils.flat_layout(value)
         if isinstance(written, types.Layout) and written.strides == types.compact_row_major(written.shape):
             rendered = self.shape_tuple(written.shape, ctx)
         else:
@@ -610,9 +605,7 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
         return "None"
 
     def visit_Layout(self, value: types.Layout, ctx=None) -> str:
-        return (
-            f"Layout({self.shape_tuple(value.shape, ctx)}, {self.shape_tuple(value.strides, ctx)})"
-        )
+        return f"Layout({self.dim_entry(value.shape, ctx)}, {self.dim_entry(value.strides, ctx)})"
 
     def visit_Swizzle(self, value: types.Swizzle, ctx=None) -> str:
         return f"Swizzle({value.bits}, {value.base}, {value.shift})"
@@ -621,8 +614,10 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
         """Use composition operators only where the parser expects a layout."""
         if isinstance(value, types.ShardLayout):
             return self.shard_surface(value, ctx, storage=storage) or self.visit(value, ctx)
-        if isinstance(value, types.Layout) and not any(
-            isinstance(entry, tuple) for entry in (*value.shape, *value.strides)
+        if (
+            isinstance(value, types.Layout)
+            and isinstance(value.shape, tuple)
+            and not any(isinstance(entry, tuple) for entry in (*value.shape, *value.strides))
         ):
             shape = self.shape_tuple(value.shape, ctx)
             if value.strides == types.Layout(value.shape).strides:
@@ -690,7 +685,7 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], core.TypeFunctor[str]):
         )
 
     def visit_ShardLayout(self, value: types.ShardLayout, ctx=None) -> str:
-        value = ir_utils.participant_layout(value)
+        value = ir_utils.filter_topologies(value)
         outer, child = self.type_indent, self.type_indent + "    "
         attrs = ", ".join(self.visit(attr, ctx) for attr in value.attrs)
         if len(value.attrs) == 1:

@@ -1,4 +1,4 @@
-"""Value types: tensors, tuples of values, the unit type, and the ``Type`` union."""
+"""Value types: tensors, tuples of values, and the ``Type`` union."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from tilefoundry.ir import expr
 
 from .layout import Layout
 
-__all__ = ["ShapeDim", "TensorType", "TupleType", "Type", "UnitType"]
+__all__ = ["ShapeDim", "TensorType", "TupleType", "Type"]
 
 type ShapeDim = "int | DimVar | Expr"
 """A shape entry: static, symbolic, or expression-valued."""
@@ -105,22 +105,31 @@ class TensorType:
         )
 
 
+class VoidMember:
+    """The empty ``TupleType`` of the class that holds it, built on first access and then shared."""
+
+    def __init__(self) -> None:
+        """Start with no value; the owner class is not complete yet."""
+        self.value: TupleType | None = None
+
+    def __get__(self, instance: object, owner: type[TupleType]) -> TupleType:
+        """The one empty tuple type this member stands for."""
+        if self.value is None:
+            self.value = owner(())
+        return self.value
+
+
 @dataclass(frozen=True)
 class TupleType:
-    """An ordered group of values."""
+    """An ordered group of values.
 
-    fields: tuple[Union["TensorType", "TupleType", "CallableType"], ...]
-
-
-@dataclass(frozen=True)
-class UnitType:
-    """Empty / void result type.
-
-    Used as the ``Call.type`` of effect-ful TIR Ops that have no
-    meaningful result value (the side effect is the operation itself —
-    e.g. ``Copy``, ``Fill``, ``Mma``, ``ReLU`` writes to its ``dst``).
-    Such Ops are placed in Stmt position via ``Evaluate(op, args)``.
+    ``TupleType.Void`` has no fields: it is the ``Call.type`` of an effect Op that
+    has no result value (``Copy``, ``Fill``, ``Mma``), placed in Stmt position via
+    ``Evaluate(op, args)``.
     """
 
+    fields: tuple[Union["TensorType", "TupleType", "CallableType"], ...] = ()
+    Void = VoidMember()
 
-Type = Union[TensorType, TupleType, UnitType, "CallableType", "PointerType"]
+
+Type = Union[TensorType, TupleType, "CallableType", "PointerType"]

@@ -48,8 +48,8 @@ class Issue:
     operands: tuple[tuple[str, expr.Expr], ...]
     read_values: dict[str, expr.Expr]
     written: expr.Expr | None
-    enclosing: types.Mesh | None
-    issuers: types.Mesh | None
+    mesh_scope: types.Mesh | None
+    execution_mesh: types.Mesh | None
 
 
 class CudaLowering(transforms.Lowering):
@@ -178,7 +178,7 @@ class CudaLowering(transforms.Lowering):
         return self.fill(call, ctx)
 
     def default_visit_T(self, call: expr.Call, op, operands, ctx, emit=None) -> expr.Expr:
-        """Issue *op* once in its owner region, or at each point of its execution mesh.
+        """Issue *op* once in its owner region, or once at each serial tile on its execution mesh.
 
         *emit* adds one issue from the op and its operands in place of a bare
         ``Evaluate``.
@@ -227,7 +227,7 @@ class CudaLowering(transforms.Lowering):
 
     def prepare_operands(self, call: expr.Call, op, operands, ctx) -> Issue:
         """Project *op*, lower the operands it takes and stage each scalar in a register."""
-        mesh = ctx.enclosing_mesh()
+        mesh = ctx.innermost_mesh()
         plan, type_list, owner = ctx.issues.plan(call, op, mesh)
         params = plan.params
         supplied, produced = analysis.operand_roles(call, params)
@@ -273,16 +273,16 @@ class CudaLowering(transforms.Lowering):
             else type_
             for type_ in type_list
         )
-        issuers = analysis.issue_mesh(op, owner, mesh)
-        return Issue(plan, type_list, tuple(issued_operands), read_values, written, mesh, issuers)
+        execution_mesh = analysis.execution_mesh_of(op, owner, mesh)
+        return Issue(plan, type_list, tuple(issued_operands), read_values, written, mesh, execution_mesh)
 
     def issue_in_owner(self, call: expr.Call, op, issue: Issue, ctx, emit) -> None:
         """Issue *op* once with its attributes through *emit*, in the region of its owner mesh."""
-        if issue.enclosing is None:
+        if issue.mesh_scope is None:
             raise transforms.LoweringError(f"{transforms.label(call)} instruction issue has no lexical mesh")
         params, type_list = issue.plan.params, issue.types
         with ctx.builder.region(
-            mesh=issue.issuers, binding=expr.Var(ctx.names.fresh("threads"), type=transforms.BINDING)
+            mesh=issue.execution_mesh, binding=expr.Var(ctx.names.fresh("threads"), type=transforms.BINDING)
         ):
             issued = []
             for param, (role, value) in zip(params, issue.operands, strict=True):
@@ -307,8 +307,8 @@ class CudaLowering(transforms.Lowering):
             self.emit_steps(call, "after", ctx)
 
     def local_operands(self, op, issue: Issue, ctx) -> list:
-        """Each operand as one point of *op*'s execution mesh sees it, in parameter order."""
-        plan, type_list, issuers = issue.plan, issue.types, issue.issuers
+        """Each operand as a unit of *op*'s execution mesh holds it, in parameter order."""
+        plan, type_list, execution_mesh = issue.plan, issue.types, issue.execution_mesh
         required = analysis.required_execution_mesh(op)
         for region in ctx.builder.blocks[:-1]:
             for key, value in region.views.items():
@@ -317,16 +317,16 @@ class CudaLowering(transforms.Lowering):
         unit_coordinates = {}
         for (role, value), type_, rest in zip(issue.operands, type_list, plan.rests, strict=True):
             base = ctx.builder.value(ctx.storage.operand(value, type_, whole_tensor=True), ctx=ctx)
-            binding_mesh = rest.mesh if isinstance(rest, types.ShardLayout) else issuers
-            frame, dropped = utils.participant_frame(binding_mesh, required)
+            binding_mesh = rest.mesh if isinstance(rest, types.ShardLayout) else execution_mesh
+            _, dropped = utils.find_execution_mesh(binding_mesh, required)
             source = types.shard_layout_of(base.type.layout)
             attrs = (
                 list(source.attrs)
                 if source is not None
-                else [types.Broadcast()] * len(types.axis_keys(binding_mesh))
+                else [types.Broadcast()] * len(utils.axis_keys(binding_mesh))
             )
             coords = [None] * len(attrs)
-            for mesh_axis, (topology, name) in enumerate(types.axis_keys(binding_mesh)[:dropped]):
+            for mesh_axis, (topology, name) in enumerate(utils.axis_keys(binding_mesh)[:dropped]):
                 attr = rest.attrs[mesh_axis]
                 attrs[mesh_axis] = attr
                 coordinate = 0
@@ -349,18 +349,17 @@ class CudaLowering(transforms.Lowering):
             )
             if any(isinstance(attr, types.Split) for attr in attrs[:dropped]):
                 primitive = local.layout if isinstance(local, types.ShardLayout) else local
-                outer = primitive.outer if isinstance(primitive, types.ComposedLayout) else primitive
-                local_shape = tuple(prod(types.flatten(mode)) for mode in outer.shape)
-                original = address.outer if isinstance(address, types.ComposedLayout) else address
-                if not any(isinstance(mode, tuple) for mode in original.shape):
+                outer = types.plain_layout(primitive)
+                local_shape = tuple(prod(types.flatten_to_tuple(mode)) for mode in outer.shape)
+                if not any(isinstance(mode, tuple) for mode in types.plain_layout(address).shape):
                     flat = types.flatten(outer)
                     primitive = (
                         replace(primitive, outer=flat)
                         if isinstance(primitive, types.ComposedLayout)
                         else flat
                     )
-                if expr.static_dim_value(offset) != 0:
-                    primitive = types.ComposedLayout(None, offset, primitive)
+                if offset:
+                    primitive = types.make_composed_layout(None, offset, primitive)
                 local = (
                     replace(local, layout=primitive)
                     if source is not None and isinstance(local, types.ShardLayout)
@@ -377,9 +376,13 @@ class CudaLowering(transforms.Lowering):
         return locals_
 
     def issue_at_points(self, call: expr.Call, op, issue: Issue, locals_, ctx, emit) -> None:
-        """Issue *op* through *emit* at each ``IssuePlan.points`` point, in the issuing region."""
+        """Issue *op* through *emit* at each serial tile ``IssuePlan.points`` gives.
+
+        The issue runs in the issuing region. A point is the operand windows of
+        one serial tile, not a unit of the execution mesh.
+        """
         with ctx.builder.region(
-            mesh=issue.issuers, binding=expr.Var(ctx.names.fresh("threads"), type=transforms.BINDING)
+            mesh=issue.execution_mesh, binding=expr.Var(ctx.names.fresh("threads"), type=transforms.BINDING)
         ):
             locals_ = [
                 ctx.builder.bind(expr.Var(ctx.names.fresh(f"{role}_local"), type=base.type), base)

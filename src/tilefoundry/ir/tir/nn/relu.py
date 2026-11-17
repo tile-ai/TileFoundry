@@ -30,8 +30,8 @@ class ReLU(expr.Op):
 
 
 @typeinfer.register(ReLU)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 access.register_relation(ReLU)(access.identity_relations)

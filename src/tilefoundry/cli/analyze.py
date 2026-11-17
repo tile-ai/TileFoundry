@@ -76,19 +76,19 @@ def guidance() -> str:
         family         what --topology changes                 pass it when
         ------------   --------------------------------------  ---------------------
         compute-cost   nothing. Every kind states its total     never
-                       and every level's per-unit share
+                       and every topology's per-unit share
         memory         nothing for traffic, which states every   the program shards
-                       level; placement remains Function-wide
+                       topology; address assignment remains Function-wide
         roofline       nothing. The bound is the machine's     never
                        and is unchanged by program splits
-        performance    which level's parallel capacity the     the program shards
+        performance    which topology's capacity the           the program shards
                        plan is issued against
 
         Two assumptions the reported numbers rest on:
           logical traffic omits loop replication that does not change an access;
             total traffic counts every executed occurrence. Per-unit traffic is
             the selected topology unit's share of that executed total.
-          a reported placement peak holds under the order this walk took. Which
+          a reported memory peak holds under the order this walk took. Which
             order the program really takes is settled by scheduling, so the peak
             is an observation, not a bound.
 
@@ -120,13 +120,13 @@ def run_authored_analysis(
     disarmed = watch(ANALYSIS_TIMEOUT_SECONDS)
     try:
         program = checked_program(
-            source, dims, command="analyze", topology_level=topology if analyses else None
+            source, dims, command="analyze", topology=topology if analyses else None
         )
         checked, root = program.module, program.entry
         if not analyses:
             annotated = "\n".join(
-                inspection.as_script(frame.function, options=inspection.PythonPrintOptions(show_types=True))
-                for frame in valuation.definitions(valuation.Context(checked, root))
+                inspection.as_script(ctx.function, options=inspection.PythonPrintOptions(show_types=True))
+                for ctx in valuation.definitions(valuation.Context(checked, root))
             )
             write_report(out_path, annotated)
             return 0
@@ -135,7 +135,7 @@ def run_authored_analysis(
             checked,
             root,
             analysis=analyses,
-            topology_level=topology,
+            topology=topology,
         )
         rendered = inspection.render_analysis(result, operands=operands and not as_json)
         if as_json:

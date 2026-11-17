@@ -16,6 +16,7 @@ from types import MappingProxyType
 
 from tilefoundry import utils
 from tilefoundry.ir import types
+from tilefoundry.ir import utils as ir_utils
 
 __all__ = ["ShardTensor", "local_type"]
 
@@ -62,10 +63,10 @@ class ShardTensor:
         if shard is None:
             return self.tensor
         if placement is None:
-            axes = tuple(getattr(topology, "name", topology) for topology in shard.mesh.topologies)
+            axes = ir_utils.topology_names(shard.mesh)
             raise ValueError(
                 f"ShardTensor: {tuple(self.type.shape)} is sharded over {axes}, and "
-                f"no Placement says which program this is; pass placement= to load()"
+                f"no Placement says which unit this is; pass placement= to load()"
             )
         if any(types.partial_reductions_by_axis(shard)):
             raise ValueError(
@@ -97,13 +98,13 @@ class ShardTensor:
         first = self.tensor[0][1]
         parts: dict[tuple, utils.torch.Tensor] = {}
         for placement, data in self.tensor:
-            coord = types.mesh_coords(shard.mesh, placement.program_ids(shard.mesh.topologies))
+            coord = placement.coords(shard.mesh)
             key = tuple(coord[axis] for axis in partial)
             if key not in parts:
                 parts[key] = utils.torch.empty(
                     tuple(self.type.shape), dtype=first.dtype, device=first.device
                 )
-            self.window(parts[key], shard, placement).copy_(data)
+            window_at(parts[key], shard, tuple(self.type.shape), coord).copy_(data)
         values = list(parts.values())
         if len(values) == 1:
             return ShardTensor(self.type, values[0])
@@ -129,8 +130,11 @@ class ShardTensor:
         reads them with row-major strides; the address strides may not say where
         a placement's part is, since a private Split has stride zero.
         """
-        address = shard.layout.outer if isinstance(shard.layout, types.ComposedLayout) else shard.layout
-        host = replace(shard, layout=types.Layout(address.shape))
-        coord = types.mesh_coords(shard.mesh, placement.program_ids(shard.mesh.topologies))
-        layout, offset = types.local_layout_and_offset(host, tuple(self.type.shape), coord)
-        return whole.as_strided(layout.shape, layout.strides, whole.storage_offset() + offset)
+        return window_at(whole, shard, tuple(self.type.shape), placement.coords(shard.mesh))
+
+
+def window_at(whole, shard: types.ShardLayout, shape: tuple, coord: tuple):
+    """The part of row-major *whole* that the unit at mesh *coord* holds, as ``window`` reads it."""
+    host = replace(shard, layout=types.Layout(types.plain_layout(shard.layout).shape))
+    layout, offset = types.local_layout_and_offset(host, shape, coord)
+    return whole.as_strided(layout.shape, layout.strides, whole.storage_offset() + offset)

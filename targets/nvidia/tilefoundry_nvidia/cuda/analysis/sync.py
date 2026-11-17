@@ -24,13 +24,13 @@ from tilefoundry.passes import transforms
 from tilefoundry_nvidia.cuda.ir.tir import sync
 
 from .completion import Effect, Group, Issued, Mechanism, Proxy, completion_of
-from .ctas import axis_numbering, refuse_cta_overlaps
+from .ctas import mesh_axis_numbering, refuse_cta_overlaps
 from .emission import (
     copies_carry_backedge,
     copies_carry_entry,
     copies_insert_slice_base,
     copies_insert_slice_update,
-    issue_mesh,
+    execution_mesh_of,
     operand_roles,
     required_execution_mesh,
     result_param,
@@ -111,7 +111,7 @@ class SyncPlanMetadata(expr.IRMetadata):
 class Use:
     """One effect of an action on shared memory bytes, global memory roots or one register storage.
 
-    ``threads`` is the layout that gives each of those bytes to one issuing
+    ``threads`` is the layout that gives each of those bytes to one executing
     thread, when there is one. A root of None in ``global_roots`` is unknown.
     """
 
@@ -144,10 +144,10 @@ class Access:
 
     ``ordered`` holds ``(mesh chain, published)`` for each barrier that ordered it;
     it orders the access only for threads inside that scope, and ``published``
-    says a proxy fence ran before the barrier. ``fenced`` says the issuing threads
+    says a proxy fence ran before the barrier. ``fenced`` says the executing threads
     ran the proxy fence after it, and ``group_fenced`` that its group's fence ran
-    since this register access. ``issuers`` and ``unit`` are the issuing threads and
-    the collective unit whose steps they run together, if any.
+    since this register access. ``execution_mesh`` and ``unit`` are the threads that execute
+    the issue and the collective unit whose steps they run together, if any.
     """
 
     position: tuple[int, int]
@@ -159,7 +159,7 @@ class Access:
     group: Group | None = None
     proxy: Proxy = Proxy.GENERIC
     chain: tuple[int, expr.DType] | None = None
-    issuers: types.Mesh | None = None
+    execution_mesh: types.Mesh | None = None
     unit: types.Mesh | None = None
     threads: types.ShardLayout | None = None
     ordered: frozenset = frozenset()
@@ -200,9 +200,9 @@ def overlap(a, b) -> bool:
 
 
 def threads_of(op, type_, owners) -> types.ShardLayout | None:
-    """The layout giving each byte of a shared memory operand of *type_* to one issuing thread.
+    """The layout giving each byte of a shared memory operand of *type_* to one executing thread.
 
-    Each thread issues *op* on its own shard when *op* declares no execution
+    Each thread executes *op* on its own shard when *op* declares no execution
     mesh. A layout that splits along every mesh axis whose units share shared
     memory, as *owners* states, gives each shard's bytes to that thread alone.
     """
@@ -211,9 +211,9 @@ def threads_of(op, type_, owners) -> types.ShardLayout | None:
     layout = type_.layout
     if type_.storage is not expr.StorageKind.SMEM or not isinstance(layout, types.ShardLayout):
         return None
-    axes = zip(layout.attrs, types.axis_keys(layout.mesh), strict=True)
-    shared = (level for attr, (level, _) in axes if not isinstance(attr, types.Split))
-    return layout if all(owners.private(type_.storage, level) for level in shared) else None
+    mesh_axes = zip(layout.attrs, utils.axis_keys(layout.mesh), strict=True)
+    shared = (topology for attr, (topology, _) in mesh_axes if not isinstance(attr, types.Split))
+    return layout if all(owners.private(type_.storage, topology) for topology in shared) else None
 
 
 def mesh_chain(scope) -> tuple[int, ...]:
@@ -225,38 +225,38 @@ def alone(mesh: types.Mesh | None) -> bool:
     if mesh is None or any(topology.name != "thread" for topology in mesh.topologies):
         return False
     try:
-        return tir.sync.participation(mesh).count == 1
+        return tir.sync.sync_scope(mesh).count == 1
     except expr.VerifyError:
         return False
 
 
-def region_mesh(scope) -> types.Mesh | None:
-    """The mesh of the innermost ``MeshRegion`` around *scope*."""
+def innermost_mesh(scope) -> types.Mesh | None:
+    """The innermost enclosing MeshRegion's mesh, or None when there is none."""
     return next(
         (node.owner.mesh for node in scope.ancestors() if isinstance(node.owner, core.MeshRegion)), None
     )
 
 
-def one_coordinate(mesh: types.Mesh, axis: int, size: int, bases: range) -> bool:
-    """Whether each group of *size* threads from *bases* reads one coordinate on *mesh*'s *axis*.
+def one_coordinate(mesh: types.Mesh, mesh_axis: int, size: int, bases: range) -> bool:
+    """Whether each group of *size* threads from *bases* reads one coordinate on *mesh_axis*.
 
     Every thread of a group must be one of *mesh*'s. A thread reads
-    ``((thread - start) // stride) % extent`` on an axis of its level, as the
+    ``((thread - first_unit_id) // stride) % extent`` on a mesh axis of its topology, as the
     runtime's ``mesh_coords`` does.
     """
-    numbering = axis_numbering(mesh, axis)
+    numbering = mesh_axis_numbering(mesh, mesh_axis)
     if numbering is None:
         return False
-    start, extents, strides, index = numbering
+    first_unit_id, extents, strides, index = numbering
     extent, stride = extents[index], strides[index]
     if extent > 1 and stride <= 0:
         return False
-    held = {start + sum(map(mul, point, strides)) for point in product(*map(range, extents))}
+    held = {first_unit_id + sum(map(mul, point, strides)) for point in product(*map(range, extents))}
     for base in bases:
         threads = range(base, base + size)
         if not set(threads) <= held:
             return False
-        if extent > 1 and len({(thread - start) // stride % extent for thread in threads}) > 1:
+        if extent > 1 and len({(thread - first_unit_id) // stride % extent for thread in threads}) > 1:
             return False
     return True
 
@@ -363,7 +363,7 @@ class Planner:
         A parameter named in *filled* is issued with the call's *result* storage,
         and also with its argument when one is given.
         """
-        if mesh is not None and (scope.mesh is None or not types.within_scope(mesh, scope.mesh)):
+        if mesh is not None and (scope.mesh is None or not utils.within_mesh_scope(mesh, scope.mesh)):
             raise analysis.Error(f"sync: {name} is issued on a mesh not within its scope's")
         params = schedule.call_params(op, len(args))
         leaves = {
@@ -558,7 +558,7 @@ class Planner:
                 type_list,
                 type(op).__name__,
                 scope,
-                issue_mesh(op, transforms.issue_owner(type_list), scope.mesh),
+                execution_mesh_of(op, transforms.issue_owner(type_list), scope.mesh),
                 filled=tuple(param.name for param in produced),
                 result=core.ssa_leaves(call),
             )
@@ -772,7 +772,7 @@ class Planner:
             effect.group,
             effect.proxy,
             effect.chain,
-            action.mesh or region_mesh(scope),
+            action.mesh or innermost_mesh(scope),
             effect.unit,
             use.threads,
             global_roots=use.global_roots,
@@ -794,7 +794,7 @@ class Planner:
             if access.state != DONE:
                 if access.unit is not None:
                     try:
-                        self.collective(meeting, access.unit, access.issuers)
+                        self.collective(meeting, access.unit, access.execution_mesh)
                     except analysis.Error as error:
                         raise UnplacedError(access.position, str(error)) from None
                 group = access.group
@@ -807,7 +807,7 @@ class Planner:
                     storage = expr.StorageKind.GMEM if access.global_roots else None
                     fence = SyncStep(StepKind.PROXY_FENCE, storage=storage)
                     state = self.plan(fence, meeting, position, state)
-                mesh = region_mesh(meeting)
+                mesh = innermost_mesh(meeting)
                 if alone(mesh):
                     barrier = SyncStep(StepKind.BARRIER, mesh)
                     state = self.effect(barrier, meeting, state, self.entered[position])
@@ -918,7 +918,7 @@ class Planner:
 
         It is the mesh of the innermost ``MeshRegion`` around *scope*.
         """
-        mesh = region_mesh(scope)
+        mesh = innermost_mesh(scope)
         try:
             barrier = None if mesh is None else tir.sync.classify(mesh)
         except expr.VerifyError as error:
@@ -930,14 +930,14 @@ class Planner:
 
     def collective(self, scope, unit: types.Mesh, threads: types.Mesh | None) -> None:
         """Require whole *unit*s of threads, *threads* among them, to reach *scope* together."""
-        mesh = region_mesh(scope)
+        mesh = innermost_mesh(scope)
         if mesh is None:
             raise analysis.Error(
                 "sync: a collective step is needed in a scope that no thread mesh binds"
             )
         try:
-            size = tir.sync.participation(unit).count
-            held, needed = tir.sync.participation(mesh), tir.sync.participation(threads or mesh)
+            size = tir.sync.sync_scope(unit).count
+            held, needed = tir.sync.sync_scope(mesh), tir.sync.sync_scope(threads or mesh)
             whole = sync.whole_groups(mesh, size)
         except expr.VerifyError as error:
             raise analysis.Error(f"sync: {error}") from None
@@ -948,7 +948,7 @@ class Planner:
             )
         if needed.base < held.base or needed.base + needed.count > held.base + held.count:
             raise analysis.Error(
-                "sync: a collective step is needed outside the threads that issued it"
+                "sync: a collective step is needed outside the threads that execute it"
             )
         self.uniform_loops(scope, mesh, "a collective step", size)
 
@@ -959,16 +959,16 @@ class Planner:
         only needs the threads of each aligned group of *unit* to agree (PTX
         ``.aligned``), so the trip count may differ from one group to the next.
         """
-        spanned = {topology.name for topology in mesh.topologies}
+        spanned = set(utils.topology_names(mesh))
         groups = None
         if unit is not None and len(mesh.topologies) == 1:
-            held = tir.sync.participation(mesh)
+            held = tir.sync.sync_scope(mesh)
             groups = range(held.base, held.base + held.count, unit)
 
-        def fixed(coordinates: types.Mesh, axis: int) -> bool:
-            if types.axis_keys(coordinates)[axis][0] not in spanned:
+        def fixed(coordinates: types.Mesh, mesh_axis: int) -> bool:
+            if utils.axis_keys(coordinates)[mesh_axis][0] not in spanned:
                 return True
-            return groups is not None and one_coordinate(coordinates, axis, unit, groups)
+            return groups is not None and one_coordinate(coordinates, mesh_axis, unit, groups)
 
         entry = self.context.entry is None or self.function is self.context.entry
         uniform = {id(param) for param in self.function.params} if entry else set()
@@ -987,17 +987,17 @@ class Planner:
     def uniform(self, node, uniform: set[int], fixed, scope) -> bool:
         """Whether the threads that must agree see the same value of a loop bound.
 
-        ``fixed(mesh, axis)`` says whether they read one coordinate on that mesh axis.
+        ``fixed(mesh, mesh_axis)`` says whether they read one coordinate on that mesh axis.
         """
         if isinstance(node, expr.Constant) or expr.static_dim_value(node) is not None:
             return True
         if isinstance(node, expr.Var):
             return id(node) in uniform or id(scope.capture_root(node)) in uniform
         if isinstance(node, expr.Call) and isinstance(node.target, dim.MeshCoord):
-            axes = dim.literal_axes(node.args[0])
-            count = len(types.axis_keys(node.target.mesh))
-            return axes is not None and all(
-                0 <= axis < count and fixed(node.target.mesh, axis) for axis in axes
+            mesh_axes = dim.literal_axes(node.args[0])
+            count = len(utils.axis_keys(node.target.mesh))
+            return mesh_axes is not None and all(
+                0 <= mesh_axis < count and fixed(node.target.mesh, mesh_axis) for mesh_axis in mesh_axes
             )
         if isinstance(node, expr.Call) and expr.is_dim_op_call(node):
             return all(self.uniform(arg, uniform, fixed, scope) for arg in node.args)

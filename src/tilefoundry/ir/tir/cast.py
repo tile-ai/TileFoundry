@@ -38,8 +38,8 @@ class Cast(expr.Op):
 
 
 @typeinfer.register(Cast)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 access.register_relation(Cast)(access.identity_relations)

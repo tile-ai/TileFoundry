@@ -34,12 +34,12 @@ def address_points(layout, count: int, logical_shape: tuple):
     base = shard.layout if shard is not None else layout
     whole = {}
     flat = types.flatten(base)
-    grouped = types.unflatten(types.Layout(flat.shape, types.compact_col_major(flat.shape)),
+    grouped = types.unflatten(types.Layout(flat.shape, types.compact_row_major(flat.shape)),
                         int_tuple.compatible_profile(base.shape, logical_shape))
     logical_steps = types.compact_col_major(logical_shape)
     for coordinate in range(count):
         logical = types.idx2crd(coordinate, logical_shape, logical_steps)
-        address = types.apply(base, types.crd2idx(logical, grouped.shape, grouped.strides))
+        address = base(types.crd2idx(logical, grouped.shape, grouped.strides))
         if shard is None:
             yield coordinate, (), address, address
         else:
@@ -51,8 +51,8 @@ def address_points(layout, count: int, logical_shape: tuple):
     if len(whole) != count:
         raise ValueError(f"rmem layout address function is not injective: {layout!r}")
     for placement in types.Placement.from_mesh(layout.mesh):
-        ids = placement.program_ids(layout.mesh.topologies)
-        coordinates = types.mesh_coords(layout.mesh, ids)
+        ids = placement.unit_ids(layout.mesh.topologies)
+        coordinates = placement.coords(layout.mesh)
         if any(
             isinstance(attr, types.Varying) and coord != 0
             for attr, coord in zip(layout.attrs, coordinates, strict=True)
@@ -67,17 +67,15 @@ def address_points(layout, count: int, logical_shape: tuple):
         else:
             unit = tuple(
                 sorted(
-                    (topology.name, start + index)
-                    for topology, start, index in zip(
-                        layout.mesh.topologies, types.starts(layout.mesh), ids, strict=True
-                    )
+                    (topology.name, unit_id)
+                    for topology, unit_id in zip(layout.mesh.topologies, ids, strict=True)
                 )
             )
         local, offset = types.local_layout_and_offset(
             layout, tuple(layout.layout.shape), coordinates
         )
         for coord in range(prod(local.shape)):
-            held = types.apply(local, coord)
+            held = local(coord)
             logical = whole.get(offset + held)
             if logical is None:
                 raise ValueError(
@@ -90,7 +88,7 @@ def address_table(layout, count: int, logical_shape: tuple):
     """Require one unique address per element within each Varying copy."""
     if not isinstance(layout, types.ShardLayout):
         return tuple(point[2] for point in address_points(layout, count, logical_shape))
-    layout = ir_utils.participant_layout(layout)
+    layout = ir_utils.filter_topologies(layout)
     addresses = [None] * count
     for logical, unit, full, held in address_points(layout, count, logical_shape):
         if addresses[logical] is not None:
@@ -137,7 +135,7 @@ def _(call: expr.Call, ctx) -> types.TensorType:
     if not expr.is_literal_shape(source.shape):
         ctx.error(call, "source tensor shape must be literal")
     sharded = isinstance(source.layout, types.ShardLayout) or isinstance(stated_layout, types.ShardLayout)
-    shape = source.shape if sharded else tuple(prod(types.flatten(mode)) for mode in stated_layout.shape)
+    shape = source.shape if sharded else tuple(prod(types.flatten_to_tuple(mode)) for mode in stated_layout.shape)
     result = types.TensorType(shape, source.dtype, stated_layout, source.storage)
     layout = result.layout
     if sharded:
@@ -145,8 +143,8 @@ def _(call: expr.Call, ctx) -> types.TensorType:
             ctx.error(call, "sharded bitcast requires rmem storage")
         if not isinstance(source.layout, types.ShardLayout) or not isinstance(layout, types.ShardLayout):
             ctx.error(call, "sharded bitcast requires ShardLayout at both ends")
-        source_layout = ir_utils.participant_layout(source.layout)
-        result_layout = ir_utils.participant_layout(layout)
+        source_layout = ir_utils.filter_topologies(source.layout)
+        result_layout = ir_utils.filter_topologies(layout)
         if source_layout.mesh != result_layout.mesh:
             ctx.error(call, "source and result ShardLayout must use the same mesh")
     else:
@@ -167,7 +165,7 @@ def _(call: expr.Call, ctx) -> types.TensorType:
             try:
                 axes = int_tuple.mode_axes(int_tuple.compatible_profile(held.layout.shape, source.shape))
                 types.split_target_axes(held, source.shape)
-                extents = tuple(prod(types.flatten(mode)) for mode in held.layout.shape)
+                extents = tuple(prod(types.flatten_to_tuple(mode)) for mode in held.layout.shape)
                 if any(
                     prod(
                         extent
@@ -183,10 +181,10 @@ def _(call: expr.Call, ctx) -> types.TensorType:
             held = held.layout
         if not isinstance(held, (types.Layout, types.ComposedLayout)) or types.shard_layout_of(held) is not None:
             ctx.error(call, f"{end} layout must be plain (without ShardLayout): {held!r}")
-        if not expr.is_literal_shape(types.flatten(held.shape)):
+        if not expr.is_literal_shape(types.flatten_to_tuple(held.shape)):
             ctx.error(call, f"{end} layout shape must be literal")
     count = prod(source.shape)
-    layout_count = prod(types.flatten(layout.shape))
+    layout_count = prod(types.flatten_to_tuple(layout.shape))
     if layout_count != count:
         ctx.error(call, f"element count differs: source {count}, result layout {layout_count}")
     if prod(shape) != count:

@@ -11,7 +11,7 @@ __all__: list[str] = []
 
 
 def axes_shape(axes_type) -> tuple | None:
-    """The result shape: () for one axis, (k,) for k of them, None for anything else."""
+    """The result shape: () for one mesh axis, (k,) for k of them, None for anything else."""
     if isinstance(axes_type, types.TupleType):
         scalars = all(
             isinstance(field, types.TensorType) and not field.shape for field in axes_type.fields
@@ -24,11 +24,11 @@ def axes_shape(axes_type) -> tuple | None:
 
 @register(dim.MeshCoord)
 def infer_mesh_coord(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
-    """Coordinates are numbers about this unit, so they carry no placement."""
+    """Coordinates are numbers about this unit, so they carry no shard layout."""
     if not isinstance(call.target.mesh, types.Mesh):
         ctx.error(call, "MeshCoord.mesh must be a Mesh")
     try:
-        covered = ctx.current_mesh is not None and utils.covered_by_scope(call.target.mesh, ctx.current_mesh)
+        covered = ctx.mesh_scope is not None and utils.equals_mesh_scope(call.target.mesh, ctx.mesh_scope)
     except ValueError as error:
         ctx.error(call, str(error))
     if not covered:
@@ -38,12 +38,12 @@ def infer_mesh_coord(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
     held_shape = axes_shape(ctx.type_of(call.args[0]))
     if held_shape is None:
         ctx.error(call, "MeshCoord.axes must be an i64 scalar, vector, or tuple of scalars")
-    shape = types.flatten(call.target.mesh.layout).shape
-    axes = dim.literal_axes(call.args[0])
-    for axis in axes or ():
-        if not 0 <= axis < len(shape):
-            ctx.error(call, f"axis {axis} is out of range for rank-{len(shape)} mesh")
-    extents = tuple(shape[axis] for axis in axes) if axes is not None else shape
+    shape = call.target.mesh.shape
+    mesh_axes = dim.literal_axes(call.args[0])
+    for mesh_axis in mesh_axes or ():
+        if not 0 <= mesh_axis < len(shape):
+            ctx.error(call, f"mesh axis {mesh_axis} is out of range for rank-{len(shape)} mesh")
+    extents = tuple(shape[mesh_axis] for mesh_axis in mesh_axes) if mesh_axes is not None else shape
     bounds = (
         (0, max(extents))
         if extents

@@ -77,7 +77,7 @@ def carrier_layout(
 ):
     """Transform a covering input shard layout into the output layout.
 
-    Route positions through domain projections and emit them in output-axis
+    Route modes through domain projections and emit them in output-axis
     order. This carries a physical factorization across, so anything short of an
     exact coordinate projection returns ``None`` and lets synthesis build a
     canonical layout instead.
@@ -91,18 +91,18 @@ def carrier_layout(
     out_access = result_access(output_map)
     dom_to_out = {d: o for o, (k, d) in out_access.items() if k == "proj"}
 
-    pos_dom: list = []
+    mode_domain_dims: list = []
     for p in range(len(layout.shape)):
         kind, ddim = in_access[la2ta_in[p]]
         if kind != "proj":
             return None
-        pos_dom.append(ddim)
-    if not set(dom_to_out).issubset(set(pos_dom)):
+        mode_domain_dims.append(ddim)
+    if not set(dom_to_out).issubset(set(mode_domain_dims)):
         return None
 
     out_rank = len(output_shape)
     per_axis: dict[int, list] = {o: [] for o in range(out_rank)}
-    for p, ddim in enumerate(pos_dom):
+    for p, ddim in enumerate(mode_domain_dims):
         if ddim in dom_to_out:
             per_axis[dom_to_out[ddim]].append(p)
         elif ddim in complete_reduction_dims:
@@ -112,30 +112,30 @@ def carrier_layout(
             return None
 
     new_shape: list = []
-    new_pos_of: dict[int, int] = {}
-    src_pos: list = []
+    new_mode_of: dict[int, int] = {}
+    src_modes: list = []
     for o in range(out_rank):
-        positions = per_axis[o]
-        if not positions:
+        modes = per_axis[o]
+        if not modes:
             new_shape.append(1)
-            src_pos.append(None)
+            src_modes.append(None)
             continue
-        for p in positions:
-            reduced = pos_dom[p] in complete_reduction_dims
-            new_pos_of[p] = len(new_shape)
+        for p in modes:
+            reduced = mode_domain_dims[p] in complete_reduction_dims
+            new_mode_of[p] = len(new_shape)
             new_shape.append(1 if reduced else layout.shape[p])
-            src_pos.append(None if reduced else p)
-    new_strides = [0 if p is None else layout.strides[p] for p in src_pos]
+            src_modes.append(None if reduced else p)
+    new_strides = [0 if p is None else layout.strides[p] for p in src_modes]
 
     out_attrs: list = [
         attr if not isinstance(attr, types.Split) else types.Broadcast() for attr in propagated_attrs
     ]
     for p_mesh, attr in enumerate(sl.attrs):
-        if isinstance(attr, types.Split) and attr.axis in new_pos_of:
+        if isinstance(attr, types.Split) and attr.axis in new_mode_of:
             out_attrs[p_mesh] = (
                 types.Partial(reduction)
-                if pos_dom[attr.axis] in complete_reduction_dims
-                else types.Split(new_pos_of[attr.axis])
+                if mode_domain_dims[attr.axis] in complete_reduction_dims
+                else types.Split(new_mode_of[attr.axis])
             )
         elif isinstance(attr, types.Partial):
             out_attrs[p_mesh] = types.Partial(attr.reduction)
@@ -182,7 +182,7 @@ def derive_output_shard_layout(
 ):
     """Derive the output ``ShardLayout`` from the input shards and the Op's relations.
 
-    Every input is projected onto the same participating levels -- each level
+    Every input is projected onto the same executing topologies -- each topology
     any input distributes -- so mesh axes keep one index across the inputs.
     """
     target = getattr(ctx, "target", None)
@@ -193,38 +193,38 @@ def derive_output_shard_layout(
         for type_, state in zip(input_types, states, strict=True)
         for layout in (types.shard_layout_of(type_.layout),)
     )
-    frame_levels = {level for state in states for level, _ in state}
+    topologies = {topology for state in states for topology, _ in state}
     required = {
-        level
+        topology
         for type_, layout, state in zip(input_types, layouts, states)
-        for level in frame_levels
-        if any(attr != types.Broadcast() for (at, _), attr in state.items() if at == level)
-        or (layout is None and owners.private(type_.storage, level))
+        for topology in topologies
+        if any(attr != types.Broadcast() for (at, _), attr in state.items() if at == topology)
+        or (layout is None and owners.private(type_.storage, topology))
     }
     parts, active = {}, set()
     for layout, state in zip(layouts, states, strict=True):
         if layout is None:
             continue
-        for part in types.separate(layout.mesh):
-            level = part.topologies[0].name
+        for topology in utils.topology_names(layout.mesh):
+            part = utils.topology_mesh(layout.mesh, topology)
             nonbroadcast = any(
-                attr != types.Broadcast() for (at, _), attr in state.items() if at == level
+                attr != types.Broadcast() for (at, _), attr in state.items() if at == topology
             )
-            if nonbroadcast and level in active and parts[level] != part:
+            if nonbroadcast and topology in active and parts[topology] != part:
                 raise ValueError(
                     "inputs distribute over different meshes; their mesh axes do not align"
                 )
-            if level not in parts or (nonbroadcast and level not in active):
-                parts[level] = part
+            if topology not in parts or (nonbroadcast and topology not in active):
+                parts[topology] = part
             if nonbroadcast:
-                active.add(level)
+                active.add(topology)
     if not parts:
         return None
     order = tuple(dict.fromkeys((*owners.order, *parts)))
     mesh = (
-        types.Mesh.from_meshes(*(parts[level] for level in order if level in required))
+        utils.from_meshes(*(parts[topology] for topology in order if topology in required))
         if required
-        else utils.participant_layout(next(layout for layout in layouts if layout is not None)).mesh
+        else utils.filter_topologies(next(layout for layout in layouts if layout is not None)).mesh
     )
     mesh = next(
         (layout.mesh for layout in layouts if layout is not None and layout.mesh == mesh), mesh
@@ -299,7 +299,7 @@ def derive_output_shard_layout(
             elif ddim in out_all_dims:
                 raise ValueError(
                     f"input {i} mesh axis {p}: domain dim survives only via a "
-                    "non-projection output access; cannot derive output layout axis"
+                    "non-projection output access; cannot derive output tensor axis"
                 )
             else:
                 continue
@@ -311,8 +311,8 @@ def derive_output_shard_layout(
             attrs[p] = new_attr
 
     if all(isinstance(attr, types.Varying) for attr in attrs):
-        kept_levels = {level for level, _ in keys}
-        if all((level in kept_levels) == owners.private(storage, level) for level in frame_levels):
+        kept_topologies = {topology for topology, _ in keys}
+        if all((topology in kept_topologies) == owners.private(storage, topology) for topology in topologies):
             return None
 
     carriers = [

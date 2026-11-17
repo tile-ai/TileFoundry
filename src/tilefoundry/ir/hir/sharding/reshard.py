@@ -36,9 +36,9 @@ def buffer_alias(call: expr.Call) -> int | None:
     if result.storage is not source.storage or not expr.is_literal_shape(result.shape):
         return None
     layouts = tuple(types.shard_layout_of(held.layout) for held in (source, result))
-    frame = next((layout.mesh for layout in layouts if layout is not None), None)
+    shard_mesh = next((layout.mesh for layout in layouts if layout is not None), None)
     states = tuple(
-        utils.attrs_by_axis(held, None if layout is not None else frame)
+        utils.attrs_by_axis(held, None if layout is not None else shard_mesh)
         for held, layout in zip((source, result), layouts)
     )
     for key in states[0].keys() | states[1].keys():
@@ -62,11 +62,14 @@ def buffer_alias(call: expr.Call) -> int | None:
         if isinstance(view.target, tensor.Slice):
             starts = view.args[1].elements
             if all(expr.static_dim_value(start) is not None for start in starts):
-                _, moved = types.domain_offset(starts, parent.type.layout, parent.type.shape)
+                held = parent.type.layout
+                held = held.layout if isinstance(held, types.ShardLayout) else held
+                grouped = types.unflatten(types.flatten(held), int_tuple.compatible_profile(held.shape, parent.type.shape))
+                _, moved = types.domain_offset(tuple(starts), grouped)
                 offset += moved
         view = parent
-    if offset != 0:
-        source = replace(source, layout=types.ComposedLayout(None, offset, source.layout))
+    if offset:
+        source = replace(source, layout=types.make_composed_layout(None, offset, source.layout))
     boxes = []
     for held in (source, result):
         layout = held.layout
@@ -81,15 +84,15 @@ def buffer_alias(call: expr.Call) -> int | None:
         physical = shard.layout if shard is not None else layout
         if shard is not None and isinstance(layout, types.ComposedLayout):
             physical = replace(layout, outer=physical)
-        flat, threads = types.flatten(physical), None
+        flat, threads = types.flatten(types.plain_layout(physical)), None
         if held.storage is expr.StorageKind.RMEM and shard is not None:
             mesh = shard.mesh
-            start = mesh.layout.offset if isinstance(mesh.layout, types.ComposedLayout) else 0
-            threads = (mesh.topologies, utils.device_layout(mesh), start)
+            first_index = mesh.layout(0)
+            threads = (mesh.topologies, types.plain_layout(utils.flat_layout(mesh)), first_index)
             sizes = (getattr(topology, "size", 1) for topology in mesh.topologies)
             if not all(
                 isinstance(value, int)
-                for value in (start, *sizes, *threads[1].shape, *threads[1].strides)
+                for value in (*sizes, first_index, *threads[1].shape, *threads[1].strides)
             ):
                 return None
         steps = flat.strides if threads is None else utils.register_strides(shard)
@@ -100,14 +103,14 @@ def buffer_alias(call: expr.Call) -> int | None:
             for mesh_axis, attr in enumerate(shard.attrs):
                 if (
                     isinstance(attr, types.Split)
-                    and expr.static_dim_value(tuple(types.flatten(shard.mesh.layout.shape))[mesh_axis]) != 1
+                    and expr.static_dim_value(shard.mesh.shape[mesh_axis]) != 1
                     and steps[attr.axis] == 0
                 ):
-                    position = attr.axis
-                    suffix = prod(flat.shape[index] for index in range(position + 1, len(axes))
-                                  if axes[index] == axes[position])
-                    splits.append((mesh_axis, axes[position], suffix, flat.shape[position]))
-                    independent.add(position)
+                    mode = attr.axis
+                    suffix = prod(flat.shape[index] for index in range(mode + 1, len(axes))
+                                  if axes[index] == axes[mode])
+                    splits.append((mesh_axis, axes[mode], suffix, flat.shape[mode]))
+                    independent.add(mode)
         kept = tuple(
             (extent, step)
             for index, (extent, step) in enumerate(zip(flat.shape, steps, strict=True))
@@ -128,8 +131,8 @@ def reshard_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """Every logical index reads itself. Where those bytes go is a separate fact.
 
     A reshard moves a value between storages or redistributes it across
-    positions; neither changes which logical element the result's index came
-    from, so the boundary is exactly identity and never opaque. Which positions
+    units; neither changes which logical element the result's index came
+    from, so the boundary is exactly identity and never opaque. Which modes
     those indices are is the reader's question, not this one's.
     """
     logical = ctx.type_of(call.args[0])
@@ -174,9 +177,9 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     result = types.TensorType(
         shape=x_ty.shape, dtype=x_ty.dtype, layout=new_layout, storage=new_storage
     )
-    frame = next((layout.mesh for layout in layouts if layout is not None), None)
+    shard_mesh = next((layout.mesh for layout in layouts if layout is not None), None)
     states = tuple(
-        utils.attrs_by_axis(held, None if layout is not None else frame, owners)
+        utils.attrs_by_axis(held, None if layout is not None else shard_mesh, owners)
         for held, layout in zip((x_ty, result), layouts)
     )
     for key in states[0].keys() | states[1].keys():
@@ -213,7 +216,7 @@ def sent_traffic(source, destination, *, logical_source=None, logical_destinatio
 
     Whole logical layouts select communicating mesh axes; projected types
     supply each unit's source bytes. At each boundary, retain one uniform
-    share across the selected axes and charge the remaining bytes.
+    share across the selected mesh axes and charge the remaining bytes.
     """
     logical_source = source if logical_source is None else logical_source
     logical_destination = destination if logical_destination is None else logical_destination
@@ -222,28 +225,22 @@ def sent_traffic(source, destination, *, logical_source=None, logical_destinatio
     if before is None or after is None:
         return ()
     completed = {
-        axis
-        for axis, (pending, remaining) in enumerate(zip_longest(
+        mesh_axis
+        for mesh_axis, (pending, remaining) in enumerate(zip_longest(
             types.partial_reductions_by_axis(logical_source.layout),
             types.partial_reductions_by_axis(logical_destination.layout),
         ))
         if pending is not None and remaining is None
     }
     mesh = types.shard_layout_of(source.layout).mesh
-    extents = types.flatten(types.flatten(mesh.layout).shape)
-    stated = mesh.layout.outer if isinstance(mesh.layout, types.ComposedLayout) else mesh.layout
-    levels = types.flatten(
-        tuple(
-            int_tuple.repeat_like(mode, topology.name)
-            for mode, topology in zip(stated.shape, mesh.topologies, strict=True)
-        )
-    )
+    extents = mesh.shape
+    axis_topologies = tuple(topology for topology, _ in utils.axis_keys(mesh))
     held = utils.tensor_bytes(source)
     moved: dict[str, int] = {}
     for topology in mesh.topologies:
         units = 1
-        for mesh_axis, level in enumerate(levels):
-            if level != topology.name:
+        for mesh_axis, axis_topology in enumerate(axis_topologies):
+            if axis_topology != topology.name:
                 continue
             if before.get(mesh_axis) != after.get(mesh_axis) or mesh_axis in completed:
                 units *= extents[mesh_axis]

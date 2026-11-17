@@ -48,10 +48,10 @@ class Architecture(target.Architecture):
         return dtype in self.supported_compute_dtypes
 
     def topology_limit(self, name: str) -> int:
-        """Return the structural limit for a CUDA topology level."""
+        """Return the structural limit for a CUDA topology."""
         if name == "thread":
             return self.max_threads_per_cta
-        raise ValueError(f"{self.name}: no architecture limit for topology level {name!r}")
+        raise ValueError(f"{self.name}: no architecture limit for topology {name!r}")
 
 
 __all__ = ["Architecture"]

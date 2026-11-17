@@ -176,8 +176,8 @@ class Target:
     def get_facts(self, facts_type: type[FactsT], query: object | None = None) -> FactsT:
         """Return one immutable hardware-facts aggregate for this Target.
 
-        A backend that states no topology levels runs one program per call, so
-        the empty level list is the default rather than a missing projection.
+        A backend that states no topologies runs one program per call, so
+        the empty topology list is the default rather than a missing projection.
         """
         if facts_type is TopologyFacts and query is None:
             return facts_result(self, facts_type, TopologyFacts(()))
@@ -191,12 +191,12 @@ class Target:
     def validate_program_topology(self, topology: types.Topology) -> None:
         """Validate one declared topology against this Target's Facts."""
         described = summary(self)
-        levels = self.get_facts(TopologyFacts).topologies
-        limits = {level.name: level.max_logical_units for level in levels}
+        stated_topologies = self.get_facts(TopologyFacts).topologies
+        limits = {stated.name: stated.max_logical_units for stated in stated_topologies}
         if topology.name not in limits:
             raise ValueError(
-                f"{described}: unsupported topology level {topology.name!r}; "
-                f"supported levels are {tuple(limits)}"
+                f"{described}: unsupported topology {topology.name!r}; "
+                f"supported topologies are {tuple(limits)}"
             )
         limit = limits[topology.name]
         if isinstance(topology.size, bool):

@@ -43,9 +43,9 @@ def test_topology_limits_are_target_facts_and_base_validation_is_inherited() -> 
 
         def get_facts(self, facts_type: type, query: object | None = None):
             if facts_type is target.TopologyFacts and query is None:
-                return target.TopologyFacts((target.TopologyLevelFacts("unit", 4, 2),))
-            if facts_type is target.TopologyLevelFacts and query == "unit":
-                return target.TopologyLevelFacts("unit", 4, 2)
+                return target.TopologyFacts((target.TopologyLimits("unit", 4, 2),))
+            if facts_type is target.TopologyLimits and query == "unit":
+                return target.TopologyLimits("unit", 4, 2)
             return super().get_facts(facts_type, query)
 
     _DirectTarget().validate_program_topology(types.Topology("unit", 4))

@@ -1,4 +1,4 @@
-"""A nested saved-state tuple passed between participant-local functions."""
+"""A nested saved-state tuple passed between unit-local functions."""
 
 from __future__ import annotations
 

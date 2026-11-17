@@ -1,7 +1,7 @@
 """Canonical Python DSL printer for HIR Functions.
 
 Converts a ``hir.Function`` to executable Python source using the
-``@func`` DSL. Placement sugar names only explicit mesh-scope bindings;
+``@func`` DSL. Shard layout sugar names only explicit mesh-scope bindings;
 otherwise the verbose ``ShardLayout(...)`` form is used.
 """
 
@@ -675,7 +675,7 @@ def emit_def(
     if isinstance(return_type, types.TensorType):
         with printer.type_surface(indent=indent):
             arrow = " -> " + printer.visit(return_type, ctx)
-    elif not isinstance(return_type, types.TupleType):
+    elif return_type == types.TupleType.Void or not isinstance(return_type, types.TupleType):
         arrow = " -> None"
 
     lines.append(f"def {def_name}(")
@@ -705,19 +705,19 @@ def emit_def(
 
     printed: set[int] = {id(param) for param in fn.params}
 
-    def emit_inline_call(node: expr.Call, level: str) -> None:
+    def emit_inline_call(node: expr.Call, prefix: str) -> None:
         name = names[id(node)]
         if statements is not None:
             statements[id(node)] = PrintedStatement(
                 value=name,
                 line=line_offset + physical_line_count(lines) + 1,
             )
-        with printer.type_surface(indent=level):
+        with printer.type_surface(indent=prefix):
             rendered = printer.visit(node, ctx)
-        lines.append(f"{level}{name} = {rendered}{metadata_comments(node, options, printer, ctx)}")
+        lines.append(f"{prefix}{name} = {rendered}{metadata_comments(node, options, printer, ctx)}")
         printed.add(id(node))
 
-    def emit_expr(node: expr.Expr, level: str) -> None:
+    def emit_expr(node: expr.Expr, prefix: str) -> None:
         key = id(node)
         if key in printed:
             return
@@ -729,7 +729,7 @@ def emit_def(
             return
         if isinstance(node, expr.Constant):
             lines.append(
-                f"{level}{names[id(node)]} = {printer.print(node.value, ctx)}"
+                f"{prefix}{names[id(node)]} = {printer.print(node.value, ctx)}"
                 f"{metadata_comments(node, options, printer, ctx)}"
             )
             printed.add(key)
@@ -737,44 +737,44 @@ def emit_def(
         if isinstance(node, expr.Tuple):
             for element in node.elements:
                 if not isinstance(element, expr.Constant):
-                    emit_expr(element, level)
+                    emit_expr(element, prefix)
             printed.add(key)
             return
         if isinstance(node, core.LoopRegion):
-            emit_loop_region(node, level)
+            emit_loop_region(node, prefix)
             return
         if isinstance(node, core.MeshRegion):
-            emit_mesh_region(node, level)
+            emit_mesh_region(node, prefix)
             return
         if isinstance(node, expr.Call):
             projection = region_projection(node)
             if isinstance(projection, core.LoopRegion):
-                emit_loop_region(projection, level)
+                emit_loop_region(projection, prefix)
                 printed.add(key)
                 return
             if isinstance(projection, core.MeshRegion):
-                emit_mesh_region(projection, level)
+                emit_mesh_region(projection, prefix)
                 printed.add(key)
                 return
             for arg in node.args:
-                emit_expr(arg, level)
-            emit_inline_call(node, level)
+                emit_expr(arg, prefix)
+            emit_inline_call(node, prefix)
             return
         printed.add(key)
 
-    def emit_loop_region(region: core.LoopRegion, level: str) -> None:
+    def emit_loop_region(region: core.LoopRegion, prefix: str) -> None:
         key = id(region)
         if key in printed:
             return
         for init in region.args:
-            emit_expr(init, level)
+            emit_expr(init, prefix)
         for carry, init in zip(
             region.params[: len(region.yield_values)],
             region.args[: len(region.yield_values)],
             strict=True,
         ):
             if isinstance(init, expr.Var) and names[id(carry)] != printer.reference(init):
-                lines.append(f"{level}{names[id(carry)]} = {printer.reference(init)}")
+                lines.append(f"{prefix}{names[id(carry)]} = {printer.reference(init)}")
             printed.add(id(carry))
         extent = printer.visit(region.extent, ctx)
         step = printer.visit(region.step, ctx)
@@ -790,7 +790,7 @@ def emit_def(
         else:
             loop = f"range({start}, {extent}, {step})"
         lines.append(
-            f"{level}for {names[id(region.induction_var)]} in {loop}:{metadata_comments(region, options, printer, ctx)}"
+            f"{prefix}for {names[id(region.induction_var)]} in {loop}:{metadata_comments(region, options, printer, ctx)}"
         )
         if statements is not None:
             for carry in region.params[: len(region.yield_values)]:
@@ -798,32 +798,32 @@ def emit_def(
                     value=names[id(carry)], line=line_offset + physical_line_count(lines)
                 )
         printed.add(key)
-        inner = level + "    "
+        inner = prefix + "    "
         emit_expr(region.body, inner)
         for value in region.yield_values:
             emit_expr(value, inner)
         for carry, value in zip(region.params[: len(region.yield_values)], region.yield_values):
             lines.append(f"{inner}{names[id(carry)]} = {printer.reference(value)}")
 
-    def emit_mesh_region(region: core.MeshRegion, level: str, *, terminal: bool = False) -> None:
+    def emit_mesh_region(region: core.MeshRegion, prefix: str, *, terminal: bool = False) -> None:
         key = id(region)
         if key in printed:
             return
         for arg in region.args:
-            emit_expr(arg, level)
+            emit_expr(arg, prefix)
         if root_mesh is not None and region is fn.body:
             printed.add(key)
-            emit_expr(region.body, level)
+            emit_expr(region.body, prefix)
             if terminal:
-                lines.append(f"{level}return {printer.reference(region.body, ctx)}")
+                lines.append(f"{prefix}return {printer.reference(region.body, ctx)}")
             return
         mesh_text = printer.mesh_context(region.mesh, ctx)
-        mesh_name = ctx.scope_name(region.mesh)
+        mesh_name = ctx.mesh_name(region.mesh)
         lines.append(
-            f"{level}with {mesh_text} as {mesh_name}:{metadata_comments(region, options, printer, ctx)}"
+            f"{prefix}with {mesh_text} as {mesh_name}:{metadata_comments(region, options, printer, ctx)}"
         )
         printed.add(key)
-        inner = level + "    "
+        inner = prefix + "    "
         ctx.push_mesh(region.mesh, mesh_name)
         try:
             if terminal and isinstance(region.body, core.MeshRegion):
@@ -983,7 +983,7 @@ def render_hir_function(
 
     A normal function prints as a single ``@func``. A dispatch prototype
     (``variants != ()``) prints as a ``pass``-bodied ``@func`` base followed by
-    one ``@<name>.specialize(pattern)`` block per variant. Placement sugar is
+    one ``@<name>.specialize(pattern)`` block per variant. Shard layout sugar is
     emitted only where an explicit mesh-scope binding dominates its use.
     """
     indent = "    "
@@ -1103,7 +1103,7 @@ def emit_module_class(
         if isinstance(fn, core.Function):
             blocks.append(emit_decorated_defs(fn, ctx, indent, options))
         elif isinstance(fn, core.PrimFunction):
-            tir_block = function_block(fn, frame=valuation.Context(mod, fn))
+            tir_block = function_block(fn, ctx=valuation.Context(mod, fn))
             ctx.imports.update(tir_block.imports)
             blocks.append(tir_block)
         else:

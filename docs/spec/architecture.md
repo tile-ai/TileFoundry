@@ -74,14 +74,14 @@ ownership.
 
 ## 2. IR design
 
-IR design has three regions: `core_ir` holds the shared node algebra
-(`Module` / `Expr` / `Op` / `Call` / `Var` / `Constant` / `Tuple`);
+IR design has three regions. `core_ir` holds the shared node algebra
+(`Module` / `Expr` / `Op` / `Call` / `Var` / `Constant` / `Tuple`).
 `hir` extends it with a value-semantic `Function` (an `Expr`
-subclass), `LoopRegion`, and value Ops; `tir` extends it with a
+subclass), `LoopRegion`, and value Ops. `tir` extends it with a
 `Stmt` base, `PrimFunction`, structural / effect Stmts, and TIR-owned
-tensor-handle / view Exprs. `hir` and `tir` are siblings — neither
-leaks its node kinds into the other's final contract. The class-level
-diagrams live in the owners: [core-ir](./core-ir.md) for the shared
+tensor-handle / view Exprs. `hir` and `tir` are siblings. Neither
+leaks its node kinds into the other's final contract. The owners hold the
+class-level diagrams: [core-ir](./core-ir.md) for the shared
 algebra, [hir](./hir.md) for the HIR shape, [tir](./tir.md) for the
 Stmt hierarchy.
 
@@ -91,8 +91,8 @@ The type system is what each `Expr` carries. It is split into a
 **core** layer ([types](./types.md)) and a **shard / layout** sublayer
 ([shard](./shard.md)).
 
-- core types: `Type` (union alias) / `TensorType` / `TupleType` /
-  `UnitType` / `DType` / `dim.*`.
+- core types: `Type` (union alias) / `TensorType` / `TupleType` (with `TupleType.Void`) /
+  `DType` / `dim.*`.
 - shard / layout sublayer: `IntTuple` / `Layout` / `ComposedLayout` /
   `Topology` / `Mesh` family / `ShardAttr` / `ShardLayout`.
   `TensorType.layout` accepts any member of the layout hierarchy.
@@ -102,14 +102,14 @@ hierarchy diagram lives in [shard](./shard.md).
 
 ## 4. Parser
 
-The parser turns Python DSL source into a `core.Module`. There are
-two layers: a **module layer** (the `@module` decorator, `parser.module`)
-that assembles the compilation unit, and a **function layer**
-(`parse_function(fn, context)`) that turns each authored Python `FunctionType`
-into a `core.Function` or `core.PrimFunction`. The DSL surface
+The parser turns Python DSL source into a `core.Module`. The parser has
+two layers. The **module layer** (the `@module` decorator, `parser.module`)
+assembles the compilation unit. The **function layer**
+(`parse_function(fn, context)`) turns each authored Python `FunctionType`
+into a `core.Function` or `core.PrimFunction`. [parser](./parser.md) owns the DSL surface
 (authoring namespace, OpSchema registry, dispatch tokens, AST
-subset, sugar disambiguation) and the lexical-env rules for
-`with Mesh` are owned by [parser](./parser.md).
+subset, sugar disambiguation). It also owns the lexical-env rules for
+`with Mesh`.
 
 Inspection (DOT, Python DSL pretty-printer, dump integration, interactive
 viewer) is a side-channel consumer of the same IR and type objects and owns no
@@ -120,10 +120,10 @@ semantics ([inspection](./inspection.md)).
 This stage layers two concerns on top of the same IR:
 
 1. **Per-node analyses** — callable families dispatched on a single IR
-   node (Op or Stmt). The settled split: `typeinfer` covers any
-   Expr-producing `Op` `Call` (HIR value Ops + TIR-owned Expr Ops);
-   `verify` covers TIR `Stmt` nodes plus cross-function invariants and
-   recursively retriggers `typeinfer` on embedded Expr fields. The
+   node (Op or Stmt). `typeinfer` covers any
+   Expr-producing `Op` `Call` (HIR value Ops + TIR-owned Expr Ops).
+   `verify` covers TIR `Stmt` nodes plus cross-function invariants.
+   It recursively retriggers `typeinfer` on embedded Expr fields. The
    dispatch pattern (`Registry`, per-class handler
    registration, `(Call, ctx)` / `(Stmt, ctx)` signature families)
    lives in [visitor-registry](./visitor-registry.md). Concrete
@@ -139,20 +139,20 @@ This stage layers two concerns on top of the same IR:
 
 IR traversal / rewrite utilities (`ExprVisitor` / `ExprCloner` /
 `StmtVisitor` / `StmtMutator` / mixed stmt-expr rewriters) are shared
-infrastructure used by both passes and codegen walkers; the framework
+infrastructure. Both passes and codegen walkers use them. The framework
 contract lives in [visitor-mutator](./visitor-mutator.md).
 
 ## 6. Target / codegen
 
-Codegen is the back end. **TIR is the lowest IR**, and each target
+Codegen is the back end. **TIR is the lowest IR**. Each target
 walks the verified TIR tree and emits the final
-target code string directly; there is no intermediate per-target IR
+target code string directly. There is no intermediate per-target IR
 layer. HIR Ops do not reach codegen — any HIR Op participating in
 final emission must first be lowered into TIR-owned forms.
 
-Codegen groups a module's functions by their target, emits one
-`LinkableModule` per target, and links them into one `LinkedModule`;
-the runtime then loads the `LinkedModule` into a `runtime.Module`:
+Codegen groups a module's functions by their target. It emits one
+`LinkableModule` per target and links them into one `LinkedModule`.
+The runtime then loads the `LinkedModule` into a `runtime.Module`:
 
     verified TIR → codegen emit (per-target LinkableModule) → link → LinkedModule → runtime load → runtime.Module
 
@@ -160,9 +160,9 @@ The emit / link pipeline and its products (`LinkableFunction` /
 `LinkableModule` / `LinkedModule`) are owned by [codegen](./codegen.md).
 Target capability (the `Target` descriptors and the admitted program
 topology levels) is owned by [target](./target.md). The hardware numbers those
-descriptors stand on are not written in Python: they come from installed,
-source-attributed Architecture and Device documents resolved by stable ID, and
-a composed Target retains each document's ID and content digest
+descriptors stand on are not written in Python. They come from installed,
+source-attributed Architecture and Device documents resolved by stable ID.
+A composed Target retains each document's ID and content digest
 ([target §10](./target.md#10-installed-hardware-resources)). The Python-side
 `runtime.Module` boundary (field semantics, ABI, launch rules) is owned
 by [runtime](./runtime.md).
@@ -175,9 +175,9 @@ execution support used by generated target code and by Python-side
 
 - the Python `runtime.Module` / `runtime.Function` surface returned by
   `build(...)` / `compile(...)` / `jit(...)`;
-- the C++ runtime surface: each target's preamble directly includes its own
+- the C++ runtime surface. Each target's preamble directly includes its own
   package's runtime header, without an umbrella header or target-selection
-  macros; these headers provide `tilefoundry::Topology` / `Mesh` / `ShardLayout`
+  macros. These headers provide `tilefoundry::Topology` / `Mesh` / `ShardLayout`
   primitives and the `tilefoundry::ops::*` op free-function contract;
 - the load path that turns a `LinkedModule` ([codegen](./codegen.md))
   into a loadable, callable `runtime.Module`.
@@ -191,7 +191,7 @@ first.
 |---|---|
 | **[architecture](./architecture.md)** (this doc) | The map: pipeline + support-network picture, IR-region overview, spec-ownership table |
 | **[core-ir](./core-ir.md)** | core_ir shared node algebra: `Module` / `Expr` / `Op` / `Call` / `Var` / `Constant` / `Tuple`. No types, no `Stmt` |
-| **[types](./types.md)** | Core type system: `Type` union / `TensorType` / `TupleType` / `UnitType` / `DType` / `dim.*` + TensorType invariants |
+| **[types](./types.md)** | Core type system: `Type` union / `TensorType` / `TupleType` (with `TupleType.Void`) / `DType` / `dim.*` + TensorType invariants |
 | **[shard](./shard.md)** | Shard / layout sublayer: `IntTuple` / `Layout` / `ComposedLayout` / `Mesh` family / `ShardAttr` / `ShardLayout` + shard-binding invariants |
 | **[hir](./hir.md)** | HIR dataflow IR: `Function` (`Expr` subclass), op subdirectories (math / tensor / nn / sharding), `LoopRegion`, `MeshRegion` |
 | **[tir](./tir.md)** | TIR stmt IR: `Stmt` base (tir-only), `PrimFunction`, `Sequential(Stmt)`, control-flow Stmts, effect / tile Ops in `Evaluate(op, args)` form, user `@intrinsic` Stmt generation |
@@ -209,5 +209,5 @@ first.
 | **[cli](./cli.md)** | Command-line grammar and behavior for models, spec, tutorial, check, analyze, target, schedule, and scaffold |
 | **[code-organization](./code-organization.md)** | Implementation guide (not architectural): Python source tree layout |
 
-**Cross-spec sync.** A spec change that touches an architectural invariant
+**Cross-spec sync.** A spec change that touches an invariant
 defined here MUST update this ownership map in the same change.

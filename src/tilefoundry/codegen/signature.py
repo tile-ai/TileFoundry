@@ -53,15 +53,15 @@ class TensorSignature(Signature):
 
 
 @dataclass(frozen=True)
-class ProgramIdSignature(Signature):
-    """The id of one topology level, told to a program that cannot read it."""
+class UnitIdSignature(Signature):
+    """The unit id of one topology, told to a program that cannot read it."""
 
     name: str
-    topology_level: str
+    topology: str
 
 
 @dataclass(frozen=True)
-class ProgramMetaSignature(Signature):
+class PlacementSignature(Signature):
     """The block of ids a kernel hands to the runtime it was compiled against."""
 
     name: str
@@ -80,11 +80,6 @@ class TupleSignature(Signature):
     """The C++ side of a ``TupleType``: its fields, in order."""
 
     fields: tuple[Signature, ...] = ()
-
-
-@dataclass(frozen=True)
-class UnitSignature(Signature):
-    """The C++ side of ``UnitType``: nothing is passed."""
 
 
 @dataclass(frozen=True)
@@ -144,22 +139,22 @@ def tensor_signature_of(var) -> TensorSignature:
     return TensorSignature(name=var.name, type=ty)
 
 
-def program_id_params(module: core.Module, target: tilefoundry_target.Target) -> tuple[ProgramIdSignature, ...]:
-    """One id per level of *module*'s program whose ids *target* states.
+def unit_id_params(module: core.Module, target: tilefoundry_target.Target) -> tuple[UnitIdSignature, ...]:
+    """One unit id per topology of *module*'s program whose ids *target* states.
 
-    A level the target states has no register the device can read, so its id
+    A topology the target states has no register the device can read, so its id
     has to arrive with the call. This is the one place the question is asked,
     so a host entry and the launcher it calls cannot answer it differently.
     """
     stated = {
-        topology_level.name
-        for topology_level in target.get_facts(tilefoundry_target.TopologyFacts).topologies
-        if topology_level.from_target
+        topology.name
+        for topology in target.get_facts(tilefoundry_target.TopologyFacts).topologies
+        if topology.from_target
     }
     return tuple(
-        ProgramIdSignature(
-            name=f"tilefoundry_{topology.name}_program_id",
-            topology_level=topology.name,
+        UnitIdSignature(
+            name=f"tilefoundry_{topology.name}_unit_id",
+            topology=topology.name,
         )
         for topology in module.effective_topologies()
         if topology.name in stated
@@ -169,7 +164,7 @@ def program_id_params(module: core.Module, target: tilefoundry_target.Target) ->
 def called_as(
     fn,
     symbol: str,
-    program_ids: tuple[ProgramIdSignature, ...] = (),
+    unit_ids: tuple[UnitIdSignature, ...] = (),
     *,
     target: tilefoundry_target.Target,
     params=None,
@@ -189,21 +184,20 @@ def called_as(
             f"how {fn.name!r} is called"
         )
     if params is None:
-        return convention(fn, symbol, program_ids)
-    return convention(fn, symbol, program_ids, params)
+        return convention(fn, symbol, unit_ids)
+    return convention(fn, symbol, unit_ids, params)
 
 
 __all__ = [
     "LAUNCH_ABI",
     "CallableSignature",
     "LaunchSignature",
-    "ProgramIdSignature",
-    "ProgramMetaSignature",
+    "PlacementSignature",
     "Signature",
     "TensorSignature",
     "TupleSignature",
-    "UnitSignature",
+    "UnitIdSignature",
     "called_as",
-    "program_id_params",
     "tensor_signature_of",
+    "unit_id_params",
 ]

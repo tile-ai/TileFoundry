@@ -42,34 +42,32 @@ DERIVED_METADATA = frozenset(
 
 @dataclass
 class CheckContext(valuation.Context):
-    """What every input check reads: the program, the machine, and the topology level.
+    """What every input check reads: the program, the machine, and the topology.
 
     The context is bound to the derived Function the analyses will read, so a
     check answers about the same program they do. Nothing a check reads is a
     derived analysis record.
     """
 
-    topology_level: str | None = None
+    topology: str | None = None
 
     @property
     def selected_topology(self) -> types.Topology:
-        """The topology level the analyses were asked about."""
-        if self.topology_level is None:
-            raise Error(
-                "no topology level was selected, so results cannot carry an execution placement"
-            )
-        return self.module.resolve_topology(self.topology_level)
+        """The topology the analyses were asked about."""
+        if self.topology is None:
+            raise Error("no topology selected")
+        return self.module.resolve_topology(self.topology)
 
 
 def check_context(
-    module: core.Module, function: core.Function, topology_level: str | None
+    module: core.Module, function: core.Function, topology: str | None
 ) -> CheckContext:
     """Bind one context to the derived Function the analyses will read."""
     return CheckContext(
         module=module,
         function=function,
         target=module.resolve_target(),
-        topology_level=topology_level,
+        topology=topology,
     )
 
 
@@ -88,20 +86,20 @@ class PerformanceChecker:
             topologies = ctx.target.get_facts(target.TopologyFacts)
         except target.UnsupportedCapabilityError as error:
             raise Error(f"performance: {error}") from None
-        if ctx.topology_level is None:
+        if ctx.topology is None:
             raise Error(
-                "performance: no topology level was selected, so there is no "
+                "performance: no topology was selected, so there is no "
                 "unit for a rate to be stated per"
             )
-        level = topologies.level(ctx.topology_level)
-        if level is None or level.max_physical_units is None:
+        limits = topologies.topology(ctx.topology)
+        if limits is None or limits.max_physical_units is None:
             raise Error(
                 "performance: the target states no physical units for topology "
-                f"level {ctx.topology_level!r}"
+                f"{ctx.topology!r}"
             )
-        units = level.max_physical_units
+        units = limits.max_physical_units
         try:
-            services = ctx.target.get_facts(target.PerformanceServiceFacts, ctx.topology_level)
+            services = ctx.target.get_facts(target.PerformanceServiceFacts, ctx.topology)
         except target.UnsupportedCapabilityError as error:
             raise Error(f"performance: {error}") from None
         if isinstance(units, bool) or not isinstance(units, int) or units <= 0:
@@ -109,10 +107,10 @@ class PerformanceChecker:
                 "performance: the target must publish a positive parallel-unit "
                 f"capacity, got {units!r}"
             )
-        if services.unit != ctx.topology_level:
+        if services.topology != ctx.topology:
             raise Error(
-                f"performance: selected topology level {ctx.topology_level!r}, but "
-                f"the target's one-unit throughputs are stated for {services.unit!r}"
+                f"performance: selected topology {ctx.topology!r}, but "
+                f"the target's one-unit throughputs are stated for {services.topology!r}"
             )
 
     def visit(self, node: expr.Expr, ctx: CheckContext) -> None:
@@ -121,10 +119,10 @@ class PerformanceChecker:
 
 def program_dim_vars(module: core.Module, function: core.Function) -> dict[str, object]:
     """Dimension declarations in reachable values and effective execution geometry."""
-    return valuation.dim_vars_reached(function, required_frame(module, function))
+    return valuation.dim_vars_reached(function, required_context(module, function))
 
 
-def required_frame(module: core.Module, function: core.Function):
+def required_context(module: core.Module, function: core.Function):
     """Read a function directly from its supplied owning definition."""
     if module.owns(function, derived=True):
         return valuation.Context(module, function)
@@ -168,14 +166,14 @@ class CheckCalls(valuation.Visitor[None]):
             param.type if implicit and param.is_const else next(given).type
             for param in callee.params
         )
-        self.derive(inner, type_list, ctx.current_mesh, f"{self.label}/{self.labels[id(call)]}")
+        self.derive(inner, type_list, ctx.mesh_scope, f"{self.label}/{self.labels[id(call)]}")
 
 
 def check_program(
     module: core.Module,
     function: core.Function,
     *,
-    topology_level: str | None = None,
+    topology: str | None = None,
     budget: int = NODE_BUDGET,
     analyzers: tuple[object, ...] = (),
     dims: Mapping[str, int] | None = None,
@@ -207,7 +205,7 @@ def check_program(
                 raise valuation.SpecializationError(
                     f"specialising {function.name!r}: dimension {name!r} takes an integer extent, got {extent!r}"
                 )
-    required_frame(module, function)
+    required_context(module, function)
     bound_module, bound_root = valuation.instantiate(module, function, dims)
     initial = valuation.Context(bound_module, bound_root)
     residual = set(valuation.dim_vars_reached(bound_root, initial))
@@ -221,8 +219,8 @@ def check_program(
         )
     signatures = {}
 
-    def derive(frame, type_list, mesh, label):
-        definition = frame.function
+    def derive(ctx, type_list, mesh, label):
+        definition = ctx.function
         identity = id(definition)
         signature = (type_list, mesh)
         if identity in signatures:
@@ -240,12 +238,12 @@ def check_program(
         prepare_function(definition)
         definition.attach_metadata(ExecutionMeshMetadata(mesh))
         context = typeinfer.TypeInferContext(
-            module=frame.module,
-            function=frame.function,
-            target=frame.target,
-            topologies=frame.topologies,
+            module=ctx.module,
+            function=ctx.function,
+            target=ctx.target,
+            topologies=ctx.topologies,
             owner=definition,
-            current_mesh=mesh,
+            mesh_scope=mesh,
             memo=bindings,
         )
         typeinfer.infer_function(definition, context)
@@ -261,34 +259,34 @@ def check_program(
         function.name,
     )
 
-    frames = tuple(valuation.definitions(valuation.Context(module, root)))
-    functions = tuple(frame.function for frame in frames)
+    contexts = tuple(valuation.definitions(valuation.Context(module, root)))
+    functions = tuple(ctx.function for ctx in contexts)
     size = sum(len(core.collect_exprs(body.body)) for body in functions)
     if size > budget:
         raise Error(
             f"analysis program {function.name!r} has {size} derived body nodes, exceeding the node budget {budget}"
         )
     tgt = module.resolve_target()
-    for topology in module.effective_topologies():
+    for declared in module.effective_topologies():
         try:
-            tgt.validate_program_topology(topology)
+            tgt.validate_program_topology(declared)
         except ValueError as error:
             raise Error(
-                f"program topology level {topology.name!r} with extent "
-                f"{topology.size!r} is invalid: {error}"
+                f"program topology {declared.name!r} with extent "
+                f"{declared.size!r} is invalid: {error}"
             ) from None
-    if topology_level is not None:
+    if topology is not None:
         try:
-            module.resolve_topology(topology_level)
+            module.resolve_topology(topology)
         except ValueError as error:
-            raise Error(f"program topology level {topology_level!r} is invalid: {error}") from None
+            raise Error(f"program topology {topology!r} is invalid: {error}") from None
 
-    for frame in frames:
-        for call in core.collect_exprs(frame.function.body):
-            if not isinstance(call, expr.Call) or (inner := frame.callee_context(call) if frame is not None else None) is None:
+    for ctx in contexts:
+        for call in core.collect_exprs(ctx.function.body):
+            if not isinstance(call, expr.Call) or (inner := ctx.callee_context(call) if ctx is not None else None) is None:
                 continue
             for field, noun in (("target", "target"), ("topologies", "topology hierarchy")):
-                expected, actual = getattr(frame, field), getattr(inner, field)
+                expected, actual = getattr(ctx, field), getattr(inner, field)
                 if expected != actual:
                     suffix = (
                         "one kernel invocation runs one target"
@@ -298,10 +296,10 @@ def check_program(
                         )
                     )
                     raise Error(
-                        f"{frame.module.name!r} calls {inner.module.name!r}, which resolves "
+                        f"{ctx.module.name!r} calls {inner.module.name!r}, which resolves "
                         f"a different {noun} {actual!r} against {expected!r}; {suffix}"
                     )
-    check_analyses(module, root, analyzers, topology_level=topology_level)
+    check_analyses(module, root, analyzers, topology=topology)
     return module, root
 
 
@@ -310,13 +308,13 @@ def check_analyses(
     function: core.Function,
     analyzers: tuple[object, ...],
     *,
-    topology_level: str | None = None,
+    topology: str | None = None,
 ) -> None:
     """Check requested families against a built program before any writes."""
     functions = tuple(
-        frame.function for frame in valuation.definitions(valuation.Context(module, function))
+        context.function for context in valuation.definitions(valuation.Context(module, function))
     )
-    ctx = check_context(module, function, topology_level)
+    ctx = check_context(module, function, topology)
     for analyzer in analyzers:
         checker = analyzer.get_checker()
         if checker is None:

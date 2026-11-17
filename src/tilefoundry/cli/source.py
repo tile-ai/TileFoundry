@@ -31,7 +31,7 @@ def bind_dims(stated: Sequence[str] | None) -> dict[str, int] | None:
 
 def checked_program(
     source: str, dims: Sequence[str] | None, *, command: str,
-    topology_level: str | None = None,
+    topology: str | None = None,
 ) -> Program:
     """Load the authored HIR, bind its dims, and check it."""
     bound = bind_dims(dims)
@@ -39,7 +39,7 @@ def checked_program(
     authored = module.entry_function()
     require_bound_dims(module, authored, bound, command=command)
     try:
-        checked, entry = analysis.check_program(module, authored, topology_level=topology_level, dims=bound)
+        checked, entry = analysis.check_program(module, authored, topology=topology, dims=bound)
     except valuation.SpecializationError as error:
         raise ValueError(f"{command}: {error}") from None
     return Program(checked, entry)

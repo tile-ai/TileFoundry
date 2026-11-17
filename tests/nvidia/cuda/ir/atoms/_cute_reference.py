@@ -111,10 +111,10 @@ def cute_reference():
 
 
 def _canonical(shape, strides, *, values=False):
-    modes = list(zip(types.flatten(tuple(shape)), types.flatten(tuple(strides)), strict=True))
+    modes = list(zip(types.flatten_to_tuple(tuple(shape)), types.flatten_to_tuple(tuple(strides)), strict=True))
     if values:
         modes.sort(key=lambda pair: pair[1])
-    return layout_algebra.coalesce(types.Layout(tuple(s for s, _ in modes), tuple(d for _, d in modes)))
+    return layout_algebra.coalesce(types.Layout(tuple(s for s, _ in modes), tuple(d for _, d in modes)), major="col")
 
 
 def reference_tv(raw, *, broadcast=False):
@@ -146,11 +146,11 @@ def to_tv_layout(atom, role):
     if copy and not isinstance(declared, pattern.ShardLayout):
         vector = declared.predicates[0].widths[0] * 8
         rows = int_tuple.product(shape) * 16 // vector
-        return types.Layout(((rows,), (vector,)), ((vector,), (1,)))
+        return types.Layout((rows, vector), (vector, 1))
     if declared.attrs == wgmma.BROADCAST:
         shape = shape[::-1] if role == "B" else shape
-        threads = int_tuple.product(types.flatten(atom.required_execution_mesh.layout.shape))
-        return types.Layout(((threads,), shape), ((0,), (1, shape[0])))
+        threads = int_tuple.product(types.flatten_to_tuple(atom.required_execution_mesh.layout.shape))
+        return types.Layout((threads, shape), (0, (1, shape[0])))
 
     if copy:
         mesh_pattern = type(atom).execution_mesh.pattern
@@ -165,7 +165,7 @@ def to_tv_layout(atom, role):
     else:
         shard = _bound_fragment(atom, role)
     axes = int_tuple.mode_axes(int_tuple.compatible_profile(shard.layout.shape, shape))
-    extents = types.flatten(shard.layout.shape)
+    extents = types.flatten_to_tuple(shard.layout.shape)
     steps = [0] * len(extents)
     for axis in range(len(shape)):
         group = tuple(i for i, target in enumerate(axes) if target == axis)
@@ -185,7 +185,7 @@ def to_tv_layout(atom, role):
                 if axis == 1 and reached == 8:
                     step = 2048
     thread_axes = [attr.axis for attr in shard.attrs]
-    mesh_steps = types.flatten(shard.mesh.layout.strides)
+    mesh_steps = types.flatten_to_tuple(shard.mesh.layout.strides)
     thread_axes = [axis for _, axis in sorted(zip(mesh_steps, thread_axes, strict=True))]
     value_axes = [i for i in range(len(steps)) if i not in thread_axes]
     parts = [
@@ -218,9 +218,9 @@ def to_thread_layout(atom):
         declared = type(atom).execution_mesh.pattern.layout.outer
         layout = types.Layout(declared.shape, declared.strides)
     modes = sorted(
-        zip(types.flatten(layout.shape), types.flatten(layout.strides), strict=True), key=lambda p: p[1]
+        zip(types.flatten_to_tuple(layout.shape), types.flatten_to_tuple(layout.strides), strict=True), key=lambda p: p[1]
     )
-    return layout_algebra.coalesce(types.Layout(tuple(s for s, _ in modes), tuple(d for _, d in modes)))
+    return layout_algebra.coalesce(types.Layout(tuple(s for s, _ in modes), tuple(d for _, d in modes)), major="col")
 
 
 def reference_threads(raw):

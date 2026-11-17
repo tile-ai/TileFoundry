@@ -25,51 +25,23 @@ class Sync(expr.Op):
 
 
 @typeinfer.register(Sync)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 def legal_slice_of(m: types.Mesh, e: types.Mesh) -> bool:
     """Return whether *m* reconstructs as a constant slice of full mesh *e*.
 
-    Topology, names, strides, bounds, and decomposed offset must agree. The
-    final proof rebuilds the slice and compares it structurally.
+    ``utils.sub_box`` decodes the box from the first and last unit of *m*. The
+    final proof rebuilds the slice and compares it structurally, names included.
     """
-    if isinstance(e.layout, types.ComposedLayout):
+    if isinstance(e.layout, types.ComposedLayout) or e.names != m.names:
         return False
-    if e.topologies != m.topologies or e.names != m.names:
+    box = utils.sub_box(e, m)
+    if box is None:
         return False
-    region = m.layout
-    if not isinstance(region, types.ComposedLayout):
-        return False
-    if not isinstance(region.outer, types.Layout):
-        return False
-    outer, p = types.get(region.outer, 0), types.get(e.layout, 0)
-    if outer.strides != p.strides:
-        return False
-    sub, pshape = outer.shape, p.shape
-    if len(sub) != len(pshape):
-        return False
-    if any(not isinstance(s, int) for s in sub) or any(not isinstance(s, int) for s in pshape):
-        return False
-    if not isinstance(region.offset, int) or any(s > ps for s, ps in zip(sub, pshape)):
-        return False
-
-    rem = region.offset
-    starts = [0] * len(sub)
-    for i in sorted(range(len(sub)), key=lambda k: -p.strides[k]):
-        st = p.strides[i]
-        if not isinstance(st, int) or st <= 0:
-            return False
-        starts[i] = rem // st
-        rem -= starts[i] * st
-    if rem != 0 or any(
-        not (0 <= starts[i] and starts[i] + sub[i] <= pshape[i]) for i in range(len(sub))
-    ):
-        return False
-    key = tuple(slice(starts[i], starts[i] + sub[i]) for i in range(len(sub)))
     try:
-        return e[key] == m
+        return e[box] == m
     except (ValueError, IndexError):
         return False
 
@@ -77,7 +49,7 @@ def legal_slice_of(m: types.Mesh, e: types.Mesh) -> bool:
 def mesh_str(mesh: types.Mesh) -> str:
     """A mesh as its topologies and the shape they are viewed through."""
     topologies = ", ".join(f"{t.name}({t.size})" for t in mesh.topologies)
-    return f"({topologies})[{', '.join(str(d) for d in types.flatten(mesh.layout.shape))}]"
+    return f"({topologies})[{', '.join(str(d) for d in types.flatten_to_tuple(mesh.layout.shape))}]"
 
 
 def no_enclosing_mesh_error(m: types.Mesh, scope: "tuple[types.Mesh, ...]") -> expr.VerifyError:
@@ -109,7 +81,7 @@ def no_enclosing_mesh_error(m: types.Mesh, scope: "tuple[types.Mesh, ...]") -> e
 def _(call: "Call", ctx: "verify.Context") -> None:
     """Verify a Sync references an enclosing mesh or its legal constant slice.
 
-    The participant set must classify to a supported barrier; dynamic,
+    The unit set must classify to a supported barrier; dynamic,
     non-contiguous, and cross-warp-unaligned subsets are rejected.
 
     See [tir §1.5](docs/spec/tir.md#15-sync).
@@ -140,8 +112,8 @@ class SyncBarrier(Enum):
 
 
 @dataclass(unsafe_hash=True)
-class Participation:
-    """Describe a contiguous participant interval and its barrier properties."""
+class SyncScope:
+    """The contiguous run of threads one barrier synchronizes, and its barrier properties."""
 
     base: int
     count: int
@@ -151,22 +123,8 @@ class Participation:
     lane_mask: int
 
 
-def participant_layout(mesh: types.Mesh) -> "tuple[types.Layout, int]":
-    """The (outer layout, offset) describing which threads participate.
-
-    Every level states its own run, and which threads participate is those
-    runs read as the device numbers them: the mesh's axes, at its offset.
-    """
-    try:
-        return utils.device_layout(mesh), (
-            mesh.layout.offset if isinstance(mesh.layout, types.ComposedLayout) else 0
-        )
-    except ValueError as error:
-        raise expr.VerifyError(f"T.sync: {error}") from error
-
-
-def participation(mesh: types.Mesh) -> Participation:
-    """Derive the participating thread set of ``mesh``.
+def sync_scope(mesh: types.Mesh) -> SyncScope:
+    """Derive the run of threads that one barrier over ``mesh`` synchronizes.
 
     Raises ``VerifyError`` for a malformed mesh (dynamic extent) or an
     unsupported slice (non-contiguous / overlapping).
@@ -177,11 +135,14 @@ def participation(mesh: types.Mesh) -> Participation:
             "T.sync: a mesh with a dynamic topology extent cannot be classified; "
             "only a static thread count is supported"
         )
-    outer, offset = participant_layout(mesh)
+    try:
+        outer = types.plain_layout(utils.flat_layout(mesh))
+    except ValueError as error:
+        raise expr.VerifyError(f"T.sync: {error}") from error
     shape = outer.shape
     strides = outer.strides
     if (
-        not isinstance(offset, int)
+        not isinstance(mesh.layout(0), int)
         or any(not isinstance(s, int) for s in shape)
         or any(not isinstance(s, int) for s in strides)
     ):
@@ -189,7 +150,7 @@ def participation(mesh: types.Mesh) -> Participation:
 
     count = types.size(outer)
 
-    lins = {offset + types.apply(outer, c) for c in range(count)}
+    lins = {mesh.layout(c) for c in range(count)}
     if len(lins) != count:
         raise expr.VerifyError("T.sync: mesh layout maps several coords to one thread (overlap)")
     base = min(lins)
@@ -200,12 +161,12 @@ def participation(mesh: types.Mesh) -> Participation:
             "range is supported"
         )
     if base + count > domain:
-        raise expr.VerifyError("T.sync: participant range exceeds the block thread domain")
+        raise expr.VerifyError("T.sync: the thread run exceeds the block thread domain")
 
     full_cta = base == 0 and count == domain
     single_warp = count <= WARP_SIZE and (base // WARP_SIZE == (base + count - 1) // WARP_SIZE)
     lane_mask = (((1 << count) - 1) << (base % WARP_SIZE)) & 0xFFFFFFFF if single_warp else 0
-    return Participation(
+    return SyncScope(
         base=base,
         count=count,
         block_domain=domain,
@@ -226,7 +187,7 @@ def classify(mesh: types.Mesh) -> SyncBarrier:
         if isinstance(mesh.layout, types.ComposedLayout):
             raise expr.VerifyError("T.sync: a partial grid sync (cta mesh slice) is unsupported")
         return SyncBarrier.GRID
-    p = participation(mesh)
+    p = sync_scope(mesh)
     if p.full_cta:
         return SyncBarrier.SYNCWARP if p.count == WARP_SIZE else SyncBarrier.SYNCTHREADS
     if p.single_warp:
@@ -242,8 +203,8 @@ def classify(mesh: types.Mesh) -> SyncBarrier:
 __all__ = [
     "Sync",
     "SyncBarrier",
-    "Participation",
-    "participation",
+    "SyncScope",
+    "sync_scope",
     "classify",
     "WARP_SIZE",
 ]

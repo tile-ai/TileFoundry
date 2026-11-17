@@ -25,8 +25,8 @@ def projected(
 ) -> tuple[Relation, ...]:
     """Every boundary in the coordinates the reader asking can address.
 
-    Compose logical accesses with layout positions, restricting participants
-    and boundaries to shared iterations. Without a topology level coordinates
+    Compose logical accesses with layout modes, restricting units
+    and boundaries to shared iterations. Without a topology, coordinates
     stay logical; otherwise *device* supplies each mesh coordinate, keyed by
     axis name (or number when unnamed), defaulting to zero. Inputs come first.
     Unplaced, parameter-free boundaries own every iteration they answer about,
@@ -34,9 +34,9 @@ def projected(
     """
     ninputs = len(call.args)
     held = ctx.local_type_of(call)
-    fields = held.fields if isinstance(held, types.TupleType) else (held,)
+    fields = ir_utils.result_fields(held)
     logical = ctx.type_of(call)
-    logical_fields = logical.fields if isinstance(logical, types.TupleType) else (logical,)
+    logical_fields = ir_utils.result_fields(logical)
     if len(relations) - ninputs != len(fields):
         raise ValueError(
             f"{type(call.target).__name__} describes {len(relations) - ninputs} output "
@@ -44,19 +44,21 @@ def projected(
             f"with {len(fields)}"
         )
     bindings = values_of(relations)
-    level = getattr(ctx, "topology_level", None)
+    topology = getattr(ctx, "topology", None)
     coordinates: dim.IslParamValues = {}
 
-    def placement(value) -> "isl.map | None":
+    def layout_map(value) -> "isl.map | None":
         shard = types.shard_layout_of(getattr(value, "layout", None))
-        if level is None or not isinstance(value, types.TensorType) or shard is None:
+        if topology is None or not isinstance(value, types.TensorType) or shard is None:
             return None
         placed_at = dim.layout_to_isl_map(
             tuple(value.shape),
             value.layout,
             coordinates,
-            divided=lambda layer: ir_utils.divided_mesh_axes(
-                layer, topology_level=level, topologies=ctx.topologies
+            divided=lambda layer: ir_utils.divided_axes(
+                layer,
+                selected_level=ir_utils.topology_level(topology, ctx.topologies),
+                topologies=ctx.topologies,
             ),
         )
         return at_device(placed_at, coordinates, device or {})
@@ -67,7 +69,7 @@ def projected(
     )
     where = tuple(boundary(index, ninputs) for index in range(len(relations)))
     placed = tuple(
-        place_boundary(access, *view, label, call, placement, bindings)
+        place_boundary(access, *view, label, call, layout_map, bindings)
         for access, view, label in zip(relations, views, where, strict=True)
     )
     carried = tuple(
@@ -75,7 +77,7 @@ def projected(
         for relation, label, access in zip(placed, where, relations, strict=True)
     )
     if (
-        level is None
+        topology is None
         and all(local is logical for local, logical in views)
         and all(not access.values for access in relations)
         and all(
@@ -100,7 +102,7 @@ def answered_domain(access: Relation, logical) -> "isl.set":
 
     A relation may be written to reach past its value -- a window shifted back
     to where it came from does -- and outside that it is saying nothing rather
-    than saying this participant does not iterate there.
+    than saying this unit does not iterate there.
     """
     relation = access.relation
     if not isinstance(logical, types.TensorType) or not expr.is_literal_shape(logical.shape):
@@ -114,7 +116,7 @@ def answered_domain(access: Relation, logical) -> "isl.set":
 def own_iterations(
     stated: tuple[Relation, ...], placed: tuple, answered: tuple, ninputs: int
 ) -> "isl.set | None":
-    """Which of an Op's iterations this participant performs, or None if all.
+    """Which of an Op's iterations this unit performs, or None if all.
 
     A value handed out in pieces says which iterations belong to whoever holds
     this piece, and says it only where its boundary answers at all: outside
@@ -138,7 +140,7 @@ def own_iterations(
         except isl.Error as error:
             raise ValueError(
                 f"{boundary(index, ninputs)} cannot be lined up with the space its "
-                f"Op walks, so which iterations are this participant's is not "
+                f"Op walks, so which iterations are this unit's is not "
                 f"answerable: {error}"
             ) from error
         share = allowed if share is None else share.intersect(allowed)
@@ -153,7 +155,7 @@ def own_iterations(
 
 
 def hold_to_share(access: Relation, share: "isl.set", bindings: dim.IslParamValues) -> Relation:
-    """One boundary held to the iterations its participant performs.
+    """One boundary held to the iterations its unit performs.
 
     Restricting can bring in a parameter another boundary named, so what they
     stand for comes from the whole Op rather than from this boundary alone.
@@ -163,7 +165,7 @@ def hold_to_share(access: Relation, share: "isl.set", bindings: dim.IslParamValu
     except isl.Error as error:
         raise ValueError(
             f"a boundary at {access.relation} cannot be held to the iterations "
-            f"{share} this participant performs: {error}"
+            f"{share} this unit performs: {error}"
         ) from error
     names = parameter_names(held)
     return Relation(
@@ -218,29 +220,29 @@ def shape_from_relation(access: Relation, extents: "Sequence") -> tuple:
     )
 
 
-def at_device(placement: "isl.map", coordinates: dim.IslParamValues, device: Mapping) -> "isl.map":
-    """*placement* at one unit: each mesh coordinate fixed, then gone.
+def at_device(layout_map: "isl.map", coordinates: dim.IslParamValues, device: Mapping) -> "isl.map":
+    """*layout_map* at one unit: each mesh coordinate fixed, then gone.
 
     A coordinate is fixed to the value *device* gives under its mesh axis's
-    name, or 0. A value that is not one of that axis's positions is refused,
+    name, or 0. A value that is not one of that mesh axis's coords is refused,
     rather than fixing the unit nowhere and counting nothing.
     """
-    for name in parameter_names(placement):
+    for name in parameter_names(layout_map):
         target = coordinates[name].target
-        axis = expr.static_dim_value(coordinates[name].args[0])
+        mesh_axis = expr.static_dim_value(coordinates[name].args[0])
         names = target.mesh.names
-        key = names[axis] if axis < len(names) and names[axis] else str(axis)
-        extent = types.flatten(target.mesh.layout).shape[axis]
+        key = names[mesh_axis] if mesh_axis < len(names) and names[mesh_axis] else str(mesh_axis)
+        extent = target.mesh.shape[mesh_axis]
         number = device.get(key, 0)
         if not isinstance(number, int) or isinstance(number, bool) or not 0 <= number < extent:
             raise ValueError(
                 f"device coordinate {key!r} is {number!r}, and that mesh axis has "
-                f"positions 0 to {extent - 1}"
+                f"coords 0 to {extent - 1}"
             )
-        placement = placement.intersect_params(isl.set(f"[{name}] -> {{ : {name} = {number} }}"))
-        position = placement.find_dim_by_name(isl.dim_type.PARAM, name)
-        placement = placement.project_out(isl.dim_type.PARAM, position, 1)
-    return placement
+        layout_map = layout_map.intersect_params(isl.set(f"[{name}] -> {{ : {name} = {number} }}"))
+        parameter_index = layout_map.find_dim_by_name(isl.dim_type.PARAM, name)
+        layout_map = layout_map.project_out(isl.dim_type.PARAM, parameter_index, 1)
+    return layout_map
 
 
 def place_boundary(
@@ -249,20 +251,20 @@ def place_boundary(
     logical,
     where: str,
     call,
-    placement,
+    layout_map,
     bindings: dim.IslParamValues,
 ) -> "isl.map":
-    """One boundary's image carried from logical axes onto the positions it has.
+    """One boundary's image carried from logical axes onto the local coords it has.
 
-    Held to the positions this participant was given, so which iterations are
-    its own follows from the placement rather than from a relation that may
+    Held to the coords this unit was given, so which iterations are
+    its own follows from the layout map rather than from a relation that may
     reach past what it was handed. A coordinate past the logical value is cut
-    before placing, since a regroup would fold it onto a position it does not
-    name. A value with no placement is addressed at its own coordinates.
+    before mapping, since a regroup would fold it onto a coord it does not
+    name. A value with no layout map is addressed at its own coordinates.
     """
     relation = access.relation
     if not isinstance(local, types.TensorType) or not isinstance(logical, types.TensorType):
-        return within_positions(relation, local)
+        return within_coords(relation, local)
     if relation.dim(isl.dim_type.OUT) != len(logical.shape):
         raise ValueError(
             f"{type(call.target).__name__} reads {where} at "
@@ -270,20 +272,20 @@ def place_boundary(
             f"{len(logical.shape)} axes of its own; a canonical relation is "
             "stated in the axes an Op was written in"
         )
-    placed_at = placement(logical)
+    placed_at = layout_map(logical)
     if placed_at is None:
-        return within_positions(relation, local)
+        return within_coords(relation, local)
     relation = relation.intersect_range(dim.shape_to_isl_set(tuple(logical.shape), bindings))
     if placed_at.dim(isl.dim_type.OUT) != len(local.shape):
         raise ValueError(
             f"{type(call.target).__name__} places {where} at "
-            f"{placed_at.dim(isl.dim_type.OUT)} positions, and one unit holds "
+            f"{placed_at.dim(isl.dim_type.OUT)} layout modes, and one unit holds "
             f"{len(local.shape)}"
         )
-    return within_positions(relation.apply_range(placed_at), local)
+    return within_coords(relation.apply_range(placed_at), local)
 
 
-def within_positions(relation: "isl.map", local) -> "isl.map":
+def within_coords(relation: "isl.map", local) -> "isl.map":
     """One relation held to the coordinates the value it reaches actually has."""
     if not isinstance(local, types.TensorType) or not expr.is_literal_shape(local.shape):
         return relation
@@ -333,7 +335,7 @@ def local_relations_of(call, ctx) -> tuple[Relation, ...]:
     """One Op's relations, held against the Type in this reader's view.
 
     The Op stated its coordinates in its own axes; here they are carried onto the
-    positions this reader addresses, and then held to the Call. What is checked
+    local coords this reader addresses, and then held to the Call. What is checked
     is what needs the Type: one relation per result field after the arguments',
     each written at the rank that field has in this view.
     """
@@ -344,10 +346,10 @@ def logical_axes_of(local: "types.Type", logical: "types.Type") -> list[int]:
     """Which logical axis each axis of a projected Type belongs to.
 
     A canonical `ShardLayout` factors a logical axis into several layout
-    positions -- an extent of 12 over a mesh of 6 becomes `(6, 2)` -- and the
-    projected Type keeps those positions. So the projected rank is not the
+    modes -- an extent of 12 over a mesh of 6 becomes `(6, 2)` -- and the
+    projected Type keeps those modes. So the projected rank is not the
     authored rank and an Op's own axis numbers do not index it: reducing "axis
-    1" by position would reduce the mesh factor of axis 0 and carry its residual
+    1" by mode would reduce the mesh factor of axis 0 and carry its residual
     through. A plain projected view already names logical axes even when its
     engine retains a larger source domain, as Local does.
     """
@@ -364,24 +366,24 @@ def logical_axes_of(local: "types.Type", logical: "types.Type") -> list[int]:
 
 
 def logical_coordinates(local: "types.Type", logical: "types.Type") -> dict[int, str]:
-    """One expression per logical axis, rebuilt from the positions holding it.
+    """One expression per logical axis, rebuilt from the modes holding it.
 
     The inverse of `factored_image`: a domain is indexed by a projected Type's
-    positions, and an Op reasons about the logical axes those positions came
-    from. A position a participant holds one of contributes nothing, its
+    modes, and an Op reasons about the logical axes those modes came
+    from. A mode a unit holds one of contributes nothing, its
     coordinate being fixed; the rest are recombined in the order the layout
     states them.
     """
     belongs = logical_axes_of(local, logical)
     linear: dict[int, str] = {}
     strides: dict[int, int] = {}
-    for position in reversed(range(len(belongs))):
-        owner = belongs[position]
-        extent = local.shape[position]
+    for mode in reversed(range(len(belongs))):
+        owner = belongs[mode]
+        extent = local.shape[mode]
         if extent == 1:
             continue
         stride = strides.get(owner, 1)
-        term = f"d{position}" if stride == 1 else f"{stride} * d{position}"
+        term = f"d{mode}" if stride == 1 else f"{stride} * d{mode}"
         linear[owner] = term if owner not in linear else f"{linear[owner]} + {term}"
         strides[owner] = stride * extent
     return linear
@@ -422,45 +424,45 @@ def projected_axes(access: Relation) -> tuple[int | None, ...]:
 def logical_term(
     names: "Sequence[str]", local: "types.Type", logical: "types.Type", axis: int
 ) -> str:
-    """One logical axis's coordinate, rebuilt from the positions holding it."""
+    """One logical axis's coordinate, rebuilt from the modes holding it."""
     linear, stride = "", 1
     belongs = logical_axes_of(local, logical)
-    for position in reversed(range(len(belongs))):
-        extent = local.shape[position]
-        if belongs[position] != axis or expr.static_dim_value(extent) == 1:
+    for mode in reversed(range(len(belongs))):
+        extent = local.shape[mode]
+        if belongs[mode] != axis or expr.static_dim_value(extent) == 1:
             continue
-        term = names[position] if stride == 1 else f"{stride} * {names[position]}"
+        term = names[mode] if stride == 1 else f"{stride} * {names[mode]}"
         linear = term if not linear else f"{linear} + {term}"
         stride *= extent
     return linear or "0"
 
 
 def factored_image(reads: "Sequence[str]", local: "types.Type", logical: "types.Type") -> list[str]:
-    """Spread one expression per logical axis over the positions it occupies.
+    """Spread one expression per logical axis over the modes it occupies.
 
-    A canonical `ShardLayout` factors a logical axis into several positions, and
+    A canonical `ShardLayout` factors a logical axis into several modes, and
     an image has to name every one of them or it cannot be composed with the
-    `Layout` that turns positions into bytes. A position a participant holds one
-    of contributes a constant, because its coordinate is the participant's
+    `Layout` that turns coords into an index. A mode a unit holds one
+    of contributes a constant, because its coordinate is the unit's
     identity rather than anything the expression varies over. The rest carry the
     expression, delinearized across them in the order the layout states.
     """
     belongs = logical_axes_of(local, logical)
     extents = list(local.shape)
-    positions: dict[int, list[int]] = {}
-    for position, owner in enumerate(belongs):
-        positions.setdefault(owner, []).append(position)
+    modes: dict[int, list[int]] = {}
+    for mode, owner in enumerate(belongs):
+        modes.setdefault(owner, []).append(mode)
     image = ["0"] * len(belongs)
-    for owner, held in positions.items():
-        carrying = [position for position in held if extents[position] != 1]
+    for owner, held in modes.items():
+        carrying = [mode for mode in held if extents[mode] != 1]
         if not carrying:
             continue
         expression = reads[owner] if owner < len(reads) else "0"
         stride = 1
-        for position in reversed(carrying):
-            extent = extents[position]
+        for mode in reversed(carrying):
+            extent = extents[mode]
             walked = expression if stride == 1 else f"floor(({expression})/{stride})"
-            image[position] = walked if position == carrying[0] else f"({walked}) mod {extent}"
+            image[mode] = walked if mode == carrying[0] else f"({walked}) mod {extent}"
             stride *= extent
     return image
 

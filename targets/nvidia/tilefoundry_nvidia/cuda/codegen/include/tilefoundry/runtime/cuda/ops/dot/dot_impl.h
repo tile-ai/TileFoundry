@@ -70,16 +70,16 @@ __device__ float contract(AView const &a, BView const &b, int n) {
     return total(acc);
 }
 
-/// Extent of the thread mesh's fastest axis, as the mesh states it.
+/// Extent of the thread mesh's fastest mesh axis, as the mesh states it.
 ///
-/// The axis, not the ids it reaches: a butterfly runs one axis, so a mesh
-/// written ``(2,16)`` spans sixteen lanes twice even where those 32 threads
-/// are one whole warp. ``id_axes`` folds that distinction away, so read the
-/// mesh's own last axis -- row-major, so the fastest is last.
+/// The mesh axis, not the ids it reaches: a butterfly runs one mesh axis, so a
+/// mesh written ``(2,16)`` spans sixteen lanes twice even where those 32
+/// threads are one whole warp. ``id_axes`` folds that distinction away, so read
+/// the mesh's own last mesh axis -- row-major, so the fastest is last.
 template <class T> CUTE_HOST_DEVICE constexpr int lane_axis_extent() {
     using mesh_t = typename cute::remove_cvref_t<T>::shard_layout_type::mesh;
     using axes_t = cute::remove_cvref_t<decltype(cute::flatten(
-        detail::positions_of(typename mesh_t::layout_type{})))>;
+        detail::plain_layout(typename mesh_t::layout_type{})))>;
     return int(cute::get<decltype(cute::rank(axes_t{}))::value - 1>(
         cute::shape(axes_t{})));
 }
@@ -88,11 +88,11 @@ template <class T> CUTE_HOST_DEVICE constexpr int lane_axis_extent() {
 struct Warp {
     template <class Lhs, class Rhs, class Dst>
     __device__ void operator()(Lhs const &lhs, Rhs const &rhs, Dst &dst) const {
-        static_assert(tilefoundry::shard_mesh_instances<Lhs>() <= kWarpSize,
+        static_assert(tilefoundry::shard_mesh_units<Lhs>() <= kWarpSize,
                       "ops::dot: a cross-warp mesh requires workspace");
         static_assert(lane_axis_extent<Lhs>() == kWarpSize,
-                      "ops::dot (warp tier): the fastest axis of the operands' "
-                      "mesh must be exactly one warp of 32 lanes");
+                      "ops::dot (warp tier): the operands' fastest mesh axis "
+                      "must be exactly one warp of 32 lanes");
         auto a = tilefoundry::local_tensor(lhs);
         auto b = tilefoundry::local_tensor(rhs);
         auto &&d = tilefoundry::local_tensor(dst);
@@ -113,15 +113,15 @@ struct Cta {
         auto &&d = tilefoundry::local_tensor(dst);
         auto &&slots = tilefoundry::local_tensor(ws);
         using value_type = cute::remove_cvref_t<decltype(d(0))>;
-        constexpr int instances = tilefoundry::shard_mesh_instances<Lhs>();
-        static_assert(instances >= kWarpSize && instances % kWarpSize == 0,
+        constexpr int units = tilefoundry::shard_mesh_units<Lhs>();
+        static_assert(units >= kWarpSize && units % kWarpSize == 0,
                       "ops::dot (block tier): the operands' mesh must be a "
                       "whole number of warps");
-        constexpr int warps = instances / kWarpSize;
+        constexpr int warps = units / kWarpSize;
         const float part = tilefoundry::warp_reduce<primitive::add_op>(
             contract(a, b, int(cute::size(a))));
         const unsigned tid = unsigned(
-            tilefoundry::program_id<tilefoundry::TopologyScope::thread>());
+            tilefoundry::unit_id<tilefoundry::TopologyLevel::thread>());
         if ((tid & unsigned(kWarpSize - 1)) == 0u)
             slots(int(tid / unsigned(kWarpSize))) = part;
         ops::sync(lhs.shard_layout.mesh_value);

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from tilefoundry.ir import expr, types
 
-from .local import participant_layout
+from .local import filter_topologies
 
 __all__ = ["is_unsharded_layout", "types_compatible"]
 
@@ -35,8 +35,8 @@ def layout_compatible(declared_layout, actual_layout) -> bool:
     if isinstance(declared_layout, types.ShardLayout):
         if not isinstance(actual_layout, types.ShardLayout):
             return False
-        declared_layout = participant_layout(declared_layout)
-        actual_layout = participant_layout(actual_layout)
+        declared_layout = filter_topologies(declared_layout)
+        actual_layout = filter_topologies(actual_layout)
         return (
             field_compatible(declared_layout.mesh, actual_layout.mesh)
             and field_compatible(declared_layout.attrs, actual_layout.attrs)

@@ -9,7 +9,7 @@ using tilefoundry::detail::id_axes;
 using tilefoundry::detail::is_partial_attr_v;
 using tilefoundry::detail::is_shard_tensor;
 using tilefoundry::detail::is_split_attr_v;
-using tilefoundry::detail::positions_of;
+using tilefoundry::detail::plain_layout;
 using tilefoundry::detail::shard_attrs_match_mesh;
 using tilefoundry::detail::shard_layout_is_full_broadcast;
 }

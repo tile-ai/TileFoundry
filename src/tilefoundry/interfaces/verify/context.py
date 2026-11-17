@@ -14,7 +14,7 @@ class Context(typeinfer.TypeInferContext):
     """The context a per-stmt verify handler is annotated against.
 
     The enclosing scopes a handler asks about are the TIR ``MeshScope``
-    regions on its region chain: ``enclosing_meshes()`` and ``current_mesh``
+    regions on its region chain: ``enclosing_meshes()`` and ``mesh_scope``
     (see [tir §1.3](docs/spec/tir.md#13-primfunction)).
     """
 

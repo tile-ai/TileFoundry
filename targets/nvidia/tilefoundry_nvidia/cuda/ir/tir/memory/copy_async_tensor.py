@@ -54,7 +54,7 @@ def tma_box_pattern(dtype: str, *, allow_partial=False) -> pattern.Switch:
     boxes = {
         TmaSwizzle.NONE: pattern.Layout(
             predicates=(
-                pattern.PlainArrangement(allow_partial=allow_partial),
+                pattern.Strided(allow_partial=allow_partial),
                 pattern.BoxDims(plain_dims, dtype, BOX_EXTENT, allow_partial=allow_partial),
                 *dim_formulas("dim0", dtype),
                 *rest_formulas,
@@ -73,7 +73,7 @@ def tma_box_pattern(dtype: str, *, allow_partial=False) -> pattern.Switch:
             0,
             pattern.Layout(
                 predicates=(
-                    pattern.PlainArrangement(allow_partial=allow_partial),
+                    pattern.Strided(allow_partial=allow_partial),
                     pattern.BoxDims(
                         dims,
                         dtype,
@@ -93,7 +93,7 @@ def tma_global_pattern(dtype: str) -> pattern.Layout:
     steps = tuple(pattern.Wildcard(f"step{index}") for index in range(1, TMA_RANK))
     return pattern.Layout(
         predicates=(
-            pattern.PlainArrangement(),
+            pattern.Strided(),
             pattern.TensorMap(steps, dtype),
             *(pattern.Bits(dtype) * step % TMA_UNIT_BITS == 0 for step in steps),
         )
@@ -173,8 +173,8 @@ class CopyAsyncTensorTx(expr.Op):
 
     Lowering emits it for a selected ``CopyAsyncTensor`` from global to shared
     memory; a schedule never names it. ``barrier`` holds one word per warp; the
-    first issuing thread completes the load on its own warp's word. The box is
-    in ``dst`` for every issuing thread when the operation ends.
+    first executing thread completes the load on its own warp's word. The box is
+    in ``dst`` for every executing thread when the operation ends.
     """
 
     src = expr.ParamDef(
@@ -215,8 +215,8 @@ class CopyAsyncTensorTx(expr.Op):
 
 
 @typeinfer.register(CopyAsyncTensorTx)
-def _(call: "Call", ctx: "TypeInferContext") -> types.UnitType:
-    return types.UnitType()
+def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
+    return types.TupleType.Void
 
 
 @access.register_relation(CopyAsyncTensorTx)

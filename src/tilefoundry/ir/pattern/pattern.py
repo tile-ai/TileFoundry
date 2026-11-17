@@ -182,10 +182,10 @@ def validate_mode_frame(shape, strides, path=()) -> None:
         shape_stars = tuple(index for index, item in enumerate(shape) if isinstance(item, Star))
         stride_stars = tuple(index for index, item in enumerate(strides) if isinstance(item, Star))
         if len(shape_stars) > 1 or len(stride_stars) > 1:
-            positions = shape_stars if len(shape_stars) > 1 else stride_stars
+            modes = shape_stars if len(shape_stars) > 1 else stride_stars
             raise ValueError(
                 "pattern.Layout allows at most one pattern.Star per tuple at "
-                f"{mode_path(path)}; found positions {positions}"
+                f"{mode_path(path)}; found modes {modes}"
             )
         if len(shape) != len(strides):
             raise ValueError(
@@ -264,7 +264,7 @@ class Layout(Pattern):
         *,
         predicates=(),
     ):
-        """Build the exact pattern for one authored arrangement."""
+        """Build the exact pattern for one authored layout."""
         held = tuple(predicates)
         if isinstance(layout, types.ComposedLayout):
             inner = layout.inner
@@ -284,16 +284,16 @@ class Layout(Pattern):
             predicates=held,
         )
 
-    def positions(self) -> tuple:
+    def mode_fields(self) -> tuple:
         return (
-            *(types.flatten(self.shape) if self.shape is not None else ()),
-            *(types.flatten(self.strides) if self.strides is not None else ()),
+            *(types.flatten_to_tuple(self.shape) if self.shape is not None else ()),
+            *(types.flatten_to_tuple(self.strides) if self.strides is not None else ()),
         )
 
     def fixed(self):
         if self.shape is None or self.strides is None:
             return None
-        if any(isinstance(value, Pattern) for value in self.positions()):
+        if any(isinstance(value, Pattern) for value in self.mode_fields()):
             return None
         return types.Layout(tuple(self.shape), tuple(self.strides))
 
@@ -349,7 +349,7 @@ def require_per_mode(pattern) -> None:
 
 @dataclass(frozen=True)
 class Mesh(Pattern):
-    """Match named levels, or bind the innermost level with a wildcard."""
+    """Match named topologies, or bind the innermost topology with a wildcard."""
 
     topologies: tuple[str, ...] | Wildcard
     layout: object
@@ -377,7 +377,7 @@ class Tensor(Pattern):
 
 @dataclass(frozen=True)
 class ShardLayout(Pattern):
-    """Match a sharded layout's layout, shard attrs, and mesh frame."""
+    """Match a sharded layout's layout, shard attrs, and shard mesh."""
 
     layout: object
     attrs: tuple
@@ -385,16 +385,16 @@ class ShardLayout(Pattern):
 
     @typing.override
     def project(self, subject, bindings: dict):
-        """Read a sharded subject through the participants this pattern's mesh names."""
+        """Read a sharded subject through the units this pattern's mesh names."""
         if not isinstance(subject, types.ShardLayout):
             return subject
         topologies = self.mesh.topologies
         if not isinstance(topologies, tuple):
             topologies = bindings.get(
                 topologies.name,
-                tuple(getattr(level, "name", level) for level in subject.mesh.topologies[-1:]),
+                utils.topology_names(subject.mesh)[-1:],
             )
-        return utils.participant_layout(subject, topologies)
+        return utils.filter_topologies(subject, topologies)
 
     @typing.override
     def tensor_layout(self, subject, matcher):
@@ -406,7 +406,7 @@ class ShardLayout(Pattern):
             return UNREADABLE
         if shard is None and isinstance(self.mesh.topologies, tuple):
             attrs = tuple(utils.attrs_by_axis(subject, mesh).values())
-            mesh = utils.participant_layout(
+            mesh = utils.filter_topologies(
                 types.ShardLayout(layout, attrs, mesh), self.mesh.topologies
             ).mesh
         attrs = tuple(utils.attrs_by_axis(subject, mesh, matcher.owners).values())
