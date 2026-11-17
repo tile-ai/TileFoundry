@@ -13,14 +13,15 @@ from pathlib import Path
 import pytest
 import torch
 
+from tests.core._corpus import Case, case, check_case, special
 from tilefoundry import cli, core, services
 from tilefoundry.dsl import *
 from tilefoundry.interfaces import cost, evaluator, typeinfer
-from tilefoundry.ir import core as ir_core
 from tilefoundry.ir import expr, types, utils
 from tilefoundry.ir.hir import math, tensor
 
 _F = DType.f32
+_LOCAL_VIEW = Path(__file__).parents[2] / "fixtures" / "ops" / "local_view.py"
 _M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 
 
@@ -282,26 +283,48 @@ def test_moved_window_reads_far_half():
     torch.testing.assert_close(actual, _moved_reference(gu))
 
 
-def _local_slice_function(source_type, starts, sizes):
-    variable = expr.Var(name="x", type=source_type)
-    sliced = _slice_call(source_type, starts, sizes, (1,) * len(starts), source_expr=variable)
-    return ir_core.Function.from_parts(
-        name="slice", params=(variable,), body=sliced, return_type=sliced.type
-    )
+class LocalViewCase(Case):
+    """A DSL local-view program evaluated against its logical tensor result."""
+
+    name: str | None
+
+    def guard(self, state, problems):
+        function = state.entry_function()
+        source = torch.arange(256 * 8 * 4 * 128).reshape(256, 8, 4, 128).float()
+        if self.name == "BroadcastView":
+            pieces = ((types.Placement({"gpu": 0}), source),)
+        else:
+            pieces = tuple(
+                (types.Placement({"gpu": rank}), source[rank * 128:(rank + 1) * 128])
+                for rank in range(2)
+            )
+        result = evaluator.evaluate(function, core.ShardTensor(function.params[0].type, pieces))
+        expected = source[:, :, 0:2, :].reshape(1, 256, 16, 128)
+        torch.testing.assert_close(result.to_global().tensor, expected, rtol=0, atol=0)
 
 
-def test_full_split_axis_slice_uses_each_local_shard():
-    mesh = types.Mesh((types.Topology("gpu", 2),), types.Layout((2,)), ("rank",))
-    source_type = utils.make_shard_tensor_type((4, 3), mesh=mesh, attrs=(types.Split(0),))
-    function = _local_slice_function(source_type, (0, 0), (4, 3))
-    source = torch.arange(12).reshape(4, 3).float()
-    pieces = tuple((types.Placement({"gpu": rank}), source[rank * 2:(rank + 1) * 2]) for rank in range(2))
-    result = evaluator.evaluate(function, core.ShardTensor(source_type, pieces))
-    torch.testing.assert_close(result.to_global().tensor, source, rtol=0, atol=0)
+@case
+class LocalViewBroadcast(LocalViewCase):
+    path: Path = _LOCAL_VIEW
+    name: str | None = "BroadcastView"
+
+
+@case
+class LocalViewSplit(LocalViewCase):
+    path: Path = _LOCAL_VIEW
+    name: str | None = "SplitView"
+
+
+CASES = special(LocalViewCase)
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_local_view_case(case: LocalViewCase) -> None:
+    check_case(case)
 
 
 def test_partial_split_axis_slice_is_refused():
     mesh = types.Mesh((types.Topology("gpu", 2),), types.Layout((2,)), ("rank",))
     source_type = utils.make_shard_tensor_type((4, 3), mesh=mesh, attrs=(types.Split(0),))
     with pytest.raises(expr.VerifyError, match="Slice narrows axis 0"):
-        _local_slice_function(source_type, (0, 0), (3, 3))
+        _slice_call(source_type, (0, 0), (3, 3), (1, 1))
