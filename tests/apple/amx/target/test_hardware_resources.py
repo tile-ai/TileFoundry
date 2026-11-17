@@ -49,7 +49,7 @@ def test_instruction_capabilities_and_execution_resources_are_separate_axes() ->
     """Enumerate instruction declarations and reconcile only their capability side."""
     declared = {
         capability.name for op, capability in instruction_declarations()
-        if op.__module__.startswith("tilefoundry_apple.")
+        if op.__module__.startswith("tilefoundry_apple.amx.")
     }
     documented = {
         capability
