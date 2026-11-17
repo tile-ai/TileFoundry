@@ -184,7 +184,7 @@ short bullet list — keep it that way.
 
 ### Naming
 
-The terms are in [shard §0](./spec/shard.md#0-terms).
+The terms are in [terms](./spec/terms.md).
 
 - N1: A value has the name of the term that it holds: `mesh_scope`, `execution_mesh`, `unit_id`, `offset`.
 - N2: A plural name denotes multiple values: `unit_ids`, `topologies`, `enclosing_meshes`, `sub_meshes`. Preserve the order of the named topologies or enclosing meshes.

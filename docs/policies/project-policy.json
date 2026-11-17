@@ -83,7 +83,7 @@
     {
       "id": "vocabulary",
       "name": "Vocabulary",
-      "description": "New code follows the terms of shard §0.",
+      "description": "New code follows the terms of docs/spec/terms.md.",
       "when": {
         "path_glob": [
           "src/**",
@@ -92,7 +92,7 @@
         ]
       },
       "final_ac": [
-        "Names added or renamed by this plan MUST use the terms of `docs/spec/shard.md` §0 and MUST NOT use a word that table forbids; the reviewer lists every new public name and its term."
+        "Names added or renamed by this plan MUST use the terms of `docs/spec/terms.md` and MUST NOT use a word that table forbids; the reviewer lists every new public name and its term."
       ],
       "rules": {
         "implementer": [
@@ -101,8 +101,20 @@
             "section": "Naming"
           },
           {
-            "path": "docs/spec/shard.md",
-            "section": "0. Terms"
+            "path": "docs/spec/terms.md",
+            "section": "2. Execution"
+          },
+          {
+            "path": "docs/spec/terms.md",
+            "section": "3. Data"
+          },
+          {
+            "path": "docs/spec/terms.md",
+            "section": "4. Layout"
+          },
+          {
+            "path": "docs/spec/terms.md",
+            "section": "7. Rules"
           }
         ],
         "reviewer": [
@@ -111,8 +123,20 @@
             "section": "Naming"
           },
           {
-            "path": "docs/spec/shard.md",
-            "section": "0. Terms"
+            "path": "docs/spec/terms.md",
+            "section": "2. Execution"
+          },
+          {
+            "path": "docs/spec/terms.md",
+            "section": "3. Data"
+          },
+          {
+            "path": "docs/spec/terms.md",
+            "section": "4. Layout"
+          },
+          {
+            "path": "docs/spec/terms.md",
+            "section": "7. Rules"
           }
         ]
       }

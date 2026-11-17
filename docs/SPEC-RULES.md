@@ -75,7 +75,8 @@ mention chat message IDs, agent names, version stamps, test plans, or future/TOD
 sections.
 
 A construct has one owning section. Other specs link to that section instead of
-restating its definition. Keep examples only when they pin down an otherwise
+restating its definition. A term has one owner: [terms](./spec/terms.md). Other specs
+link there and do not restate a term's definition. Keep examples only when they pin down an otherwise
 ambiguous contract corner.
 
 ## Referring To A Section
@@ -127,7 +128,7 @@ Spec text is written in ASD-STE100 Simplified Technical English.
 - An instruction has 20 words or fewer. A description has 25 words or fewer.
 - Use the active voice and the present tense.
 - One word has one meaning, and one meaning has one word. The words for meshes,
-  topologies and layouts are the terms of [shard §0](./spec/shard.md#0-terms).
+  topologies and layouts are the terms of [terms](./spec/terms.md).
 - Use a term with its defined meaning and part of speech. The defined verbs are: lowering issues; a unit executes.
 - Do not replace a defined term with a synonym.
 - Write an instruction as a command or with MUST. Write a description as a statement.
