@@ -890,7 +890,7 @@ class FunctionDifferentiator:
         outer = self.materialize(("extra", scope, len(scope.extras) - 1), scope.parent)
         stacks = expr.Var(
             name=f"stack_{self.key_name(key)[0] or 'saved'}",
-            type=stacked(held, trip, owners, located(value)),
+            type=stacked(held, trip, owners, located(self.key_node(key))),
         )
         ctx.remember(stacks, stacks.type)
         scope.region_params.append((stacks, outer))
@@ -909,6 +909,13 @@ class FunctionDifferentiator:
         rank = len(type_.shape) + 1
         taken = ctx.call("slice", stacks, corner, sizes=(1, *type_.shape), strides=(1,) * rank)
         return ctx.call("reshape", taken, new_shape=tuple(type_.shape))
+
+    def key_node(self, key: tuple) -> expr.Expr:
+        """The forward value *key* comes from: an inner region's value for an extra result."""
+        if key[0] == "extra":
+            _, scope, index = key
+            return self.key_node(scope.extras[index])
+        return key[1]
 
     def key_type(self, key: tuple) -> types.Type:
         if key[0] == "node":

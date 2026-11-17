@@ -302,6 +302,12 @@ class LoopSharded(Differentiated):
     wrt: tuple[str, ...] = ("h0", "w")
 
 
+@case
+class LoopNested(Differentiated):
+    path: Path = FIXTURES / "loop_nested.py"
+    wrt: tuple[str, ...] = ("x", "w")
+
+
 CASES = special(Differentiated)
 
 
