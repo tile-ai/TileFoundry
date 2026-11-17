@@ -48,71 +48,71 @@ dispatched by [visitor-registry](./visitor-registry.md), with concrete checks in
 
 ## 0. Terms
 
-$$
+```math
 \underbrace{\mathcal{T}_{\mathrm{thread}}}_{\text{topology}} = \underbrace{(384)}_{\text{topology size}}
 \qquad\qquad
 \underbrace{0,\ 1,\ 2,\ \dots,\ 383}_{\text{unit ids}}
-$$
+```
 
 1. A **topology** is one layer of parallel resource. Its name is the kind of **unit**. Its **topology size** counts its units within one unit of its parent, when present. A **unit id** is the number of one unit in its topology. The **topology scope** is all units of the topology.
 
-$$
+```math
 \underbrace{\big(\ \underbrace{\mathrm{gpu}:1}_{\text{topology level }0},\quad \underbrace{\mathrm{cta}:132}_{\text{topology level }1},\quad \underbrace{\mathrm{thread}:384}_{\text{topology level }2}\ \big)}_{\text{topologies of the Module}}
-$$
+```
 
 2. A Module declares an ordered list of **topologies**. The **topology level** is the position of a topology in this list. Level 0 is the coarsest. The list is the Module's, not the target's: in `(cta, thread)` the cta is at level 0.
 
-$$
+```math
 \underbrace{\mathcal{M}}_{\text{mesh}} =
 \underbrace{\Bigg[\ \underbrace{\begin{matrix}132@\mathrm{sm}\\384\end{matrix}}_{\text{cta group}}\ \Bigg|\ \underbrace{\begin{matrix}3@\mathrm{group} & 128@\mathrm{lane}\\128 & 1\end{matrix}}_{\text{thread group}}\ \Bigg]}_{\text{mesh layout}}
 \qquad
 \underbrace{\mathcal{M}_{\mathrm{cta}} = \begin{bmatrix}132@\mathrm{sm}\\1\end{bmatrix}}_{\text{sub mesh}}
-$$
+```
 
 3. A **mesh** puts the units of adjacent topologies on named **mesh axes**. Each column of the **mesh layout** is `extent@mesh axis` above its stride. Each topology has one group of columns. A **sub mesh** contains one topology. Its unit-id layout is `composition` of its group with `U_t`, the projection of the index onto that topology.
 
-$$
+```math
 \underbrace{(1,\ 1,\ 40)}_{\text{coord}}\ \mapsto\ 384\cdot 1 + 128\cdot 1 + 40 = \underbrace{552}_{\text{index}} = \underbrace{1}_{\text{unit id in cta}}\cdot 384 + \underbrace{168}_{\text{unit id in thread}}
-$$
+```
 
 4. The mesh layout maps a **coord** to the **index** of a unit. The index counts the units of all topologies of the mesh: `T = make_layout(sizes)`, row-major. `idx2crd(index, sizes)` gives one unit id for each topology.
 
-$$
+```math
 \underbrace{\mathcal{M}_{\mathrm{thread}}[1{:}3,\ :]}_{\text{sliced mesh}} = \begin{bmatrix}2@\mathrm{group} & 128@\mathrm{lane}\\128 & 1\end{bmatrix} + \underbrace{128}_{\text{offset}}
-$$
+```
 
 5. A **sliced mesh** keeps the topology and the mesh axes. Its layout is a `ComposedLayout`. The **offset** is its `ComposedLayout.offset`, the index of the first unit of the slice.
 
-$$
+```math
 \underbrace{\big(\ \mathcal{M}_1,\ \underbrace{\mathcal{M}_2}_{\text{innermost mesh}}\ \big)}_{\text{enclosing meshes}}
 \qquad
 \underbrace{\mathcal{M}_{\mathrm{scope}}}_{\text{mesh scope}} = \Bigg[\ \begin{matrix}132@\mathrm{sm}\\384\end{matrix}\ \Bigg|\ \begin{matrix}2@\mathrm{group} & 128@\mathrm{lane}\\128 & 1\end{matrix}\ \Bigg] + 128
-$$
+```
 
 6. Each mesh `with` adds one **enclosing mesh**. The first one is the outermost. The last one is the **innermost mesh**. The **mesh scope** composes the enclosing meshes in order, with the rules of [shard §5](#5-mesh). Its units are in force at that point of the program. Here $\mathcal{M}_1$ is the mesh of all cta, and $\mathcal{M}_2$ is the sliced mesh of item 5.
 
-$$
+```math
 \underbrace{\mathrm{mma}}_{\text{instruction}}:\quad
 \underbrace{\mathcal{M}_{\mathrm{exec}} = \begin{bmatrix}32@\mathrm{lane}\\1\end{bmatrix}}_{\text{execution mesh}}
 \qquad
 \mathrm{repeat} = (4,\ 2)\ \Rightarrow\ \underbrace{8}_{\text{issues}}
-$$
+```
 
 7. An **instruction** is a TIR op that declares an **execution mesh** and can be selected by scheduling. One **issue** is one application of the instruction to one tile. Lowering issues the instruction. The units of the execution mesh execute it.
 
-$$
+```math
 \underbrace{\mathcal{L}_C}_{\text{shard layout}} = \big(\ \underbrace{(256,\ 64):(64,\ 1)}_{\text{layout of the data}},\ \ \underbrace{(\mathrm{Broadcast},\ \mathrm{Split}(0),\ \mathrm{Split}(0))}_{\text{shard attrs}},\ \ \underbrace{\mathcal{M}_{\mathrm{scope}}}_{\text{mesh}}\ \big)
-$$
+```
 
-$$
+```math
 \underbrace{(256,\ 64)}_{\text{shape of }C}\ \rightarrow\ \underbrace{(1,\ 64)}_{\text{local shape of one unit}}
-$$
+```
 
 8. A **shard layout** binds the layout of the data to a mesh. It has one **shard attr** for each mesh axis. **Local** is the part that one unit of the specified topology holds. The example gives the local shape at the thread topology.
 
-$$
+```math
 \underbrace{\{\ \underbrace{\mathrm{gpu}}_{\text{topology}} : \underbrace{0}_{\text{unit id}}\ \}}_{\text{placement}}
-$$
+```
 
 9. A **placement** gives a unit id for each topology that it names. It tells where a process or a piece of data is. It may name only some topologies.
 
