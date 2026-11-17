@@ -102,6 +102,10 @@
           },
           {
             "path": "docs/spec/terms.md",
+            "section": "1. Terms by example"
+          },
+          {
+            "path": "docs/spec/terms.md",
             "section": "2. Execution"
           },
           {
@@ -111,6 +115,14 @@
           {
             "path": "docs/spec/terms.md",
             "section": "4. Layout"
+          },
+          {
+            "path": "docs/spec/terms.md",
+            "section": "5. Polyhedral"
+          },
+          {
+            "path": "docs/spec/terms.md",
+            "section": "6. Other words"
           },
           {
             "path": "docs/spec/terms.md",
@@ -124,6 +136,10 @@
           },
           {
             "path": "docs/spec/terms.md",
+            "section": "1. Terms by example"
+          },
+          {
+            "path": "docs/spec/terms.md",
             "section": "2. Execution"
           },
           {
@@ -133,6 +149,14 @@
           {
             "path": "docs/spec/terms.md",
             "section": "4. Layout"
+          },
+          {
+            "path": "docs/spec/terms.md",
+            "section": "5. Polyhedral"
+          },
+          {
+            "path": "docs/spec/terms.md",
+            "section": "6. Other words"
           },
           {
             "path": "docs/spec/terms.md",
