@@ -553,7 +553,7 @@ def layout_to_isl_map(
         raise TypeError(f"layout_to_isl_map places a Layout or ShardLayout, not {type(layout).__name__}")
     while isinstance(layers[-1], types.ShardLayout) and (inner := types.shard_layout_of(layers[-1].layout)) is not None:
         layers.append(inner)
-    extents = tuple(types.flatten(layers[0].shape))
+    extents = tuple(types.flatten_to_tuple(layers[0].shape))
     coords = [f"c{axis}" for axis in range(len(shape))]
     clash = set(values) & set(coords)
     if clash:

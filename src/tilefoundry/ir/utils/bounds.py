@@ -46,7 +46,7 @@ def register_strides(sl: types.ShardLayout) -> tuple[int, ...]:
     """
     local = types.shard_layout_local_shape(sl, require_static=False)
     split_axes = {int(a.axis) for a in sl.attrs if isinstance(a, types.Split)}
-    physical = types.flatten(sl.layout)
+    physical = types.flatten(types.plain_layout(sl.layout))
     order = sorted(range(len(local)), key=lambda axis: int(upper_bound(physical.strides[axis])))
     strides: list[int] = [0] * len(local)
     step = 1

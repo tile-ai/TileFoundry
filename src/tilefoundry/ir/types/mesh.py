@@ -9,7 +9,7 @@ from tilefoundry import services
 from tilefoundry.ir import expr
 
 from . import layout
-from .int_tuple import compatible_profile
+from .int_tuple import compatible_profile, flatten_to_tuple, rank
 from .layout import (
     ComposedLayout,
     Layout,
@@ -18,9 +18,8 @@ from .layout import (
     plain_layout,
     size,
     unflatten,
-    with_offset,
 )
-from .layout_algebra import filter, is_contiguous
+from .layout_algebra import filter, is_contiguous, make_composed_layout
 from .stride import compact_row_major, crd2idx, idx2crd
 from .topology import Topology, topology_name
 
@@ -68,7 +67,7 @@ class Mesh:
         if len(set(names)) != len(names):
             raise ValueError(f"Mesh topology names must be unique, got {names!r}")
         object.__setattr__(self, "layout", nested_layout(self.layout, tuple(self.topologies)))
-        for axis, extent in enumerate(flatten(self.layout.shape)):
+        for axis, extent in enumerate(flatten_to_tuple(self.layout.shape)):
             if extent is None:
                 raise ValueError(
                     f"Mesh: layout axis {axis} must have an explicit extent; "
@@ -78,7 +77,7 @@ class Mesh:
     @property
     def shape(self) -> tuple:
         """The extent of each mesh axis."""
-        return tuple(flatten(self.layout).shape)
+        return flatten_to_tuple(self.layout.shape)
 
     def __getitem__(self, key) -> "Mesh":
         """Return a constant sub-mesh selected by integers or step-1 slices.
@@ -94,18 +93,18 @@ class Mesh:
             raise ValueError("cannot slice an already-sliced mesh (nested slice unsupported)")
         stated = plain_layout(self.layout)
         groups = tuple(layout.get(stated, index) for index in range(len(stated.shape)))
-        rank = sum(len(flatten(group.shape)) for group in groups)
+        count = sum(rank(flatten_to_tuple(group.shape)) for group in groups)
         keys = key if isinstance(key, tuple) else (key,)
-        if len(keys) > rank:
-            raise ValueError(f"mesh slice has {len(keys)} indices but the mesh has {rank} axes")
-        keys = keys + (slice(None),) * (rank - len(keys))
+        if len(keys) > count:
+            raise ValueError(f"mesh slice has {len(keys)} indices but the mesh has {count} axes")
+        keys = keys + (slice(None),) * (count - len(keys))
 
         sub_levels: list[Layout] = []
         total = 0
         axis = 0
         for group in groups:
-            level_shape = tuple(flatten(group.shape))
-            level_strides = tuple(flatten(group.strides))
+            level_shape = flatten_to_tuple(group.shape)
+            level_strides = flatten_to_tuple(group.strides)
             sub_shape: list[int] = []
             for k, extent, stride in zip(
                 keys[axis : axis + len(level_shape)], level_shape, level_strides
@@ -176,7 +175,7 @@ class Mesh:
                 current = result
                 kept = len(here) - len(there)
                 above = layouts(result)[:kept]
-                named = sum(len(flatten(level.shape)) for level in above)
+                named = sum(rank(flatten_to_tuple(level.shape)) for level in above)
                 result = joined(
                     (*result.topologies[:kept], *inner.topologies),
                     (*above, *layouts(inner)),
@@ -215,7 +214,7 @@ def nested_layout(layout_value, topologies: tuple) -> "Layout | ComposedLayout":
     units of the topologies inside it.
     """
     if not isinstance(layout_value, LayoutBase):
-        extents = tuple(flatten(layout_value))
+        extents = flatten_to_tuple(layout_value)
         layout_value = Layout(extents, compact_row_major(extents))
     if isinstance(layout_value, ComposedLayout):
         if layout_value.outer is None:
@@ -230,8 +229,8 @@ def nested_layout(layout_value, topologies: tuple) -> "Layout | ComposedLayout":
     ):
         grouped = layout_value
     else:
-        extents = tuple(flatten(layout_value.shape))
-        steps = tuple(flatten(layout_value.strides))
+        extents = flatten_to_tuple(layout_value.shape)
+        steps = flatten_to_tuple(layout_value.strides)
         if len(topologies) == 1:
             return Layout(shape=(extents,), strides=(steps,))
         unit_scales(topologies)
@@ -326,8 +325,8 @@ def flat_layouts(mesh: Mesh) -> tuple[tuple[tuple, tuple], ...]:
     """
     flat = []
     for level in layouts(mesh):
-        shape = tuple(flatten(level.shape))
-        strides = tuple(flatten(level.strides))
+        shape = flatten_to_tuple(level.shape)
+        strides = flatten_to_tuple(level.strides)
         if not shape:
             shape, strides = (1,), (0,)
         flat.append((shape, strides))
@@ -427,8 +426,8 @@ def joined_layout(parts: tuple[Layout, ...]) -> Layout:
     if len(parts) == 1:
         return parts[0]
     return Layout(
-        shape=tuple(tuple(flatten(level.shape)) for level in parts),
-        strides=tuple(tuple(flatten(level.strides)) for level in parts),
+        shape=tuple(flatten_to_tuple(level.shape) for level in parts),
+        strides=tuple(flatten_to_tuple(level.strides) for level in parts),
     )
 
 
@@ -449,7 +448,8 @@ def joined(
     )
     if sliced:
         total = sum(start * scale for start, scale in zip(starts, scales))
-        layout_value = with_offset(layout_value, total)
+        if total:
+            layout_value = make_composed_layout(None, total, layout_value)
     return Mesh(topologies, layout_value, names)
 
 
@@ -466,7 +466,7 @@ def axis_keys(mesh: Mesh) -> tuple[tuple[str, str | None], ...]:
     """Identify each mesh axis by its topology and authored name."""
     keys = []
     for topology, shape in zip(mesh.topologies, plain_layout(mesh.layout).shape, strict=True):
-        for _ in flatten(shape):
+        for _ in flatten_to_tuple(shape):
             axis = len(keys)
             name = mesh.names[axis] if axis < len(mesh.names) else None
             keys.append((topology_name(topology), name))
@@ -499,8 +499,8 @@ def get(value, key):
         )
     at = names.index(key)
     parts = layouts(value)
-    first = sum(len(flatten(part.shape)) for part in parts[:at])
-    count = len(flatten(parts[at].shape))
+    first = sum(rank(flatten_to_tuple(part.shape)) for part in parts[:at])
+    count = rank(flatten_to_tuple(parts[at].shape))
     remaining = offset(value)
     own = 0
     for index in range(len(names) - 1, at - 1, -1):
@@ -517,7 +517,7 @@ def get(value, key):
     part = parts[at]
     return Mesh(
         (value.topologies[at],),
-        with_offset(part, own),
+        make_composed_layout(None, own, part) if own else part,
         value.names[first : first + count],
     )
 
@@ -537,7 +537,9 @@ def sub_box(parent: Mesh, mesh: Mesh) -> tuple[slice, ...] | None:
         for one in (*source.shape, *target.shape, *strides, *target_strides, start)
     ):
         return None
-    if any(step <= 0 for step in strides) or any(step < 0 for step in target_strides):
+    if any(step <= 0 for extent, step in zip(source.shape, strides) if extent != 1) or any(
+        step < 0 for step in target_strides
+    ):
         return None
     last = start + sum((extent - 1) * step for extent, step in zip(target.shape, target_strides))
     lower = idx2crd(start, source.shape, strides)

@@ -34,12 +34,12 @@ def address_points(layout, count: int, logical_shape: tuple):
     base = shard.layout if shard is not None else layout
     whole = {}
     flat = types.flatten(base)
-    grouped = types.unflatten(types.Layout(flat.shape, types.compact_col_major(flat.shape)),
+    grouped = types.unflatten(types.Layout(flat.shape, types.compact_row_major(flat.shape)),
                         int_tuple.compatible_profile(base.shape, logical_shape))
     logical_steps = types.compact_col_major(logical_shape)
     for coordinate in range(count):
         logical = types.idx2crd(coordinate, logical_shape, logical_steps)
-        address = types.apply(base, types.crd2idx(logical, grouped.shape, grouped.strides))
+        address = base(types.crd2idx(logical, grouped.shape, grouped.strides))
         if shard is None:
             yield coordinate, (), address, address
         else:
@@ -75,7 +75,7 @@ def address_points(layout, count: int, logical_shape: tuple):
             layout, tuple(layout.layout.shape), coordinates
         )
         for coord in range(prod(local.shape)):
-            held = types.apply(local, coord)
+            held = local(coord)
             logical = whole.get(offset + held)
             if logical is None:
                 raise ValueError(
@@ -135,7 +135,7 @@ def _(call: expr.Call, ctx) -> types.TensorType:
     if not expr.is_literal_shape(source.shape):
         ctx.error(call, "source tensor shape must be literal")
     sharded = isinstance(source.layout, types.ShardLayout) or isinstance(stated_layout, types.ShardLayout)
-    shape = source.shape if sharded else tuple(prod(types.flatten(mode)) for mode in stated_layout.shape)
+    shape = source.shape if sharded else tuple(prod(types.flatten_to_tuple(mode)) for mode in stated_layout.shape)
     result = types.TensorType(shape, source.dtype, stated_layout, source.storage)
     layout = result.layout
     if sharded:
@@ -165,7 +165,7 @@ def _(call: expr.Call, ctx) -> types.TensorType:
             try:
                 axes = int_tuple.mode_axes(int_tuple.compatible_profile(held.layout.shape, source.shape))
                 types.split_target_axes(held, source.shape)
-                extents = tuple(prod(types.flatten(mode)) for mode in held.layout.shape)
+                extents = tuple(prod(types.flatten_to_tuple(mode)) for mode in held.layout.shape)
                 if any(
                     prod(
                         extent
@@ -181,10 +181,10 @@ def _(call: expr.Call, ctx) -> types.TensorType:
             held = held.layout
         if not isinstance(held, (types.Layout, types.ComposedLayout)) or types.shard_layout_of(held) is not None:
             ctx.error(call, f"{end} layout must be plain (without ShardLayout): {held!r}")
-        if not expr.is_literal_shape(types.flatten(held.shape)):
+        if not expr.is_literal_shape(types.flatten_to_tuple(held.shape)):
             ctx.error(call, f"{end} layout shape must be literal")
     count = prod(source.shape)
-    layout_count = prod(types.flatten(layout.shape))
+    layout_count = prod(types.flatten_to_tuple(layout.shape))
     if layout_count != count:
         ctx.error(call, f"element count differs: source {count}, result layout {layout_count}")
     if prod(shape) != count:

@@ -49,7 +49,7 @@ def legal_slice_of(m: types.Mesh, e: types.Mesh) -> bool:
 def mesh_str(mesh: types.Mesh) -> str:
     """A mesh as its topologies and the shape they are viewed through."""
     topologies = ", ".join(f"{t.name}({t.size})" for t in mesh.topologies)
-    return f"({topologies})[{', '.join(str(d) for d in types.flatten(mesh.layout.shape))}]"
+    return f"({topologies})[{', '.join(str(d) for d in types.flatten_to_tuple(mesh.layout.shape))}]"
 
 
 def no_enclosing_mesh_error(m: types.Mesh, scope: "tuple[types.Mesh, ...]") -> expr.VerifyError:
@@ -150,7 +150,7 @@ def sync_scope(mesh: types.Mesh) -> SyncScope:
 
     count = types.size(outer)
 
-    lins = {offset + types.apply(outer, c) for c in range(count)}
+    lins = {offset + outer(c) for c in range(count)}
     if len(lins) != count:
         raise expr.VerifyError("T.sync: mesh layout maps several coords to one thread (overlap)")
     base = min(lins)

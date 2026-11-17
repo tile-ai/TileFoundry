@@ -363,8 +363,8 @@ class Matcher:
         if pattern.shape is not None or pattern.strides is not None:
             if not isinstance(structural, types.Layout):
                 return self.fail(pattern, subject)
-            extents = tuple(types.flatten(structural.shape))
-            strides = tuple(types.flatten(structural.strides))
+            extents = tuple(types.flatten_to_tuple(structural.shape))
+            strides = tuple(types.flatten_to_tuple(structural.strides))
             if any(type(number) is not int for number in (*extents, *strides)):
                 return self.fail(pattern, subject)
             if any(number <= 0 for number in extents):

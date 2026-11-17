@@ -7,14 +7,13 @@ from dataclasses import dataclass, replace
 from tilefoundry import services
 from tilefoundry.ir import expr
 
-from .int_tuple import compatible_profile, mode_axes, product
+from .int_tuple import compatible_profile, flatten_to_tuple, mode_axes, product, rank
 from .int_tuple import unflatten as int_tuple_unflatten
 from .layout import (
     ComposedLayout,
     Layout,
     LayoutBase,
     flatten,
-    normalize_strides,
     plain_layout,
     unflatten,
 )
@@ -210,7 +209,7 @@ class ShardLayout(LayoutBase):
         private = []
         for axis, attr in enumerate(attrs):
             if isinstance(attr, Split) and (
-                axis >= len(topologies) or attr.axis >= len(flatten(shape))
+                axis >= len(topologies) or attr.axis >= rank(flatten_to_tuple(shape))
             ):
                 raise ValueError(f"Split({attr.axis}) has no matching mesh axis {axis}")
             private.append(
@@ -218,7 +217,7 @@ class ShardLayout(LayoutBase):
                 if isinstance(attr, Split) and owners.private(storage, topologies[axis])
                 else Broadcast()
             )
-        local = divided_shape(tuple(flatten(shape)), mesh, tuple(private), require_static=False)
+        local = divided_shape(flatten_to_tuple(shape), mesh, tuple(private), require_static=False)
         strides = list(Layout(local).strides)
         for attr in private:
             if isinstance(attr, Split):
@@ -282,7 +281,7 @@ def shard_layout_local_shape(sl: "ShardLayout", *, require_static: bool = True) 
 
 def divided_shape(shape, mesh, attrs, *, require_static):
     """*shape* divided by the mesh extent of every ``Split`` in *attrs*."""
-    mesh_shape = flatten(mesh.layout).shape
+    mesh_shape = flatten_to_tuple(mesh.layout.shape)
     local = list(shape)
     for mesh_axis_idx, attr in enumerate(attrs):
         if mesh_axis_idx >= len(mesh_shape):
@@ -332,7 +331,7 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
     address = shard.layout
     primitive = plain_layout(address)
     profile = compatible_profile(primitive.shape, tensor_shape)
-    flat, mesh = flatten(primitive), flatten(shard.mesh.layout)
+    flat, mesh = flatten(primitive), flatten(plain_layout(shard.mesh.layout))
     coords = tuple(coords) + (None,) * (len(shard.attrs) - len(coords))
     shape, strides, fixed, modes = [], [], [], {}
     for mode, (extent, stride) in enumerate(zip(flat.shape, flat.strides, strict=True)):
@@ -365,7 +364,11 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
     local_shape = tuple(
         services.normalize_dim(
             product(
-                tuple(n for n, at in zip(flatten(mode), flatten(coord), strict=True) if at is None)
+                tuple(
+                    n
+                    for n, at in zip(flatten_to_tuple(mode), flatten_to_tuple(coord), strict=True)
+                    if at is None
+                )
             )
         )
         for mode, coord in zip(profile, c, strict=True)
@@ -450,7 +453,7 @@ def mesh_coords(mesh: Mesh, ids: tuple[int | None, ...]) -> tuple[int | None, ..
     """
     coords = []
     for index, part in enumerate(sub_meshes(mesh)):
-        flat = flatten(part.layout)
+        flat = flatten(plain_layout(part.layout))
         unit_id = ids[index] if index < len(ids) else None
         coords.extend(
             (None,) * len(flat.shape)
@@ -471,10 +474,19 @@ def local_layout_and_offset(shard: ShardLayout, tensor_shape: tuple, coord: tupl
     return local_readback(layout), start
 
 
+def unit_leaf_strides(shape, strides):
+    """*strides* with a zero step wherever the matching extent is a static one."""
+    if isinstance(shape, tuple):
+        return tuple(
+            unit_leaf_strides(one, step) for one, step in zip(shape, strides, strict=True)
+        )
+    return 0 if expr.static_dim_value(shape) == 1 else strides
+
+
 def normalize_layout(layout: LayoutBase) -> LayoutBase:
     """Normalize unit leaves without changing modes, shard attrs or addresses."""
     if isinstance(layout, Layout):
-        return replace(layout, strides=normalize_strides(layout.shape, layout.strides))
+        return replace(layout, strides=unit_leaf_strides(layout.shape, layout.strides))
     if isinstance(layout, ComposedLayout):
         return replace(
             layout,

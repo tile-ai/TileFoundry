@@ -73,11 +73,12 @@ class TypeVisitor[T](TypeFunctor[T]):
         return None
 
     def visit_entries(self, entries: Any, ctx: Any) -> None:
+        if not isinstance(entries, tuple):
+            if entries is not None:
+                self.visit_dim(entries, ctx)
+            return
         for entry in entries:
-            if isinstance(entry, tuple):
-                self.visit_entries(entry, ctx)
-            elif entry is not None:
-                self.visit_dim(entry, ctx)
+            self.visit_entries(entry, ctx)
 
     def visit_TensorType(self, value: TensorType, ctx: Any) -> None:
         self.visit_entries(value.shape, ctx)
@@ -121,13 +122,10 @@ class TypeMutator(TypeFunctor[Any]):
     def visit_dim(self, entry: Any, ctx: Any) -> Any:
         return entry
 
-    def visit_entries(self, entries: tuple, ctx: Any) -> tuple:
-        return tuple(
-            self.visit_entries(entry, ctx)
-            if isinstance(entry, tuple)
-            else (None if entry is None else self.visit_dim(entry, ctx))
-            for entry in entries
-        )
+    def visit_entries(self, entries: Any, ctx: Any) -> Any:
+        if not isinstance(entries, tuple):
+            return None if entries is None else self.visit_dim(entries, ctx)
+        return tuple(self.visit_entries(entry, ctx) for entry in entries)
 
     def visit_TensorType(self, value: TensorType, ctx: Any) -> TensorType:
         shape = tuple(self.visit_dim(entry, ctx) for entry in value.shape)

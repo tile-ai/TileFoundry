@@ -26,11 +26,13 @@ def selection_layout(mesh: types.Mesh, selection: types.Mesh) -> types.Layout | 
         return None
     reversed_source = types.Layout(tuple(reversed(source.shape)), tuple(reversed(steps)))
     try:
-        local = types.flatten(layout_algebra.composition(layout_algebra.left_inverse(reversed_source), target))
-        order = types.compact_row_major(local.shape)
-        local = types.Layout(local.shape, tuple(
+        inverse = layout_algebra.left_inverse(reversed_source, major="col")
+        local = layout_algebra.composition(inverse, target, major="col")
+        shape, steps = types.flatten_to_tuple(local.shape), types.flatten_to_tuple(local.strides)
+        order = types.compact_row_major(shape)
+        local = types.Layout(shape, tuple(
             order[axis] if extent == 1 else step
-            for axis, (extent, step) in enumerate(zip(local.shape, local.strides))
+            for axis, (extent, step) in enumerate(zip(shape, steps))
         ))
         if layout_algebra.composition(source, local, major="row") != target:
             return None

@@ -94,7 +94,7 @@ def held_threads(mesh: types.Mesh) -> frozenset | None:
     count = types.size(layout)
     if not isinstance(count, int):
         return None
-    held = [offset + types.apply(layout, index) for index in range(count)]
+    held = [offset + layout(index) for index in range(count)]
     return frozenset(held) if all(isinstance(thread, int) for thread in held) else None
 
 

@@ -77,7 +77,7 @@ def cut(base, starts, sizes, loops=()) -> expr.Call:
 
 def addresses(shape, layout):
     """The isl map from coordinates of *shape* to addresses of *layout*."""
-    flat = types.flatten(layout)
+    flat = types.flatten(types.plain_layout(layout))
     coordinates = ir_dim.layout_to_isl_map(tuple(shape), flat, {}, divided=lambda _: ())
     offset = layout.offset if isinstance(layout, types.ComposedLayout) else 0
     linear = " + ".join(f"{stride} * p{axis}" for axis, stride in enumerate(flat.strides)) or "0"
@@ -1179,9 +1179,9 @@ class IssuePlan:
                     selected = tuple(
                         (width, stride)
                         for width, stride, bound in zip(
-                            types.flatten(mode.shape),
-                            types.flatten(mode.strides),
-                            types.flatten(mask),
+                            types.flatten_to_tuple(mode.shape),
+                            types.flatten_to_tuple(mode.strides),
+                            types.flatten_to_tuple(mask),
                             strict=True,
                         )
                         if not bound

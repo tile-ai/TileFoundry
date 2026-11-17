@@ -163,7 +163,7 @@ The names `gpu`, `cta`, `thread`, `sm`, `group` and `lane` above are examples of
 | rank | The number of modes. It is not a number of a unit. | `rank` for a unit id |
 | extent | One entry of a shape. | — |
 | size, cosize | As in CuTe. | — |
-| algebra | `flatten`, `coalesce`, `filter`, `composition`, `complement`, `logical_divide`, `zipped_divide` use the CuTe names. | — |
+| algebra | The layout functions are a port of CuTe: same names, argument order and semantics ([§9](#9-layout-construction-and-algebra)). Row-major is the default order. | — |
 | `ComposedLayout.inner`, `ComposedLayout.outer` | CuTe `layout_a` and `layout_b`. | — |
 
 **Polyhedral**
@@ -250,8 +250,8 @@ Common contract — every legal layout object MUST satisfy:
 
 - a stable domain shape exposed as `shape`,
 - a coord-to-physical mapping (`layout(coord) → physical index / offset`),
-- a stable domain-axis numbering exposed as `domain_rank`, where
-  `domain_rank == rank(flatten(shape))`,
+- a stable domain-axis numbering: the leaves of `shape`, counted as
+  `rank(flatten(shape))`,
 - **injective mapping** — overlapping / aliasing layouts are not
   permitted; distinct domain coords MUST NOT map to the same physical
   element. Extending to non-injective cases (padding / broadcast
@@ -294,7 +294,7 @@ Field meanings:
 Semantics:
 
 ```python
-idx = crd2idx(coord, shape, strides)
+idx = layout(coord)  # crd2idx(coord, shape, strides), row-major by default
 ```
 
 The primitive `Layout` has **no** `offset` field; `offset` belongs to
@@ -322,9 +322,8 @@ class ComposedLayout(LayoutBase):
 ```
 
 - constraints:
-  - `idx = apply(inner, offset + apply(outer, coord))`, where
-    `apply(None, value) == value`.
-  - `shape` and `domain_rank` come from `outer` when it is present, otherwise
+  - `layout(coord) == inner(offset + outer(coord))`. A `None` component is the identity.
+  - `shape` comes from `outer` when it is present, otherwise
     from `inner`; a composition with no explicit domain has `shape == ()`.
     A `Swizzle` states no domain, so `inner=Swizzle` with `outer=None` has
     `shape == ()` and is not a complete tensor layout.
@@ -345,7 +344,7 @@ Field meanings:
 
 A `ComposedLayout` inherits its domain shape and axis numbering from `outer`
 (from `inner` when `outer=None`). When a `ShardLayout` binds a `ComposedLayout`,
-a `Split(k)` attr references that stable `shape` / `domain_rank`.
+a `Split(k)` attr references that stable `shape`.
 
 ### 4.1 `Swizzle`
 
@@ -366,11 +365,15 @@ class Swizzle:
     base: int
     shift: int
 
+    bit_msk: int  # property; CuTe `bit_msk`
+    yyy_msk: int  # property; CuTe `yyy_msk`
+    zzz_msk: int  # property; CuTe `zzz_msk`
+
     def __call__(self, offset: int) -> int: ...
 
-    @classmethod
-    def from_active(cls, active_y: int, active_z: int) -> Swizzle:
-        """Build the representable CuTe swizzle that maps Y bits onto Z bits."""
+
+def make_swizzle(y: int, z: int) -> Swizzle:
+    """Build the CuTe swizzle that maps the Y bits onto the Z bits."""
 
 
 def get_swizzle_portion(layout: Layout | ComposedLayout) -> Swizzle | None:
@@ -392,7 +395,7 @@ the ones they are XORed onto
   - Swizzle-specialized `composition` and `left_inverse`
     MUST follow the corresponding CuTe `swizzle_layout.hpp` overloads.
     `get_swizzle_portion` returns `None` for a layout with no final swizzle.
-    `Swizzle.from_active` MUST reject mask pairs that are not equal-width contiguous
+    `make_swizzle` MUST reject mask pairs that are not equal-width contiguous
     runs. It MUST NOT invent a representation.
   - A `Swizzle` is a mapping on an index, not a layout. It is not a
     `LayoutBase`. It states no `shape`. It MUST NOT be a
@@ -402,7 +405,7 @@ the ones they are XORed onto
     `cosize(ComposedLayout(Swizzle, offset, outer)) == cosize(outer)` and the
     backing allocation is unchanged by it.
   - A `Swizzle` states where an element lives, never which element a logical
-    coordinate names. `outer` gives `shape`, `domain_rank`, the axis numbering a `Split`
+    coordinate names. `outer` gives `shape`, the axis numbering a `Split`
     references, and the access relation of an op. These MUST
     equal those of the unswizzled layout. Hence `Transpose`, `Reshape` and `Slice`,
     which only relabel the domain, carry the same `Swizzle` through (a window's
@@ -545,8 +548,8 @@ offset included. It is the form a mesh is written and printed in. A sliced mesh
 keeps its `ComposedLayout`, its inner transform and a zero offset included. A
 slice's `ComposedLayout.offset` is where the whole mesh starts in that index.
 For a slice with no inner transform, the unit's index is
-`offset(mesh) + apply(mesh.layout.outer, coord)`. `apply(mesh.layout, coord)`
-already includes that offset. A slice with an inner transform applies its parts
+`offset(mesh) + mesh.layout.outer(coord)`. `mesh.layout(coord)` already
+includes that offset. A slice with an inner transform applies its parts
 in the order of [§4](#4-composedlayout).
 
 Mesh composition uses the following rules:
@@ -610,7 +613,7 @@ value is consumed by a region.
     MUST take that level's projected layout as above. It MUST refuse a Mesh
     that names no such level. For both a plain `Layout` and a sliced
     `ComposedLayout`, the set is
-    `{apply(layout, c) | 0 <= c < size(layout)}`. Composition applies its
+    `{layout(c) | 0 <= c < size(layout)}`. Composition applies its
     retained offset and inner mapping.
   - That unit set MUST be static, positive, inverse-projectable,
     duplicate-free,
@@ -891,8 +894,8 @@ an IR op: `hir.sharding.Reshard`, see [hir §1.3](./hir.md#13-op).
 ### 7.1 `layout`
 
 The underlying `LayoutBase`. `Layout` / `ComposedLayout` ([§3](#3-layout-pure-primitive), [§4](#4-composedlayout)) own
-the layout algebra. `ShardLayout` binds their stable `shape` and
-`domain_rank` to a mesh. It does not redefine that algebra. The `LayoutBase`
+the layout algebra. `ShardLayout` binds their stable `shape` and its leaf
+numbering to a mesh. It does not redefine that algebra. The `LayoutBase`
 hierarchy represents nested stage layouts.
 
 When a `Layout` sits inside `ShardLayout.layout`, its `shape` and
@@ -1100,54 +1103,46 @@ copy that displacement to a materialized consumer.
 ## 9. Layout construction and algebra
 
 `Layout(shape)` is the tensor default constructor. It keeps the authored mode
-profile. It uses compact row-major strides (including symbolic products). It
-normalizes each statically known extent-1 leaf to stride zero. Rank zero gives
-`Layout(())`. `normalize_layout` applies only that leaf rule to an existing
-tensor layout. It preserves every other stride, mode, offset, swizzle and mesh.
-The parser uses this rule for explicit tensor layouts. Mesh layouts and algebra
-intermediates retain their own coordinate conventions.
+profile. It uses compact row-major strides, CuTe `LayoutRight`, including
+symbolic products. A statically known extent 1 gets stride 0. Rank zero gives
+`Layout(())`. A shape and its strides MAY be one integer: that layout has one mode.
+`normalize_layout` applies only the extent-1 rule to an existing tensor layout.
+It preserves every other stride, mode, offset, swizzle and mesh. The parser uses
+this rule for explicit tensor layouts. Mesh layouts and algebra intermediates
+keep their own coordinate conventions.
+
+The layout functions are a port of CuTe. Each function has the CuTe name,
+argument order and semantics. Its docstring names the CuTe header. One Python
+function holds every overload of one CuTe function.
+
+| Module | CuTe header | Functions |
+|---|---|---|
+| `ir/types/int_tuple.py` | `int_tuple.hpp`, `algorithm/tuple_algorithms.hpp`, `numeric/math.hpp` | `rank`, `depth`, `get`, `take`, `select`, `wrap`, `unwrap`, `flatten`, `flatten_to_tuple`, `unflatten`, `repeat_like`, `group`, `append`, `prepend`, `product`, `product_each`, `product_like`, `size`, `sum`, `inner_product`, `ceil_div`, `round_up`, `shape_div`, `safe_div`, `elem_scale`, `congruent`, `weakly_congruent`, `compatible`, `evenly_divides`, `filter_zeros`, `lex_less`, `colex_less`, `elem_less` and their `leq`/`gtr`/`geq` forms, `transform_leaf`, `zip2_by` |
+| `ir/types/stride.py` | `stride.hpp` | `crd2idx`, `idx2crd`, `crd2crd`, `compact_major`, `compact_col_major`, `compact_row_major`, `compact_order`, `LayoutLeft`, `LayoutRight` |
+| `ir/types/layout.py` | `layout.hpp`, `layout_composed.hpp`, `swizzle.hpp` | `Layout`, `ComposedLayout`, `Swizzle`, `get`, `take`, `select`, `flatten`, `unflatten`, `rank`, `depth`, `size`, `coshape`, `cosize`, `domain_offset` |
+| `ir/types/layout_algebra.py` | `layout.hpp`, `layout_composed.hpp`, `swizzle_layout.hpp`, `underscore.hpp` | `make_layout`, `make_composed_layout`, `make_ordered_layout`, `make_layout_like`, `make_fragment_like`, `transform_layout`, `coalesce`, `filter`, `filter_zeros`, `append`, `prepend`, `replace`, `group`, `composition`, `complement`, `right_inverse`, `left_inverse`, `zip`, `tile_unzip`, `logical_divide`, `zipped_divide`, `tiled_divide`, `flat_divide`, `ceil_div`, `logical_product`, `zipped_product`, `tiled_product`, `flat_product`, `blocked_product`, `raked_product`, `tile_to_shape`, `with_shape`, `upcast`, `downcast`, `recast_layout`, `max_alignment`, `max_common_layout`, `max_common_vector`, `domain_distribute`, `nullspace`, `slice`, `dice`, `slice_and_offset` |
+| `ir/types/swizzle_layout.py` | `swizzle.hpp`, `swizzle_layout.hpp` | `make_swizzle`, `get_swizzle_portion`, `get_nonswizzle_portion`, `composition` of a `Swizzle` |
 
 ```python
 class Layout:
-    def __init__(self, shape: tuple, strides: tuple | None = None): ...
+    def __init__(self, shape: IntTuple, strides: IntTuple | None = None): ...
+
+    def __call__(self, coord, *, major: str = "row") -> int:
+        """Return crd2idx(coord, shape, strides, major=major)."""
+        ...
+
 
 def normalize_layout(layout: LayoutBase) -> LayoutBase: ...
+
+
+def reverse_modes(t):
+    """Reverse the modes of t at every level; a Layout reverses shape and strides."""
+    ...
 ```
 
 ```python
 class NotProjectableError(ValueError):
     """Report that a layout cannot serve as a mesh execution scope."""
-
-
-def apply(layout: Layout | ComposedLayout, coord: int) -> int:
-    """Apply a layout to one linear domain coordinate."""
-    ...
-
-
-def compact_col_major(shape: tuple, *, mul=None) -> tuple:
-    """Return column-major compact strides (mode zero fastest).
-
-    Args:
-        shape: Flat or nested shape.
-        mul: Optional multiplication operation for symbolic entries.
-
-    Returns:
-        Column-major natural strides.
-    """
-    ...
-
-
-def compact_row_major(shape: tuple, *, mul=None) -> tuple:
-    """Return row-major contiguous strides.
-
-    Args:
-        shape: Flat shape.
-        mul: Optional multiplication operation for symbolic entries.
-
-    Returns:
-        C-order strides.
-    """
-    ...
 
 
 class StorageOwners:
@@ -1182,74 +1177,20 @@ def shard_layout_local_shape(
         The per-shard shape. In strict mode every extent is static.
     """
     ...
-
-
-def coalesce(layout: Layout | ComposedLayout, trg_profile=..., *, major: str = "col"):
-    """Merge contiguous modes, optionally within profile-selected groups.
-
-    Args:
-        layout: Layout to simplify.
-        major: "col" (mode zero fastest) or "row" (last mode fastest).
-        trg_profile: Optional nesting whose terminals select groups to merge.
-
-    Returns:
-        The equivalent layout with contiguous modes merged.
-    """
-    ...
-
-
-def composition(left, right, offset: int = 0, *, major: str = "col"):
-    """Compose CuTe layouts; offset belongs to the swizzle overload."""
-    ...
-
-
-def complement(layout: Layout, max_idx: int = 1, *, major: str = "col") -> Layout:
-    """Return the modes filling the layout's gaps below max_idx."""
-    ...
-
-
-def logical_divide(layout: Layout, tile, *, major: str = "col") -> Layout:
-    """Compose a tile and its complement into the source layout."""
-    ...
-
-
-def zipped_divide(layout: Layout, tile, *, major: str = "col") -> Layout:
-    """Gather hierarchical tile and remainder modes into two modes."""
-    ...
-
-
-def is_inverse_projectable(layout: Layout) -> bool:
-    """Return whether a layout admits the supported inverse construction.
-
-    Args:
-        layout: Primitive layout to inspect.
-
-    Returns:
-        Whether it is injective and compact-ordered.
-    """
-    ...
-
-
-def left_inverse(layout: Layout | ComposedLayout):
-    """Build the supported CuTe left inverse.
-
-    Args:
-        layout: Layout to invert.
-
-    Returns:
-        Its left-inverse layout.
-    """
-    ...
-
-
 ```
 
 - constraints:
-  - `compact_col_major` and `compact_row_major` live in
-    `ir/types/stride.py`. `apply`, `coalesce`, `composition`, `complement`,
-    `logical_divide`, `zipped_divide`, `filter`, `is_contiguous` and the inverse
-    functions live in `ir/types/layout_algebra.py`. Reach them as
-    `types.layout_algebra.<name>`. Only `apply` is also exported by `types`.
+  - A function whose result depends on mode order takes `major`. `"col"` is CuTe: mode 0 is fastest.
+  - `"row"` is the default. It reverses the modes of the inputs at every level.
+    Then it applies `"col"` and reverses the modes of the result.
+  - A row-major divide or product keeps the CuTe structural groups in CuTe order.
+    These groups are the `(tile, rest)` of `zipped_divide` and each `(tile_i, rest_i)` of `logical_divide`.
+  - A tuple tiler or profile applies position by position in both orders. Only a terminal reverses.
+  - An integer coordinate of a tuple shape divides from the first mode in CuTe order.
+    The last mode is not reduced. `None` in a coordinate is CuTe `_` and reads as 0.
+  - `int_tuple`, `layout_algebra` and `swizzle_layout` are reached as namespaces.
+    `types` exports the `layout.py` and `stride.py` functions and the `make_*` constructors.
+    `types.get` also reads a `Mesh`. `types.domain_offset` is the `ShardLayout` form.
   - Default strides come from `Layout(shape)` (above). A Split whose topology is
     private under `target.storage_owners` gets stride zero. Compacting the
     remaining modes drops only its mesh factor. It keeps its local residual
@@ -1277,32 +1218,22 @@ def left_inverse(layout: Layout | ComposedLayout):
     factor MUST yield its other factor as the local extent. Other symbolic split
     relations MUST be rejected as undecidable. An unconsumed symbolic extent MAY pass through
     only when `require_static=False`. Strict mode MUST reject it.
-  - `coalesce(layout)` MUST flatten and merge contiguous modes under CuTe's
-    mode-zero-fast convention. With `trg_profile`, it MUST apply that rule at
-    each profile terminal. It MUST preserve unmatched trailing modes. It MUST reject a
-    profile that asks for more modes at any nesting level. The diagnostic MUST
-    include that level. `major="row"` MUST process modes from last to first and
-    return the reduced modes in their stated order. Merge comparisons MUST
-    normalize dimension expressions on both sides.
-  - `filter(layout, profile=..., major="col")` MUST remove shape-one and
-    stride-zero modes before coalescing, with the same profile and major-order
-    conventions. `is_contiguous(layout, major="col")` takes the already filtered
-    result with the same `major`. It MUST test the result without repeating filtering.
-    For static extents it MUST use `size == cosize`. For symbolic extents it MUST look for one unit-stride mode
-    after coalescing in either direction.
+  - `coalesce` and `bw_coalesce` merge static modes as CuTe does. Symbolic modes merge when the
+    normal forms of `shape * stride` and the next stride are equal.
+  - A tuple profile of `coalesce` or `filter` MUST NOT have more modes than the layout.
+    Modes past the profile stay unchanged.
+  - `filter` MUST remove static stride-0 and extent-1 modes before coalescing. An empty result is `1:0`.
+  - `is_contiguous(layout, major)` takes a filtered layout. For static extents it tests `size == cosize`.
+    For symbolic extents it looks for one stride-1 mode after coalescing in either order.
+  - `complement` MUST raise `NotProjectableError` for a non-injective layout.
   - Inverting a composed mesh layout MUST accept only an identity inner mapping
     and an inverse-projectable primitive outer layout. Other layouts MUST raise
     `NotProjectableError`, not return a guessed inverse.
-  - General `composition` MUST support a `Layout` on the left. On the right it MUST support a `Layout`,
-    integer tile, tuple of per-mode tiles, or identity `None`.
-    A tuple dispatch MUST preserve unmatched trailing modes. The existing
-    swizzle overload MUST retain its offset semantics.
-  - `logical_divide` MUST compose the tile with its complement. `zipped_divide`
-    MUST gather the hierarchical result into tile and remainder modes.
-    Tiles MUST have integer extents and strides. `None` denotes an unsplit mode.
-    All three operations and `complement` MUST interpret traversal order via
-    `major="col"` or `major="row"`. This MUST NOT change their per-mode tile dispatch.
-    Overlapping modes in `complement` MUST remain rejected as `NotProjectableError`.
+  - `composition` of static shapes MUST raise `ValueError` when the CuTe divisibility condition fails.
+  - `shape_div` of two symbolic extents is a project extension. Equal extents give 1. Other pairs MUST raise `ValueError`.
+  - `cosize` of a `ComposedLayout` is the `cosize` of its outer layout. A symbolic stride counts as non-negative.
+  - `slice_and_offset` of a swizzled `ComposedLayout` follows `swizzle_layout.hpp` when the coordinates and offset are static.
+    Otherwise it moves the index into the composed offset.
   - Instruction projection MUST leave a whole operand axis unchanged. It MUST retain
     symbolic extents without division or a static-extent requirement. A cut axis
     MUST use `zipped_divide` with a tiler built from its own mode structure.

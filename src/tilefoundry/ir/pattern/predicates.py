@@ -18,8 +18,8 @@ def static_strided_layout(subject, *, allow_partial=False) -> types.Layout | Non
     subject = strided_layout(subject, allow_partial=allow_partial)
     if subject is None:
         return None
-    extents = tuple(types.flatten(subject.shape))
-    strides = tuple(types.flatten(subject.strides))
+    extents = tuple(types.flatten_to_tuple(subject.shape))
+    strides = tuple(types.flatten_to_tuple(subject.strides))
     if any(type(number) is not int for number in (*extents, *strides)):
         return None
     if any(extent <= 0 for extent in extents):
@@ -49,10 +49,10 @@ def is_ranked_tensor(**fields) -> Tensor:
 def mode_layouts(layout: types.Layout, per_mode: bool) -> tuple[types.Layout, ...]:
     if per_mode:
         return tuple(
-            types.Layout(tuple(types.flatten(shape)), tuple(types.flatten(steps)))
+            types.Layout(tuple(types.flatten_to_tuple(shape)), tuple(types.flatten_to_tuple(steps)))
             for shape, steps in zip(layout.shape, layout.strides)
         )
-    return (types.Layout(tuple(types.flatten(layout.shape)), tuple(types.flatten(layout.strides))),)
+    return (types.Layout(tuple(types.flatten_to_tuple(layout.shape)), tuple(types.flatten_to_tuple(layout.strides))),)
 
 
 @dataclass(frozen=True)
@@ -67,7 +67,7 @@ class Forward(Predicate):
         if held is None:
             return False
         return all(
-            all(step >= 0 for step in types.flatten(part.strides))
+            all(step >= 0 for step in types.flatten_to_tuple(part.strides))
             for part in mode_layouts(held, self.per_mode)
         )
 
@@ -118,10 +118,11 @@ def vector_widths(layout, element_bits: int, widths: tuple[int, ...]) -> tuple[i
     grouped = layout_algebra.coalesce(
         row_major_groups_for_cute(held),
         (0,) * len(held.shape),
+        major="col",
     )
     runs = tuple(
         sorted(
-            zip(types.flatten(grouped.shape), types.flatten(grouped.strides)),
+            zip(types.flatten_to_tuple(grouped.shape), types.flatten_to_tuple(grouped.strides)),
             key=lambda run: run[1],
         )
     )
@@ -194,7 +195,7 @@ def box_runs(
     """Read box runs by tile axis, ordered by increasing step."""
     runs: list[Run] = []
     for axis, (extents, steps) in enumerate(zip(layout.shape, layout.strides)):
-        modes = tuple(enumerate(zip(types.flatten(extents), types.flatten(steps))))
+        modes = tuple(enumerate(zip(types.flatten_to_tuple(extents), types.flatten_to_tuple(steps))))
         for mode, (extent, step) in reversed(modes):
             if extent == 1:
                 continue
@@ -282,7 +283,7 @@ class TensorMap(Predicate):
         modes = [
             (extent, step)
             for extents, steps in zip(layout.shape, layout.strides)
-            for extent, step in zip(types.flatten(extents), types.flatten(steps))
+            for extent, step in zip(types.flatten_to_tuple(extents), types.flatten_to_tuple(steps))
             if extent > 1
         ]
         unit = [mode for mode in modes if mode[1] == 1]

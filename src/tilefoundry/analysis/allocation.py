@@ -1031,14 +1031,13 @@ def storage_bytes(held: types.TensorType, *, topology=None, topologies=()) -> in
                 return low + offset, high + offset
             return bounds(layout.inner, low + offset, high + offset)
         if isinstance(layout, types.Layout):
-            flat = types.flatten(layout)
-            if not all(isinstance(value, int) for value in (*flat.shape, *flat.strides)):
+            extents = types.flatten_to_tuple(layout.shape)
+            steps = types.flatten_to_tuple(layout.strides)
+            if not all(isinstance(value, int) for value in (*extents, *steps)):
                 raise Error(f"allocation: unresolved physical layout {layout!r}")
             contributions = tuple(
                 (extent - 1) * stride
-                for extent, stride in zip(
-                    flat.shape if shape is None else shape, flat.strides, strict=True
-                )
+                for extent, stride in zip(extents if shape is None else shape, steps, strict=True)
             )
             return sum(min(0, value) for value in contributions), sum(
                 max(0, value) for value in contributions

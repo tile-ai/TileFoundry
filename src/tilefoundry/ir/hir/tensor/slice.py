@@ -117,9 +117,9 @@ def require_affine_window(call, ctx, source, tiled, steps):
 def steps_of(shape, tile):
     """The step each flattened source mode takes inside its tile."""
     if tile is None:
-        return (1,) * len(types.flatten(shape))
+        return (1,) * len(types.flatten_to_tuple(shape))
     if isinstance(tile, types.Layout):
-        return tuple(types.flatten(tile.strides))
+        return tuple(types.flatten_to_tuple(tile.strides))
     return tuple(x for s, t in zip(shape, tile, strict=True) for x in steps_of(s, t))
 
 
@@ -147,7 +147,7 @@ def window_tiler(call, ctx, source):
     require_affine_window(call, ctx, source, tiled, mode_steps)
     flat = types.flatten(window)
     axes = int_tuple.mode_axes(profile)
-    kept = tuple(i for i, (before, after) in enumerate(zip(types.flatten(primitive.shape), flat.shape, strict=True))
+    kept = tuple(i for i, (before, after) in enumerate(zip(types.flatten_to_tuple(primitive.shape), flat.shape, strict=True))
                  if expr.static_dim_value(before) == 1 or expr.static_dim_value(after) != 1
                  or axes.count(axes[i]) == 1)
     if splits.difference(kept):

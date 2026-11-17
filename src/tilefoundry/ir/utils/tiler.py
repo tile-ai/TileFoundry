@@ -14,7 +14,7 @@ def axis_tiler(profile, sizes, *, steps=None, splits=()):
 
     def tile(mode, span, step):
         nonlocal next_mode
-        extents = int_tuple.flatten(mode)
+        extents = int_tuple.flatten_to_tuple(mode)
         tiles = [None] * len(extents)
         for index in reversed(range(len(extents))):
             extent = extents[index]
@@ -30,7 +30,7 @@ def axis_tiler(profile, sizes, *, steps=None, splits=()):
                     raise ValueError(f"tile exceeds outermost mode {next_mode} (extent {extent})")
             if next_mode + index in splits and not (int_tuple.compatible(count, 1) or int_tuple.compatible(count, extent)):
                 raise ValueError(f"tile splits shard layout mode {next_mode + index} (extent {extent})")
-            tiles[index] = types.Layout((count,), (mode_step,))
+            tiles[index] = types.Layout(count, mode_step)
             if index:
                 span = int_tuple.shape_div(span, count)
                 step = int_tuple.shape_div(step, extent)
@@ -40,11 +40,11 @@ def axis_tiler(profile, sizes, *, steps=None, splits=()):
     result = []
     for mode, count, step in zip(profile, sizes, steps or (1,) * len(profile), strict=True):
         if count is None:
-            next_mode += len(int_tuple.flatten(mode))
+            next_mode += len(int_tuple.flatten_to_tuple(mode))
             result.append(None)
         elif expr.static_dim_value(count) == 0:
-            next_mode += len(int_tuple.flatten(mode))
-            result.append(types.Layout((0,), (step,)))
+            next_mode += len(int_tuple.flatten_to_tuple(mode))
+            result.append(types.Layout(0, step))
         else:
             result.append(tile(mode, count, step))
     return tuple(result)

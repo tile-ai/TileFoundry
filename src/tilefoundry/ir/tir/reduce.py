@@ -95,7 +95,7 @@ def workspace_slots(source) -> int:
     else:
         level = types.plain_layout(mesh.layout)
     threads = 1
-    for extent in types.flatten(level).shape:
+    for extent in types.flatten_to_tuple(level.shape):
         value = expr.static_dim_value(extent)
         if value is None or value <= 0:
             raise ValueError(

@@ -97,20 +97,20 @@ def find_execution_mesh(mesh: types.Mesh, required: types.Mesh) -> tuple[types.M
     axes come before those axes, as an index into the full layout of *mesh*.
     """
     assert len(required.topologies) == 1, "an execution mesh has one topology"
-    source_layout = types.flatten(mesh.layout)
-    required_layout = types.flatten(required.layout)
+    source_layout = types.flatten(types.plain_layout(mesh.layout))
+    required_layout = types.flatten(types.plain_layout(required.layout))
     if not isinstance(source_layout, types.Layout) or not isinstance(required_layout, types.Layout):
         raise ValueError("tile execution meshes require concrete layouts")
     source_shape = tuple(source_layout.shape)
     source_strides = tuple(source_layout.strides)
-    stated = {types.apply(required_layout, index) for index in range(types.size(required_layout))}
+    stated = {required_layout(index) for index in range(types.size(required_layout))}
     dropped = next(
         (
             begin
             for begin in range(len(source_shape) - 1, -1, -1)
             if (
                 (suffix := types.Layout(source_shape[begin:], source_strides[begin:]))
-                and {types.apply(suffix, index) for index in range(types.size(suffix))} == stated
+                and {suffix(index) for index in range(types.size(suffix))} == stated
             )
         ),
         None,
@@ -124,7 +124,7 @@ def find_execution_mesh(mesh: types.Mesh, required: types.Mesh) -> tuple[types.M
     return (
         types.Mesh(
             mesh.topologies[-len(required.topologies) :],
-            types.with_offset(required.layout, start),
+            types.make_composed_layout(None, start, required.layout) if start else required.layout,
             required.names,
         ),
         dropped,
@@ -289,7 +289,7 @@ def nested_layout_shape(
             shard, selected_level=selected_level, topologies=topologies
         )
     if isinstance(layout, (types.Layout, types.ComposedLayout)):
-        return tuple(types.flatten(layout).shape)
+        return types.flatten_to_tuple(layout.shape)
     raise ValueError(
         f"local_type_of: unresolved layout {layout!r}; local projection requires a resolved Layout"
     )

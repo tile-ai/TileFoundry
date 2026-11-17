@@ -56,12 +56,12 @@ class ReuseAxes:
 def static_axes(mesh: types.Mesh) -> "tuple[int, tuple[int, ...], tuple[int, ...]] | None":
     """A mesh's device-numbered unit ids, when every one of them is a number."""
     try:
-        axes = types.flatten(mesh.layout)
+        axes = types.flatten(types.plain_layout(mesh.layout))
         offset = types.offset(mesh)
     except ValueError:
         return None
-    shape = tuple(expr.static_dim_value(extent) for extent in types.flatten(axes.shape))
-    strides = tuple(expr.static_dim_value(stride) for stride in types.flatten(axes.strides))
+    shape = tuple(expr.static_dim_value(extent) for extent in types.flatten_to_tuple(axes.shape))
+    strides = tuple(expr.static_dim_value(stride) for stride in types.flatten_to_tuple(axes.strides))
     if any(value is None for value in (*shape, *strides, expr.static_dim_value(offset))):
         return None
     return offset, shape, strides

@@ -199,7 +199,7 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
             except ValueError as error:
                 first = 0
                 for axis, (mode, size) in enumerate(zip(profile, shape, strict=True)):
-                    widths = types.flatten(mode)
+                    widths = types.flatten_to_tuple(mode)
                     count = prod(widths) // size
                     for index, prefix in enumerate(accumulate(widths, lambda x, y: x * y)):
                         if count % prefix and prefix % count:
@@ -224,8 +224,8 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
                 strides=tuple(
                     original if extent == 1 else stride
                     for extent, original, stride in zip(
-                        types.flatten(primitive.shape),
-                        types.flatten(primitive.strides),
+                        types.flatten_to_tuple(primitive.shape),
+                        types.flatten_to_tuple(primitive.strides),
                         flat.strides,
                         strict=True,
                     )
@@ -235,7 +235,7 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
             kept = tuple(
                 i
                 for i, (before, after) in enumerate(
-                    zip(types.flatten(primitive.shape), flat.shape, strict=True)
+                    zip(types.flatten_to_tuple(primitive.shape), flat.shape, strict=True)
                 )
                 if before == 1 or after != 1 or layout_axes.count(layout_axes[i]) == 1
             )
@@ -340,7 +340,7 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
                 if iteration_axis not in shared:
                     continue
                 mode = types.get(physical, axis)
-                active = tuple(width for width in types.flatten(mode.shape) if width != 1)
+                active = tuple(width for width in types.flatten_to_tuple(mode.shape) if width != 1)
                 expected = shared[iteration_axis][1]
                 try:
                     int_tuple.compatible_profile(active, expected)
@@ -361,13 +361,13 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
             rest_attrs = (
                 list(rest.attrs)
                 if isinstance(rest, types.ShardLayout)
-                else [types.Broadcast()] * len(types.flatten(rest_mesh.layout.shape))
+                else [types.Broadcast()] * len(types.flatten_to_tuple(rest_mesh.layout.shape))
             )
             logical_axes = int_tuple.mode_axes(physical.shape)
             flat = types.flatten(physical)
             for axis, (_, _, source_mesh, bound) in bindings_on_axes:
                 modes = [i for i, a in enumerate(logical_axes) if a == axis and flat.shape[i] != 1]
-                shift = len(rest_attrs) - len(types.flatten(source_mesh.layout.shape))
+                shift = len(rest_attrs) - len(types.flatten_to_tuple(source_mesh.layout.shape))
                 for mesh_axis, mode in bound:
                     rest_attrs[mesh_axis + shift] = types.Split(modes[mode])
             rests[index] = types.ShardLayout(physical, tuple(rest_attrs), rest_mesh)
@@ -383,7 +383,7 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
         )
         bind_masks.append(
             int_tuple.unflatten(
-                tuple(index in bound for index in range(len(types.flatten(physical.shape)))),
+                tuple(index in bound for index in range(len(types.flatten_to_tuple(physical.shape)))),
                 physical.shape,
             )
         )
@@ -530,7 +530,7 @@ def check_call(op, operands, mesh, *, ctx, repeat=None, order=None, projection=N
         selected = utils.filter_topologies(
             types.ShardLayout(
                 types.Layout(()),
-                tuple(types.Broadcast() for _ in types.flatten(mesh.layout.shape)),
+                tuple(types.Broadcast() for _ in types.flatten_to_tuple(mesh.layout.shape)),
                 mesh,
             ),
             participant,

@@ -42,8 +42,8 @@ def raw_groups(mesh: types.Mesh) -> tuple[tuple, tuple]:
     stated = types.plain_layout(mesh.layout)
     shapes, strides = [], []
     for index in range(len(stated.shape)):
-        group = types.flatten(types.get(stated, index))
-        shape, steps = tuple(group.shape), tuple(group.strides)
+        group = types.get(stated, index)
+        shape, steps = types.flatten_to_tuple(group.shape), types.flatten_to_tuple(group.strides)
         if not shape:
             shape, steps = (1,), (0,)
         shapes.append(shape)

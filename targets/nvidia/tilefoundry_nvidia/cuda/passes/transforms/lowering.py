@@ -350,7 +350,7 @@ class CudaLowering(transforms.Lowering):
             if any(isinstance(attr, types.Split) for attr in attrs[:dropped]):
                 primitive = local.layout if isinstance(local, types.ShardLayout) else local
                 outer = types.plain_layout(primitive)
-                local_shape = tuple(prod(types.flatten(mode)) for mode in outer.shape)
+                local_shape = tuple(prod(types.flatten_to_tuple(mode)) for mode in outer.shape)
                 if not any(isinstance(mode, tuple) for mode in types.plain_layout(address).shape):
                     flat = types.flatten(outer)
                     primitive = (
@@ -358,7 +358,8 @@ class CudaLowering(transforms.Lowering):
                         if isinstance(primitive, types.ComposedLayout)
                         else flat
                     )
-                primitive = types.with_offset(primitive, offset)
+                if offset:
+                    primitive = types.make_composed_layout(None, offset, primitive)
                 local = (
                     replace(local, layout=primitive)
                     if source is not None and isinstance(local, types.ShardLayout)

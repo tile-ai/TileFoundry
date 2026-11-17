@@ -165,7 +165,7 @@ def test_matmul_carries_operand_shard(lhs, rhs, shape, attrs):
     out = infer_call(_MM, lhs, rhs)
     assert out.shape == shape
     assert out.layout.attrs == attrs
-    assert math.prod(types.flatten(out.layout.shape)) == math.prod(shape), (
+    assert math.prod(types.flatten_to_tuple(out.layout.shape)) == math.prod(shape), (
         "the result's layout domain holds the result, not an operand"
     )
 

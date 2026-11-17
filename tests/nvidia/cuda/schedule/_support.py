@@ -14,7 +14,6 @@ from tilefoundry.interfaces import evaluator, schedule, verify
 from tilefoundry.ir import core, expr, hir, pattern, tir, types
 from tilefoundry.ir.hir import tensor
 from tilefoundry.ir.tir import memory
-from tilefoundry.ir.types import layout_algebra
 from tilefoundry.schedule import finalize
 
 
@@ -24,7 +23,7 @@ def _region_key(region: core.MeshRegion, occurrences: dict[str, int]) -> str:
     assert len(mesh.topologies) == 1
     topology = getattr(mesh.topologies[0], "name", mesh.topologies[0])
     offset = types.offset(mesh)
-    size = prod(types.flatten(types.layouts(mesh)[0].shape))
+    size = prod(types.flatten_to_tuple(types.layouts(mesh)[0].shape))
     selection = f"{topology}@{offset}:{size}"
     occurrence = occurrences.get(selection, 0)
     occurrences[selection] = occurrence + 1
@@ -102,7 +101,7 @@ def _assert_live_smem_views_do_not_overlap(function: core.PrimFunction, source: 
                     and isinstance(field.args[0], expr.Constant)
                 ):
                     span = (
-                        layout_algebra.cosize(field.type.layout)
+                        types.cosize(field.type.layout)
                         if field.type.layout is not None
                         else prod(field.type.shape)
                     )

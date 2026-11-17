@@ -160,7 +160,7 @@ def shard_engine_layout(shard: types.ShardLayout, storage: expr.StorageKind) -> 
     Global memory and CTA-shared storage retain their declared address steps.
     Registers use the same local extents and numbering as the emitted shard.
     """
-    physical = types.flatten(shard.layout)
+    physical = types.flatten(types.plain_layout(shard.layout))
     if storage is expr.StorageKind.RMEM:
         return types.Layout(types.shard_layout_local_shape(shard), utils.register_strides(shard))
     if storage is expr.StorageKind.GMEM or (
@@ -231,7 +231,7 @@ def render_shard_layout_value(var_name: str, sl: types.ShardLayout, dynamic_exte
             "which units these are"
         )
     ml_base = int(mesh_base)
-    mesh_axes = types.flatten(stated)
+    mesh_axes = types.flatten(types.plain_layout(stated))
     topo = topos[0]
 
     def global_dim(d):

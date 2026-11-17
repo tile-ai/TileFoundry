@@ -110,6 +110,10 @@ class TensorType:
     carries `storage=umat`, as do shape elements. An unmaterialized value MUST be
     resolved to a concrete residency (or otherwise materialized) before codegen
     consumes it ([§10](#10-unmaterialized-values)).
+  - `Layout(shape)` gives compact row-major strides, CuTe `LayoutRight`. A static extent 1 gets stride 0.
+  - The layout functions are a port of CuTe. [shard §9](./shard.md#9-layout-construction-and-algebra)
+    lists each function and its CuTe header.
+  - A layout result of a CuTe function MAY have a scalar shape. It has one mode.
   - For plain `Layout` / `ComposedLayout`, `layout.shape` MUST have the same rank
     and logical extents as `shape`. The layout describes the value whose type
     carries it. Consumers use this common contract rather than inspecting a

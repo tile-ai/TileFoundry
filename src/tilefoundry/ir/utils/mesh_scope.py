@@ -9,8 +9,6 @@ either.
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 from tilefoundry.ir import expr, types
 
 
@@ -26,8 +24,7 @@ def flat_layout(mesh: types.Mesh) -> types.Layout | types.ComposedLayout:
             "a mesh whose slice states an identity box states no layout of "
             "its own, so its levels select nothing"
         )
-    flat = types.flatten(outer)
-    return replace(mesh.layout, outer=flat) if isinstance(mesh.layout, types.ComposedLayout) else flat
+    return types.flatten(mesh.layout)
 
 
 def storage_reaches(storage, mesh: types.Mesh, current: types.Mesh) -> bool:

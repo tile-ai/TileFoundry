@@ -15,7 +15,6 @@ from __future__ import annotations
 from tilefoundry import codegen
 from tilefoundry.ir import core, expr, types, utils
 from tilefoundry.ir.tir import memory
-from tilefoundry.ir.types import layout_algebra
 from tilefoundry_nvidia.cuda import target
 from tilefoundry_nvidia.cuda.codegen import context
 
@@ -49,7 +48,7 @@ def emit_plain_alloc(
             f"AllocTensor for {name!r} has unmaterialized storage (storage=umat); "
             "a memory-resident tensor must carry a concrete StorageKind"
         )
-    total = int(utils.upper_bound(layout_algebra.cosize(engine_layout)))
+    total = int(utils.upper_bound(types.cosize(engine_layout)))
 
     layout = render_layout_value(engine_layout, literal, literal)
     cpp_type = ctx.dtype_to_cpp(var.type.dtype.name)

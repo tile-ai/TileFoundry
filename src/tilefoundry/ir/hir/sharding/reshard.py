@@ -65,7 +65,8 @@ def buffer_alias(call: expr.Call) -> int | None:
                 _, moved = types.domain_offset(starts, parent.type.layout, parent.type.shape)
                 offset += moved
         view = parent
-    source = replace(source, layout=types.with_offset(source.layout, offset))
+    if offset:
+        source = replace(source, layout=types.make_composed_layout(None, offset, source.layout))
     boxes = []
     for held in (source, result):
         layout = held.layout
@@ -80,7 +81,7 @@ def buffer_alias(call: expr.Call) -> int | None:
         physical = shard.layout if shard is not None else layout
         if shard is not None and isinstance(layout, types.ComposedLayout):
             physical = replace(layout, outer=physical)
-        flat, threads = types.flatten(physical), None
+        flat, threads = types.flatten(types.plain_layout(physical)), None
         if held.storage is expr.StorageKind.RMEM and shard is not None:
             mesh = shard.mesh
             try:

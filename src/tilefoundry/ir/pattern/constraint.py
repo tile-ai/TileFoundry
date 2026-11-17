@@ -86,7 +86,7 @@ def read_mode(tensor: types.TensorType, stated=None, *, allow_partial=False):
     shape, strides = tuple(layout.shape), tuple(layout.strides)
     extents = tuple(tensor.shape)
     if len(shape) != len(extents) or any(
-        prod(types.flatten(group)) != extent for group, extent in zip(shape, extents)
+        prod(types.flatten_to_tuple(group)) != extent for group, extent in zip(shape, extents)
     ):
         return None, (
             f"{layout!r} is not one group of modes per axis of the {extents} tile it arranges"
@@ -94,7 +94,7 @@ def read_mode(tensor: types.TensorType, stated=None, *, allow_partial=False):
     unit = []
     for axis, (group, steps) in enumerate(zip(shape, strides)):
         walked = tuple(
-            step for extent, step in zip(types.flatten(group), types.flatten(steps)) if extent > 1
+            step for extent, step in zip(types.flatten_to_tuple(group), types.flatten_to_tuple(steps)) if extent > 1
         )
         unit += [
             (axis, mode, mode == len(walked) - 1)

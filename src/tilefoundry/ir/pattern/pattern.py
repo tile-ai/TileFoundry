@@ -286,8 +286,8 @@ class Layout(Pattern):
 
     def mode_fields(self) -> tuple:
         return (
-            *(types.flatten(self.shape) if self.shape is not None else ()),
-            *(types.flatten(self.strides) if self.strides is not None else ()),
+            *(types.flatten_to_tuple(self.shape) if self.shape is not None else ()),
+            *(types.flatten_to_tuple(self.strides) if self.strides is not None else ()),
         )
 
     def fixed(self):

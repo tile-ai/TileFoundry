@@ -605,9 +605,7 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], types.TypeFunctor[str])
         return "None"
 
     def visit_Layout(self, value: types.Layout, ctx=None) -> str:
-        return (
-            f"Layout({self.shape_tuple(value.shape, ctx)}, {self.shape_tuple(value.strides, ctx)})"
-        )
+        return f"Layout({self.dim_entry(value.shape, ctx)}, {self.dim_entry(value.strides, ctx)})"
 
     def visit_Swizzle(self, value: types.Swizzle, ctx=None) -> str:
         return f"Swizzle({value.bits}, {value.base}, {value.shift})"
@@ -616,8 +614,10 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], types.TypeFunctor[str])
         """Use composition operators only where the parser expects a layout."""
         if isinstance(value, types.ShardLayout):
             return self.shard_surface(value, ctx, storage=storage) or self.visit(value, ctx)
-        if isinstance(value, types.Layout) and not any(
-            isinstance(entry, tuple) for entry in (*value.shape, *value.strides)
+        if (
+            isinstance(value, types.Layout)
+            and isinstance(value.shape, tuple)
+            and not any(isinstance(entry, tuple) for entry in (*value.shape, *value.strides))
         ):
             shape = self.shape_tuple(value.shape, ctx)
             if value.strides == types.Layout(value.shape).strides:

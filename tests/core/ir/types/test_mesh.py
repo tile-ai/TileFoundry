@@ -195,7 +195,7 @@ def test_a_mesh_of_several_topologies_maps_a_coord_to_the_index_over_all() -> No
     assert grouped == joined
     assert grouped.layout.strides == ((128,), (1,))
     assert types.layouts(grouped) == (types.Layout((4,), (1,)), types.Layout((128,), (1,)))
-    assert types.apply(grouped.layout, 1 + 4 * 40) == types.crd2idx((1, 40), (4, 128), (128, 1)) == 168
+    assert grouped.layout(1 * 128 + 40) == types.crd2idx((1, 40), (4, 128), (128, 1)) == 168
     sliced = grouped[1, 32:64]
     assert types.offset(sliced) == 160
     assert (types.offset(types.get(sliced, "cta")), types.offset(types.get(sliced, "thread"))) == (1, 32)

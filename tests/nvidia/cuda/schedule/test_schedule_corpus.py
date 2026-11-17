@@ -472,7 +472,7 @@ class PhysicalSlots(ScheduleCase):
                     offset = slot.args[0].value
                     assert offset % 16 == 0
                     placed = {
-                        offset + (types.apply(held.layout, index) * held.dtype.bit_width + bit) // 8
+                        offset + (held.layout(index) * held.dtype.bit_width + bit) // 8
                         for index in range(prod(types.flatten(held.layout).shape))
                         for bit in range(held.dtype.bit_width)
                     }
