@@ -11,6 +11,7 @@ import pytest
 import torch
 
 import tilefoundry
+from tests.nvidia.cuda.ops.tir.targets import CUDA_TARGETS, retarget
 from tilefoundry import cli
 from tilefoundry_nvidia import cuda
 
@@ -124,3 +125,27 @@ def test_plain_window_enters_row_major() -> None:
         "2t+1 of each row, so a transposed or otherwise permuted slice shows "
         "up as out != a exactly where the projection misread the index"
     )
+
+
+@pytest.mark.parametrize("target", CUDA_TARGETS)
+@pytest.mark.parametrize(
+    ("name", "by_columns"), [("ViewIntoParameter", False), ("ColumnsIntoRows", True)]
+)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_parameter_copies_by_coordinate(name: str, by_columns: bool, target: cuda.Target) -> None:
+    """A copy into a parameter lands every element at its own coordinate.
+
+    CUDA holds a parameter as one flat mode in memory order, while CuTe numbers
+    a (2, 4) view first mode fastest. Pairing the two by CuTe's number put
+    ``a[1, 0]`` where ``a[0, 1]`` belongs, and two parameters stored in
+    different orders were copied as raw memory.
+    """
+    module = cli.load_authored_ir(f"{OPS / 'parameter_copies.py'}:{name}")
+    rm = tilefoundry.compile(retarget(module, target), target=target)
+    a = torch.arange(8, dtype=torch.float32, device="cuda").view(2, 4)
+    if by_columns:
+        a = a.t().contiguous().t()
+    out = torch.zeros(2, 4, dtype=torch.float32, device="cuda")
+    rm(a, out)
+    torch.cuda.synchronize()
+    assert torch.equal(out, a)

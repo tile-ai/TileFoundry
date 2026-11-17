@@ -16,14 +16,11 @@ from tilefoundry.ir.tir import memory
 from tilefoundry_nvidia.cuda import target
 from tilefoundry_nvidia.cuda.codegen import context
 
+from .tensor_view import emit_paired, tensor_reference
+
 
 def is_shard(var) -> bool:
     return isinstance(getattr(var.type, "layout", None), types.ShardLayout)
-
-
-def tensor_expr(var, ctx: context.Context) -> str:
-    base = ctx.name_for(var)
-    return f"{base}_tensor" if ctx.is_kernel_param(var) else base
 
 
 def has_dyn_shape(var) -> bool:
@@ -37,9 +34,9 @@ def emit(call, ctx: context.Context) -> None:
     src_shard = is_shard(source)
     dst_shard = is_shard(destination)
     dyn = has_dyn_shape(source) or has_dyn_shape(destination)
-    src = tensor_expr(source, ctx)
-    dst = tensor_expr(destination, ctx)
     if dyn and not src_shard and not dst_shard:
+        src = tensor_reference(source, ctx)
+        dst = tensor_reference(destination, ctx)
         n = utils.shape_runtime_total(destination.type.shape, ctx.dynamic_extents)
 
 
@@ -52,7 +49,7 @@ def emit(call, ctx: context.Context) -> None:
         ctx.dedent()
         ctx.emit("}")
         return
-    ctx.emit(f"tilefoundry::ops::copy({src}, {dst});")
+    emit_paired("tilefoundry::ops::copy", (source, destination), ctx)
 
 
 __all__: list[str] = []
