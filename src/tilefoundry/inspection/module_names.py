@@ -5,8 +5,8 @@ from __future__ import annotations
 from tilefoundry.ir import core
 
 
-def module_definition_order(root, *, before_children=False):
-    """Definitions once, children before the slots that reference them."""
+def module_definition_order(*roots, before_children=False):
+    """Definitions of every root once, children before the slots that reference them."""
     seen = set()
     ordered = []
 
@@ -22,15 +22,17 @@ def module_definition_order(root, *, before_children=False):
         if not before_children:
             ordered.append(node)
 
-    visit(root)
+    for root in roots:
+        visit(root)
     return ordered
 
 
-def definition_names(root, root_name):
-    names = {id(root): root_name}
-    taken = {root_name}
-    for node in module_definition_order(root, before_children=True):
-        if node is root:
+def definition_names(*named_roots):
+    """A class name per definition: a ``(root, name)`` keeps its name, children take free ones."""
+    names = {id(root): name for root, name in named_roots}
+    taken = set(names.values())
+    for node in module_definition_order(*(root for root, _ in named_roots), before_children=True):
+        if id(node) in names:
             continue
         name = node.name
         suffix = 2

@@ -208,12 +208,19 @@ def empty_like(type_: types.Type):
     return tuple(empty_like(item) for item in type_.fields) if isinstance(type_, types.TupleType) else None
 
 
-def projection(value: expr.Expr, index: int, type_: types.Type) -> expr.Call:
-    """``value[index]`` as an untyped-by-inference Call; the final inference types it."""
+def projection(value: expr.Expr, index: int, type_: types.Type, name: str | None = None) -> expr.Call:
+    """``value[index]``, bound to *name* when one is given; the final inference types it."""
     constant = expr.Constant(
         type=types.TensorType.from_scalar(expr.DType.i64, storage=expr.StorageKind.UMAT), value=index
     )
-    return expr.Call(tensor.TupleGetItem(), (value, constant), type=type_)
+    metadata = () if name is None else (expr.BindingMetadata(name=name),)
+    return expr.Call(tensor.TupleGetItem(), (value, constant), type=type_, metadata=metadata)
+
+
+def capture_name(pair: tuple[expr.Var, expr.Expr]) -> str:
+    """The name a printed region reads its argument by: what the parser sorts captures by."""
+    _, value = pair
+    return value.name if isinstance(value, expr.Var) else expr.binding_name(value) or ""
 
 
 def pack(items: tuple[expr.Expr, ...]) -> expr.Tuple:
@@ -828,23 +835,28 @@ class FunctionDifferentiator:
         node = backward.node
         inner = backward.scope
         body = self.rebuild(node.body, inner)
+        captures = sorted(
+            (*zip(node.params, (self.rebuild(arg, scope) for arg in node.args)), *inner.region_params),
+            key=capture_name,
+        )
         return replace(
             node,
             body=body,
-            params=(*node.params, *(param for param, _ in inner.region_params)),
-            args=(*(self.rebuild(arg, scope) for arg in node.args), *(value for _, value in inner.region_params)),
+            params=tuple(param for param, _ in captures),
+            args=tuple(value for _, value in captures),
         )
 
     def rebuild_loop(self, backward: RegionBackward, scope: Scope) -> core.LoopRegion:
         node = backward.node
         inner = backward.scope
         updates = tuple(self.rebuild(value, inner) for value in node.yield_values)
+        captures = sorted(inner.region_params, key=capture_name)
         return replace(
             node,
             body=updates[-1],
             yield_values=updates,
-            params=(*node.params, *(param for param, _ in inner.region_params)),
-            args=(*(self.rebuild(arg, scope) for arg in node.args), *(value for _, value in inner.region_params)),
+            params=(*node.params, *(param for param, _ in captures)),
+            args=(*(self.rebuild(arg, scope) for arg in node.args), *(value for _, value in captures)),
         )
 
     def materialize(self, key: tuple, scope: Scope) -> expr.Expr:
@@ -861,7 +873,7 @@ class FunctionDifferentiator:
         elif key[0] == "node" and id(value) in self.differ.recompute:
             result = replace(value, args=tuple(self.materialize(("node", arg), scope) for arg in value.args))
         elif scope.parent is None:
-            result = projection(self.saved, len(self.saved_keys), self.key_type(key))
+            result = projection(self.saved, len(self.saved_keys), self.key_type(key), self.read_name(key))
             self.saved_keys.append(key)
         elif isinstance(scope.region, core.LoopRegion):
             result = self.materialize_in_loop(key, scope)
@@ -872,10 +884,27 @@ class FunctionDifferentiator:
             else:
                 scope.extras.append(key)
                 outer = self.materialize(("extra", scope, len(scope.extras) - 1), scope.parent)
-            result = expr.Var(name=self.fresh(self.key_name(key)[0] or "saved"), type=self.key_type(key))
-            scope.region_params.append((result, outer))
+            if is_projection(outer) and outer.args[0] is self.saved:
+                index = outer.args[1].value
+                result = projection(self.saved_in(scope), index, self.key_type(key), self.read_name(key))
+            else:
+                result = expr.Var(name=self.fresh(self.key_name(key)[0] or "saved"), type=self.key_type(key))
+                scope.region_params.append((result, outer))
         scope.remember_slot(slot, result)
         return result
+
+    def saved_in(self, scope: Scope) -> expr.Var:
+        """``saved`` as a parameter of the region *scope*, so its items are read inside the mesh."""
+        held = scope.slots.get(("saved",))
+        if held is None:
+            held = expr.Var(name=self.saved.name, type=self.saved.type)
+            scope.region_params.append((held, self.saved))
+            scope.remember_slot(("saved",), held)
+        return held
+
+    def read_name(self, key: tuple) -> str:
+        """A name of its own for the backward's read of the saved value *key*."""
+        return self.fresh(self.key_name(key)[0] or "saved_value")
 
     def materialize_in_loop(self, key: tuple, scope: Scope) -> expr.Expr:
         """The backward loop's access to a forward loop value.

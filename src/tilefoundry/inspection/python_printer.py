@@ -682,7 +682,9 @@ def emit_def(
     params: list[str] = []
     for param in fn.params:
         name = names[id(param)]
-        if isinstance(param.type, types.TensorType):
+        if isinstance(param.type, types.TupleType) and not param.type.fields:
+            params.append(f"{indent}{name}: tuple[()]")
+        elif isinstance(param.type, (types.TensorType, types.TupleType)):
             with printer.type_surface(indent=indent, const=param.is_const):
                 annotation = printer.visit(param.annotation, ctx)
             params.append(f"{indent}{name}: {annotation}")
@@ -1017,7 +1019,7 @@ def hir_function_to_python(
 
 
 def as_script(
-    fn: core.Function | core.PrimFunction | core.Module,
+    fn: core.Function | core.PrimFunction | core.Module | tuple[core.Module, ...],
     *,
     module: str | None = None,
     options: PythonPrintOptions | None = None,
@@ -1025,9 +1027,11 @@ def as_script(
     """Convert an HIR function or module to Python DSL source.
 
     Without *module*, emit a standalone decorated function. With *module*, emit
-    a named module-class wrapper with entry and mesh definitions. *options*
-    controls canonical-source rendering.
+    a named module-class wrapper with entry and mesh definitions. A tuple of HIR
+    Modules is emitted as one file. *options* controls canonical-source rendering.
     """
+    if isinstance(fn, tuple):
+        return modules_source(tuple((each, each.name) for each in fn), options=options)
     if isinstance(fn, core.Module):
         if fn.functions and all(isinstance(item, core.PrimFunction) for item in fn.functions):
             return tir_module_to_python(fn, module)
@@ -1133,18 +1137,27 @@ def module_source(
             entry=fn_or_module.name,
         )
         module_name = root.name
-    functions = tuple(fn for node in module_definition_order(root) for fn in node.functions)
-    if not functions:
+    return modules_source(((root, module_name),), options=options)
+
+
+def modules_source(
+    named_roots: tuple[tuple[core.Module, str], ...], *, options: PythonPrintOptions | None = None
+) -> str:
+    """Render Module trees as one file: one header, and each definition once."""
+    roots = tuple(root for root, _ in named_roots)
+    order = module_definition_order(*roots)
+    if not any(node.functions for node in order):
         raise TypeError("Module printer requires at least one function")
-    entry = root.entry_function() if root.entry is not None else None
-    if entry is not None and not isinstance(entry, (core.Function, core.PrimFunction)):
-        raise TypeError("Module printer requires a function entry")
+    for root in roots:
+        entry = root.entry_function() if root.entry is not None else None
+        if entry is not None and not isinstance(entry, (core.Function, core.PrimFunction)):
+            raise TypeError("Module printer requires a function entry")
 
     indent4 = "    "
-    ctx = new_hir_context(target=root.target)
-    names = definition_names(root, module_name)
+    ctx = new_hir_context(target=roots[0].target)
+    names = definition_names(*named_roots)
     lines = []
-    for node in module_definition_order(root):
+    for node in order:
         if lines:
             lines.append("")
         lines.extend(
@@ -1152,15 +1165,11 @@ def module_source(
                 node, names[id(node)], ctx, indent4, options or PythonPrintOptions(), names
             )
         )
-        if node is not root and names[id(node)] != node.name:
+        if not any(node is root for root in roots) and names[id(node)] != node.name:
             lines.append(f"{names[id(node)]}.name = {node.name!r}")
-    if root.children:
-        lines.extend(
-            (
-                "",
-                f"del {', '.join(names[id(node)] for node in module_definition_order(root) if node is not root)}",
-            )
-        )
+    children = [names[id(node)] for node in order if not any(node is root for root in roots)]
+    if children:
+        lines.extend(("", f"del {', '.join(children)}"))
     header = ctx.header()
     return "\n".join(header + lines) + "\n"
 

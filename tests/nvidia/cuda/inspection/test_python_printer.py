@@ -53,6 +53,18 @@ class TypesAreOptInComments(PythonPrinterCase):
         )
 
 
+@case
+class TupleParametersRoundTrip(PythonPrinterCase):
+    """A tuple parameter prints its ``tuple[...]`` annotation, so the source loads again."""
+
+    path: Path = Path(__file__).parents[1] / "fixtures" / "evaluator" / "nested_tuple_call.py"
+
+    def guard(self, state, problems):
+        printed = inspection.as_script(state)
+        assert "pair: tuple[" in printed
+        assert inspection.as_script(reload(printed, state.name)) == printed
+
+
 CASES = special(PythonPrinterCase)
 
 

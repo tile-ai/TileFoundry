@@ -42,6 +42,7 @@ Consequently an SMEM body under `-> Tensor[...]` MUST return a GMEM result expli
 When the annotation and the inferred body type are incompatible, the parser reports both,
 with the authored function location. `tuple[...]` annotations are
 accepted. They apply this same compatibility rule recursively to every field.
+A parameter annotated `tuple[()]` has the empty `TupleType`.
 
 ### 1.2 Source Span Metadata
 
@@ -238,7 +239,7 @@ tensor                ::= tensor-head '[' '(' (tensor-shape-layout ',' dtype | s
                           tensor-optional-slot | tensor-shape-layout ',' dtype ','
                           tensor-optional-slot | shape ',' dtype ',' tensor-optional-slot ','
                           tensor-optional-slot) ')' ']'
-tuple-type            ::= 'tuple' '[' '(' type-annotation (',' type-annotation)* ')' ']'
+tuple-type            ::= 'tuple' '[' '(' (type-annotation (',' type-annotation)*)? ')' ']'
                           | 'tuple' '[' type-annotation ']'
 scalar-type           ::= primary
                           | call

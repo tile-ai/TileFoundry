@@ -467,7 +467,7 @@ def single_module_to_python(mod: core.Module, module_name: str, names) -> str:
 
 def tir_module_to_python(mod: core.Module, module_name: str | None = None) -> str:
     """Print shared TIR definitions once, with slots referring to those definitions."""
-    names = definition_names(mod, module_name or mod.name)
+    names = definition_names((mod, module_name or mod.name))
     ctx = TirPrintContext()
     declarations = []
     lines = []
