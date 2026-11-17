@@ -188,7 +188,7 @@ __device__ float cta_combine_via_workspace(float warp_partial,
 using detail::is_partial_attr_v;
 using detail::is_split_attr_v;
 
-/// An axis whose units hold pieces of one value, either kind.
+/// A mesh axis whose units hold pieces of one value, either kind.
 template <class T>
 inline constexpr bool is_reducible_attr_v =
     is_split_attr_v<T> || is_partial_attr_v<T>;
@@ -200,7 +200,8 @@ struct reduce_dispatch_info {
     int lanes_reduced;
     /// Whether the reduction crosses any mesh axis.
     bool mesh_reduced;
-    /// Whether every reduced axis divides into whole lanes and whole warps.
+    /// Whether every reduced mesh axis divides into whole lanes and whole
+    /// warps.
     bool warp_aligned;
     bool needs_workspace;
     bool needs_counter;
@@ -225,7 +226,7 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr int lanes_of_mesh() {
 /// instantiates and, e.g., ``CrossWarp<mean_op>`` would trip its supported-op
 /// guard. Requires a static mesh layout; each mesh axis is classified by the
 /// topology it belongs to, so a composed cta×thread mesh spends the lane budget
-/// only on its thread-level axes.
+/// only on the mesh axes of its thread topology.
 template <class SrcSL, class DstSL>
 CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
     using src_attrs = typename SrcSL::attrs;
@@ -237,8 +238,8 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
     using m_layout_t = typename mesh_t::layout_type;
     constexpr int m_rank = cute::tuple_size<src_attrs>::value;
     /// Topologies order coarsest first, so a thread topology is the last nest
-    /// when the mesh names one, and the last flat axis's topology answers for
-    /// it.
+    /// when the mesh names one, and the last flat mesh axis's topology answers
+    /// for it.
     constexpr bool has_thread =
         mesh_t::template mesh_axis_topology<m_rank - 1>() ==
         TopologyLevel::thread;
@@ -272,10 +273,11 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
          ...);
     }(std::make_index_sequence<m_rank>{});
 
-    /// How each mesh axis divides into lanes and warps. A thread-level axis
-    /// spends the lane budget, fastest axis first; a cta-level axis reduces
-    /// across CTAs rather than warp lanes. The thread topology's mode of a mesh
-    /// naming several topologies, as a mesh of that topology, states the lanes.
+    /// How each mesh axis divides into lanes and warps. A mesh axis of the
+    /// thread topology spends the lane budget, fastest mesh axis first; a mesh
+    /// axis of the cta topology reduces across CTAs rather than warp lanes. The
+    /// thread topology's mode of a mesh naming several topologies, as a mesh of
+    /// that topology, states the lanes.
     int lanes_of[m_rank] = {};
     int warps_of[m_rank] = {};
     constexpr int kLanes = [] {
@@ -306,7 +308,7 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
     bool lane_reduced = false;
     bool mesh_reduced = false;
     /// A mesh whose ids state no (lanes, warps) divides into neither, so it
-    /// fails the same check a ragged axis does and says the same thing.
+    /// fails the same check a ragged mesh axis does and says the same thing.
     bool warp_aligned = !has_thread || kLanes > 0;
     int warps_per_group = 1;
     int lanes_reduced = 1;

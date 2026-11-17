@@ -116,7 +116,7 @@ class Target(target.Target):
     architecture states `None`. A level for hardware with no such store would
     offer a plan accumulator space that does not exist.
 
-#### Topologies
+#### Topology levels
 
 A target's topologies define the names a program may declare. The program hierarchy
 stops at those topologies. Thread mesh layouts hold warp, lane, and warpgroup structure.

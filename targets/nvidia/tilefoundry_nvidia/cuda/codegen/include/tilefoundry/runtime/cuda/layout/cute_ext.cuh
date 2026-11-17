@@ -5,8 +5,8 @@
 /// A layout with its modes in the other order; ``cute::reverse`` takes a
 /// tuple and a layout is two of them.
 ///
-/// A mesh is row-major, last axis fastest, and CuTe's algebra reads mode zero
-/// as the fastest, so every CuTe function meaning "next to" reads a mesh
+/// A mesh is row-major, last mesh axis fastest, and CuTe's algebra reads mode
+/// zero as the fastest, so every CuTe function meaning "next to" reads a mesh
 /// backwards: ``coalesce`` leaves ``(2,32):(32,1)``, 64 consecutive threads,
 /// unfolded. Reverse first and CuTe is right again. Only the top-level modes
 /// turn, so a nested layout is flattened first.

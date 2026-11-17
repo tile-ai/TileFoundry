@@ -46,7 +46,7 @@ template <Tier, class...> CUTE_HOST_DEVICE constexpr void reject();
 /// How many units a mesh covers, as a compile-time number.
 ///
 /// One topology, because every tier below names threads of one block -- a
-/// barrier counts those, and a mesh naming a coarser topology counts programs
+/// barrier counts those, and a mesh naming a coarser topology counts units
 /// no barrier here reaches.
 template <class TMesh> CUTE_HOST_DEVICE constexpr int units() {
     static_assert(TMesh::topology_count == 1,
@@ -58,8 +58,8 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr int units() {
 /// Whether the mesh's warps are one unbroken run: ``bar.sync`` names a count
 /// of consecutive threads, so a mesh that skips warps has no barrier to name.
 ///
-/// One unbroken run is what ``coalesce`` folds to rank one -- once the axes
-/// are in the order CuTe reads them.
+/// One unbroken run is what ``coalesce`` folds to rank one -- once the mesh
+/// axes are in the order CuTe reads them.
 template <class TMesh> CUTE_HOST_DEVICE constexpr bool warps_run_together() {
     using ids_t = cute::remove_cvref_t<decltype(detail::id_axes(
         typename TMesh::layout_type{}))>;

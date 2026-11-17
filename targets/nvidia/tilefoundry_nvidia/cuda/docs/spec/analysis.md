@@ -213,9 +213,9 @@ class SyncPlanMetadata(IRMetadata):
     no relation when a layout splits it over a mesh whose units are
     exactly the threads that execute it. These are the threads that every
     thread slice around it holds, or every thread of the CTA without one. That
-    layout is the destination's own. For a `Copy`, it is that of the one
-    operand that splits every thread axis, since `Copy` projects a plain
-    operand through it. Two different threads that reach one element are otherwise
+    layout is the destination's own. For a `Copy`, it is the layout of the
+    operand that splits every mesh axis of the thread topology. `Copy` projects
+    a plain operand through it. Two different threads that reach one element are otherwise
     decided by the rows of the **CTAs** table. The family checks **Threads**
     after **CTAs**.
   - **Word users.** The word of warp `k` has one user, thread `W * k`. Whole

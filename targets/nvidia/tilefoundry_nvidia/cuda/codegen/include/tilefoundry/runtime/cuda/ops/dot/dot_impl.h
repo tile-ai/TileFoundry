@@ -70,12 +70,12 @@ __device__ float contract(AView const &a, BView const &b, int n) {
     return total(acc);
 }
 
-/// Extent of the thread mesh's fastest axis, as the mesh states it.
+/// Extent of the thread mesh's fastest mesh axis, as the mesh states it.
 ///
-/// The axis, not the ids it reaches: a butterfly runs one axis, so a mesh
-/// written ``(2,16)`` spans sixteen lanes twice even where those 32 threads
-/// are one whole warp. ``id_axes`` folds that distinction away, so read the
-/// mesh's own last axis -- row-major, so the fastest is last.
+/// The mesh axis, not the ids it reaches: a butterfly runs one mesh axis, so a
+/// mesh written ``(2,16)`` spans sixteen lanes twice even where those 32
+/// threads are one whole warp. ``id_axes`` folds that distinction away, so read
+/// the mesh's own last mesh axis -- row-major, so the fastest is last.
 template <class T> CUTE_HOST_DEVICE constexpr int lane_axis_extent() {
     using mesh_t = typename cute::remove_cvref_t<T>::shard_layout_type::mesh;
     using axes_t = cute::remove_cvref_t<decltype(cute::flatten(
@@ -91,8 +91,8 @@ struct Warp {
         static_assert(tilefoundry::shard_mesh_units<Lhs>() <= kWarpSize,
                       "ops::dot: a cross-warp mesh requires workspace");
         static_assert(lane_axis_extent<Lhs>() == kWarpSize,
-                      "ops::dot (warp tier): the fastest axis of the operands' "
-                      "mesh must be exactly one warp of 32 lanes");
+                      "ops::dot (warp tier): the operands' fastest mesh axis "
+                      "must be exactly one warp of 32 lanes");
         auto a = tilefoundry::local_tensor(lhs);
         auto b = tilefoundry::local_tensor(rhs);
         auto &&d = tilefoundry::local_tensor(dst);

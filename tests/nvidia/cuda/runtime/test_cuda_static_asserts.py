@@ -34,7 +34,7 @@ CASES: dict[int, str | None] = {
     12: "ops::reduce: a reduce mesh's topology must be cta or thread",
     14: "these two views share no run wide enough for cp.async",
     15: "the two projected slices must hold the same number of elements",
-    16: "ops::dot (warp tier): the fastest axis of the operands' mesh",
+    16: "ops::dot (warp tier): the operands' fastest mesh axis",
     17: "ops::dot (block tier): the operands' mesh must be a whole number of warps",
     18: "operands must be one atom's lane fragments",
     19: "ops::sync: a mesh's topology must be cta or thread",

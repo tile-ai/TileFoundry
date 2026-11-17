@@ -98,10 +98,10 @@ template <class TLayout, TopologyLevel... Topos> struct Mesh {
     static constexpr int topology_count;
     static constexpr TopologyLevel first_topology;
     TLayout layout;
-    /// The topology flat axis ``I`` runs at. A mesh naming one topology
-    /// answers its own topology for every axis. A mesh naming several
+    /// The topology flat mesh axis ``I`` runs at. A mesh naming one topology
+    /// answers its own topology for every mesh axis. A mesh naming several
     /// groups its layout one nest per topology, and the nest holding
-    /// flat axis ``I`` states its topology.
+    /// flat mesh axis ``I`` states its topology.
     template <int I>
     CUTE_HOST_DEVICE static constexpr TopologyLevel mesh_axis_topology();
 };
@@ -133,7 +133,7 @@ CUTE_HOST_DEVICE constexpr auto make_mesh(Extents const &extents);
   - `mesh_coords` gives the coord of this unit in the mesh. It holds one `idx2crd` per topology. Each one takes the id of that topology less its id at the first unit. It multiplies that by the stride of the topology in `T` and reads it against the nest of that topology. The grouping is the grouping of the mesh. The result is congruent with `cute::shape` of the mesh layout, whether the mesh names one topology or several. A layout over that shape therefore indexes with it as it stands. It reads `unit_ids()`, one id for each topology that this program names. A coord of another length is refused by name.
   - `contains` and `mesh_coords` ask different questions. On a mesh narrower than its topology, they also give different answers. `idx2crd` is `(id / stride) % extent`. Thread 64 of a 128-thread block is therefore not in a 32-unit mesh. It does act as unit 0 of that mesh. The upper warps repeat what the lowest warp does. A slice does not repeat. A coord from outside a slice that reaches `mesh_coords` is a codegen fault. `contains` asks every topology that the mesh names, each against its own nest. A mesh with one nest per topology is one unit per topology together.
   - A thread mesh has warps only when its ids run a whole number of warps. `(32,..)` stepping by one is one warp. The mesh axis beyond it carries the warps. `(128,..)` holds four warps, and `as_warped` splits them out. Lanes shorter than a warp, repeated across warps, MUST be refused by name. Such lanes reach neither `bar.sync`, which counts whole warps, nor one `__syncwarp`.
-  - `as_warped` is idempotent: a mesh whose fastest axis is already one warp comes back unchanged.
+  - `as_warped` is idempotent: a mesh whose fastest mesh axis is already one warp comes back unchanged.
   - Only one shape of `cute::ComposedLayout` is a mesh: `cute::identity` over a static offset. A swizzle in the first slot, or a dynamic offset, gives a first unit that is not a compile-time number. `ops::sync` names its threads by the index of the first unit, so it refuses such a mesh by name.
   - The offset MUST NOT be dropped. A mesh layout maps a coord to a unit *within* the mesh. Only the offset turns that into a unit of the launch. A coord read off a raw id gives every unit of a slice the box that its neighbour owns. A plain `cute::Layout` is the whole topology at offset zero.
 
@@ -337,7 +337,7 @@ An op derives its geometry from `ShardTensor` or `Mesh` operands. An op is one i
 | --- | --- |
 | `elementwise` | destination local domain; stride-zero source broadcasts |
 | `copy` / `copy_async` | operand shapes, strides, shares and move width |
-| `reduce` | destination-broadcast axes split by the source |
+| `reduce` | destination-broadcast mesh axes split by the source |
 | `dot` | operand meshes' contraction axes |
 | `mma` | one atom's per-lane fragments |
 | `sync` | mesh scope, base and count |
@@ -516,7 +516,7 @@ __device__ inline void reduce(Src const &src, Dst &dst, Ws &&ws = {});
   - The combine domain is `float`. `init`, `elem`, `combine` and `finalize` are all in it. The entry refuses an element type that `float` cannot hold exactly, such as a 4- or 8-byte integer or a packed key. It does not round that type.
   - Plain operands derive extents from the operand rank and size inside the
     runtime.
-  - A reduction whose reduced axis crosses CTA boundaries is not supported.
+  - A reduction whose reduced mesh axis crosses CTA boundaries is not supported.
 
 #### 2.6.7 `ops/sync.cuh`
 

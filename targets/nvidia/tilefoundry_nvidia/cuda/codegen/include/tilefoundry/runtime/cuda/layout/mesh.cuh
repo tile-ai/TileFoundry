@@ -29,10 +29,10 @@ template <class TLayout, TopologyLevel... Topos> struct Mesh {
         detail::first_topology_of<Topos...>::value;
     TLayout layout;
 
-    /// The topology flat axis ``I`` runs at. A mesh naming one topology
-    /// answers its own topology for every axis. A mesh naming several
+    /// The topology flat mesh axis ``I`` runs at. A mesh naming one topology
+    /// answers its own topology for every mesh axis. A mesh naming several
     /// groups its layout one nest per topology, and the nest holding
-    /// flat axis ``I`` states its topology.
+    /// flat mesh axis ``I`` states its topology.
     template <int I>
     CUTE_HOST_DEVICE static constexpr TopologyLevel mesh_axis_topology() {
         if constexpr (sizeof...(Topos) == 1) {
@@ -80,15 +80,15 @@ template <class L> CUTE_HOST_DEVICE constexpr auto plain_layout(L const &l) {
 ///
 /// ``reverse`` because a mesh is row-major and CuTe is not -- the reason is
 /// on ``reverse`` itself in layout/cute_ext.cuh -- and ``filter`` because an
-/// axis of extent one, which CuTe writes as stride zero, names no id.
+/// mesh axis of extent one, which CuTe writes as stride zero, names no id.
 template <class L> CUTE_HOST_DEVICE constexpr auto id_axes(L const &l) {
     return cute::filter(reverse(cute::flatten(plain_layout(l))));
 }
 
-/// The mode of the mesh's layout that holds topology ``S``'s axes:
+/// The mode of the mesh's layout that holds topology ``S``'s mesh axes:
 /// ``cute::get<at>`` of the plain layout, strides in the index over all the
-/// mesh's topologies. A mesh naming one topology states its axes ungrouped, so
-/// its whole plain layout is that mode.
+/// mesh's topologies. A mesh naming one topology states its mesh axes
+/// ungrouped, so its whole plain layout is that mode.
 template <TopologyLevel S, class L, TopologyLevel... Topos>
 CUTE_HOST_DEVICE constexpr auto topology_mode(Mesh<L, Topos...> const &mesh) {
     constexpr int at = topology_level_of<S, Topos...>();
@@ -212,9 +212,9 @@ CUTE_HOST_DEVICE constexpr auto mesh_coords(Mesh<L, Topos...> const &mesh,
 
 /// Whether the mesh's ids say where the warps are.
 ///
-/// The axes arrive in CuTe's order, so mode zero is the fastest and its
+/// The mesh axes arrive in CuTe's order, so mode zero is the fastest and its
 /// extent is how many lanes run together: ``(32,..):(1,..)`` is one warp and
-/// the next axis carries the warps, ``(128,..):(1,..)`` holds four that
+/// the next mesh axis carries the warps, ``(128,..):(1,..)`` holds four that
 /// ``as_warped`` splits out, and ``(16,..):(1,..)`` is half a warp shared
 /// between units. The third reaches neither ``bar.sync``, which counts
 /// whole warps, nor one ``__syncwarp``, so it is refused by name.
@@ -238,11 +238,11 @@ CUTE_HOST_DEVICE constexpr bool is_warped(Mesh<L, Topos...> const &mesh) {
     }
 }
 
-/// The same mesh with its lanes stated as an axis of their own: the fastest
-/// axis of extent ``E`` becomes ``(E/32, 32)``, so the last axis is one
-/// warp and the axis before it steps between warps.
+/// The same mesh with its lanes stated as a mesh axis of their own: the fastest
+/// mesh axis of extent ``E`` becomes ``(E/32, 32)``, so the last mesh axis is
+/// one warp and the mesh axis before it steps between warps.
 ///
-/// Idempotent -- a fastest axis of exactly 32 is already that -- and every
+/// Idempotent -- a fastest mesh axis of exactly 32 is already that -- and every
 /// warp question is then a shape or a stride of the result.
 template <class L, TopologyLevel... Topos>
 CUTE_HOST_DEVICE constexpr auto as_warped(Mesh<L, Topos...> const &mesh) {
@@ -250,7 +250,7 @@ CUTE_HOST_DEVICE constexpr auto as_warped(Mesh<L, Topos...> const &mesh) {
                   "as_warped: this mesh's fastest axis must step by one "
                   "and run whole warps");
     using ids_t = cute::remove_cvref_t<decltype(detail::id_axes(mesh.layout))>;
-    /// Mode zero is the fastest here, so a warp-sized tile cuts the axis a
+    /// Mode zero is the fastest here, so a warp-sized tile cuts the mesh axis a
     /// warp runs along; the result turns back into the mesh's own order.
     if constexpr (int(cute::get<0>(cute::shape(ids_t{}))) == kWarpSize) {
         auto rowwise = reverse(ids_t{});
