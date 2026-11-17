@@ -1003,6 +1003,10 @@ def swizzle_slice_and_offset(coord, layout: ComposedLayout):
     bits, base, shift = swizzle.bits, swizzle.base, abs(swizzle.shift)
     if all_underscore(coord):
         return composition(swizzle, layout.offset, slice(coord, layout.outer)), 0
+    if not any(one is None for one in flatten_to_tuple(coord)):
+        raise ValueError(
+            "slice_and_offset: a swizzled layout needs a coordinate that keeps at least one mode"
+        )
     shape = (1 << base, 1 << bits, 1 << (shift - bits), 1 << bits, 1)
     compact = compact_major(shape, LayoutLeft)
     anti_zy = Layout(shape, (compact[0], 0, compact[2], 0, int_tuple.product(shape)))
