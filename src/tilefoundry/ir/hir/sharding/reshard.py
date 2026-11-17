@@ -62,7 +62,10 @@ def buffer_alias(call: expr.Call) -> int | None:
         if isinstance(view.target, tensor.Slice):
             starts = view.args[1].elements
             if all(expr.static_dim_value(start) is not None for start in starts):
-                _, moved = types.domain_offset(starts, parent.type.layout, parent.type.shape)
+                held = parent.type.layout
+                held = held.layout if isinstance(held, types.ShardLayout) else held
+                grouped = types.unflatten(types.flatten(held), int_tuple.compatible_profile(held.shape, parent.type.shape))
+                _, moved = types.domain_offset(tuple(starts), grouped)
                 offset += moved
         view = parent
     if offset:
@@ -84,14 +87,12 @@ def buffer_alias(call: expr.Call) -> int | None:
         flat, threads = types.flatten(types.plain_layout(physical)), None
         if held.storage is expr.StorageKind.RMEM and shard is not None:
             mesh = shard.mesh
-            try:
-                start = types.offset(mesh)
-            except ValueError:
-                return None
+            start = mesh.layout(0)
             threads = (mesh.topologies, types.plain_layout(utils.flat_layout(mesh)), start)
             sizes = (getattr(topology, "size", 1) for topology in mesh.topologies)
             if not all(
-                isinstance(value, int) for value in (*sizes, *threads[1].shape, *threads[1].strides)
+                isinstance(value, int)
+                for value in (*sizes, start, *threads[1].shape, *threads[1].strides)
             ):
                 return None
         steps = flat.strides if threads is None else utils.register_strides(shard)
@@ -233,7 +234,7 @@ def sent_traffic(source, destination, *, logical_source=None, logical_destinatio
     }
     mesh = types.shard_layout_of(source.layout).mesh
     extents = mesh.shape
-    levels = tuple(level for level, _ in types.axis_keys(mesh))
+    levels = tuple(level for level, _ in utils.axis_keys(mesh))
     held = utils.tensor_bytes(source)
     moved: dict[str, int] = {}
     for topology in mesh.topologies:

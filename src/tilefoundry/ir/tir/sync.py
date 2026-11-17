@@ -32,12 +32,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
 def legal_slice_of(m: types.Mesh, e: types.Mesh) -> bool:
     """Return whether *m* reconstructs as a constant slice of full mesh *e*.
 
-    ``types.sub_box`` decodes the box from the first and last unit of *m*. The
+    ``utils.sub_box`` decodes the box from the first and last unit of *m*. The
     final proof rebuilds the slice and compares it structurally, names included.
     """
     if isinstance(e.layout, types.ComposedLayout) or e.names != m.names:
         return False
-    box = types.sub_box(e, m)
+    box = utils.sub_box(e, m)
     if box is None:
         return False
     try:
@@ -136,13 +136,13 @@ def sync_scope(mesh: types.Mesh) -> SyncScope:
             "only a static thread count is supported"
         )
     try:
-        outer, offset = types.plain_layout(utils.flat_layout(mesh)), types.offset(mesh)
+        outer = types.plain_layout(utils.flat_layout(mesh))
     except ValueError as error:
         raise expr.VerifyError(f"T.sync: {error}") from error
     shape = outer.shape
     strides = outer.strides
     if (
-        not isinstance(offset, int)
+        not isinstance(mesh.layout(0), int)
         or any(not isinstance(s, int) for s in shape)
         or any(not isinstance(s, int) for s in strides)
     ):
@@ -150,7 +150,7 @@ def sync_scope(mesh: types.Mesh) -> SyncScope:
 
     count = types.size(outer)
 
-    lins = {offset + outer(c) for c in range(count)}
+    lins = {mesh.layout(c) for c in range(count)}
     if len(lins) != count:
         raise expr.VerifyError("T.sync: mesh layout maps several coords to one thread (overlap)")
     base = min(lins)

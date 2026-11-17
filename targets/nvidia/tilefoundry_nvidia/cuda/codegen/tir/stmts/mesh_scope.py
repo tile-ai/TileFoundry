@@ -37,7 +37,7 @@ def validate_topology(mesh: types.Mesh, tgt) -> None:
 def raw_groups(mesh: types.Mesh) -> tuple[tuple, tuple]:
     """Each topology's axes as flat (shape, strides), strides in the index over all topologies.
 
-    A topology stating no axes reads as one mode of one, as ``flat_layouts`` reads it.
+    A topology stating no axes reads as one mode of one.
     """
     stated = types.plain_layout(mesh.layout)
     shapes, strides = [], []
@@ -52,11 +52,7 @@ def raw_groups(mesh: types.Mesh) -> tuple[tuple, tuple]:
 
 
 def grouped_layout(mesh: types.Mesh) -> str:
-    """One nest per topology, strides in the index over all topologies.
-
-    ``get<L>`` on the C++ side divides a nest's strides back into that
-    topology's own numbering.
-    """
+    """One nest per topology, strides in the index over all topologies."""
     return cute_layout.render_layout_type(*raw_groups(mesh))
 
 
@@ -75,7 +71,8 @@ def mesh_type(mesh: types.Mesh) -> str:
     else:
         base = 0
     if len(topos) == 1:
-        shape, strides = types.flat_layouts(mesh)[0]
+        flat = types.flatten(types.plain_layout(mesh.layout))
+        shape, strides = flat.shape or (1,), flat.strides or (0,)
         layout = cute_layout.render_layout_type(shape, strides)
     else:
         if base:

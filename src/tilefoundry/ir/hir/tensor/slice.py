@@ -244,10 +244,12 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     try:
         new_layout = window_tiler(call, ctx, source)
         if composed is not None:
-            _, moved = types.domain_offset(starts.elements, composed.outer, x_ty.shape)
+            outer = composed.outer.layout if isinstance(composed.outer, types.ShardLayout) else composed.outer
+            grouped = types.unflatten(types.flatten(outer), int_tuple.compatible_profile(outer.shape, x_ty.shape))
+            _, moved = types.domain_offset(tuple(starts.elements), grouped)
             shifted = composed
             if expr.static_dim_value(moved) is not None:
-                shifted, _ = types.domain_offset(starts.elements, composed, x_ty.shape)
+                shifted, _ = types.domain_offset(tuple(starts.elements), replace(composed, outer=grouped))
             new_layout = replace(new_layout, layout=replace(shifted, outer=new_layout.layout)) if shard is not None else replace(shifted, outer=new_layout)
     except ValueError as error:
         ctx.error(call, str(error))

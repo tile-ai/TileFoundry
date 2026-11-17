@@ -369,11 +369,13 @@ def held_in_mesh_scope(mesh: types.Mesh, mesh_scope: types.Mesh) -> bool:
 
     *mesh* may also name enclosing topologies. Those do not reject a mesh scope
     that states only an inner topology; each topology of *mesh_scope* is compared
-    independently, so sliced offsets remain in that topology's own numbering.
+    independently, by the unit ids of its ``utils.topology_mesh``.
     """
-    for scope_part in types.sub_meshes(mesh_scope):
-        part = types.get(mesh, types.topology_names(scope_part)[0])
-        if part is None or not types.within_mesh_scope(part, scope_part):
+    for name in ir_utils.topology_names(mesh_scope):
+        part = ir_utils.topology_mesh(mesh, name)
+        if part is None or not ir_utils.within_mesh_scope(
+            part, ir_utils.topology_mesh(mesh_scope, name)
+        ):
             return False
     return True
 
@@ -394,7 +396,7 @@ def values_in_region(
     """
     owner_order = {name: index for index, name in enumerate(topology_names)}
     region_indices = tuple(
-        owner_order[name] for name in types.topology_names(region.mesh)
+        owner_order[name] for name in ir_utils.topology_names(region.mesh)
     )
     outermost_region = min(region_indices)
     result = []

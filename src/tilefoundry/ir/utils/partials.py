@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from tilefoundry.ir import expr, types
 
+from .mesh_scope import axis_keys
+
 __all__ = [
     "attrs_by_axis",
     "check_multilinear_partials",
@@ -37,7 +39,7 @@ def attrs_by_axis(
     shard = types.shard_layout_of(type_.layout)
     stated, counts = {}, {}
     if shard is not None:
-        for axis, (level, _) in enumerate(types.axis_keys(shard.mesh)):
+        for axis, (level, _) in enumerate(axis_keys(shard.mesh)):
             ordinal = counts.get(level, 0)
             counts[level] = ordinal + 1
             stated[level, ordinal] = (
@@ -46,7 +48,7 @@ def attrs_by_axis(
     keys = stated
     if mesh is not None:
         keys, counts = {}, {}
-        for level, _ in types.axis_keys(mesh):
+        for level, _ in axis_keys(mesh):
             ordinal = counts.get(level, 0)
             counts[level] = ordinal + 1
             keys[level, ordinal] = None

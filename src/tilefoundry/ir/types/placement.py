@@ -14,11 +14,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from itertools import product
 
-from .layout import plain_layout, size
-from .mesh import Mesh, offset, sub_meshes
+from .layout import size
+from .mesh import Mesh, topology_sizes
 from .shard_layout import mesh_coords
+from .stride import idx2crd
 from .topology import Topology, topology_name
 
 __all__ = ["Placement"]
@@ -48,15 +48,10 @@ class Placement:
 
     @classmethod
     def from_mesh(cls, mesh: Mesh) -> "tuple[Placement, ...]":
-        """Every placement of *mesh*: each unit id is its topology's layout value plus offset."""
-        parts = sub_meshes(mesh)
+        """Every placement of *mesh*, in coord order: ``idx2crd(L(i), sizes)`` is its unit ids."""
+        names = tuple(map(topology_name, mesh.topologies))
+        sizes = topology_sizes(mesh.topologies)
         return tuple(
-            cls(
-                {
-                    topology_name(part.topologies[0]): plain_layout(part.layout)(index)
-                    + offset(part)
-                    for part, index in zip(parts, at, strict=True)
-                }
-            )
-            for at in product(*(range(size(part.layout)) for part in parts))
+            cls(dict(zip(names, idx2crd(mesh.layout(index), sizes), strict=True)))
+            for index in range(size(mesh.layout))
         )

@@ -271,14 +271,17 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
 
     /// How each mesh axis divides into lanes and warps. A thread-level axis
     /// spends the lane budget, fastest axis first; a cta-level axis reduces
-    /// across CTAs rather than warp lanes. The thread level's own mesh, which
-    /// ``get`` picks out of a mesh naming several levels, states the lanes.
+    /// across CTAs rather than warp lanes. The thread level's mode of a mesh
+    /// naming several levels, as a mesh of that level, states the lanes.
     int lanes_of[m_rank] = {};
     int warps_of[m_rank] = {};
     constexpr int kLanes = [] {
         if constexpr (has_thread)
-            return lanes_of_mesh<cute::remove_cvref_t<
-                decltype(tilefoundry::get<TopologyLevel::thread>(mesh_t{}))>>();
+            return lanes_of_mesh<
+                Mesh<cute::remove_cvref_t<
+                         decltype(tilefoundry::detail::topology_mode<
+                                  TopologyLevel::thread>(mesh_t{}))>,
+                     TopologyLevel::thread>>();
         else
             return 0;
     }();

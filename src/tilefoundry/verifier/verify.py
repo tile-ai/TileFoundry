@@ -11,6 +11,7 @@ from contextlib import ExitStack, contextmanager
 from tilefoundry import services, utils
 from tilefoundry.interfaces import valuation, verify
 from tilefoundry.ir import core, dim, expr, pattern, tir, types
+from tilefoundry.ir import utils as ir_utils
 from tilefoundry.ir.tir import memory
 from tilefoundry.target import cpu
 
@@ -498,7 +499,7 @@ def iter_op_attrs(op):
 
 def assert_mesh_in_scope(mesh: types.Mesh, ctx, fn):
     scope = ctx.enclosing_meshes()
-    if any(mesh == m for m in scope) or (scope and mesh == types.Mesh.from_meshes(*scope)):
+    if any(mesh == m for m in scope) or (scope and mesh == ir_utils.from_meshes(*scope)):
         return
     for p in fn.params:
         if isinstance(p.type, types.TensorType) and isinstance(p.type.layout, types.ShardLayout):

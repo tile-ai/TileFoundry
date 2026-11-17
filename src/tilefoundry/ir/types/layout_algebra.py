@@ -328,7 +328,7 @@ def composition_impl(lhs_shape, lhs_stride, rhs_shape, rhs_stride) -> Layout:
     if expr.static_dim_value(rhs_stride) == 0:
         return Layout(rhs_shape, rhs_stride)
     if not isinstance(lhs_shape, tuple):
-        return Layout(rhs_shape, rhs_stride * lhs_stride)
+        return Layout(rhs_shape, scaled(rhs_stride, lhs_stride))
     result_shape, result_stride = (), ()
     rest_shape, rest_stride = rhs_shape, rhs_stride
     for curr_shape, curr_stride in builtins.zip(lhs_shape[:-1], lhs_stride[:-1]):
@@ -338,23 +338,54 @@ def composition_impl(lhs_shape, lhs_stride, rhs_shape, rhs_stride) -> Layout:
         magnitude = abs(rest_stride) if isinstance(rest_stride, int) else rest_stride
         sign = -1 if isinstance(rest_stride, int) and rest_stride < 0 else 1
         next_shape = int_tuple.ceil_div(curr_shape, magnitude)
-        next_stride = int_tuple.ceil_div(magnitude, curr_shape) * sign
+        next_stride = scaled(int_tuple.ceil_div(magnitude, curr_shape), sign)
         if expr.static_dim_value(next_shape) == 1 or expr.static_dim_value(rest_shape) == 1:
             rest_stride = next_stride
             continue
-        new_shape = min(next_shape, rest_shape)
+        new_shape = least(next_shape, rest_shape, curr_shape, magnitude)
         if expr.static_dim_value(new_shape) is not None and expr.static_dim_value(rest_shape) is not None:
             if rest_shape % new_shape:
                 raise ValueError("composition: Shape Divisibility Condition")
         result_shape += (new_shape,)
-        result_stride += (rest_stride * curr_stride,)
-        rest_shape = rest_shape // new_shape
+        result_stride += (scaled(rest_stride, curr_stride),)
+        rest_shape = int_tuple.safe_div(rest_shape, new_shape)
         rest_stride = next_stride
     if not result_shape:
-        return Layout(rest_shape, rest_stride * lhs_stride[-1])
+        return Layout(rest_shape, scaled(rest_stride, lhs_stride[-1]))
     if expr.static_dim_value(rest_shape) == 1:
         return Layout(unwrap(result_shape), unwrap(result_stride))
-    return Layout((*result_shape, rest_shape), (*result_stride, rest_stride * lhs_stride[-1]))
+    return Layout(
+        (*result_shape, rest_shape), (*result_stride, scaled(rest_stride, lhs_stride[-1]))
+    )
+
+
+def least(next_shape, rest_shape, curr_shape, magnitude):
+    """CuTe ``min(next_shape, rest_shape)`` of ``detail::composition_impl``.
+
+    A symbolic operand takes the one proven no larger: ``rest_shape`` also when
+    ``rest_shape * magnitude <= curr_shape``, which bounds the ceiling
+    ``next_shape``. An unproven order stays the dynamic ``min``.
+    """
+    if expr.static_dim_value(next_shape) is not None and expr.static_dim_value(rest_shape) is not None:
+        return min(next_shape, rest_shape)
+    if int_tuple.dim_at_most(rest_shape, next_shape) or (
+        int_tuple.dim_at_most(1, magnitude)
+        and int_tuple.dim_at_most(services.simplify_dim("mul", (rest_shape, magnitude)), curr_shape)
+    ):
+        return rest_shape
+    if int_tuple.dim_at_most(next_shape, rest_shape):
+        return next_shape
+    return services.simplify_dim("min", (next_shape, rest_shape))
+
+
+def scaled(value, factor):
+    """*value* times *factor*; a static factor 1 or 0 gives *value* or 0, as CuTe ``Int`` does."""
+    step = expr.static_dim_value(factor)
+    if step == 1:
+        return value
+    if step == 0:
+        return 0
+    return value * factor
 
 
 def composition(lhs, *rhs, major="row"):

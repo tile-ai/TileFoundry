@@ -69,8 +69,8 @@ def crd2idx(coord, shape, stride=None, *, major="row"):
     coord = literal if literal is not None else coord
     if not isinstance(shape, tuple):
         step = expr.static_dim_value(stride)
-        if literal is not None and step is not None:
-            return literal * step
+        if literal == 0 or (literal is not None and step is not None):
+            return literal * (step or 0)
         return services.simplify_dim("mul", (coord, stride))
     if len(shape) != len(stride):
         raise ValueError(f"crd2idx: mismatched ranks {len(shape)} and {len(stride)}")

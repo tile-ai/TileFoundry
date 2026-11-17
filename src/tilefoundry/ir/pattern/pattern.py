@@ -392,7 +392,7 @@ class ShardLayout(Pattern):
         if not isinstance(topologies, tuple):
             topologies = bindings.get(
                 topologies.name,
-                types.topology_names(subject.mesh)[-1:],
+                utils.topology_names(subject.mesh)[-1:],
             )
         return utils.filter_topologies(subject, topologies)
 

@@ -21,7 +21,7 @@ from typing import Literal as TypingLiteral
 from tilefoundry import services
 from tilefoundry import target as tilefoundry_target
 from tilefoundry.interfaces import typeinfer, valuation
-from tilefoundry.ir import core, dim, expr, types
+from tilefoundry.ir import core, dim, expr, types, utils
 from tilefoundry.ir import pattern as ir_pattern
 from tilefoundry.ir.hir import math, sharding, tensor
 from tilefoundry.ir.tir import memory
@@ -231,7 +231,7 @@ runtime = SimpleNamespace(
     Var=expr.Var,
     DISPLAY_NAME=valuation.DISPLAY_NAME,
     compact_row_major=types.compact_row_major,
-    make_mesh=types.Mesh.from_meshes,
+    make_mesh=utils.from_meshes,
     dim_expr=dim.as_dimension,
     normalize_dim=services.normalize_dim,
     static_dim_value=expr.static_dim_value,

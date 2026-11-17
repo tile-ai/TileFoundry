@@ -8,6 +8,7 @@ from contextlib import contextmanager
 
 from tilefoundry import utils
 from tilefoundry.ir import types
+from tilefoundry.ir import utils as ir_utils
 
 from .mesh_utils import selection_layout
 
@@ -28,7 +29,7 @@ def box_text(parent: types.Mesh, box: tuple[slice, ...], alias: str) -> str:
 def slice_from_parent(parent: types.Mesh, child: types.Mesh, alias: str) -> str | None:
     if parent.names != child.names:
         return None
-    box = types.sub_box(parent, child)
+    box = ir_utils.sub_box(parent, child)
     if box is None or parent[box] != child:
         return None
     return box_text(parent, box, alias)
@@ -110,7 +111,7 @@ class PrintContext:
 
     @property
     def mesh_scope(self) -> types.Mesh | None:
-        return types.Mesh.from_meshes(*(mesh for mesh, _ in self.mesh_bindings)) if self.mesh_bindings else None
+        return ir_utils.from_meshes(*(mesh for mesh, _ in self.mesh_bindings)) if self.mesh_bindings else None
 
     def mesh_alias(self, mesh: types.Mesh) -> str | None:
         for bound, name in reversed(self.mesh_bindings):
@@ -123,7 +124,7 @@ class PrintContext:
         names = mesh.names
         if axis >= len(names):
             return None
-        target_level, target_name = types.axis_keys(mesh)[axis]
+        target_level, target_name = ir_utils.axis_keys(mesh)[axis]
         target_topology = next(
             (topology for topology in mesh.topologies if topology.name == target_level), None
         )
@@ -131,7 +132,7 @@ class PrintContext:
             bound, alias = self.mesh_bindings[binding_index]
             if not bound.names or target_name not in bound.names:
                 continue
-            for bound_level, bound_name in types.axis_keys(bound):
+            for bound_level, bound_name in ir_utils.axis_keys(bound):
                 if bound_name != target_name or bound_level != target_level:
                     continue
                 bound_topology = next(
@@ -139,7 +140,8 @@ class PrintContext:
                 )
                 if (
                     target_topology == bound_topology
-                    and types.get(mesh, target_level).layout == types.get(bound, target_level).layout
+                    and ir_utils.topology_mesh(mesh, target_level).layout
+                    == ir_utils.topology_mesh(bound, target_level).layout
                 ):
                     return f"{alias}.{bound_name}"
         return None
@@ -160,7 +162,7 @@ class PrintContext:
             layout = selection_layout(mesh, parent)
             if layout is not None:
                 return alias, layout
-            box = types.sub_box(parent, mesh)
+            box = ir_utils.sub_box(parent, mesh)
             if box is None:
                 continue
             selection = parent[box]

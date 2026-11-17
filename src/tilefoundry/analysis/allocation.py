@@ -253,13 +253,13 @@ def visible_at(model, value, producer):
         if mesh is None:
             return False
         axes = dim.literal_axes(value.args[0])
-        keys = types.axis_keys(value.target.mesh)
+        keys = ir_utils.axis_keys(value.target.mesh)
         needed = (
-            set(types.topology_names(value.target.mesh))
+            set(ir_utils.topology_names(value.target.mesh))
             if axes is None
             else {keys[axis][0] for axis in axes if axis < len(keys)}
         )
-        return needed <= set(types.topology_names(mesh))
+        return needed <= set(ir_utils.topology_names(mesh))
     interval = model.liveness.interval_of(core.SSAValue(value))
     location = model.context.scope.snapshot.definition.locations.get(id(value))
     return (
@@ -990,7 +990,7 @@ def partial_copies(held: types.TensorType, owners: expr.StorageOwners) -> int:
         return 1
     copies = 1
     for (level, _), reduction, extent in zip(
-        types.axis_keys(layout.mesh),
+        ir_utils.axis_keys(layout.mesh),
         types.partial_reductions_by_axis(layout),
         layout.mesh.shape,
     ):

@@ -57,8 +57,8 @@ def static_axes(mesh: types.Mesh) -> "tuple[int, tuple[int, ...], tuple[int, ...
     """A mesh's device-numbered unit ids, when every one of them is a number."""
     try:
         axes = types.flatten(types.plain_layout(mesh.layout))
-        offset = types.offset(mesh)
-    except ValueError:
+        offset = mesh.layout(0)
+    except (TypeError, ValueError):
         return None
     shape = tuple(expr.static_dim_value(extent) for extent in types.flatten_to_tuple(axes.shape))
     strides = tuple(expr.static_dim_value(stride) for stride in types.flatten_to_tuple(axes.strides))
@@ -296,7 +296,7 @@ def space_axes(
 
 def axis_label(mesh: types.Mesh, axis: int) -> str:
     """Name a mesh axis, falling back to its numeric index."""
-    keys = types.axis_keys(mesh)
+    keys = ir_utils.axis_keys(mesh)
     level_name = keys[axis][0] if axis < len(keys) else ""
     if axis < len(mesh.names):
         name = mesh.names[axis]
@@ -438,8 +438,8 @@ def axis_parameters_of(scope: IterationScope, mesh: types.Mesh | None) -> tuple[
         axis = expr.static_dim_value(coordinate.args[0])
         if axis is None:
             continue
-        keys = types.axis_keys(coordinate.target.mesh)
-        if axis < len(keys) and types.get(coordinate.target.mesh, keys[axis][0]) == mesh:
+        keys = ir_utils.axis_keys(coordinate.target.mesh)
+        if axis < len(keys) and ir_utils.topology_mesh(coordinate.target.mesh, keys[axis][0]) == mesh:
             names_by_axis[axis - [level for level, _ in keys].index(keys[axis][0])] = name
     return tuple(names_by_axis.get(axis) for axis in range(len(mesh.shape)))
 
@@ -452,7 +452,7 @@ def wave_mesh(scope: IterationScope, topology: str) -> types.Mesh | None:
             if isinstance(ctx.owner, core.MeshRegion)
             else (ctx.mesh if ctx.parent is None else None)
         )
-        if mesh is not None and (part := types.get(mesh, topology)) is not None:
+        if mesh is not None and (part := ir_utils.topology_mesh(mesh, topology)) is not None:
             return part
     return None
 

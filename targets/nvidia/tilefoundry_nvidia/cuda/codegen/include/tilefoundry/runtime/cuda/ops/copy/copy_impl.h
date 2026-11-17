@@ -134,11 +134,13 @@ struct CopyIndexedAsync {
             bytes == 4 || bytes == 8 || bytes == 16,
             "indexed copy_async needs an aligned 4, 8, or 16 byte row vector");
         constexpr int V = bytes / int(sizeof(value_type));
-        constexpr auto threads =
-            tilefoundry::get<tilefoundry::TopologyLevel::thread>(
+        constexpr auto threads = tilefoundry::detail::topology_mode<
+            tilefoundry::TopologyLevel::thread>(ExecutionMesh{});
+        constexpr int units = int(cute::size(threads));
+        const int lane =
+            int(threadIdx.x) -
+            tilefoundry::detail::first_id<tilefoundry::TopologyLevel::thread>(
                 ExecutionMesh{});
-        constexpr int units = int(cute::size(threads.layout));
-        const int lane = int(threadIdx.x) - tilefoundry::offset(threads);
         auto row_vectors = cute::recast<cute::uint_bit_t<bytes * 8>>(row_d);
         const int vectors_per_row = int(cute::size(row_vectors));
         const int vectors = int(cute::size<0>(rows_d)) * vectors_per_row;

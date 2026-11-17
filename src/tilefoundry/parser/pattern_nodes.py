@@ -411,11 +411,11 @@ def meshes_outermost_first(meshes, context):
     declared = tuple(context.function.topologies) if context.function is not None else ()
     order = {name: index for index, name in enumerate(declared)}
 
-    def rank(mesh):
-        names = types.topology_names(mesh)
+    def topology_level(mesh):
+        names = utils.topology_names(mesh)
         return min((order.get(name, len(order)) for name in names), default=len(order))
 
-    return tuple(sorted(meshes, key=rank))
+    return tuple(sorted(meshes, key=topology_level))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -682,10 +682,10 @@ class ShardLayoutScopeRule:
             raise ParseError.from_node(
                 match.node, context, "shard layout requires a current mesh scope"
             )
-        keys = types.axis_keys(mesh)
+        keys = utils.axis_keys(mesh)
         attrs = [runtime.Broadcast() for _ in keys]
         for source, source_axis, *state in (*value.splits, *value.states):
-            key = types.axis_keys(source)[source_axis]
+            key = utils.axis_keys(source)[source_axis]
             targets = [axis for axis, held in enumerate(keys) if held == key]
             if len(targets) != 1:
                 raise ParseError.from_node(
@@ -4025,7 +4025,7 @@ class SelectionSizeRule:
     def apply(self, value, *, match, context):
         if not isinstance(value, MeshSelection):
             return value
-        source = types.flatten(types.layouts(value.selection)[0])
+        source = types.flatten(types.plain_layout(value.selection.layout))
         layout = value.layout
         message = None
         if types.size(layout) != types.size(source):
@@ -4074,7 +4074,7 @@ class SelectionStrideRule:
     def apply(self, value, *, match, context):
         if not isinstance(value, MeshSelection):
             return value
-        source = types.flatten(types.layouts(value.selection)[0])
+        source = types.flatten(types.plain_layout(value.selection.layout))
         try:
             outer = layout_algebra.composition(source, value.layout, major="row")
         except (AssertionError, ValueError, TypeError) as error:
@@ -4104,7 +4104,7 @@ class SelectionConstructionRule:
         if not isinstance(value, MeshSelection):
             return value
         assert value.outer is not None
-        start = types.offset(value.selection)
+        start = value.selection.layout(0)
         whole = start == 0 and types.size(value.outer) == value.selection.topologies[0].size
         mesh = runtime.Mesh(
             value.selection.topologies,

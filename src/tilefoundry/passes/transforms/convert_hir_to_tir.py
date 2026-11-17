@@ -127,7 +127,7 @@ def first_thread(enclosing: types.Mesh | None, topologies) -> types.Mesh | None:
     one over several levels whose sizes are not all numbers, so its start cannot
     be split into the start of each level.
     """
-    if enclosing is not None and "thread" not in types.topology_names(enclosing):
+    if enclosing is not None and "thread" not in ir_utils.topology_names(enclosing):
         enclosing = None
     if enclosing is None:
         topology = next((one for one in topologies or () if one.name == "thread"), None)
@@ -141,11 +141,11 @@ def first_thread(enclosing: types.Mesh | None, topologies) -> types.Mesh | None:
                 return None
             if len(sizes) > 1 and not all(isinstance(size, int) for size in sizes):
                 return None
-        level = types.get(enclosing, "thread")
-        topology = level.topologies[0]
-        if types.size(ir_utils.flat_layout(level)) == 1:
+        thread = ir_utils.topology_names(enclosing).index("thread")
+        topology = enclosing.topologies[thread]
+        if types.size(types.get(types.plain_layout(enclosing.layout), thread)) == 1:
             return None
-        start = types.offset(level)
+        start = ir_utils.first_unit_ids(enclosing)[thread]
     return types.Mesh((topology,), types.ComposedLayout(None, start, types.Layout((1,), (1,))), ("writer",))
 
 
@@ -162,10 +162,10 @@ def transfer_meshes(type_list, destination, around, topologies) -> tuple[types.M
     held = () if mesh is None else (mesh,)
     if getattr(destination, "storage", None) is not expr.StorageKind.SMEM:
         return held
-    if mesh is not None and "thread" in types.topology_names(mesh):
+    if mesh is not None and "thread" in ir_utils.topology_names(mesh):
         return held
     enclosing = next(
-        (one for one in around if one is not None and "thread" in types.topology_names(one)), None
+        (one for one in around if one is not None and "thread" in ir_utils.topology_names(one)), None
     )
     writer = first_thread(enclosing, topologies)
     return held if writer is None else (*held, writer)

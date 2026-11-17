@@ -16,6 +16,7 @@ from types import MappingProxyType
 
 from tilefoundry import utils
 from tilefoundry.ir import types
+from tilefoundry.ir import utils as ir_utils
 
 __all__ = ["ShardTensor", "local_type"]
 
@@ -62,7 +63,7 @@ class ShardTensor:
         if shard is None:
             return self.tensor
         if placement is None:
-            axes = types.topology_names(shard.mesh)
+            axes = ir_utils.topology_names(shard.mesh)
             raise ValueError(
                 f"ShardTensor: {tuple(self.type.shape)} is sharded over {axes}, and "
                 f"no Placement says which unit this is; pass placement= to load()"

@@ -6,7 +6,7 @@ import copy
 from dataclasses import dataclass, field
 from typing import ClassVar
 
-from tilefoundry.ir import dim, expr, types
+from tilefoundry.ir import dim, expr, types, utils
 from tilefoundry.ir.types import int_tuple
 
 from .solve import UNKNOWN, Unknown, failing, solve
@@ -422,18 +422,18 @@ class Matcher:
     def visit_Mesh(self, pattern, subject) -> bool:
         if not isinstance(subject, types.Mesh):
             return self.fail(pattern, subject)
-        names = types.topology_names(subject)
+        names = utils.topology_names(subject)
         if not isinstance(pattern.topologies, tuple):
             if not names:
                 return self.fail(pattern, subject)
             return self.match(pattern.topologies, names[-1:]) and self.match(
-                pattern.layout, types.get(subject, names[-1]).layout
+                pattern.layout, utils.topology_mesh(subject, names[-1]).layout
             )
         found = tuple(name for name in names if name in pattern.topologies)
         if len(found) != len(pattern.topologies) or set(found) != set(pattern.topologies):
             return self.fail(pattern, subject)
-        picked = (types.get(subject, name) for name in found)
-        return self.match(pattern.layout, types.Mesh.from_meshes(*picked).layout)
+        picked = (utils.topology_mesh(subject, name) for name in found)
+        return self.match(pattern.layout, utils.from_meshes(*picked).layout)
 
     def visit_Tensor(self, pattern, subject) -> bool:
         if not isinstance(subject, types.TensorType):
@@ -462,7 +462,7 @@ class Matcher:
     def visit_ShardLayout(self, pattern, subject) -> bool:
         if not isinstance(subject, types.ShardLayout):
             return self.fail(pattern, subject)
-        if not self.match(pattern.mesh.topologies, types.topology_names(subject.mesh)):
+        if not self.match(pattern.mesh.topologies, utils.topology_names(subject.mesh)):
             return self.fail(pattern, subject)
         return all(
             self.match(place, value)

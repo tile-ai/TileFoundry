@@ -21,8 +21,8 @@ _INCLUDES = ("-I", str(_ROOT / "targets/nvidia/tilefoundry_nvidia/cuda/codegen/i
 
 CASES: dict[int, str | None] = {
     0: None,
-    1: "a mesh layout's first component must be cute::identity",
-    2: "a mesh layout's offset must be a compile-time number",
+    1: "ops::sync: a mesh layout's first component must be cute::identity",
+    2: "ops::sync: a mesh's first index must be a compile-time number",
     3: "a shard layout must say what each of its mesh's axes does with the tensor",
     4: "make_shard_layout: one attr per mesh axis",
     5: "one attr per mesh axis: this layout has one stride per attr",
@@ -42,13 +42,10 @@ CASES: dict[int, str | None] = {
     22: "a reduced mesh axis must divide into whole lanes and whole warps",
     24: "ops::copy_async_bulk: both operands must leave the tile whole on every ",
     25: "ops::sync: a mesh that skips warps names no barrier",
-    26: "get<level>: this mesh does not name that level",
+    26: "topology_mode: this mesh does not name that level",
     27: "operands must be one atom's lane fragments",
     28: "operands must be one atom's lane fragments",
     29: "operands must be one atom's lane fragments",
-    30: "get<level>: a level inside it must have a compile-time positive size",
-    31: "get<level>: a stride the units inside the level do not divide",
-    32: "get<level>: a stride must be a compile-time number",
 }
 
 _DIAGNOSTIC = re.compile(r"\n(?=\S+\(\d+\): (?!note))")

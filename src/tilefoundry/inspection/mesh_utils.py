@@ -15,9 +15,9 @@ def selection_layout(mesh: types.Mesh, selection: types.Mesh) -> types.Layout | 
         return None
     if not isinstance(mesh.layout, types.ComposedLayout) or mesh.layout.inner is not None:
         return None
-    if not isinstance(mesh.layout.outer, types.Layout) or mesh.layout.offset != types.offset(selection):
+    if not isinstance(mesh.layout.outer, types.Layout) or mesh.layout.offset != selection.layout(0):
         return None
-    source = types.flatten(types.layouts(selection)[0])
+    source = types.flatten(types.plain_layout(selection.layout))
     target = types.flatten(mesh.layout.outer)
     if types.size(source) != types.size(target):
         return None

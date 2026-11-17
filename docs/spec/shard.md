@@ -69,19 +69,19 @@ $$
 \underbrace{\mathcal{M}_{\mathrm{cta}} = \begin{bmatrix}132@\mathrm{sm}\\1\end{bmatrix}}_{\text{sub mesh}}
 $$
 
-3. A **mesh** puts the units of adjacent topologies on named **mesh axes**. Each column of the **mesh layout** is `extent@mesh axis` above its stride. Each topology has one group of columns. A **sub mesh** contains one topology. Its strides divide the stored group strides by the product of the lower topology sizes.
+3. A **mesh** puts the units of adjacent topologies on named **mesh axes**. Each column of the **mesh layout** is `extent@mesh axis` above its stride. Each topology has one group of columns. A **sub mesh** contains one topology. Its unit-id layout is `composition` of its group with `U_t`, the projection of the index onto that topology.
 
 $$
 \underbrace{(1,\ 1,\ 40)}_{\text{coord}}\ \mapsto\ 384\cdot 1 + 128\cdot 1 + 40 = \underbrace{552}_{\text{index}} = \underbrace{1}_{\text{unit id in cta}}\cdot 384 + \underbrace{168}_{\text{unit id in thread}}
 $$
 
-4. The mesh layout maps a **coord** to the **index** of a unit. The index counts the units of all topologies of the mesh. It divides into one unit id for each topology.
+4. The mesh layout maps a **coord** to the **index** of a unit. The index counts the units of all topologies of the mesh: `T = make_layout(sizes)`, row-major. `idx2crd(index, sizes)` gives one unit id for each topology.
 
 $$
 \underbrace{\mathcal{M}_{\mathrm{thread}}[1{:}3,\ :]}_{\text{sliced mesh}} = \begin{bmatrix}2@\mathrm{group} & 128@\mathrm{lane}\\128 & 1\end{bmatrix} + \underbrace{128}_{\text{offset}}
 $$
 
-5. A **sliced mesh** keeps the topology and the mesh axes. The **offset** is the index of the first unit of the slice.
+5. A **sliced mesh** keeps the topology and the mesh axes. Its layout is a `ComposedLayout`. The **offset** is its `ComposedLayout.offset`, the index of the first unit of the slice.
 
 $$
 \underbrace{\big(\ \mathcal{M}_1,\ \underbrace{\mathcal{M}_2}_{\text{innermost mesh}}\ \big)}_{\text{enclosing meshes}}
@@ -128,12 +128,12 @@ The names `gpu`, `cta`, `thread`, `sm`, `group` and `lane` above are examples of
 | topology level | The position of a topology in the topologies that the Module declares, an `int`. 0 is the outermost. Python and C++ count the same list. | own | `topology_level: str` (a value that is a name) | `topology: str` for a name; `topology_level(topology, topologies)` gives the position | `cute::find(program_topologies(), cute::C<L>{})` gives the position; `enum class TopologyLevel` labels the topology |
 | unit id | The number of a unit in its topology, in `[0, size)`. | CUDA `%tid`, `%ctaid` | `program_id`, `rank` | `Placement.ids`, `unit_ids()` | `unit_id<L>()`, `unit_ids()` |
 | mesh | The units of one or more adjacent topologies, arranged by a layout on named mesh axes. | JAX | — | `Mesh(topologies, layout, names)` | `Mesh<TLayout, TopologyLevel...>` |
-| sub mesh | The part of a mesh that is one topology. It is a mesh of one topology. | CuTe sublayout, `get<I>` | `separate`, `level` (for this object), `sub-mesh` for the result of a slice | `get(mesh, topology)`, `sub_meshes(mesh)` | `get<L>(mesh)` |
+| sub mesh | The part of a mesh that is one topology. Its mode is `get(mesh.layout, t)`, strides in the index over all topologies. As a mesh of one topology, its layout is `utils.unit_layout(mesh, t)`. | CuTe sublayout, `get<I>` | `separate`, `level` (for this object), `sub-mesh` for the result of a slice | `get(mesh.layout, t)`, `utils.topology_mesh(mesh, topology)` | `cute::get<t>(mesh.layout)` |
 | mesh axis | One axis of a mesh. | JAX `axis_names` | `axis` alone | `mesh_axis`, `Mesh.names` | — |
-| mesh layout | The layout of a mesh. It maps a coord to the index over all topologies of the mesh. Mode `i` holds the group of topology `i`. `layouts(mesh)` and `get(mesh, topology)` give the layout of one topology. They divide its strides by the product of the lower topology sizes. The result maps a coord to a unit id. | CuTe | `arrangement` | `Mesh.layout`, `layouts(mesh)` | `Mesh::layout` |
+| mesh layout | The layout of a mesh. It maps a coord to the index over all topologies of the mesh. Mode `t` holds the group of topology `t`. The unit id of topology `t` at coord `c` is `idx2crd(L(c), sizes)[t]`. | CuTe | `arrangement` | `Mesh.layout` | `Mesh::layout` |
 | coord | The location of a unit on the mesh axes. | CuTe | `position` (for a location), "device numbering" | `mesh_coords`, `MeshCoord` | `mesh_coords` |
-| index | The linear number that a layout gives to a coord. The index of the layout of one topology is the unit id. | CuTe | "device numbering" | — | — |
-| offset | The index of the first unit of a sliced mesh, over all topologies of that mesh. It is one number. `get(mesh, topology)` gives a mesh of one topology with its own offset, a unit id. | CuTe | `starts` | `types.offset(mesh)` | `offset(mesh)` |
+| index | The linear number that a layout gives to a coord. The index of a mesh layout runs over `T = make_layout(sizes)` of its topologies. The index of the first unit is `L(0)`, `crd2idx(0, L)`. | CuTe | "device numbering" | `mesh.layout(0)` | `mesh.layout(cute::Int<0>{})` |
+| offset | `ComposedLayout.offset`, CuTe `ComposedLayout::offset()`. Of a sliced mesh it is the index of its first unit. It is not a unit id; `idx2crd` of an index gives the unit ids. | CuTe | `starts` | `ComposedLayout.offset` | `layout.offset()` |
 | placement | A map from topology names to unit ids. It can name only some topologies. It tells where a process or a piece of data is. | OneFlow | `ProgramMetaData`; `placement` for a shard attr; "memory placement" | `Placement` | `Placement` |
 | topology scope | All units of one topology. | own | `scope` alone | — | — |
 | mesh scope | The units in force at one point of the program. It is one mesh. It composes the meshes of all enclosing `with`. Its units come from the topology scopes. | own | `scope` alone; `current_mesh`, `active_mesh` | `ctx.mesh_scope`, `MeshScope` | — |
@@ -446,23 +446,24 @@ class Mesh:
     def __getitem__(self, key) -> Mesh: ...
 
 
-def layouts(mesh: Mesh) -> tuple[Layout, ...]:
-    """Return each topology's layout in its own unit ids."""
+def check_topology(mesh: Mesh) -> None:
+    """Refuse a topology mode beyond its topology's size or off its unit stride."""
     ...
 
 
-def offset(mesh: Mesh) -> int:
-    """Return the index of the first unit the mesh covers; 0 when it is not sliced."""
+# ir/utils/mesh_scope.py
+def unit_layout(mesh: Mesh, t: int) -> Layout | ComposedLayout:
+    """Return topology t's unit id at each coord of its mode."""
     ...
 
 
-def get(value, key):
-    """Return one mode of a layout, or the mesh of one topology of a mesh."""
+def topology_mesh(mesh: Mesh, topology: str) -> Mesh | None:
+    """Return topology's unit_layout as a mesh of that topology alone."""
     ...
 
 
-def sub_meshes(mesh: Mesh) -> tuple[Mesh, ...]:
-    """Return get(mesh, topology) for each topology in order."""
+def from_meshes(*meshes: Mesh) -> Mesh:
+    """Compose nested mesh scopes."""
     ...
 
 
@@ -477,26 +478,31 @@ def equals_mesh_scope(mesh: Mesh, current: Mesh) -> bool:
 ```
 
 - constraints:
-  - `offset(mesh)` MUST return the integer `ComposedLayout.offset` of a sliced
-    mesh and 0 for an unsliced mesh. It MUST refuse an offset that is not an
-    integer. It does not decode the offset per topology.
-  - `get(mesh, topology)` MUST return the single-topology mesh of that topology,
-    or `None` when the mesh does not name it. `get(layout, i)` is the CuTe mode
-    getter. Only `get` divides the total offset into one topology's unit id.
-  - `get` divides the offset from the innermost topology outward, down to the
-    selected one. A size that divides a nonzero remainder MUST be static and
-    positive. A remainder of 0 needs no further size. The outermost topology
-    keeps the quotient, so its size MAY be symbolic. `get` MUST refuse an offset
-    that it cannot divide. It MUST refuse a mesh of several
+  - `Mesh`, its construction, slicing and `check_topology` are in
+    `ir/types/mesh.py`. The functions over a mesh's layout are compositions of
+    CuTe functions. They are in `ir/utils/mesh_scope.py`.
+  - `L = mesh.layout`, `sizes` are the topology sizes and `T = make_layout(sizes)`.
+    The index of the first unit is `L(0)`. The unit ids of the first unit are
+    `idx2crd(L(0), sizes)`. `types.get` is the CuTe `get` of a layout. It does
+    not read a mesh.
+  - `unit_layout(mesh, t)` MUST be `composition(U_t, get(P, t))`, with
+    `P = plain_layout(L)`. `U_t = Layout(sizes, e_t)` has stride 1 at `t` and 0
+    elsewhere. So `U_t(index)` is `idx2crd(index, sizes)[t]`, and the outermost
+    level keeps the quotient. The start is computed apart from `P`, as
+    `U_t(L(0))`. A start other than 0 is a `ComposedLayout.offset`.
+  - `composition` of a symbolic stride or extent applies the CuTe arithmetic of
+    a dynamic value. A `ceil_div` or `min` takes one operand only where bounds
+    prove it. Otherwise the result keeps the dynamic form.
+    A mesh of one topology is its own `unit_layout`. It MUST refuse a mesh of several
     topologies whose slice has an inner transform.
-  - Scope comparison reads `selected_units(get(mesh, topology))`. It reduces
-    that sub mesh's layout with `layout_algebra.filter(layout, major="row")`
-    and keeps its offset. Filtering
+  - Scope comparison reads `selected_units(mesh, t)`. It reduces
+    `unit_layout(mesh, t)` with `layout_algebra.filter(layout, major="row")`
+    and keeps the unit id of the first unit. Filtering
     removes shape-one and stride-zero modes and coalesces adjacent modes after
     affine dimension normalization. For continuous selections,
-    `equals_mesh_scope` MUST compare offsets and normalized sizes, independent
-    of mode order. Otherwise it MUST conservatively compare the filtered
-    layouts and offsets for equality. It compares only the topologies that
+    `equals_mesh_scope` MUST compare first unit ids and normalized sizes,
+    independent of mode order. Otherwise it MUST conservatively compare the
+    filtered layouts and first unit ids for equality. It compares only the topologies that
     `mesh` names. The other topologies of `current` do not enter it.
   - `within_mesh_scope` MUST require both filtered selections to be continuous and
     prove containment of their half-open intervals `[start, start + size)`.
@@ -524,23 +530,28 @@ Composition preserves topology and offset. A slice of the resulting composed mes
 
 Every mesh MUST state one nested `Layout` whose mode `i` holds the axes of
 topology `i`, a one-level mesh included. Its strides are in the index over all
-topologies of the mesh. A stride of topology `i` is its own stride times `u_i`.
-`u_i` is the product of the declared sizes of the topologies after `i` in this
-mesh. A size that enters `u_i` MUST be a positive static int. The outermost
+topologies of the mesh, `T = make_layout(sizes)`. A stride of topology `i` MUST
+be a multiple of `u_i`. `u_i` is the product of the declared sizes of the
+topologies after `i` in this mesh. It is `stride(T)[i]` when topology `i` has
+more than one unit. A size that enters `u_i` MUST be a positive
+static int. The outermost
 size enters no product, so it MAY be symbolic. `Mesh` normalizes what was
 written into that form at construction. `Mesh` cuts one layout over all
 topologies' axes at the topology boundaries. Each topology takes axes left to
 right until their extents multiply to its own size. An axis of extent one adds
 no units and joins the topology being filled. An axis that straddles a
 boundary MUST be refused rather than divided. Every axis MUST belong to one
-topology. A stride that `u_i` does not divide exactly MUST be refused. This holds for
-a layout written grouped, ungrouped or under a `ComposedLayout`. A
-one-level mesh takes every axis into its single mode, with `u_0 = 1`.
+topology. A stride that is not a multiple of `u_i` MUST be refused. An axis
+of extent one never steps, so its stride is not read. This holds for a layout written
+grouped, ungrouped or under a `ComposedLayout`. Construction applies CuTe
+`unflatten` to cut the axes, and `make_layout` of the flat layout for a
+one-level mesh.
 
 Because the layout is a nested `Layout`, the layout operations read it.
 `get(mesh.layout, i)` is the group of topology `i`, in the index over all
-topologies. `get(mesh, topology)` and `layouts(mesh)` divide that group's
-strides by `u_i`, so they are in that topology's own numbering.
+topologies. `utils.unit_layout(mesh, i)` gives its unit ids by `composition`. `make_layout_like(get(mesh.layout, i))` gives a
+compact local numbering. The two differ on a slice or a gapped mode: thread
+`2:6` is unit ids `2..5` and local numbers `0..3`.
 `flatten(mesh.layout)` is every topology's axes end to end.
 `int_tuple.repeat_like` against `mesh.layout.shape` states per axis whatever is
 stated per topology. `utils.flat_layout(mesh)` is those axes as one layout,
@@ -548,38 +559,36 @@ offset included. It is the form a mesh is written and printed in. A sliced mesh
 keeps its `ComposedLayout`, its inner transform and a zero offset included. A
 slice's `ComposedLayout.offset` is where the whole mesh starts in that index.
 For a slice with no inner transform, the unit's index is
-`offset(mesh) + mesh.layout.outer(coord)`. `mesh.layout(coord)` already
+`mesh.layout.offset + mesh.layout.outer(coord)`. `mesh.layout(coord)` already
 includes that offset. A slice with an inner transform applies its parts
 in the order of [§4](#4-composedlayout).
 
 Mesh composition uses the following rules:
 
-- `Mesh.from_meshes(*meshes)` MUST append a mesh whose level names are disjoint from
+- `utils.from_meshes(*meshes)` MUST append a mesh whose level names are disjoint from
   those in force. It MUST replace them entirely when the inner mesh names every
   one. It MUST replace the trailing levels when the inner mesh names a suffix
   of them. In that case it MUST keep the levels above and their names unchanged. Level names
   overlapping in any other way MUST be rejected rather than decomposed.
-- Append concatenates the per-level layouts. Each topology's own strides are
-  multiplied by its `u_i` in the result once. When an appended mesh is sliced,
-  the result's `ComposedLayout.offset` is the sum of each topology's start times
-  its `u_i`.
+- Append and replacement place each kept topology's `unit_layout` in the new
+  `T` by `composition(get(T, t), unit_layout)`. When a joined mesh is sliced,
+  its `ComposedLayout.offset` is `crd2idx` of the first unit ids in the new `T`.
+  An offset of 0 leaves the layout plain.
 - Replacing a suffix with a sliced mesh MUST preserve each retained upper level's
-  start. It MUST take each replaced level's start and layout from the inner mesh.
-  The combined `ComposedLayout.offset` MUST then be re-encoded in
-  index from those per-level starts. Replacing an unsliced suffix
+  first unit id. It MUST take each replaced level's first unit id and layout
+  from the inner mesh. Replacing an unsliced suffix
   and replacing the whole mesh retain their existing behavior. Every replaced
   level MUST select a continuous unit set contained in the enclosing level's
   continuous unit set. Continuity and containment MUST hold throughout the
   declared dimension envelopes. A replacement or enclosing selection with holes
   MUST be rejected rather than approximated as an interval.
-- `Mesh.from_meshes(*meshes)` invokes `check_topology` on its result. For each named
-  level with a concrete declared extent, its unit count MUST NOT exceed
-  that extent. The check defers a symbolic extent until dimensions are bound. A
-  level stating a run is already bounded by `Mesh.__getitem__` and is not
-  checked again.
-- `sub_meshes(mesh)` is the inverse construction: it returns `get(mesh, topology)`
-  for each topology in order. Each result has that topology's layout, its own
-  offset, and its share of the axis names. It is exported as `types.sub_meshes`.
+- `utils.from_meshes(*meshes)` invokes `check_topology` on its result. For each
+  named level with a concrete declared extent, `size(get(L, t))` MUST NOT exceed
+  that extent. The check defers a symbolic extent until dimensions are bound.
+  Each stride of the level MUST be a multiple of `stride(T)[t]`.
+- `utils.topology_mesh(mesh, topology)` for each topology in order is the inverse
+  construction. Each result has that topology's `unit_layout` and its share of
+  the axis names. `None` stands for a topology the mesh does not name.
 
 HIR `MeshRegion` applies this composition only at its body boundary. Its `args`
 are evaluated in the enclosing scope and are not recomposed merely because the
@@ -598,9 +607,9 @@ value is consumed by a region.
     `Topology` tuple before it constructs the record. A bare string and the
     `topology=` keyword are not Mesh author forms.
   - A Mesh naming several levels may be sliced. The key addresses all level axes
-    in order. The sliced layout keeps the strides in the index over all
-    topologies. The slice offset is the sum of each selected start times that
-    axis's stride.
+    in order. The box is `make_layout` of the selected extents with the mesh's
+    strides. CuTe `domain_offset` moves it to its first coord, and the index it
+    returns is the slice offset.
   - Nested single-level Mesh scopes compose to exactly that shape. The axes join
     outermost first. Each outer stride is scaled by the units below it.
     A value distributed at two levels at once may therefore be written either
@@ -629,7 +638,7 @@ The placed-layout constructor has one more guard. A single layout may
 split a named level only once. Take two distinct meshes that one placed layout
 uses. If they name the same topology level, parsing MUST reject the layout at
 its source node. This is a layout-construction rule. It is independent of
-`Mesh.from_meshes()`'s scope-composition rules.
+`utils.from_meshes()`'s scope-composition rules.
 
 ### 5.1 `Placement`
 
@@ -655,10 +664,9 @@ class Placement:
     identity while it holds weights narrowed for the old one.
   - `ids` is keyed by level name. `unit_ids(topologies)` answers one id per
     ordered `Topology` by lookup. A level the mapping does not name is unfixed.
-  - `Placement.from_mesh(mesh)` lists every placement of a mesh. Each id is a
-    unit id within its topology: the value of that topology's layout plus the
-    offset of `get(mesh, topology)`. Its coordinates are `mesh_coords` of those
-    ids ([§7.6](#76-local_layout)).
+  - `Placement.from_mesh(mesh)` lists every placement of a mesh in coord order.
+    The unit ids at coord `i` are `idx2crd(L(i), sizes)`. Its coordinates are
+    `mesh_coords` of those ids ([§7.6](#76-local_layout)).
   - `coords(mesh)` is `mesh_coords(mesh, unit_ids(mesh.topologies))`.
   - The placement of a launched process comes from `runtime.placement_from_env`
     ([runtime](./runtime.md)). The IR layer does not read the environment.
@@ -1057,9 +1065,11 @@ def local_layout_and_offset(shard, tensor_shape, coord) -> tuple[Layout, int]: .
     holds is the same rows, the same distance apart. They begin further in.
   - The mesh of a `ShardLayout` that `local_layout` returns keeps the unfixed
     axes. When it keeps every topology, the kept strides and the offset stay as
-    they were. When it drops a whole topology, each kept topology's axes go back
-    to its own numbering through `get`. The result is then composed again over
-    the kept topologies. Its offset counts from their starts. The second return value
+    they were. When it drops a whole topology, each kept topology's selected axes
+    move to the index over the kept topologies. The move is `composition` with
+    `Layout(sizes, u_t * e_t)`, as in `unit_layout`. `u_t` is the stride of `t`
+    among the kept topologies. Its offset is `crd2idx` of the kept topologies'
+    first unit ids. The second return value
     is the tensor address offset. This step does not change it.
   - `local_layout_and_offset` counts its offset in exactly those strides. It
     takes a mesh coord, as the CUDA runtime's `local_layout_and_offset(sl, coord)`
@@ -1067,9 +1077,10 @@ def local_layout_and_offset(shard, tensor_shape, coord) -> tuple[Layout, int]: .
     layout of the shard with the row-major layout of the same modes
     ([runtime §1.10](runtime.md#110-shardtensor)).
   - `mesh_coords` turns per-level unit ids into mesh coordinates, as the
-    CUDA runtime's `mesh_coords(mesh, unit_ids())` does. It subtracts the offset
-    of each topology's `get` before it divides the id, as the runtime
-    `level_id` does. A level whose id is `None` leaves its axes `None`.
+    CUDA runtime's `mesh_coords(mesh, unit_ids())` does. Each topology `t` is
+    read alone. Its id less its first unit id, times `stride(T)[t]`, is an index.
+    `idx2crd` over the shape and strides of `get(L, t)` reads that index back. A level
+    whose id is `None` leaves its axes `None`.
   - the host states `tensor_shape` and `ids`. The device reads them off its
     own layout and its hardware. [§7.1.1](#711-layoutshape) factors a split
     axis. So the rank of the layout is not the rank of the tensor. A `Placement` may leave
@@ -1190,7 +1201,8 @@ def shard_layout_local_shape(
     The last mode is not reduced. `None` in a coordinate is CuTe `_` and reads as 0.
   - `int_tuple`, `layout_algebra` and `swizzle_layout` are reached as namespaces.
     `types` exports the `layout.py` and `stride.py` functions and the `make_*` constructors.
-    `types.get` also reads a `Mesh`. `types.domain_offset` is the `ShardLayout` form.
+    `types.get` and `types.domain_offset` are the CuTe functions of `layout.py`. A caller
+    that holds a coord per tensor axis groups the layout by that shape before `domain_offset`.
   - Default strides come from `Layout(shape)` (above). A Split whose topology is
     private under `target.storage_owners` gets stride zero. Compacting the
     remaining modes drops only its mesh factor. It keeps its local residual
@@ -1219,7 +1231,8 @@ def shard_layout_local_shape(
     relations MUST be rejected as undecidable. An unconsumed symbolic extent MAY pass through
     only when `require_static=False`. Strict mode MUST reject it.
   - `coalesce` and `bw_coalesce` merge static modes as CuTe does. Symbolic modes merge when the
-    normal forms of `shape * stride` and the next stride are equal.
+    normal forms of `shape * stride` and the next stride are equal. This is a CuTe-compatible
+    project extension: CuTe merges static modes only.
   - A tuple profile of `coalesce` or `filter` MUST NOT have more modes than the layout.
     Modes past the profile stay unchanged.
   - `filter` MUST remove static stride-0 and extent-1 modes before coalescing. An empty result is `1:0`.
@@ -1230,10 +1243,13 @@ def shard_layout_local_shape(
     and an inverse-projectable primitive outer layout. Other layouts MUST raise
     `NotProjectableError`, not return a guessed inverse.
   - `composition` of static shapes MUST raise `ValueError` when the CuTe divisibility condition fails.
-  - `shape_div` of two symbolic extents is a project extension. Equal extents give 1. Other pairs MUST raise `ValueError`.
+  - `shape_div` of two symbolic extents is a CuTe-compatible project extension. Equal extents give 1.
+    A product divided by one of its factors gives the other factor. Other pairs MUST raise `ValueError`.
+    Every symbolic division of an extent by a mesh extent goes through it.
   - `cosize` of a `ComposedLayout` is the `cosize` of its outer layout. A symbolic stride counts as non-negative.
   - `slice_and_offset` of a swizzled `ComposedLayout` follows `swizzle_layout.hpp` when the coordinates and offset are static.
-    Otherwise it moves the index into the composed offset.
+    Otherwise it moves the index into the composed offset. This is a CuTe-compatible project
+    extension for symbolic coordinates. Static input domains and refusals stay those of CuTe.
   - Instruction projection MUST leave a whole operand axis unchanged. It MUST retain
     symbolic extents without division or a static-extent requirement. A cut axis
     MUST use `zipped_divide` with a tiler built from its own mode structure.

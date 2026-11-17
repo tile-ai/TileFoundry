@@ -25,6 +25,7 @@ __all__ = [
     "colex_less",
     "compatible",
     "compatible_profile",
+    "dim_at_most",
     "congruent",
     "depth",
     "elem_geq",
@@ -280,7 +281,32 @@ def ceil_div(a, b, *, major="row"):
         return tuple(result)
     if isinstance(b, tuple):
         return ceil_div(a, product(b), major="col")
+    x, y = expr.static_dim_value(a), expr.static_dim_value(b)
+    if x is not None and y is not None:
+        return (x + y - 1) // y
+    if y == 1:
+        return a
+    quotient = expr.exact_quotient(a, b)
+    if quotient is not None and dim_at_most(1, b):
+        return quotient
+    if dim_at_most(1, a) and dim_at_most(a, b):
+        return 1
     return (a + b - 1) // b
+
+
+def dim_at_most(a, b) -> bool:
+    """Whether ``a <= b`` is proven: by static values, else by the range of ``b - a``.
+
+    A difference with no affine range proves nothing.
+    """
+    x, y = expr.static_dim_value(a), expr.static_dim_value(b)
+    if x is not None and y is not None:
+        return x <= y
+    try:
+        bounds = services.dim_range(services.simplify_dim("sub", (b, a)))
+    except (NotImplementedError, TypeError, ValueError):
+        return False
+    return bounds is not None and bounds[0] >= 0
 
 
 def round_up(a, b):
@@ -296,7 +322,8 @@ def shape_div(a, b, *, major="row"):
     """CuTe ``int_tuple.hpp`` ``shape_div``; a tuple divided by an int folds from mode 0.
 
     Static extents require the CuTe divisibility condition. Symbolic extents are a
-    project extension: equal extents divide to one, any other pair is refused.
+    project extension (CuTe divides only integers): equal extents divide to one, a
+    product divides by either factor to the other, and any other pair is refused.
     """
     if major == "row":
         return reverse_modes(shape_div(reverse_modes(a), reverse_modes(b), major="col"))
@@ -317,12 +344,22 @@ def shape_div(a, b, *, major="row"):
         return (x + y - 1) // y
     if compatible(a, b):
         return 1
-    raise ValueError(f"shape_div: cannot divide symbolic extents {a!r} and {b!r}")
+    quotient = expr.exact_quotient(a, b)
+    if quotient is None:
+        raise ValueError(f"shape_div: cannot divide symbolic extents {a!r} and {b!r}")
+    return quotient
 
 
 def safe_div(t, u):
-    """CuTe ``numeric/math.hpp`` ``safe_div``: ``t / u``, which the caller knows divides."""
-    return t // u
+    """CuTe ``numeric/math.hpp`` ``safe_div``: ``t / u``, which the caller knows divides.
+
+    A symbolic product with *u* as a factor gives its other factor, as ``shape_div``
+    does, once *u* is proven positive; else the quotient stays ``t // u``.
+    """
+    if isinstance(t, int) and isinstance(u, int):
+        return t // u
+    quotient = expr.exact_quotient(t, u)
+    return quotient if quotient is not None and dim_at_most(1, u) else t // u
 
 
 def elem_scale(a, b):

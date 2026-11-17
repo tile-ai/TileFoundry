@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import Optional
 
 from tilefoundry.ir import expr, types
+from tilefoundry.ir.types import int_tuple
+
+from .mesh_scope import axis_keys, first_unit_ids, from_meshes, topology_mesh, topology_names
 
 __all__ = [
     "divided_axes",
@@ -28,9 +31,9 @@ def filter_topologies(
     execution mesh, retain value-varying topologies too, or the innermost
     topology for an entirely broadcast value.
     """
-    names = types.topology_names(layout.mesh)
+    names = topology_names(layout.mesh)
     required_names = (
-        set(types.topology_names(required))
+        set(topology_names(required))
         if isinstance(required, types.Mesh)
         else None
         if required is None
@@ -38,7 +41,7 @@ def filter_topologies(
     )
     if len(names) == 1 and (required_names is None or names[0] in required_names):
         return layout
-    keys = types.axis_keys(layout.mesh)
+    keys = axis_keys(layout.mesh)
     if len(keys) != len(layout.attrs):
         raise ValueError("shard attributes must have the rank of their mesh")
     attrs_by_topology = {name: [] for name in names}
@@ -56,7 +59,7 @@ def filter_topologies(
     selected_attrs = []
     for name, attrs in attrs_by_topology.items():
         if name in required_names:
-            selected.append(types.get(layout.mesh, name))
+            selected.append(topology_mesh(layout.mesh, name))
             selected_attrs.extend(attrs)
         elif any(isinstance(attr, (types.Split, types.Partial)) for attr in attrs):
             raise ValueError(f"shard attr other than Broadcast outside the kept topology {name!r}")
@@ -64,15 +67,15 @@ def filter_topologies(
         raise ValueError("shard layout keeps no topology")
     if len(selected) == len(names):
         return layout
-    return types.ShardLayout(layout.layout, tuple(selected_attrs), types.Mesh.from_meshes(*selected))
+    return types.ShardLayout(layout.layout, tuple(selected_attrs), from_meshes(*selected))
 
 
 def physical_layout(layout: types.ShardLayout) -> types.LayoutBase:
     """Omit value-only levels, then read remaining variation as Broadcast."""
     if not any(isinstance(attr, types.Varying) for attr in layout.attrs):
         return layout
-    by_level = {level: [] for level, _ in types.axis_keys(layout.mesh)}
-    for attr, (level, _) in zip(layout.attrs, types.axis_keys(layout.mesh)):
+    by_level = {level: [] for level, _ in axis_keys(layout.mesh)}
+    for attr, (level, _) in zip(layout.attrs, axis_keys(layout.mesh)):
         by_level[level].append(attr)
     kept = tuple(
         level
@@ -120,7 +123,7 @@ def find_execution_mesh(mesh: types.Mesh, required: types.Mesh) -> tuple[types.M
             f"mesh layout {source_shape} does not end in execution mesh "
             f"{tuple(required_layout.shape)}"
         )
-    start = types.offset(types.get(mesh, types.topology_names(mesh)[-1]))
+    start = first_unit_ids(mesh)[-1]
     return (
         types.Mesh(
             mesh.topologies[-len(required.topologies) :],
@@ -181,7 +184,7 @@ def all_split_local_type(type: types.Type, *, refuse_indivisible: bool) -> types
                 f"tensor axis {tensor_axis} (extent {size}) is not evenly "
                 f"divisible by its mesh extent {extent}"
             )
-        local[tensor_axis] = size // extent
+        local[tensor_axis] = int_tuple.shape_div(size, extent)
     return types.TensorType(
         shape=tuple(local),
         dtype=type.dtype,
@@ -258,7 +261,7 @@ def divided_axes(
     value's coordinates among that unit's modes.
     """
     axis_topology_levels = tuple(
-        topology_level(name, topologies) for name, _ in types.axis_keys(layout.mesh)
+        topology_level(name, topologies) for name, _ in axis_keys(layout.mesh)
     )
     return tuple(
         mesh_axis
@@ -331,6 +334,6 @@ def local_layout_shape(
                 "and bind the tile count"
             )
         else:
-            shape[axis] //= extent
+            shape[axis] = int_tuple.shape_div(shape[axis], extent)
     require_concrete(shape)
     return tuple(shape)

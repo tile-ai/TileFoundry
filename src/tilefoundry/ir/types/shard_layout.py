@@ -7,18 +7,34 @@ from dataclasses import dataclass, replace
 from tilefoundry import services
 from tilefoundry.ir import expr
 
-from .int_tuple import compatible_profile, flatten_to_tuple, mode_axes, product, rank
+from .int_tuple import (
+    compatible_profile,
+    flatten_to_tuple,
+    mode_axes,
+    product,
+    rank,
+    shape_div,
+    unwrap,
+)
 from .int_tuple import unflatten as int_tuple_unflatten
 from .layout import (
     ComposedLayout,
     Layout,
     LayoutBase,
     flatten,
+    get,
     plain_layout,
+    select,
     unflatten,
 )
-from .layout_algebra import coalesce, slice_and_offset
-from .mesh import Mesh, axis_keys, get, offset, sub_meshes
+from .layout_algebra import (
+    coalesce,
+    composition,
+    make_composed_layout,
+    make_layout,
+    slice_and_offset,
+)
+from .mesh import Mesh, topology_sizes
 from .stride import compact_row_major, crd2idx, idx2crd
 from .topology import topology_name
 
@@ -34,7 +50,6 @@ __all__ = [
     "V",
     "Varying",
     "combine_attrs",
-    "domain_offset",
     "local_layout",
     "local_layout_and_offset",
     "local_readback",
@@ -135,14 +150,15 @@ def factor_axis(axis_size, mesh_shape, splitting_mesh_axes, logical_axis):
         residual = axis_size
         for mesh_axis in splitting_mesh_axes:
             extent = mesh_shape[mesh_axis]
-            quotient = expr.exact_quotient(residual, extent)
-            if quotient is None:
+            try:
+                quotient = shape_div(residual, extent)
+            except ValueError:
                 raise ValueError(
                     f"default_shard_layout: logical axis {logical_axis} size "
                     f"{axis_size!r} is dynamic; cannot factorize across multiple "
                     "mesh axes (undecidable division by axis "
                     f"{mesh_axis} extent {extent!r})"
-                )
+                ) from None
             factors.append(extent)
             residual = quotient
     else:
@@ -205,7 +221,11 @@ class ShardLayout(LayoutBase):
     @classmethod
     def from_modes(cls, shape, mesh, attrs, *, storage, owners):
         """Construct authored modes with the owner's compact local strides."""
-        topologies = tuple(topology for topology, _ in axis_keys(mesh))
+        topologies = tuple(
+            topology_name(topology)
+            for topology, mode in zip(mesh.topologies, plain_layout(mesh.layout).shape)
+            for _ in flatten_to_tuple(mode)
+        )
         private = []
         for axis, attr in enumerate(attrs):
             if isinstance(attr, Split) and (
@@ -295,15 +315,15 @@ def divided_shape(shape, mesh, attrs, *, require_static):
                 if mesh_ext != 0:
                     local[k] //= mesh_ext
             else:
-                quotient = expr.exact_quotient(local[k], mesh_ext)
-                if quotient is None:
+                try:
+                    local[k] = shape_div(local[k], mesh_ext)
+                except ValueError:
                     raise ValueError(
                         f"shard_layout_local_shape: layout dim {k} ({local[k]!r}) "
                         f"and mesh axis {mesh_axis_idx} extent {mesh_ext!r} do not "
                         "have a decidable divisibility relation; bind symbolic "
                         "dimensions before local projection"
-                    )
-                local[k] = quotient
+                    ) from None
 
     if require_static:
         for i, d in enumerate(local):
@@ -342,7 +362,7 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
         ]
         normalize = any(coords[axis] is not None for axis in axes)
         factors = factor_axis(extent, mesh.shape, axes, mode) if normalize else (extent,)
-        steps = compact_row_major(factors)
+        steps = flatten_to_tuple(composition(Layout(extent, stride), make_layout(factors)).strides)
         for index, mesh_axis in enumerate(axes):
             modes[mesh_axis] = len(shape) + (index if normalize else 0)
         for index, (factor, step) in enumerate(zip(factors, steps, strict=True)):
@@ -354,7 +374,7 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
                 else None
             )
             shape.append(factor)
-            strides.append(services.normalize_dim(crd2idx(step, factor, stride)))
+            strides.append(services.normalize_dim(step))
     profile = compatible_profile(tuple(shape), tensor_shape)
     grouped = unflatten(Layout(tuple(shape), tuple(strides)), profile)
     c = int_tuple_unflatten(tuple(fixed), profile)
@@ -383,27 +403,28 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
     kept = {old: new for new, old in enumerate(i for i, at in enumerate(fixed) if at is None)}
     remaining = [axis for axis, at in enumerate(coords) if at is None]
     if remaining:
-        keys, held = axis_keys(shard.mesh), {}
+        stated = plain_layout(shard.mesh.layout)
+        keys = tuple(
+            t for t in range(len(shard.mesh.topologies)) for _ in flatten_to_tuple(get(stated, t).shape)
+        )
+        held = {}
         for axis in remaining:
             if axis < len(keys):
-                held.setdefault(keys[axis][0], []).append(axis)
-        topologies = tuple(t for t in shard.mesh.topologies if topology_name(t) in held)
+                held.setdefault(keys[axis], []).append(axis - keys.index(keys[axis]))
         names = tuple(shard.mesh.names[i] for i in remaining if i < len(shard.mesh.names))
-        if len(topologies) == len(shard.mesh.topologies):
+        if len(held) == len(shard.mesh.topologies):
             outer = Layout(
-                tuple(tuple(mesh.shape[i] for i in group) for group in held.values()),
-                tuple(tuple(mesh.strides[i] for i in group) for group in held.values()),
+                tuple(select(flatten(get(stated, t)), *axes).shape for t, axes in held.items()),
+                tuple(select(flatten(get(stated, t)), *axes).strides for t, axes in held.items()),
             )
             layout = (
                 replace(shard.mesh.layout, outer=outer)
                 if isinstance(shard.mesh.layout, ComposedLayout)
                 else outer
             )
-            shard_mesh = Mesh(topologies, layout, names)
+            shard_mesh = Mesh(shard.mesh.topologies, layout, names)
         else:
-            shard_mesh = Mesh.from_meshes(
-                *(kept_axes(shard.mesh, keys, held[topology_name(t)]) for t in topologies)
-            )
+            shard_mesh = kept_axes(shard.mesh, held, names)
         attrs = tuple(
             Split(kept[modes[axis]])
             if isinstance(shard.attrs[axis], Split)
@@ -414,18 +435,33 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
     return sliced, services.normalize_dim(start)
 
 
-def kept_axes(mesh: Mesh, keys, axes) -> Mesh:
-    """The mesh axes *axes* of one topology of *mesh*, as that topology's own mesh."""
-    name = keys[axes[0]][0]
-    part = get(mesh, name)
-    first = next(axis for axis, (held, _) in enumerate(keys) if held == name)
-    own = flatten(plain_layout(part.layout))
-    kept = Layout(
-        tuple(own.shape[axis - first] for axis in axes),
-        tuple(own.strides[axis - first] for axis in axes),
+def kept_axes(mesh: Mesh, held: dict, names: tuple) -> Mesh:
+    """The axes *held* keeps of some topologies of *mesh*, as a mesh of those topologies.
+
+    *held* maps a topology's position to the axes of its mode it keeps. Each kept
+    mode is ``select`` of those axes, moved to the index over the kept topologies
+    by ``composition(Layout(sizes, u_t * e_t), ·)``: ``u_t`` is the
+    ``compact_row_major`` stride of *t* among the kept topologies, ``e_t`` is 1
+    at *t* and 0 elsewhere. The first index is ``crd2idx`` of the kept
+    topologies' first unit ids, ``idx2crd(L(0), sizes)``.
+    """
+    stated = plain_layout(mesh.layout)
+    sizes = topology_sizes(mesh.topologies)
+    topologies = tuple(mesh.topologies[t] for t in held)
+    kept_sizes = topology_sizes(topologies)
+    units = compact_row_major(kept_sizes)
+    kept = make_layout(
+        *(
+            composition(
+                Layout(sizes, tuple(unit if at == t else 0 for at in range(len(sizes)))),
+                select(flatten(get(stated, t)), *axes),
+            )
+            for (t, axes), unit in zip(held.items(), units)
+        )
     )
-    stated = replace(part.layout, outer=kept) if isinstance(part.layout, ComposedLayout) else kept
-    return Mesh(part.topologies, stated, tuple(mesh.names[i] for i in axes if i < len(mesh.names)))
+    starts = idx2crd(mesh.layout(0), sizes)
+    index = crd2idx(tuple(starts[t] for t in held), kept_sizes, units)
+    return Mesh(topologies, make_composed_layout(None, index, kept) if index else kept, names)
 
 
 def local_readback(layout):
@@ -433,32 +469,32 @@ def local_readback(layout):
     address = layout.layout if isinstance(layout, ShardLayout) else layout
     result = coalesce(address, (0,) * len(address.shape), major="row")
     primitive = plain_layout(result)
-    shape = tuple(
-        mode[0] if isinstance(mode, tuple) and len(mode) == 1 else mode for mode in primitive.shape
-    )
-    strides = tuple(
-        mode[0] if isinstance(mode, tuple) and len(mode) == 1 else mode
-        for mode in primitive.strides
-    )
+    shape = tuple(unwrap(mode) for mode in primitive.shape)
+    strides = tuple(unwrap(mode) for mode in primitive.strides)
     plain = Layout(shape, strides)
     return replace(result, outer=plain) if isinstance(result, ComposedLayout) else plain
 
 
 def mesh_coords(mesh: Mesh, ids: tuple[int | None, ...]) -> tuple[int | None, ...]:
-    """Each mesh axis's coordinate under per-level unit ids; None where a level is unfixed.
+    """Each mesh axis's coordinate under per-topology unit ids; None where one is unfixed.
 
-    The host side of the CUDA runtime's ``mesh_coords(mesh, unit_ids())``. A unit id
-    counts from the start of its topology, so each topology's own offset comes off
-    first, as the runtime's ``level_id`` does.
+    The host side of the CUDA runtime's ``mesh_coords(mesh, unit_ids())``. Each
+    topology ``t`` is read alone: its id counts from the first unit's,
+    ``idx2crd(L(0), sizes)[t]``, steps ``stride(T)[t]`` in the index over all
+    topologies, and ``idx2crd`` over its mode's shape and strides gives the coord.
     """
+    stated = plain_layout(mesh.layout)
+    sizes = topology_sizes(mesh.topologies)
+    units = compact_row_major(sizes) if len(sizes) > 1 else (1,)
+    starts = idx2crd(mesh.layout(0), sizes)
     coords = []
-    for index, part in enumerate(sub_meshes(mesh)):
-        flat = flatten(plain_layout(part.layout))
-        unit_id = ids[index] if index < len(ids) else None
+    for t in range(len(mesh.topologies)):
+        mode = flatten(get(stated, t))
+        unit_id = ids[t] if t < len(ids) else None
         coords.extend(
-            (None,) * len(flat.shape)
+            (None,) * len(mode.shape)
             if unit_id is None
-            else idx2crd(unit_id - offset(part), flat.shape, flat.strides)
+            else idx2crd((unit_id - starts[t]) * units[t], mode.shape, mode.strides)
         )
     return tuple(coords)
 
@@ -498,13 +534,3 @@ def normalize_layout(layout: LayoutBase) -> LayoutBase:
     if isinstance(layout, ShardLayout):
         return replace(layout, layout=normalize_layout(layout.layout))
     raise TypeError(f"not a tensor layout: {type(layout).__name__}")
-
-
-def domain_offset(coord, layout, shape):
-    """CuTe domain_offset: move the pointer, or a composed layout's offset."""
-    if isinstance(layout, ComposedLayout):
-        _, start = domain_offset(coord, layout.outer, shape)
-        return ComposedLayout(layout.inner, services.normalize_dim(layout.offset + start), layout.outer), 0
-    primitive = layout.layout if isinstance(layout, ShardLayout) else layout
-    grouped = unflatten(flatten(primitive), compatible_profile(primitive.shape, shape))
-    return layout, crd2idx(tuple(coord), grouped.shape, grouped.strides)

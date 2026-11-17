@@ -22,8 +22,8 @@ def _region_key(region: core.MeshRegion, occurrences: dict[str, int]) -> str:
     mesh = region.mesh
     assert len(mesh.topologies) == 1
     topology = getattr(mesh.topologies[0], "name", mesh.topologies[0])
-    offset = types.offset(mesh)
-    size = prod(types.flatten_to_tuple(types.layouts(mesh)[0].shape))
+    offset = mesh.layout(0)
+    size = prod(types.flatten_to_tuple(types.get(types.plain_layout(mesh.layout), 0).shape))
     selection = f"{topology}@{offset}:{size}"
     occurrence = occurrences.get(selection, 0)
     occurrences[selection] = occurrence + 1

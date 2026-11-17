@@ -3,8 +3,7 @@
 The layer above ``ir.expr``: it reads dimensions through ``ir.expr.dim`` and the
 ``services`` and never imports ``ir.dim``. ``int_tuple`` and ``layout_algebra`` are
 exported as namespaces because their function names (``product``, ``filter``,
-``slice``) would collide. ``get`` is the one of ``mesh``: it also reads a mesh.
-``domain_offset`` is the one of ``shard_layout``.
+``slice``) would collide. ``get`` and ``domain_offset`` are the ones of ``layout``.
 See [types](docs/spec/types.md) and [shard](docs/spec/shard.md).
 """
 
@@ -27,7 +26,9 @@ from .layout import (
     coshape,
     cosize,
     depth,
+    domain_offset,
     flatten,
+    get,
     plain_layout,
     rank,
     select,
@@ -41,21 +42,7 @@ from .layout_algebra import (
     make_layout_like,
     make_ordered_layout,
 )
-from .mesh import (
-    Mesh,
-    axis_keys,
-    check_topology,
-    equals_mesh_scope,
-    flat_layouts,
-    get,
-    layouts,
-    offset,
-    selected_units,
-    sub_box,
-    sub_meshes,
-    topology_names,
-    within_mesh_scope,
-)
+from .mesh import Mesh, check_topology, topology_sizes
 from .placement import Placement
 from .pointer import PointerType
 from .shard_layout import (
@@ -70,7 +57,6 @@ from .shard_layout import (
     V,
     Varying,
     combine_attrs,
-    domain_offset,
     local_layout,
     local_layout_and_offset,
     local_readback,

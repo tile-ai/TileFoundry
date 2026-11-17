@@ -273,10 +273,13 @@ def exact_quotient(value, divisor):
         return value // divisor if divisor != 0 and value % divisor == 0 else None
     if value == divisor:
         return 1
-    if isinstance(value, Call) and isinstance(value.target, DimMul) and divisor in value.args:
+    if isinstance(value, Call) and isinstance(value.target, DimMul):
         left, right = value.args
-        quotient = right if left == divisor else left
-        return quotient.value if isinstance(quotient, Constant) else quotient
+        for factor, quotient in ((left, right), (right, left)):
+            if factor == divisor or (
+                isinstance(divisor, int) and static_dim_value(factor) == divisor
+            ):
+                return quotient.value if isinstance(quotient, Constant) else quotient
     return None
 
 

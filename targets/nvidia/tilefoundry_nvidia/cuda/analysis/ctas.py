@@ -298,25 +298,43 @@ class Reaches:
 
 
 def axis_numbering(mesh: types.Mesh, axis: int):
-    """The numbering of the level of *mesh* that holds *axis*, or None when it is not static.
+    """The unit ids of the level of *mesh* that holds *axis*, or None when they are not static.
 
-    Returns the level's start, extents and strides, and the axis's index among
-    them. A unit reads ``((unit - start) // stride) % extent`` on that axis, as
-    the runtime's ``mesh_coords`` does.
+    Returns the level's first unit id, the extents and strides of its
+    ``unit_layout``, and the axis's index among them. A unit reads
+    ``((unit - start) // stride) % extent`` on that axis, as the runtime's
+    ``mesh_coords`` does.
     """
-    keys = types.axis_keys(mesh)
+    keys = utils.axis_keys(mesh)
     if axis >= len(keys):
         return None
-    level = types.get(mesh, keys[axis][0])
+    numbering = level_numbering(mesh, keys[axis][0])
+    if numbering is None:
+        return None
+    return (*numbering, axis - [name for name, _ in keys].index(keys[axis][0]))
+
+
+def level_numbering(mesh: types.Mesh, name: str):
+    """Topology *name*'s first unit id, and the extents and strides of its ``unit_layout``.
+
+    None when *mesh* does not name it or they are not static.
+    """
+    names = utils.topology_names(mesh)
+    if name not in names:
+        return None
+    t = names.index(name)
     try:
-        start = types.offset(level)
+        layout = types.plain_layout(utils.unit_layout(mesh, t))
     except ValueError:
         return None
-    layout = types.plain_layout(utils.flat_layout(level))
-    extents, strides = layout.shape, layout.strides
-    if not all(isinstance(value, int) for value in (*extents, *strides)):
+    if layout is None:
         return None
-    return start, extents, strides, axis - [name for name, _ in keys].index(keys[axis][0])
+    layout = types.flatten(layout)
+    start = utils.first_unit_ids(mesh)[t]
+    extents, strides = layout.shape, layout.strides
+    if not all(isinstance(value, int) for value in (start, *extents, *strides)):
+        return None
+    return start, extents, strides
 
 
 def unit_read(name: str, coordinate: expr.Call, unit: str) -> str | None:
@@ -343,17 +361,10 @@ def unit_guard(mesh: types.Mesh, unit: str, name: str = "cta") -> str | None:
 
     It is the runtime's ``contains``: a unit of that level the mesh's layout reaches.
     """
-    level = types.get(mesh, name)
-    if level is None:
+    numbering = level_numbering(mesh, name)
+    if numbering is None:
         return None
-    try:
-        start = types.offset(level)
-    except ValueError:
-        return None
-    layout = types.plain_layout(utils.flat_layout(level))
-    extents, strides = layout.shape, layout.strides
-    if not all(isinstance(value, int) for value in (*extents, *strides)):
-        return None
+    start, extents, strides = numbering
     steps = [f"p{mode}" for mode in range(len(extents))]
     held = [f"{unit} = {start}" + "".join(f" + {s} * {p}" for s, p in zip(strides, steps))]
     held += [f"0 <= {p} < {e}" for p, e in zip(steps, extents)]
@@ -384,7 +395,7 @@ def unit_reach(reach: Reach, suffix: str, shared, level: str = "cta"):
             axis = expr.static_dim_value(value.args[0])
             extent = value.target.mesh.shape[axis]
             bounds.append((f"{name}{suffix}", extent))
-            if types.axis_keys(value.target.mesh)[axis][0] == level:
+            if utils.axis_keys(value.target.mesh)[axis][0] == level:
                 renamed = f"{name}{suffix}"
                 bindings.append((renamed, unit_read(renamed, value, f"__{level}{suffix}")))
         elif not (

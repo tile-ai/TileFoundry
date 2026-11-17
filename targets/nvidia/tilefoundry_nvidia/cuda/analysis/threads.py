@@ -74,7 +74,7 @@ def projected(type_list) -> types.Mesh | None:
     if len(type_list) != 2 or len(sharded) != 1:
         return None
     layout = sharded[0].layout
-    axes = zip(layout.attrs, types.axis_keys(layout.mesh), strict=True)
+    axes = zip(layout.attrs, utils.axis_keys(layout.mesh), strict=True)
     on_threads = [attr for attr, (level, _) in axes if level == "thread"]
     split = bool(on_threads) and all(isinstance(attr, types.Split) for attr in on_threads)
     return layout.mesh if split else None
@@ -82,14 +82,18 @@ def projected(type_list) -> types.Mesh | None:
 
 def held_threads(mesh: types.Mesh) -> frozenset | None:
     """The threads of one CTA that *mesh*'s thread level holds, None when they are not static."""
-    level = types.get(mesh, "thread")
-    if level is None or (
+    names = utils.topology_names(mesh)
+    if "thread" not in names or (
         isinstance(mesh.layout, types.ComposedLayout) and not isinstance(mesh.layout.offset, int)
     ):
         return None
+    thread = names.index("thread")
     try:
-        layout, offset = types.plain_layout(utils.flat_layout(level)), types.offset(level)
+        layout = types.plain_layout(utils.unit_layout(mesh, thread))
     except ValueError:
+        return None
+    offset = utils.first_unit_ids(mesh)[thread]
+    if layout is None or not isinstance(offset, int):
         return None
     count = types.size(layout)
     if not isinstance(count, int):
@@ -122,7 +126,7 @@ def thread_level(value) -> bool:
     if not (isinstance(value, expr.Call) and isinstance(value.target, dim.MeshCoord)):
         return False
     axis = expr.static_dim_value(value.args[0])
-    return axis is not None and types.axis_keys(value.target.mesh)[axis][0] == "thread"
+    return axis is not None and utils.axis_keys(value.target.mesh)[axis][0] == "thread"
 
 
 def refuse_thread_overlaps(planner) -> None:

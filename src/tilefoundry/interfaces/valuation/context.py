@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
-from tilefoundry.ir import core, expr, types
+from tilefoundry.ir import core, expr, types, utils
 
 
 @dataclass
@@ -39,7 +39,7 @@ class Context:
         if isinstance(region, core.LoopRegion):
             loop = (region.induction_var, region.start, region.extent, region.step)
             return replace(inner, loops=(*self.loops, loop), owner=region, parent=self)
-        mesh = types.Mesh.from_meshes(self.mesh_scope, region.mesh) if self.mesh_scope else region.mesh
+        mesh = utils.from_meshes(self.mesh_scope, region.mesh) if self.mesh_scope else region.mesh
         return replace(inner, mesh_scope=mesh, owner=region, parent=self)
 
     def __post_init__(self):

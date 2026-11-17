@@ -68,6 +68,30 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr bool warps_run_together() {
            int(cute::get<0>(cute::stride(run_t{}))) == 1;
 }
 
+/// The index of the mesh's first unit, ``layout(0)``. A barrier names
+/// threads by a number fixed at compile time, so the index MUST be a
+/// compile-time number with nothing but ``cute::identity`` above it.
+template <class TMesh> CUTE_HOST_DEVICE constexpr int first_index() {
+    using layout_t = typename TMesh::layout_type;
+    if constexpr (cute::is_composed_layout<layout_t>::value) {
+        using inner = cute::remove_cvref_t<decltype(layout_t{}.layout_a())>;
+        using off = cute::remove_cvref_t<decltype(layout_t{}.offset())>;
+        static_assert(std::is_same_v<inner, cute::identity>,
+                      "ops::sync: a mesh layout's first component must be "
+                      "cute::identity");
+        static_assert(cute::is_static<off>::value,
+                      "ops::sync: a mesh's first index must be a compile-time "
+                      "number");
+        if constexpr (std::is_same_v<inner, cute::identity> &&
+                      cute::is_static<off>::value)
+            return int(layout_t{}(cute::Int<0>{}));
+        else
+            return 0;
+    } else {
+        return int(layout_t{}(cute::Int<0>{}));
+    }
+}
+
 /// The lanes of one warp this mesh occupies, as a ``__shfl`` mask. Only a
 /// mesh inside one warp has one, which is the only mesh that is asked.
 template <class TMesh> CUTE_HOST_DEVICE constexpr unsigned lane_mask() {
@@ -75,13 +99,13 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr unsigned lane_mask() {
     static_assert(extent <= kWarpSize,
                   "ops::sync: a lane mask names the lanes of one warp, and "
                   "this mesh holds more threads than a warp has");
-    constexpr int first = tilefoundry::offset(TMesh{}) % kWarpSize;
+    constexpr int first = first_index<TMesh>() % kWarpSize;
     return extent == kWarpSize ? 0xffffffffu : ((1u << extent) - 1u) << first;
 }
 
 /// Classify a mesh into its synchronization tier.
 template <class TMesh> CUTE_HOST_DEVICE constexpr Tier classify() {
-    constexpr int first = tilefoundry::offset(TMesh{});
+    constexpr int first = first_index<TMesh>();
     if constexpr (TMesh::level == TopologyLevel::cta) {
         /// A CTA mesh based at zero covers the grid.
         return first == 0 ? Tier::grid : Tier::illegal_grid_slice;
@@ -107,8 +131,8 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr Tier classify() {
 
 template <class TMesh> CUTE_HOST_DEVICE constexpr plan_t plan() {
     constexpr Tier tier = classify<TMesh>();
-    return {tier,  tilefoundry::offset(TMesh{}), units<TMesh>(),
-            false, tier == Tier::grid,           tier == Tier::named};
+    return {tier,  first_index<TMesh>(), units<TMesh>(),
+            false, tier == Tier::grid,   tier == Tier::named};
 }
 
 /// The meshes that name no barrier, refused however they are handed in.

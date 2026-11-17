@@ -5,7 +5,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry.interfaces import access, typeinfer, verify
-from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import expr, pattern, types, utils
 
 from .sync import WARP_SIZE
 
@@ -89,9 +89,9 @@ def workspace_slots(source) -> int:
     CTA combines its own partials in its own shared memory.
     """
     mesh = source.layout.mesh
-    names = types.topology_names(mesh)
+    names = utils.topology_names(mesh)
     if "thread" in names:
-        level = types.layouts(mesh)[names.index("thread")]
+        level = types.get(types.plain_layout(mesh.layout), names.index("thread"))
     else:
         level = types.plain_layout(mesh.layout)
     threads = 1

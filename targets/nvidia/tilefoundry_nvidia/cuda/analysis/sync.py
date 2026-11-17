@@ -211,7 +211,7 @@ def threads_of(op, type_, owners) -> types.ShardLayout | None:
     layout = type_.layout
     if type_.storage is not expr.StorageKind.SMEM or not isinstance(layout, types.ShardLayout):
         return None
-    axes = zip(layout.attrs, types.axis_keys(layout.mesh), strict=True)
+    axes = zip(layout.attrs, utils.axis_keys(layout.mesh), strict=True)
     shared = (level for attr, (level, _) in axes if not isinstance(attr, types.Split))
     return layout if all(owners.private(type_.storage, level) for level in shared) else None
 
@@ -363,7 +363,7 @@ class Planner:
         A parameter named in *filled* is issued with the call's *result* storage,
         and also with its argument when one is given.
         """
-        if mesh is not None and (scope.mesh is None or not types.within_mesh_scope(mesh, scope.mesh)):
+        if mesh is not None and (scope.mesh is None or not utils.within_mesh_scope(mesh, scope.mesh)):
             raise analysis.Error(f"sync: {name} is issued on a mesh not within its scope's")
         params = schedule.call_params(op, len(args))
         leaves = {
@@ -959,14 +959,14 @@ class Planner:
         only needs the threads of each aligned group of *unit* to agree (PTX
         ``.aligned``), so the trip count may differ from one group to the next.
         """
-        spanned = set(types.topology_names(mesh))
+        spanned = set(utils.topology_names(mesh))
         groups = None
         if unit is not None and len(mesh.topologies) == 1:
             held = tir.sync.sync_scope(mesh)
             groups = range(held.base, held.base + held.count, unit)
 
         def fixed(coordinates: types.Mesh, axis: int) -> bool:
-            if types.axis_keys(coordinates)[axis][0] not in spanned:
+            if utils.axis_keys(coordinates)[axis][0] not in spanned:
                 return True
             return groups is not None and one_coordinate(coordinates, axis, unit, groups)
 
@@ -995,7 +995,7 @@ class Planner:
             return id(node) in uniform or id(scope.capture_root(node)) in uniform
         if isinstance(node, expr.Call) and isinstance(node.target, dim.MeshCoord):
             axes = dim.literal_axes(node.args[0])
-            count = len(types.axis_keys(node.target.mesh))
+            count = len(utils.axis_keys(node.target.mesh))
             return axes is not None and all(
                 0 <= axis < count and fixed(node.target.mesh, axis) for axis in axes
             )

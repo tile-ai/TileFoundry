@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir import dim, expr, types
+from tilefoundry.ir import dim, expr, types, utils
 
 from .context import TypeInferResults
 from .registry import register
@@ -28,7 +28,7 @@ def infer_mesh_coord(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
     if not isinstance(call.target.mesh, types.Mesh):
         ctx.error(call, "MeshCoord.mesh must be a Mesh")
     try:
-        covered = ctx.mesh_scope is not None and types.equals_mesh_scope(call.target.mesh, ctx.mesh_scope)
+        covered = ctx.mesh_scope is not None and utils.equals_mesh_scope(call.target.mesh, ctx.mesh_scope)
     except ValueError as error:
         ctx.error(call, str(error))
     if not covered:

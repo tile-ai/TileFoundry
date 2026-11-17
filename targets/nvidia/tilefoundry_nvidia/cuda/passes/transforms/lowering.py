@@ -323,10 +323,10 @@ class CudaLowering(transforms.Lowering):
             attrs = (
                 list(source.attrs)
                 if source is not None
-                else [types.Broadcast()] * len(types.axis_keys(binding_mesh))
+                else [types.Broadcast()] * len(utils.axis_keys(binding_mesh))
             )
             coords = [None] * len(attrs)
-            for mesh_axis, (topology, name) in enumerate(types.axis_keys(binding_mesh)[:dropped]):
+            for mesh_axis, (topology, name) in enumerate(utils.axis_keys(binding_mesh)[:dropped]):
                 attr = rest.attrs[mesh_axis]
                 attrs[mesh_axis] = attr
                 coordinate = 0

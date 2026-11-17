@@ -58,8 +58,8 @@ def test_mesh_value_equality_is_by_value() -> None:
 
 
 def test_make_mesh_appends_a_sliced_scope_with_its_offset() -> None:
-    assert types.Mesh.from_meshes(CTA, THR[128:256]).layout == RUN
-    assert not types.equals_mesh_scope(types.Mesh.from_meshes(CTA, THR[0:128]), types.Mesh.from_meshes(CTA, THR[128:256]))
+    assert utils.from_meshes(CTA, THR[128:256]).layout == RUN
+    assert not utils.equals_mesh_scope(utils.from_meshes(CTA, THR[0:128]), utils.from_meshes(CTA, THR[128:256]))
 
 
 def test_make_mesh_replaces_a_sliced_suffix_by_component() -> None:
@@ -67,20 +67,20 @@ def test_make_mesh_replaces_a_sliced_suffix_by_component() -> None:
         (types.Topology("cta", 4352),),
         types.Layout((64, 68), (68, 1)),
     )
-    current = types.Mesh.from_meshes(cta[2:3, :], THR)
+    current = utils.from_meshes(cta[2:3, :], THR)
     inner = types.Mesh(
         (types.Topology("thread", 384),),
         types.ComposedLayout(None, 128, types.Layout((4, 8, 4), (32, 4, 1))),
     )
 
-    replaced = types.Mesh.from_meshes(current, inner)
+    replaced = utils.from_meshes(current, inner)
 
     assert replaced.layout == types.ComposedLayout(
         None,
         52352,
         types.Layout(((1, 68), (4, 8, 4)), ((68 * 384, 384), (32, 4, 1))),
     )
-    assert types.sub_meshes(replaced) == (
+    assert tuple(utils.topology_mesh(replaced, name) for name in utils.topology_names(replaced)) == (
         types.Mesh(
             (types.Topology("cta", 4352),),
             types.ComposedLayout(None, 136, types.Layout((1, 68), (68, 1))),
@@ -91,7 +91,7 @@ def test_make_mesh_replaces_a_sliced_suffix_by_component() -> None:
 
 def test_mesh_with_several_levels_slices_in_device_numbering() -> None:
     assert CT[:, 128:256].layout == RUN
-    assert CT[:, 128:256] == types.Mesh.from_meshes(CTA, THR[128:256])
+    assert CT[:, 128:256] == utils.from_meshes(CTA, THR[128:256])
     assert CT[1:3, 128:256].layout == types.ComposedLayout(
         None, 1 * 384 + 128, types.Layout(((2,), (128,)), ((384,), (1,)))
     )
@@ -99,7 +99,7 @@ def test_mesh_with_several_levels_slices_in_device_numbering() -> None:
 
 def test_separate_undoes_make_mesh() -> None:
     mesh = CT[1:3, 128:256]
-    assert types.sub_meshes(mesh) == (
+    assert tuple(utils.topology_mesh(mesh, name) for name in utils.topology_names(mesh)) == (
         types.Mesh(
             (types.Topology("cta", 4),),
             types.ComposedLayout(None, 1, types.Layout((2,), (1,))),
@@ -109,26 +109,26 @@ def test_separate_undoes_make_mesh() -> None:
             types.ComposedLayout(None, 128, types.Layout((128,), (1,))),
         ),
     )
-    assert types.Mesh.from_meshes(*types.sub_meshes(mesh)) == mesh
+    assert utils.from_meshes(*(utils.topology_mesh(mesh, name) for name in utils.topology_names(mesh))) == mesh
 
 
 
-def test_offset_is_the_total_index_and_get_divides_it() -> None:
-    """One offset counts over every topology; only ``get`` divides it per topology."""
+def test_the_first_index_counts_over_every_topology() -> None:
+    """The first index ``L(0)`` counts over every topology; ``idx2crd`` splits it into unit ids."""
     cta, thread = types.Topology("cta", 4), types.Topology("thread", 128)
-    sliced = types.Mesh.from_meshes(
+    sliced = utils.from_meshes(
         types.Mesh((cta,), types.Layout((4,), (1,)), ("c",)),
         types.Mesh((thread,), types.Layout((128,), (1,)), ("t",)),
     )[1, 32:64]
 
-    assert types.offset(sliced) == 1 * 128 + 32
-    assert types.get(sliced, "cta") == types.Mesh(
+    assert sliced.layout(0) == 1 * 128 + 32
+    assert utils.topology_mesh(sliced, "cta") == types.Mesh(
         (cta,), types.ComposedLayout(None, 1, types.Layout((1,), (1,))), ("c",)
     )
-    assert types.get(sliced, "thread") == types.Mesh(
+    assert utils.topology_mesh(sliced, "thread") == types.Mesh(
         (thread,), types.ComposedLayout(None, 32, types.Layout((32,), (1,))), ("t",)
     )
-    assert types.get(sliced, "gpu") is None
+    assert utils.topology_mesh(sliced, "gpu") is None
 
 
 def test_a_slice_counts_its_unit_ids_from_its_start() -> None:
@@ -170,45 +170,48 @@ _STRIDED = types.Mesh(_TOPOLOGY, types.Layout((_CHUNKS,), (3,)))
     ids=("same", "equivalent", "contained", "exceeds", "different-topology"),
 )
 def test_symbolic_scopes_compare_by_selected_positions(inner, outer, covered, within) -> None:
-    assert types.equals_mesh_scope(inner, outer) is covered
-    assert types.within_mesh_scope(inner, outer) is within
+    assert utils.equals_mesh_scope(inner, outer) is covered
+    assert utils.within_mesh_scope(inner, outer) is within
 
 
 @pytest.mark.parametrize("selection", (_HOLES, _STRIDED), ids=("holes", "strided"))
 def test_a_scope_with_gaps_is_refused(selection) -> None:
-    assert not types.within_mesh_scope(selection, selection)
-    assert not types.within_mesh_scope(selection, _FULL)
+    assert not utils.within_mesh_scope(selection, selection)
+    assert not utils.within_mesh_scope(selection, _FULL)
     with pytest.raises(ValueError, match="both must be continuous"):
-        types.Mesh.from_meshes(types.Mesh.from_meshes(THR, selection), selection)
+        utils.from_meshes(utils.from_meshes(THR, selection), selection)
 
 
 _CTA4, _THREAD128 = types.Topology("cta", 4), types.Topology("thread", 128)
 
 
 def test_a_mesh_of_several_topologies_maps_a_coord_to_the_index_over_all() -> None:
-    """Stored strides are in the index over both topologies; ``layouts`` divides them back."""
+    """Stored strides are in the index over both topologies; ``idx2crd`` reads the unit ids back."""
     grouped = types.Mesh((_CTA4, _THREAD128), types.Layout(((4,), (128,)), None))
-    joined = types.Mesh.from_meshes(
+    joined = utils.from_meshes(
         types.Mesh((_CTA4,), types.Layout((4,), (1,))),
         types.Mesh((_THREAD128,), types.Layout((128,), (1,))),
     )
     assert grouped == joined
     assert grouped.layout.strides == ((128,), (1,))
-    assert types.layouts(grouped) == (types.Layout((4,), (1,)), types.Layout((128,), (1,)))
+    assert tuple(types.get(grouped.layout, t) for t in range(2)) == (
+        types.Layout((4,), (128,)),
+        types.Layout((128,), (1,)),
+    )
     assert grouped.layout(1 * 128 + 40) == types.crd2idx((1, 40), (4, 128), (128, 1)) == 168
     sliced = grouped[1, 32:64]
-    assert types.offset(sliced) == 160
-    assert (types.offset(types.get(sliced, "cta")), types.offset(types.get(sliced, "thread"))) == (1, 32)
+    assert sliced.layout(0) == 160
+    assert utils.first_unit_ids(sliced) == (1, 32)
 
 
 def test_an_outer_stride_counts_every_declared_inner_unit() -> None:
     """Thread declares 256 units and the mesh selects 32; the CTA strides scale by 256."""
-    mesh = types.Mesh.from_meshes(
+    mesh = utils.from_meshes(
         types.Mesh((types.Topology("cta", 8),), types.Layout((4, 2), (2, 1))),
         types.Mesh((types.Topology("thread", 256),), types.Layout((32,), (1,))),
     )
     assert mesh.layout.strides == ((512, 256), (1,))
-    assert types.layouts(mesh) == (types.Layout((4, 2), (2, 1)), types.Layout((32,), (1,)))
+    assert utils.unit_layout(mesh, 0) == types.Layout((4, 2), (2, 1))
 
 
 @pytest.mark.parametrize(
@@ -229,11 +232,11 @@ def test_an_inner_topology_needs_a_static_size(layout) -> None:
 def test_the_outermost_size_may_be_symbolic() -> None:
     blocks = types.Topology("cta", expr.DimVar("blocks", 1, 64))
     mesh = types.Mesh((blocks, _THREAD128), types.Layout(((4,), (128,)), ((128,), (1,))))
-    assert types.layouts(mesh)[0] == types.Layout((4,), (1,))
+    assert utils.unit_layout(mesh, 0) == types.Layout((4,), (1,))
 
 
 def test_flat_layout_keeps_the_slice_wrapper() -> None:
-    whole = types.Mesh.from_meshes(types.Mesh((_CTA4,), types.Layout((4,))), types.Mesh((_THREAD128,), types.Layout((128,))))
+    whole = utils.from_meshes(types.Mesh((_CTA4,), types.Layout((4,))), types.Mesh((_THREAD128,), types.Layout((128,))))
     assert utils.flat_layout(whole) == types.Layout((4, 128), (128, 1))
     assert utils.flat_layout(whole[1, 32:64]) == types.ComposedLayout(None, 160, types.Layout((1, 32), (128, 1)))
     assert utils.flat_layout(whole[0, :]) == types.ComposedLayout(None, 0, types.Layout((1, 128), (128, 1)))
@@ -263,7 +266,7 @@ def test_a_local_view_reencodes_the_mesh_it_keeps() -> None:
 
 
 def test_a_constant_slice_is_proved_by_its_sub_box() -> None:
-    whole = types.Mesh.from_meshes(types.Mesh((_CTA4,), types.Layout((4,))), types.Mesh((_THREAD128,), types.Layout((128,))))
+    whole = utils.from_meshes(types.Mesh((_CTA4,), types.Layout((4,))), types.Mesh((_THREAD128,), types.Layout((128,))))
     assert tir.sync.legal_slice_of(whole[:, :], whole)
     assert tir.sync.legal_slice_of(whole[1:3, 32:64], whole)
     assert not tir.sync.legal_slice_of(whole[1:3, 32:64], whole[1:3, :])
@@ -271,5 +274,5 @@ def test_a_constant_slice_is_proved_by_its_sub_box() -> None:
         types.Mesh(whole.topologies, types.ComposedLayout(None, 160, types.Layout(((2,), (32,)), ((256,), (1,))))),
         whole,
     )
-    with pytest.raises(ValueError, match="do not divide"):
+    with pytest.raises(ValueError, match="'cta' steps by 1, which is not a multiple of its unit 128"):
         types.Mesh(whole.topologies, types.ComposedLayout(None, 160, types.Layout(((2,), (32,)), ((1,), (1,)))))
