@@ -496,6 +496,80 @@ entry is rejected by compile.
   - A synthesized `Launch` MUST carry its settled geometry so downstream
     codegen reads it without deriving it again.
 
+### 7.4 `differentiate`
+
+```python
+# tilefoundry.passes.transforms.differentiate, exported by tilefoundry.dsl
+def differentiate(
+    module: core.Module, *, wrt: tuple[str, ...], recompute: tuple[str, ...] = ()
+) -> tuple[core.Module, core.Module]: ...
+
+class Saved:
+    """One value the forward keeps for the backward; frozen."""
+
+    name: str
+    type: types.Type
+    origin: str
+
+def saved_values(forward: core.Module) -> tuple[Saved, ...]: ...
+def select_value(module: core.Module, selector: str) -> expr.Expr: ...
+```
+
+`differentiate` is not a `Pass`: the author calls it with arguments, and it
+returns two Modules. It reads the entry of *module*, which MUST have passed type
+inference, and builds `<Name>Forward` and `<Name>Backward`. The author calls the
+two from a step of their own; `differentiate` builds no step and no optimizer.
+
+- The forward entry keeps the name and the parameters of the original entry. It
+  returns the original results, flattened, and last a `saved` tuple.
+- The backward entry is named `backward`. Its parameters are the gradient of each
+  floating point result, in result order, then `saved`. It returns the gradient
+  of each `wrt` parameter, in `wrt` order: one value for one name, a tuple for
+  more. The gradient of a tuple parameter is a tuple of the same structure.
+- `saved` holds only what the backward reads: values the forward computed, and
+  parameters by reference. A value named in `recompute` is computed again in the
+  backward from what it reads, which `saved` holds instead.
+- A function of the same Module that the entry calls is differentiated with
+  respect to each of its floating point parameters that is not a `ConstTensor`.
+  Each Module keeps one forward and one backward version of it under its own
+  name. A child slot's Module is differentiated the same way and takes the same
+  slot in both generated Modules. A callee's `saved` is one item of its
+  caller's `saved`.
+- A `MeshRegion` stays a region in both Modules. A value inside a forward
+  region that the backward reads leaves the region as an extra result; the
+  backward region of the same mesh takes it, and the gradients, as arguments.
+- A value that only parameters outside `wrt`, constants and `ConstTensor`
+  parameters reach has no gradient and gets none; a `wrt` parameter that no
+  gradient reaches gets zeros.
+- Gradient layout: the gradient of a value of layout `L` has layout
+  `gradient_layout(L)`, which is `L` with each `Partial` read as `Broadcast`.
+  The backward of a `Reshard` reshards the gradient back to `gradient_layout`
+  of its input's layout, in one `Reshard`. Each gradient parameter of the
+  backward has `gradient_layout` of its result's layout. A `wrt` gradient whose
+  layout differs from `gradient_layout` of its parameter's layout gets a final
+  `Reshard` to it, so a broadcast weight's partial gradient is all-reduced.
+- Each Op that can be differentiated registers one rule
+  ([visitor-registry §12](./visitor-registry.md#12-instance-5--autodiff)).
+- `recompute` items are `Module[.function]:variable`. The part before `:` is a
+  selector as in [cli Commands](./cli.md#commands), resolved by `Module.name`
+  among the Modules reachable from *module*; without `.function` it names the
+  entry. The variable is the name the author bound.
+- `saved_values` lists the items of a generated forward's `saved` with the name
+  the author bound (`v<index>` when there is none), the type, and the origin:
+  `parameter`, the Op and its source line, or the call whose `saved` it is.
+- constraints:
+  - `differentiate` MUST NOT change *module*.
+  - Each refusal is a `ValueError` that names what it refuses, and the source
+    line when there is one: an empty `wrt`; a `wrt` name that is not a
+    parameter, not a floating point tensor or a tuple of them, or a
+    `ConstTensor`; an Op with no rule, or a kind its rule does not take; a
+    `LoopRegion` that a gradient reaches; a call that reaches past one child
+    slot; a callee named `backward`; a `recompute` selector without `:`, with a
+    child slot path, naming no reachable Module, a Module name two reachable
+    Modules share, no function, no value, two values of one name, a parameter,
+    or a value computed by a call rather than an Op; and a backward that
+    `differentiate` generated, since a second derivative is not supported.
+
 ## 8. Directory layout
 
 File layout is implementation-owned. Dispatch registry ownership is defined by

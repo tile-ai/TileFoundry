@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from . import differentiate
 from .convert_hir_to_tir import (
     BINDING,
     INDEX,

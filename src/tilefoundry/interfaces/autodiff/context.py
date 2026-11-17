@@ -2,13 +2,26 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from tilefoundry.interfaces import typeinfer
 from tilefoundry.ir import expr, types
 from tilefoundry.ir.expr import op_registry
 
-__all__ = ["Context"]
+__all__ = ["Context", "gradient_layout"]
+
+
+def gradient_layout(layout):
+    """The layout a gradient takes for a value of *layout*: each ``Partial`` becomes ``Broadcast``.
+
+    The gradient of a value is laid out like the value, except that a gradient is
+    never left partial: DTensor's ``_normalize_placements_for_grad`` is the same rule.
+    """
+    shard = types.shard_layout_of(layout)
+    if shard is None or not any(isinstance(attr, types.Partial) for attr in shard.attrs):
+        return layout
+    attrs = tuple(types.Broadcast() if isinstance(attr, types.Partial) else attr for attr in shard.attrs)
+    return replace(shard, attrs=attrs)
 
 
 @dataclass
@@ -21,14 +34,52 @@ class Context(typeinfer.TypeInferContext):
     """
 
     def call(self, name: str, *args: expr.Expr, **attrs) -> expr.Call:
-        """Build ``tf.<name>(*args, **attrs)`` through the op registry and infer its type."""
+        """Build ``tf.<name>(*args, **attrs)`` through the op registry and infer its type.
+
+        Only the new call is typed: every argument must already have a type in
+        this context, so the forward the arguments come from is never retyped.
+        """
         schema = op_registry.lookup("tf", (), name)
         if not isinstance(schema, expr.OpSchema):
             raise ValueError(f"autodiff: no tf op named {name!r}")
+        for arg in args:
+            if id(arg) not in self.memo:
+                raise ValueError(f"autodiff: tf.{name} got an argument with no type in this context")
         call = expr.Call(
             type=types.TensorType.from_scalar(expr.DType.f32),
             target=schema.builder(**attrs),
             args=args,
         )
-        typeinfer.TypeInferVisitor().visit(call, self)
+        call.retype(typeinfer.TypeInferVisitor(owns_body=False).visit(call, self))
         return call
+
+    def constant(self, value: int | float, dtype: expr.DType | None = None) -> expr.Constant:
+        """A scalar literal typed in this context.
+
+        Its dtype is *dtype*, else ``i64`` for an int and ``f32`` for a float.
+        """
+        if dtype is None:
+            dtype = expr.DType.i64 if isinstance(value, int) else expr.DType.f32
+        constant = expr.Constant(
+            type=types.TensorType.from_scalar(dtype, storage=expr.StorageKind.UMAT), value=value
+        )
+        return self.remember(constant, constant.type)
+
+    def remember(self, node: expr.Expr, type_: types.Type) -> expr.Expr:
+        """Record *type_* for *node*, a value built outside ``call``, and return *node*."""
+        self.memo[id(node)] = (node, type_)
+        return node
+
+    def sum_to(self, gradient: expr.Expr, target: types.TensorType) -> expr.Expr:
+        """Sum *gradient* over the axes a broadcast added, then reshape it to *target*'s shape."""
+        shape = self.type_of(gradient).shape
+        lead = len(shape) - len(target.shape)
+        axes = (
+            *range(lead),
+            *(lead + axis for axis, extent in enumerate(target.shape) if extent == 1 and shape[lead + axis] != 1),
+        )
+        if axes:
+            gradient = self.call("reduce", gradient, axes=axes, keepdim=True, kind=expr.ReduceKind.SUM)
+        if self.type_of(gradient).shape != tuple(target.shape):
+            gradient = self.call("reshape", gradient, new_shape=tuple(target.shape))
+        return gradient

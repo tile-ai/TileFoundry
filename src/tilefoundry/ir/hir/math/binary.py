@@ -10,7 +10,7 @@ the TIR effect-form ``Binary`` Stmt that writes into ``dst``.
 from __future__ import annotations
 
 from tilefoundry import core
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 
@@ -140,6 +140,41 @@ def eval_binary(ctx):
         else tuple((p, evaluator.binary(ctx.op.kind, a.to_local(p), b.to_local(p))) for p in placements)
     )
     return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
+
+
+@autodiff.register(Binary)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """ADD, SUB, MUL, DIV and MAX; a broadcast input gets its gradient summed back to its shape.
+
+    MAX splits the gradient evenly between equal inputs, as ``torch.maximum`` does.
+    """
+    lhs, rhs = call.args
+    kind = call.target.kind
+    if kind is expr.BinaryKind.ADD:
+        grads = (cotangent, cotangent)
+    elif kind is expr.BinaryKind.SUB:
+        grads = (cotangent, ctx.call("neg", cotangent))
+    elif kind is expr.BinaryKind.MUL:
+        grads = (ctx.call("mul", cotangent, rhs), ctx.call("mul", cotangent, lhs))
+    elif kind is expr.BinaryKind.DIV:
+        grads = (
+            ctx.call("div", cotangent, rhs),
+            ctx.call("neg", ctx.call("div", ctx.call("mul", cotangent, call), rhs)),
+        )
+    elif kind is expr.BinaryKind.MAX:
+        dtype = ctx.type_of(call).dtype
+        half_equal = ctx.call(
+            "mul", ctx.constant(0.5, dtype), ctx.call("cast", ctx.call("cmp_eq", lhs, rhs), dtype=dtype)
+        )
+        grads = tuple(
+            ctx.call("mul", cotangent, ctx.call(
+                "add", ctx.call("cast", ctx.call(name, lhs, rhs), dtype=dtype), half_equal
+            ))
+            for name in ("cmp_gt", "cmp_lt")
+        )
+    else:
+        raise ValueError(f"Binary {kind.name} has no autodiff rule")
+    return tuple(ctx.sum_to(grad, ctx.type_of(arg)) for grad, arg in zip(grads, call.args))
 
 
 __all__ = ["Binary", "merge_layout"]

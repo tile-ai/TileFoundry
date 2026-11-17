@@ -5,7 +5,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry import core, utils
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 
@@ -74,6 +74,13 @@ def eval_transpose(ctx):
 def transpose_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
     moved = ir_utils.tensor_bytes(cost.output_type(call, ctx))
     return cost.Cost({}, (cost.TrafficBytes(read=moved), cost.TrafficBytes(write=moved)))
+
+
+@autodiff.register(Transpose)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """The gradient transposed by the inverse permutation."""
+    perm = tuple(axis % len(call.target.perm) for axis in call.target.perm)
+    return (ctx.call("transpose", cotangent, perm=tuple(perm.index(axis) for axis in range(len(perm)))),)
 
 
 __all__ = ["Transpose"]

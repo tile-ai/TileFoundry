@@ -8,7 +8,7 @@ from types import MappingProxyType
 import isl
 
 from tilefoundry import core, utils
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 
@@ -226,3 +226,31 @@ def reduce_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
     if not isinstance(source, types.TensorType):
         raise ValueError("Reduce cost requires a tensor input")
     return cost.operation(source.dtype, ir_utils.numel(source), cost.traffic((source,), output))
+
+
+@autodiff.register(Reduce)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """SUM, MEAN and MAX: the gradient broadcast back over the reduced axes.
+
+    MAX gives the gradient to every element equal to the maximum, divided by
+    how many there are, as ``torch.amax`` does.
+    """
+    (x,) = call.args
+    op = call.target
+    source = ctx.type_of(x)
+    axes = tuple(sorted(axis % len(source.shape) for axis in op.axes))
+    kept = tuple(1 if axis in axes else extent for axis, extent in enumerate(source.shape))
+
+    def keep(value):
+        return value if ctx.type_of(value).shape == kept else ctx.call("reshape", value, new_shape=kept)
+
+    if op.kind is expr.ReduceKind.MAX:
+        mask = ctx.call("cast", ctx.call("cmp_eq", x, keep(call)), dtype=source.dtype)
+        count = ctx.call("reduce", mask, axes=axes, keepdim=True, kind=expr.ReduceKind.SUM)
+        return (ctx.call("mul", mask, ctx.call("div", keep(cotangent), count)),)
+    if op.kind not in (expr.ReduceKind.SUM, expr.ReduceKind.MEAN):
+        raise ValueError(f"Reduce {op.kind.name} has no autodiff rule")
+    gradient = keep(cotangent)
+    if op.kind is expr.ReduceKind.MEAN:
+        gradient = ctx.call("mul", gradient, ctx.constant(1.0 / prod(source.shape[axis] for axis in axes), source.dtype))
+    return (ctx.call("add", ctx.call("zeros", type=source), gradient),)
