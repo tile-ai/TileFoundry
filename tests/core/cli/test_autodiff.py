@@ -19,6 +19,8 @@ ROUND_TRIP = (
     ("loop_range.py", "LoopRange", "x,w,h0"),
     ("loop_call.py", "LoopCall", "keys,decay"),
     ("loop_nested.py", "LoopNested", "x,w"),
+    ("mesh_data_parallel.py", "MeshDataParallel", "x,w"),
+    ("mesh_two_regions.py", "MeshTwoRegions", "x,w"),
 )
 
 

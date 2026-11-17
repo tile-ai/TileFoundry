@@ -308,6 +308,19 @@ class LoopNested(Differentiated):
     wrt: tuple[str, ...] = ("x", "w")
 
 
+@case
+class MeshDataParallel(Differentiated):
+    path: Path = FIXTURES / "mesh_data_parallel.py"
+    wrt: tuple[str, ...] = ("x", "w")
+    reshards: tuple = (((P,), (B,)),)
+
+
+@case
+class MeshTwoRegions(Differentiated):
+    path: Path = FIXTURES / "mesh_two_regions.py"
+    wrt: tuple[str, ...] = ("x", "w")
+
+
 CASES = special(Differentiated)
 
 

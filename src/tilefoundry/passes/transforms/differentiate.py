@@ -553,8 +553,14 @@ class FunctionDifferentiator:
         gradients = types.TupleType(tuple(gradient_type(function.params[index].type) for index in self.wrt))
         returned = outputs[0] if len(outputs) == 1 else pack(outputs)
         body = self.rebuild(returned, self.top)
+        meshes = {
+            repr(node.mesh): node.mesh for node in self.top.nodes.values() if isinstance(node, core.MeshRegion)
+        }
         saved = types.TupleType(tuple(self.key_type(key) for key in self.saved_keys))
         self.saved.restamp(saved, saved)
+        if len(meshes) == 1:
+            (mesh,) = meshes.values()
+            body = enclose(body, mesh, (*params, self.saved))
         backward = core.Function.from_parts(
             name="backward" if function is self.module.entry_function() else function.name,
             params=(*params, self.saved),
@@ -835,16 +841,26 @@ class FunctionDifferentiator:
         node = backward.node
         inner = backward.scope
         body = self.rebuild(node.body, inner)
-        captures = sorted(
-            (*zip(node.params, (self.rebuild(arg, scope) for arg in node.args)), *inner.region_params),
-            key=capture_name,
-        )
+        args = tuple(self.named(arg, scope) for arg in node.args)
+        captures = sorted((*zip(node.params, args), *inner.region_params), key=capture_name)
         return replace(
             node,
             body=body,
             params=tuple(param for param, _ in captures),
             args=tuple(value for _, value in captures),
         )
+
+    def named(self, node: expr.Expr, scope: Scope) -> expr.Expr:
+        """*node* rebuilt with a binding name, so a region capturing it sorts by its printed name.
+
+        Every later read of *node* in *scope* gets the same named value.
+        """
+        value = self.rebuild(node, scope)
+        if isinstance(value, expr.Var) or expr.binding_name(value):
+            return value
+        named = replace(value, metadata=(*value.metadata, expr.BindingMetadata(name=self.fresh("grad"))))
+        scope.remember_rebuilt(node, named)
+        return named
 
     def rebuild_loop(self, backward: RegionBackward, scope: Scope) -> core.LoopRegion:
         node = backward.node
@@ -1031,6 +1047,40 @@ def rebuild_structure(type_: types.Type, found) -> expr.Expr:
     if isinstance(type_, types.TupleType):
         return pack(tuple(rebuild_structure(item, found) for item in type_.fields))
     return next(found)
+
+
+class Inliner(core.BindingSubstitutionCloner):
+    """A copy with each region of one mesh replaced by its body, its params bound to its args."""
+
+    def __init__(self, mesh: types.Mesh) -> None:
+        super().__init__()
+        self.mesh = mesh
+
+    def visit_MeshRegion(self, node: core.MeshRegion, ctx) -> expr.Expr:
+        if node.mesh != self.mesh:
+            return super().visit_MeshRegion(node, ctx)
+        inner = dict(ctx)
+        inner.update((id(param), self.visit(arg, ctx)) for param, arg in zip(node.params, node.args))
+        return self.visit(node.body, inner)
+
+    def visit_Call(self, node: expr.Call, ctx) -> expr.Expr:
+        copied = super().visit_Call(node, ctx)
+        held, index = copied.args[0] if copied.args else None, copied.args[-1] if copied.args else None
+        if is_projection(copied) and isinstance(held, expr.Tuple) and isinstance(index, expr.Constant):
+            return held.elements[index.value]
+        return copied
+
+
+def enclose(body: expr.Expr, mesh: types.Mesh, params: tuple[expr.Var, ...]) -> core.MeshRegion:
+    """*body* as the whole-function region of *mesh*, the backward regions of that mesh inlined.
+
+    A function that opens a mesh runs no op outside it. The region has the
+    shape the parser gives ``@func(mesh=...)``: one copy of each parameter,
+    in order, bound to that parameter.
+    """
+    inner = tuple(replace(param) for param in params)
+    region_body = Inliner(mesh).visit(body, {id(old): new for old, new in zip(params, inner)})
+    return core.MeshRegion(mesh=mesh, params=inner, args=params, body=region_body, type=region_body.type)
 
 
 class ForwardCloner(core.BindingSubstitutionCloner):
