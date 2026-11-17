@@ -98,6 +98,10 @@ def test_simd_evaluators():
     )
     out = lambda: lanes(torch.zeros(1, 32, dtype=torch.int32))
     assert total(tir.ReduceKind.SUM, source).tolist() == [[496]]
+    shared_total = types.TensorType((1, 1), I32, bound(tir.layout.SHARED, groups=1, width=32), expr.StorageKind.RMEM)
+    in_memory = types.TensorType((1, 32), I32, types.Layout((1, 32), (32, 1)), expr.StorageKind.GMEM)
+    with pytest.raises(schedule.RefusalError, match="src: gmem does not match rmem"):
+        schedule.check_call(tir.Reduce(dtype=I32), (shared_total, in_memory), shared_total.layout.mesh, ctx=None)
     assert total(tir.ReduceKind.MAX, source).tolist() == [[31]]
     assert total(tir.ReduceKind.SUM, source[:, :4]).tolist() == [[6]]
     running = evaluate(tir.Prefix(kind=tir.PrefixKind.SUM, inclusive=False, dtype=I32), out(), lanes(source))

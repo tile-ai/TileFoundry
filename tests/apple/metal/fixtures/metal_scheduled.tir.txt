@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+from tilefoundry.dsl import *
+from tilefoundry_apple import metal
+
+
+@module(
+    entry="mma",
+    target=metal.Target("apple.m2_pro.gpu"),
+    topologies=(Topology("threadgroup", 1), Topology("thread", 64),),
+)
+class MatMul:
+    @prim_func(target=metal.Target("apple.m2_pro.gpu"))
+    def mma(
+        a: Tensor[(2, 8, 8), "f32"], b: Tensor[(2, 8, 8), "f32"], c: Tensor[(2, 8, 8), "f32"], out: Tensor[(2, 8, 8), "f32"]
+    ):
+        with Mesh((Topology("thread", 64),), layout=((2, 2, 4, 2, 2), (32, 1, 2, 8, 16))) as cta:
+            value = T.alloc_tensor(
+                tensor_type=Tensor[
+                    (2, 8, 8),
+                    "f32",
+                    ShardLayout(
+                    layout=Layout((2, (2, 4), (2, 2, 2)), (0, (0, 0), (0, 0, 1))),
+                    attrs=(S(0), S(4), S(2), S(3), S(1)),
+                    mesh=cta,
+                ),
+                    "rmem",
+                ]
+            )
+            T.metal.ldmatrix(value, c, transpose=False, dtype="f32")
+            value_1 = T.alloc_tensor(
+                tensor_type=Tensor[
+                    (2, 8, 8),
+                    "f32",
+                    ShardLayout(
+                    layout=Layout((2, (2, 4), (2, 2, 2)), (0, (0, 0), (0, 0, 1))),
+                    attrs=(S(0), S(4), S(2), S(3), S(1)),
+                    mesh=cta,
+                ),
+                    "rmem",
+                ]
+            )
+            T.metal.ldmatrix(value_1, a, transpose=False, dtype="f32")
+            value_2 = T.alloc_tensor(
+                tensor_type=Tensor[
+                    (2, 8, 8),
+                    "f32",
+                    ShardLayout(
+                    layout=Layout((2, (2, 4), (2, 2, 2)), (0, (0, 0), (0, 0, 1))),
+                    attrs=(S(0), S(4), S(2), S(3), S(1)),
+                    mesh=cta,
+                ),
+                    "rmem",
+                ]
+            )
+            T.metal.ldmatrix(value_2, b, transpose=False, dtype="f32")
+            T.metal.mma(value, value_1, value_2, value, dtype="f32")
+            T.metal.stmatrix(out, value, transpose=False, dtype="f32")
+
+from __future__ import annotations
+
+from tilefoundry.dsl import *
+from tilefoundry_apple import metal
+
+
+@module(
+    entry="reduce",
+    target=metal.Target("apple.m2_pro.gpu"),
+    topologies=(Topology("threadgroup", 1), Topology("thread", 64),),
+)
+class Reduction:
+    @prim_func(target=metal.Target("apple.m2_pro.gpu"))
+    def reduce(
+        partial: Tensor[(2, 1), "f32",
+    ShardLayout(
+        layout=Layout((2, 1), (0, 0)),
+        attrs=(S(0), P("sum")),
+        mesh=Mesh((Topology("thread", 64),), layout=(2, 32)),
+    ), "rmem"], out: Tensor[(2, 1), "f32",
+    ShardLayout(
+        layout=Layout((2, 1), (0, 0)),
+        attrs=(S(0), B()),
+        mesh=Mesh((Topology("thread", 64),), layout=(2, 32)),
+    ), "rmem"]
+    ):
+        with Mesh((Topology("thread", 64),), layout=(2, 32)) as cta:
+            T.metal.reduce(out, partial, kind=T.metal.ReduceKind.SUM, dtype="f32")

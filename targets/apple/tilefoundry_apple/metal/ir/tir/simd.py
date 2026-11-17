@@ -7,7 +7,7 @@ from tilefoundry.interfaces import schedule
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir.hir import sharding
 
-from .layout import LANE_GROUPS, LANE_INTS, LANE_NUMBERS, G, W, lanes, one_of, shared
+from .layout import LANE_GROUPS, LANE_INTS, LANE_NUMBERS, LANES, G, W, lanes, one_of, shared
 
 R, WRITE = expr.MemoryEffect.READ, expr.MemoryEffect.WRITE
 
@@ -80,9 +80,10 @@ class Reduce(expr.Op):
     dtype = expr.ParamDef(kind="attribute", annotation=expr.DType,
                           pattern=pattern.Wildcard("dtype", predicates=(REDUCE_DTYPES,)), default=expr.DType.f32)
     dst = expr.ParamDef(kind="input", effect=WRITE, pattern=shared())
-    src = expr.ParamDef(kind="input", effect=R, pattern=pattern.Or(
-        lanes(), pattern.Tensor(shape=(G, 1), dtype=pattern.Wildcard("dtype"), storage=expr.StorageKind.RMEM,
-                                layout=pattern.Switch("kind", PARTIAL))))
+    # One scalar per lane, or the per-lane partial values a Reshard to Broadcast resolves
+    src = expr.ParamDef(kind="input", effect=R, pattern=pattern.Tensor(
+        shape=(G, pattern.Or(W, 1)), dtype=pattern.Wildcard("dtype"), storage=expr.StorageKind.RMEM,
+        layout=pattern.Or(LANES, pattern.Switch("kind", PARTIAL))))
 
 
 @expr.register_op(dialect="T", category="arith", namespace="metal", name="prefix")
