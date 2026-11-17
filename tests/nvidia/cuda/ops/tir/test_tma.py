@@ -93,6 +93,23 @@ def test_tma_admits_off_grain_transfer(n, dtype) -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_parameter_bulk_stages_by_coordinate() -> None:
+    """A (3, 2) parameter staged through the strided tier keeps its rows.
+
+    24 bytes is not a whole number of grains, so the tier pairs the two sides
+    element by element. CUDA holds the parameter as one flat mode in memory
+    order while CuTe numbers the (3, 2) tile first mode fastest.
+    """
+    module = cli.load_authored_ir(f"{OPS / 'parameter_bulk_stage.py'}:ParameterBulkStage")
+    rm = tilefoundry.compile(module, target=cuda.Target("nvidia.h200_sxm"))
+    a = torch.arange(6, dtype=torch.float32, device="cuda").view(3, 2)
+    out = torch.zeros_like(a)
+    rm(a, out)
+    torch.cuda.synchronize()
+    assert torch.equal(out, a)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_tma_tiers_stage_input_unchanged() -> None:
     """One compile behind two assertions, each naming the tier that failed."""
     TmaTiers = cli.load_authored_ir(f"{OPS / 'tma_tiers.py'}:TmaTiers")

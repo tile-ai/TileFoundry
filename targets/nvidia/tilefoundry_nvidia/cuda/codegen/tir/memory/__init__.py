@@ -12,4 +12,4 @@ from . import (
     stmatrix,
     tensor_view,
 )
-from .tensor_view import render_attr, render_shard_layout_value
+from .tensor_view import emit_paired, render_attr, render_shard_layout_value

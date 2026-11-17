@@ -54,6 +54,14 @@ class Context(EmitContext):
     offsets before conversion to CuTe shared-memory pointers.
   - Handlers obtain target type spellings and hardware counters through the
     context rather than rediscovering them from IR.
+  - A kernel parameter is wrapped as one flat mode over its envelope, numbered
+    in memory order. A parameter with a static shape and a plain `Layout`
+    reaches `Copy`, the unindexed `CopyAsync` and `CopyAsyncBulk` through that
+    layout. `Copy` and the unindexed `CopyAsync` pair two operands of one shape
+    by coordinate. `CopyAsyncBulk` does so only on its element path, as the
+    bulk instruction copies bytes in memory order. `Dot` pairs its operands by
+    register index, which for a parameter is memory order, and takes the flat
+    wrap.
 
 Every `LetStmt` binding a `Tuple` declares one C++ variable:
 `cute::array<decltype(e0), N>` when the elements share one type, otherwise
