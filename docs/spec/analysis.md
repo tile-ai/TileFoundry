@@ -372,8 +372,8 @@ counts one slice per index as an upper bound.
     received and what it sent. A unit finer than the boundary MUST state no
     share of it. Crossing is what the units on either side do. Dividing
     the move among the units inside one states a move nobody made.
-  - A same-mesh `Reshard` can resolve a `Partial` mesh axis across multiple units.
-    It MUST record communication at the topology boundary of that mesh axis. This holds
+  - When a same-mesh `Reshard` resolves a `Partial` mesh axis across multiple
+    units, communication MUST be recorded at that topology boundary. This holds
     even when every `Split` mesh axis is unchanged. An extent-one mesh axis contributes no communication.
   - A duration MUST take whichever of compute, storage movement and crossing is
     longest. It MUST NOT sum them. One movement spends two resources over one
