@@ -3,8 +3,8 @@
 The derived-visitor pattern: every `analysis` / `verify` / `codegen` walker is
 one template, **base visitor + custom Context + per-class registry**. This spec
 defines the template and the generic `Registry`. Every instance is built on the
-generic one. The instances are `typeinfer` / `verify` / `codegen` / `cost`, with
-the access-relation and evaluator registries beside them. One interface
+generic one. The instances are `typeinfer` / `verify` / `codegen` / `cost` /
+`autodiff`, with the access-relation and evaluator registries beside them. One interface
 package under `tilefoundry.interfaces` owns each registry. The package
 `tilefoundry.codegen` owns the code-generation registry. A key with no entry
 raises `MissingHandlerError` where it is looked up
@@ -180,6 +180,7 @@ registry lives in a package that depends on the Ops it dispatches.
 | `typeinfer.registry` | `type[Op]`, or `(type[Target], type[Op])` | `(Call, TypeInferContext) -> Type \| TypeInferResults` | `interfaces/typeinfer` |
 | `evaluator.registry` | `type[Op]` | `(EvaluateContext) -> Value` | `interfaces/evaluator` |
 | `cost.registry` | `type[Op]` | `(Call, cost.Context) -> Cost` | `interfaces/cost` |
+| `autodiff.registry` | `type[Op]` | `(Call, cotangent, autodiff.Context) -> tuple[Expr \| None, ...]` ([§12](#12-instance-5--autodiff)) | `interfaces/autodiff` |
 | `access.relation_registry` | `type[Op]` | `(Call, ctx) -> tuple[access.Relation, ...]` | `interfaces/access` |
 | `verify.registry` | `type` (Stmt or Op) | `(node, verify.Context) -> None` | `interfaces/verify` |
 | `access.alias_registry` | `type[Op]` | `(Call) -> int \| None` | `interfaces/access` |
@@ -191,7 +192,8 @@ registry lives in a package that depends on the Ops it dispatches.
 | `services.registry` | a service function | its implementation ([§3.2](#32-services)) | `services` |
 
 The registration functions are `typeinfer.register(cls, *, target=None)`,
-`evaluator.register(cls)`, `cost.register(cls)`, `access.register_relation(cls)`,
+`evaluator.register(cls)`, `cost.register(cls)`, `autodiff.register(cls)`,
+`access.register_relation(cls)`,
 `verify.register(cls)`, `access.register_alias(cls)` and
 `codegen.register(target, role, cls)`; the candidate pairings are registered
 through `schedule.register_candidates` ([§11](#11-instruction-candidate-mappings)).
@@ -1051,3 +1053,38 @@ Target capability records supply an open atom class to the instruction
 matcher. The matcher's frozen result records contain the constructed instruction and
 full ordered matcher path. [schedule](./schedule.md) owns acceptance and
 [inspection](./inspection.md) owns path and refusal rendering.
+
+## 12. Instance 5 — `autodiff`
+
+`differentiate` ([passes](./passes.md)) walks the body of a forward function in
+reverse and asks this registry for the rule of each Op it meets. The package
+`tilefoundry.interfaces.autodiff` owns `registry`, the registration function
+`autodiff.register` and `autodiff.Context`. A rule is registered in the Op's
+own file, like the other rules of the Op.
+
+```python
+# tilefoundry.interfaces.autodiff
+def rule(call: Call, cotangent, ctx: Context) -> tuple[Expr | None, ...]:
+    """Return the gradient of each input of *call*, in input order.
+
+    ``cotangent`` is the gradient of the result of *call*. ``None`` means the
+    input has no gradient (an index, a table). When the result is a tuple
+    (``TopK``, ``RoPE``), ``cotangent`` is a Python tuple with one item per
+    field, and ``None`` for a field that has no gradient. An input whose type is
+    a tuple gets its gradient as a Python tuple of the same shape.
+    """
+
+class Context(TypeInferContext):
+    def call(self, name: str, *args: Expr, **attrs) -> Call:
+        """Build ``tf.<name>(*args, **attrs)`` through the op registry and infer its type."""
+```
+
+- constraints:
+  - A rule builds every new Call through `ctx.call`, which finds the Op by its
+    DSL name. An Op file does not import another Op file to build its gradient.
+  - One rule per Op class. A rule dispatches on the kind of the Op (`Binary`,
+    `Unary`, `Reduce`) itself; a kind it does not support raises `ValueError`
+    naming the Op and the kind.
+  - An Op with no rule raises `MissingHandlerError` from `registry.require`.
+    `differentiate` refuses that Op and an unsupported kind the same way,
+    naming the Op and the location of the call.

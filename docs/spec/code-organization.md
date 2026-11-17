@@ -151,6 +151,9 @@ Its handler MUST NOT emit HIR operation bodies.
   When the Op is a view, the file also has `access.register_alias(Op)`. The Op
   file imports the interface packages (`from tilefoundry.interfaces import typeinfer`).
   The Op's own file holds the evaluator of the Op.
+  An Op that can be differentiated also has `@autodiff.register(Op)`
+  ([visitor-registry §12](./visitor-registry.md#12-instance-5--autodiff)).
+  `differentiate` refuses an Op that has none and names it.
 - **TIR effect Op file** (`ir/tir/<cat>/<name>.py`): Op class +
   `@typeinfer.register(Op)` (returning `TupleType.Void`) + an access relation +
   `@verify.register(Op)`, and `@evaluator.register(Op)` when a schedule can
