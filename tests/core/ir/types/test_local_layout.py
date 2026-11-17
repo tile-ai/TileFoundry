@@ -17,6 +17,12 @@ import pytest
 
 from tilefoundry.ir import expr, types, utils
 
+
+def test_zero_stride_mesh_coordinates_do_not_move():
+    mesh = types.Mesh((types.Topology("gpu", 1),), types.Layout((1,)), ("rank",))
+    assert types.mesh_coords(mesh, (0,)) == (0,)
+
+
 _GPU, _THREAD = types.Topology("gpu", 2), types.Topology("thread", 32)
 
 
