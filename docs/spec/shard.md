@@ -528,8 +528,8 @@ one-topology selection.
 It MUST cover every selected unit once. It MUST give each mesh axis one fixed physical stride.
 Composition preserves topology and offset. A slice of the resulting composed mesh is rejected.
 
-Every mesh MUST state one nested `Layout` whose mode `i` holds the mesh axes of
-topology `i`, a one-topology mesh included. Its strides are in the index over all
+Every mesh MUST state one nested `Layout`, a one-topology mesh included. Its
+mode `i` holds the mesh axes of topology `i`. Its strides are in the index over all
 topologies of the mesh, `T = make_layout(sizes)`. A stride of topology `i` MUST
 be a multiple of `u_i`. `u_i` is the product of the declared sizes of the
 topologies after `i` in this mesh. It is `stride(T)[i]` when topology `i` has

@@ -1,7 +1,7 @@
 """The Facts aggregates a Target projects, and the validation of what it returns.
 
 Each aggregate is the narrow hardware record one consumer asks for, and none
-names a backend: the topology limits and the memory-execution levels that
+names a backend: the topology limits and the memory execution topologies that
 several consumers share, the memory hierarchy graph, and the throughput rates
 and parallel capacity the analysis families divide work by. What a consumer
 cannot see it cannot depend on, so these types are the record of how much

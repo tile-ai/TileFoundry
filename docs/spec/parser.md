@@ -363,7 +363,7 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | mesh_axis | call_attribute, layout, mesh_layout, tensor_optional_slot, tensor_shape | MeshAxisBindingRule | A mesh axis of a shard layout resolves to a lexical Mesh binding. | src/tilefoundry/parser/pattern_nodes.py |
 | mesh_axis | call_attribute, layout, mesh_layout, tensor_optional_slot, tensor_shape | MeshAxisNameRule | A named mesh axis of a shard layout exists in its lexical Mesh. | src/tilefoundry/parser/pattern_nodes.py |
 | mesh_context | mesh_context | SelectionBindingRule | A mesh selection names a lexical Mesh binding or its constant slice. | src/tilefoundry/parser/pattern_nodes.py |
-| mesh_context | mesh_context | SelectionConstructionRule | A checked selection constructs a Mesh with its topology, sliced at its offset unless it holds its whole topology, enters its execution scope, and defines its lexical binding. | src/tilefoundry/parser/pattern_nodes.py |
+| mesh_context | mesh_context | SelectionConstructionRule | A checked selection constructs a Mesh with its topology. The Mesh starts at the first index of the selection, unless the selection holds its whole topology. The Mesh enters its execution scope and defines its lexical binding. | src/tilefoundry/parser/pattern_nodes.py |
 | mesh_context | mesh_context | SelectionCoverRule | A mesh selection layout covers each selection-local index exactly once. | src/tilefoundry/parser/pattern_nodes.py |
 | mesh_context | mesh_context | SelectionLayoutFormRule | A mesh selection layout is a shape tuple or a shape/stride tuple pair. | src/tilefoundry/parser/pattern_nodes.py |
 | mesh_context | mesh_context | SelectionLevelRule | A mesh selection names exactly one topology. | src/tilefoundry/parser/pattern_nodes.py |
@@ -390,7 +390,7 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | storage | call_attribute, tensor_optional_slot | StorageValueRule | Storage must resolve to a StorageKind. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, call_attribute, expression, slice_endpoint, subscript_index, type_annotation, variadic_input | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, call_attribute, expression, slice_endpoint, subscript_index, type_annotation, variadic_input | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |
-| value_states | call_attribute, tensor_optional_slot, tensor_shape | ValueStatesFormRule | Layout states are either a single B() or one or more mesh axis @ P(nonempty string) or mesh axis @ V() entries; empty states, mesh axis @ B(), and mixing B() with other entries are rejected. | src/tilefoundry/parser/pattern_nodes.py |
+| value_states | call_attribute, tensor_optional_slot, tensor_shape | ValueStatesFormRule | Layout states are one B() alone, or one or more mesh axis @ P(nonempty string) or mesh axis @ V() entries. Empty states are rejected. A mesh axis @ B() entry is rejected. B() mixed with other entries is rejected. | src/tilefoundry/parser/pattern_nodes.py |
 | where_annotation | annotation | WhereTopologyStatesRule | Where layout states constrain named topologies with topology @ B() or topology @ P(nonempty string); they do not bind lexical mesh axes. | src/tilefoundry/parser/pattern_nodes.py |
 <!-- parser-constraints:end -->
 

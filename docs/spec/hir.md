@@ -569,7 +569,9 @@ class Binary(Op):
     - `ADD` with both operands `Partial`: commutes (passes) only when both
       carry the same `reduction="sum"` on that mesh axis (`max`/`min` reject
       — `max(x)+max(y)` is not `max(x+y)`).
-    - `ADD` with one `Partial` operand and the other `Broadcast` on that mesh axis commutes (passes) for `reduction` in `{"max", "min"}`, because adding a replicated constant is order-preserving. It rejects for `"sum"`
+    - `ADD` with one `Partial` operand and the other `Broadcast` on that mesh axis
+      commutes (passes) for `reduction` in `{"max", "min"}`. Adding a replicated
+      constant preserves order. It rejects for `"sum"`
       (`sum(x)+b != sum(x+b)`).
     - `MUL` with one `Partial` operand and the other `Broadcast` on that mesh axis commutes (passes) only for `reduction="sum"`. Scaling by a replicated constant distributes over `sum`. It rejects for `"max"`/`"min"`. The constant's sign is not statically provable, and a negative scale flips `max` to `min`.
     - Every other `kind` / operand-shape combination involving a `Partial`
@@ -1583,9 +1585,10 @@ class Reshard(Op):
     privately. So an `rmem` Reshard with a `ShardLayout` is a view only when each
     logical element keeps its threads and its register on each thread. The box
     of an `rmem` `ShardLayout` also holds the mesh's thread numbering. That
-    numbering is the topologies, the plain layout of `flat_layout`, and the
-    mesh offset (0 when the mesh states none). That box steps by `register_strides` instead of the
-    physical strides. So every Split keeps its mesh axis even where its physical
+    numbering has three parts. The first part is the topologies of the mesh.
+    The second part is `plain_layout(flat_layout(mesh))`. The third part is
+    the index of the first unit, `mesh.layout(0)`. That box steps by
+    `register_strides` instead of the physical strides. So every Split keeps its mesh axis even where its physical
     stride is not 0.
     Such a value whose mesh is not static is a copy. The rule is conservative:
     two notations of one thread numbering may be judged a copy.

@@ -522,9 +522,9 @@ def value_states() -> AstPattern[Any]:
 @dataclass(frozen=True)
 class ValueStatesFormRule:
     STATEMENT: ClassVar[str] = (
-        "Layout states are either a single B() or one or more mesh axis @ P(nonempty string) "
-        "or mesh axis @ V() "
-        "entries; empty states, mesh axis @ B(), and mixing B() with other entries are rejected."
+        "Layout states are one B() alone, or one or more mesh axis @ P(nonempty string) "
+        "or mesh axis @ V() entries. Empty states are rejected. A mesh axis @ B() entry is "
+        "rejected. B() mixed with other entries is rejected."
     )
 
     def apply(self, value, *, node, context):
@@ -4095,9 +4095,9 @@ class SelectionStrideRule:
 @dataclass(frozen=True)
 class SelectionConstructionRule:
     STATEMENT: ClassVar[str] = (
-        "A checked selection constructs a Mesh with its topology, sliced at its offset "
-        "unless it holds its whole topology, enters its execution scope, and defines its "
-        "lexical binding."
+        "A checked selection constructs a Mesh with its topology. The Mesh starts at the "
+        "first index of the selection, unless the selection holds its whole topology. The "
+        "Mesh enters its execution scope and defines its lexical binding."
     )
 
     def apply(self, value, *, match, context):

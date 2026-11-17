@@ -109,7 +109,7 @@ def operand_types(call: expr.Call, op: expr.Op) -> tuple:
     return schedule.candidate_operands(call, type(op))[1]
 
 
-def participants(layouts) -> types.Mesh | None:
+def physical_shard_mesh(layouts) -> types.Mesh | None:
     """The mesh of the first physical shard layout among *layouts*, if any."""
     for layout in layouts:
         if isinstance(layout, types.ShardLayout):
@@ -158,7 +158,7 @@ def transfer_meshes(type_list, destination, around, topologies) -> tuple[types.M
     write the whole of its share of *destination*. In shared memory, which
     those threads share, the first of them writes it alone.
     """
-    mesh = participants(type_.layout for type_ in type_list)
+    mesh = physical_shard_mesh(type_.layout for type_ in type_list)
     held = () if mesh is None else (mesh,)
     if getattr(destination, "storage", None) is not expr.StorageKind.SMEM:
         return held
@@ -176,7 +176,7 @@ def issue_owner(type_list) -> types.Mesh | None:
 
     ``Partial`` attributes count as ``Broadcast`` here.
     """
-    return participants(
+    return physical_shard_mesh(
         replace(
             type_.layout,
             attrs=tuple(
@@ -430,7 +430,7 @@ class TirBuilder:
         source_type = source.type if source_type is None else source_type
         if not isinstance(source_type, types.TensorType) or not isinstance(target.type, types.TensorType):
             raise LoweringError("copy lowering requires tensor operands")
-        sharded = participants((source_type.layout, target.type.layout))
+        sharded = physical_shard_mesh((source_type.layout, target.type.layout))
         meshes = transfer_meshes(
             (source_type, target.type),
             target.type,
