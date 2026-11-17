@@ -295,8 +295,8 @@ class LocalViewCase(Case):
             pieces = ((types.Placement({"gpu": 0}), source),)
         else:
             pieces = tuple(
-                (types.Placement({"gpu": rank}), source[rank * 128:(rank + 1) * 128])
-                for rank in range(2)
+                (types.Placement({"gpu": unit_id}), source[unit_id * 128:(unit_id + 1) * 128])
+                for unit_id in range(2)
             )
         result = evaluator.evaluate(function, core.ShardTensor(function.params[0].type, pieces))
         expected = source[:, :, 0:2, :].reshape(1, 256, 16, 128)
@@ -324,7 +324,7 @@ def test_local_view_case(case: LocalViewCase) -> None:
 
 
 def test_partial_split_axis_slice_is_refused():
-    mesh = types.Mesh((types.Topology("gpu", 2),), types.Layout((2,)), ("rank",))
+    mesh = types.Mesh((types.Topology("gpu", 2),), types.Layout((2,)), ("g",))
     source_type = utils.make_shard_tensor_type((4, 3), mesh=mesh, attrs=(types.Split(0),))
     with pytest.raises(expr.VerifyError, match="Slice narrows axis 0"):
         _slice_call(source_type, (0, 0), (3, 3), (1, 1))

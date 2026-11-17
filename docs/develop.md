@@ -184,16 +184,8 @@ short bullet list — keep it that way.
 
 ### Naming
 
-The terms are in [terms](./spec/terms.md).
+The terms, and the rules N1–N7 for using them in names, are in [terms](./spec/terms.md).
 
-- N1: A value has the name of the term that it holds: `mesh_scope`, `execution_mesh`, `unit_id`, `offset`.
-- N2: A plural name denotes multiple values: `unit_ids`, `topologies`, `enclosing_meshes`, `sub_meshes`. Preserve the order of the named topologies or enclosing meshes.
-- N3: `topology: str` is a name. `topology_level: int` is a position.
-- N4: Functions that select or rearrange a mesh or layout use CuTe verbs. Examples: `get`, `flatten`, `filter`, `offset`, `size`.
-- N5: Only these words qualify a `Mesh` value: scope, enclosing, innermost, execution, root, sub, sliced. `level`, `scope`, `domain` and `axis` always have a qualifier, unless the class, function or module handles one case only.
-- N6: The parameter that holds a `valuation.Context` is `ctx`. `frame` is a Python stack frame.
-- N7: Lowering issues an instruction. A unit executes it.
-- A review checks N1–N7 at the Final Gate of each plan.
 - S1–S11 and C4–C6 in this section bind the Python sources in the scope of [code-organization §4](spec/code-organization.md#4-checkers), with its exceptions.
 - S10: Classes are `CapWords`; functions, methods and variables are `snake_case`; constants are `UPPER_CASE`; an exception class name ends in `Error`. Reflection dispatches some method names on a class name (`<prefix>_<ClassName>`: `visit_*`, `visit_leaf_*`, `print_*` and the pattern printer's readers).
   `pyproject.toml` lists these names in `ignore-names`.

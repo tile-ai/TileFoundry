@@ -97,70 +97,14 @@
       "rules": {
         "implementer": [
           {
-            "path": "docs/develop.md",
-            "section": "Naming"
-          },
-          {
             "path": "docs/spec/terms.md",
-            "section": "1. Terms by example"
-          },
-          {
-            "path": "docs/spec/terms.md",
-            "section": "2. Execution"
-          },
-          {
-            "path": "docs/spec/terms.md",
-            "section": "3. Data"
-          },
-          {
-            "path": "docs/spec/terms.md",
-            "section": "4. Layout"
-          },
-          {
-            "path": "docs/spec/terms.md",
-            "section": "5. Polyhedral"
-          },
-          {
-            "path": "docs/spec/terms.md",
-            "section": "6. Other words"
-          },
-          {
-            "path": "docs/spec/terms.md",
-            "section": "7. Rules"
+            "section": "TileFoundry Spec — Terms"
           }
         ],
         "reviewer": [
           {
-            "path": "docs/develop.md",
-            "section": "Naming"
-          },
-          {
             "path": "docs/spec/terms.md",
-            "section": "1. Terms by example"
-          },
-          {
-            "path": "docs/spec/terms.md",
-            "section": "2. Execution"
-          },
-          {
-            "path": "docs/spec/terms.md",
-            "section": "3. Data"
-          },
-          {
-            "path": "docs/spec/terms.md",
-            "section": "4. Layout"
-          },
-          {
-            "path": "docs/spec/terms.md",
-            "section": "5. Polyhedral"
-          },
-          {
-            "path": "docs/spec/terms.md",
-            "section": "6. Other words"
-          },
-          {
-            "path": "docs/spec/terms.md",
-            "section": "7. Rules"
+            "section": "TileFoundry Spec — Terms"
           }
         ]
       }
