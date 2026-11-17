@@ -7,6 +7,7 @@ from dataclasses import replace
 from tilefoundry import core
 from tilefoundry.interfaces import access, cost, evaluator, typeinfer
 from tilefoundry.ir import dim, expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
 from .view_layout import derive_view_layout
 
@@ -223,7 +224,7 @@ def eval_reshape(ctx):
     if x.is_global:
         held = x.tensor.reshape(shape_of(ctx.result_type))
     else:
-        shape = shape_of(core.local_type(ctx.result_type))
+        shape = shape_of(ir_utils.local_type_of(ctx.result_type))
         held = tuple((p, t.reshape(shape)) for p, t in x.tensor)
     return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 

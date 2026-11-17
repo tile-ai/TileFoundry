@@ -263,7 +263,7 @@ def eval_slice(ctx):
     sizes = [evaluator.resolve_dim(size, ctx.dim_bindings) for size in op.sizes]
     strides = [evaluator.resolve_dim(stride, ctx.dim_bindings) for stride in op.strides]
 
-    def slice_(x, *starts):
+    def slice_(x, sizes, *starts):
         start_values = [int(value.reshape(-1)[0].item()) for value in starts]
         if not (len(start_values) == len(sizes) == len(strides) == x.ndim):
             raise evaluator.EvalError("Slice: starts/sizes/strides rank must match input rank")
@@ -283,13 +283,31 @@ def eval_slice(ctx):
             key.append(slice(start, start + size * stride, stride))
         return x[tuple(key)]
 
+    source = ctx.args[0].tensor
+    layout = types.shard_layout_of(source.type.layout)
+    splits = () if layout is None else types.split_target_axes(layout, source.type.shape)
+
+    def local_slice(placement):
+        local_starts = [value.tensor.to_local(placement) for value in starts.elements]
+        local_sizes = list(sizes)
+        source_local = source.to_local(placement)
+        for axis, mesh_axis in enumerate(splits):
+            if mesh_axis is None:
+                continue
+            start = int(local_starts[axis].reshape(-1)[0].item())
+            if sizes[axis] and (start != 0 or sizes[axis] != source.type.shape[axis]):
+                raise evaluator.EvalError(
+                    f"Slice on split axis {axis} must cover the full local shard or be reshaped before slicing"
+                )
+            local_sizes[axis] = source_local.shape[axis]
+        return slice_(source_local, local_sizes, *local_starts)
+
     xs = tuple(arg.tensor for arg in (ctx.args[0], *starts.elements))
     placements = evaluator.common_placements(*xs)
-    held = (
-        slice_(*(x.tensor for x in xs))
-        if not placements
-        else tuple((p, slice_(*(x.to_local(p) for x in xs))) for p in placements)
-    )
+    if placements:
+        held = tuple((p, local_slice(p)) for p in placements)
+    else:
+        held = slice_(source.tensor, sizes, *(value.data for value in starts.elements))
     return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
 
 

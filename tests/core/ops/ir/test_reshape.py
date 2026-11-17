@@ -21,6 +21,10 @@ from tests.core.ops.ir.op_case import (
     op_case_test,
     split_local_extents,
 )
+from tests.core.ops.ir.test_slice import _slice_call
+from tilefoundry import core
+from tilefoundry.interfaces import evaluator
+from tilefoundry.ir import core as ir_core
 from tilefoundry.ir import expr, types, utils
 from tilefoundry.ir.hir import sharding, tensor
 
@@ -205,3 +209,24 @@ CASES = (
     _make_reshape_evaluate_dynamic_axis_inferred(),
 )
 test_op_case = op_case_test(CASES)
+
+
+def test_local_reshape_preserves_factored_physical_modes():
+    mesh = types.Mesh((types.Topology("gpu", 1),), types.Layout((1,)), ("rank",))
+    source_type = utils.make_shard_tensor_type((256, 8, 4, 128), mesh=mesh, attrs=(types.Broadcast(),))
+    variable = expr.Var(name="x", type=source_type)
+    sliced_call = _slice_call(
+        source_type, (0, 0, 0, 0), (256, 8, 2, 128), (1, 1, 1, 1), source_expr=variable
+    )
+    sliced = sliced_call.type
+    merged = infer_call(tensor.Reshape(new_shape=(256, 16, 128)), sliced)
+    merged_call = expr.Call(type=merged, target=tensor.Reshape(new_shape=(256, 16, 128)), args=(sliced_call,))
+    output = infer_call(tensor.Reshape(new_shape=(1, 256, 16, 128)), merged)
+    body = expr.Call(type=output, target=tensor.Reshape(new_shape=(1, 256, 16, 128)), args=(merged_call,))
+    function = ir_core.Function.from_parts(name="reshape", params=(variable,), body=body, return_type=output)
+    source = torch.arange(256 * 8 * 4 * 128).reshape(256, 8, 4, 128).float()
+    placement = types.Placement({"gpu": 0})
+    result = evaluator.evaluate(function, core.ShardTensor(source_type, ((placement, source),)))
+    assert output.shape == (1, 256, 16, 128)
+    assert core.local_type(output).shape == (1, 256, (8, 2), 128)
+    torch.testing.assert_close(result.to_local(placement), source[:, :, 0:2, :].reshape(1, 256, 16, 128), rtol=0, atol=0)
