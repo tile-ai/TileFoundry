@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry import core
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 
 
@@ -45,6 +45,15 @@ def eval_cast(ctx):
 @cost.register(Cast)
 def cast_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
     return cost.elementwise(call, ctx)
+
+
+@autodiff.register(Cast)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """The gradient cast back to the input's dtype; a non-float input gets none."""
+    dtype = ctx.type_of(call.args[0]).dtype
+    if not isinstance(dtype, expr.FloatDType):
+        return (None,)
+    return (ctx.call("cast", cotangent, dtype=dtype),)
 
 
 __all__ = ["Cast"]

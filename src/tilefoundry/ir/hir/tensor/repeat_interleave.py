@@ -5,7 +5,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry import core, utils
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 
 
@@ -102,6 +102,16 @@ def repeat_interleave_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
     inputs = cost.input_types(call, ctx)
     output = cost.output_type(call, ctx)
     return cost.Cost({}, cost.traffic(inputs, output))
+
+
+@autodiff.register(RepeatInterleave)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """The gradient summed over the copies of each element."""
+    source = ctx.type_of(call.args[0])
+    axis = call.target.axis % len(source.shape)
+    grouped = (*source.shape[:axis], source.shape[axis], call.target.repeats, *source.shape[axis + 1:])
+    reshaped = ctx.call("reshape", cotangent, new_shape=grouped)
+    return (ctx.call("reduce", reshaped, axes=(axis + 1,), keepdim=False, kind=expr.ReduceKind.SUM),)
 
 
 __all__ = ["RepeatInterleave"]

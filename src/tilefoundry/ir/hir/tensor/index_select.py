@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry import core
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types, utils
 
 
@@ -114,6 +114,17 @@ def eval_index_select(ctx):
         else tuple((p, index_select(*(x.to_local(p) for x in xs))) for p in placements)
     )
     return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
+
+
+@autodiff.register(IndexSelect)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """The gradient added into zeros of the input's type at the selected rows; no index gradient."""
+    x, index = call.args
+    op = call.target
+    if op.fill_value is not None:
+        raise ValueError("IndexSelect with a fill_value has no autodiff rule")
+    zeros = ctx.call("zeros", type=ctx.type_of(x))
+    return ctx.call("index_add", zeros, index, cotangent, dim=op.dim), None
 
 
 __all__ = ["IndexSelect", "norm_dim"]

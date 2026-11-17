@@ -506,7 +506,7 @@ class FunctionDifferentiator:
         if isinstance(type_, types.TupleType):
             return tuple(self.add(scope, item, a, b) for item, a, b in zip(type_.fields, left, right))
         ctx = scope.ctx
-        if ctx.type_of(left).layout != ctx.type_of(right).layout:
+        if types.shard_layout_of(ctx.type_of(left).layout) != types.shard_layout_of(ctx.type_of(right).layout):
             left, right = (self.finish(value, type_, ctx) for value in (left, right))
         return ctx.call("add", left, right)
 
@@ -663,6 +663,8 @@ class FunctionDifferentiator:
         value = key[1]
         if key[0] == "node" and isinstance(value, (expr.Constant, core.ShapeOf)):
             result = replace(value)
+        elif key[0] == "node" and isinstance(value, expr.Tuple):
+            result = replace(value, elements=tuple(self.materialize(("node", item), scope) for item in value.elements))
         elif key[0] == "node" and id(value) in self.differ.recompute:
             result = replace(value, args=tuple(self.materialize(("node", arg), scope) for arg in value.args))
         elif scope.parent is None:

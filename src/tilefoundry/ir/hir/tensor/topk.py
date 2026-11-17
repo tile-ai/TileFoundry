@@ -11,7 +11,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry import core, utils
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import core as ir_core
 from tilefoundry.ir import dim, expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
@@ -250,6 +250,35 @@ def eval_topk(ctx):
     return evaluator.TupleValue(
         tuple(evaluator.TensorValue(core.ShardTensor(field, data)) for field, data in zip(fields, held, strict=True))
     )
+
+
+@autodiff.register(TopK)
+def _(call: expr.Call, cotangent: tuple, ctx: autodiff.Context) -> tuple:
+    """The values' gradient put back where each value came from, through a one-hot of the indices.
+
+    The indices are one group per row, which IndexAdd does not take; they get no gradient.
+    """
+    (x,) = call.args
+    values, _ = cotangent
+    if values is None:
+        return (None,)
+    source = ctx.type_of(x)
+    if call.target.axis % len(source.shape) != len(source.shape) - 1:
+        raise ValueError("TopK on an axis that is not the last has no autodiff rule")
+    indices_type = ctx.type_of(call).fields[1]
+    indices = ctx.call("tuple_get_item", call, ctx.constant(1))
+    extent = source.shape[-1]
+    positions = ctx.call("arange", type=types.TensorType(
+        (extent,), indices_type.dtype, types.Layout((extent,)), indices_type.storage
+    ))
+    column = (*indices_type.shape, 1)
+    onehot = ctx.call(
+        "cast",
+        ctx.call("cmp_eq", ctx.call("reshape", indices, new_shape=column), positions),
+        dtype=source.dtype,
+    )
+    spread = ctx.call("mul", ctx.call("reshape", values, new_shape=column), onehot)
+    return (ctx.call("reduce", spread, axes=(-2,), keepdim=False, kind=expr.ReduceKind.SUM),)
 
 
 __all__ = ["TopK"]

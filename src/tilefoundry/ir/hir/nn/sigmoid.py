@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry import core, utils
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 
@@ -35,6 +35,12 @@ access.register_relation(Sigmoid)(access.identity_relations)
 @cost.register(Sigmoid)
 def sigmoid_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
     return cost.elementwise(call, ctx)
+
+
+@autodiff.register(Sigmoid)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """``g * (y - y * y)``, read off the result."""
+    return (ctx.call("mul", cotangent, ctx.call("sub", call, ctx.call("mul", call, call))),)
 
 
 __all__ = ["Sigmoid"]

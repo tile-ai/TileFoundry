@@ -27,7 +27,7 @@ def inputs_for(type_: types.Type, generator: torch.Generator):
         return tuple(inputs_for(item, generator) for item in type_.fields)
     if isinstance(type_.dtype, expr.FloatDType):
         return torch.randn(tuple(type_.shape), generator=generator) * 0.5 + 0.1
-    return torch.zeros(tuple(type_.shape), dtype=torch.int64)
+    return torch.randint(0, 3, tuple(type_.shape), generator=generator)
 
 
 def leaves(value):
@@ -95,7 +95,9 @@ def reshards(backward: core.Module) -> list[tuple[tuple, tuple]]:
     for value in core.collect_exprs(backward.entry_function().body):
         if isinstance(value, expr.Call) and isinstance(value.target, sharding.Reshard):
             source = types.shard_layout_of(value.args[0].type.layout)
-            found.append((source.attrs, types.shard_layout_of(value.type.layout).attrs))
+            result = types.shard_layout_of(value.type.layout)
+            if source is not None and result is not None:
+                found.append((source.attrs, result.attrs))
     return found
 
 
@@ -210,6 +212,60 @@ class MeshRegions(Differentiated):
     wrt: tuple[str, ...] = ("x", "w")
 
 
+@case
+class RmsNorm(Differentiated):
+    path: Path = FIXTURES / "rms_norm.py"
+    wrt: tuple[str, ...] = ('x', 'w')
+
+
+@case
+class Softmax(Differentiated):
+    path: Path = FIXTURES / "softmax.py"
+    wrt: tuple[str, ...] = ('x',)
+
+
+@case
+class Activations(Differentiated):
+    path: Path = FIXTURES / "sigmoid_silu_softplus.py"
+    wrt: tuple[str, ...] = ('x',)
+
+
+@case
+class Rope(Differentiated):
+    path: Path = FIXTURES / "rope.py"
+    wrt: tuple[str, ...] = ('q', 'k')
+
+
+@case
+class SliceConcat(Differentiated):
+    path: Path = FIXTURES / "slice_concat.py"
+    wrt: tuple[str, ...] = ('x', 'y')
+
+
+@case
+class CastFullLike(Differentiated):
+    path: Path = FIXTURES / "cast_full_like.py"
+    wrt: tuple[str, ...] = ('x',)
+
+
+@case
+class IndexSelect(Differentiated):
+    path: Path = FIXTURES / "index_select.py"
+    wrt: tuple[str, ...] = ('table',)
+
+
+@case
+class RepeatInterleave(Differentiated):
+    path: Path = FIXTURES / "repeat_interleave.py"
+    wrt: tuple[str, ...] = ('x',)
+
+
+@case
+class Topk(Differentiated):
+    path: Path = FIXTURES / "topk.py"
+    wrt: tuple[str, ...] = ('x',)
+
+
 CASES = special(Differentiated)
 
 
@@ -259,6 +315,9 @@ REFUSED = (
     ("no_rule.py", ("x",), (), "ReLU has no autodiff rule"),
     ("unsupported_kind.py", ("x",), (), "Binary MIN has no autodiff rule"),
     ("loop.py", ("x",), (), "LoopRegion is not differentiated"),
+    ("strided_slice.py", ("x",), (), "Slice with strides (2, 1) has no autodiff rule"),
+    ("filled_index_select.py", ("table",), (), "IndexSelect with a fill_value has no autodiff rule"),
+    ("topk_inner_axis.py", ("x",), (), "TopK on an axis that is not the last has no autodiff rule"),
     ("backward_name.py", ("x",), (), "declares a function named 'backward'"),
     ("sharded.py", ("w",), ("Nope.forward:full",), "no Module named 'Nope'"),
     ("sharded.py", ("w",), ("Layer.nope:full",), "'nope' must resolve to exactly one function"),

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry import core, utils
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 
@@ -38,6 +38,12 @@ access.register_relation(Softplus)(access.identity_relations)
 @cost.register(Softplus)
 def softplus_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
     return cost.elementwise(call, ctx)
+
+
+@autodiff.register(Softplus)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """``g * sigmoid(x)``."""
+    return (ctx.call("mul", cotangent, ctx.call("sigmoid", call.args[0])),)
 
 
 __all__ = ["Softplus"]

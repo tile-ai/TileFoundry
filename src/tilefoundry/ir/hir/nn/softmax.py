@@ -5,7 +5,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry import core, utils
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 
@@ -61,6 +61,16 @@ def eval_softmax(ctx):
 @cost.register(SoftMax)
 def softmax_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
     return cost.elementwise(call, ctx)
+
+
+@autodiff.register(SoftMax)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """``y * (g - sum(g * y))`` along the softmax axis."""
+    weighted = ctx.call(
+        "reduce", ctx.call("mul", cotangent, call), axes=(call.target.axis,), keepdim=True,
+        kind=expr.ReduceKind.SUM,
+    )
+    return (ctx.call("mul", call, ctx.call("sub", cotangent, weighted)),)
 
 
 __all__ = ["SoftMax"]

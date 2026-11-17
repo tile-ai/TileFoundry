@@ -7,7 +7,7 @@ from typing import Tuple
 import isl
 
 from tilefoundry import core, services, utils
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 
@@ -167,6 +167,22 @@ def concat_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
     inputs plus the output -- unlike a slice, which reads only what it keeps.
     """
     return cost.Cost({}, cost.traffic(cost.input_types(call, ctx), cost.output_type(call, ctx)))
+
+
+@autodiff.register(Concat)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """One slice of the gradient per piece, at the piece's offset along the axis."""
+    fields = [ctx.type_of(piece) for piece in call.args]
+    rank = len(fields[0].shape)
+    axis = call.target.axis % rank
+    offset, parts = 0, []
+    for field in fields:
+        starts = tuple(ctx.constant(offset if index == axis else 0) for index in range(rank))
+        window_type = types.TupleType(tuple(start.type for start in starts))
+        window = ctx.remember(expr.Tuple(elements=starts, type=window_type), window_type)
+        parts.append(ctx.call("slice", cotangent, window, sizes=tuple(field.shape), strides=(1,) * rank))
+        offset += field.shape[axis]
+    return tuple(parts)
 
 
 __all__ = ["Concat"]
