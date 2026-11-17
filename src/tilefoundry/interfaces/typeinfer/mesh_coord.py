@@ -11,7 +11,7 @@ __all__: list[str] = []
 
 
 def axes_shape(axes_type) -> tuple | None:
-    """The result shape: () for one axis, (k,) for k of them, None for anything else."""
+    """The result shape: () for one mesh axis, (k,) for k of them, None for anything else."""
     if isinstance(axes_type, types.TupleType):
         scalars = all(
             isinstance(field, types.TensorType) and not field.shape for field in axes_type.fields
@@ -39,11 +39,11 @@ def infer_mesh_coord(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
     if held_shape is None:
         ctx.error(call, "MeshCoord.axes must be an i64 scalar, vector, or tuple of scalars")
     shape = call.target.mesh.shape
-    axes = dim.literal_axes(call.args[0])
-    for axis in axes or ():
-        if not 0 <= axis < len(shape):
-            ctx.error(call, f"axis {axis} is out of range for rank-{len(shape)} mesh")
-    extents = tuple(shape[axis] for axis in axes) if axes is not None else shape
+    mesh_axes = dim.literal_axes(call.args[0])
+    for mesh_axis in mesh_axes or ():
+        if not 0 <= mesh_axis < len(shape):
+            ctx.error(call, f"mesh axis {mesh_axis} is out of range for rank-{len(shape)} mesh")
+    extents = tuple(shape[mesh_axis] for mesh_axis in mesh_axes) if mesh_axes is not None else shape
     bounds = (
         (0, max(extents))
         if extents

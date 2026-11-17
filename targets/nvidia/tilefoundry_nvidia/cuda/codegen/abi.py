@@ -128,8 +128,8 @@ def called_as_launcher(
     """The one convention of *fn* a caller can reach: its launcher.
 
     The kernel's own convention is not this one, because nobody outside the
-    translation unit can name it. A program that names a level the target
-    names such a level is told its id first, and the launch geometry comes last.
+    translation unit can name it. A program that names a topology the target
+    names such a topology is told its id first, and the launch geometry comes last.
     """
     return codegen.CallableSignature(
         name=launcher_symbol(symbol),
@@ -181,7 +181,7 @@ def declare_launch(sig: codegen.LaunchSignature, ctx: Context) -> tuple[str, ...
 
 @codegen.register(target.Target, codegen.Role.CALLEE, codegen.UnitIdSignature)
 def declare_unit_id(sig: codegen.UnitIdSignature, ctx: Context) -> tuple[str, ...]:
-    """The id of a level no card can read for itself, told to it instead."""
+    """The id of a topology no card can read for itself, told to it instead."""
     return (f"{UNIT_ID_CTYPE} {sig.name}",)
 
 

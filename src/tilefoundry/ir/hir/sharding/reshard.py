@@ -87,12 +87,12 @@ def buffer_alias(call: expr.Call) -> int | None:
         flat, threads = types.flatten(types.plain_layout(physical)), None
         if held.storage is expr.StorageKind.RMEM and shard is not None:
             mesh = shard.mesh
-            start = mesh.layout(0)
-            threads = (mesh.topologies, types.plain_layout(utils.flat_layout(mesh)), start)
+            first_index = mesh.layout(0)
+            threads = (mesh.topologies, types.plain_layout(utils.flat_layout(mesh)), first_index)
             sizes = (getattr(topology, "size", 1) for topology in mesh.topologies)
             if not all(
                 isinstance(value, int)
-                for value in (*sizes, start, *threads[1].shape, *threads[1].strides)
+                for value in (*sizes, first_index, *threads[1].shape, *threads[1].strides)
             ):
                 return None
         steps = flat.strides if threads is None else utils.register_strides(shard)
@@ -216,7 +216,7 @@ def sent_traffic(source, destination, *, logical_source=None, logical_destinatio
 
     Whole logical layouts select communicating mesh axes; projected types
     supply each unit's source bytes. At each boundary, retain one uniform
-    share across the selected axes and charge the remaining bytes.
+    share across the selected mesh axes and charge the remaining bytes.
     """
     logical_source = source if logical_source is None else logical_source
     logical_destination = destination if logical_destination is None else logical_destination
@@ -225,8 +225,8 @@ def sent_traffic(source, destination, *, logical_source=None, logical_destinatio
     if before is None or after is None:
         return ()
     completed = {
-        axis
-        for axis, (pending, remaining) in enumerate(zip_longest(
+        mesh_axis
+        for mesh_axis, (pending, remaining) in enumerate(zip_longest(
             types.partial_reductions_by_axis(logical_source.layout),
             types.partial_reductions_by_axis(logical_destination.layout),
         ))
@@ -234,13 +234,13 @@ def sent_traffic(source, destination, *, logical_source=None, logical_destinatio
     }
     mesh = types.shard_layout_of(source.layout).mesh
     extents = mesh.shape
-    levels = tuple(level for level, _ in utils.axis_keys(mesh))
+    axis_topologies = tuple(topology for topology, _ in utils.axis_keys(mesh))
     held = utils.tensor_bytes(source)
     moved: dict[str, int] = {}
     for topology in mesh.topologies:
         units = 1
-        for mesh_axis, level in enumerate(levels):
-            if level != topology.name:
+        for mesh_axis, axis_topology in enumerate(axis_topologies):
+            if axis_topology != topology.name:
                 continue
             if before.get(mesh_axis) != after.get(mesh_axis) or mesh_axis in completed:
                 units *= extents[mesh_axis]

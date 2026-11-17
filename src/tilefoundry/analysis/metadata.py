@@ -222,7 +222,7 @@ class PerformanceSummaryMetadata(expr.IRMetadata):
     ``timeline`` is the whole-Function envelope from zero, every wave the
     Function's executing units need, so its duration is the prediction.
     ``wave`` is those units against the physical units of the selected
-    level. The prediction is exact for the model it states, so there is nothing
+    topology. The prediction is exact for the model it states, so there is nothing
     here about how it was reached.
     """
 

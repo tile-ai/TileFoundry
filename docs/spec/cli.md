@@ -368,7 +368,7 @@ explicit analysis; there is no ordinary `--target` option.
   - `--topology TOPOLOGY` MUST be optional, passed through as the public analysis
     operation's `topology`, and name the unit for per-unit figures. Its help MUST
     state the default. For every family, its help MUST state which figure changes
-    with the level and when to pass it. Its help MUST also state the logical/total
+    with the topology and when to pass it. Its help MUST also state the logical/total
     traffic distinction and the observed-peak assumption. Compute cost MUST
     distinguish `logical`, `total`, and each topology level's per-unit share.
     Movement MUST name the `MemoryMetadata.traffic.storage` per-unit account against

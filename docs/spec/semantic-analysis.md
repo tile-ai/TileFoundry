@@ -129,11 +129,11 @@ dictionary from isl parameter name to IR value.
   MUST check every Call result with that rule. It MUST report the declaring
   source location. Canonical UMAT shape metadata uses the same compact
   `Layout(shape)` as other tensor values.
-- A reader with no topology level addresses logical coordinates. A reader at a
-  given topology level addresses the coords one unit of that level holds. The
-  reader splits a coord cut by mesh axes at that level or coarser into digits. The
-  digits follow the cutting axes outermost first in mesh-axis order, then the
-  residual. Each cutting-axis digit is that unit's `MeshCoord` on that axis.
+- A reader with no topology addresses logical coordinates. A reader at a
+  given topology addresses the coords one unit of that topology holds. The
+  reader splits a coord cut by mesh axes at that topology or coarser into digits. The
+  digits follow the cutting mesh axes outermost first in mesh-axis order, then the
+  residual. Each cutting mesh axis digit is that unit's `MeshCoord` on that mesh axis.
   The residual is the local coord within the unit and is not a `MeshCoord`.
 - A mesh coord is an isl parameter while the layout map is built. The
   access relation service fixes it to the requested unit. The default is 0 on
@@ -195,7 +195,7 @@ def derive_output_shard_layout(
     have stride zero. Compacting the remaining
     modes drops only each Split's mesh factor and retains its local residual
     (extent one for a fully factored Split). The set comes from the target memory
-    owner and every coarser topology level. With no memory hierarchy it is empty.
+    owner and every coarser topology. With no memory hierarchy it is empty.
     Otherwise a compatible propagated physical layout is preserved when possible.
   - `ShardLayout.attrs` is indexed by mesh axis. A `Partial(reduction)` is a
     value state at that exact index, not an unordered collection of reductions
@@ -221,7 +221,7 @@ def derive_output_shard_layout(
        rule. States on different mesh axes MUST NOT be compared as an unordered
        set. Only an explicit reduction/allreduce resolves `Partial` to
        `Broadcast`.
-    5. A `Broadcast` input axis contributes no `Split`.
+    5. A `Broadcast` input mesh axis contributes no `Split`.
     6. Two inputs giving one mesh axis different output states is an error.
   - A `Partial` MUST NOT be silently eliminated or carried through a
     non-commuting ordinary op.

@@ -216,7 +216,7 @@ def report_data(
 
 
 def totals_of(held: "analysis.Breakdown | analysis.Spread | None") -> dict[str, object]:
-    """Each kind's whole-program amount, without any level's share."""
+    """Each kind's whole-program amount, without any topology's share."""
     if held is None:
         return {}
     if isinstance(held, analysis.Spread):

@@ -715,8 +715,8 @@ patterns.
 `per_mode=False`. An empty predicate table is allowed. It never changes the supplied pattern
 implicitly. Predicates on a surrounding `pattern.ComposedLayout` instead
 check the whole matched layout. Execution-mesh declarations may admit leading
-modes with `pattern.Star`; operand mesh declarations keep their exact axis
-structure because shard attrs refer to those axes.
+modes with `pattern.Star`; operand mesh declarations keep their exact mesh axis
+structure because shard attrs refer to those mesh axes.
 A wildcard in `pattern.Mesh.topologies` selects the innermost execution topology and binds its one-name tuple. Reusing that wildcard in an operand mesh requires the same topology. Valid topology names and extents come from the module's Target
 Facts, as specified in [target §11](./target.md#11-target-facts-projection).
 `pattern.ShardLayout` names the same `layout`, `attrs`, and `mesh` fields as

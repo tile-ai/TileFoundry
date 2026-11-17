@@ -54,7 +54,7 @@ def execution_mesh_of(
     """The mesh lowering issues *op* on, None for the enclosing mesh scope.
 
     An instruction without an execution mesh is issued on its owner; one with
-    an execution mesh on the axes ``find_execution_mesh`` finds for it within
+    an execution mesh on the mesh axes ``find_execution_mesh`` finds for it within
     the owner, or within *mesh_scope* when nothing owns it.
     """
     required = required_execution_mesh(op)

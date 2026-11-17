@@ -100,7 +100,7 @@ def parallel_units(tgt: "Target", topology: str) -> int:
 
 
 def asked(tgt: "Target", query: object) -> tuple[str, int, int | None]:
-    """A query's level, running units and bytes in flight; only ``cta`` counts fewer."""
+    """A query's topology, running units and bytes in flight; only ``cta`` counts fewer."""
     topology, active, inflight = (*query, None)[:3] if isinstance(query, tuple) else (query, None, None)
     topology = "cta" if topology is None else str(topology)
     share = parallel_units(tgt, topology)
@@ -161,7 +161,7 @@ def rates(
 def throughput(tgt: "Target", query: object = None) -> target.ThroughputFacts:
     """The rates a roofline divides the whole program's work by: `rates`, whole.
 
-    Asked about no level, the whole deployment; the bound reads global traffic.
+    Asked about no topology, the whole deployment; the bound reads global traffic.
     """
     whole = rates(tgt, *asked(tgt, query))
     return target.ThroughputFacts(

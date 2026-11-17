@@ -75,7 +75,7 @@ def make_kernel_caller(instance: Module, ir_fn, body: Callable) -> Callable:
     """Bind *body* into a callable taking activations only, converting both ways.
 
     The way in is a ``forward_pre_hook`` and the way out a ``forward_hook``:
-    each ``ShardTensor`` argument is projected to this program's slice and each
+    each ``ShardTensor`` argument is projected to this unit's slice and each
     ``is_const`` param comes from *instance*'s loaded weights by name, already
     projected, so a body -- a Python reference or a launched kernel alike --
     only sees ``torch.Tensor`` and never the mesh it came out of. The way out
@@ -154,7 +154,7 @@ class Twin(Module):
         super().load(resource, placement=placement)
 
     def to_local(self, value):
-        """Into a body: a ``ShardTensor`` projected to this program's slice.
+        """Into a body: a ``ShardTensor`` projected to this unit's slice.
 
         Anything the mesh never spread is already what this program holds, so
         it passes through -- the choice is made once here rather than at each
@@ -169,9 +169,9 @@ class Twin(Module):
 
         The declared return type decides, not the value: what a body hands
         back is a bare ``torch.Tensor`` with nothing on it saying whether it is
-        one program's slice or the whole. Only a return type the mesh divides
+        one unit's slice or the whole. Only a return type the mesh divides
         is a distributed value; anything else is one tensor and stays one. A
-        distributed value is returned scattered, holding only this program's
+        distributed value is returned scattered, holding only this unit's
         piece under the declared global type, so it is never narrowed twice.
         """
         if not isinstance(value, utils.torch.Tensor) or not isinstance(declared, ir_types.TensorType):
@@ -181,7 +181,7 @@ class Twin(Module):
         return core.ShardTensor(declared, ((self.placement, value),))
 
     def weight_of(self, name: str):
-        """Read one declared weight, narrow it to this program, and memoize it.
+        """Read one declared weight, narrow it to this unit, and memoize it.
 
         A narrowed weight is copied out of the read it came from, so the whole
         canonical tensor is released once the shard it contributed is held;

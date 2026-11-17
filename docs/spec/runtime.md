@@ -104,8 +104,8 @@ trailing params are outputs):
 - **Pre-alloc**: `len(args) == len(type.params)` — uses the provided output
   tensors and returns them. Any other argument count raises `TypeError`.
 - **Return**: single output → bare tensor; multiple outputs → `tuple`.
-- **Unit ids**: when `type.leading` is non-empty, the call passes the unit ids of those topology
-  levels ahead of the arguments. It reads them from the `Placement` given to `load`. With no `Placement` the call raises `ValueError`.
+- **Unit ids**: when `type.leading` is non-empty, the call passes the unit ids of those topologies
+  ahead of the arguments. It reads them from the `Placement` given to `load`. With no `Placement` the call raises `ValueError`.
 
 Output shape and dtype come from `CallableSignature.output_params` (set by
 codegen from lowered IR, never guessed at runtime). This convention is specific
@@ -847,7 +847,7 @@ class ShardTensor:
   - a local view holds one piece per `Placement`, each of `local_type(type)`;
     `to_local` returns the piece its placement holds.
   - a `type` with no `ShardLayout` is every unit's whole tensor, and so is
-    an axis the mesh only broadcasts over. A global `Partial` value is its
+    a mesh axis the mesh only broadcasts over. A global `Partial` value is its
     reduced value, so `to_local` MUST refuse it: no unit's own part is left.
   - `to_local` on a global view is the host side of the CUDA runtime's
     `local_tensor`. It applies `mesh_coords` to the placement's unit ids. Then it applies
@@ -859,7 +859,7 @@ class ShardTensor:
     sit side by side. Any `Broadcast` piece serves. `Partial` pieces combine
     by their reduction. A type with no `ShardLayout`, or `Partial` reductions
     that differ, MUST be refused.
-  - a level whose id is unfixed MUST be left undivided
+  - a topology whose id is unfixed MUST be left undivided
     ([shard §5.1](shard.md#51-placement)).
   - a `runtime.Module`'s public boundary takes and returns `ShardTensor`, while
     a body -- a Python reference or a launched kernel alike -- only ever

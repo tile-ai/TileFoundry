@@ -100,20 +100,20 @@ parameter ([tir](./tir.md)).
 The return type MAY carry a `Partial(reduction)` in a `TensorType`, or in any
 tensor field of a nested `TupleType`. Function construction, type inference,
 and call elaboration MUST allow that state. A Function boundary MUST preserve
-the `ShardLayout` mesh and per-axis reduction. It MUST NOT complete the value
+the `ShardLayout` mesh and per mesh axis reduction. It MUST NOT complete the value
 merely because it is `Partial`. It MUST NOT reject the value for that reason. A layout-unconstrained parameter can bind to a sharded argument.
 Then inference carries each `Partial(reduction)` at its original mesh-axis
 index through the body. Inference also carries it into the concrete return
 type, including tuple fields. Only an explicit `Reshard` or
 allreduce completes that state.
 
-A `with Mesh(("cta",), layout=...) as cta:` inside the body names a level of
+A `with Mesh(("cta",), layout=...) as cta:` inside the body names a topology of
 the execution domain the owning `Module` declares. The name MUST resolve to
-one of that Module's effective `Topology` levels. The scope creates a
+one of that Module's effective `Topology` entries. The scope creates a
 parser-lexical mesh binding. `ShardLayout.mesh` MUST point at an active
-binding on the lexical path. A `Mesh` MAY map fewer levels than the domain
-declares. It MUST NOT create a level. It MUST NOT change the extent of a
-level.
+binding on the lexical path. A `Mesh` MAY map fewer topologies than the domain
+declares. It MUST NOT create a topology. It MUST NOT change the extent of a
+topology.
 
 **Return type.** `Function.return_type` is the HIR result `Type`: a
 `TensorType` for one result or a `TupleType` for multiple results. It is part of
@@ -414,7 +414,7 @@ value. Inference seeds the inner visitor with the induction binding and all para
 bindings, then derives the body and yields. Every yield MUST satisfy
 `types_compatible(entry_type, yield_type)` for the parameter it carries into,
 and `k > len(params)` is an error. A carried value whose state changes between
-Broadcast and Varying is rejected with its axis and an explicit entry-to-Varying
+Broadcast and Varying is rejected with its mesh axis and an explicit entry-to-Varying
 or yield-to-Broadcast Reshard remedy. The carry result is the entry type of the
 first `k` parameters. A more specific yield does not narrow it. A loop that
 runs no iteration has that type. A no-carry loop (`k == 0`) has the type of its
@@ -554,8 +554,8 @@ class Binary(Op):
   - Sharded results merge value states using
     [shard §6.1](./shard.md#61-shard-attr-semantics), including plain inputs.
     All-Broadcast inputs retain Broadcast. A result may use plain layout for
-    Varying only when plain reads back to the same states on every axis. These
-    are the axes of the original input shard mesh, including omitted Broadcast levels.
+    Varying only when plain reads back to the same states on every mesh axis. These
+    are the mesh axes of the original input shard mesh, including omitted Broadcast topologies.
   - If the fallback result is a shaped `rmem` or `smem` value, Binary MUST give it its own C-order `Layout`. A concrete local
     result cannot reach authored analysis with an unresolved layout.
   - A `ShardLayout` operand carrying `Partial(reduction)` propagates to the
@@ -569,9 +569,9 @@ class Binary(Op):
     - `ADD` with both operands `Partial`: commutes (passes) only when both
       carry the same `reduction="sum"` on that mesh axis (`max`/`min` reject
       — `max(x)+max(y)` is not `max(x+y)`).
-    - `ADD` with one `Partial` operand and the other `Broadcast` on that axis commutes (passes) for `reduction` in `{"max", "min"}`, because adding a replicated constant is order-preserving. It rejects for `"sum"`
+    - `ADD` with one `Partial` operand and the other `Broadcast` on that mesh axis commutes (passes) for `reduction` in `{"max", "min"}`, because adding a replicated constant is order-preserving. It rejects for `"sum"`
       (`sum(x)+b != sum(x+b)`).
-    - `MUL` with one `Partial` operand and the other `Broadcast` on that axis commutes (passes) only for `reduction="sum"`. Scaling by a replicated constant distributes over `sum`. It rejects for `"max"`/`"min"`. The constant's sign is not statically provable, and a negative scale flips `max` to `min`.
+    - `MUL` with one `Partial` operand and the other `Broadcast` on that mesh axis commutes (passes) only for `reduction="sum"`. Scaling by a replicated constant distributes over `sum`. It rejects for `"max"`/`"min"`. The constant's sign is not statically provable, and a negative scale flips `max` to `min`.
     - Every other `kind` / operand-shape combination involving a `Partial`
       operand (including `MUL` with both operands `Partial`) rejects: not
       proven to commute with any `reduction`.
@@ -677,7 +677,7 @@ second presentation of the result.
   components. Otherwise both layouts MUST be rmem `ShardLayout` on the same mesh.
   That `ShardLayout` MUST contain only `Split` and `Varying` attributes ([shard §6.1](./shard.md#61-shard-attr-semantics)). Bitcast type inference MUST materialize omitted authored strides, using the same default and storage-owner rules as Reshard and TensorView. Every resulting `Layout` component has concrete strides.
   For rmem shards, an address is the owning mesh coordinate paired with the
-  offset within that unit. Varying axes do not enter that unit coordinate:
+  offset within that unit. Varying mesh axes do not enter that unit coordinate:
   each unit proves the bijection within its own copy, as for a plain layout.
   Both ends MUST have Varying on the same mesh axes; Varying against Split is
   rejected. The two address sets MUST be equal, so every element stays in its
@@ -956,7 +956,7 @@ class Stack(Op):
     propagation derives any representable ownership from that relation.
   - Compatible `Split` ownership carries to the shifted old logical axis. A
     fully replicated input contributes no sharding. Incompatible input meshes
-    or per-axis states MUST fail. A non-uniform `Partial` across result slices
+    or per-mesh-axis states MUST fail. A non-uniform `Partial` across result slices
     MUST fail. Each failure MUST name the conflicting input and require an
     explicit `Reshard`. Typeinfer MUST NOT select input zero's layout. Typeinfer
     MUST NOT silently discard real ownership. Compatible ownership receives concrete default result strides
@@ -1414,7 +1414,7 @@ Consensus torch.nn.functional ops.
     same per-mesh-axis `Partial(sum)` state. Then completing the partial result
     adds the bias exactly once.
   - The relation MUST fail on any translated/halo access, incompatible
-    contraction, mesh, or per-axis state that it cannot represent. The failure
+    contraction, mesh, or per mesh axis state that it cannot represent. The failure
     MUST name the operand and require an explicit `Reshard`. The relation MUST
     NOT copy an input layout or discard real ownership.
   - `Conv2D` costs `2 * numel(output) * weight.shape[1] * kh * kw` flops after
@@ -1526,7 +1526,7 @@ class RoPE(Op):
   - On each mesh axis, a branch MAY preserve one `Partial(sum)` on its
     corresponding query or key input. The branch MAY do so only when
     `cos_cache`, `sin_cache`, and `pos_ids` are `Broadcast` / replicated on that
-    axis.
+    mesh axis.
   - A non-`sum` Partial, multiple value-carrying Partials, or a Partial on a
     secondary cache/index input MUST be rejected. The rejection MUST give a
     `Reshard` remedy.
@@ -1551,10 +1551,10 @@ class MeshCoord(Op):
 
 - constraints:
   - `axes` is an `i64` scalar, an `i64` vector, or a tuple of `i64` scalars.
-    The result is one `i64` coordinate per axis, with no shard layout. The result
+    The result is one `i64` coordinate per mesh axis, with no shard layout. The result
     is a scalar for a scalar `axes` and a vector of the same length otherwise.
   - Type inference MUST reject a mesh that the current `MeshRegion` does not
-    bind. Type inference MUST reject a literal axis outside the mesh's rank.
+    bind. Type inference MUST reject a literal mesh axis outside the mesh's rank.
   - Evaluation holds one value per unit of `mesh`
     ([evaluator §6](./evaluator.md#6-layout-domain)).
 
@@ -1583,7 +1583,7 @@ class Reshard(Op):
     privately. So an `rmem` Reshard with a `ShardLayout` is a view only when each
     logical element keeps its threads and its register on each thread. The box
     of an `rmem` `ShardLayout` also holds the mesh's thread numbering. That
-    numbering is the topology levels, the plain layout of `flat_layout`, and the
+    numbering is the topologies, the plain layout of `flat_layout`, and the
     mesh offset (0 when the mesh states none). That box steps by `register_strides` instead of the
     physical strides. So every Split keeps its mesh axis even where its physical
     stride is not 0.
@@ -1615,21 +1615,21 @@ class Reshard(Op):
     mixed cases. Typeinfer and the cost evaluator classify the call.
 
 **Stride resolution.** Storage direction follows the physical addressability
-hierarchy `rmem < smem < gmem` (per-thread / per-CTA / per-program). Typeinfer
+hierarchy `rmem < smem < gmem` (per-thread / per-CTA / per-gpu). Typeinfer
 dispatches on `(layout, storage)`:
 
 - `layout=None`, storage unchanged → `x.type` (no-op).
 - `layout=None`, storage changed → error; a storage change MUST carry an
   explicit `layout=`.
 - a layout with unspecified strides, storage unchanged → dest strides match
-  the form already on `x.layout`. A Split-axes-zero source ⇒ per-instance form.
+  the form already on `x.layout`. A Split-axes-zero source ⇒ per-unit form.
   Otherwise ⇒ shared-engine C-order over the canonical global shape. When
   `x.layout` is `None` (plain kernel-param), fall back to shared-engine C-order.
 - a layout with unspecified strides, low → high level → dest strides =
   C-order over `layout.shape` (shared-engine form).
 - a layout with unspecified strides, high → low level → dest `strides[k]=0`
   for every `Split` axis `k`. Non-`Split` axes follow C-order over
-  `shard_layout_local_shape(layout)` with size-1 → 0 (per-instance form).
+  `shard_layout_local_shape(layout)` with size-1 → 0 (per-unit form).
 - `layout=Layout(strides=tuple)` (verbose) → dest strides are taken verbatim;
   typeinfer MUST NOT rewrite them.
 

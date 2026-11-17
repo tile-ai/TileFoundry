@@ -110,7 +110,7 @@ class Target(target.Target):
         if facts_type is target.MemoryExecutionFacts and query is None:
             return target.facts_result(
                 self, facts_type,
-                target.MemoryExecutionFacts(tuple(level.name for level in self.topology_facts().topologies)),
+                target.MemoryExecutionFacts(tuple(topology.name for topology in self.topology_facts().topologies)),
             )
         if facts_type is target.TopologyLimits:
             limits = self.topology_facts().topology(

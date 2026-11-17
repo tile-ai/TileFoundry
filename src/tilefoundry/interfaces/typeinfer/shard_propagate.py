@@ -182,7 +182,7 @@ def derive_output_shard_layout(
 ):
     """Derive the output ``ShardLayout`` from the input shards and the Op's relations.
 
-    Every input is projected onto the same executing levels -- each level
+    Every input is projected onto the same executing topologies -- each topology
     any input distributes -- so mesh axes keep one index across the inputs.
     """
     target = getattr(ctx, "target", None)
@@ -193,36 +193,36 @@ def derive_output_shard_layout(
         for type_, state in zip(input_types, states, strict=True)
         for layout in (types.shard_layout_of(type_.layout),)
     )
-    topologies = {level for state in states for level, _ in state}
+    topologies = {topology for state in states for topology, _ in state}
     required = {
-        level
+        topology
         for type_, layout, state in zip(input_types, layouts, states)
-        for level in topologies
-        if any(attr != types.Broadcast() for (at, _), attr in state.items() if at == level)
-        or (layout is None and owners.private(type_.storage, level))
+        for topology in topologies
+        if any(attr != types.Broadcast() for (at, _), attr in state.items() if at == topology)
+        or (layout is None and owners.private(type_.storage, topology))
     }
     parts, active = {}, set()
     for layout, state in zip(layouts, states, strict=True):
         if layout is None:
             continue
-        for level in utils.topology_names(layout.mesh):
-            part = utils.topology_mesh(layout.mesh, level)
+        for topology in utils.topology_names(layout.mesh):
+            part = utils.topology_mesh(layout.mesh, topology)
             nonbroadcast = any(
-                attr != types.Broadcast() for (at, _), attr in state.items() if at == level
+                attr != types.Broadcast() for (at, _), attr in state.items() if at == topology
             )
-            if nonbroadcast and level in active and parts[level] != part:
+            if nonbroadcast and topology in active and parts[topology] != part:
                 raise ValueError(
                     "inputs distribute over different meshes; their mesh axes do not align"
                 )
-            if level not in parts or (nonbroadcast and level not in active):
-                parts[level] = part
+            if topology not in parts or (nonbroadcast and topology not in active):
+                parts[topology] = part
             if nonbroadcast:
-                active.add(level)
+                active.add(topology)
     if not parts:
         return None
     order = tuple(dict.fromkeys((*owners.order, *parts)))
     mesh = (
-        utils.from_meshes(*(parts[level] for level in order if level in required))
+        utils.from_meshes(*(parts[topology] for topology in order if topology in required))
         if required
         else utils.filter_topologies(next(layout for layout in layouts if layout is not None)).mesh
     )
@@ -299,7 +299,7 @@ def derive_output_shard_layout(
             elif ddim in out_all_dims:
                 raise ValueError(
                     f"input {i} mesh axis {p}: domain dim survives only via a "
-                    "non-projection output access; cannot derive output layout axis"
+                    "non-projection output access; cannot derive output tensor axis"
                 )
             else:
                 continue
@@ -311,8 +311,8 @@ def derive_output_shard_layout(
             attrs[p] = new_attr
 
     if all(isinstance(attr, types.Varying) for attr in attrs):
-        kept_levels = {level for level, _ in keys}
-        if all((level in kept_levels) == owners.private(storage, level) for level in topologies):
+        kept_topologies = {topology for topology, _ in keys}
+        if all((topology in kept_topologies) == owners.private(storage, topology) for topology in topologies):
             return None
 
     carriers = [

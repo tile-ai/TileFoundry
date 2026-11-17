@@ -75,9 +75,9 @@ class PerformanceVisitor(valuation.Visitor[None]):
         ctx.occurrences.append((scope, node, duration))
 
 
-def wave_count(scope, level) -> int:
-    """Whole waves of *level*'s physical units the units *scope* runs need."""
-    return -(-scope.active_units(level.name) // level.max_physical_units)
+def wave_count(scope, topology) -> int:
+    """Whole waves of *topology*'s physical units the units *scope* runs need."""
+    return -(-scope.active_units(topology.name) // topology.max_physical_units)
 
 
 def schedule(occurrences, context, *, origin):
@@ -144,8 +144,8 @@ def analyze_performance(function: core.Function, context: AnalyzeContext) -> Non
     if context.topology is None:
         raise Error("performance requires a resolved topology")
     topologies = context.target.get_facts(target.TopologyFacts)
-    level = topologies.parallel()
-    if level is None or level.max_physical_units is None:
+    topology = topologies.parallel()
+    if topology is None or topology.max_physical_units is None:
         raise target.UnsupportedCapabilityError(
             f"{type(context.target).__name__}: no default parallel topology"
         )
@@ -156,7 +156,7 @@ def analyze_performance(function: core.Function, context: AnalyzeContext) -> Non
         **vars(context),
         facts=context.target.get_facts(target.ThroughputFacts),
         active=active,
-        parallel=level,
+        parallel=topology,
     )
     PerformanceVisitor().visit(function.body, performance_context)
     total_cursor = schedule(performance_context.occurrences, context, origin=context.scope.root)
@@ -166,7 +166,7 @@ def analyze_performance(function: core.Function, context: AnalyzeContext) -> Non
         summary_end = max(summary_end, roofline.ideal_ns)
     function.attach_metadata(PerformanceSummaryMetadata(
             timeline=TimelineMetadata(
-                start_ns=0, end_ns=summary_end * wave_count(context.scope, level)
+                start_ns=0, end_ns=summary_end * wave_count(context.scope, topology)
             ),
             wave=(units, physical),
         ))

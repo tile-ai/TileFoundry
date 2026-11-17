@@ -339,7 +339,7 @@ class PlainLayoutPattern(ElementPattern):
 
 @dataclass(frozen=True)
 class MeshAxisBindingRule:
-    STATEMENT: ClassVar[str] = "A shard layout axis resolves to a lexical Mesh binding."
+    STATEMENT: ClassVar[str] = "A mesh axis of a shard layout resolves to a lexical Mesh binding."
 
     def apply(self, value, *, match, context):
         mesh, binding, _ = value
@@ -352,20 +352,20 @@ class MeshAxisBindingRule:
 
 @dataclass(frozen=True)
 class BareMeshAxisRule:
-    STATEMENT: ClassVar[str] = "A bare Mesh in a shard layout names a one-axis mesh."
+    STATEMENT: ClassVar[str] = "A bare Mesh in a shard layout names a mesh with one mesh axis."
 
     def apply(self, value, *, match, context):
         mesh, _, axis_name = value
         if axis_name is None and len(mesh.shape) != 1:
             raise ParseError.from_node(
-                match.node, context, "a bare Mesh in a shard layout requires a one-axis mesh"
+                match.node, context, "a bare Mesh in a shard layout requires a mesh with one mesh axis"
             )
         return value
 
 
 @dataclass(frozen=True)
 class MeshAxisNameRule:
-    STATEMENT: ClassVar[str] = "A named shard layout axis exists in its lexical Mesh."
+    STATEMENT: ClassVar[str] = "A named mesh axis of a shard layout exists in its lexical Mesh."
 
     def apply(self, value, *, match, context):
         mesh, binding, axis_name = value
@@ -375,7 +375,7 @@ class MeshAxisNameRule:
             return mesh, mesh.names.index(axis_name)
         except ValueError as error:
             raise ParseError.from_node(
-                match.node, context, f"Mesh {binding!r} has no axis {axis_name!r}"
+                match.node, context, f"Mesh {binding!r} has no mesh axis {axis_name!r}"
             ) from error
 
 
@@ -522,9 +522,9 @@ def value_states() -> AstPattern[Any]:
 @dataclass(frozen=True)
 class ValueStatesFormRule:
     STATEMENT: ClassVar[str] = (
-        "Layout states are either a single B() or one or more axis @ P(nonempty string) "
-        "or axis @ V() "
-        "entries; empty states, axis @ B(), and mixing B() with other entries are rejected."
+        "Layout states are either a single B() or one or more mesh axis @ P(nonempty string) "
+        "or mesh axis @ V() "
+        "entries; empty states, mesh axis @ B(), and mixing B() with other entries are rejected."
     )
 
     def apply(self, value, *, node, context):
@@ -540,7 +540,7 @@ class ValueStatesFormRule:
         ):
             return value
         raise ParseError.from_node(
-            node, context, 'layout states must be {B()} or {axis @ P("reduction") | axis @ V(), ...}'
+            node, context, 'layout states must be {B()} or {mesh_axis @ P("reduction") | mesh_axis @ V(), ...}'
         )
 
 
@@ -566,7 +566,7 @@ def layout_sugar_parts(node: object):
 
 
 def value_state_parts(node: ast.AST):
-    """Read ``axis @ P("reduction")`` or ``axis @ V()`` as axis node and state."""
+    """Read ``mesh_axis @ P("reduction")`` or ``mesh_axis @ V()`` as mesh axis node and state."""
     if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.MatMult):
         return None
     call = node.right
@@ -652,8 +652,8 @@ class MeshAxisBoundOnceRule:
 
     def apply(self, value, *, match, context):
         seen: set[tuple[int, int]] = set()
-        for mesh, axis, *_ in (*value.splits, *value.states):
-            key = (id(mesh), axis)
+        for mesh, mesh_axis, *_ in (*value.splits, *value.states):
+            key = (id(mesh), mesh_axis)
             if key in seen:
                 raise ParseError.from_node(match.node, context, "mesh axis is bound more than once")
             seen.add(key)
@@ -670,8 +670,8 @@ def shard_layout_scope(context):
 class ShardLayoutScopeRule:
     STATEMENT: ClassVar[str] = (
         "A shard layout requires and covers the current mesh scope, or the function "
-        "mesh in a signature. Each referenced axis must "
-        "map uniquely to an axis of that scope. Unstated axes are Broadcast."
+        "mesh in a signature. Each referenced mesh axis must "
+        "map uniquely to a mesh axis of that scope. Unstated mesh axes are Broadcast."
     )
 
     def apply(self, value, *, match, context):
@@ -686,12 +686,12 @@ class ShardLayoutScopeRule:
         attrs = [runtime.Broadcast() for _ in keys]
         for source, source_axis, *state in (*value.splits, *value.states):
             key = utils.axis_keys(source)[source_axis]
-            targets = [axis for axis, held in enumerate(keys) if held == key]
+            targets = [mesh_axis for mesh_axis, held in enumerate(keys) if held == key]
             if len(targets) != 1:
                 raise ParseError.from_node(
                     match.node,
                     context,
-                    "shard layout axis does not map uniquely to the current mesh scope",
+                    "mesh axis of a shard layout does not map uniquely to the current mesh scope",
                 )
             if len(state) == 1:
                 attr = runtime.Split(state[0])
@@ -951,9 +951,9 @@ def bind_stated_layout(node, context, matched):
         state = value_state_parts(item)
         if state is None:
             continue
-        axis, kind, reduction = state
+        mesh_axis, kind, reduction = state
         name = f"state_{index}"
-        children.append(AstChild(name, MeshAxisPattern(), axis, "mesh_axis", "mesh_axis"))
+        children.append(AstChild(name, MeshAxisPattern(), mesh_axis, "mesh_axis", "mesh_axis"))
         states.append((name, kind, reduction))
     return dataclasses.replace(
         matched,
@@ -3892,26 +3892,26 @@ def enter_mesh_coordinate(
     mesh = context.lexical_scope.lookup(node.value.id)
     if not isinstance(mesh, runtime.Mesh):
         return None
-    axis = next(
+    mesh_axis = next(
         (index for index, name in enumerate(mesh.names) if name == node.attr),
         None,
     )
-    if axis is None and node.attr in {"x", "y", "z"}:
+    if mesh_axis is None and node.attr in {"x", "y", "z"}:
         candidate = ("x", "y", "z").index(node.attr)
         if candidate < len(mesh.shape):
-            axis = candidate
-    if axis is None:
+            mesh_axis = candidate
+    if mesh_axis is None:
         named = ", ".join(mesh.names)
         return PatternFailure(
             "mesh_coordinate",
             node,
-            f"mesh {node.value.id!r} has no axis {node.attr!r}; its axes are: {named}",
+            f"mesh {node.value.id!r} has no mesh axis {node.attr!r}; its mesh axes are: {named}",
         )
     return dataclasses.replace(
         matched,
         pattern_id="expression.mesh_coordinate",
         branch_id="mesh_coordinate",
-        captures={**matched.captures, "mesh": mesh, "axis": axis},
+        captures={**matched.captures, "mesh": mesh, "mesh_axis": mesh_axis},
     )
 
 
@@ -3933,17 +3933,17 @@ class MeshCoordinatePattern(ElementPattern):
             raise ParseError.from_node(match.node, context, "mesh coordinate lacks context")
         note_authored_call(match.node, context)
         mesh = match.captures["mesh"]
-        axis = match.captures["axis"]
-        extent = mesh.shape[axis]
+        mesh_axis = match.captures["mesh_axis"]
+        extent = mesh.shape[mesh_axis]
         if isinstance(extent, bool) or not isinstance(extent, int):
             raise ParseError.from_node(
-                match.node, context, "mesh coordinate requires a concrete axis extent"
+                match.node, context, "mesh coordinate requires a concrete mesh axis extent"
             )
-        cache_key = (id(mesh), axis)
+        cache_key = (id(mesh), mesh_axis)
         cached = context.function.state.mesh_coordinates.get(cache_key)
         if cached is not None:
             return cached
-        index = constant(axis)
+        index = constant(mesh_axis)
         coordinate = infer_call(runtime.MeshCoord(mesh=mesh), (index,), context)
         coordinate.attach_metadata(expr.RangeMetadata(0, extent))
         context.function.state.cache_mesh_coordinate(cache_key, coordinate)
@@ -4030,7 +4030,7 @@ class SelectionSizeRule:
         message = None
         if types.size(layout) != types.size(source):
             message = (
-                "mesh selection layout must hold the same number of positions as its selection"
+                "mesh selection layout must hold the same number of units as its selection"
             )
         elif not all(isinstance(one, int) and one > 0 for one in (*source.shape, *layout.shape)):
             message = "a mesh selection requires positive static extents"
@@ -4060,7 +4060,7 @@ class SelectionCoverRule:
         }
         if indices != set(range(types.size(layout))):
             raise ParseError.from_node(
-                match.node, context, "mesh selection layout must cover each selected position once"
+                match.node, context, "mesh selection layout must cover each selected unit once"
             )
         return value
 
@@ -4069,7 +4069,7 @@ class SelectionCoverRule:
 class SelectionStrideRule:
     """Composition uses AssertionError to reject indivisible mode strides."""
 
-    STATEMENT: ClassVar[str] = "Each new mesh selection axis maps to one fixed physical stride."
+    STATEMENT: ClassVar[str] = "Each new mesh axis of a mesh selection maps to one fixed physical stride."
 
     def apply(self, value, *, match, context):
         if not isinstance(value, MeshSelection):
@@ -4081,13 +4081,13 @@ class SelectionStrideRule:
             raise ParseError.from_node(
                 match.node,
                 context,
-                "a mesh selection axis does not map to one stride of the selection",
+                "a mesh axis of a mesh selection does not map to one stride of the selection",
             ) from error
         if outer.shape != value.layout.shape:
             raise ParseError.from_node(
                 match.node,
                 context,
-                "a mesh selection axis does not map to one stride of the selection",
+                "a mesh axis of a mesh selection does not map to one stride of the selection",
             )
         return dataclasses.replace(value, outer=outer)
 
@@ -4096,7 +4096,7 @@ class SelectionStrideRule:
 class SelectionConstructionRule:
     STATEMENT: ClassVar[str] = (
         "A checked selection constructs a Mesh with its topology, sliced at its offset "
-        "unless it holds its whole level, enters its execution scope, and defines its "
+        "unless it holds its whole topology, enters its execution scope, and defines its "
         "lexical binding."
     )
 
@@ -4104,11 +4104,11 @@ class SelectionConstructionRule:
         if not isinstance(value, MeshSelection):
             return value
         assert value.outer is not None
-        start = value.selection.layout(0)
-        whole = start == 0 and types.size(value.outer) == value.selection.topologies[0].size
+        first_index = value.selection.layout(0)
+        whole = first_index == 0 and types.size(value.outer) == value.selection.topologies[0].size
         mesh = runtime.Mesh(
             value.selection.topologies,
-            value.outer if whole else types.ComposedLayout(None, start, value.outer),
+            value.outer if whole else types.ComposedLayout(None, first_index, value.outer),
             value.names,
         )
         return finish_mesh_context(mesh, match, context)
@@ -5521,11 +5521,11 @@ class TupleAssignmentPattern(ElementPattern):
 
 
 def resolved_mesh(value, match, context):
-    """Name the levels a Mesh written in a function body says it divides.
+    """Name the topologies a Mesh written in a function body says it divides.
 
     A Mesh is a value wherever it is written, so one bound in the body has to
-    arrive as complete as one a `with` opens: it names its levels by string, and
-    the module is what says which levels those are.
+    arrive as complete as one a `with` opens: it names its topologies by string, and
+    the module is what says which topologies those are.
     """
     if not isinstance(value, runtime.Mesh) or context.function is None:
         return value

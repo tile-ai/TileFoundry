@@ -146,7 +146,7 @@ def inflight_bytes(call: expr.Call, scope, tgt, level: str) -> int | None:
     An asynchronous copy (TMA, ``cp.async``) keeps every stage of its buffer in
     flight: one unit's bytes at *level* times the slots its buffer declares. A
     synchronous access keeps one 16-byte access per thread of the unit, and as
-    many threads as the finest level allows when the program states none.
+    many threads as the finest topology allows when the program states none.
     """
     facts = tgt.get_facts(target.TopologyFacts)
     parallel_topology = facts.parallel()

@@ -142,7 +142,7 @@ def tensor_signature_of(var) -> TensorSignature:
 def unit_id_params(module: core.Module, target: tilefoundry_target.Target) -> tuple[UnitIdSignature, ...]:
     """One unit id per topology of *module*'s program whose ids *target* states.
 
-    A level the target states has no register the device can read, so its id
+    A topology the target states has no register the device can read, so its id
     has to arrive with the call. This is the one place the question is asked,
     so a host entry and the launcher it calls cannot answer it differently.
     """

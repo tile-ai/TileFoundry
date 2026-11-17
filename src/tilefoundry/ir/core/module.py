@@ -137,7 +137,7 @@ class Module:
             if dupes:
                 raise ValueError(
                     f"Module {self.name!r}: duplicate topology name(s) {dupes}; "
-                    f"one name must map to one level of the ordered hierarchy"
+                    f"one name must map to one topology of the ordered hierarchy"
                 )
         for key, slot in self.children.items():
             if slot == ():
@@ -165,12 +165,12 @@ class Module:
         """The effective Topology named *name*.
 
         The effective Topology named *name*; raises unless exactly one of
-        the effective levels matches.
+        the effective topologies matches.
         """
-        levels = self.effective_topologies()
-        matches = tuple(t for t in levels if t.name == name)
+        topologies = self.effective_topologies()
+        matches = tuple(t for t in topologies if t.name == name)
         if not matches:
-            available = ", ".join(t.name for t in levels) or "none"
+            available = ", ".join(t.name for t in topologies) or "none"
             raise ValueError(
                 f"Module {self.name!r}: no topology named {name!r}; "
                 f"effective topologies are {available}"
@@ -178,7 +178,7 @@ class Module:
         if len(matches) > 1:
             raise ValueError(
                 f"Module {self.name!r}: topology {name!r} resolves to "
-                f"{len(matches)} levels; one name must map to one level"
+                f"{len(matches)} topologies; one name must map to one topology"
             )
         return matches[0]
 

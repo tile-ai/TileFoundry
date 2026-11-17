@@ -31,8 +31,8 @@ def selection_layout(mesh: types.Mesh, selection: types.Mesh) -> types.Layout | 
         shape, steps = types.flatten_to_tuple(local.shape), types.flatten_to_tuple(local.strides)
         order = types.compact_row_major(shape)
         local = types.Layout(shape, tuple(
-            order[axis] if extent == 1 else step
-            for axis, (extent, step) in enumerate(zip(shape, steps))
+            order[mode] if extent == 1 else step
+            for mode, (extent, step) in enumerate(zip(shape, steps))
         ))
         if layout_algebra.composition(source, local, major="row") != target:
             return None

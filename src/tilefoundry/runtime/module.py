@@ -92,9 +92,9 @@ class CompiledModule(Module):
     def unit_ids(self) -> tuple:
         """The ids the entry needs told, ahead of its own arguments.
 
-        A level no register on the device answers for has to be told, so its
-        id travels with the call; each leading parameter states which level it
-        carries, which is how a ``Placement`` is keyed. A program whose levels
+        A topology no register on the device answers for has to be told, so its
+        id travels with the call; each leading parameter states which topology it
+        carries, which is how a ``Placement`` is keyed. A program whose topologies
         are all answered on the device is called as it was written.
         """
         if not self.type.leading:

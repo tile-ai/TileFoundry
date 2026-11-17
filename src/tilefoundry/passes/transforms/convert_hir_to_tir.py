@@ -122,10 +122,10 @@ def participants(layouts) -> types.Mesh | None:
 def first_thread(enclosing: types.Mesh | None, topologies) -> types.Mesh | None:
     """A slice holding the first thread of *enclosing*, or of the CTA when there is none.
 
-    None when that level holds one thread already, or when the first thread has
-    no constant index: *enclosing* is a slice whose start is not a number, or
-    one over several levels whose sizes are not all numbers, so its start cannot
-    be split into the start of each level.
+    None when that topology holds one thread already, or when the first thread has
+    no constant index: *enclosing* is a slice whose offset is not a number, or
+    one over several topologies whose sizes are not all numbers, so its index of
+    the first unit cannot be split into the first unit id of each topology.
     """
     if enclosing is not None and "thread" not in ir_utils.topology_names(enclosing):
         enclosing = None
@@ -133,7 +133,7 @@ def first_thread(enclosing: types.Mesh | None, topologies) -> types.Mesh | None:
         topology = next((one for one in topologies or () if one.name == "thread"), None)
         if topology is None or topology.size == 1:
             return None
-        start = 0
+        first_unit_id = 0
     else:
         if isinstance(enclosing.layout, types.ComposedLayout):
             sizes = [topology.size for topology in enclosing.topologies]
@@ -145,8 +145,8 @@ def first_thread(enclosing: types.Mesh | None, topologies) -> types.Mesh | None:
         topology = enclosing.topologies[thread]
         if types.size(types.get(types.plain_layout(enclosing.layout), thread)) == 1:
             return None
-        start = ir_utils.first_unit_ids(enclosing)[thread]
-    return types.Mesh((topology,), types.ComposedLayout(None, start, types.Layout((1,), (1,))), ("writer",))
+        first_unit_id = ir_utils.first_unit_ids(enclosing)[thread]
+    return types.Mesh((topology,), types.ComposedLayout(None, first_unit_id, types.Layout((1,), (1,))), ("writer",))
 
 
 def transfer_meshes(type_list, destination, around, topologies) -> tuple[types.Mesh, ...]:

@@ -1432,7 +1432,7 @@ class DeclarationOrderError(ParseError):
 
 
 def resolve_mesh_topologies_at(topologies, declared, node, context):
-    """Resolve mesh levels and anchor declaration errors to *node*."""
+    """Resolve mesh topologies and anchor declaration errors to *node*."""
     try:
         return resolve_mesh_topologies(topologies, declared)
     except KeyError as error:

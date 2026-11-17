@@ -81,21 +81,21 @@ def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
 
 
 def workspace_slots(source) -> int:
-    """One slot per warp of the thread level ``source`` is sharded over.
+    """One slot per warp of the thread topology ``source`` is sharded over.
 
     The runtime posts each warp's partial at its warp index and reads its group
     back (`cta_combine_via_workspace`); which warp takes which slot is its
-    choice. A mesh naming several levels counts only its thread level: each
+    choice. A mesh naming several topologies counts only its thread topology: each
     CTA combines its own partials in its own shared memory.
     """
     mesh = source.layout.mesh
     names = utils.topology_names(mesh)
     if "thread" in names:
-        level = types.get(types.plain_layout(mesh.layout), names.index("thread"))
+        thread_layout = types.get(types.plain_layout(mesh.layout), names.index("thread"))
     else:
-        level = types.plain_layout(mesh.layout)
+        thread_layout = types.plain_layout(mesh.layout)
     threads = 1
-    for extent in types.flatten_to_tuple(level.shape):
+    for extent in types.flatten_to_tuple(thread_layout.shape):
         value = expr.static_dim_value(extent)
         if value is None or value <= 0:
             raise ValueError(

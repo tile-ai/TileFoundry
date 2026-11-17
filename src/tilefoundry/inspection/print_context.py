@@ -119,29 +119,29 @@ class PrintContext:
                 return name
         return None
 
-    def mesh_axis_alias(self, mesh: types.Mesh, axis: int) -> str | None:
+    def mesh_axis_alias(self, mesh: types.Mesh, mesh_axis: int) -> str | None:
         """Name one mesh axis through an active scope binding, if one dominates it."""
         names = mesh.names
-        if axis >= len(names):
+        if mesh_axis >= len(names):
             return None
-        target_level, target_name = ir_utils.axis_keys(mesh)[axis]
+        target_topology_name, target_name = ir_utils.axis_keys(mesh)[mesh_axis]
         target_topology = next(
-            (topology for topology in mesh.topologies if topology.name == target_level), None
+            (topology for topology in mesh.topologies if topology.name == target_topology_name), None
         )
         for binding_index in range(len(self.mesh_bindings) - 1, -1, -1):
             bound, alias = self.mesh_bindings[binding_index]
             if not bound.names or target_name not in bound.names:
                 continue
-            for bound_level, bound_name in ir_utils.axis_keys(bound):
-                if bound_name != target_name or bound_level != target_level:
+            for bound_topology_name, bound_name in ir_utils.axis_keys(bound):
+                if bound_name != target_name or bound_topology_name != target_topology_name:
                     continue
                 bound_topology = next(
-                    topology for topology in bound.topologies if topology.name == target_level
+                    topology for topology in bound.topologies if topology.name == target_topology_name
                 )
                 if (
                     target_topology == bound_topology
-                    and ir_utils.topology_mesh(mesh, target_level).layout
-                    == ir_utils.topology_mesh(bound, target_level).layout
+                    and ir_utils.topology_mesh(mesh, target_topology_name).layout
+                    == ir_utils.topology_mesh(bound, target_topology_name).layout
                 ):
                     return f"{alias}.{bound_name}"
         return None

@@ -94,13 +94,13 @@ def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]: ...
   - Target values MUST remain immutable hardware values. Their getters select
     immutable descriptors and Facts, and a subclass inherits those selections
     unless it overrides or refuses them.
-  - `get_facts(TopologyFacts)` MUST list every topology level the Target
+  - `get_facts(TopologyFacts)` MUST list every topology the Target
     admits, coarsest first, as the `TopologyLimits` of each. A Target that
     states none MUST answer the empty tuple: it runs one program per call.
-  - `validate_program_topology` MUST reject a level outside
+  - `validate_program_topology` MUST reject a topology outside
     `get_facts(TopologyFacts)`. It MUST reject any resolved static extent that is not
     positive. It MUST reject any resolved static extent that exceeds the finite
-    `max_logical_units` of its level. The shared
+    `max_logical_units` of its topology. The shared
     program check MUST use this method rather than reproduce a backend's
     topology limits.
   - A provider MAY import `Analyzer` from `tilefoundry.target`. Codegen base
@@ -136,7 +136,7 @@ class Architecture:
   - Concrete backend architecture values MUST be immutable; `name` MUST be the
     stable architecture identity.
   - `max_threads_per_cta` MUST describe the architecture's static CTA thread
-    limit when the architecture has a CTA thread level.
+    limit when the architecture has a CTA thread topology.
 
 ### 1.2 `Device`
 
@@ -415,7 +415,7 @@ class MemoryExecutionFacts:
 ```
 
 - constraints:
-  - `MemoryExecutionFacts.topologies` MUST list the Target's execution levels
+  - `MemoryExecutionFacts.topologies` MUST list the Target's execution topologies
     admitted for synchronous Copy and Fill. Each name MUST occur in
     `TopologyFacts.topologies`. An empty list admits no memory execution scope.
     Shared instruction matching MUST specialize the memory mesh wildcard from

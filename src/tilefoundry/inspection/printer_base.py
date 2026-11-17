@@ -417,21 +417,21 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], types.TypeFunctor[str])
             if alias is None:
                 raise ValueError("MeshCoord mesh has no active binding to print")
             return f"tf.meshcoord({self.visit(value.args[0], ctx)}, mesh={alias})"
-        axis = expr.static_dim_value(value.args[0]) if value.args else None
-        if axis is None or axis < 0 or axis >= len(tgt.mesh.shape):
-            raise ValueError("MeshCoord requires a literal in-range axis to print")
-        ref = ctx.mesh_axis_alias(tgt.mesh, axis)
+        mesh_axis = expr.static_dim_value(value.args[0]) if value.args else None
+        if mesh_axis is None or mesh_axis < 0 or mesh_axis >= len(tgt.mesh.shape):
+            raise ValueError("MeshCoord requires a literal in-range mesh_axis to print")
+        ref = ctx.mesh_axis_alias(tgt.mesh, mesh_axis)
         if ref is not None:
             return ref
         if alias is None:
             raise ValueError("MeshCoord mesh has no active binding to print")
-        if axis < len(tgt.mesh.names):
-            axis_name = tgt.mesh.names[axis]
-        elif axis < 3:
-            axis_name = ("x", "y", "z")[axis]
+        if mesh_axis < len(tgt.mesh.names):
+            mesh_axis_name = tgt.mesh.names[mesh_axis]
+        elif mesh_axis < 3:
+            mesh_axis_name = ("x", "y", "z")[mesh_axis]
         else:
-            raise ValueError("unnamed MeshCoord axes above z cannot be printed")
-        return f"{alias}.{axis_name}"
+            raise ValueError("unnamed MeshCoord mesh axes above z cannot be printed")
+        return f"{alias}.{mesh_axis_name}"
 
     def visit_program_call(self, value: expr.Call, ctx=None) -> str:
         raise NotImplementedError(f"{type(self).__name__} cannot render program calls")

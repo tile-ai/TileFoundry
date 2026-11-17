@@ -34,7 +34,7 @@ def units_at(mesh: types.Mesh, topology: str, topologies: tuple[types.Topology, 
         count = types.size(types.get(stated, index))
         if not isinstance(count, int) or isinstance(count, bool) or count < 1:
             raise Error(
-                f"mesh level {each.name!r} needs positive static extents, got {count!r}"
+                f"mesh topology {each.name!r} needs positive static extents, got {count!r}"
             )
         units *= count
     return units

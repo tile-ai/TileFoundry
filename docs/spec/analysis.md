@@ -55,7 +55,7 @@ Every compact text summary begins with these two lines:
 
 ```text
 # example
-# analysis target=<target> module=<module> function=<function> topology=<level>
+# analysis target=<target> module=<module> function=<function> topology=<topology>
 # selection requested=<selector>[,<selector>...] executed=<selector>[,<selector>...]
 ```
 
@@ -130,9 +130,9 @@ name:
     establish every requested root's family-specific readiness. Each family
     states its own through the checker its descriptor carries, and one
     metadata-free traversal of the derived program answers all of them.
-    Performance readiness requires a selected topology level whose
+    Performance readiness requires a selected topology whose
     `TopologyLimits.max_physical_units` is a positive integer and one-unit
-    `PerformanceServiceFacts` stated for that same level. The program
+    `PerformanceServiceFacts` stated for that same topology. The program
     states where an occurrence runs, so that checker visits no occurrence. Where
     the buffers go is not a readiness question. Failing performance readiness
     MUST NOT make the program invalid for `compute-cost`, `memory`, or `roofline`.
@@ -189,8 +189,8 @@ class ComputeCostMetadata(IRMetadata):
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `topologies` | The effective Module topology levels, coarsest first. | No |
-| `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written for `logical`. Each level's share is the same evaluator over Types projected through authored `Split`s at or coarser than that level. `total` is the selected unit's share times its executing mesh units. Function accumulation multiplies `logical` by varying-loop trips. It multiplies `per_unit` and `total` by all enclosing loop trips. Retained calls carry the one-execution summary of their callee. Primitive work accumulates into root totals with full repeats. It accumulates into each enclosing call with repeats relative to that call scope. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `topologies` | The effective Module topologies, coarsest first. | No |
+| `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written for `logical`. Each topology's share is the same evaluator over Types projected through authored `Split`s at or coarser than that topology. `total` is the selected unit's share times its executing mesh units. Function accumulation multiplies `logical` by varying-loop trips. It multiplies `per_unit` and `total` by all enclosing loop trips. Retained calls carry the one-execution summary of their callee. Primitive work accumulates into root totals with full repeats. It accumulates into each enclosing call with repeats relative to that call scope. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `other_ops` | The evaluator's non-floating-point operation counts (`integer`, `predicate`, `select`, `special`), totalled and shared the same way. These keys map directly to target one-unit operation-throughput keys. Target-side service naming is unchanged. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `precision` | One-trip Call work is exact; Function work combines the precision of every enclosing loop's trip count. Coordinate-dependent maximum trip counts yield an upper bound. | No |
 
@@ -199,7 +199,7 @@ record, stated exactly as a Call's is. The whole program's work is not a second
 record.
 
 ```text
-compute-cost flops=<dtype>:<int>@logical,<int>@total,<int>@<level>[,...][;<dtype>:...] other-ops=<kind>:<int>@logical,<int>@total,<int>@<level>[,...][;<kind>:...] precision=<exact|upper_bound|lower_bound|unknown>
+compute-cost flops=<dtype>:<int>@logical,<int>@total,<int>@<topology>[,...][;<dtype>:...] other-ops=<kind>:<int>@logical,<int>@total,<int>@<topology>[,...][;<kind>:...] precision=<exact|upper_bound|lower_bound|unknown>
 ```
 
 Every measured Call receives this annotation. Each key pairs the whole quantity
@@ -208,7 +208,7 @@ with one unit's share, so the two `*_per_unit` fields are not separate keys.
 Each reported Call's JSON projection is under its `compute-cost` key:
 
 ```text
-{"topologies": [<level>, ...],
+{"topologies": [<topology>, ...],
  "flops": {<dtype>: {"logical": <int>, "total": <int>,
                       "per_unit": [<int>, ...]}},
  "other_ops": {<kind>: {"logical": <int>, "total": <int>,
@@ -292,12 +292,12 @@ class RegionMemoryMetadata(IRMetadata):
 
 ```python
 class Spread[V]:
-    """One quantity, whole and as one unit of each topology level holds it.
+    """One quantity, whole and as one unit of each topology holds it.
 
     Attributes:
         logical: property; What the authored operation asks before replication.
         total: attribute; What the whole execution asks.
-        per_unit: attribute; What one unit of each level holds, in topology order.
+        per_unit: attribute; What one unit of each topology holds, in topology order.
         logical_groups: attribute; Local logical values grouped by the induction
             variables and formals they depend on.
     """
@@ -331,12 +331,12 @@ counts one slice per index as an upper bound.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `MemoryMetadata.topologies` | The effective Module topology levels, coarsest first. | No |
+| `MemoryMetadata.topologies` | The effective Module topologies, coarsest first. | No |
 | `MemoryMetadata.traffic` | One occurrence's per-boundary movement, grouped by storage and communication boundary. | No; projection reads resolved Mesh and topology extents. |
 | `MemoryMetadata.operands` | One occurrence's movement in order `(*call.args, call)`. | No |
 | `MemoryMetadata.buffer_bytes` | The size in bytes of one physical copy of an address-placed `gmem` or `smem` tensor result. The size includes a carried phi. It also includes all contributions on Partial axes finer than its storage owner. It is `None` for tuple results or results that are not address-placed. | No |
 | `MemoryMetadata.offsets` | The byte offset of each physical result slot: each copy of a staged tensor in copy order, or each tuple `AllocationValue` in flattened result-index order. An `rmem` result has no reported offsets. Staged tuple results MUST raise `analysis.Error`. | No |
-| `RegionMemoryMetadata.topologies` | The same effective Module topology levels. | No |
+| `RegionMemoryMetadata.topologies` | The same effective Module topologies. | No |
 | `RegionMemoryMetadata.traffic` | Every reachable occurrence. `logical` multiplies only loops the value varies in; `total` and `per_unit` multiply every enclosing loop. | No |
 
 - constraints:
@@ -359,12 +359,12 @@ counts one slice per index as an upper bound.
   - Two operands MAY name the same value. The `operands` split MUST keep their
     positions distinct. It MUST omit an entry it cannot state. It MUST NOT emit
     that entry empty.
-  - Every `Spread` MUST state a share for each declared topology level, not only
-    for the level the call selected. The record MUST name those levels once in
+  - Every `Spread` MUST state a share for each declared topology, not only
+    for the topology the call selected. The record MUST name those topologies once in
     `topologies`, not beside each share.
   - A movement has two coordinates and MUST be stated in both. `storage` names
     the level the bytes entered or left. `communication` names the topology
-    level whose boundary they crossed. No storage level can answer that. Data
+    whose boundary they crossed. No storage level can answer that. Data
     handed from one unit to another is the same storage at both ends. It has
     still gone somewhere. The same bytes MUST appear under both. A move between
     two storage levels reads the bytes at one level and writes them at the other.
@@ -372,12 +372,12 @@ counts one slice per index as an upper bound.
     received and what it sent. A unit finer than the boundary MUST state no
     share of it. Crossing is what the units on either side do. Dividing
     the move among the units inside one states a move nobody made.
-  - A same-mesh `Reshard` that resolves a `Partial` axis across multiple units
-    MUST record communication at that axis's topology boundary. This holds
-    even when every `Split` axis is unchanged. An extent-one axis contributes no communication.
+  - A same-mesh `Reshard` that resolves a `Partial` mesh axis across multiple units
+    MUST record communication at that mesh axis's topology boundary. This holds
+    even when every `Split` mesh axis is unchanged. An extent-one mesh axis contributes no communication.
   - A duration MUST take whichever of compute, storage movement and crossing is
     longest. It MUST NOT sum them. One movement spends two resources over one
-    span of time. A crossing at a level the target publishes no rate for MUST
+    span of time. A crossing at a topology the target publishes no rate for MUST
     be stated and left untimed.
   - A Call's `traffic` and `operands` MUST state one occurrence. Only the
     Function record counts an occurrence as often as its authored loops repeat
@@ -549,13 +549,13 @@ class BufferAlias:
     Every other ordinary result, including `Transpose`, MUST allocate its own.
     Analysis MUST use operation semantics
     for this distinction rather than infer aliasing from layouts.
-  - Reshard MUST alias its source if and only if three conditions hold. Storage is unchanged. The shape is literal. Every logical element retains its complete set of storage instances and addresses. Gmem has one instance per device. Smem has one per device and CTA. Rmem has one per thread. Broadcast replicas MUST be included: removing a
+  - Reshard MUST alias its source if and only if three conditions hold. Storage is unchanged. The shape is literal. Every logical element retains its complete set of storage instances and addresses. Gmem has one copy per device. Smem has one per device and CTA. Rmem has one per thread. Broadcast replicas MUST be included: removing a
     replica changes the set. [shard §6.1](./shard.md#61-shard-attr-semantics) states which copies each end holds. Two ends that hold the same copies at the same addresses alias. Every other Reshard MUST retain its
     independent buffer.
   - Bitcast MUST alias its source and allocate no independent buffer. Its declared access relation MUST bijectively map result coordinates to source coordinates with the same physical address. Bitcast MUST require the source's address. Bitcast MUST record zero traffic.
-  - A value can have a Partial axis finer than its storage owner. `buffer_bytes` of that value MUST count one copy per unit of that axis. Multiple such axes multiply
+  - A value can have a Partial mesh axis finer than its storage owner. `buffer_bytes` of that value MUST count one copy per unit of that mesh axis. Multiple such mesh axes multiply
     their copy counts; an unresolved extent MUST raise `analysis.Error`.
-  - Fresh smem allocations MUST reserve a byte span. The span MUST cover the physical layout's addresses within the selected topology unit. It MUST include stride holes and composition offsets. Splits at coarser levels restrict the local domain;
+  - Fresh smem allocations MUST reserve a byte span. The span MUST cover the physical layout's addresses within the selected topology unit. It MUST include stride holes and composition offsets. Splits at coarser topologies restrict the local domain;
     finer splits remain in it. Swizzles MAY reserve complete low-bit periods. They preserve the unchanged high bits. This is an arena-capacity bound. It is not a unique-footprint or traffic count.
     Every staged slot MUST reserve that span at the required alignment.
     Invalid negative or unresolved physical address ranges MUST be refused.
@@ -726,8 +726,8 @@ addressable roots. The Call results report their concrete offsets. A `MeshRegion
 occupancy over its entry-to-exit window instead. It counts each root once. At
 addressable levels, it uses the union of live address intervals. It covers only
 the levels that the region holds. In the target's ordered topology hierarchy, a
-region's outermost level MUST be the target-declared owner or an enclosing
-level. A region strictly inside the owner is not eligible to report that level.
+region's outermost topology MUST be the target-declared owner or an enclosing
+topology. A region strictly inside the owner is not eligible to report that level.
 A target-owned level makes no `MeshRegion` eligible. Eligibility does not decide
 attribution. Every eligible region whose mesh contains the authored holder mesh
 of a value reports that value. An enclosing region therefore also counts values
@@ -868,9 +868,9 @@ savings are unknown. A buffer with none of these reuse relations states no row.
     parameters and applies no wave limit. `holds_bytes` reads the narrow
     relation. It limits that relation to the wave and projects out mesh
     parameters.
-  - Under nested mesh regions, a reuse row states its space axis against the
+  - Under nested mesh regions, a reuse row states its space mesh axis against the
     innermost enclosing mesh. Outer execution meshes are not composed into
-    that axis label.
+    that mesh axis label.
   - The window is the loop axis when one exists. Otherwise the window is the mesh
     axis alone. Units that read at once are already inside one iteration
     of the loop that carries the later read.
@@ -924,7 +924,7 @@ class ExplicitMemoryLevelFacts:
     Attributes:
         name: attribute; The storage level name.
         capacity_bytes: attribute; Stated capacity, or None when unknown.
-        scope: attribute; The topology level the capacity is stated per.
+        scope: attribute; The topology the capacity is stated per.
         owner: attribute; The topology whose units own separate values, or target.
     """
 
@@ -940,7 +940,7 @@ class ImplicitMemoryLevelFacts:
     Attributes:
         name: attribute; The cache level name.
         capacity_bytes: attribute; Stated capacity, or None when unknown.
-        scope: attribute; The topology level the capacity is stated per.
+        scope: attribute; The topology the capacity is stated per.
     """
 
     name: str
@@ -1035,9 +1035,9 @@ JSON projections are both under `memory`. The Function's full projection is
 under `function_records.memory`:
 
 ```text
-{"topologies": [<level>, ...],
+{"topologies": [<topology>, ...],
  "traffic": {"storage": {<memory-level>: <spread>, ...},
-             "communication": {<topology-level>: <spread>, ...}},
+             "communication": {<topology>: <spread>, ...}},
  "footprint": {"buffers": {<buffer>: {<memory-level>: <spread>}, ...},
                "precision": <"exact"|"upper_bound"|"lower_bound"|"unknown">} | null,
  "reuse_windows": [{"buffer": <name>, "time": <loop|"">,
@@ -1109,12 +1109,12 @@ class ThroughputFacts:
 
 Roofline asks for `ThroughputFacts` with the query
 `(topology, active, inflight)`. Here `active` is the most units that the
-meshes of the Function run at that level. `inflight` is the bytes in flight of a
+meshes of the Function run at that topology. `inflight` is the bytes in flight of a
 Call, as performance states them. The Function uses the most that any of its
 own Calls keeps, so its bound stays a lower bound. A call into another
 definition is not an access and keeps nothing in flight. That definition prices
 its own. The rates are those of the units the program
-runs. A query of no level is the whole deployment. A separate projection states
+runs. A query of no topology is the whole deployment. A separate projection states
 what one unit gets through. `performance` reads it, and `roofline` does not.
 Work that is not floating point at all has its own published instruction
 throughput. It has no dtype to be filed under.
@@ -1127,7 +1127,7 @@ class PerformanceServiceFacts:
         unit_flops: attribute; One unit's floating-point rate, by dtype.
         unit_ops: attribute; One unit's rate for each named service kind.
         unit_bandwidth: attribute; One unit's rate for each memory level it moves at.
-        unit: attribute; Topology level these throughputs describe.
+        topology: attribute; Topology these throughputs describe.
     """
 
     unit_flops: tuple[tuple[DType, int], ...]
@@ -1188,21 +1188,21 @@ selects its full form, as that family's section defines.
   - Footprint pricing assumes ideal reuse within one wave and repeats bytes
     across windows. Counting a partial last wave as full is a pessimistic
     approximation. Deduplication within one wave is optimistic. Below the
-    parallel topology level of the device, analysis counts the windows of each
+    parallel topology of the device, analysis counts the windows of each
     parent unit separately. This overestimates bytes when parents share data.
   - Performance local duration MUST divide one unit's share of
     `ComputeCostMetadata.flops` by `unit_flops`. It MUST divide one unit's share
     of `service` by `unit_ops`. It MUST divide one unit's share of the bytes at
-    each storage level by `unit_bandwidth`. All three divisions are at the level
+    each storage level by `unit_bandwidth`. All three divisions are at the topology
     that performance was asked about, for the active units of the Function.
     Performance asks for `PerformanceServiceFacts` with
     `(topology, active, inflight)`. It caps `active` at the
-    `max_physical_units` of the level. `inflight` is the bytes that one
+    `max_physical_units` of the topology. `inflight` is the bytes that one
     parallel unit keeps in flight for the occurrence. An asynchronous copy
     (`category="async"`, such as TMA or `cp.async`) keeps one unit's bytes at
     `bandwidth_level` times the slots that its buffer declares. Any other access
     keeps 16 bytes per thread of the unit. When the program states no thread
-    count, the count is as many threads as the finest level allows. At
+    count, the count is as many threads as the finest topology allows. At
     `bandwidth_level`, one unit's bytes are the footprint `logical` bytes of the
     occurrence, divided among the units that its window holds, and rounded up.
     Reads and writes are one count. The units that the window holds are its
@@ -1283,7 +1283,7 @@ class PerformanceSummaryMetadata(IRMetadata):
 
     Attributes:
         timeline: attribute; Whole-Function envelope from zero, in ns.
-        wave: attribute; Units the Function's meshes run, and the level's physical units.
+        wave: attribute; Units the Function's meshes run, and the topology's physical units.
     """
 
     timeline: TimelineMetadata
@@ -1306,7 +1306,7 @@ Function summary fields are:
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `timeline` | `[0, local makespan * waves)`. The local makespan is the end of the CTA-local timeline, or zero with no work. On the entry Function, roofline raises it to the roofline `ideal_ns` when roofline ran. `waves` is `ceil(N / P)`. `N` is the most units the Function's meshes run at the level selected by `TopologyFacts.parallel_topology`. `P` is the `max_physical_units` of that level. The duration of the interval is the prediction. `waves` is not a field. | `TopologyFacts` |
+| `timeline` | `[0, local makespan * waves)`. The local makespan is the end of the CTA-local timeline, or zero with no work. On the entry Function, roofline raises it to the roofline `ideal_ns` when roofline ran. `waves` is `ceil(N / P)`. `N` is the most units the Function's meshes run at the topology selected by `TopologyFacts.parallel_topology`. `P` is the `max_physical_units` of that topology. The duration of the interval is the prediction. `waves` is not a field. | `TopologyFacts` |
 
 Occurrence intervals remain CTA-local. They are not copied once per wave. The
 capacity `P` is the machine-side unit count. The mapping of one CTA to one
@@ -1324,9 +1324,9 @@ function the report already states. It is not a field of `PerformanceSummaryMeta
 It does not appear in the JSON projection of that record. `predicted-ns` is the
 duration of the summary's own envelope. It is not a second measurement. `wave` is
 the summary's `wave`. `active` is the most units the Function's meshes run at the
-selected topology level and the coarser ones. It is 1 when the Function states no
-mesh. `physical` is the `TopologyLimits.max_physical_units` of that level. Forty
-units on a 132-unit level read `wave=40/132`. 8192 units read `wave=8192/132`.
+selected topology and the coarser ones. It is 1 when the Function states no
+mesh. `physical` is the `TopologyLimits.max_physical_units` of that topology. Forty
+units on a 132-unit topology read `wave=40/132`. 8192 units read `wave=8192/132`.
 It states where the program's units reach. It is not an occupancy guarantee.
 
 Every Call with a modeled duration receives this annotation. It is one interval
@@ -1370,12 +1370,12 @@ does not model.
     counts copied or replicated work. Every unit performs an unsharded operation
     inside a scope independently. The operation therefore contributes once
     per unit to the total. The per-unit quantity already includes work
-    projected through finer levels.
+    projected through finer topologies.
   - A `MeshRegion` evaluates its boundary arguments outside the region and
     executes its body once per enclosing unit. The model charges argument work at
     its defining site. It charges body work per enclosing unit.
   - The Mesh layout of an occurrence ([shard §5](./shard.md#5-mesh)) gives the
-    units it runs on. The model counts them at the selected level and caps the
+    units it runs on. The model counts them at the selected topology and caps the
     count at `active` for the per-unit share. A `Broadcast` shard attribute does not
     change them. Attributes describe distribution. The Mesh describes which
     units execute it.
@@ -1431,7 +1431,7 @@ def check_program(
 
 
 class CheckContext(valuation.Context):
-    """What every input check reads: the program, the machine, and the topology level.
+    """What every input check reads: the program, the machine, and the topology.
 
     The context is bound to the derived Function the analyses will read.
     Nothing a check reads is a derived analysis record.
@@ -1455,9 +1455,9 @@ class CheckContext(valuation.Context):
     [hir §2](./hir.md#2-function-specialization-api)
     before ordinary type inference with ranges.
     Remaining symbolic dimensions MUST be named before any consuming algorithm runs.
-  - Every effective Module topology MUST name a level the resolved Target
+  - Every effective Module topology MUST name a topology the resolved Target
     supports. Its extent MUST be positive and static, and within the finite
-    hardware limit of that level. A rejection names the level, its extent, and
+    hardware limit of that topology. A rejection names the topology, its extent, and
     the reason.
   - A non-`None` `topology` MUST name exactly one effective Module topology.
   - `check_program(analyzers=...)` and Analyze use the same checker gate. The gate
@@ -1576,22 +1576,22 @@ def analyze(
 - constraints:
   - `topology` MUST name one effective Module topology. When omitted, it
     MUST default to the coarsest effective topology whose `TopologyLimits`
-    states `max_physical_units`. A program may name a level the host places
+    states `max_physical_units`. A program may name a topology the host places
     rather than the machine runs. Several cards are one deployment's shape,
-    not one card's. Measuring per such a level asks the machine for
+    not one card's. Measuring per such a topology asks the machine for
     a unit it publishes no rate for. When the target answers for none of the
-    declared levels, the coarsest MUST be left selected. The refusal then names
-    the level, not the absence of one. When the Module declares none,
+    declared topologies, the coarsest MUST be left selected. The refusal then names
+    the topology, not the absence of one. When the Module declares none,
     `topology` MUST remain `None`. No per-unit projection divides.
     `analysis.Result.topology` MUST record the resolved answer.
   - A target MUST answer `PerformanceServiceFacts` and state
-    `TopologyLimits.max_physical_units` for the level it is asked about.
-    It MUST refuse a level it publishes no rate for. It MUST NOT answer for a
+    `TopologyLimits.max_physical_units` for the topology it is asked about.
+    It MUST refuse a topology it publishes no rate for. It MUST NOT answer for a
     different one. The query is
-    the level name, or `(level, active)` when the program runs `active` of its
+    the topology name, or `(topology, active)` when the program runs `active` of its
     units. A target MAY ignore `active`. One unit gets the
     deployment's rate for the active units, shared among them. The same
-    program measured at two levels therefore states the same work against
+    program measured at two topologies therefore states the same work against
     proportionally different rates.
   - The Function MUST belong to the checked Module, including its derived
     definitions. Analyze MUST write metadata in place without cloning or
@@ -1627,7 +1627,7 @@ def analyze(
     inferred types and assumes a verified function.
   - Family-specific readiness MUST be checked on that derived program before the
     first analysis in the dependency closure runs. A target can state no physical
-    units for a level. A performance request for that level MUST fail before
+    units for a topology. A performance request for that topology MUST fail before
     dependency Metadata is written.
   - Re-running MUST recompute the closure and refresh the Metadata that closure
     owns. There MUST be no cross-call cache. Metadata owned by nothing in the
@@ -1871,13 +1871,13 @@ class Target:
 
 - constraints:
   - `AnalysisCallable` MUST receive the normalized Function graph and one
-    `AnalyzeContext`. That context MUST carry the exact Module, Target, resolved topology level,
+    `AnalyzeContext`. That context MUST carry the exact Module, Target, resolved topology,
     and caller options. It MUST also carry the shared `scope` view (`scope.root` for the definition). The
     `topology` MAY be `None` only when the Module declares no topology.
     Options MAY be `None`.
   - Analysis reads types and access relations through the same `AnalyzeContext`.
     Analyze creates it before the scope tree. The scope tree reads relations through
-    it with no topology level. Analyze binds its `scope` to that tree
+    it with no topology. Analyze binds its `scope` to that tree
     (`bind_scope`) before any analysis runs. `type_of` returns the `Expr.type` that
     `check_program` stored on the analyzed copy. `local_type_of` projects it to
     `topology` over the Module's topologies, or returns it whole without

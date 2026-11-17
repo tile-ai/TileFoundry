@@ -181,10 +181,9 @@ def topology_level(topology: str, topologies: tuple[Topology, ...]) -> int:
     capacity. A stated
     static extent that does not divide the split dimension MUST raise. A
     symbolic tensor axis or mesh extent MUST be bound before local projection.
-  - Every axis of a Mesh carrying one topology MUST be read at that topology
-    level. A Mesh carrying multiple topologies remains a valid Mesh. Local
+  - Every mesh axis of a Mesh carrying one topology MUST be read at that topology. A Mesh carrying multiple topologies remains a valid Mesh. Local
     projection MUST reject such a Mesh when asked for a unit count by topology
-    name. Local projection MUST NOT assign one of its modes to a guessed level
+    name. Local projection MUST NOT assign one of its modes to a guessed topology
     ([shard §5](./shard.md#5-mesh)).
   - The result MUST remain an ordinary IR Type and MUST NOT introduce a
     consumer-specific tensor type.
@@ -840,8 +839,8 @@ parameter name to IR value.
     once, with the innermost layer's cuts outermost. This matches the
     projection of [§2.1](#21-recursive-local-projection). `divided(layer)` names
     the mesh axes of that layer whose `Split` the unit holds one part of. Each
-    such axis's coordinate is a `MeshCoord` parameter named into `values`. The
-    parameter ranges over the axis.
+    such mesh axis's coordinate is a `MeshCoord` parameter named into `values`. The
+    parameter ranges over the mesh axis.
   - `layout_to_isl_map` MUST raise `ValueError` for static logical and layout
     sizes that differ. This check MUST run before a size-zero shape yields an
     empty map. It MUST raise the same error for a regroup that needs a symbolic

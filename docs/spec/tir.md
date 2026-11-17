@@ -202,7 +202,7 @@ resolved and an `Evaluate(FunctionRef)` is rejected):
   reference one of three meshes. The first is a mesh on the active TIR `MeshScope` traversal cache.
   The second is the composition of that stack. The third is a parameter's `ShardLayout.mesh`.
 - **`For` bound coordinates**. A `MeshCoord` in `For.start`, `.stop`, or
-  `.step` MUST name a literal in-range axis. The mesh MUST be bound by an enclosing
+  `.step` MUST name a literal in-range mesh axis. The mesh MUST be bound by an enclosing
   `MeshScope`.
 - **`Evaluate.callable`**. When `callable` is a `FunctionRef`
   ([§2.1](#21-functionref)), its callee MUST be a `PrimFunction`. An HIR
@@ -281,7 +281,7 @@ class Sync(Op):
 - A **mesh slice is a compile-time descriptor.** The parser evaluates `m[...]`
   via `Mesh.__getitem__` into a sliced `Mesh`. Its `layout` is a
   **`ComposedLayout`** that records the sub-box of units (the affine "mesh
-  scope" case `image(c) = offset + outer(c)`). `outer` holds the selected per-axis extents
+  scope" case `image(c) = offset + outer(c)`). `outer` holds the selected per mesh axis extents
   over the parent strides. `offset` holds the slice origin (linear thread index of
   the first unit). `inner` is the identity. An un-sliced mesh's
   `layout` is a plain `Layout`. A sliced mesh is still a `Mesh`. The slice never
@@ -295,8 +295,8 @@ class Sync(Op):
 - **Legal-slice verification.** Verification accepts a sliced mesh only if its
   `ComposedLayout` `layout` reconstructs as a constant slice of an enclosing
   full mesh `e`. The slice MUST have the same strides as the enclosing mesh.
-  The per-axis sub-extents MUST be bounded by `e`'s shape.
-  The offset MUST decompose into in-range per-axis starts.
+  The per mesh axis sub-extents MUST be bounded by `e`'s shape.
+  The offset MUST decompose into in-range per mesh axis starts.
   The **full topology tuple** + names MUST be equal.
   The proof rebuilds `e[key]` and compares, so a forged
   slice cannot pass. A full mesh (plain-`Layout` `layout`) is accepted only by
@@ -490,7 +490,7 @@ class TensorView(Op):
 
 Copy and Fill use a shared mesh wildcard, specialized from the Target's
 `MemoryExecutionFacts`. They require a contiguous run and sharded register
-operands on that same level. The module's Target Facts validate topology names
+operands on that same topology. The module's Target Facts validate topology names
 and extents; memory declarations do not enumerate backend topology names.
 
 ##### Copy
@@ -621,7 +621,7 @@ the row.
 
 ```python
 class Dot(Op):
-    """Effect form; fused multiply-contract over the axes the meshes contract.
+    """Effect form; fused multiply-contract over the mesh axes the meshes contract.
 
     Attributes:
         lhs: input; left operand.
@@ -639,7 +639,7 @@ class Dot(Op):
   - `lhs` and `rhs` declare `READ`; `dst` declares `WRITE`; `workspace` declares `READ | WRITE`.
     `lhs`, `rhs`, and `dst` may live in any storage; `workspace` is smem.
   - **No axes attribute.** The operands' meshes already state the contraction
-    axes; restating them would introduce a second source for one fact.
+    mesh axes; restating them would introduce a second source for one fact.
   - `lhs` and `rhs` contract over the same number of *local* elements: the fold
     walks one operand's length and indexes the other with it. Their global
     shapes may differ. In the canonical matrix-vector call they differ: the mesh splits a row
@@ -860,7 +860,7 @@ same execution-mesh pattern in `pattern.ShardLayout.mesh`. Unsharded gmem and
 smem operands carry no holder mesh; the execution declaration does not invent
 one for them. Plain operands read their state through
 [shard §6.1](./shard.md#61-shard-attr-semantics) and match Broadcast only on
-axes that do not separate storage copies.
+mesh axes that do not separate storage copies.
 
 #### Async copy Ops (`tir.async_copy.*`)
 

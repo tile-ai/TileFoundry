@@ -9,7 +9,7 @@ from tilefoundry.ir import expr, tir, types, utils
 def test_topology_and_mesh_require_explicit_extents() -> None:
     with pytest.raises(ValueError, match="extent must be explicit"):
         types.Topology("cta", None)
-    with pytest.raises(ValueError, match="layout axis 0 must have an explicit extent"):
+    with pytest.raises(ValueError, match="mesh axis 0 must have an explicit extent"):
         types.Mesh((types.Topology("cta", 8),), types.Layout(shape=(None,), strides=(1,)))
 
 
@@ -44,7 +44,7 @@ def test_check_topology_rejects_positions_beyond_a_declared_extent() -> None:
 
     with pytest.raises(
         ValueError,
-        match="mesh level 'cta' has 256 units, exceeding declared extent 128",
+        match="mesh topology 'cta' has 256 units, exceeding declared extent 128",
     ):
         types.check_topology(oversized)
 

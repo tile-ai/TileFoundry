@@ -252,12 +252,12 @@ def visible_at(model, value, producer):
         mesh = scope.mesh
         if mesh is None:
             return False
-        axes = dim.literal_axes(value.args[0])
+        mesh_axes = dim.literal_axes(value.args[0])
         keys = ir_utils.axis_keys(value.target.mesh)
         needed = (
             set(ir_utils.topology_names(value.target.mesh))
-            if axes is None
-            else {keys[axis][0] for axis in axes if axis < len(keys)}
+            if mesh_axes is None
+            else {keys[mesh_axis][0] for mesh_axis in mesh_axes if mesh_axis < len(keys)}
         )
         return needed <= set(ir_utils.topology_names(mesh))
     interval = model.liveness.interval_of(core.SSAValue(value))
@@ -989,17 +989,17 @@ def partial_copies(held: types.TensorType, owners: expr.StorageOwners) -> int:
     if layout is None:
         return 1
     copies = 1
-    for (level, _), reduction, extent in zip(
+    for (topology, _), reduction, extent in zip(
         ir_utils.axis_keys(layout.mesh),
         types.partial_reductions_by_axis(layout),
         layout.mesh.shape,
     ):
-        if reduction is None or owners.private(held.storage, level):
+        if reduction is None or owners.private(held.storage, topology):
             continue
         amount = expr.static_dim_value(extent)
         if amount is None:
             raise Error(
-                f"allocation: Partial copies at level {level!r} need a static extent, got {extent!r}"
+                f"allocation: Partial copies at topology {topology!r} need a static extent, got {extent!r}"
             )
         copies *= amount
     return copies

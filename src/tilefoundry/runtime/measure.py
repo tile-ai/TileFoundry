@@ -267,13 +267,13 @@ def flatten_outputs(x, path: str = "output") -> list[tuple[str, utils.torch.Tens
 
     Flatten a tensor or nested tuple-of-tensors into ``[(path, tensor), ...]``;
     the path list doubles as a structural signature for comparing outputs.
-    A ``ShardTensor`` a module returned holds one program's piece, so what is
+    A ``ShardTensor`` a module returned holds one unit's piece, so what is
     compared is that piece ([runtime §1.10](docs/spec/runtime.md#110-shardtensor)).
     """
     if isinstance(x, core.ShardTensor):
         if len(x.placements) > 1 or (x.is_global and types.shard_layout_of(x.type.layout) is not None):
             raise TypeError(
-                f"check: {path} is more than one program's data; take one program's "
+                f"check: {path} is more than one unit's data; take one unit's "
                 "piece with local(placement) before comparing it against a reference"
             )
         return flatten_outputs(x.to_local(x.placements[0]) if x.placements else x.tensor, path)

@@ -64,7 +64,7 @@ def projected(type_list) -> types.Mesh | None:
     For a plain operand paired with a sharded one, the runtime's copy moves only
     the slice the unit owns, projected through the sharded side
     (``copy_impl::local_as``). The slices of different units are disjoint
-    when the shard splits along every thread axis of its mesh. None otherwise.
+    when the shard splits along every mesh axis of its thread topology. None otherwise.
     """
     sharded = [
         type_
@@ -74,14 +74,14 @@ def projected(type_list) -> types.Mesh | None:
     if len(type_list) != 2 or len(sharded) != 1:
         return None
     layout = sharded[0].layout
-    axes = zip(layout.attrs, utils.axis_keys(layout.mesh), strict=True)
-    on_threads = [attr for attr, (level, _) in axes if level == "thread"]
+    mesh_axes = zip(layout.attrs, utils.axis_keys(layout.mesh), strict=True)
+    on_threads = [attr for attr, (topology, _) in mesh_axes if topology == "thread"]
     split = bool(on_threads) and all(isinstance(attr, types.Split) for attr in on_threads)
     return layout.mesh if split else None
 
 
 def held_threads(mesh: types.Mesh) -> frozenset | None:
-    """The threads of one CTA that *mesh*'s thread level holds, None when they are not static."""
+    """The threads of one CTA that *mesh*'s thread topology holds, None when they are not static."""
     names = utils.topology_names(mesh)
     if "thread" not in names or (
         isinstance(mesh.layout, types.ComposedLayout) and not isinstance(mesh.layout.offset, int)
@@ -92,13 +92,13 @@ def held_threads(mesh: types.Mesh) -> frozenset | None:
         layout = types.plain_layout(utils.unit_layout(mesh, thread))
     except ValueError:
         return None
-    offset = utils.first_unit_ids(mesh)[thread]
-    if layout is None or not isinstance(offset, int):
+    first_unit_id = utils.first_unit_ids(mesh)[thread]
+    if layout is None or not isinstance(first_unit_id, int):
         return None
     count = types.size(layout)
     if not isinstance(count, int):
         return None
-    held = [offset + layout(index) for index in range(count)]
+    held = [first_unit_id + layout(index) for index in range(count)]
     return frozenset(held) if all(isinstance(thread, int) for thread in held) else None
 
 
@@ -121,12 +121,12 @@ def one_writer_each(mesh: types.Mesh | None, reach, threads: int | None) -> bool
     return split is not None and split == runners
 
 
-def thread_level(value) -> bool:
-    """Whether *value* is a coordinate of a thread axis."""
+def thread_coordinate(value) -> bool:
+    """Whether *value* is a coordinate of a mesh axis of the thread topology."""
     if not (isinstance(value, expr.Call) and isinstance(value.target, dim.MeshCoord)):
         return False
-    axis = expr.static_dim_value(value.args[0])
-    return axis is not None and utils.axis_keys(value.target.mesh)[axis][0] == "thread"
+    mesh_axis = expr.static_dim_value(value.args[0])
+    return mesh_axis is not None and utils.axis_keys(value.target.mesh)[mesh_axis][0] == "thread"
 
 
 def refuse_thread_overlaps(planner) -> None:
@@ -154,7 +154,7 @@ def refuse_thread_overlaps(planner) -> None:
             ):
                 continue
             verdict = overlap(
-                reach, reach, lambda value: not thread_level(value), threads, "thread"
+                reach, reach, lambda value: not thread_coordinate(value), threads, "thread"
             )
             if verdict is not None:
                 what = "write" if verdict is Overlap.CONFLICT else "may write"

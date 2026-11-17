@@ -31,7 +31,7 @@ class Placement:
     Data, not a callable: which unit a loaded module speaks for is fixed
     when it is loaded, so a placement that answered differently on a later
     call would let one module change identity while holding weights narrowed
-    for the old one. A level nobody named is left unfixed -- ``cta`` and
+    for the old one. A topology nobody named is left unfixed -- ``cta`` and
     ``thread`` are chosen by the device, and a host that guessed ``0`` for
     them would hand back one thread's data as if it were the card's.
     """

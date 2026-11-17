@@ -24,7 +24,7 @@ from tilefoundry.passes import transforms
 from tilefoundry_nvidia.cuda.ir.tir import sync
 
 from .completion import Effect, Group, Issued, Mechanism, Proxy, completion_of
-from .ctas import axis_numbering, refuse_cta_overlaps
+from .ctas import mesh_axis_numbering, refuse_cta_overlaps
 from .emission import (
     copies_carry_backedge,
     copies_carry_entry,
@@ -211,9 +211,9 @@ def threads_of(op, type_, owners) -> types.ShardLayout | None:
     layout = type_.layout
     if type_.storage is not expr.StorageKind.SMEM or not isinstance(layout, types.ShardLayout):
         return None
-    axes = zip(layout.attrs, utils.axis_keys(layout.mesh), strict=True)
-    shared = (level for attr, (level, _) in axes if not isinstance(attr, types.Split))
-    return layout if all(owners.private(type_.storage, level) for level in shared) else None
+    mesh_axes = zip(layout.attrs, utils.axis_keys(layout.mesh), strict=True)
+    shared = (topology for attr, (topology, _) in mesh_axes if not isinstance(attr, types.Split))
+    return layout if all(owners.private(type_.storage, topology) for topology in shared) else None
 
 
 def mesh_chain(scope) -> tuple[int, ...]:
@@ -237,26 +237,26 @@ def innermost_mesh(scope) -> types.Mesh | None:
     )
 
 
-def one_coordinate(mesh: types.Mesh, axis: int, size: int, bases: range) -> bool:
-    """Whether each group of *size* threads from *bases* reads one coordinate on *mesh*'s *axis*.
+def one_coordinate(mesh: types.Mesh, mesh_axis: int, size: int, bases: range) -> bool:
+    """Whether each group of *size* threads from *bases* reads one coordinate on *mesh_axis*.
 
     Every thread of a group must be one of *mesh*'s. A thread reads
-    ``((thread - start) // stride) % extent`` on an axis of its level, as the
+    ``((thread - first_unit_id) // stride) % extent`` on a mesh axis of its topology, as the
     runtime's ``mesh_coords`` does.
     """
-    numbering = axis_numbering(mesh, axis)
+    numbering = mesh_axis_numbering(mesh, mesh_axis)
     if numbering is None:
         return False
-    start, extents, strides, index = numbering
+    first_unit_id, extents, strides, index = numbering
     extent, stride = extents[index], strides[index]
     if extent > 1 and stride <= 0:
         return False
-    held = {start + sum(map(mul, point, strides)) for point in product(*map(range, extents))}
+    held = {first_unit_id + sum(map(mul, point, strides)) for point in product(*map(range, extents))}
     for base in bases:
         threads = range(base, base + size)
         if not set(threads) <= held:
             return False
-        if extent > 1 and len({(thread - start) // stride % extent for thread in threads}) > 1:
+        if extent > 1 and len({(thread - first_unit_id) // stride % extent for thread in threads}) > 1:
             return False
     return True
 
@@ -965,10 +965,10 @@ class Planner:
             held = tir.sync.sync_scope(mesh)
             groups = range(held.base, held.base + held.count, unit)
 
-        def fixed(coordinates: types.Mesh, axis: int) -> bool:
-            if utils.axis_keys(coordinates)[axis][0] not in spanned:
+        def fixed(coordinates: types.Mesh, mesh_axis: int) -> bool:
+            if utils.axis_keys(coordinates)[mesh_axis][0] not in spanned:
                 return True
-            return groups is not None and one_coordinate(coordinates, axis, unit, groups)
+            return groups is not None and one_coordinate(coordinates, mesh_axis, unit, groups)
 
         entry = self.context.entry is None or self.function is self.context.entry
         uniform = {id(param) for param in self.function.params} if entry else set()
@@ -987,17 +987,17 @@ class Planner:
     def uniform(self, node, uniform: set[int], fixed, scope) -> bool:
         """Whether the threads that must agree see the same value of a loop bound.
 
-        ``fixed(mesh, axis)`` says whether they read one coordinate on that mesh axis.
+        ``fixed(mesh, mesh_axis)`` says whether they read one coordinate on that mesh axis.
         """
         if isinstance(node, expr.Constant) or expr.static_dim_value(node) is not None:
             return True
         if isinstance(node, expr.Var):
             return id(node) in uniform or id(scope.capture_root(node)) in uniform
         if isinstance(node, expr.Call) and isinstance(node.target, dim.MeshCoord):
-            axes = dim.literal_axes(node.args[0])
+            mesh_axes = dim.literal_axes(node.args[0])
             count = len(utils.axis_keys(node.target.mesh))
-            return axes is not None and all(
-                0 <= axis < count and fixed(node.target.mesh, axis) for axis in axes
+            return mesh_axes is not None and all(
+                0 <= mesh_axis < count and fixed(node.target.mesh, mesh_axis) for mesh_axis in mesh_axes
             )
         if isinstance(node, expr.Call) and expr.is_dim_op_call(node):
             return all(self.uniform(arg, uniform, fixed, scope) for arg in node.args)

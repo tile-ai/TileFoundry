@@ -224,15 +224,15 @@ def at_device(layout_map: "isl.map", coordinates: dim.IslParamValues, device: Ma
     """*layout_map* at one unit: each mesh coordinate fixed, then gone.
 
     A coordinate is fixed to the value *device* gives under its mesh axis's
-    name, or 0. A value that is not one of that axis's coords is refused,
+    name, or 0. A value that is not one of that mesh axis's coords is refused,
     rather than fixing the unit nowhere and counting nothing.
     """
     for name in parameter_names(layout_map):
         target = coordinates[name].target
-        axis = expr.static_dim_value(coordinates[name].args[0])
+        mesh_axis = expr.static_dim_value(coordinates[name].args[0])
         names = target.mesh.names
-        key = names[axis] if axis < len(names) and names[axis] else str(axis)
-        extent = target.mesh.shape[axis]
+        key = names[mesh_axis] if mesh_axis < len(names) and names[mesh_axis] else str(mesh_axis)
+        extent = target.mesh.shape[mesh_axis]
         number = device.get(key, 0)
         if not isinstance(number, int) or isinstance(number, bool) or not 0 <= number < extent:
             raise ValueError(

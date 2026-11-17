@@ -161,12 +161,12 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
             f"order {order} is not a permutation of iteration dimensions", path=bindings, op=op
         )
     declaration = getattr(op, "atom", op)
-    participant = (
+    required_execution_mesh = (
         declaration.execution_mesh
         if isinstance(declaration, type)
         else getattr(declaration, "required_execution_mesh", getattr(declaration, "execution_mesh", None))
     )
-    if not isinstance(participant, types.Mesh):
+    if not isinstance(required_execution_mesh, types.Mesh):
         return Projection(params, writes, patterns, whole_types, (), repeat, order, single_shape)
     if not fragments:
         inner_types = tuple(
@@ -274,8 +274,8 @@ def project(op, operand_types, mesh, *, bindings=None, repeat=None, order=None, 
                     else attr
                     for attr in shard.attrs
                 )
-                source = utils.filter_topologies(replace(shard, attrs=tile_attrs), participant)
-                execution_mesh, dropped = utils.find_execution_mesh(source.mesh, participant)
+                source = utils.filter_topologies(replace(shard, attrs=tile_attrs), required_execution_mesh)
+                execution_mesh, dropped = utils.find_execution_mesh(source.mesh, required_execution_mesh)
                 tile = types.ShardLayout(tile, source.attrs[dropped:], execution_mesh)
                 rest = types.ShardLayout(
                     rest,
@@ -517,7 +517,7 @@ def check_call(op, operands, mesh, *, ctx, repeat=None, order=None, projection=N
     except ValueError as error:
         raise RefusalError(str(error), path=matcher.bindings, op=op) from error
     declaration = getattr(op, "atom", op)
-    participant = getattr(
+    required_execution_mesh = getattr(
         declaration, "required_execution_mesh", getattr(declaration, "execution_mesh", None)
     )
     needs_execution_mesh = any(
@@ -526,20 +526,20 @@ def check_call(op, operands, mesh, *, ctx, repeat=None, order=None, projection=N
         and types.shard_layout_of(type_.layout) is None
         for declared, type_ in zip(tiles.patterns, tiles.tiles, strict=True)
     )
-    if needs_execution_mesh and isinstance(participant, types.Mesh) and mesh is not None:
+    if needs_execution_mesh and isinstance(required_execution_mesh, types.Mesh) and mesh is not None:
         selected = utils.filter_topologies(
             types.ShardLayout(
                 types.Layout(()),
                 tuple(types.Broadcast() for _ in types.flatten_to_tuple(mesh.layout.shape)),
                 mesh,
             ),
-            participant,
+            required_execution_mesh,
         ).mesh
         try:
-            execution_mesh, _ = utils.find_execution_mesh(selected, participant)
+            execution_mesh, _ = utils.find_execution_mesh(selected, required_execution_mesh)
         except ValueError as error:
             raise RefusalError(
-                f"scope {mesh!r} does not contain execution mesh {participant!r}",
+                f"scope {mesh!r} does not contain execution mesh {required_execution_mesh!r}",
                 path=matcher.bindings,
                 op=op,
             ) from error
@@ -556,13 +556,13 @@ def check_call(op, operands, mesh, *, ctx, repeat=None, order=None, projection=N
                 and matcher.mesh is not None
             ):
                 states = utils.attrs_by_axis(match_type, matcher.mesh, matcher.owners)
-                for axis, (required, (key, held)) in enumerate(
+                for mesh_axis, (required, (key, held)) in enumerate(
                     zip(declared.layout.attrs, states.items())
                 ):
-                    level = key[0]
+                    topology = key[0]
                     if required == types.Broadcast() and isinstance(held, types.Varying):
                         refusal = RefusalError(
-                            f"{refusal.reason}; mesh axis {axis} ({level}) is Varying; "
+                            f"{refusal.reason}; mesh axis {mesh_axis} ({topology}) is Varying; "
                             f"reshard({param.name}, @ {{B()}}) to declare equal values",
                             path=refusal.path,
                             op=op,

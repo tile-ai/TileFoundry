@@ -33,7 +33,7 @@ class Target(target.Target):
     device: target.Device = field(init=False)
 
     device_count: int | None = field(default=None, init=False)
-    """How many cards a program of this target may name at its ``gpu`` level."""
+    """How many cards a program of this target may name at its ``gpu`` topology."""
 
 
 
@@ -72,7 +72,7 @@ class Target(target.Target):
         ):
             raise ValueError(
                 f"cuda.Target: device_count {device_count!r} must be a positive int "
-                f"or None, which admits any extent at the gpu level"
+                f"or None, which admits any extent at the gpu topology"
             )
         if architecture is None:
             architecture = target.architecture_of(
@@ -109,7 +109,7 @@ class Target(target.Target):
         object.__setattr__(self, "device_document", device.document)
 
     def topology_facts(self) -> target.TopologyFacts:
-        """The three CUDA levels, coarsest first.
+        """The three CUDA topologies, coarsest first.
 
         Only ``gpu`` comes from the target instance: how many cards a deployment
         has is stated by whoever constructs the target, and no card can read

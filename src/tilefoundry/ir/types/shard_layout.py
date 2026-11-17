@@ -227,14 +227,14 @@ class ShardLayout(LayoutBase):
             for _ in flatten_to_tuple(mode)
         )
         private = []
-        for axis, attr in enumerate(attrs):
+        for mesh_axis, attr in enumerate(attrs):
             if isinstance(attr, Split) and (
-                axis >= len(topologies) or attr.axis >= rank(flatten_to_tuple(shape))
+                mesh_axis >= len(topologies) or attr.axis >= rank(flatten_to_tuple(shape))
             ):
-                raise ValueError(f"Split({attr.axis}) has no matching mesh axis {axis}")
+                raise ValueError(f"Split({attr.axis}) has no matching mesh axis {mesh_axis}")
             private.append(
                 attr
-                if isinstance(attr, Split) and owners.private(storage, topologies[axis])
+                if isinstance(attr, Split) and owners.private(storage, topologies[mesh_axis])
                 else Broadcast()
             )
         local = divided_shape(flatten_to_tuple(shape), mesh, tuple(private), require_static=False)
@@ -355,22 +355,22 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
     coords = tuple(coords) + (None,) * (len(shard.attrs) - len(coords))
     shape, strides, fixed, modes = [], [], [], {}
     for mode, (extent, stride) in enumerate(zip(flat.shape, flat.strides, strict=True)):
-        axes = [
-            axis
-            for axis, attr in enumerate(shard.attrs)
+        mesh_axes = [
+            mesh_axis
+            for mesh_axis, attr in enumerate(shard.attrs)
             if isinstance(attr, Split) and attr.axis == mode
         ]
-        normalize = any(coords[axis] is not None for axis in axes)
-        factors = factor_axis(extent, mesh.shape, axes, mode) if normalize else (extent,)
+        normalize = any(coords[mesh_axis] is not None for mesh_axis in mesh_axes)
+        factors = factor_axis(extent, mesh.shape, mesh_axes, mode) if normalize else (extent,)
         steps = flatten_to_tuple(composition(Layout(extent, stride), make_layout(factors)).strides)
-        for index, mesh_axis in enumerate(axes):
+        for index, mesh_axis in enumerate(mesh_axes):
             modes[mesh_axis] = len(shape) + (index if normalize else 0)
         for index, (factor, step) in enumerate(zip(factors, steps, strict=True)):
-            axis = axes[index] if index < len(axes) else None
-            symbolic_whole = len(axes) == 1 and not isinstance(extent, int)
+            mesh_axis = mesh_axes[index] if index < len(mesh_axes) else None
+            symbolic_whole = len(mesh_axes) == 1 and not isinstance(extent, int)
             fixed.append(
-                coords[axis]
-                if axis is not None and not symbolic_whole and factor == mesh.shape[axis]
+                coords[mesh_axis]
+                if mesh_axis is not None and not symbolic_whole and factor == mesh.shape[mesh_axis]
                 else None
             )
             shape.append(factor)
@@ -401,21 +401,21 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
         else inner
     )
     kept = {old: new for new, old in enumerate(i for i, at in enumerate(fixed) if at is None)}
-    remaining = [axis for axis, at in enumerate(coords) if at is None]
+    remaining = [mesh_axis for mesh_axis, at in enumerate(coords) if at is None]
     if remaining:
         stated = plain_layout(shard.mesh.layout)
         keys = tuple(
             t for t in range(len(shard.mesh.topologies)) for _ in flatten_to_tuple(get(stated, t).shape)
         )
         held = {}
-        for axis in remaining:
-            if axis < len(keys):
-                held.setdefault(keys[axis], []).append(axis - keys.index(keys[axis]))
+        for mesh_axis in remaining:
+            if mesh_axis < len(keys):
+                held.setdefault(keys[mesh_axis], []).append(mesh_axis - keys.index(keys[mesh_axis]))
         names = tuple(shard.mesh.names[i] for i in remaining if i < len(shard.mesh.names))
         if len(held) == len(shard.mesh.topologies):
             outer = Layout(
-                tuple(select(flatten(get(stated, t)), *axes).shape for t, axes in held.items()),
-                tuple(select(flatten(get(stated, t)), *axes).strides for t, axes in held.items()),
+                tuple(select(flatten(get(stated, t)), *mesh_axes).shape for t, mesh_axes in held.items()),
+                tuple(select(flatten(get(stated, t)), *mesh_axes).strides for t, mesh_axes in held.items()),
             )
             layout = (
                 replace(shard.mesh.layout, outer=outer)
@@ -426,20 +426,20 @@ def local_layout(shard: ShardLayout, tensor_shape: tuple, coords: tuple):
         else:
             shard_mesh = kept_axes(shard.mesh, held, names)
         attrs = tuple(
-            Split(kept[modes[axis]])
-            if isinstance(shard.attrs[axis], Split)
-            else shard.attrs[axis]
-            for axis in remaining
+            Split(kept[modes[mesh_axis]])
+            if isinstance(shard.attrs[mesh_axis], Split)
+            else shard.attrs[mesh_axis]
+            for mesh_axis in remaining
         )
         sliced = ShardLayout(sliced, attrs, shard_mesh)
     return sliced, services.normalize_dim(start)
 
 
 def kept_axes(mesh: Mesh, held: dict, names: tuple) -> Mesh:
-    """The axes *held* keeps of some topologies of *mesh*, as a mesh of those topologies.
+    """The mesh axes *held* keeps of some topologies of *mesh*, as a mesh of those topologies.
 
-    *held* maps a topology's position to the axes of its mode it keeps. Each kept
-    mode is ``select`` of those axes, moved to the index over the kept topologies
+    *held* maps a topology's position to the mesh axes of its mode it keeps. Each kept
+    mode is ``select`` of those mesh axes, moved to the index over the kept topologies
     by ``composition(Layout(sizes, u_t * e_t), ·)``: ``u_t`` is the
     ``compact_row_major`` stride of *t* among the kept topologies, ``e_t`` is 1
     at *t* and 0 elsewhere. The first index is ``crd2idx`` of the kept
@@ -454,13 +454,13 @@ def kept_axes(mesh: Mesh, held: dict, names: tuple) -> Mesh:
         *(
             composition(
                 Layout(sizes, tuple(unit if at == t else 0 for at in range(len(sizes)))),
-                select(flatten(get(stated, t)), *axes),
+                select(flatten(get(stated, t)), *mesh_axes),
             )
-            for (t, axes), unit in zip(held.items(), units)
+            for (t, mesh_axes), unit in zip(held.items(), units)
         )
     )
-    starts = idx2crd(mesh.layout(0), sizes)
-    index = crd2idx(tuple(starts[t] for t in held), kept_sizes, units)
+    first_unit_ids = idx2crd(mesh.layout(0), sizes)
+    index = crd2idx(tuple(first_unit_ids[t] for t in held), kept_sizes, units)
     return Mesh(topologies, make_composed_layout(None, index, kept) if index else kept, names)
 
 
@@ -486,7 +486,7 @@ def mesh_coords(mesh: Mesh, ids: tuple[int | None, ...]) -> tuple[int | None, ..
     stated = plain_layout(mesh.layout)
     sizes = topology_sizes(mesh.topologies)
     units = compact_row_major(sizes) if len(sizes) > 1 else (1,)
-    starts = idx2crd(mesh.layout(0), sizes)
+    first_unit_ids = idx2crd(mesh.layout(0), sizes)
     coords = []
     for t in range(len(mesh.topologies)):
         mode = flatten(get(stated, t))
@@ -494,7 +494,7 @@ def mesh_coords(mesh: Mesh, ids: tuple[int | None, ...]) -> tuple[int | None, ..
         coords.extend(
             (None,) * len(mode.shape)
             if unit_id is None
-            else idx2crd((unit_id - starts[t]) * units[t], mode.shape, mode.strides)
+            else idx2crd((unit_id - first_unit_ids[t]) * units[t], mode.shape, mode.strides)
         )
     return tuple(coords)
 

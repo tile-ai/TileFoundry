@@ -60,7 +60,7 @@ def candidates(
         calls.append(call)
         ctx = contexts[id(call)]
         mesh = ctx.mesh_scope
-        level = None if mesh is None else mesh.topologies[-1].name
+        topology = None if mesh is None else mesh.topologies[-1].name
         usable, refused = [], []
         for op_type, capability in declared:
             if op_type not in instructions:
@@ -104,7 +104,7 @@ def candidates(
             {
                 "line": expr.value_label(call) or expr.schema_of(type(call.target)).name,
                 "op": expr.get_registered_name(call.target),
-                "scope": "whole program" if level is None else f"per {level}",
+                "scope": "whole program" if topology is None else f"per {topology}",
                 "operands": operands,
                 "candidates": usable,
                 "refused": refused,

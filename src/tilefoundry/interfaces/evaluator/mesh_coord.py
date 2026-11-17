@@ -1,4 +1,4 @@
-"""Evaluation of ``MeshCoord``: each placement's coordinates along the axes."""
+"""Evaluation of ``MeshCoord``: each placement's coordinates along the mesh axes."""
 
 from __future__ import annotations
 
@@ -13,13 +13,13 @@ __all__: list[str] = []
 
 @register(dim.MeshCoord)
 def evaluate_mesh_coord(ctx):
-    """Each placement's coordinates along the axes: a local view over the mesh."""
-    axes = ctx.args[0]
-    if isinstance(axes, TupleValue):
-        axes = utils.torch.stack([element.data.reshape(()) for element in axes.elements])
+    """Each placement's coordinates along the mesh axes: a local view over the mesh."""
+    mesh_axes = ctx.args[0]
+    if isinstance(mesh_axes, TupleValue):
+        mesh_axes = utils.torch.stack([element.data.reshape(()) for element in mesh_axes.elements])
     else:
-        axes = axes.data
-    axes = axes.long()
+        mesh_axes = mesh_axes.data
+    mesh_axes = mesh_axes.long()
     mesh = ctx.op.mesh
     pieces = tuple(
         (
@@ -27,8 +27,8 @@ def evaluate_mesh_coord(ctx):
             utils.torch.as_tensor(
                 placement.coords(mesh),
                 dtype=utils.torch.int64,
-                device=axes.device,
-            )[axes],
+                device=mesh_axes.device,
+            )[mesh_axes],
         )
         for placement in types.Placement.from_mesh(mesh)
     )

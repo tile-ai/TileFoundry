@@ -13,8 +13,8 @@ from tilefoundry.ir import expr, types, utils
 class Context(typeinfer.TypeInferContext):
     """Cost Evaluator context for one topology window.
 
-    ``topology=None`` exposes the types as written. A named level projects
-    them to what one unit of that level holds, letting the same registered
+    ``topology=None`` exposes the types as written. A named topology projects
+    them to what one unit of that topology holds, letting the same registered
     evaluator answer both global and per-unit questions.
     """
 
@@ -77,8 +77,8 @@ class Cost:
     """Bytes that left the unit they were on, by the boundary they crossed.
 
     ``traffic`` says which storage level each operand touched. Data handed
-    between two units of one topology level touches the same storage at both
-    ends and has still gone somewhere, so it is stated against that level's
+    between two units of one topology touches the same storage at both
+    ends and has still gone somewhere, so it is stated against that topology's
     name in addition to the storage traffic, from the sending unit's own view.
     """
 

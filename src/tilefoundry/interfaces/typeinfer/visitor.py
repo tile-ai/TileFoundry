@@ -269,7 +269,7 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
                         if before != after:
                             labels = {types.Broadcast(): "B", types.Varying(): "V"}
                             hint = (
-                                f": axis {key} enters {labels.get(before, repr(before))} "
+                                f": mesh axis {key} enters {labels.get(before, repr(before))} "
                                 f"and leaves {labels.get(after, repr(after))}"
                             )
                             if before in labels and after in labels:

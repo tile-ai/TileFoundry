@@ -39,7 +39,7 @@ schedule.register_candidates(sharding.Reshard, (tir.reduce.Reduce,), when=combin
 
 
 def resolved_reduction(source, result) -> str | None:
-    """The reduction a reshard performs by dropping its source's Partial axes, if any."""
+    """The reduction a reshard performs by dropping its source's Partial mesh axes, if any."""
     resolved = {
         kind
         for kind, kept in zip_longest(

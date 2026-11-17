@@ -30,21 +30,21 @@ CUDA_CPP: Mapping[str, str] = MappingProxyType({
 })
 
 
-def topology_level_str(name: str) -> str:
+def topology_enumerator(name: str) -> str:
     """Map a topology name to its C++ ``tilefoundry::TopologyLevel`` enumerator.
 
     Loud on an unknown topology rather than silently defaulting.
     """
-    levels = {
+    enumerators = {
         "gpu": "tilefoundry::TopologyLevel::gpu",
         "cta": "tilefoundry::TopologyLevel::cta",
         "thread": "tilefoundry::TopologyLevel::thread",
     }
     try:
-        return levels[name]
+        return enumerators[name]
     except KeyError:
         raise ValueError(
-            f"unknown topology {name!r}; expected one of {sorted(levels)}"
+            f"unknown topology {name!r}; expected one of {sorted(enumerators)}"
         ) from None
 
 
@@ -177,4 +177,4 @@ class Context(codegen.EmitContext):
         return t
 
 
-__all__ = ["Context", "float_literal", "scalar_read", "topology_level_str"]
+__all__ = ["Context", "float_literal", "scalar_read", "topology_enumerator"]

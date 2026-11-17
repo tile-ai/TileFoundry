@@ -260,8 +260,8 @@ a matching slice uses the slice form. Otherwise the printer emits a complete
 mesh constructor. The function's execution mesh is available while printing
 its signature and body; a named constant outside those bindings does not
 create a printable lexical name.
-A sharded type uses shard layout sugar only when each referenced mesh level has
-an active binding with the same geometry. Equal axis names and topology sizes
+A sharded type uses shard layout sugar only when each referenced mesh topology has
+an active binding with the same geometry. Equal mesh axis names and topology sizes
 alone do not establish that binding. Otherwise it MUST print the complete
 `ShardLayout(..., mesh=Mesh(...))` value, including in a register allocation
 outside the scope that uses it.

@@ -481,10 +481,10 @@ def verify_bound_coordinates(field: str, bound, ctx) -> None:
         if not (isinstance(node, expr.Call) and isinstance(node.target, dim.MeshCoord)):
             continue
         mesh = node.target.mesh
-        axes = dim.literal_axes(node.args[0]) if node.args else None
+        mesh_axes = dim.literal_axes(node.args[0]) if node.args else None
         rank = len(mesh.shape)
-        if axes is None or not all(0 <= axis < rank for axis in axes):
-            raise expr.VerifyError(f"For.{field} reads axes {axes!r} of a mesh of rank {rank}")
+        if mesh_axes is None or not all(0 <= mesh_axis < rank for mesh_axis in mesh_axes):
+            raise expr.VerifyError(f"For.{field} reads mesh axes {mesh_axes!r} of a mesh of rank {rank}")
         if not any(held is mesh or held == mesh for held in ctx.enclosing_meshes()):
             raise expr.VerifyError(
                 f"For.{field} reads a coordinate of {mesh!r}, which no enclosing MeshScope binds"

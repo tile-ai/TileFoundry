@@ -26,7 +26,7 @@ def filter_topologies(
     """Drop the topologies a value does not take part on, keeping mesh axes and attrs aligned.
 
     CuTe ``filter`` drops modes that do not change the index. An instruction
-    retains all axes of its required topologies, including Broadcast. Outside
+    retains all mesh axes of its required topologies, including Broadcast. Outside
     them, only Split and Partial prevent omission. Without an instruction's
     execution mesh, retain value-varying topologies too, or the innermost
     topology for an entirely broadcast value.
@@ -71,15 +71,15 @@ def filter_topologies(
 
 
 def physical_layout(layout: types.ShardLayout) -> types.LayoutBase:
-    """Omit value-only levels, then read remaining variation as Broadcast."""
+    """Omit value-only topologies, then read remaining variation as Broadcast."""
     if not any(isinstance(attr, types.Varying) for attr in layout.attrs):
         return layout
-    by_level = {level: [] for level, _ in axis_keys(layout.mesh)}
-    for attr, (level, _) in zip(layout.attrs, axis_keys(layout.mesh)):
-        by_level[level].append(attr)
+    by_topology = {topology: [] for topology, _ in axis_keys(layout.mesh)}
+    for attr, (topology, _) in zip(layout.attrs, axis_keys(layout.mesh)):
+        by_topology[topology].append(attr)
     kept = tuple(
-        level
-        for level, attrs in by_level.items()
+        topology
+        for topology, attrs in by_topology.items()
         if not (
             any(isinstance(attr, types.Varying) for attr in attrs)
             and not any(isinstance(attr, (types.Split, types.Partial)) for attr in attrs)
@@ -256,7 +256,7 @@ def divided_axes(
 ) -> tuple[int, ...]:
     """The mesh axes whose ``Split`` one unit at topology level *selected_level* holds one part of.
 
-    A ``Split`` at that level or coarser divides; a finer one does not. This is
+    A ``Split`` at that topology level or coarser divides; a finer one does not. This is
     the rule ``local_type_of`` divides by, stated once for whoever places a
     value's coordinates among that unit's modes.
     """
@@ -316,7 +316,7 @@ def local_layout_shape(
         extent = mesh_shape[mesh_axis]
         axis = attr.axis
         if not isinstance(axis, int) or isinstance(axis, bool) or not 0 <= axis < len(shape):
-            raise ValueError("local_type_of: Split axis is not a concrete layout axis")
+            raise ValueError("local_type_of: Split axis is not a concrete layout mode")
         if not isinstance(extent, int) or isinstance(extent, bool) or extent <= 0:
             raise ValueError("local_type_of: mesh extent is not a concrete positive integer")
         if extent == shape[axis]:

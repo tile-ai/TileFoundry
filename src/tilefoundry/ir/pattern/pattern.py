@@ -349,7 +349,7 @@ def require_per_mode(pattern) -> None:
 
 @dataclass(frozen=True)
 class Mesh(Pattern):
-    """Match named levels, or bind the innermost level with a wildcard."""
+    """Match named topologies, or bind the innermost topology with a wildcard."""
 
     topologies: tuple[str, ...] | Wildcard
     layout: object

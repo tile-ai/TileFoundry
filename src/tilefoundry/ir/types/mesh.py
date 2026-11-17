@@ -1,4 +1,4 @@
-"""Meshes: hardware levels, the layout of their units, and sliced meshes."""
+"""Meshes: topologies, the layout of their units, and sliced meshes."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ __all__ = ["Mesh", "check_topology", "topology_sizes"]
 
 @dataclass(frozen=True)
 class Mesh:
-    """Describe hardware levels, the layout of their units, and axis names.
+    """Describe topologies, the layout of their units, and mesh axis names.
 
     ``layout`` holds one mode per topology and maps a coord to the unit's index
     over all topologies of the mesh, ``T = make_layout(sizes)``. Topology ``t``'s
@@ -48,15 +48,15 @@ class Mesh:
         if len(self.topologies) > 1 and any(
             not isinstance(topology, Topology) for topology in self.topologies
         ):
-            raise ValueError("a multi-level Mesh requires Topology values")
+            raise ValueError("a multi-topology Mesh requires Topology values")
         names = tuple(map(topology_name, self.topologies))
         if len(set(names)) != len(names):
             raise ValueError(f"Mesh topology names must be unique, got {names!r}")
         object.__setattr__(self, "layout", nested_layout(self.layout, tuple(self.topologies)))
-        for axis, extent in enumerate(flatten_to_tuple(self.layout.shape)):
+        for mesh_axis, extent in enumerate(flatten_to_tuple(self.layout.shape)):
             if extent is None:
                 raise ValueError(
-                    f"Mesh: layout axis {axis} must have an explicit extent; "
+                    f"Mesh: mesh axis {mesh_axis} must have an explicit extent; "
                     "None is not a ShapeDim. The rule: tilefoundry spec shard mesh"
                 )
         check_strides(self)
@@ -69,7 +69,7 @@ class Mesh:
     def __getitem__(self, key) -> "Mesh":
         """Return a constant sliced mesh selected by integers or step-1 slices.
 
-        Missing axes are full slices; integers select extent one. The box is
+        Missing mesh axes are full slices; integers select extent one. The box is
         ``make_layout`` of the selected extents with the mesh's strides, moved to
         its first coord by CuTe ``domain_offset``; the index that leaves becomes the
         ``ComposedLayout`` offset. Topologies and names are kept.
@@ -85,31 +85,31 @@ class Mesh:
         count = len(extents)
         keys = key if isinstance(key, tuple) else (key,)
         if len(keys) > count:
-            raise ValueError(f"mesh slice has {len(keys)} indices but the mesh has {count} axes")
+            raise ValueError(f"mesh slice has {len(keys)} indices but the mesh has {count} mesh axes")
         keys = keys + (slice(None),) * (count - len(keys))
         starts, selected = [], []
-        for axis, (k, extent, stride) in enumerate(zip(keys, extents, strides)):
+        for mesh_axis, (k, extent, stride) in enumerate(zip(keys, extents, strides)):
             if not isinstance(extent, int) or not isinstance(stride, int):
-                raise ValueError(f"cannot slice mesh axis {axis} with a dynamic extent/stride")
+                raise ValueError(f"cannot slice mesh axis {mesh_axis} with a dynamic extent/stride")
             if isinstance(k, int):
                 start = from_end(k, extent)
                 if not (0 <= start < extent):
                     raise ValueError(
-                        f"mesh slice index {k} out of range for axis {axis} (extent {extent})"
+                        f"mesh slice index {k} out of range for mesh axis {mesh_axis} (extent {extent})"
                     )
                 stop = start + 1
             elif isinstance(k, slice):
                 if k.step not in (None, 1):
-                    raise ValueError(f"mesh slice step must be 1 (axis {axis})")
+                    raise ValueError(f"mesh slice step must be 1 (mesh axis {mesh_axis})")
                 start = 0 if k.start is None else from_end(k.start, extent)
                 stop = extent if k.stop is None else from_end(k.stop, extent)
                 if not (0 <= start <= stop <= extent):
                     raise ValueError(
-                        f"mesh slice {k.start}:{k.stop} out of range for axis "
-                        f"{axis} (extent {extent})"
+                        f"mesh slice {k.start}:{k.stop} out of range for mesh axis "
+                        f"{mesh_axis} (extent {extent})"
                     )
                 if stop == start:
-                    raise ValueError(f"mesh slice selects an empty range on axis {axis}")
+                    raise ValueError(f"mesh slice selects an empty range on mesh axis {mesh_axis}")
             else:
                 raise ValueError(f"mesh slice index must be int or slice, got {type(k).__name__}")
             starts.append(start)
@@ -120,13 +120,13 @@ class Mesh:
 
 
 def nested_layout(layout_value, topologies: tuple) -> "Layout | ComposedLayout":
-    """What a mesh was written as, with every topology's axes under its own mode.
+    """What a mesh was written as, with every topology's mesh axes under its own mode.
 
     A mesh naming several topologies may state a tuple of extents or one layout
-    over all of their axes. The axes go to the topologies left to right, each
+    over all of their mesh axes. The mesh axes go to the topologies left to right, each
     taking them until their extents multiply to its own size (CuTe ``unflatten``);
-    a boundary no prefix of axes lands on is refused. A mesh naming one topology
-    holds all axes as its one mode (CuTe ``make_layout`` of the flat layout).
+    a boundary no prefix of mesh axes lands on is refused. A mesh naming one topology
+    holds all mesh axes as its one mode (CuTe ``make_layout`` of the flat layout).
     Strides stay in the index over all topologies.
     """
     if not isinstance(layout_value, LayoutBase):
@@ -158,7 +158,7 @@ def topology_sizes(topologies: tuple) -> tuple:
         count = topology.size
         if not isinstance(count, int) or isinstance(count, bool) or count < 1:
             raise ValueError(
-                f"mesh level {topology.name!r} states extent {count!r}; the index "
+                f"mesh topology {topology.name!r} states extent {count!r}; the index "
                 "over all topologies needs the unit count of every inner topology"
             )
     return tuple(getattr(topology, "size", None) for topology in topologies)
@@ -211,7 +211,7 @@ def check_topology(mesh: Mesh) -> None:
         count = size(get(stated, t))
         if isinstance(count, int) and count > declared:
             raise ValueError(
-                f"mesh level {topology_name(topology)!r} has {count} "
+                f"mesh topology {topology_name(topology)!r} has {count} "
                 f"units, exceeding declared extent {declared}"
             )
 

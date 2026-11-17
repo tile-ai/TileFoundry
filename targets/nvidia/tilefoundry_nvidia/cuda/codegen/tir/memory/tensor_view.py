@@ -85,14 +85,14 @@ def scope_mesh_value(mesh, ctx) -> "str | None":
 
 @codegen.register(target.Target, codegen.Role.EMIT, dim.MeshCoord)
 def mesh_coord_value(call: expr.Call, ctx) -> str:
-    """This unit's coordinate along one static axis of its enclosing mesh."""
-    axis = expr.static_dim_value(call.args[0])
-    if axis is None:
-        raise NotImplementedError("CUDA MeshCoord requires a static axis")
+    """This unit's coordinate along one static mesh axis of its enclosing mesh."""
+    mesh_axis = expr.static_dim_value(call.args[0])
+    if mesh_axis is None:
+        raise NotImplementedError("CUDA MeshCoord requires a static mesh axis")
     mesh = scope_mesh_value(call.target.mesh, ctx)
     if mesh is None:
         raise ValueError("CUDA MeshCoord requires its enclosing mesh binding")
-    return f"cute::get<{axis}>(cute::flatten(tilefoundry::mesh_coords({mesh}, tilefoundry::unit_ids())))"
+    return f"cute::get<{mesh_axis}>(cute::flatten(tilefoundry::mesh_coords({mesh}, tilefoundry::unit_ids())))"
 
 
 def render_mesh_type(mesh, ctx=None) -> str:
@@ -226,8 +226,8 @@ def render_shard_layout_value(var_name: str, sl: types.ShardLayout, dynamic_exte
     topos = stmts.program_topologies(sl.mesh)
     if len(topos) > 1 and mesh_base:
         raise NotImplementedError(
-            "render_shard_layout_value: a mesh naming several levels cannot also "
-            "be sliced; the slice and the level boundary would both be deciding "
+            "render_shard_layout_value: a mesh naming several topologies cannot also "
+            "be sliced; the slice and the topology boundary would both be deciding "
             "which units these are"
         )
     ml_base = int(mesh_base)
@@ -276,7 +276,7 @@ def render_shard_layout_value(var_name: str, sl: types.ShardLayout, dynamic_exte
         mesh_shape, mesh_strides = mesh_axes.shape, mesh_axes.strides
     else:
         mesh_shape, mesh_strides = stmts.raw_groups(sl.mesh)
-    scope = ", ".join(context.topology_level_str(t.name) for t in topos)
+    scope = ", ".join(context.topology_enumerator(t.name) for t in topos)
     raw_mesh_layout = cute_layout.render_layout_value(mesh_shape, mesh_strides, mesh_dim, mesh_stride)
     mesh_layout = composed_mesh_layout(raw_mesh_layout, ml_base)
 
@@ -337,7 +337,7 @@ def coord_ref(index_var, ctx: context.Context) -> str:
     renders as the arithmetic itself: a multiplication preserves grid output
     address after an ordinal is converted to an element start, and an addition
     moves a window's base by a compile-time offset. A mesh coordinate reads this
-    unit's coord along its axis. Other forms fail closed.
+    unit's coord along its mesh axis. Other forms fail closed.
     """
     return CoordinateVisitor().visit(index_var, ctx)
 

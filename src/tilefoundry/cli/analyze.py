@@ -76,12 +76,12 @@ def guidance() -> str:
         family         what --topology changes                 pass it when
         ------------   --------------------------------------  ---------------------
         compute-cost   nothing. Every kind states its total     never
-                       and every level's per-unit share
+                       and every topology's per-unit share
         memory         nothing for traffic, which states every   the program shards
-                       level; address assignment remains Function-wide
+                       topology; address assignment remains Function-wide
         roofline       nothing. The bound is the machine's     never
                        and is unchanged by program splits
-        performance    which level's parallel capacity the     the program shards
+        performance    which topology's capacity the           the program shards
                        plan is issued against
 
         Two assumptions the reported numbers rest on:

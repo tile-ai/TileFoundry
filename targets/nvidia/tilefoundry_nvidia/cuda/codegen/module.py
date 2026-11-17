@@ -29,7 +29,7 @@ from .abi import (
     kernel_arguments,
     kernel_signature,
 )
-from .context import Context, topology_level_str
+from .context import Context, topology_enumerator
 from .hir import device_functions
 from .templates import render
 
@@ -149,16 +149,16 @@ def define_launcher(
 def tell_the_block(launcher: codegen.CallableSignature, ctx: Context) -> None:
     """Gather the ids the launcher was told into the block the kernel takes.
 
-    Which levels these are is the signature's answer, so the launcher states no
-    level of its own: one line per id the convention put in front.
+    Which topologies these are is the signature's answer, so the launcher states no
+    topology of its own: one line per id the convention put in front.
     """
     if not launcher.leading:
         return
     ctx.emit(f"{PLACEMENT_CTYPE} {PLACEMENT.name}{{}};")
     for signature in launcher.leading:
-        level = topology_level_str(signature.topology)
+        enumerator = topology_enumerator(signature.topology)
         ctx.emit(
-            f"{PLACEMENT.name}.unit_id[int({level})] = static_cast<int>({signature.name});"
+            f"{PLACEMENT.name}.unit_id[int({enumerator})] = static_cast<int>({signature.name});"
         )
 
 
@@ -200,13 +200,13 @@ def topology_sizes(geometry: Geometry) -> list[dict[str, str]]:
     dims = []
     static_grid = tuple(expr.static_dim_value(value) for value in grid)
     if all(value is not None for value in static_grid):
-        dims.append({"level": topology_level_str("cta"), "count": str(math.prod(static_grid))})
+        dims.append({"level": topology_enumerator("cta"), "count": str(math.prod(static_grid))})
     elif static_grid[1:] != (1, 1):
         raise ValueError("codegen: only grid.x may be a host-computed dynamic expression")
     static_block = tuple(expr.static_dim_value(value) for value in block)
     if any(value is None for value in static_block):
         raise ValueError("codegen: thread topology extents must be compile-time constants")
-    dims.append({"level": topology_level_str("thread"), "count": str(math.prod(static_block))})
+    dims.append({"level": topology_enumerator("thread"), "count": str(math.prod(static_block))})
     return dims
 
 
@@ -269,7 +269,7 @@ class CudaLinkableModule(codegen.LinkableModule):
         geometry = one_geometry(kernels, ctx)
         preamble = render(
             "cuda_preamble.cu.j2",
-            program_topology=topology_level_str(
+            program_topology=topology_enumerator(
                 ctx.codegen_context.topology_domains[id(kernels[0])].topologies[0].name
                 if ctx.codegen_context.topology_domains[id(kernels[0])].topologies
                 else "cta"

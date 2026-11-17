@@ -25,7 +25,7 @@ def flat_layout(mesh: types.Mesh) -> types.Layout | types.ComposedLayout:
     if outer is None:
         raise ValueError(
             "a mesh whose slice states an identity box states no layout of "
-            "its own, so its levels select nothing"
+            "its own, so its topologies select nothing"
         )
     return types.flatten(mesh.layout)
 
@@ -51,8 +51,8 @@ def axis_keys(mesh: types.Mesh) -> tuple[tuple[str, str | None], ...]:
     keys = []
     for topology, shape in zip(mesh.topologies, types.plain_layout(mesh.layout).shape, strict=True):
         for _ in types.flatten_to_tuple(shape):
-            axis = len(keys)
-            name = mesh.names[axis] if axis < len(mesh.names) else None
+            mesh_axis = len(keys)
+            name = mesh.names[mesh_axis] if mesh_axis < len(mesh.names) else None
             keys.append((types.topology_name(topology), name))
     return tuple(keys)
 
@@ -86,8 +86,8 @@ def unit_layout(mesh: types.Mesh, t: int) -> types.Layout | types.ComposedLayout
             f"topology {types.topology_name(mesh.topologies[t])!r}: composition cannot "
             f"order the symbolic strides of its mode {mode}"
         ) from error
-    start = units(mesh.layout(0))
-    return types.make_composed_layout(None, start, ids) if start else ids
+    first_unit_id = units(mesh.layout(0))
+    return types.make_composed_layout(None, first_unit_id, ids) if first_unit_id else ids
 
 
 def topology_mesh(mesh: types.Mesh, name: str) -> types.Mesh | None:
@@ -114,10 +114,10 @@ def selected_units(mesh: types.Mesh, t: int):
     filtered ``unit_layout``.
     """
     reduced = layout_algebra.filter(types.plain_layout(unit_layout(mesh, t)))
-    start = first_unit_ids(mesh)[t]
+    first_unit_id = first_unit_ids(mesh)[t]
     if not layout_algebra.is_contiguous(reduced):
-        return reduced, start
-    return services.normalize_dim(types.size(reduced)), start
+        return reduced, first_unit_id
+    return services.normalize_dim(types.size(reduced)), first_unit_id
 
 
 def runs(mesh: types.Mesh, names) -> dict:
@@ -138,11 +138,11 @@ def within_mesh_scope(mesh: types.Mesh, current: types.Mesh) -> bool:
     for t, name in enumerate(topology_names(mesh)):
         if name not in scope:
             return False
-        (count, start), (bound, at_start) = selected_units(mesh, t), scope[name]
+        (count, first_unit_id), (bound, scope_first_unit_id) = selected_units(mesh, t), scope[name]
         if isinstance(count, types.LayoutBase) or isinstance(bound, types.LayoutBase):
             return False
-        if not int_tuple.dim_at_most(at_start, start) or not int_tuple.dim_at_most(
-            start + count, at_start + bound
+        if not int_tuple.dim_at_most(scope_first_unit_id, first_unit_id) or not int_tuple.dim_at_most(
+            first_unit_id + count, scope_first_unit_id + bound
         ):
             return False
     return True
@@ -193,7 +193,7 @@ def from_meshes(*meshes: types.Mesh) -> types.Mesh:
             unnamed = sorted(set(here) - set(there))
             raise ValueError(
                 f"{shared} named again while {unnamed} is not; a scope either "
-                "replaces the levels in force or adds levels below them"
+                "replaces the topologies in force or adds topologies below them"
             )
     types.check_topology(result)
     return result
@@ -208,7 +208,7 @@ def joined(outer: types.Mesh, kept: int, inner: types.Mesh, names: tuple) -> typ
     """
     topologies = (*outer.topologies[:kept], *inner.topologies)
     if any(not isinstance(topology, types.Topology) for topology in topologies):
-        raise ValueError("a multi-level Mesh requires Topology values")
+        raise ValueError("a multi-topology Mesh requires Topology values")
     sizes = types.topology_sizes(topologies)
     units = types.compact_row_major(sizes)
     modes, ids = [], []
@@ -254,15 +254,15 @@ def sub_box(parent: types.Mesh, mesh: types.Mesh) -> tuple[slice, ...] | None:
         step < 0 for step in target_strides
     ):
         return None
-    start, last = mesh.layout(0), mesh.layout(types.size(target) - 1)
-    lower = types.idx2crd(start, source.shape, strides)
+    first_index, last = mesh.layout(0), mesh.layout(types.size(target) - 1)
+    lower = types.idx2crd(first_index, source.shape, strides)
     upper = types.idx2crd(last, source.shape, strides)
     if any(first > stop for first, stop in zip(lower, upper)):
         return None
     if (
         types.crd2idx(lower, source.shape, strides),
         types.crd2idx(upper, source.shape, strides),
-    ) != (start, last):
+    ) != (first_index, last):
         return None
     if int_tuple.product(tuple(stop - first + 1 for first, stop in zip(lower, upper))) != types.size(
         target

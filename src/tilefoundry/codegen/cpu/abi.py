@@ -44,7 +44,7 @@ def declare_tensor(sig: signature.TensorSignature, ctx: context.EmitContext) -> 
 
 @registry.register(cpu.Target, registry.Role.CALLEE, signature.UnitIdSignature)
 def declare_unit_id(sig: signature.UnitIdSignature, ctx: context.EmitContext) -> tuple[str, ...]:
-    """The id of a level no device register answers for, passed in by value."""
+    """The id of a topology no device register answers for, passed in by value."""
     return (f"{UNIT_ID_CTYPE} {sig.name}",)
 
 

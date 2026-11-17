@@ -10,11 +10,11 @@ from tilefoundry_nvidia.cuda.codegen.tir import cute_layout
 
 
 def resolved(topology: types.Topology | str) -> types.Topology:
-    """*topology* as a ``Topology``, never a bare level name."""
+    """*topology* as a ``Topology``, never a bare topology name."""
     if isinstance(topology, str):
         raise RuntimeError(
-            f"CUDA mesh emission: mesh level {topology!r} is still a bare name; "
-            f"lowering resolves each level to a Topology stating its extent"
+            f"CUDA mesh emission: mesh topology {topology!r} is still a bare name; "
+            f"lowering resolves each topology to a Topology stating its extent"
         )
     return topology
 
@@ -35,9 +35,9 @@ def validate_topology(mesh: types.Mesh, tgt) -> None:
 
 
 def raw_groups(mesh: types.Mesh) -> tuple[tuple, tuple]:
-    """Each topology's axes as flat (shape, strides), strides in the index over all topologies.
+    """Each topology's mesh axes as flat (shape, strides), strides in the index over all topologies.
 
-    A topology stating no axes reads as one mode of one.
+    A topology stating no mesh axes reads as one mode of one.
     """
     stated = types.plain_layout(mesh.layout)
     shapes, strides = [], []
@@ -77,20 +77,20 @@ def mesh_type(mesh: types.Mesh) -> str:
     else:
         if base:
             raise NotImplementedError(
-                "CUDA mesh emission: a mesh naming several levels cannot also "
-                "be sliced; the slice and the level boundary would both be "
+                "CUDA mesh emission: a mesh naming several topologies cannot also "
+                "be sliced; the slice and the topology boundary would both be "
                 "deciding which units these are"
             )
         layout = grouped_layout(mesh)
     if base:
         layout = f"cute::ComposedLayout<cute::identity, cute::Int<{base}>, {layout}>"
-    return f"tilefoundry::Mesh<{layout}, {', '.join(context.topology_level_str(t.name) for t in topos)}>"
+    return f"tilefoundry::Mesh<{layout}, {', '.join(context.topology_enumerator(t.name) for t in topos)}>"
 
 
 def is_dynamic_mesh(mesh: types.Mesh) -> bool:
     """A launch-provided (dynamic) CTA mesh.
 
-    A launch-provided (dynamic) CTA mesh: its topology size or a layout axis
+    A launch-provided (dynamic) CTA mesh: its topology size or a mesh axis
     extent is ``None`` and only known at launch time.
     """
     if any(t.size is None for t in program_topologies(mesh)):
@@ -104,7 +104,7 @@ def validate_cuda_topology_levels(tgt: target.Target, names) -> None:
     See docs/spec/target.md § Topology levels.
     """
     supported = tuple(
-        level.name for level in tgt.get_facts(target.TopologyFacts).topologies
+        topology.name for topology in tgt.get_facts(target.TopologyFacts).topologies
     )
     for name in names:
         if name not in supported:

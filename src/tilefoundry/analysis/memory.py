@@ -269,11 +269,11 @@ def occurrence_shares(
     counted: str | None,
     units: Callable[[str | None], int],
 ) -> "Breakdown[cost.TrafficBytes]":
-    """One entry per level, each carrying the whole and every level's share.
+    """One entry per name, each carrying the whole and every topology's share.
 
     ``counted`` selects storage's unit; None counts each communication boundary
     at its own topology. Total scales that share by its executing units.
-    The shares run in *topologies* order, so a level a move never reached --
+    The shares run in *topologies* order, so a topology a move never reached --
     a unit inside the boundary it crossed -- reads as no bytes rather than as
     a missing entry.
     """

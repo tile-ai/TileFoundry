@@ -514,18 +514,18 @@ def shape_to_isl_set(shape: tuple, values: IslParamValues) -> "isl.set":
     return isl.set(prefix + f"{{ [{', '.join(dims)}] : {' and '.join(constraints)} }}")
 
 
-def mesh_coordinate(mesh, axis: int, values: IslParamValues) -> str:
+def mesh_coordinate(mesh, mesh_axis: int, values: IslParamValues) -> str:
     """The parameter standing for this unit's coordinate on one mesh axis."""
     for name, value in values.items():
         if (
             isinstance(value, expr.Call)
             and isinstance(value.target, MeshCoord)
             and value.target.mesh is mesh
-            and expr.static_dim_value(value.args[0]) == axis
+            and expr.static_dim_value(value.args[0]) == mesh_axis
         ):
             return name
     coordinate = expr.Call(
-        type=types.TensorType.from_umat_scalar(), target=MeshCoord(mesh=mesh), args=(i64_const(axis),)
+        type=types.TensorType.from_umat_scalar(), target=MeshCoord(mesh=mesh), args=(i64_const(mesh_axis),)
     )
     name = fresh_name(values, set())
     values[name] = coordinate

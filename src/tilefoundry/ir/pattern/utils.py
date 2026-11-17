@@ -113,7 +113,7 @@ def thread_execution_mesh() -> Mesh:
 
 
 def memory_execution_mesh() -> Mesh:
-    """Bind a contiguous run at the current innermost topology level."""
+    """Bind a contiguous run at the current innermost topology."""
     return Mesh(Wildcard(), THREAD_EXECUTION_LAYOUT)
 
 
@@ -133,11 +133,11 @@ def declared_execution_mesh(op_type, tgt=None) -> Mesh | Or:
             f"{name} execution_mesh must be a constant, ParamDef, or operand mesh reference"
         )
     if tgt is not None and any(isinstance(choice.topologies, Wildcard) for choice in choices):
-        levels = tgt.get_facts(target.MemoryExecutionFacts).topologies
+        topologies = tgt.get_facts(target.MemoryExecutionFacts).topologies
         expanded = []
         for choice in choices:
             if isinstance(choice.topologies, Wildcard):
-                expanded.extend(replace(choice, topologies=(level,)) for level in levels)
+                expanded.extend(replace(choice, topologies=(topology,)) for topology in topologies)
             else:
                 expanded.append(choice)
         choices = tuple(expanded)

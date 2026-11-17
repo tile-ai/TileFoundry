@@ -9,7 +9,7 @@ __all__ = ["MeshCoord", "literal_axes"]
 
 @expr.register_op(dialect="tf", category="sharding")
 class MeshCoord(expr.Op):
-    """This unit's coordinates along *axes* of *mesh*: a scalar axis gives one, a vector one each.
+    """This unit's coordinates along mesh axes *axes* of *mesh*: a scalar gives one, a vector many.
 
     Naming a mesh axis and asking which unit this is are two different
     questions. The first fills in a ``Split`` on a layout and leaves no node
@@ -24,14 +24,14 @@ class MeshCoord(expr.Op):
     axes = expr.ParamDef(kind="input")
 
 
-def literal_axes(axes) -> tuple[int, ...] | None:
-    """The axes a literal operand names, or None when any of them is computed."""
-    if isinstance(axes, expr.Tuple):
-        found = tuple(expr.static_dim_value(axis) for axis in axes.elements)
+def literal_axes(mesh_axes) -> tuple[int, ...] | None:
+    """The mesh axes a literal operand names, or None when any of them is computed."""
+    if isinstance(mesh_axes, expr.Tuple):
+        found = tuple(expr.static_dim_value(mesh_axis) for mesh_axis in mesh_axes.elements)
         return None if None in found else found
-    axis = expr.static_dim_value(axes)
-    if axis is not None:
-        return (axis,)
-    if isinstance(axes, expr.Constant) and isinstance(axes.value, (list, tuple)):
-        return tuple(int(axis) for axis in axes.value)
+    mesh_axis = expr.static_dim_value(mesh_axes)
+    if mesh_axis is not None:
+        return (mesh_axis,)
+    if isinstance(mesh_axes, expr.Constant) and isinstance(mesh_axes.value, (list, tuple)):
+        return tuple(int(mesh_axis) for mesh_axis in mesh_axes.value)
     return None
