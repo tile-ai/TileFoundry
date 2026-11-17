@@ -562,8 +562,9 @@ two from a step of their own; `differentiate` builds no step and no optimizer.
   - Each refusal is a `ValueError` that names what it refuses, and the source
     line when there is one: an empty `wrt`; a `wrt` name that is not a
     parameter, not a floating point tensor or a tuple of them, or a
-    `ConstTensor`; an Op with no rule, or a kind its rule does not take; a
-    `LoopRegion` that a gradient reaches; a call that reaches past one child
+    `ConstTensor`; an Op with no rule, or a kind or an attribute its rule does
+    not take (a strided `Slice`, an `IndexSelect` with `fill_value`, a `TopK`
+    off the last axis); a `LoopRegion` that a gradient reaches; a call that reaches past one child
     slot; a callee named `backward`; a `recompute` selector without `:`, with a
     child slot path, naming no reachable Module, a Module name two reachable
     Modules share, no function, no value, two values of one name, a parameter,
