@@ -41,7 +41,7 @@ return annotation. It is not an unspecified-storage spelling.
 Consequently an SMEM body under `-> Tensor[...]` MUST return a GMEM result explicitly.
 When the annotation and the inferred body type are incompatible, the parser reports both,
 with the authored function location. A tuple type is annotated `Tuple[...]`,
-for a parameter and for a return alike. It applies this same compatibility rule
+for a parameter and for an optional return annotation alike. It applies this same compatibility rule
 recursively to every field. `Tuple[()]` is the empty `TupleType`; a function that
 returns nothing writes `-> None`. The lowercase `tuple[...]` is not a DSL annotation.
 `Tuple` is Python's `typing.Tuple`: the parser matches the name in the AST, and a

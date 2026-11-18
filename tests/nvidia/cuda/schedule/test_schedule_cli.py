@@ -215,16 +215,16 @@ class ReshardLocations(ScheduleCliCase):
     def guard(self, state, problems):
         out, captured = state
         rows = _quiet_json(out, captured)["functions"][0]["calls"]
-        rows = {row["value"].rsplit(":", 1)[0]: row["memory"] for row in rows}
-        for label, byte_count in (("transposed", 256), ("shifted", 224)):
+        rows = {row["value"].rsplit(":", 1)[1]: row["memory"] for row in rows}
+        for label, byte_count in (("12", 256), ("20", 224)):
             memory = rows[label]
             assert memory["operands"][0]["read"] == byte_count
             assert memory["operands"][1]["write"] == byte_count
-        assert rows["shifted"]["buffer_bytes"] == 112
-        assert rows["shifted"]["offsets"]
-        moved = rows["exchanged"]["traffic"]["storage"]["rmem"]["logical"]
+        assert rows["20"]["buffer_bytes"] == 112
+        assert rows["20"]["offsets"]
+        moved = rows["14"]["traffic"]["storage"]["rmem"]["logical"]
         assert moved == {"read": 32, "write": 32}, "the registers change threads"
-        for label in ("repartitioned", "same", "shared_view", "placed"):
+        for label in ("15", "16", "17", "18"):
             memory = rows[label]
             assert memory["buffer_bytes"] is None
             assert memory["offsets"] == []

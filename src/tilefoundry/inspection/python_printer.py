@@ -672,12 +672,10 @@ def emit_def(
 
     return_type = fn.return_type
     arrow = ""
-    if isinstance(return_type, types.TensorType) or (
-        isinstance(return_type, types.TupleType) and return_type != types.TupleType.Void
-    ):
+    if isinstance(return_type, types.TensorType):
         with printer.type_surface(indent=indent):
             arrow = " -> " + printer.visit(return_type, ctx)
-    else:
+    elif return_type == types.TupleType.Void or not isinstance(return_type, types.TupleType):
         arrow = " -> None"
 
     lines.append(f"def {def_name}(")

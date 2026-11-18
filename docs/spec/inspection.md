@@ -150,9 +150,11 @@ used by the rendered program and MUST remain lint-clean.
   - A tuple of HIR Modules is one file: one header, then each Module class,
     child slot classes included, once. Each root keeps its own name.
   - A tuple type prints as `Tuple[...]`, the fields nested as they are, and an
-    empty one as `Tuple[()]`: a tuple-typed parameter carries it as its
-    annotation, and a function that returns a non-empty tuple carries it as its
-    `->` annotation. A function that returns the empty tuple prints `-> None`.
+    empty one as `Tuple[()]`; a tuple-typed parameter carries it as its
+    annotation. A function that returns a non-empty tuple prints no `->`
+    annotation: its body gives the type, and the parser accepts an author's
+    optional `-> Tuple[...]`. A function that returns the empty tuple prints
+    `-> None`.
 
 The printer MUST emit each Module definition once, before the slots that use it.
 Class-body bindings MUST preserve shared definitions and instance keys.
