@@ -252,8 +252,10 @@ def combine_operand_attrs(result: TensorType, others: tuple[TensorType, ...], ct
   - Each operand is read on the result's shard mesh with the target's storage
     owners ([shard §6.1](./shard.md#61-shard-attr-semantics)). A plain operand
     reads as `Varying` on a topology that owns its storage per unit.
-  - On each mesh axis: a `Broadcast` result with a `Varying` operand becomes
-    `Varying`. A `Partial` result with a `Varying` operand MUST fail
+  - On each mesh axis whose topology owns the result's storage per unit: a
+    `Broadcast` result with a `Varying` operand becomes `Varying`. Where the
+    result storage has one shared copy, `Broadcast` and `Varying` read alike and
+    the result keeps its attr. A `Partial` result with a `Varying` operand MUST fail
     (`ValueError`). Every other pair leaves the result unchanged; the op's own
     checks own `Split` and `Partial`.
   - A result that is `Varying` on every mesh axis is the plain `Layout` over its

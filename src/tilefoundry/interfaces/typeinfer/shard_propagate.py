@@ -365,7 +365,7 @@ def combine_operand_attrs(result, others: tuple, ctx) -> "types.TensorType":
                 raise ValueError(
                     f"mesh axis {mesh_axis}: a Partial result cannot combine with a Varying operand"
                 )
-            if isinstance(held[key], types.Broadcast):
+            if isinstance(held[key], types.Broadcast) and owners.private(result.storage, key[0]):
                 attr = held[key] = types.Varying()
         attrs.append(attr)
     if all(isinstance(attr, types.Varying) for attr in held.values()):

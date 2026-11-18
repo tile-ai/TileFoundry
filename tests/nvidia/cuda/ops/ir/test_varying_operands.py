@@ -16,6 +16,7 @@ from tilefoundry_nvidia import cuda
 
 _H200 = cuda.Target("nvidia.h200_sxm", device_count=2)
 _M = types.Mesh((types.Topology("gpu", 2),), types.Layout((2,), (1,)), ("g",))
+_CTA = types.Mesh((types.Topology("cta", 4),), types.Layout((4,), (1,)), ("c",))
 _B, _V, _P = types.Broadcast(), types.Varying(), types.Partial("sum")
 
 
@@ -49,6 +50,17 @@ CASES = (
         tensor.IndexSelect(dim=0),
         (held((8, 4), types.Split(0)), _INDEX),
         error=ExpectedError(match="Partial result cannot combine with a Varying operand"),
+        target=_H200,
+    ),
+    OpCase(
+        "insert_slice_plain_offset_keeps_a_shared_copy_broadcast",
+        tensor.InsertSlice(),
+        (
+            utils.make_shard_tensor_type((8,), mesh=_CTA, attrs=(_B,)),
+            utils.make_shard_tensor_type((2,), mesh=_CTA, attrs=(_B,)),
+            types.TensorType.from_umat_scalar(expr.DType.i32),
+        ),
+        type=utils.make_shard_tensor_type((8,), mesh=_CTA, attrs=(_B,)),
         target=_H200,
     ),
     OpCase(
