@@ -171,7 +171,7 @@ class Mma(Op):
 - constraints:
   - `acc` MAY be the same tensor as `dst`.
 
-### 2.3 Lane Ops (`ir/tir/simd`)
+### 2.3 Lane Ops (`ir/tir/arith`)
 
 #### ReduceKind / PrefixKind / ShuffleKind
 
