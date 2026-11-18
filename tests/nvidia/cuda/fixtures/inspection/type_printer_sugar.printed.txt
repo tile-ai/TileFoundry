@@ -14,7 +14,7 @@ class TypePrinterSugar:
                 attrs=(B(), P("max")),
                 mesh=Mesh((Topology("thread", 8),), layout=(2, 4), names=("warp", "lane")),
             )]
-    ):
+    ) -> Tuple[Tensor[(8, 16), "f32"], Tensor[(8, 16), "f32"], Tensor[(8, 16), "f32"]]:
         split = tf.reshard(x, layout=(8 @ mesh.lane, 16), storage="rmem")
         whole = tf.reshard(x, layout=(8, 16), storage="rmem")
         for _ in range(3):
@@ -39,7 +39,17 @@ class TypePrinterSugar:
                 attrs=(S(0), S(1)),
                 mesh=Mesh((Topology("thread", 8),), layout=(2, 4), names=("warp", "lane")),
             ), "rmem"]
-    ):
+    ) -> Tuple[Tensor[(8, 16), "f32"], Tensor[(8, 16), "f32", (4 @ mesh.tile, 2, 16), "rmem"], Tensor[(16,), "f32",
+        ShardLayout(
+            layout=Layout((2, 4, 2), (8, 2, 1)),
+            attrs=(S(0), S(1)),
+            mesh=Mesh((Topology("thread", 8),), layout=(2, 4), names=("warp", "lane")),
+        ), "rmem"], Tensor[(8, 16), "f32",
+        ShardLayout(
+            layout=Layout((2, 4, 16), (0, 16, 1)),
+            attrs=(S(0), B()),
+            mesh=Mesh((Topology("thread", 8),), layout=(2, 4), names=("warp", "lane")),
+        ), "rmem"]]:
         mine = tf.reshard(x, layout=(4 @ mesh.tile, 2, 16), storage="rmem")
         v1 = tf.reshard(mine, layout=(8, 16), storage="gmem")
         escaped = tf.reshard(x, layout=ShardLayout(
@@ -60,7 +70,7 @@ class TypePrinterSugar:
                 attrs=(S(0), B(), P("sum")),
                 mesh=Mesh((Topology("cta", 4), Topology("thread", 8)), layout=(4, 2, 4), names=("tile", "warp", "lane")),
             ), "rmem"]
-    ):
+    ) -> Tuple[Tensor[(8, 16, 4), "bf16"], Tensor[(8, 16), "f32"], Tensor[(8, 16), "f32"], Tensor[(16,), "f32"]]:
         with Mesh(("cta",), layout=(4,), names=("tile",)) as cta:
             composed = tf.reshard(x, layout=(4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), storage="rmem")
             v1 = tf.square(composed)

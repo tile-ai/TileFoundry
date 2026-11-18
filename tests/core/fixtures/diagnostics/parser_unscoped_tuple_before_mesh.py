@@ -11,7 +11,7 @@ class TupleBeforeMesh:
     @func
     def tuple_before_mesh(
         x: Tensor[(4, 4), "f32"],
-        pair: tuple[Tensor[(4, 4), "f32"], Tensor[(4, 4), "f32"]],
+        pair: Tuple[Tensor[(4, 4), "f32"], Tensor[(4, 4), "f32"]],
     ):
         result = pair[0]
         with Mesh(("cta",), (1,), names=("unit",)) as _mesh:

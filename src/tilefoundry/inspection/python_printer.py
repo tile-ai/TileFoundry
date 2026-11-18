@@ -672,19 +672,19 @@ def emit_def(
 
     return_type = fn.return_type
     arrow = ""
-    if isinstance(return_type, types.TensorType):
+    if isinstance(return_type, types.TensorType) or (
+        isinstance(return_type, types.TupleType) and return_type != types.TupleType.Void
+    ):
         with printer.type_surface(indent=indent):
             arrow = " -> " + printer.visit(return_type, ctx)
-    elif return_type == types.TupleType.Void or not isinstance(return_type, types.TupleType):
+    else:
         arrow = " -> None"
 
     lines.append(f"def {def_name}(")
     params: list[str] = []
     for param in fn.params:
         name = names[id(param)]
-        if isinstance(param.type, types.TupleType) and not param.type.fields:
-            params.append(f"{indent}{name}: tuple[()]")
-        elif isinstance(param.type, (types.TensorType, types.TupleType)):
+        if isinstance(param.type, (types.TensorType, types.TupleType)):
             with printer.type_surface(indent=indent, const=param.is_const):
                 annotation = printer.visit(param.annotation, ctx)
             params.append(f"{indent}{name}: {annotation}")

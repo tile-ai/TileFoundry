@@ -5,6 +5,8 @@ input into the other one before writing its own rows. The tail rows each CTA
 then loads through a tensor map are rows the other CTAs are still copying.
 """
 
+from typing import Tuple
+
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import cuda
 
@@ -24,7 +26,7 @@ class TmaLoadFromInputCopies:
     def update(
         x: Tensor[(TAIL + ROWS, COLS), "f32"],
         y: Tensor[(TAIL, COLS), "f32"],
-    ) -> tuple[
+    ) -> Tuple[
         Tensor[(TAIL + ROWS, COLS), "f32"],
         Tensor[(TAIL + ROWS, COLS), "f32"],
         Tensor[(2 * TAIL, COLS), "f32"],
