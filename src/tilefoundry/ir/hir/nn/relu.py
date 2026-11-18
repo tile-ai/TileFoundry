@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry import core, utils
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 
@@ -27,6 +27,15 @@ def eval_relu(ctx):
     x = ctx.args[0].tensor
     held = utils.torch.relu(x.tensor) if x.is_global else tuple((p, utils.torch.relu(t)) for p, t in x.tensor)
     return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
+
+
+@autodiff.register(ReLU)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """``g`` where ``x > 0`` and 0 elsewhere, ``x == 0`` included, as ``torch.relu`` does."""
+    (x,) = call.args
+    dtype = ctx.type_of(call).dtype
+    positive = ctx.call("cast", ctx.call("cmp_gt", x, ctx.constant(0.0, dtype)), dtype=dtype)
+    return (ctx.call("mul", cotangent, positive),)
 
 
 access.register_relation(ReLU)(access.identity_relations)

@@ -10,7 +10,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry import core, utils
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 
@@ -108,6 +108,32 @@ def rms_norm_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
     if not isinstance(source, types.TensorType):
         raise ValueError("RMSNorm cost requires a tensor input")
     return cost.Cost({expr.DType.f32: 8 * ir_utils.numel(source)}, cost.traffic(inputs, output))
+
+
+@autodiff.register(RMSNorm)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """Written with the input x, so a zero in the weight loses nothing.
+
+    ``inv = rsqrt(mean(x * x) + eps)``, ``n = x * inv``, ``gn = g * weight``;
+    ``dx = inv * (gn - n * mean(gn * n))`` and the weight takes ``sum(g * n)``
+    over every other axis.
+    """
+    x, weight = call.args
+    dtype = ctx.type_of(x).dtype
+
+    def mean(value):
+        return ctx.call("reduce", value, axes=(-1,), keepdim=True, kind=expr.ReduceKind.MEAN)
+
+    inverse = ctx.call(
+        "rsqrt", ctx.call("add", mean(ctx.call("mul", x, x)), ctx.constant(call.target.eps, dtype))
+    )
+    normed = ctx.call("mul", x, inverse)
+    scaled = ctx.call("mul", cotangent, weight)
+    centered = ctx.call("sub", scaled, ctx.call("mul", normed, mean(ctx.call("mul", scaled, normed))))
+    return (
+        ctx.call("mul", inverse, centered),
+        ctx.sum_to(ctx.call("mul", cotangent, normed), ctx.type_of(weight)),
+    )
 
 
 __all__ = ["RMSNorm"]

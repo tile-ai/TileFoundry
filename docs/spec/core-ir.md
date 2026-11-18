@@ -316,6 +316,7 @@ def remove_metadata(expr: "Expr", cls: type[IRMetadata]) -> "Expr": ...
 def binding_name(expr: "Expr") -> str | None: ...
 def describe_value(expr: "Expr") -> str: ...
 def diagnostic_location(expr: "Expr") -> str | None: ...
+def span_text(expr: "Expr", *, column: bool = True, short: bool = False) -> str | None: ...
 def source_metadata(expr: "Expr") -> tuple[IRMetadata, ...]: ...
 
 class Annotated:
@@ -336,8 +337,10 @@ class Annotated:
   - `Annotated.attach_metadata` and `Annotated.detach_metadata` perform those exact-class updates
     in place for passes that annotate the caller's IR. Attaching replaces any
     existing value and appends the new value after the retained metadata.
-  - `binding_name` returns the authored SSA label. `diagnostic_location`
-    prefers a source span and falls back to that label. `source_metadata`
+  - `binding_name` returns the authored SSA label. `span_text` writes the
+    source span as `file:line:column`, without the column when `column` is
+    false and with the file's base name when `short`. `diagnostic_location`
+    prefers that span and falls back to that label. `source_metadata`
     copies only binding/span metadata when a compiler pass synthesizes a
     replacement expression.
   - `describe_value` returns one diagnostic line with the source span when

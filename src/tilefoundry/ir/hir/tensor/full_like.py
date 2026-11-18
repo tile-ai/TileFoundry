@@ -9,7 +9,7 @@ initial values (e.g. ``-inf`` for an online-softmax running max).
 from __future__ import annotations
 
 from tilefoundry import core, utils
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 
@@ -53,6 +53,12 @@ def full_like_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
     """The template gives its Type and none of its elements; one full write."""
     output = cost.output_type(call, ctx)
     return cost.Cost({}, (cost.TrafficBytes(), cost.TrafficBytes(write=ir_utils.tensor_bytes(output))))
+
+
+@autodiff.register(FullLike)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """A constant: no gradient reaches the input, whose shape is all it reads."""
+    return (None,)
 
 
 __all__ = ["FullLike"]

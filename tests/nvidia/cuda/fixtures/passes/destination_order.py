@@ -4,6 +4,8 @@ One thread of the first warp loads each tile, since every thread that runs a pla
 writes all of it; the second warp reads.
 """
 
+from typing import Tuple
+
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import cuda
 
@@ -39,7 +41,7 @@ class MaybeTrip:
     @func
     def run(
         a: Tensor[(2, 32), "f32"],
-    ) -> tuple[Tensor[(1, 32), "f32"], Tensor[(2, 32), "f32"]]:
+    ) -> Tuple[Tensor[(1, 32), "f32"], Tensor[(2, 32), "f32"]]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(2, 32), names=("warp", "lane")) as threads:
                 with threads[0, :1] as _loader:
@@ -68,7 +70,7 @@ class CaptureHandoff:
     @func
     def run(
         a: Tensor[(3, 32), "f32"],
-    ) -> tuple[Tensor[(1, 32), "f32"], Tensor[(2, 32), "f32"]]:
+    ) -> Tuple[Tensor[(1, 32), "f32"], Tensor[(2, 32), "f32"]]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(2, 32), names=("warp", "lane")) as threads:
                 with threads[0, :1] as _loader:
@@ -97,7 +99,7 @@ class KeptAcross:
     @func
     def run(
         a: Tensor[(2, 32), "f32"],
-    ) -> tuple[Tensor[(2, 32), "f32"], Tensor[(2, 32), "f32"]]:
+    ) -> Tuple[Tensor[(2, 32), "f32"], Tensor[(2, 32), "f32"]]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(2, 32), names=("warp", "lane")) as threads:
                 with threads[0, :1] as _loader:
@@ -125,7 +127,7 @@ class WriteKept:
     @func
     def run(
         a: Tensor[(2, 32), "f32"],
-    ) -> tuple[Tensor[(2, 32), "f32"], Tensor[(2, 32), "f32"]]:
+    ) -> Tuple[Tensor[(2, 32), "f32"], Tensor[(2, 32), "f32"]]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(2, 32), names=("warp", "lane")) as threads:
                 with threads[0, :1] as _loader:
@@ -153,7 +155,7 @@ class CarryBeforeLoad:
     @func
     def run(
         a: Tensor[(3, 32), "f32"],
-    ) -> tuple[Tensor[(2, 32), "f32"], Tensor[(2, 32), "f32"]]:
+    ) -> Tuple[Tensor[(2, 32), "f32"], Tensor[(2, 32), "f32"]]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(2, 32), names=("warp", "lane")) as threads:
                 with threads[0, :1] as _loader:
@@ -177,7 +179,7 @@ class CarryOtherHalf:
     """A loop carries a tile's upper half on, and reads a load the lower half took first."""
 
     @func
-    def run(a: Tensor[(32,), "f32"]) -> tuple[Tensor[(2, 32), "f32"], Tensor[(2, 32), "f32"]]:
+    def run(a: Tensor[(32,), "f32"]) -> Tuple[Tensor[(2, 32), "f32"], Tensor[(2, 32), "f32"]]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(2, 32), names=("warp", "lane")) as threads:
                 with threads[0, :1] as _loader:
@@ -202,7 +204,7 @@ class CrossHalves:
     @func
     def run(
         a: Tensor[(2, 32), "f32"],
-    ) -> tuple[Tensor[(1, 32), "f32"], Tensor[(2, 32), "f32"]]:
+    ) -> Tuple[Tensor[(1, 32), "f32"], Tensor[(2, 32), "f32"]]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(2, 32), names=("warp", "lane")) as threads:
                 with threads[0, :1] as _loader:
@@ -230,7 +232,7 @@ class OneTrip:
     @func
     def run(
         a: Tensor[(2, 32), "f32"],
-    ) -> tuple[Tensor[(1, 32), "f32"], Tensor[(1, 32), "f32"]]:
+    ) -> Tuple[Tensor[(1, 32), "f32"], Tensor[(1, 32), "f32"]]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(2, 32), names=("warp", "lane")) as threads:
                 with threads[0, :1] as _loader:
@@ -259,7 +261,7 @@ class DisjointHandoff:
     @func
     def run(
         a: Tensor[(2, 64), "f32"],
-    ) -> tuple[Tensor[(2, 32), "f32"], Tensor[(2, 32), "f32"]]:
+    ) -> Tuple[Tensor[(2, 32), "f32"], Tensor[(2, 32), "f32"]]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(2, 32), names=("warp", "lane")) as threads:
                 with threads[0, :1] as _loader:
@@ -285,7 +287,7 @@ class YieldOld:
     @func
     def run(
         a: Tensor[(2, 32), "f32"],
-    ) -> tuple[Tensor[(2, 32), "f32"], Tensor[(2, 32), "f32"]]:
+    ) -> Tuple[Tensor[(2, 32), "f32"], Tensor[(2, 32), "f32"]]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(2, 32), names=("warp", "lane")) as threads:
                 with threads[0, :1] as _loader:
@@ -311,7 +313,7 @@ class PartialReload:
     @func
     def run(
         a: Tensor[(2, 64), "f32"],
-    ) -> tuple[Tensor[(1, 32), "f32"], Tensor[(2, 32), "f32"]]:
+    ) -> Tuple[Tensor[(1, 32), "f32"], Tensor[(2, 32), "f32"]]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(2, 32), names=("warp", "lane")) as threads:
                 with threads[0, :1] as _loader:
@@ -337,7 +339,7 @@ class ReturnOld:
     """The function returns a row it overwrites, beside a copy of what the overwrite stored."""
 
     @func
-    def run(a: Tensor[(32,), "f32"]) -> tuple[Tensor[(32,), "f32"], Tensor[(32,), "f32"]]:
+    def run(a: Tensor[(32,), "f32"]) -> Tuple[Tensor[(32,), "f32"], Tensor[(32,), "f32"]]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(2, 32), names=("warp", "lane")) as threads:
                 with threads[0, :1] as _loader:

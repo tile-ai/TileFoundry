@@ -7,7 +7,7 @@ from dataclasses import replace
 import isl
 
 from tilefoundry import core, services
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import dim, expr, pattern, types, utils
 from tilefoundry.ir.types import int_tuple, layout_algebra
 
@@ -311,6 +311,16 @@ def eval_slice(ctx):
     else:
         held = slice_(source.tensor, sizes, *(value.data for value in starts.elements))
     return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
+
+
+@autodiff.register(Slice)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """The gradient written into zeros of the input's type, at the window's starts."""
+    x, starts = call.args
+    if any(stride != 1 for stride in call.target.strides):
+        raise ValueError(f"Slice with strides {call.target.strides} has no autodiff rule")
+    zeros = ctx.call("zeros", type=ctx.type_of(x))
+    return ctx.call("insert_slice", zeros, cotangent, starts), None
 
 
 __all__ = ["Slice", "slice_size"]

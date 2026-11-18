@@ -15,7 +15,7 @@ class IncompatibleVariant:
     @func
     def root(
         x: Tensor[(size,), "f32"],
-    ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
+    ) -> Tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
         pass
 
     @root.specialize(pattern.Range("prototype_mismatch_size", 1, 8))

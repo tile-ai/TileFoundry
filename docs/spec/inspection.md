@@ -103,7 +103,7 @@ def hir_function_to_python(
 
 ```python
 def as_script(
-    fn: core.Function | core.PrimFunction | core.Module,
+    fn: core.Function | core.PrimFunction | core.Module | tuple[core.Module, ...],
     *,
     module: str | None = None,
     options: PythonPrintOptions | None = None,
@@ -111,7 +111,7 @@ def as_script(
     """Render a HIR/TIR function or Module as Python DSL source.
 
     Args:
-        fn: Function or Module to render.
+        fn: Function or Module to render, or HIR Modules to render as one file.
         module: Optional wrapper class name for a Function.
         options: Optional inspection annotations for HIR only; TIR prints no annotations.
 
@@ -147,6 +147,14 @@ used by the rendered program and MUST remain lint-clean.
     `PrimFunction` as `@prim_func`. Meshes used by a function are written at
     their scope boundary. The TIR printer raises `NotImplementedError` for an
     HIR Function it reaches.
+  - A tuple of HIR Modules is one file: one header, then each Module class,
+    child slot classes included, once. Each root keeps its own name.
+  - A tuple type prints as `Tuple[...]`, the fields nested as they are, and an
+    empty one as `Tuple[()]`; a tuple-typed parameter carries it as its
+    annotation. A function that returns a non-empty tuple prints no `->`
+    annotation: its body gives the type, and the parser accepts an author's
+    optional `-> Tuple[...]`. A function that returns the empty tuple prints
+    `-> None`.
 
 The printer MUST emit each Module definition once, before the slots that use it.
 Class-body bindings MUST preserve shared definitions and instance keys.

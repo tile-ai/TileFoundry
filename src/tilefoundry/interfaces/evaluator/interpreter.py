@@ -10,7 +10,7 @@ from typing import Any
 
 from tilefoundry import core, services, utils
 from tilefoundry.ir import core as ir_core
-from tilefoundry.ir import expr, pattern
+from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 
 from .context import EvaluateContext
@@ -30,10 +30,7 @@ def device_of(values) -> str | None:
     """
     seen: dict[str, int] = {}
     for index, value in enumerate(values):
-        held = (
-            (value.tensor,) if value.is_global else tuple(piece for _, piece in value.tensor)
-        ) if isinstance(value, core.ShardTensor) else (value,)
-        for data in held:
+        for data in held_data(value):
             device = getattr(data, "device", None)
             if device is not None:
                 seen.setdefault(str(device), index)
@@ -51,6 +48,15 @@ def devices_match(actual, expected: utils.torch.device) -> bool:
     if actual.type != expected.type:
         return False
     return expected.index is None or actual.index == expected.index
+
+
+def held_data(value) -> tuple:
+    """The data objects one input holds: a tuple input holds those of its items."""
+    if isinstance(value, tuple):
+        return tuple(data for item in value for data in held_data(item))
+    if isinstance(value, core.ShardTensor):
+        return (value.tensor,) if value.is_global else tuple(piece for _, piece in value.tensor)
+    return (value,)
 
 
 def bind_dim_vars(params, values) -> dict[str, int]:
@@ -345,21 +351,33 @@ def select_variant(callee: ir_core.Function, arg_values) -> ir_core.Function:
     return matches[0]
 
 
-def bound_values(fn: ir_core.Function, args) -> list[TensorValue]:
+def bound_values(fn: ir_core.Function, args) -> list[Value]:
     """*args* as evaluator values, left exactly where they already live."""
-    return [bound_value(param, arg) for param, arg in zip(fn.params, args)]
+    return [bound_value(param.name, param.type, arg) for param, arg in zip(fn.params, args)]
 
 
-def bound_value(param, arg) -> TensorValue:
-    """A torch input is global logical data; a ``ShardTensor`` is taken as it is."""
-    if isinstance(arg, core.ShardTensor):
-        if not ir_utils.types_compatible(param.type, arg.type):
+def bound_value(name: str, type_, arg) -> Value:
+    """A torch input is global logical data; a ``ShardTensor`` is taken as it is.
+
+    A tuple parameter takes a Python tuple with one input per field, bound by the
+    same rule, however deeply the tuples nest.
+    """
+    if isinstance(type_, types.TupleType):
+        if not isinstance(arg, tuple) or len(arg) != len(type_.fields):
+            given = f"{len(arg)} inputs" if isinstance(arg, tuple) else type(arg).__name__
             raise EvalError(
-                f"evaluator: {param.name!r} expects {param.type!r}, got {arg.type!r}"
+                f"evaluator: {name!r} expects a tuple of {len(type_.fields)} inputs, got {given}"
             )
+        return TupleValue(tuple(
+            bound_value(f"{name}[{index}]", field, item)
+            for index, (field, item) in enumerate(zip(type_.fields, arg))
+        ))
+    if isinstance(arg, core.ShardTensor):
+        if not ir_utils.types_compatible(type_, arg.type):
+            raise EvalError(f"evaluator: {name!r} expects {type_!r}, got {arg.type!r}")
         return TensorValue(arg)
-    data = utils.torch.as_tensor(arg, dtype=to_torch_dtype(param.type.dtype))
-    return TensorValue(core.ShardTensor(param.type, data))
+    data = utils.torch.as_tensor(arg, dtype=to_torch_dtype(type_.dtype))
+    return TensorValue(core.ShardTensor(type_, data))
 
 
 def run_bound(fn: ir_core.Function, args, *, context: EvaluateContext):

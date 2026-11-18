@@ -14,7 +14,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry import core, utils
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import dim, expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 
@@ -154,6 +154,26 @@ def eval_rope(ctx):
     return evaluator.TupleValue(
         tuple(evaluator.TensorValue(core.ShardTensor(field, data)) for field, data in zip(fields, held, strict=True))
     )
+
+
+@autodiff.register(RoPE)
+def _(call: expr.Call, cotangent: tuple, ctx: autodiff.Context) -> tuple:
+    """The rotation transposed: RoPE of the gradients with the sine negated.
+
+    ``rotate_half`` transposed is ``-rotate_half``, and it commutes with the sine
+    because a RoPE table repeats its two halves. The tables and positions get no
+    gradient; a missing result gradient is zeros.
+    """
+    q, k, cos_cache, sin_cache, pos_ids = call.args
+    if all(part is None for part in cotangent):
+        return (None,) * 5
+    gq, gk = (
+        ctx.call("zeros", type=field) if part is None else part
+        for part, field in zip(cotangent, ctx.type_of(call).fields)
+    )
+    rotated = ctx.call("rope", gq, gk, cos_cache, ctx.call("neg", sin_cache), pos_ids)
+    dq, dk = (ctx.call("tuple_get_item", rotated, ctx.constant(index)) for index in (0, 1))
+    return dq, dk, None, None, None
 
 
 __all__ = ["RoPE"]

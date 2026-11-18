@@ -46,3 +46,9 @@ def test_loop_iterator_names_arity_error(iterator: str, expected: str) -> None:
     """
     with pytest.raises(parser.ParseError, match=re.escape(expected)):
         cli.load_authored_ir(str(FIXTURES / "diagnostics" / LOOP_ITERATORS[iterator]))
+
+
+def test_lowercase_tuple_annotation_is_refused() -> None:
+    """Only ``Tuple[...]`` names a tuple type; the lowercase spelling is not DSL."""
+    with pytest.raises(parser.ParseError, match=":12:24"):
+        cli.load_authored_ir(str(FIXTURES / "diagnostics" / "parser_lowercase_tuple_annotation.py"))

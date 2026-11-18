@@ -25,7 +25,6 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     return infer_index_write(
         call,
         ctx,
-        op_name="IndexCopy",
         index_dtypes=(expr.DType.i64,),
     )
 

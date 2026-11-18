@@ -12,7 +12,7 @@ shard = ShardLayout(Layout((4, 2)), (Split(0),), mesh)
 @module(entry="run", target=cuda.Target("nvidia.h200_sxm", device_count=2), topologies=(gpu,))
 class TupleCall:
     @func
-    def child(pair: tuple[Tensor[(4, 2), "f32", shard], tuple[Tensor[(4, 2), "f32", shard]]]):
+    def child(pair: Tuple[Tensor[(4, 2), "f32", shard], Tuple[Tensor[(4, 2), "f32", shard]]]):
         return pair[0] + pair[1][0]
 
     @func

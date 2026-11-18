@@ -23,7 +23,6 @@ def infer_index_write(
     call: "expr.Call",
     ctx: "TypeInferContext",
     *,
-    op_name: str,
     index_dtypes: tuple[expr.DType, ...],
 ) -> types.TensorType:
     dst_ty = ctx.type_of(call.args[0])
@@ -31,21 +30,21 @@ def infer_index_write(
     src_ty = ctx.type_of(call.args[2])
 
     if len(index_ty.shape) != 1:
-        ctx.error(call, f"{op_name}: index must be 1-D, got shape {index_ty.shape}")
+        ctx.error(call, f"index must be 1-D, got shape {index_ty.shape}")
     if index_ty.dtype not in index_dtypes:
         allowed = " or ".join(dtype.name for dtype in index_dtypes)
-        ctx.error(call, f"{op_name}: index must have dtype {allowed}, got {index_ty.dtype}")
+        ctx.error(call, f"index must have dtype {allowed}, got {index_ty.dtype}")
 
     dst_rank = len(dst_ty.shape)
     if len(src_ty.shape) != dst_rank:
         ctx.error(
             call,
-            f"{op_name}: src rank {len(src_ty.shape)} must equal dst rank {dst_rank}",
+            f"src rank {len(src_ty.shape)} must equal dst rank {dst_rank}",
         )
     if src_ty.dtype != dst_ty.dtype:
         ctx.error(
             call,
-            f"{op_name}: dst/src dtype mismatch {dst_ty.dtype} vs {src_ty.dtype}",
+            f"dst/src dtype mismatch {dst_ty.dtype} vs {src_ty.dtype}",
         )
 
     dim = norm_dim(call.target.dim, dst_rank, ctx, call)
@@ -53,41 +52,50 @@ def infer_index_write(
         if axis != dim and dst_extent != src_extent:
             ctx.error(
                 call,
-                f"{op_name}: src shape {src_ty.shape} must match dst shape "
+                f"src shape {src_ty.shape} must match dst shape "
                 f"{dst_ty.shape} outside dim {dim}; mismatch at dim {axis}",
             )
     if index_ty.shape[0] != src_ty.shape[dim]:
         ctx.error(
             call,
-            f"{op_name}: index length {index_ty.shape[0]} must equal "
+            f"index length {index_ty.shape[0]} must equal "
             f"src.shape[{dim}] {src_ty.shape[dim]}",
         )
 
     for name, ty in (("dst", dst_ty), ("index", index_ty), ("src", src_ty)):
         utils.reject_partials(name, ty.layout)
-        reject_splits(ctx, call, op_name, name, ty)
+    reject_splits(ctx, call, dim, dst_ty, index_ty, src_ty)
     return dst_ty
 
 
-def reject_splits(ctx, call: "expr.Call", op_name: str, name: str, type_: types.TensorType) -> None:
-    """Refuse a sharded operand here, where the author can still be told why.
+def reject_splits(ctx, call: "expr.Call", dim: int, dst, index, src) -> None:
+    """Refuse a split the index values decide, where the author can still be told why.
 
-    Which rows a unit owns is decided by index *values*, so a split
-    destination needs value binding, a payload guard whose coordinates differ
-    from the destination's, and per-unit arithmetic that moves with the share --
-    three things that only work together. Until they exist, a split is refused
-    at the boundary the author wrote rather than costed as if it were whole.
+    A ``Split`` on ``dim``, or of the index, makes which rows a unit owns depend
+    on index *values*: that needs value binding, a payload guard whose
+    coordinates differ from the destination's, and per-unit arithmetic that
+    moves with the share. A ``Split`` on another axis does not: every unit holds
+    whole rows of that axis, so it writes the rows the index names into its own
+    columns. ``src`` must then be split as ``dst`` is, so each unit holds the
+    payload for its columns.
     """
+    for name, type_, axis in (("dst", dst, dim), ("index", index, 0), ("src", src, dim)):
+        if axis in split_axes(type_):
+            ctx.error(
+                call,
+                f"{name} is Split on dim {axis}, and which rows a unit writes "
+                "depends on the index values; reshard it to a replicated layout "
+                "before the update",
+            )
+    held = (split_axes(dst), split_axes(src))
+    if any(axis is not None for axes in held for axis in axes) and held[0] != held[1]:
+        ctx.error(call, "src must be split on the axes dst is split on")
+
+
+def split_axes(type_: types.TensorType) -> tuple:
+    """The tensor axis each mesh axis splits, ``None`` where it does not; ``()`` without a mesh."""
     layout = types.shard_layout_of(type_.layout)
-    if layout is None:
-        return
-    if any(isinstance(attr, types.Split) for attr in layout.attrs):
-        ctx.error(
-            call,
-            f"{op_name}: {name} is Split, and which rows a unit writes "
-            "depends on the index values; reshard it to a replicated layout "
-            "before the update",
-        )
+    return () if layout is None else types.split_target_axes(layout, type_.shape)
 
 
 @typeinfer.register(IndexAdd)
@@ -95,7 +103,6 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     return infer_index_write(
         call,
         ctx,
-        op_name="IndexAdd",
         index_dtypes=(expr.DType.i32, expr.DType.i64),
     )
 

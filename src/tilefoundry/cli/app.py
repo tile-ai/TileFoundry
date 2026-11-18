@@ -12,6 +12,7 @@ from tilefoundry import analysis
 from tilefoundry.ir import expr
 
 from .analyze import ANALYSES, EVIDENCE, guidance, run_authored_analysis
+from .autodiff import run_autodiff
 from .check import add_arguments, run_check
 from .check import guidance as check_guidance
 from .models import run_models
@@ -38,6 +39,7 @@ COMMANDS = MappingProxyType({
     "target": "list, show, add, or remove compilation targets",
     "schedule": "finalize scheduled HIR and inspect instruction choices",
     "scaffold": "generate an editable project for the program's Target",
+    "autodiff": "differentiate a Module into a forward and a backward Module",
 })
 
 TARGET_COMMANDS = MappingProxyType({
@@ -274,6 +276,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_source_argument(scaffold)
     scaffold.add_argument("out_dir", metavar="OUT_DIR", help="write the project to an empty directory")
+    autodiff = commands.add_parser(
+        "autodiff", help=COMMANDS["autodiff"], description=COMMANDS["autodiff"]
+    )
+    add_source_argument(autodiff)
+    autodiff.add_argument(
+        "--wrt", required=True, metavar="NAMES",
+        help="comma-separated entry parameters whose gradients the backward returns",
+    )
+    autodiff.add_argument(
+        "--recompute", action="append", default=[], metavar="Module[.function]:variable",
+        help="a value the backward computes again instead of saving it; repeat for more",
+    )
+    autodiff.add_argument(
+        "--saved", action="store_true",
+        help="print what the forward saves for the backward instead of the two Modules",
+    )
+    autodiff.add_argument(
+        "out", nargs="?", metavar="PATH", help="write here instead of stdout"
+    )
 
     return parser
 
@@ -354,6 +375,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return run_add_module(args.source, registrations)
             return run_remove(args.name, registrations)
         except Exception as error:
+            print(f"tilefoundry: error: {error}", file=sys.stderr)
+            return 1
+    if args.command == "autodiff":
+        try:
+            return run_autodiff(args.source, args.wrt, args.recompute, args.out, saved=args.saved)
+        except (expr.VerifyError, OSError, TypeError, ValueError) as error:
             print(f"tilefoundry: error: {error}", file=sys.stderr)
             return 1
     if args.command == "schedule":

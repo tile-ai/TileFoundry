@@ -41,6 +41,7 @@ from .metadata import (
     get_metadata,
     remove_metadata,
     source_metadata,
+    span_text,
     value_label,
     value_labels,
 )

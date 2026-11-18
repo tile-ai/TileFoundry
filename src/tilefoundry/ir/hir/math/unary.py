@@ -7,7 +7,7 @@ sugar names (``neg`` / ``abs`` / ``rsqrt`` / ``logical_not``).
 from __future__ import annotations
 
 from tilefoundry import core, utils
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 
@@ -89,6 +89,26 @@ def eval_unary(ctx):
     x = ctx.args[0].tensor
     held = fn(x.tensor) if x.is_global else tuple((p, fn(t)) for p, t in x.tensor)
     return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
+
+
+@autodiff.register(Unary)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """NEG, EXP, LOG, RSQRT and SQUARE; EXP and RSQRT read the result, LOG and SQUARE the input."""
+    (x,) = call.args
+    kind = call.target.kind
+    dtype = ctx.type_of(call).dtype
+    if kind is expr.UnaryKind.NEG:
+        return (ctx.call("neg", cotangent),)
+    if kind is expr.UnaryKind.EXP:
+        return (ctx.call("mul", cotangent, call),)
+    if kind is expr.UnaryKind.LOG:
+        return (ctx.call("div", cotangent, x),)
+    if kind is expr.UnaryKind.RSQRT:
+        cube = ctx.call("mul", ctx.call("mul", call, call), call)
+        return (ctx.call("mul", cotangent, ctx.call("mul", ctx.constant(-0.5, dtype), cube)),)
+    if kind is expr.UnaryKind.SQUARE:
+        return (ctx.call("mul", cotangent, ctx.call("mul", ctx.constant(2.0, dtype), x)),)
+    raise ValueError(f"Unary {kind.name} has no autodiff rule")
 
 
 __all__ = ["Unary"]

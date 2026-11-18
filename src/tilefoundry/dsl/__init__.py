@@ -60,6 +60,7 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.utils import make_shard_tensor_type
 from tilefoundry.parser import func, module, prim_func
+from tilefoundry.passes.transforms.differentiate import differentiate
 
 from . import T, namespace, tf
 from .tensor import ConstTensor, Tensor
@@ -72,6 +73,7 @@ __all__ = [
     "namespace",
     "ConstTensor",
     "Tensor",
+    "differentiate",
     "func",
     "module",
     "ModuleList",

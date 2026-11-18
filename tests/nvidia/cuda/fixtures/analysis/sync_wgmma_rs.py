@@ -1,5 +1,7 @@
 """An RS WGMMA issues four times and shares A with an ordinary register copy."""
 
+from typing import Tuple
+
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import cuda
 
@@ -17,7 +19,7 @@ class WgmmaRs:
     @func
     def gemm(
         p: Tensor[(64, 64), "bf16"], v: Tensor[(64, 64), "bf16"]
-    ) -> tuple[Tensor[(64, 64), "f32", "umat"], Tensor[(64, 64), "bf16", "umat"]]:
+    ) -> Tuple[Tensor[(64, 64), "f32", "umat"], Tensor[(64, 64), "bf16", "umat"]]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as m:
                 a_fragment = ShardLayout(

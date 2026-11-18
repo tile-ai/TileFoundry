@@ -1511,7 +1511,7 @@ class ScalarTypePattern(ElementPattern):
 
 
 class TupleTypePattern(ElementPattern):
-    """Parse ``tuple[T, U, ...]`` as a parser-only type annotation value."""
+    """Parse ``Tuple[T, U, ...]`` as a parser-only type annotation value; ``Tuple[()]`` is empty."""
 
     element_name = "tuple_type"
     syntax = LazyPattern(
@@ -1524,7 +1524,7 @@ class TupleTypePattern(ElementPattern):
                         "value",
                         AstNodePattern(
                             ast.Name,
-                            FieldPattern("id", LiteralPattern("tuple")),
+                            FieldPattern("id", LiteralPattern("Tuple")),
                         ),
                     ),
                     FieldPattern(
@@ -1541,7 +1541,7 @@ class TupleTypePattern(ElementPattern):
                                         "type_annotation",
                                         "tuple_field",
                                     ),
-                                    minimum=1,
+                                    minimum=0,
                                 ),
                             ),
                         ),
@@ -1557,7 +1557,7 @@ class TupleTypePattern(ElementPattern):
                         "value",
                         AstNodePattern(
                             ast.Name,
-                            FieldPattern("id", LiteralPattern("tuple")),
+                            FieldPattern("id", LiteralPattern("Tuple")),
                         ),
                     ),
                     FieldPattern(

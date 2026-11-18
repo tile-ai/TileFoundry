@@ -6,7 +6,7 @@ import math
 from typing import Literal
 
 from tilefoundry import core, utils
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 
@@ -212,6 +212,28 @@ def matmul_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
     )
     flops = 2 * ir_utils.numel(output) * k
     return cost.Cost({lhs.dtype: flops}, cost.traffic((lhs, rhs), output))
+
+
+@autodiff.register(MatMul)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """Each operand's gradient is a MatMul of the other operand and the gradient.
+
+    The operand layouts choose which operand is read transposed, so neither
+    gradient needs a transpose of its own. Broadcast batch axes are summed.
+    """
+    lhs, rhs = call.args
+    op = call.target
+    if op.out_dtype is not None and op.out_dtype != ctx.type_of(lhs).dtype:
+        raise ValueError(f"MatMul with out_dtype={op.out_dtype} has no autodiff rule")
+    if op.a_layout == "MK":
+        lhs_grad = ctx.call("matmul", cotangent, rhs, b_layout=op.b_layout[::-1])
+    else:
+        lhs_grad = ctx.call("matmul", rhs, cotangent, a_layout="MK" if op.b_layout == "KN" else "KM", b_layout="NK")
+    if op.b_layout == "KN":
+        rhs_grad = ctx.call("matmul", lhs, cotangent, a_layout=op.a_layout[::-1])
+    else:
+        rhs_grad = ctx.call("matmul", cotangent, lhs, a_layout="KM", b_layout="KN" if op.a_layout == "MK" else "NK")
+    return ctx.sum_to(lhs_grad, ctx.type_of(lhs)), ctx.sum_to(rhs_grad, ctx.type_of(rhs))
 
 
 __all__ = ["MatMul", "matmul_result_dtype", "matmul_result_shape_and_layout"]

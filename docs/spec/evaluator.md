@@ -104,6 +104,9 @@ corresponding positional input:
   convertible to a torch tensor. A torch input is the
   global view. The evaluator casts it to the dtype of the parameter `TensorType`.
 - A `Function` weight is an ordinary parameter, bound like an activation.
+- A parameter of `TupleType` takes a Python tuple with one input per field.
+  Each item is bound to its field by these rules, however deeply the tuples
+  nest; a tuple of another length is refused, naming the parameter.
 - Each `DimVar` ([types §4](./types.md#4-dim--symbolic-shape-dimensions)) appearing in a parameter's
   `TensorType.shape` is bound from the corresponding axis of the input
   tensor's concrete shape. A later occurrence of the same `DimVar` MUST

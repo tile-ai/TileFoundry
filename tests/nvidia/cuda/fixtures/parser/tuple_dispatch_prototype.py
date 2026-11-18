@@ -17,11 +17,11 @@ class TupleDispatch:
     @func
     def root(
         x: Tensor[(size,), "f32"],
-    ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
+    ) -> Tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
         pass
 
     @root.specialize(pattern.Range("prototype_size", 1, 8))
     def both(
         x: Tensor[(size,), "f32"],
-    ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
+    ) -> Tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
         return x, x

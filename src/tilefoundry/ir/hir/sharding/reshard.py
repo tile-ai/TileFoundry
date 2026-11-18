@@ -6,7 +6,7 @@ from dataclasses import replace
 from itertools import zip_longest
 from math import prod
 
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types, utils
 from tilefoundry.ir.hir import tensor
 from tilefoundry.ir.types import int_tuple, layout_algebra
@@ -265,6 +265,21 @@ def reshard_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
         cost.TrafficBytes(read=utils.tensor_bytes(source)),
         cost.TrafficBytes(write=utils.tensor_bytes(destination)),
     ), sent=sent)
+
+
+@autodiff.register(Reshard)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """The gradient resharded back to the input's layout, with ``Partial`` read as ``Broadcast``.
+
+    This is DTensor's ``_redistribute_backward``: one Reshard, whatever mesh
+    axes it changes.
+    """
+    source = ctx.type_of(call.args[0])
+    wanted = autodiff.gradient_layout(source.layout)
+    held = ctx.type_of(cotangent)
+    if (held.layout, held.storage) == (wanted, source.storage):
+        return (cotangent,)
+    return (ctx.call("reshard", cotangent, layout=types.normalize_layout(wanted), storage=source.storage),)
 
 
 __all__ = ["Reshard"]

@@ -40,8 +40,13 @@ All variants share one dispatch signature.
 return annotation. It is not an unspecified-storage spelling.
 Consequently an SMEM body under `-> Tensor[...]` MUST return a GMEM result explicitly.
 When the annotation and the inferred body type are incompatible, the parser reports both,
-with the authored function location. `tuple[...]` annotations are
-accepted. They apply this same compatibility rule recursively to every field.
+with the authored function location. A tuple type is annotated `Tuple[...]`,
+for a parameter and for an optional return annotation alike. It applies this same compatibility rule
+recursively to every field. `Tuple[()]` is the empty `TupleType`; a function that
+returns nothing writes `-> None`. The lowercase `tuple[...]` is not a DSL annotation.
+`Tuple` is Python's `typing.Tuple`: the parser matches the name in the AST, and a
+file without `from __future__ import annotations` imports it with `from typing import Tuple`.
+A tuple value is written `()`, `(a,)`, `(a, b)` and an item is read as `a[0]`.
 
 ### 1.2 Source Span Metadata
 
@@ -238,8 +243,8 @@ tensor                ::= tensor-head '[' '(' (tensor-shape-layout ',' dtype | s
                           tensor-optional-slot | tensor-shape-layout ',' dtype ','
                           tensor-optional-slot | shape ',' dtype ',' tensor-optional-slot ','
                           tensor-optional-slot) ')' ']'
-tuple-type            ::= 'tuple' '[' '(' type-annotation (',' type-annotation)* ')' ']'
-                          | 'tuple' '[' type-annotation ']'
+tuple-type            ::= 'Tuple' '[' '(' (type-annotation (',' type-annotation)*)? ')' ']'
+                          | 'Tuple' '[' type-annotation ']'
 scalar-type           ::= primary
                           | call
 type-annotation       ::= tensor

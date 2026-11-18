@@ -1126,7 +1126,11 @@ operation and is not an HIR op.
     because torch's last copy is nondeterministic; consumers MUST NOT rely on an
     order.
   - `IndexAdd` and `IndexCopy` reject a `Partial` on `dst`, `index`, or `src`.
-    Complete `Split` and `Broadcast` layouts remain logical HIR types.
+    They reject a `Split` of `index`, and a `Split` of `dst` or `src` on `dim`:
+    which rows a unit writes would depend on the index values. A `Split` on
+    another axis is accepted when `src` is split on the axes `dst` is: each unit
+    holds whole rows of that axis and writes them. `Broadcast` layouts remain
+    logical HIR types.
   - `IndexAdd` and `IndexCopy` have type inference, cost, and evaluator
     semantics only. No HIR-to-TIR lowering is registered.
   - `IndexAdd` charges one add and reads `src`, `index`, and the addressed `dst`
@@ -1523,6 +1527,9 @@ class RoPE(Op):
     unqualified HF convention (`apply_rotary_pos_emb` / `rotate_half`). The
     interleaved form (`rotate_every_two`, GPT-J / CodeGen) is a different Op,
     not an attribute of this one.
+  - The two halves of each `cos_cache` and `sin_cache` row MUST be equal: the
+    pair rotates by one angle. The autodiff rule relies on it; the evaluator
+    does not check it.
   - The result is `(q_rope, k_rope)`. Each branch preserves the layout of its
     corresponding `q` or `k` input.
   - On each mesh axis, a branch MAY preserve one `Partial(sum)` on its

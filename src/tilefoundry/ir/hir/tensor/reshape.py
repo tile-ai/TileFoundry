@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from tilefoundry import core
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import dim, expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 
@@ -232,6 +232,12 @@ def eval_reshape(ctx):
 @cost.register(Reshape)
 def reshape_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
     return cost.Cost({}, cost.idle(call))
+
+
+@autodiff.register(Reshape)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """The gradient reshaped back to the input's shape."""
+    return (ctx.call("reshape", cotangent, new_shape=tuple(ctx.type_of(call.args[0]).shape)),)
 
 
 __all__ = ["Reshape"]

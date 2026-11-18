@@ -1,5 +1,7 @@
 """Write three output buffers explicitly and reuse an induction name."""
 
+from typing import Tuple
+
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import cuda
 
@@ -13,7 +15,7 @@ class LoopOutputs:
     @func
     def gemm(
         x: Tensor[(2, 4), "bf16"],
-    ) -> tuple[Tensor[(2, 4), "bf16"], Tensor[(2, 4), "bf16"], Tensor[(2, 4), "bf16"]]:
+    ) -> Tuple[Tensor[(2, 4), "bf16"], Tensor[(2, 4), "bf16"], Tensor[(2, 4), "bf16"]]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(32,), names=("lane",)) as threads:
                 direct = tf.zeros(Tensor[(2, 4), "bf16"])

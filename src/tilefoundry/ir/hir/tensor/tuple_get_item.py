@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import isl
 
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types, utils
 
 
@@ -86,6 +86,16 @@ def eval_tuple_get_item(ctx):
     if not 0 <= taken < len(ctx.args[0].elements):
         raise evaluator.EvalError(f"evaluator: TupleGetItem index {taken} out of range")
     return ctx.args[0].elements[taken]
+
+
+@autodiff.register(TupleGetItem)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """The gradient goes to the field that was taken; the other fields and the index get none."""
+    held, index = call.args
+    if not isinstance(index, expr.Constant):
+        raise ValueError("TupleGetItem with an index that is not a constant has no autodiff rule")
+    fields = len(ctx.type_of(held).fields)
+    return tuple(cotangent if field == index.value else None for field in range(fields)), None
 
 
 __all__ = ["TupleGetItem"]

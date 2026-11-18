@@ -393,6 +393,28 @@ def instances(slot) -> tuple[Module, ...]:
     return slot if isinstance(slot, tuple) else (slot,)
 
 
+def module_definition_order(*roots, before_children=False) -> list[Module]:
+    """Each Module *roots* reach by child slots, once; children first unless *before_children*."""
+    seen = set()
+    ordered = []
+
+    def visit(node):
+        if id(node) in seen:
+            return
+        seen.add(id(node))
+        if before_children:
+            ordered.append(node)
+        for slot in node.children.values():
+            for child in instances(slot):
+                visit(child)
+        if not before_children:
+            ordered.append(node)
+
+    for root in roots:
+        visit(root)
+    return ordered
+
+
 def descend(scope, ref: FunctionRef):
     """Yield each Module the path of *ref* enters from *scope*, in order."""
     path = ref.qualified_name
@@ -453,4 +475,13 @@ def resolve(scope, ref: FunctionRef) -> tuple[Module, ModuleFunction]:
     return module, matches[0]
 
 
-__all__ = ["LoadedModule", "Module", "ModuleFunction", "ModuleList", "descend", "instances", "resolve"]
+__all__ = [
+    "LoadedModule",
+    "Module",
+    "ModuleFunction",
+    "ModuleList",
+    "descend",
+    "instances",
+    "module_definition_order",
+    "resolve",
+]
