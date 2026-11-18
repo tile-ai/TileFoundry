@@ -64,7 +64,10 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TupleType:
     )
 
     ir_utils.reject_partials("pos_ids", pos_ty.layout)
-    return types.TupleType(fields=(q_ty, k_ty))
+    tables = (cos_ty, sin_ty, pos_ty)
+    return types.TupleType(
+        fields=tuple(typeinfer.combine_operand_attrs(ty, tables, ctx) for ty in (q_ty, k_ty))
+    )
 
 
 @access.register_relation(RoPE)

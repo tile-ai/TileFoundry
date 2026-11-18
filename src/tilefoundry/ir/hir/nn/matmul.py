@@ -129,21 +129,9 @@ def matmul_result_shape_and_layout(call: "expr.Call", ctx: "TypeInferContext") -
         ctx.error(call, str(e))
     layout = shard
     if layout is None:
-        held = types.shard_layout_of(lhs.layout) or lhs.layout
-        if isinstance(held, types.ShardLayout):
-            layout = types.ShardLayout.from_logical(
-                out_shape,
-                held.mesh,
-                held.attrs,
-                storage=lhs.storage,
-                owners=ctx.target.storage_owners
-                if ctx is not None and ctx.target is not None
-                else expr.StorageOwners((), {}),
-            )
-        elif tuple(held.shape) == tuple(out_shape):
-            layout = held
-        else:
-            layout = types.Layout(out_shape)
+        sharded = any(types.shard_layout_of(type_.layout) is not None for type_ in (lhs, rhs))
+        same = not sharded and tuple(lhs.layout.shape) == tuple(out_shape)
+        layout = lhs.layout if same else types.Layout(out_shape)
     return out_shape, layout
 
 

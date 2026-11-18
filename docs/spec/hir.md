@@ -1111,6 +1111,8 @@ operation and is not an HIR op.
     `Split` on `dim` becomes `Partial(sum)`, and a `Split` on another dim keeps
     its target. Multiple `Split`s including `dim`, or a composed shard layout,
     MUST fail closed.
+  - The result's shard attrs also read `index`, and for `IndexAdd` / `IndexCopy`
+    `index` and `src`, by `combine_operand_attrs` ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
   - `IndexSelect` is a pure value operation, not a copy. To stage dim-0
     selections into shared memory, schedule its inputs as
     `tf.schedule((x, tf.empty(Tensor[..., "smem"]), index), op=T.copy_async(fill=f))`.
@@ -1266,6 +1268,8 @@ class InsertSlice(Op):
   - When `dst` is complete, an `update` carrying a `Partial` MUST be rejected.
     The write result cannot preserve that secondary value state. An explicit
     `Reshard(update, Broadcast)` completes it.
+  - The result's shard attrs also read `update` and every tensor in `offsets`,
+    by `combine_operand_attrs` ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
   - `ComputeCostMetadata` charges no traffic for the untouched `dst`. It charges
     one window-sized `update` read, one read of the scalar or structural tuple
     `offsets`, and one window-sized result write.
@@ -1301,6 +1305,8 @@ class CacheUpdate(Op):
     runtime values.
   - This is a pure value-form op. Lowering MAY realize the output in place on
     the buffer of `cache`.
+  - The result's shard attrs also read `cur_pos`, `s` and `new`, by
+    `combine_operand_attrs` ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
   - A `cache` can carry `Partial(reduction)` on a mesh axis. Then `new` MUST
     carry the identical mesh and per-mesh-axis state. A complete `cache`
     rejects a `new` that carries `Partial`. Typeinfer rejects either mismatch.
@@ -1382,6 +1388,11 @@ Consensus torch.nn.functional ops.
     is `Broadcast` / replicated. On each mesh axis, one `Partial(sum)` is
     therefore allowed. A double-Partial input or a non-`sum` reduction is
     rejected.
+  - When the derived `MatMul` result is `Varying` on every mesh axis, its
+    layout is the plain `Layout` over the result shape
+    ([shard §6.1](./shard.md#61-shard-attr-semantics)).
+  - The `LayerNorm` result's shard attrs also read `weight` and `bias`, by
+    `combine_operand_attrs` ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
   - `MatMul.a_layout` is `"MK"` (the default) or `"KM"`. `MatMul.b_layout` is
     `"KN"` (the default) or `"NK"`. These literals state the physical order of
     the final two axes of each operand. The access relation maps them to logical
@@ -1506,6 +1517,8 @@ class RMSNorm(Op):
   - Normalization combines every value on the axis non-monotonically, so no
     mesh-axis reduction provably commutes. Typeinfer rejects any `Partial`
     operand.
+  - The result's shard attrs also read `weight`, by `combine_operand_attrs`
+    ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
 
 ##### RoPE
 ```python
@@ -1531,7 +1544,9 @@ class RoPE(Op):
     pair rotates by one angle. The autodiff rule relies on it; the evaluator
     does not check it.
   - The result is `(q_rope, k_rope)`. Each branch preserves the layout of its
-    corresponding `q` or `k` input.
+    corresponding `q` or `k` input, with its shard attrs also reading
+    `cos_cache`, `sin_cache` and `pos_ids` by `combine_operand_attrs`
+    ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
   - On each mesh axis, a branch MAY preserve one `Partial(sum)` on its
     corresponding query or key input. The branch MAY do so only when
     `cos_cache`, `sin_cache`, and `pos_ids` are `Broadcast` / replicated on that

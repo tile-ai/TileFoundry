@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.core.ops.ir.op_case import OpCase, op_case_test
 from tests.core.ops.ir.test_cache_update import (
     _GLOBAL_TRAFFIC,
     _WINDOW_BYTES,
@@ -11,12 +12,40 @@ from tests.core.ops.ir.test_cache_update import (
 from tilefoundry import analysis, cli
 from tilefoundry.dsl import *
 from tilefoundry.interfaces import cost
-from tilefoundry.ir import core, expr
+from tilefoundry.ir import core, expr, types, utils
 from tilefoundry.ir.hir import tensor
+from tilefoundry_nvidia import cuda
 
 OPS = Path(__file__).parents[2] / "fixtures" / "ops"
 _CTA = Topology("cta", 2)
 _CTA_MESH = Mesh((_CTA,), Layout((2,), (1,)), ("g",))
+_GPUS = Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("g",))
+
+
+def _held(shape, attr, dtype=expr.DType.bf16):
+    return utils.make_shard_tensor_type(shape, dtype, mesh=_GPUS, attrs=(attr,))
+
+
+CASES = (
+    OpCase(
+        "varying_new_makes_a_broadcast_cache_plain",
+        tensor.CacheUpdate(),
+        (
+            _held((1, 8, 2, 4), types.Broadcast()),
+            _held((), types.Broadcast(), expr.DType.i32),
+            _held((), types.Broadcast(), expr.DType.i32),
+            _held((1, 2, 2, 4), types.Varying()),
+        ),
+        type=types.TensorType(
+            shape=(1, 8, 2, 4),
+            dtype=expr.DType.bf16,
+            layout=types.Layout((1, 8, 2, 4)),
+            storage="gmem",
+        ),
+        target=cuda.Target("nvidia.h200_sxm", device_count=2),
+    ),
+)
+test_op_case = op_case_test(CASES)
 
 
 def test_cache_update_cost_per_level() -> None:

@@ -341,4 +341,38 @@ def derive_output_shard_layout(
     return types.ShardLayout.from_logical(output_shape, mesh, tuple(attrs), storage=storage, owners=owners)
 
 
-__all__ = ["derive_output_shard_layout"]
+def combine_operand_attrs(result, others: tuple, ctx) -> "types.TensorType":
+    """Read the result's shard attrs together with the other tensor operands'.
+
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics) and
+    [semantic-analysis §3.2](docs/spec/semantic-analysis.md#32-relation-driven-shard-propagation).
+
+    Raises:
+        ValueError: A ``Partial`` result axis meets a ``Varying`` operand.
+    """
+    shard = types.shard_layout_of(result.layout)
+    if shard is None:
+        return result
+    target = getattr(ctx, "target", None)
+    owners = target.storage_owners if target else expr.StorageOwners((), {})
+    held = utils.attrs_by_axis(result, shard.mesh, owners)
+    states = tuple(utils.attrs_by_axis(type_, shard.mesh, owners) for type_ in others)
+    attrs = []
+    for mesh_axis, key in enumerate(held):
+        attr = shard.attrs[mesh_axis] if mesh_axis < len(shard.attrs) else types.Broadcast()
+        if any(isinstance(state[key], types.Varying) for state in states):
+            if isinstance(held[key], types.Partial):
+                raise ValueError(
+                    f"mesh axis {mesh_axis}: a Partial result cannot combine with a Varying operand"
+                )
+            if isinstance(held[key], types.Broadcast):
+                attr = held[key] = types.Varying()
+        attrs.append(attr)
+    if all(isinstance(attr, types.Varying) for attr in held.values()):
+        return replace(result, layout=types.Layout(result.shape))
+    shard = replace(shard, attrs=tuple(attrs))
+    layout = shard if isinstance(result.layout, types.ShardLayout) else replace(result.layout, outer=shard)
+    return replace(result, layout=layout)
+
+
+__all__ = ["combine_operand_attrs", "derive_output_shard_layout"]

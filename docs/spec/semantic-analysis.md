@@ -240,6 +240,26 @@ def derive_output_shard_layout(
     translated access.
   - `Split(axis)` indexes an output mode, not a logical tensor axis.
 
+An op whose result type is one operand's type reads the other tensor operands
+with one shared rule.
+
+```python
+# typeinfer.combine_operand_attrs (interfaces/typeinfer/shard_propagate.py)
+def combine_operand_attrs(result: TensorType, others: tuple[TensorType, ...], ctx) -> TensorType: ...
+```
+
+- constraints:
+  - Each operand is read on the result's shard mesh with the target's storage
+    owners ([shard §6.1](./shard.md#61-shard-attr-semantics)). A plain operand
+    reads as `Varying` on a topology that owns its storage per unit.
+  - On each mesh axis: a `Broadcast` result with a `Varying` operand becomes
+    `Varying`. A `Partial` result with a `Varying` operand MUST fail
+    (`ValueError`). Every other pair leaves the result unchanged; the op's own
+    checks own `Split` and `Partial`.
+  - A result that is `Varying` on every mesh axis is the plain `Layout` over its
+    shape. A plain result is returned unchanged.
+  - The mesh and the address layout of the result do not change.
+
 ### 3.3 Output storage and mesh/layout compatibility
 
 - constraints:
