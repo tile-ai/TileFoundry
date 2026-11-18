@@ -1,0 +1,33 @@
+[spec]
+schema = "tilefoundry.metal.architecture/v1"
+kind = "architecture"
+id = "apple.gpu8"
+
+[facts.identity.name]
+value = "apple_gpu8"
+unit = "name"
+origin = "reference"
+source = "Metal Feature Set Tables, Apple GPU family 8"
+conditions = "Apple GPU family 8 as an instruction profile: only the listed native MSL functions, not a machine ISA."
+
+[facts.capabilities]
+value = [
+  "simdgroup_load", "simdgroup_store", "simdgroup_multiply", "simdgroup_multiply_accumulate",
+  "simd_sum", "simd_product", "simd_min", "simd_max", "simd_and", "simd_or", "simd_xor", "simd_all", "simd_any",
+  "simd_prefix_inclusive_sum", "simd_prefix_exclusive_sum",
+  "simd_prefix_inclusive_product", "simd_prefix_exclusive_product",
+  "simd_shuffle", "simd_shuffle_xor", "simd_shuffle_up", "simd_shuffle_down",
+  "simd_shuffle_rotate_up", "simd_shuffle_rotate_down", "simd_broadcast",
+  "simd_shuffle_and_fill_up", "simd_shuffle_and_fill_down", "simd_ballot",
+]
+unit = "name"
+origin = "reference"
+source = "Metal Shading Language Specification 4.1, sections 6.8, 6.10.2 and 6.10.3"
+conditions = "Each name compiles with the macOS 26 Metal compiler and ran on an Apple M2 Pro. The quad_ forms share these entries."
+
+[facts.simd.width]
+value = 32
+unit = "count"
+origin = "measured"
+source = "MTLComputePipelineState.threadExecutionWidth on Apple M2 Pro"
+conditions = "threadExecutionWidth was 32 for every probed pipeline on Apple M2 Pro."

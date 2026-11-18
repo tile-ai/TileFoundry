@@ -1,0 +1,243 @@
+target apple.m2_pro.gpu
+ops
+
+T.arange
+  target             apple.m2_pro.gpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    start  any value (type int) (default 0)
+    step   any value (type int) (default 1)
+  operands
+    dst  Tensor(shape=(None,), dtype=one of {i32; i64}, storage=rmem, layout=any layout)
+
+T.metal.ballot
+  target             apple.m2_pro.gpu
+  target capability  simd_ballot
+  execution mesh     Mesh(('thread',), Layout(((groups, width),), ((width, 1),))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024
+  operands
+    dst  Tensor(shape=(groups where 1 <= dst.shape[0] <= 32, 1), dtype=u32, storage=rmem, layout=ShardLayout(Layout((groups, 1), (0, 0)), (S(0), B()), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024)
+    src  Tensor(shape=(groups where 1 <= src.shape[0] <= 32, width where one of {4; 32}), dtype=bool, storage=rmem, layout=ShardLayout(Layout((groups, width), (0, 0)), (S(0), S(1)), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024)
+
+T.binary
+  target             apple.m2_pro.gpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    kind  any value in {BinaryKind.ADD, BinaryKind.SUB, BinaryKind.MUL, BinaryKind.DIV, BinaryKind.FLOOR_DIV, BinaryKind.MOD, BinaryKind.MIN, BinaryKind.MAX, BinaryKind.EQ, BinaryKind.NE, BinaryKind.LT, BinaryKind.LE, BinaryKind.GT, BinaryKind.GE, BinaryKind.AND, BinaryKind.OR}
+  operands
+    lhs  Tensor(storage=rmem, layout=any layout)
+    rhs  Tensor(storage=rmem, layout=any layout)
+    dst  Tensor(storage=rmem, layout=any layout)
+
+T.cast
+  target             apple.m2_pro.gpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    dtype  cast_dtype (type DType)
+  operands
+    src  Tensor(storage=rmem, layout=one of {ShardLayout(_, _, Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))); layout})
+    dst  Tensor(dtype=cast_dtype, storage=rmem, layout=one of {ShardLayout(_, _, Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))); layout})
+  between operands
+    src.shape = dst.shape
+    src.dtype != dst.dtype
+
+T.clamp
+  target             apple.m2_pro.gpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    min_val  any value (type float)
+    max_val  any value (type float)
+  operands
+    src  Tensor(storage=rmem, layout=any layout)
+    dst  Tensor(storage=rmem, layout=any layout)
+  between operands
+    src.dtype = dst.dtype
+
+T.metal.prefix
+  target             apple.m2_pro.gpu
+  target capability  simd_prefix_inclusive_sum, simd_prefix_inclusive_product, simd_prefix_exclusive_sum, simd_prefix_exclusive_product
+  execution mesh     Mesh(('thread',), Layout(((groups, width),), ((width, 1),))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024
+  parameters
+    kind       any value where one of {T.metal.PrefixKind.SUM; T.metal.PrefixKind.PRODUCT} in {T.metal.PrefixKind.SUM, T.metal.PrefixKind.PRODUCT} (default T.metal.PrefixKind.SUM)
+    inclusive  one of {False; True} (type bool) (default False)
+    dtype      any value where one of {f16; f32; i8; u8; i16; u16; i32; u32} (type DType) (default f32)
+  operands
+    dst  Tensor(shape=(groups where 1 <= dst.shape[0] <= 32, width where one of {4; 32}), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, width), (0, 0)), (S(0), S(1)), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024)
+    src  Tensor(shape=(groups where 1 <= src.shape[0] <= 32, width where one of {4; 32}), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, width), (0, 0)), (S(0), S(1)), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024)
+
+T.metal.reduce
+  target             apple.m2_pro.gpu
+  target capability  simd_sum, simd_product, simd_min, simd_max, simd_and, simd_or, simd_xor, simd_all, simd_any
+  execution mesh     Mesh(('thread',), Layout(((groups, width),), ((width, 1),))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024
+  parameters
+    kind   any value where one of {T.metal.ReduceKind.SUM; T.metal.ReduceKind.PRODUCT; T.metal.ReduceKind.MIN; T.metal.ReduceKind.MAX; T.metal.ReduceKind.AND; T.metal.ReduceKind.OR; T.metal.ReduceKind.XOR; T.metal.ReduceKind.ALL; T.metal.ReduceKind.ANY} in {T.metal.ReduceKind.SUM, T.metal.ReduceKind.PRODUCT, T.metal.ReduceKind.MIN, T.metal.ReduceKind.MAX, T.metal.ReduceKind.AND, T.metal.ReduceKind.OR, T.metal.ReduceKind.XOR, T.metal.ReduceKind.ALL, T.metal.ReduceKind.ANY} (default T.metal.ReduceKind.SUM)
+    dtype  any value (type DType) (default f32)
+             predicates:
+               switch kind:
+                 kind=T.metal.ReduceKind.SUM: one of {f16; f32; i8; u8; i16; u16; i32; u32}
+                 kind=T.metal.ReduceKind.PRODUCT: one of {f16; f32; i8; u8; i16; u16; i32; u32}
+                 kind=T.metal.ReduceKind.MIN: one of {f16; f32; i8; u8; i16; u16; i32; u32}
+                 kind=T.metal.ReduceKind.MAX: one of {f16; f32; i8; u8; i16; u16; i32; u32}
+                 kind=T.metal.ReduceKind.AND: one of {i8; u8; i16; u16; i32; u32}
+                 kind=T.metal.ReduceKind.OR: one of {i8; u8; i16; u16; i32; u32}
+                 kind=T.metal.ReduceKind.XOR: one of {i8; u8; i16; u16; i32; u32}
+                 kind=T.metal.ReduceKind.ALL: bool
+                 kind=T.metal.ReduceKind.ANY: bool
+  operands
+    dst  Tensor(shape=(groups where 1 <= dst.shape[0] <= 32, 1), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, 1), (0, 0)), (S(0), B()), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024)
+    src  Tensor:
+           shape=(groups where 1 <= src.shape[0] <= 32, one of {width where one of {4; 32}; 1})
+           dtype=dtype
+           storage=rmem
+           layout=one of {ShardLayout(Layout((groups, width), (0, 0)), (S(0), S(1)), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024; switch kind:
+               kind=T.metal.ReduceKind.SUM: ShardLayout(Layout((groups, 1), (0, 0)), (S(0), Partial(reduction='sum')), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024
+               kind=T.metal.ReduceKind.MIN: ShardLayout(Layout((groups, 1), (0, 0)), (S(0), Partial(reduction='min')), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024
+               kind=T.metal.ReduceKind.MAX: ShardLayout(Layout((groups, 1), (0, 0)), (S(0), Partial(reduction='max')), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024}
+
+T.metal.shuffle
+  target             apple.m2_pro.gpu
+  target capability  simd_shuffle, simd_broadcast, simd_shuffle_xor, simd_shuffle_up, simd_shuffle_down, simd_shuffle_rotate_up, simd_shuffle_rotate_down
+  execution mesh     Mesh(('thread',), Layout(((groups, width),), ((width, 1),))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024
+  parameters
+    kind   any value where one of {T.metal.ShuffleKind.INDEX; T.metal.ShuffleKind.BROADCAST; T.metal.ShuffleKind.XOR; T.metal.ShuffleKind.UP; T.metal.ShuffleKind.DOWN; T.metal.ShuffleKind.ROTATE_UP; T.metal.ShuffleKind.ROTATE_DOWN} in {T.metal.ShuffleKind.INDEX, T.metal.ShuffleKind.BROADCAST, T.metal.ShuffleKind.XOR, T.metal.ShuffleKind.UP, T.metal.ShuffleKind.DOWN, T.metal.ShuffleKind.ROTATE_UP, T.metal.ShuffleKind.ROTATE_DOWN} (default T.metal.ShuffleKind.INDEX)
+    dtype  any value where one of {f16; f32; i8; u8; i16; u16; i32; u32} (type DType) (default f32)
+  operands
+    dst  Tensor(shape=(groups where 1 <= dst.shape[0] <= 32, width where one of {4; 32}), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, width), (0, 0)), (S(0), S(1)), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024)
+    src  Tensor(shape=(groups where 1 <= src.shape[0] <= 32, width where one of {4; 32}), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, width), (0, 0)), (S(0), S(1)), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024)
+    sel  switch kind:
+           kind=T.metal.ShuffleKind.INDEX: Tensor(shape=(groups where 1 <= sel.shape[0] <= 32, width where one of {4; 32}), dtype=u16, storage=rmem, layout=ShardLayout(Layout((groups, width), (0, 0)), (S(0), S(1)), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024)
+           kind=T.metal.ShuffleKind.BROADCAST: Tensor(shape=(), dtype=u16, layout=any layout)
+           kind=T.metal.ShuffleKind.XOR: Tensor(shape=(), dtype=u16, layout=any layout)
+           kind=T.metal.ShuffleKind.UP: Tensor(shape=(), dtype=u16, layout=any layout)
+           kind=T.metal.ShuffleKind.DOWN: Tensor(shape=(), dtype=u16, layout=any layout)
+           kind=T.metal.ShuffleKind.ROTATE_UP: Tensor(shape=(), dtype=u16, layout=any layout)
+           kind=T.metal.ShuffleKind.ROTATE_DOWN: Tensor(shape=(), dtype=u16, layout=any layout)
+
+T.metal.shuffle_fill
+  target             apple.m2_pro.gpu
+  target capability  simd_shuffle_and_fill_up, simd_shuffle_and_fill_down
+  execution mesh     Mesh(('thread',), Layout(((groups, width),), ((width, 1),))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024
+  parameters
+    kind    any value where one of {T.metal.ShuffleKind.UP; T.metal.ShuffleKind.DOWN} in {T.metal.ShuffleKind.INDEX, T.metal.ShuffleKind.BROADCAST, T.metal.ShuffleKind.XOR, T.metal.ShuffleKind.UP, T.metal.ShuffleKind.DOWN, T.metal.ShuffleKind.ROTATE_UP, T.metal.ShuffleKind.ROTATE_DOWN} (default T.metal.ShuffleKind.UP)
+    modulo  any value where one of {2; 4; 8; 16; 32}; modulo <= width (type int) (default 32)
+    dtype   any value where one of {f16; f32; i8; u8; i16; u16; i32; u32} (type DType) (default f32)
+  operands
+    dst    Tensor(shape=(groups where 1 <= dst.shape[0] <= 32, width where one of {4; 32}), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, width), (0, 0)), (S(0), S(1)), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024)
+    src    Tensor(shape=(groups where 1 <= src.shape[0] <= 32, width where one of {4; 32}), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, width), (0, 0)), (S(0), S(1)), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024)
+    fill   Tensor(shape=(groups where 1 <= fill.shape[0] <= 32, width where one of {4; 32}), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, width), (0, 0)), (S(0), S(1)), Mesh(('thread',), Layout(((groups, width),), ((width, 1),)))) where 1 <= _ <= 32; one of {4; 32}; groups * width <= 1024)
+    delta  Tensor(shape=(), dtype=u16, layout=any layout)
+
+T.unary
+  target             apple.m2_pro.gpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    kind  any value in {UnaryKind.NEG, UnaryKind.ABS, UnaryKind.RSQRT, UnaryKind.CAST, UnaryKind.NOT, UnaryKind.RELU, UnaryKind.SQUARE, UnaryKind.EXP, UnaryKind.LOG, UnaryKind.CEIL, UnaryKind.ROUND, UnaryKind.EXP2, UnaryKind.LOG2}
+  operands
+    src  Tensor(storage=rmem, layout=any layout)
+    dst  Tensor(storage=rmem, layout=any layout)
+
+T.where
+  target             apple.m2_pro.gpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  operands
+    cond  Tensor(dtype=bool, storage=rmem, layout=any layout)
+    lhs   Tensor(storage=rmem, layout=any layout)
+    rhs   Tensor(storage=rmem, layout=any layout)
+    dst   Tensor(storage=rmem, layout=any layout)
+  between operands
+    lhs.dtype = rhs.dtype
+    lhs.dtype = dst.dtype
+
+T.copy
+  target             apple.m2_pro.gpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  operands
+    src  Tensor:
+           dtype=dtype0
+           storage=storage0
+           layout=switch storage0:
+               storage0=gmem: src.layout
+               storage0=smem: src.layout
+               storage0=rmem: one of {ShardLayout(_, _, Mesh(_, ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))); layout}
+           predicates:
+             Bits('dtype0') % 8 == 0
+             storage0 in {gmem, smem, rmem}
+    dst  Tensor:
+           dtype=dtype1
+           storage=storage1
+           layout=switch storage1:
+               storage1=gmem: dst.layout
+               storage1=smem: dst.layout
+               storage1=rmem: one of {ShardLayout(_, _, Mesh(_, ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))); layout}
+           predicates:
+             Bits('dtype1') % 8 == 0
+             storage1 in {gmem, smem, rmem}
+  between operands
+    src.shape = dst.shape
+    src.dtype = dst.dtype
+
+T.metal.ldmatrix
+  target             apple.m2_pro.gpu
+  target capability  simdgroup_load
+  execution mesh     Mesh(('thread',), Layout(((groups, 2, 4, 2, 2),), ((32, 1, 2, 8, 16),))) where 1 <= _ <= 32
+  parameters
+    transpose  one of {False; True} (type bool) (default False)
+    dtype      any value where one of {f16; bf16; f32} (type DType) (default f32)
+  operands
+    dst  Tensor(shape=(groups where 1 <= dst.shape[0] <= 32, 8, 8), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, (2, 4), (2, 2, 2)), (0, (0, 0), (0, 0, 1))), (S(0), S(4), S(2), S(3), S(1)), Mesh(('thread',), Layout(((groups, 2, 4, 2, 2),), ((32, 1, 2, 8, 16),)))) where 1 <= _ <= 32)
+    src  Tensor(shape=(groups where 1 <= src.shape[0] <= 32, 8, 8), dtype=dtype, storage=one of {gmem; smem}, layout=Layout((groups, 8, 8), (group_stride, row_stride, 1)) where 1 <= _ <= 32; 8 <= _)
+
+T.metal.stmatrix
+  target             apple.m2_pro.gpu
+  target capability  simdgroup_store
+  execution mesh     Mesh(('thread',), Layout(((groups, 2, 4, 2, 2),), ((32, 1, 2, 8, 16),))) where 1 <= _ <= 32
+  parameters
+    transpose  one of {False; True} (type bool) (default False)
+    dtype      any value where one of {f16; bf16; f32} (type DType) (default f32)
+  operands
+    dst  Tensor(shape=(groups where 1 <= dst.shape[0] <= 32, 8, 8), dtype=dtype, storage=one of {gmem; smem}, layout=Layout((groups, 8, 8), (group_stride, row_stride, 1)) where 1 <= _ <= 32; 8 <= _)
+    src  Tensor(shape=(groups where 1 <= src.shape[0] <= 32, 8, 8), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, (2, 4), (2, 2, 2)), (0, (0, 0), (0, 0, 1))), (S(0), S(4), S(2), S(3), S(1)), Mesh(('thread',), Layout(((groups, 2, 4, 2, 2),), ((32, 1, 2, 8, 16),)))) where 1 <= _ <= 32)
+
+T.metal.matmul
+  target             apple.m2_pro.gpu
+  target capability  simdgroup_multiply
+  execution mesh     Mesh(('thread',), Layout(((groups, 2, 4, 2, 2),), ((32, 1, 2, 8, 16),))) where 1 <= _ <= 32
+  parameters
+    dtype  any value where one of {f16; bf16; f32} (type DType) (default f32)
+  operands
+    dst  Tensor(shape=(groups where 1 <= dst.shape[0] <= 32, 8, 8), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, (2, 4), (2, 2, 2)), (0, (0, 0), (0, 0, 1))), (S(0), S(4), S(2), S(3), S(1)), Mesh(('thread',), Layout(((groups, 2, 4, 2, 2),), ((32, 1, 2, 8, 16),)))) where 1 <= _ <= 32)
+    lhs  Tensor(shape=(groups where 1 <= lhs.shape[0] <= 32, 8, 8), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, (2, 4), (2, 2, 2)), (0, (0, 0), (0, 0, 1))), (S(0), S(4), S(2), S(3), S(1)), Mesh(('thread',), Layout(((groups, 2, 4, 2, 2),), ((32, 1, 2, 8, 16),)))) where 1 <= _ <= 32)
+    rhs  Tensor(shape=(groups where 1 <= rhs.shape[0] <= 32, 8, 8), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, (2, 4), (2, 2, 2)), (0, (0, 0), (0, 0, 1))), (S(0), S(4), S(2), S(3), S(1)), Mesh(('thread',), Layout(((groups, 2, 4, 2, 2),), ((32, 1, 2, 8, 16),)))) where 1 <= _ <= 32)
+
+T.metal.mma
+  target             apple.m2_pro.gpu
+  target capability  simdgroup_multiply_accumulate
+  execution mesh     Mesh(('thread',), Layout(((groups, 2, 4, 2, 2),), ((32, 1, 2, 8, 16),))) where 1 <= _ <= 32
+  parameters
+    dtype  any value where one of {f16; bf16; f32} (type DType) (default f32)
+  operands
+    dst  Tensor(shape=(groups where 1 <= dst.shape[0] <= 32, 8, 8), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, (2, 4), (2, 2, 2)), (0, (0, 0), (0, 0, 1))), (S(0), S(4), S(2), S(3), S(1)), Mesh(('thread',), Layout(((groups, 2, 4, 2, 2),), ((32, 1, 2, 8, 16),)))) where 1 <= _ <= 32)
+    lhs  Tensor(shape=(groups where 1 <= lhs.shape[0] <= 32, 8, 8), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, (2, 4), (2, 2, 2)), (0, (0, 0), (0, 0, 1))), (S(0), S(4), S(2), S(3), S(1)), Mesh(('thread',), Layout(((groups, 2, 4, 2, 2),), ((32, 1, 2, 8, 16),)))) where 1 <= _ <= 32)
+    rhs  Tensor(shape=(groups where 1 <= rhs.shape[0] <= 32, 8, 8), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, (2, 4), (2, 2, 2)), (0, (0, 0), (0, 0, 1))), (S(0), S(4), S(2), S(3), S(1)), Mesh(('thread',), Layout(((groups, 2, 4, 2, 2),), ((32, 1, 2, 8, 16),)))) where 1 <= _ <= 32)
+    acc  Tensor(shape=(groups where 1 <= acc.shape[0] <= 32, 8, 8), dtype=dtype, storage=rmem, layout=ShardLayout(Layout((groups, (2, 4), (2, 2, 2)), (0, (0, 0), (0, 0, 1))), (S(0), S(4), S(2), S(3), S(1)), Mesh(('thread',), Layout(((groups, 2, 4, 2, 2),), ((32, 1, 2, 8, 16),)))) where 1 <= _ <= 32)
+
+T.relu
+  target             apple.m2_pro.gpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  operands
+    src  Tensor(storage=rmem, layout=any layout)
+    dst  Tensor(storage=rmem, layout=any layout)
+  between operands
+    src.shape = dst.shape
+    src.dtype = dst.dtype
+
+T.reduce
+  target             apple.m2_pro.gpu
+  execution mesh     Mesh(('thread',), ComposedLayout(None, p0, Layout((*execution_shape,), (*execution_strides,))))
+  parameters
+    axes     any value (type tuple)
+    keepdim  any value (type bool)
+    kind     any value in {ReduceKind.MEAN, ReduceKind.SUM, ReduceKind.ABS_MAX, ReduceKind.MAX, ReduceKind.MIN}
+  operands
+    src        Tensor(dtype=src_dtype, layout=ShardLayout(Layout((*_,), (*_,)), _, Mesh(('thread',), ComposedLayout(None, mesh_offset, Layout((*mesh_shape,), (*mesh_stride,)))))) where src_dtype in {f32, f16, bf16}
+    dst        Tensor(dtype=dst_dtype, layout=ShardLayout(None, _, Mesh(('thread',), ComposedLayout(None, mesh_offset, Layout((*mesh_shape,), (*mesh_stride,)))))) where dst_dtype in {f32, f16, bf16}
+    workspace  Tensor(storage=smem, layout=any layout) or None (default None)
