@@ -8,7 +8,7 @@ from tilefoundry.interfaces import typeinfer
 from tilefoundry.ir import expr, types
 from tilefoundry.ir.expr import op_registry
 
-__all__ = ["Context", "gradient_layout"]
+__all__ = ["Context", "build", "gradient_layout", "scalar"]
 
 
 def gradient_layout(layout):
@@ -22,6 +22,19 @@ def gradient_layout(layout):
         return layout
     attrs = tuple(types.Broadcast() if isinstance(attr, types.Partial) else attr for attr in shard.attrs)
     return replace(shard, attrs=attrs)
+
+
+def build(name: str, *args: expr.Expr, **attrs) -> expr.Call:
+    """``tf.<name>(*args, **attrs)`` through the op registry, not typed yet."""
+    schema = op_registry.lookup("tf", (), name)
+    if not isinstance(schema, expr.OpSchema):
+        raise ValueError(f"autodiff: no tf op named {name!r}")
+    return expr.Call(type=types.TupleType(()), target=schema.builder(**attrs), args=args)
+
+
+def scalar(value: int | float, dtype: expr.DType) -> expr.Constant:
+    """A scalar literal of *dtype*, not typed in any context."""
+    return expr.Constant(type=types.TensorType.from_scalar(dtype, storage=expr.StorageKind.UMAT), value=value)
 
 
 @dataclass
@@ -39,17 +52,10 @@ class Context(typeinfer.TypeInferContext):
         Only the new call is typed: every argument must already have a type in
         this context, so the forward the arguments come from is never retyped.
         """
-        schema = op_registry.lookup("tf", (), name)
-        if not isinstance(schema, expr.OpSchema):
-            raise ValueError(f"autodiff: no tf op named {name!r}")
+        call = build(name, *args, **attrs)
         for arg in args:
             if id(arg) not in self.memo:
                 raise ValueError(f"autodiff: tf.{name} got an argument with no type in this context")
-        call = expr.Call(
-            type=types.TensorType.from_scalar(expr.DType.f32),
-            target=schema.builder(**attrs),
-            args=args,
-        )
         call.retype(typeinfer.TypeInferVisitor(owns_body=False).visit(call, self))
         return call
 
@@ -60,9 +66,7 @@ class Context(typeinfer.TypeInferContext):
         """
         if dtype is None:
             dtype = expr.DType.i64 if isinstance(value, int) else expr.DType.f32
-        constant = expr.Constant(
-            type=types.TensorType.from_scalar(dtype, storage=expr.StorageKind.UMAT), value=value
-        )
+        constant = scalar(value, dtype)
         return self.remember(constant, constant.type)
 
     def remember(self, node: expr.Expr, type_: types.Type) -> expr.Expr:

@@ -35,6 +35,12 @@ def test_split_off_dim_keeps_the_destination_layout(op) -> None:
 
 
 @pytest.mark.parametrize("op", OPS, ids=lambda op: type(op).__name__)
+def test_a_plain_table_takes_broadcast_rows(op) -> None:
+    table = TensorType.from_shape((5, 6), DType.f32)
+    assert infer_call(op, table, INDEX, placed((3, 6), Broadcast())) == table
+
+
+@pytest.mark.parametrize("op", OPS, ids=lambda op: type(op).__name__)
 @pytest.mark.parametrize(
     ("table", "index", "rows", "message"),
     (

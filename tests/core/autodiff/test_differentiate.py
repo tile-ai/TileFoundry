@@ -333,6 +333,12 @@ class MeshTwoRegions(Differentiated):
     wrt: tuple[str, ...] = ("x", "w")
 
 
+@case
+class VoidCall(Differentiated):
+    path: Path = FIXTURES / "void_call.py"
+    wrt: tuple[str, ...] = ("x",)
+
+
 BLOCK_WEIGHTS = ("wq", "wk", "wv", "wo", "wu", "wd")
 
 

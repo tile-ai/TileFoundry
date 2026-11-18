@@ -87,7 +87,8 @@ def reject_splits(ctx, call: "expr.Call", dim: int, dst, index, src) -> None:
                 "depends on the index values; reshard it to a replicated layout "
                 "before the update",
             )
-    if split_axes(dst) != split_axes(src):
+    held = (split_axes(dst), split_axes(src))
+    if any(axis is not None for axes in held for axis in axes) and held[0] != held[1]:
         ctx.error(call, "src must be split on the axes dst is split on")
 
 

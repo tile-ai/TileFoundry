@@ -209,10 +209,8 @@ def check_program(
     bound_module, bound_root = valuation.instantiate(module, function, dims)
     initial = valuation.Context(bound_module, bound_root)
     residual = set(valuation.dim_vars_reached(bound_root, initial))
-    owners = [bound_module]
-    for owner in owners:
+    for owner in core.module_definition_order(bound_module):
         residual.update(dim.vars_by_name(owner.topologies))
-        owners.extend(child for slot in owner.children.values() for child in core.instances(slot))
     if residual:
         raise valuation.SpecializationError(
             f"{function.name!r} still states {sorted(residual)} as ranges after binding {sorted(dims or ())}; every dimension has to be given an extent"

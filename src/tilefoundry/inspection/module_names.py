@@ -5,33 +5,11 @@ from __future__ import annotations
 from tilefoundry.ir import core
 
 
-def module_definition_order(*roots, before_children=False):
-    """Definitions of every root once, children before the slots that reference them."""
-    seen = set()
-    ordered = []
-
-    def visit(node):
-        if id(node) in seen:
-            return
-        seen.add(id(node))
-        if before_children:
-            ordered.append(node)
-        for slot in node.children.values():
-            for child in core.instances(slot):
-                visit(child)
-        if not before_children:
-            ordered.append(node)
-
-    for root in roots:
-        visit(root)
-    return ordered
-
-
 def definition_names(*named_roots):
     """A class name per definition: a ``(root, name)`` keeps its name, children take free ones."""
     names = {id(root): name for root, name in named_roots}
     taken = set(names.values())
-    for node in module_definition_order(*(root for root, _ in named_roots), before_children=True):
+    for node in core.module_definition_order(*(root for root, _ in named_roots), before_children=True):
         if id(node) in names:
             continue
         name = node.name
@@ -55,4 +33,4 @@ def slot_binding(key, slot, names):
     return f"{key} = {value}"
 
 
-__all__ = ["definition_names", "module_definition_order", "slot_binding"]
+__all__ = ["definition_names", "slot_binding"]

@@ -9,7 +9,7 @@ from tilefoundry.ir.expr import op_registry
 from tilefoundry.ir.hir import tensor
 from tilefoundry.ir.tir import memory
 
-from .module_names import definition_names, module_definition_order, slot_binding
+from .module_names import definition_names, slot_binding
 from .print_context import TirPrintContext, identifier
 from .printer_base import PythonPrinter, call_head
 
@@ -471,7 +471,7 @@ def tir_module_to_python(mod: core.Module, module_name: str | None = None) -> st
     ctx = TirPrintContext()
     declarations = []
     lines = []
-    for node in module_definition_order(mod):
+    for node in core.module_definition_order(mod):
         source = single_module_to_python(node, names[id(node)], names).splitlines()
         start = next(index for index, line in enumerate(source) if line.startswith("@module"))
         for line in source[:start]:
@@ -491,7 +491,7 @@ def tir_module_to_python(mod: core.Module, module_name: str | None = None) -> st
         lines.extend(
             (
                 "",
-                f"del {', '.join(names[id(node)] for node in module_definition_order(mod) if node is not mod)}",
+                f"del {', '.join(names[id(node)] for node in core.module_definition_order(mod) if node is not mod)}",
             )
         )
     header = ctx.header()

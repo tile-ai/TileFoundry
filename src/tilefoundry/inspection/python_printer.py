@@ -18,7 +18,7 @@ from tilefoundry.ir import utils as ir_utils
 from tilefoundry.ir.expr import op_registry
 from tilefoundry.ir.hir import tensor
 
-from .module_names import definition_names, module_definition_order, slot_binding
+from .module_names import definition_names, slot_binding
 from .print_context import HirPrintContext
 from .printer_base import PARTS, PythonPrinter, call_head
 from .tir_printer import function_block, tir_function_to_python, tir_module_to_python
@@ -1145,7 +1145,7 @@ def modules_source(
 ) -> str:
     """Render Module trees as one file: one header, and each definition once."""
     roots = tuple(root for root, _ in named_roots)
-    order = module_definition_order(*roots)
+    order = core.module_definition_order(*roots)
     if not any(node.functions for node in order):
         raise TypeError("Module printer requires at least one function")
     for root in roots:

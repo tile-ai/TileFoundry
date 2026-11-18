@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
+from pathlib import PurePath
 from typing import ClassVar
 
 
@@ -74,9 +75,13 @@ def binding_name(expr: "Expr") -> str | None:
     return binding.name if binding is not None else None
 
 
-def span_text(expr: "Expr") -> str | None:
+def span_text(expr: "Expr", *, column: bool = True, short: bool = False) -> str | None:
+    """``file:line:column`` of *expr*; *column* false drops the column, *short* the folder."""
     span = get_metadata(expr, SourceSpanMetadata)
-    return f"{span.file}:{span.line}:{span.column}" if span is not None else None
+    if span is None:
+        return None
+    text = f"{PurePath(span.file).name if short else span.file}:{span.line}"
+    return f"{text}:{span.column}" if column else text
 
 
 def diagnostic_location(expr: "Expr") -> str | None:
@@ -164,4 +169,5 @@ __all__ = [
     "get_metadata",
     "remove_metadata",
     "source_metadata",
+    "span_text",
 ]

@@ -11,11 +11,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from pathlib import Path
 
 from tilefoundry import dispatch, verifier
 from tilefoundry.interfaces import autodiff, typeinfer
 from tilefoundry.ir import core, expr, types
+from tilefoundry.ir import utils as ir_utils
 from tilefoundry.ir.hir import sharding, tensor
 
 __all__ = ["Saved", "differentiate", "saved_values", "select_value"]
@@ -76,7 +76,7 @@ def select_value(module: core.Module, selector: str) -> expr.Expr:
         raise ValueError(
             f"recompute {selector!r}: name a Module by its name, not by a path through child slots"
         )
-    found = {id(each): each for each in reachable(module) if each.name == name}
+    found = {id(each): each for each in core.module_definition_order(module) if each.name == name}
     if not found:
         raise ValueError(f"recompute {selector!r}: no Module named {name!r} is reachable from {module.name!r}")
     if len(found) > 1:
@@ -118,30 +118,9 @@ def select_value(module: core.Module, selector: str) -> expr.Expr:
     return value
 
 
-def reachable(module: core.Module) -> tuple[core.Module, ...]:
-    """*module* and every Module in its child slots, at any depth."""
-    seen: dict[int, core.Module] = {}
-    pending = [module]
-    while pending:
-        each = pending.pop()
-        if id(each) not in seen:
-            seen[id(each)] = each
-            for slot in each.children.values():
-                pending.extend(core.instances(slot))
-    return tuple(seen.values())
-
-
-def span_of(node: expr.Expr, *, short: bool = False) -> str | None:
-    """``file:line`` of *node*, the file by its base name when *short*."""
-    span = expr.get_metadata(node, expr.SourceSpanMetadata)
-    if span is None:
-        return None
-    return f"{Path(span.file).name if short else span.file}:{span.line}"
-
-
 def where(node: expr.Expr) -> str:
     """Where the author wrote *node*, and the name they bound it to."""
-    span = span_of(node)
+    span = expr.span_text(node, column=False)
     name = expr.binding_name(node)
     return " ".join(part for part in (span, f"({name})" if name else None) if part)
 
@@ -227,16 +206,6 @@ def pack(items: tuple[expr.Expr, ...]) -> expr.Tuple:
     return expr.Tuple(elements=tuple(items), type=types.TupleType(tuple(item.type for item in items)))
 
 
-def build(name: str, *args: expr.Expr, **attrs) -> expr.Call:
-    """``tf.<name>(*args, **attrs)`` with a placeholder type; the final inference types it."""
-    schema = expr.op_registry.lookup("tf", (), name)
-    return expr.Call(schema.builder(**attrs), args, type=types.TupleType(()))
-
-
-def integer(value: int, dtype: expr.DType) -> expr.Constant:
-    return expr.Constant(type=types.TensorType.from_scalar(dtype, storage=expr.StorageKind.UMAT), value=value)
-
-
 def trip_count(loop: core.LoopRegion) -> int:
     """How many iterations *loop* runs; a domain that is not three integers is refused."""
     domain = (loop.start, loop.extent, loop.step)
@@ -265,26 +234,42 @@ def stacked(type_: types.Type, trip: int, owners, where_: str) -> types.Type:
     return types.TensorType(shape, type_.dtype, layout, type_.storage)
 
 
-def scope_order(*roots: expr.Expr) -> list[expr.Expr]:
-    """The values of one scope, operands first; a region's body is a scope of its own."""
-    order: list[expr.Expr] = []
-    seen: set[int] = set()
-    stack = [(root, False) for root in reversed(roots)]
-    while stack:
-        node, expanded = stack.pop()
-        if expanded:
-            order.append(node)
-            continue
-        if id(node) in seen:
-            continue
-        seen.add(id(node))
-        stack.append((node, True))
-        if isinstance(node, (core.MeshRegion, core.LoopRegion)):
-            children = node.args
-        else:
-            children = core.expr_children(node)
-        stack.extend((child, False) for child in reversed(children) if id(child) not in seen)
-    return order
+def operands(node: expr.Expr) -> tuple[expr.Expr, ...]:
+    """The values *node* reads in its own scope: a region's args, not its body."""
+    if isinstance(node, (core.MeshRegion, core.LoopRegion)):
+        return node.args
+    return core.expr_children(node)
+
+
+class ScopeOrder(core.ExprCollector):
+    """The values of one scope, operands first, marking which are active and which invariant.
+
+    A value is active when it reads an active value. It is invariant when only
+    the scope's invariant parameters and constants reach it through Ops: in a
+    loop body, the induction value and the values the body reads from outside.
+    """
+
+    def __init__(self, scope: "Scope") -> None:
+        super().__init__()
+        self.scope = scope
+
+    def visit_operands(self, node: expr.Expr, ctx) -> tuple:
+        return tuple(self.visit(child, ctx) for child in operands(node))
+
+    def default_visit_leaf(self, node: expr.Expr, results: tuple, ctx: list[expr.Expr]) -> None:
+        read = operands(node)
+        if isinstance(node, (expr.Call, expr.Tuple, core.MeshRegion, core.LoopRegion)) and any(
+            id(value) in self.scope.active for value in read
+        ):
+            self.scope.active.add(id(node))
+        computed = isinstance(node, expr.Tuple) or (
+            isinstance(node, expr.Call) and not isinstance(node.target, core.FunctionRef)
+        )
+        if isinstance(node, (expr.Constant, core.ShapeOf)) or (
+            computed and all(id(value) in self.scope.invariant for value in read)
+        ):
+            self.scope.invariant.add(id(node))
+        ctx.append(node)
 
 
 @dataclass
@@ -316,10 +301,26 @@ class Scope:
     slots: dict[object, expr.Expr] = field(default_factory=dict)
     region_params: list[tuple[expr.Var, expr.Expr]] = field(default_factory=list)
     extras: list[tuple] = field(default_factory=list)
-    rebuilt: dict[int, expr.Expr] = field(default_factory=dict)
+    rebuilder: "Rebuilder | None" = None
+    invariant: set[int] = field(default_factory=set)
+    order: list[expr.Expr] = field(default_factory=list)
 
     def activate(self, ids: set[int]) -> None:
         self.active.update(ids)
+
+    def rebuilt(self, owner: "FunctionDifferentiator", node: expr.Expr) -> expr.Expr:
+        """*node* through this scope's ``Rebuilder``, made on first use."""
+        if self.rebuilder is None:
+            self.rebuilder = Rebuilder(owner, self)
+        return self.rebuilder.visit(node)
+
+    def walk(self, roots: tuple[expr.Expr, ...]) -> None:
+        """Order the values *roots* reach, marking the active and the invariant ones."""
+        self.order = []
+        walker = ScopeOrder(self)
+        for root in roots:
+            walker.visit(root, self.order)
+        self.nodes.update((id(node), node) for node in self.order)
 
     def remember_gradient(self, node: expr.Expr, gradient) -> None:
         self.gradients[id(node)] = gradient
@@ -327,28 +328,15 @@ class Scope:
     def remember_slot(self, slot: tuple, value: expr.Expr) -> None:
         self.slots[slot] = value
 
-    def remember_rebuilt(self, node: expr.Expr, value: expr.Expr) -> None:
-        self.rebuilt[id(node)] = value
 
 
-def mark_active(scope: Scope, order: list[expr.Expr]) -> None:
-    """Add to ``scope.active`` each value of *order* that reads an active value."""
-    for node in order:
-        if id(node) in scope.active:
-            continue
-        if isinstance(node, (core.MeshRegion, core.LoopRegion)):
-            children = node.args
-        elif isinstance(node, (expr.Call, expr.Tuple)):
-            children = core.expr_children(node)
-        else:
-            continue
-        if any(id(child) in scope.active for child in children):
-            scope.activate({id(node)})
-
-
-def new_scope(roots, params, ctx, active: set[int], parent=None, region=None, index=None) -> Scope:
-    nodes = {id(node): node for node in (*params, *scope_order(*roots))}
-    return Scope(nodes=nodes, ctx=ctx, parent=parent, region=region, active=active, index=index)
+def new_scope(roots, params, ctx, active: set[int], parent=None, region=None, index=None, invariant=()) -> Scope:
+    scope = Scope(
+        nodes={id(param): param for param in params}, ctx=ctx, parent=parent, region=region,
+        active=active, index=index, invariant=set(invariant),
+    )
+    scope.walk(roots)
+    return scope
 
 
 @dataclass
@@ -466,10 +454,7 @@ def wrt_indices(module: core.Module, function: core.Function, wrt: tuple[str, ..
                 f"differentiate: wrt {name!r} is a ConstTensor, a constant with no gradient; "
                 "declare a trained weight as an ordinary parameter"
             )
-        if not all(
-            isinstance(leaf, types.TensorType) and isinstance(leaf.dtype, expr.FloatDType)
-            for leaf in flat_types(param.type)
-        ):
+        if not all(isinstance(leaf.dtype, expr.FloatDType) for leaf in ir_utils.leaves_of(param.type)):
             raise ValueError(
                 f"differentiate: wrt {name!r} is not a floating point tensor or a tuple of them"
             )
@@ -477,18 +462,16 @@ def wrt_indices(module: core.Module, function: core.Function, wrt: tuple[str, ..
     return tuple(indices)
 
 
-def flat_types(type_: types.Type):
-    if isinstance(type_, types.TupleType):
-        for item in type_.fields:
-            yield from flat_types(item)
-    else:
-        yield type_
+class FunctionDifferentiator(expr.Functor[None]):
+    """The reverse pass over one function, then the forward and backward built from it.
 
-
-class FunctionDifferentiator:
-    """The reverse pass over one function, then the forward and backward built from it."""
+    The reverse pass visits each value of a scope with ``(scope, gradient)``, after
+    every value that reads it: ``reverse`` drives the visits in reverse
+    ``ScopeOrder``, which a memoized visitor that recurses into operands cannot give.
+    """
 
     def __init__(self, differ: Differentiator, module: core.Module, function: core.Function, wrt) -> None:
+        super().__init__()
         self.differ = differ
         self.module = module
         self.function = function
@@ -546,7 +529,7 @@ class FunctionDifferentiator:
             params.append(param)
             seeds.append(self.split(param, self.top.ctx))
         seed = tuple(seeds) if isinstance(function.return_type, types.TupleType) else seeds[0]
-        self.reverse(self.top, (function.body,), ((function.body, seed),))
+        self.reverse(self.top, ((function.body, seed),))
         outputs = tuple(
             self.finish(self.top.gradients.get(id(function.params[index])), function.params[index].type, self.top.ctx)
             for index in self.wrt
@@ -599,7 +582,8 @@ class FunctionDifferentiator:
         """*gradient* of a *type_* value, completed with zeros and laid out as ``gradient_type``."""
         if isinstance(type_, types.TupleType):
             parts = gradient if isinstance(gradient, tuple) else empty_like(type_)
-            return pack(tuple(self.finish(part, item, ctx) for part, item in zip(parts, type_.fields)))
+            packed = pack(tuple(self.finish(part, item, ctx) for part, item in zip(parts, type_.fields)))
+            return ctx.remember(packed, gradient_type(type_))
         if gradient is None:
             return ctx.call("zeros", type=gradient_type(type_))
         return self.laid_out(gradient, type_, ctx)
@@ -635,27 +619,26 @@ class FunctionDifferentiator:
             left, right = (self.finish(value, type_, ctx) for value in (left, right))
         return ctx.call("add", left, right)
 
-    def reverse(self, scope: Scope, roots: tuple[expr.Expr, ...], seeds) -> None:
-        """Walk the values *roots* reach backward from *seeds*, ``(value, gradient)`` pairs."""
-        order = scope_order(*roots)
-        mark_active(scope, order)
+    def reverse(self, scope: Scope, seeds) -> None:
+        """Walk the values of *scope* backward from *seeds*, ``(value, gradient)`` pairs."""
         for node, seed in seeds:
             self.accumulate(scope, node, seed)
-        for node in reversed(order):
+        for node in reversed(scope.order):
             gradient = scope.gradients.get(id(node))
-            if gradient is None or isinstance(node, expr.Var):
-                continue
-            if isinstance(node, expr.Tuple):
-                for item, part in zip(node.elements, gradient):
-                    self.accumulate(scope, item, part)
-            elif isinstance(node, core.MeshRegion):
-                self.reverse_region(scope, node, gradient)
-            elif isinstance(node, core.LoopRegion):
-                self.reverse_loop(scope, node, gradient)
-            elif isinstance(node.target, core.FunctionRef):
-                self.reverse_call(scope, node, gradient)
-            else:
-                self.reverse_op(scope, node, gradient)
+            if gradient is not None and not isinstance(node, expr.Var):
+                self.visit(node, (scope, gradient))
+
+    def visit_Tuple(self, node: expr.Tuple, ctx) -> None:
+        scope, gradient = ctx
+        for item, part in zip(node.elements, gradient):
+            self.accumulate(scope, item, part)
+
+    def visit_Call(self, node: expr.Call, ctx) -> None:
+        scope, gradient = ctx
+        if isinstance(node.target, core.FunctionRef):
+            self.reverse_call(scope, node, gradient)
+        else:
+            self.reverse_op(scope, node, gradient)
 
     def reverse_op(self, scope: Scope, call: expr.Call, gradient) -> None:
         """Apply the rule of *call*'s Op to *gradient*, laid out as ``gradient_layout`` first.
@@ -685,7 +668,7 @@ class FunctionDifferentiator:
         cotangents = []
         for part, wanted in zip(parts, derived.cotangents):
             if wanted is not None:
-                cotangents.append(self.cotangent(part, wanted, ctx))
+                cotangents.append(self.finish(part, wanted, ctx))
         placeholder = expr.Var(name="saved", type=derived.saved)
         ctx.remember(placeholder, derived.saved)
         self.placeholders[id(placeholder)] = ("callee", call)
@@ -703,21 +686,8 @@ class FunctionDifferentiator:
             value = backward if len(derived.wrt) == 1 else ctx.call("tuple_get_item", backward, ctx.constant(order))
             self.accumulate(scope, supplied[id(params[index])], self.split(value, ctx))
 
-    def cotangent(self, part, wanted: types.Type, ctx: autodiff.Context) -> expr.Expr:
-        """*part* as the gradient argument a callee's backward declares as *wanted*."""
-        if isinstance(wanted, types.TupleType):
-            parts = part if isinstance(part, tuple) else (None,) * len(wanted.fields)
-            elements = tuple(self.cotangent(item, field, ctx) for item, field in zip(parts, wanted.fields))
-            value = pack(elements)
-            ctx.remember(value, wanted)
-            return value
-        if part is None:
-            return ctx.call("zeros", type=wanted)
-        if ctx.type_of(part).layout != wanted.layout:
-            return ctx.call("reshard", part, layout=types.normalize_layout(wanted.layout), storage=wanted.storage)
-        return part
-
-    def reverse_region(self, scope: Scope, region: core.MeshRegion, gradient) -> None:
+    def visit_MeshRegion(self, region: core.MeshRegion, ctx) -> None:
+        scope, gradient = ctx
         ctx = scope.ctx.enter_region(region)
         active = {id(param) for param, arg in zip(region.params, region.args) if id(arg) in scope.active}
         inner = new_scope((region.body,), region.params, ctx, active, parent=scope, region=region)
@@ -729,7 +699,7 @@ class FunctionDifferentiator:
             params.append(param)
             args.append(value)
             seed = placed(seed, path, param)
-        self.reverse(inner, (region.body,), ((region.body, seed),))
+        self.reverse(inner, ((region.body, seed),))
         outputs = []
         for index, param in enumerate(region.params):
             for path, value in leaves(inner.gradients.get(id(param))):
@@ -749,12 +719,13 @@ class FunctionDifferentiator:
         for index, structure in result.items():
             self.accumulate(scope, region.args[index], structure)
 
-    def reverse_loop(self, scope: Scope, loop: core.LoopRegion, gradient) -> None:
+    def visit_LoopRegion(self, loop: core.LoopRegion, ctx) -> None:
         """A backward loop running the iterations in reverse.
 
         Its carries are the gradient of each forward carry and, for each value the
         body reads from outside, a sum of that value's gradient over the iterations.
         """
+        scope, gradient = ctx
         trip = trip_count(loop)
         carried = len(loop.yield_values)
         if not carried:
@@ -769,17 +740,16 @@ class FunctionDifferentiator:
         ctx.remember(index, index.type)
         roots = (loop.body, *loop.yield_values)
         active = {id(param) for param, arg in zip(loop.params, loop.args) if id(arg) in scope.active}
-        inner = new_scope(roots, (loop.induction_var, *loop.params), ctx, active, scope, loop, index)
-        order = scope_order(*roots)
-        while True:
-            mark_active(inner, order)
-            woken = {
-                id(param) for param, value in zip(loop.params, loop.yield_values)
-                if id(value) in inner.active and id(param) not in inner.active
-            }
-            if not woken:
-                break
+        invariant = (loop.induction_var, *loop.params[carried:])
+        inner = new_scope(
+            roots, (loop.induction_var, *loop.params), ctx, active, scope, loop, index, map(id, invariant)
+        )
+        while woken := {
+            id(param) for param, value in zip(loop.params, loop.yield_values)
+            if id(value) in inner.active and id(param) not in inner.active
+        }:
             inner.activate(woken)
+            inner.walk(roots)
         carries = [
             position for position in range(carried)
             if id(loop.params[position]) in inner.active and is_float(loop.params[position].type)
@@ -797,7 +767,7 @@ class FunctionDifferentiator:
             held = expr.Var(name=self.fresh(f"d{param.name}"), type=gradient_type(param.type))
             ctx.remember(held, held.type)
             params.append(held)
-            inits.append(self.cotangent(parts[position], held.type, scope.ctx))
+            inits.append(self.finish(parts[position], held.type, scope.ctx))
         sums = []
         for position in captures:
             for path, leaf in leaves(flat(loop.params[position].type)):
@@ -806,9 +776,9 @@ class FunctionDifferentiator:
                 sums.append((position, path, leaf, held))
                 params.append(held)
                 inits.append(scope.ctx.call("zeros", type=held.type))
-        self.reverse(inner, roots, [(loop.yield_values[position], held) for position, held in zip(carries, params)])
+        self.reverse(inner, [(loop.yield_values[position], held) for position, held in zip(carries, params)])
         updates = [
-            self.cotangent(inner.gradients.get(id(loop.params[position])), held.type, ctx)
+            self.finish(inner.gradients.get(id(loop.params[position])), held.type, ctx)
             for position, held in zip(carries, params)
         ]
         for position, path, leaf, held in sums:
@@ -838,25 +808,7 @@ class FunctionDifferentiator:
 
     def rebuild(self, node: expr.Expr, scope: Scope) -> expr.Expr:
         """*node* of the backward with every forward value it reads replaced by its slot."""
-        held = scope.rebuilt.get(id(node))
-        if held is not None:
-            return held
-        if id(node) in scope.nodes:
-            result = self.materialize(("node", node), scope)
-        elif id(node) in self.placeholders:
-            result = self.materialize(self.placeholders[id(node)], scope)
-        elif id(node) in self.regions:
-            result = self.rebuild_region(self.regions[id(node)], scope)
-        elif id(node) in self.loops:
-            result = self.rebuild_loop(self.loops[id(node)], scope)
-        elif isinstance(node, expr.Call):
-            result = replace(node, args=tuple(self.rebuild(arg, scope) for arg in node.args))
-        elif isinstance(node, expr.Tuple):
-            result = replace(node, elements=tuple(self.rebuild(item, scope) for item in node.elements))
-        else:
-            result = node
-        scope.remember_rebuilt(node, result)
-        return result
+        return scope.rebuilt(self, node)
 
     def rebuild_region(self, backward: RegionBackward, scope: Scope) -> core.MeshRegion:
         node = backward.node
@@ -880,7 +832,7 @@ class FunctionDifferentiator:
         if isinstance(value, expr.Var) or expr.binding_name(value):
             return value
         named = replace(value, metadata=(*value.metadata, expr.BindingMetadata(name=self.fresh("grad"))))
-        scope.remember_rebuilt(node, named)
+        scope.rebuilder.keep(node, named)
         return named
 
     def rebuild_loop(self, backward: RegionBackward, scope: Scope) -> core.LoopRegion:
@@ -1000,25 +952,12 @@ class FunctionDifferentiator:
     def recomputed(self, value: expr.Expr, scope: Scope) -> bool:
         """Whether *value*, of a loop body, is an Op's result that only invariant values reach.
 
-        Those are the induction value, the values the body reads from outside and
-        constants. The backward body computes such a value again instead of
-        stacking it: an index, or one layer's slice of a stacked weight.
+        The backward body computes such a value again instead of stacking it: an
+        index, or one layer's slice of a stacked weight.
         """
-        loop = scope.region
-        if not isinstance(loop, core.LoopRegion) or not isinstance(value, expr.Call):
-            return False
-        return self.invariant(value, loop)
-
-    def invariant(self, value: expr.Expr, loop: core.LoopRegion) -> bool:
-        if isinstance(value, (expr.Constant, core.ShapeOf)):
-            return True
-        if isinstance(value, expr.Var):
-            return value is loop.induction_var or any(value is param for param in loop.params[len(loop.yield_values):])
-        if isinstance(value, expr.Tuple):
-            return all(self.invariant(item, loop) for item in value.elements)
-        if isinstance(value, expr.Call) and not isinstance(value.target, core.FunctionRef):
-            return all(self.invariant(arg, loop) for arg in value.args)
-        return False
+        return isinstance(scope.region, core.LoopRegion) and isinstance(value, expr.Call) and (
+            id(value) in scope.invariant
+        )
 
     def callee_saved_in_loop(self, call: expr.Call, scope: Scope) -> expr.Expr:
         """A loop body callee's ``saved``, one item at a time.
@@ -1036,7 +975,7 @@ class FunctionDifferentiator:
         items = []
         for position, index in enumerate(derived.saved_params):
             arg = supplied.get(index)
-            if arg is not None and self.invariant(arg, scope.region):
+            if arg is not None and id(arg) in scope.invariant:
                 items.append(self.materialize(("node", arg), scope))
             else:
                 items.append(self.materialize(("callee", call, position), scope))
@@ -1091,7 +1030,7 @@ class FunctionDifferentiator:
         if key[0] == "callee":
             ref = key[1].target
             item = "" if len(key) == 2 else f"[{key[2]}]"
-            return f"{ref.qualified_name}.saved{item}", f"call {ref.qualified_name}  {span_of(key[1], short=True) or ''}".rstrip()
+            return f"{ref.qualified_name}.saved{item}", f"call {ref.qualified_name}  {expr.span_text(key[1], column=False, short=True) or ''}".rstrip()
         node = key[1]
         if isinstance(node, expr.Var):
             return node.name, "parameter" if any(node is param for param in self.function.params) else "carry"
@@ -1102,7 +1041,7 @@ class FunctionDifferentiator:
         else:
             kind = getattr(node.target, "kind", None)
             name = kind.value if isinstance(kind, Enum) else expr.op_registry.schema_of(type(node.target)).name
-        return expr.binding_name(node), f"{name}  {span_of(node, short=True) or ''}".rstrip()
+        return expr.binding_name(node), f"{name}  {expr.span_text(node, column=False, short=True) or ''}".rstrip()
 
     def forward(self) -> core.Function:
         function = self.function
@@ -1131,6 +1070,36 @@ def rebuild_structure(type_: types.Type, found) -> expr.Expr:
     if isinstance(type_, types.TupleType):
         return pack(tuple(rebuild_structure(item, found) for item in type_.fields))
     return next(found)
+
+
+class Rebuilder(core.ExprCloner):
+    """A copy of one scope's backward values that reads each forward value through its slot.
+
+    A forward value of the scope, a callee's saved placeholder, and a backward
+    region or loop are known by identity; any other value is copied with its
+    operands rebuilt.
+    """
+
+    def __init__(self, owner: FunctionDifferentiator, scope: Scope) -> None:
+        super().__init__()
+        self.owner = owner
+        self.scope = scope
+
+    def default_visit(self, node: expr.Expr, ctx) -> expr.Expr:
+        owner, scope = self.owner, self.scope
+        if id(node) in scope.nodes:
+            return owner.materialize(("node", node), scope)
+        if id(node) in owner.placeholders:
+            return owner.materialize(owner.placeholders[id(node)], scope)
+        if id(node) in owner.regions:
+            return owner.rebuild_region(owner.regions[id(node)], scope)
+        if id(node) in owner.loops:
+            return owner.rebuild_loop(owner.loops[id(node)], scope)
+        return super().default_visit(node, ctx)
+
+    def keep(self, node: expr.Expr, value: expr.Expr) -> None:
+        """Answer *value* for every later visit of *node*."""
+        self.memo[id(node)] = (node, value)
 
 
 class Inliner(core.BindingSubstitutionCloner):
@@ -1230,9 +1199,9 @@ class ForwardCloner(core.BindingSubstitutionCloner):
         dtype = node.induction_var.type.dtype
         ordinal = copied.induction_var
         if node.start != 0:
-            ordinal = build("sub", ordinal, integer(node.start, dtype))
+            ordinal = autodiff.build("sub", ordinal, autodiff.scalar(node.start, dtype))
         if node.step != 1:
-            ordinal = build("floor_div", ordinal, integer(node.step, dtype))
+            ordinal = autodiff.build("floor_div", ordinal, autodiff.scalar(node.step, dtype))
         trip = trip_count(node)
         carried = len(node.yield_values)
         stacks, inits, updates, counts = [], [], [], []
@@ -1248,10 +1217,10 @@ class ForwardCloner(core.BindingSubstitutionCloner):
                 stack_type = stacked(leaf, trip, scope.ctx.resolve_target().storage_owners, "")
                 stack = expr.Var(name=self.owner.fresh(f"stack_{self.owner.key_name(key)[0] or 'v'}"), type=stack_type)
                 stacks.append(stack)
-                inits.append(build("zeros", type=stack_type))
-                corner = pack((ordinal, *(integer(0, dtype) for _ in leaf.shape)))
-                updates.append(build(
-                    "insert_slice", stack, build("reshape", piece, new_shape=(1, *leaf.shape)), corner
+                inits.append(autodiff.build("zeros", type=stack_type))
+                corner = pack((ordinal, *(autodiff.scalar(0, dtype) for _ in leaf.shape)))
+                updates.append(autodiff.build(
+                    "insert_slice", stack, autodiff.build("reshape", piece, new_shape=(1, *leaf.shape)), corner
                 ))
         loop = replace(
             copied,

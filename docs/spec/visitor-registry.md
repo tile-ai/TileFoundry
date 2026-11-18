@@ -1077,11 +1077,20 @@ def rule(call: Call, cotangent, ctx: Context) -> tuple[Expr | None, ...]:
 class Context(TypeInferContext):
     def call(self, name: str, *args: Expr, **attrs) -> Call:
         """Build ``tf.<name>(*args, **attrs)`` through the op registry and infer its type."""
+
+def build(name: str, *args: Expr, **attrs) -> Call:
+    """``tf.<name>(*args, **attrs)`` through the op registry, not typed yet."""
+
+def scalar(value: int | float, dtype: DType) -> Constant:
+    """A scalar literal of *dtype*, not typed in any context."""
 ```
 
 - constraints:
   - A rule builds every new Call through `ctx.call`, which finds the Op by its
     DSL name. An Op file does not import another Op file to build its gradient.
+    `ctx.call` is `build` plus type inference; `build` and `scalar` serve code
+    whose values the type inference of the whole function types later, such
+    as the stacks `differentiate` adds to a forward loop.
   - One rule per Op class. A rule dispatches on the kind of the Op (`Binary`,
     `Unary`, `Reduce`) itself; a kind it does not support raises `ValueError`
     naming the Op and the kind.

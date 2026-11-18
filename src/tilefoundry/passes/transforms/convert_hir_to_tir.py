@@ -1617,20 +1617,10 @@ class ConvertHIRToTIR(pass_base.ModulePass):
         )
         lowering.run()
         lowered[id(function)] = lowering
-        modules = set()
-
-        def lower_module(node):
-            if id(node) in modules:
-                return
-            modules.add(id(node))
-            for slot in node.children.values():
-                for child in core.instances(slot):
-                    lower_module(child)
+        for node in core.module_definition_order(module):
             node.replace_functions(
                 lowered[id(fn)].lowered if id(fn) in lowered else fn for fn in node.functions
             )
-
-        lower_module(module)
         return module
 
 
