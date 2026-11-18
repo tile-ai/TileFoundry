@@ -275,8 +275,11 @@ def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
     axes it changes.
     """
     source = ctx.type_of(call.args[0])
-    layout = types.normalize_layout(autodiff.gradient_layout(source.layout))
-    return (ctx.call("reshard", cotangent, layout=layout, storage=source.storage),)
+    wanted = autodiff.gradient_layout(source.layout)
+    held = ctx.type_of(cotangent)
+    if (held.layout, held.storage) == (wanted, source.storage):
+        return (cotangent,)
+    return (ctx.call("reshard", cotangent, layout=types.normalize_layout(wanted), storage=source.storage),)
 
 
 __all__ = ["Reshard"]

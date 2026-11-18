@@ -65,7 +65,9 @@ def fields(type_: types.Type) -> tuple[types.Type, ...]:
     return type_.fields if isinstance(type_, types.TupleType) else (type_,)
 
 
-def check_gradients(module: core.Module, forward: core.Module, backward: core.Module, wrt) -> None:
+def check_gradients(
+    module: core.Module, forward: core.Module, backward: core.Module, wrt, rtol: float = 1e-5, atol: float = 1e-6
+) -> None:
     """The backward's gradients equal autograd's through the evaluator, for ones (D36)."""
     function = module.entry_function()
     generator = torch.Generator().manual_seed(0)
@@ -86,7 +88,11 @@ def check_gradients(module: core.Module, forward: core.Module, backward: core.Mo
     computed = computed if len(wrt) > 1 else (computed,)
     for want, got in zip(reference, leaves(computed), strict=True):
         want = torch.zeros_like(got) if want is None else want
-        torch.testing.assert_close(got, want, rtol=1e-5, atol=1e-6)
+        torch.testing.assert_close(got, want, rtol=rtol, atol=atol)
+
+
+def where(value: expr.Expr) -> str:
+    return expr.binding_name(value) or type(value.target).__name__
 
 
 def reshards(backward: core.Module) -> list[tuple[tuple, tuple]]:
@@ -108,13 +114,15 @@ class Differentiated(Case):
     recompute: tuple[str, ...] = ()
     saved: frozenset[str] | None = None
     reshards: tuple[tuple[tuple, tuple], ...] = ()
+    rtol: float = 1e-5
+    atol: float = 1e-6
 
     def guard(self, module, problems):
         before = inspection.as_script(module)
         forward, backward = differentiate.differentiate(module, wrt=self.wrt, recompute=self.recompute)
         assert inspection.as_script(module) == before, "differentiate changed its input Module"
         assert (forward.name, backward.name) == (f"{module.name}Forward", f"{module.name}Backward")
-        check_gradients(module, forward, backward, self.wrt)
+        check_gradients(module, forward, backward, self.wrt, self.rtol, self.atol)
         if self.saved is not None:
             assert {value.name for value in differentiate.saved_values(forward)} == self.saved
         params = {param.name: param for param in module.entry_function().params}
@@ -124,6 +132,10 @@ class Differentiated(Case):
         for name, type_ in zip(self.wrt, returned):
             for got, held in zip(leaves(flat(type_)), leaves(flat(params[name].type))):
                 assert got.layout == autodiff.gradient_layout(held.layout), name
+        for value in core.collect_exprs(backward.entry_function().body):
+            if isinstance(value, expr.Call) and isinstance(value.target, sharding.Reshard):
+                source = value.args[0].type
+                assert (source.layout, source.storage) != (value.type.layout, value.type.storage), where(value)
         found = reshards(backward)
         for expected in self.reshards:
             assert expected in found, (expected, found)
@@ -321,6 +333,88 @@ class MeshTwoRegions(Differentiated):
     wrt: tuple[str, ...] = ("x", "w")
 
 
+BLOCK_WEIGHTS = ("wq", "wk", "wv", "wo", "wu", "wd")
+
+
+@case
+class FsdpModel(Differentiated):
+    """examples/fsdp_training as written: tf.relu, tf.log, and every weight trained."""
+
+    path: Path = FIXTURES / "fsdp_model.py"
+    wrt: tuple[str, ...] = (
+        "we", "q1", "k1", "v1", "o1", "u1", "d1", "q2", "k2", "v2", "o2", "u2", "d2", "wh",
+    )
+    rtol: float = 1e-4
+    atol: float = 1e-5
+
+
+@case
+class HsdpBlock(Differentiated):
+    path: Path = FIXTURES / "hsdp_block.py"
+    wrt: tuple[str, ...] = ("x", *BLOCK_WEIGHTS)
+    rtol: float = 1e-4
+    atol: float = 1e-5
+
+
+@case
+class MegatronBlock(Differentiated):
+    """The Partial gradient of a Broadcast value is reduced before a rule reads it."""
+
+    path: Path = FIXTURES / "megatron_block.py"
+    wrt: tuple[str, ...] = ("x", "wn1", "wq", "wk", "wv", "wo", "wn2", "wg", "wu", "wd")
+    reshards: tuple = (((P,), (B,)),)
+    rtol: float = 1e-4
+    atol: float = 1e-5
+
+
+@case
+class SplitIndexSelect(Differentiated):
+    path: Path = FIXTURES / "split_index_select.py"
+    wrt: tuple[str, ...] = ("table",)
+
+
+@case
+class LayersLoop(Differentiated):
+    """Each layer's weights and index are computed again, not stacked; the stacks are saved once."""
+
+    path: Path = FIXTURES / "layers_loop.py"
+    wrt: tuple[str, ...] = ("x", "wn0", "norms", "up", "down")
+    saved: frozenset[str] | None = frozenset({
+        "x", "wn0", "x0", "v8", "v9", "norms", "up", "down",
+        "layer.saved[0]", "layer.saved[2]", "layer.saved[5]", "layer.saved[6]",
+    })
+    rtol: float = 1e-4
+    atol: float = 1e-5
+
+
+@case
+class FsdpLoop(Differentiated):
+    """The backward gathers each layer again from the split stacked weights, which it saves."""
+
+    path: Path = FIXTURES / "fsdp_loop.py"
+    saved: frozenset[str] | None = frozenset(
+        {"up", "down", "v5", "layer.saved[1]", "layer.saved[3]", "layer.saved[4]"}
+    )
+    wrt: tuple[str, ...] = ("x", "up", "down")
+    rtol: float = 1e-4
+    atol: float = 1e-5
+
+
+@case
+class QwenBlock(Differentiated):
+    path: Path = FIXTURES / "qwen_block.py"
+    wrt: tuple[str, ...] = ("x", "wn1", "wq", "wk", "wv", "wo", "wn2", "wg", "wu", "wd")
+    recompute: tuple[str, ...] = ("Qwen:p", "Qwen:h2", "Qwen:gate")
+    rtol: float = 1e-4
+    atol: float = 1e-5
+
+
+@case
+class Moe(Differentiated):
+    path: Path = FIXTURES / "moe.py"
+    wrt: tuple[str, ...] = ("x", "wg", "experts")
+
+
 CASES = special(Differentiated)
 
 
@@ -377,7 +471,7 @@ REFUSED = (
     ("elementwise.py", ("q",), (), "wrt 'q' is not a parameter"),
     ("int_param.py", ("index",), (), "wrt 'index' is not a floating point"),
     ("const_param.py", ("w",), (), "wrt 'w' is a ConstTensor"),
-    ("no_rule.py", ("x",), (), "ReLU has no autodiff rule"),
+    ("no_rule.py", ("x",), (), "Tanh has no autodiff rule"),
     ("unsupported_kind.py", ("x",), (), "Binary MIN has no autodiff rule"),
     ("loop_dynamic.py", ("x",), (), "trip count is not static"),
     ("loop_range.py", ("x",), ("LoopRange.forward:row",), "'row' is computed inside a loop"),

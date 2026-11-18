@@ -1,4 +1,4 @@
-"""ReLU has no autodiff rule."""
+"""Tanh has no autodiff rule."""
 
 from tilefoundry.dsl import *
 from tilefoundry.target import cpu
@@ -8,5 +8,5 @@ from tilefoundry.target import cpu
 class NoRule:
     @func
     def forward(x: Tensor[(4, 3), "f32"]):
-        r = tf.relu(x)
+        r = tf.tanh(x)
         return r * x

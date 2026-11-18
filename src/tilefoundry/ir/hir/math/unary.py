@@ -93,7 +93,7 @@ def eval_unary(ctx):
 
 @autodiff.register(Unary)
 def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
-    """NEG, EXP, RSQRT and SQUARE; EXP and RSQRT read the result, SQUARE reads the input."""
+    """NEG, EXP, LOG, RSQRT and SQUARE; EXP and RSQRT read the result, LOG and SQUARE the input."""
     (x,) = call.args
     kind = call.target.kind
     dtype = ctx.type_of(call).dtype
@@ -101,6 +101,8 @@ def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
         return (ctx.call("neg", cotangent),)
     if kind is expr.UnaryKind.EXP:
         return (ctx.call("mul", cotangent, call),)
+    if kind is expr.UnaryKind.LOG:
+        return (ctx.call("div", cotangent, x),)
     if kind is expr.UnaryKind.RSQRT:
         cube = ctx.call("mul", ctx.call("mul", call, call), call)
         return (ctx.call("mul", cotangent, ctx.call("mul", ctx.constant(-0.5, dtype), cube)),)

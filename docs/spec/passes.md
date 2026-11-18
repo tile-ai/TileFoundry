@@ -519,6 +519,9 @@ def select_value(module: core.Module, selector: str) -> expr.Expr: ...
 returns two Modules. It reads the entry of *module*, which MUST have passed type
 inference, and builds `<Name>Forward` and `<Name>Backward`. The author calls the
 two from a step of their own; `differentiate` builds no step and no optimizer.
+It returns two Modules because the author's step computes the loss between
+them, and the backward reads values the forward computed: those reach it only
+through `saved`.
 
 - The forward entry keeps the name and the parameters of the original entry. It
   returns the original results, flattened, and last a `saved` tuple.
@@ -534,7 +537,8 @@ two from a step of their own; `differentiate` builds no step and no optimizer.
   Each Module keeps one forward and one backward version of it under its own
   name. A child slot's Module is differentiated the same way and takes the same
   slot in both generated Modules. A callee's `saved` is one item of its
-  caller's `saved`.
+  caller's `saved`; in a loop body its items are taken one at a time, as the
+  loop rule below says.
 - A `MeshRegion` stays a region in both Modules. A value inside a forward
   region that the backward reads leaves the region as an extra result; the
   backward region of the same mesh takes it, and the gradients, as arguments.
@@ -548,15 +552,22 @@ two from a step of their own; `differentiate` builds no step and no optimizer.
   iteration with `InsertSlice`, and returns the stacks as extra results; the
   backward reads its row with `Slice`. The induction value is not stacked: the
   backward computes it from its own index. A value the body reads from outside
-  is not stacked. A loop that runs no iteration passes the gradient of each
-  carry to its initial value.
+  is not stacked. A body value that an Op computes from the induction value,
+  values the body reads from outside and constants only is computed again in
+  the backward body, not stacked. An item of a body callee's `saved` that is a
+  parameter of the callee, passed such a value, is that value again; the other
+  items are stacked one by one. A loop that runs no iteration passes the
+  gradient of each carry to its initial value.
 - A value that only parameters outside `wrt`, constants and `ConstTensor`
   parameters reach has no gradient and gets none; a `wrt` parameter that no
   gradient reaches gets zeros.
 - Gradient layout: the gradient of a value of layout `L` has layout
   `gradient_layout(L)`, which is `L` with each `Partial` read as `Broadcast`.
-  The backward of a `Reshard` reshards the gradient back to `gradient_layout`
-  of its input's layout, in one `Reshard`. Each gradient parameter of the
+  A gradient that reaches an Op's rule with another layout, such as the
+  `Partial` gradient a column-split `MatMul` gives its `Broadcast` input, is
+  resharded to it first. The backward of a `Reshard` reshards the gradient,
+  whatever its layout, back to `gradient_layout` of its input's layout, in one
+  `Reshard`, and in none when the two layouts are the same. Each gradient parameter of the
   backward has `gradient_layout` of its result's layout. A `wrt` gradient whose
   layout differs from `gradient_layout` of its parameter's layout gets a final
   `Reshard` to it, so a broadcast weight's partial gradient is all-reduced.

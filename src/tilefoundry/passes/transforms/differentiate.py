@@ -16,7 +16,7 @@ from pathlib import Path
 from tilefoundry import dispatch, verifier
 from tilefoundry.interfaces import autodiff, typeinfer
 from tilefoundry.ir import core, expr, types
-from tilefoundry.ir.hir import tensor
+from tilefoundry.ir.hir import sharding, tensor
 
 __all__ = ["Saved", "differentiate", "saved_values", "select_value"]
 
@@ -299,6 +299,7 @@ class Derived:
     saved: types.TupleType
     gradients: types.Type
     saved_values: tuple[Saved, ...] = ()
+    saved_params: tuple[int | None, ...] = ()
 
 
 @dataclass
@@ -577,6 +578,11 @@ class FunctionDifferentiator:
             saved=self.saved.type,
             gradients=backward.return_type,
             saved_values=tuple(self.record(index, key) for index, key in enumerate(self.saved_keys)),
+            saved_params=tuple(
+                next((index for index, param in enumerate(function.params) if key[1] is param), None)
+                if key[0] == "node" else None
+                for key in self.saved_keys
+            ),
         )
 
     def split(self, value: expr.Expr, ctx: autodiff.Context):
@@ -594,9 +600,17 @@ class FunctionDifferentiator:
         if isinstance(type_, types.TupleType):
             parts = gradient if isinstance(gradient, tuple) else empty_like(type_)
             return pack(tuple(self.finish(part, item, ctx) for part, item in zip(parts, type_.fields)))
-        wanted = gradient_type(type_)
         if gradient is None:
-            return ctx.call("zeros", type=wanted)
+            return ctx.call("zeros", type=gradient_type(type_))
+        return self.laid_out(gradient, type_, ctx)
+
+    def laid_out(self, gradient, type_: types.Type, ctx: autodiff.Context):
+        """*gradient* of a *type_* value, resharded to ``gradient_layout``; None stays None."""
+        if gradient is None:
+            return None
+        if isinstance(type_, types.TupleType):
+            return tuple(self.laid_out(part, item, ctx) for part, item in zip(gradient, type_.fields))
+        wanted = gradient_type(type_)
         if ctx.type_of(gradient).layout != wanted.layout:
             gradient = ctx.call(
                 "reshard", gradient, layout=types.normalize_layout(wanted.layout), storage=wanted.storage
@@ -644,11 +658,18 @@ class FunctionDifferentiator:
                 self.reverse_op(scope, node, gradient)
 
     def reverse_op(self, scope: Scope, call: expr.Call, gradient) -> None:
+        """Apply the rule of *call*'s Op to *gradient*, laid out as ``gradient_layout`` first.
+
+        A Reshard's rule lays out its own result, so a Partial gradient reaches the
+        source's layout in one Reshard.
+        """
         op = type(call.target)
         try:
             rule = autodiff.registry.require(op)
         except dispatch.MissingHandlerError as error:
             raise ValueError(f"differentiate: {op.__name__} has no autodiff rule{located(call)}") from error
+        if op is not sharding.Reshard:
+            gradient = self.laid_out(gradient, call.type, scope.ctx)
         try:
             gradients = rule(call, gradient, scope.ctx)
         except (ValueError, expr.VerifyError) as error:
@@ -886,7 +907,7 @@ class FunctionDifferentiator:
             result = replace(value)
         elif key[0] == "node" and isinstance(value, expr.Tuple):
             result = replace(value, elements=tuple(self.materialize(("node", item), scope) for item in value.elements))
-        elif key[0] == "node" and id(value) in self.differ.recompute:
+        elif key[0] == "node" and (id(value) in self.differ.recompute or self.recomputed(value, scope)):
             result = replace(value, args=tuple(self.materialize(("node", arg), scope) for arg in value.args))
         elif scope.parent is None:
             result = projection(self.saved, len(self.saved_keys), self.key_type(key), self.read_name(key))
@@ -896,10 +917,10 @@ class FunctionDifferentiator:
         else:
             if key[0] == "node" and any(value is param for param in scope.region.params):
                 index = next(i for i, param in enumerate(scope.region.params) if param is value)
-                outer = self.materialize(("node", scope.region.args[index]), scope.parent)
+                outer = self.capture(("node", scope.region.args[index]), scope.parent)
             else:
                 scope.extras.append(key)
-                outer = self.materialize(("extra", scope, len(scope.extras) - 1), scope.parent)
+                outer = self.capture(("extra", scope, len(scope.extras) - 1), scope.parent)
             if is_projection(outer) and outer.args[0] is self.saved:
                 index = outer.args[1].value
                 result = projection(self.saved_in(scope), index, self.key_type(key), self.read_name(key))
@@ -908,6 +929,20 @@ class FunctionDifferentiator:
                 scope.region_params.append((result, outer))
         scope.remember_slot(slot, result)
         return result
+
+    def capture(self, key: tuple, scope: Scope) -> expr.Expr:
+        """``materialize``, with a binding name, for a region of *scope* to capture.
+
+        The parser sorts a region's captures by their printed names, so each one
+        needs its name before the printer would make one up.
+        """
+        value = self.materialize(key, scope)
+        if isinstance(value, expr.Var) or expr.binding_name(value):
+            return value
+        name = self.fresh(self.key_name(key)[0] or "saved")
+        named = replace(value, metadata=(*value.metadata, expr.BindingMetadata(name=name)))
+        scope.remember_slot((key[0], id(key[1]), *key[2:]), named)
+        return named
 
     def saved_in(self, scope: Scope) -> expr.Var:
         """``saved`` as a parameter of the region *scope*, so its items are read inside the mesh."""
@@ -940,10 +975,12 @@ class FunctionDifferentiator:
             if loop.start != 0:
                 coordinate = ctx.call("add", coordinate, ctx.constant(loop.start, scope.index.type.dtype))
             return coordinate
+        if key[0] == "callee" and len(key) == 2:
+            return self.callee_saved_in_loop(value, scope)
         carried = len(loop.yield_values)
         if key[0] == "node" and any(value is param for param in loop.params[carried:]):
             position = next(i for i, param in enumerate(loop.params) if param is value)
-            outer = self.materialize(("node", loop.args[position]), scope.parent)
+            outer = self.capture(("node", loop.args[position]), scope.parent)
             result = expr.Var(name=self.fresh(value.name), type=self.key_type(key))
             ctx.remember(result, result.type)
             scope.region_params.append((result, outer))
@@ -951,7 +988,7 @@ class FunctionDifferentiator:
         held = self.key_type(key)
         owners = ctx.resolve_target().storage_owners
         scope.extras.append(key)
-        outer = self.materialize(("extra", scope, len(scope.extras) - 1), scope.parent)
+        outer = self.capture(("extra", scope, len(scope.extras) - 1), scope.parent)
         stacks = expr.Var(
             name=self.fresh(f"stack_{self.key_name(key)[0] or 'saved'}"),
             type=stacked(held, trip, owners, located(self.key_node(key))),
@@ -959,6 +996,51 @@ class FunctionDifferentiator:
         ctx.remember(stacks, stacks.type)
         scope.region_params.append((stacks, outer))
         return self.row(stacks, held, ordinal, ctx)
+
+    def recomputed(self, value: expr.Expr, scope: Scope) -> bool:
+        """Whether *value*, of a loop body, is an Op's result that only invariant values reach.
+
+        Those are the induction value, the values the body reads from outside and
+        constants. The backward body computes such a value again instead of
+        stacking it: an index, or one layer's slice of a stacked weight.
+        """
+        loop = scope.region
+        if not isinstance(loop, core.LoopRegion) or not isinstance(value, expr.Call):
+            return False
+        return self.invariant(value, loop)
+
+    def invariant(self, value: expr.Expr, loop: core.LoopRegion) -> bool:
+        if isinstance(value, (expr.Constant, core.ShapeOf)):
+            return True
+        if isinstance(value, expr.Var):
+            return value is loop.induction_var or any(value is param for param in loop.params[len(loop.yield_values):])
+        if isinstance(value, expr.Tuple):
+            return all(self.invariant(item, loop) for item in value.elements)
+        if isinstance(value, expr.Call) and not isinstance(value.target, core.FunctionRef):
+            return all(self.invariant(arg, loop) for arg in value.args)
+        return False
+
+    def callee_saved_in_loop(self, call: expr.Call, scope: Scope) -> expr.Expr:
+        """A loop body callee's ``saved``, one item at a time.
+
+        An item that is a parameter of the callee, passed a loop invariant value,
+        is that value again; every other item is stacked on its own.
+        """
+        derived = self.callees[id(call)]
+        ref = call.target
+        params = core.resolve(self.module, ref)[1].params
+        supplied = dict(zip(
+            (index for index, param in enumerate(params) if not (ref.path and param.is_const)),
+            ref.arguments(call.args),
+        ))
+        items = []
+        for position, index in enumerate(derived.saved_params):
+            arg = supplied.get(index)
+            if arg is not None and self.invariant(arg, scope.region):
+                items.append(self.materialize(("node", arg), scope))
+            else:
+                items.append(self.materialize(("callee", call, position), scope))
+        return scope.ctx.remember(pack(tuple(items)), derived.saved)
 
     def row(self, stacks: expr.Expr, type_: types.Type, row: expr.Expr, ctx: autodiff.Context) -> expr.Expr:
         """Row *row*, a scalar, of the stacks of a value of *type_*, shaped as that value."""
@@ -985,7 +1067,8 @@ class FunctionDifferentiator:
         if key[0] == "node":
             return key[1].type
         if key[0] == "callee":
-            return self.callees[id(key[1])].saved
+            saved = self.callees[id(key[1])].saved
+            return saved if len(key) == 2 else saved.fields[key[2]]
         _, scope, index = key
         inner = self.key_type(scope.extras[index])
         if isinstance(scope.region, core.LoopRegion):
@@ -1007,7 +1090,8 @@ class FunctionDifferentiator:
             return name, origin
         if key[0] == "callee":
             ref = key[1].target
-            return f"{ref.qualified_name}.saved", f"call {ref.qualified_name}  {span_of(key[1], short=True) or ''}".rstrip()
+            item = "" if len(key) == 2 else f"[{key[2]}]"
+            return f"{ref.qualified_name}.saved{item}", f"call {ref.qualified_name}  {span_of(key[1], short=True) or ''}".rstrip()
         node = key[1]
         if isinstance(node, expr.Var):
             return node.name, "parameter" if any(node is param for param in self.function.params) else "carry"
@@ -1187,7 +1271,9 @@ class ForwardCloner(core.BindingSubstitutionCloner):
         if key[0] == "node":
             return self.visit(key[1], env)
         if key[0] == "callee":
-            return projection(self.calls[id(key[1])], self.owner.callees[id(key[1])].results, key[1].type)
+            derived = self.owner.callees[id(key[1])]
+            saved = projection(self.calls[id(key[1])], derived.results, derived.saved)
+            return saved if len(key) == 2 else projection(saved, key[2], derived.saved.fields[key[2]])
         _, scope, index = key
         self.visit(scope.region, env)
         if isinstance(scope.region, core.LoopRegion):
