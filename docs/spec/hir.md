@@ -1126,7 +1126,11 @@ operation and is not an HIR op.
     because torch's last copy is nondeterministic; consumers MUST NOT rely on an
     order.
   - `IndexAdd` and `IndexCopy` reject a `Partial` on `dst`, `index`, or `src`.
-    Complete `Split` and `Broadcast` layouts remain logical HIR types.
+    They reject a `Split` of `index`, and a `Split` of `dst` or `src` on `dim`:
+    which rows a unit writes would depend on the index values. A `Split` on
+    another axis is accepted when `src` is split on the axes `dst` is: each unit
+    holds whole rows of that axis and writes them. `Broadcast` layouts remain
+    logical HIR types.
   - `IndexAdd` and `IndexCopy` have type inference, cost, and evaluator
     semantics only. No HIR-to-TIR lowering is registered.
   - `IndexAdd` charges one add and reads `src`, `index`, and the addressed `dst`

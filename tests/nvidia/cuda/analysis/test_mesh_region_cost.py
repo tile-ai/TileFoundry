@@ -80,3 +80,12 @@ def test_region_calls_priced_per_position() -> None:
     ]
     binary_flops = sorted(analysis.shares(item.flops, item.topologies)["f32"] for item in binaries)
     assert binary_flops == [8, helper_flops * 2, 16]
+
+
+def test_index_add_into_a_split_table_charges_each_gpu_its_columns() -> None:
+    """A table split off the indexed axis: each of two GPUs adds the rows into half the columns."""
+    path = Path(__file__).parents[1] / "fixtures/placed/index_write_split.py"
+    module = cli.load_authored_ir(f"{path}:IndexAddColumns")
+    result = analysis.analyze(*analysis.check_program(module, module.entry_function()), analysis="compute-cost")
+    record = expr.get_metadata(result.function, analysis.ComputeCostMetadata)
+    assert analysis.shares(record.flops, record.topologies, "gpu")["f32"] == 9
