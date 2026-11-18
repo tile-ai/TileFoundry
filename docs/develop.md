@@ -122,8 +122,8 @@ short bullet list — keep it that way.
 ### Spec impact
 
 - A milestone that changes a public contract lists its owning `docs/spec/*.md`
-  files in its `#### Related Files`; one that changes none lists no spec path.
-  There is no separate declaration to keep in step with that list.
+  files as `# <path>` headers in its `##### Delivered`; one that changes none
+  names no spec path. There is no separate declaration to keep in step with them.
 - Contract-changing implementation and its specification ship in the same
   milestone.
 

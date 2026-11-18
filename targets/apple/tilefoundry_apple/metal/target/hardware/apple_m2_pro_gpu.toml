@@ -1,0 +1,50 @@
+[spec]
+schema = "tilefoundry.metal.device/v1"
+kind = "device"
+id = "apple.m2_pro.gpu"
+
+[compatibility]
+architectures = ["apple.gpu8"]
+
+[facts.identity.name]
+value = "apple_m2_pro_gpu"
+unit = "name"
+origin = "measured"
+source = "MTLDevice.name on Apple M2 Pro"
+conditions = "MTLDevice.name reports Apple M2 Pro."
+
+[facts.compute.max_threads_per_threadgroup]
+value = 1024
+unit = "count"
+origin = "measured"
+source = "MTLDevice.maxThreadsPerThreadgroup on Apple M2 Pro"
+conditions = "Device-wide limit; each compute pipeline may impose a smaller maxTotalThreadsPerThreadgroup."
+
+[facts.memory.threadgroup]
+value = 32768
+unit = "byte"
+origin = "measured"
+source = "MTLDevice.maxThreadgroupMemoryLength on Apple M2 Pro"
+conditions = "Per threadgroup."
+
+[facts.memory.unified.capacity]
+value = 34359738368
+unit = "byte"
+origin = "measured"
+source = "sysctl(8)"
+conditions = "32 GiB from sysctl hw.memsize; one DRAM pool shared with the CPU, not a Metal allocation budget or recommended working set."
+
+[facts.memory.unified.bandwidth]
+value = 200000000000
+unit = "byte/s"
+origin = "vendor"
+source = "Apple M2 Pro product specification"
+conditions = "Published decimal 200 GB/s package bandwidth shared with the CPU; not measured GPU bandwidth."
+
+[facts.compute.resident_threadgroups]
+status = "unavailable"
+conditions = "No sourced per-device residency count; the GPU core count does not establish it."
+
+[facts.memory.register_per_thread]
+status = "unavailable"
+conditions = "Apple publishes no register allocation capacity."

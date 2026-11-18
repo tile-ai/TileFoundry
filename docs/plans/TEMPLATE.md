@@ -4,49 +4,35 @@ component: <component name>
 target_repo: tilefoundry
 ---
 
-<!-- Read this before writing any of the plan below.
+<!-- How to discuss a plan with the author:
 
-     Pass 1 -- audit the repository and probe what is not yet known. Write
-     `### Current state`, and nothing else yet.
+     Round 1 -- audit the code and write `### Current state`. Settle the open
+     questions one by one into `### Decisions`, and write each milestone's
+     `##### Delivered` as a sketch. Stop and show it to the author.
 
-     Pass 2 -- write each milestone's `##### Delivered` shape. Then stop and show
-     the author those shapes. No prose exists yet, so a shape that is not what the
-     author meant costs ten lines to redirect rather than a document to rewrite.
+     Round 2 -- refine `##### Delivered` into the delivered code, and write
+     `##### Accepted by`. Stop and show it to the author.
 
-     Pass 3 -- write the rest, then run scripts/finalize_plan_context.py.
+     Round 3 -- add the constraints and failure paths, then run
+     scripts/finalize_plan_context.py.
 
-     Append to `### Decisions` as each question is settled. Never edit an accepted
-     record; append one that supersedes it.
-
-     Settle with the author anything an agent would otherwise decide alone at
-     implementation time -- the delivered code and the way it is accepted alike.
-
+     Settle with the author anything an implementer would otherwise decide alone.
      Use only the headings below. -->
 
 # [TYPE][component] <short description>
 
 ## Description
-<!-- The problem and the intended result. Only what the reader needs before the
-     current state. -->
+<!-- The problem and the intended result. -->
 
 ### Current state
-<!-- State the mechanism the code implements today: what is there, and what is
-     missing. No design and no proposal -- the gap is the finding, not the fix.
-
-     One bullet per claim, each citing a path in backticks. A claim with nothing to
-     point at is the one that turns out to be wrong, and the design resting on it
-     moves once it does. -->
+<!-- What the code does today and what is missing. No design. One bullet per
+     claim, each with a path. -->
 - `<dir>/<file>.py:<line>` <what it does today>
-- `<dir>/<file>.py` <a number a probe produced, and what it means>
 
 ### Decisions
-<!-- Append-only. One settled question per record, never edited once accepted:
-     when the answer changes, append a record that supersedes the earlier one.
-     `None.` when the plan settled nothing an implementer would otherwise choose.
-
-     A record is where "why a new one rather than the existing one" gets answered.
-     A new file, class, registry entry, analysis family, or test belongs here with
-     its reason, because that is the choice a reader most often disagrees with. -->
+<!-- Append-only: to change one, append a record that supersedes it. Give the
+     reason for each new file, class, registry entry, or test. `None.` when
+     nothing was settled. -->
 - D1 <question> -- <choice>, because <reason>.
 - D2 <question> -- <choice>, because <reason>. Supersedes D1: <what changed>.
 
@@ -55,56 +41,35 @@ target_repo: tilefoundry
 ### Milestone M0: <name>
 
 #### Depends
-<!-- `None`, or the milestones in this plan that must land first. -->
+<!-- `None`, or earlier milestones of this plan. -->
 - None
 
 #### Target State Design
 
 ##### Delivered
-<!-- The surface this milestone designs, the behaviour it executes, and its
-     output, in delivered form. Use code or compact pseudocode, in a fenced
-     block tagged with a programming language.
-
-     At least one block MUST be a ```diff, because plain code states the end
-     state but not which lines are new, which are context, and which go away --
-     leaving the reader to reconstruct the change, and two readers reconstruct
-     it differently. Head each ```diff with `# <path>` naming the file it
-     changes; a `+` with no path says what to write and not where. After a
-     header every line is `+` (added), `-` (removed), or a leading space
-     (context that locates them), until the next header. A block of context
-     only states no change and fails.
-
-     Blocks that are not diffs stay welcome beside it: a whole new file, the
-     shape a caller sees, a ```text of the output it produces. -->
+<!-- The final form, with whichever fits each part:
+     - a ```text tree of the files or modules, or the output a caller sees;
+     - an ADT: the types and the signatures, in a ```python block;
+     - a table: fields, states, rules, or a mapping;
+     - a ```diff headed by `# <path>`, with `+`, `-`, and context lines, for a
+       change to an existing file. At least one block MUST be a ```diff.
+     Head each block with `# <path>`; these paths select the acceptance criteria
+     the milestone inherits, so name every file it touches, the owning
+     docs/spec/*.md included when a public contract changes. -->
 ```diff
-# src/module.py
+# path/to/module.py
  def <the function this lands in>(...):
 -    <the line that goes away>
 +    <the line that replaces it>
 ```
 
 ##### Accepted by
-<!-- The one place acceptance is stated: first the means, then the behaviour.
-
-     Means -- two answers are legal, and the first is not an exception:
-       - nothing new; name the existing suites that must still pass unchanged
-       - the test that earns its place; say which bar it clears and what breaks it
-     Settled with the author while the plan is written.
-
-     Behaviour -- one checkbox each, in terms a reviewer can check off. State what
-     must be observable, not which suite shows it; the means above already said
-     that. -->
-- [ ] <observable completed behaviour>
-- [ ] <observable completed behaviour>
+<!-- First the means: existing tests that must still pass, or the new test and
+     what failure it catches. Then one checkbox for each observable behaviour. -->
+- [ ] <observable behaviour>
 <!-- policy_ac:start -->
 - [ ] Touched tests MUST be reviewed for redundancy: remove ones superseded by the retained workflow, and do not add source-shape or hypothetical-refactor guards unless that form is a public contract. <!-- policy_ac: milestone_review-0 -->
 <!-- policy_ac:end -->
-
-#### Related Files
-<!-- Files this milestone touches. `filter_policies` reads them to choose which
-     acceptance criteria this milestone inherits, so a missing path silently drops
-     one. List owning docs/spec/*.md files when it changes a public contract. -->
-- <path>
 
 ## Final Gate
 
