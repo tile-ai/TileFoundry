@@ -273,9 +273,10 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
                                 f"and leaves {labels.get(after, repr(after))}"
                             )
                             if before in labels and after in labels:
+                                entry, held = ("reshard", "bitcast") if after == types.Varying() else ("bitcast", "reshard")
                                 hint += (
-                                    f"; reshard the entry to {labels[after]} "
-                                    f"or the yield to {labels[before]}"
+                                    f"; {entry} the entry to {labels[after]} "
+                                    f"or {held} the yield to {labels[before]}"
                                 )
                             break
                     if hint:

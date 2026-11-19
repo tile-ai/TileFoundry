@@ -208,3 +208,17 @@ def test_loop_index_reads_broadcast_when_its_bounds_are_the_same_everywhere(modu
     shard = types.shard_layout_of(picked.type.layout)
     assert (shard is not None and shard.attrs == (_B,)) is replicated
     assert replicated or picked.type.layout == types.Layout(picked.type.shape)
+
+
+@pytest.mark.parametrize(
+    ("module", "remedy"),
+    (
+        ("EntersBroadcast", "reshard the entry to V or bitcast the yield to B"),
+        ("EntersVarying", "bitcast the entry to B or reshard the yield to V"),
+    ),
+)
+def test_loop_carry_mismatch_names_bitcast_for_varying_to_broadcast(module, remedy) -> None:
+    """A Reshard moves data, so the Varying-to-Broadcast side of the remedy is a Bitcast."""
+    fixture = Path(__file__).parents[2] / "fixtures" / "diagnostics" / "loop_carry_hints.py"
+    with pytest.raises(expr.VerifyError, match=remedy):
+        cli.load_authored_ir(f"{fixture}:{module}")
