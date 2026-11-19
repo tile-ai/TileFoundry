@@ -35,7 +35,7 @@ class RoPE(expr.Op):
 def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TupleType:
     q_ty = ctx.type_of(call.args[0])
     k_ty = ctx.type_of(call.args[1])
-    cos_ty, sin_ty, pos_ty = typeinfer.shard_read_types(ctx, call.args)[2:]
+    cos_ty, sin_ty, pos_ty = typeinfer.operand_types(ctx, call.args)[2:]
     if not q_ty.shape or not k_ty.shape:
         ctx.error(call, "q and k must be at least rank-1")
     if len(q_ty.shape) != len(k_ty.shape):

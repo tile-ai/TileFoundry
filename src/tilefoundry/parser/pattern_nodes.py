@@ -5179,8 +5179,14 @@ class LoopHeaderPattern(ElementPattern):
             step = runtime.normalize_dim(values["step"])
         except (TypeError, ValueError) as error:
             raise ParseError.from_node(match.node, context, str(error)) from error
+        inference = context.lexical_scope.lookup(TYPE_INFER_CONTEXT)
         induction_var = runtime.Var(
-            type=runtime.TensorType.from_scalar(runtime.DType.i64),
+            type=runtime.induction_type(
+                (start, extent, step),
+                runtime.TensorType.from_scalar(runtime.DType.i64),
+                inference.mesh_scope,
+                lambda bound: bound.type,
+            ),
             name=match.captures["target"],
         )
         carry_names = tuple(

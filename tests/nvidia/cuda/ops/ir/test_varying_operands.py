@@ -55,6 +55,13 @@ CASES = (
         target=_H200,
     ),
     OpCase(
+        "binary_zeros_keeps_broadcast",
+        _MUL,
+        (held((4,), _B), expr.Call(tensor.Zeros(type=plain((4,))), (), type=plain((4,)))),
+        type=held((4,), _B),
+        target=_H200,
+    ),
+    OpCase(
         "binary_literal_scale_keeps_partial_sum",
         _MUL,
         (held((4,), _P), _HALF),
@@ -222,6 +229,17 @@ def test_loop_index_reads_broadcast_when_its_bounds_are_the_same_everywhere(modu
     shard = types.shard_layout_of(picked.type.layout)
     assert (shard is not None and shard.attrs == (_B,)) is replicated
     assert replicated or picked.type.layout == types.Layout(picked.type.shape)
+
+
+def test_broadcast_index_binds_a_plain_parameter() -> None:
+    """A Broadcast argument binds a plain parameter: a value the same everywhere also varies."""
+    loaded = cli.load_authored_ir(f"{Path(__file__).parents[2] / 'fixtures' / 'ops' / 'loop_index_reads.py'}:IndexArgument")
+    (call,) = (
+        node
+        for node in core.collect_exprs(loaded.entry_function().body)
+        if isinstance(node, expr.Call) and isinstance(node.target, core.FunctionRef)
+    )
+    assert types.shard_layout_of(call.args[1].type.layout).attrs == (_B,)
 
 
 @pytest.mark.parametrize(

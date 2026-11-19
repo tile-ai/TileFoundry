@@ -98,7 +98,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     )
     la, lb = lhs_ty.layout, rhs_ty.layout
 
-    lhs_read, rhs_read = typeinfer.shard_read_types(ctx, call.args)
+    lhs_read, rhs_read = typeinfer.operand_types(ctx, call.args)
     ir_utils.check_multilinear_partials((("lhs", lhs_read), ("rhs", rhs_read)), ctx.target.storage_owners if ctx.target else tilefoundry_target.StorageOwners(), kind=op.kind)
     storage = typeinfer.resolve_anchor_storage(ctx, call, lhs_ty.storage, rhs_ty.storage)
     try:

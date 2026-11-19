@@ -76,7 +76,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     reject_normalized_splits(call, ctx, "x", x_ty, axis)
     reject_normalized_splits(call, ctx, "weight", weight_ty, 0)
     reject_normalized_splits(call, ctx, "bias", bias_ty, 0)
-    return typeinfer.combine_operand_attrs(x_ty, typeinfer.shard_read_types(ctx, call.args)[1:], ctx)
+    return typeinfer.combine_operand_attrs(x_ty, typeinfer.operand_types(ctx, call.args)[1:], ctx)
 
 
 @evaluator.register(LayerNorm)

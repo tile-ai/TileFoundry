@@ -44,7 +44,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     for arg, ty in (("x", x_ty), ("weight", w_ty)):
         ir_utils.reject_partials(arg, ty.layout)
 
-    return typeinfer.combine_operand_attrs(x_ty, typeinfer.shard_read_types(ctx, call.args)[1:], ctx)
+    return typeinfer.combine_operand_attrs(x_ty, typeinfer.operand_types(ctx, call.args)[1:], ctx)
 
 
 @access.register_relation(RMSNorm)

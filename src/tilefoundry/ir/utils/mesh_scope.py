@@ -131,13 +131,16 @@ def runs(mesh: types.Mesh, names) -> dict:
     }
 
 
-def within_mesh_scope(mesh: types.Mesh, current: types.Mesh) -> bool:
+def within_mesh_scope(mesh: types.Mesh, current: types.Mesh, names=None) -> bool:
     """Whether each topology of *mesh* selects a contiguous run inside the one *current* selects.
 
     Both runs must be contiguous; the bounds compare by the conservative range of dims.
+    *names*, when given, limits the comparison to those topologies.
     """
     scope = runs(current, topology_names(current))
     for t, name in enumerate(topology_names(mesh)):
+        if names is not None and name not in names:
+            continue
         if name not in scope:
             return False
         (count, first_unit_id), (bound, scope_first_unit_id) = selected_units(mesh, t), scope[name]

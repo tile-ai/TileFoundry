@@ -222,7 +222,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
         utils.attrs_by_axis(held, None if layout is not None else shard_mesh, owners)
         for held, layout in zip((x_ty, result), layouts)
     )
-    if layouts[0] is None and typeinfer.uniform(call.args[0], ctx):
+    if layouts[0] is None and isinstance(call.args[0], expr.Constant):
         states = ({key: types.Broadcast() for key in states[0]}, states[1])
     units = axis_units(next((layout.mesh for layout in layouts if layout is not None), None))
     for key in states[0].keys() | states[1].keys():

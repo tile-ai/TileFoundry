@@ -224,6 +224,7 @@ runtime = SimpleNamespace(
     TupleType=types.TupleType,
     TypeInferContext=typeinfer.TypeInferContext,
     TypeInferVisitor=typeinfer.TypeInferVisitor,
+    induction_type=typeinfer.induction_type,
     bind_annotation=types.bind_annotation,
     TupleGetItem=tensor.TupleGetItem,
     Unary=math.Unary,

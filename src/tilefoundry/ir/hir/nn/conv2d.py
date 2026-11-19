@@ -258,7 +258,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
         if static is not None and static <= 0:
             ctx.error(call, f"output {name} extent must be positive, got {static}")
 
-    read = typeinfer.shard_read_types(ctx, call.args)
+    read = typeinfer.operand_types(ctx, call.args)
     require_exact_partial_state(call, ctx, *read)
     require_group_aligned_output_split(call, ctx, w, bias, group_count)
     relation = access.relations_of(call, ctx)

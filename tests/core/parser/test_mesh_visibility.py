@@ -62,6 +62,11 @@ def test_finer_layout_than_scope_rejected() -> None:
         cli.load_authored_ir(str(_DIAGNOSTICS / "value_escapes.py"))
 
 
+def test_broadcast_value_of_another_slice_rejected() -> None:
+    with pytest.raises(expr.VerifyError, match="input 0 is laid out more finely than the scope it runs in"):
+        cli.load_authored_ir(str(_DIAGNOSTICS / "broadcast_other_slice.py"))
+
+
 def test_coarse_rmem_layout_rejected() -> None:
     with pytest.raises(
         expr.VerifyError,

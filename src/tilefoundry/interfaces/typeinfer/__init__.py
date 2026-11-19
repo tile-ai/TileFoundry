@@ -8,7 +8,7 @@ from .registry import register, registry
 from .shard_propagate import (
     combine_operand_attrs,
     derive_output_shard_layout,
-    shard_read_types,
-    uniform,
+    induction_type,
+    operand_types,
 )
 from .visitor import TypeInferVisitor, infer_function, inference_type
