@@ -1030,6 +1030,162 @@ class PipelineBackward(AnalysisCase):
         assert _moved(state.report, "grad", "communication") == {"gpu": (128, 128, 128)}
 
 
+def _region_peaks(result) -> list[int]:
+    """Each mesh region's gmem peak, in body order."""
+    return [
+        peak.peak_bytes
+        for node in core.collect_exprs(result.function.body)
+        if isinstance(node, core.MeshRegion)
+        for peak in expr.get_metadata(node, analysis.RegionMemoryMetadata).peaks
+        if peak.memory_level == "gmem"
+    ]
+
+
+def _differentiated(stem: str, root: str, wrt: tuple[str, ...], half: int):
+    (module,) = _constants(stem, root)
+    generated = differentiate.differentiate(module, wrt=wrt)[half]
+    return generated, generated.entry_function()
+
+
+@case
+class TensorParallelBlock(AnalysisCase):
+    """Megatron TP: each row-split matmul ends in an all-reduce of a (8, 16) f32 partial.
+
+    A GPU sends half its 512-byte partial. The block writes no mesh scope, so
+    one unit executes it and the total equals that share.
+    """
+
+    path: Path = PLACED / "megatron_block_cuda.py"
+    name: str | None = "TensorParallel"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 8_064, "rmem": 0})
+
+    def guard(self, state, problems):
+        for value in ("o", "d"):
+            assert _moved(state.report, value, "communication") == {"gpu": (256, 256, 256)}
+
+
+@case
+class TensorParallelForward(AnalysisCase):
+    path: Path = PLACED / "megatron_block_cuda.py"
+    name: str | None = "TensorParallelForward"
+    api: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 10_880, "rmem": 0})
+
+    def program(self):
+        return _differentiated("megatron_block_cuda", "TensorParallel", ("x", "wq"), 0)
+
+
+@case
+class TensorParallelBackward(AnalysisCase):
+    path: Path = PLACED / "megatron_block_cuda.py"
+    name: str | None = "TensorParallelBackward"
+    api: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 12_704, "rmem": 0})
+
+    def program(self):
+        return _differentiated("megatron_block_cuda", "TensorParallel", ("x", "wq"), 1)
+
+
+@case
+class HsdpBlockCuda(AnalysisCase):
+    """HSDP on a (replicate, shard) mesh of four GPUs."""
+
+    path: Path = PLACED / "hsdp_block_cuda.py"
+    name: str | None = "HsdpBlock"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 13_568, "rmem": 0})
+
+
+@case
+class ExpertParallelBound(AnalysisCase):
+    """EP with n = 4 tokens per expert per GPU: the all-to-all moves half of each local tensor.
+
+    Bucketed tokens are (2, 2n, 8) f32 split on axis 0: 256 bytes per GPU, 128
+    sent; the result coming back is 512 per GPU, 256 sent.
+    """
+
+    path: Path = PLACED / "expert_parallel_cuda.py"
+    name: str | None = "ExpertParallel"
+    dims: Mapping[str, int] | None = MappingProxyType({"n": 4})
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 1_824})
+
+    def guard(self, state, problems):
+        assert _moved(state.report, "received", "communication") == {"gpu": (128, 256, 256)}
+        assert _moved(state.report, "v3", "communication") == {"gpu": (256, 512, 512)}
+
+
+@case
+class ExpertParallelUpperBound(AnalysisCase):
+    """At n's upper bound of 8 the peak is still a number the capacity check reads."""
+
+    path: Path = PLACED / "expert_parallel_cuda.py"
+    name: str | None = "ExpertParallel"
+    dims: Mapping[str, int] | None = MappingProxyType({"n": 8})
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 2_880})
+
+    def guard(self, state, problems):
+        memory = state.report["functions"][0]["function_records"]["memory"]
+        (peak,) = memory["peaks"]
+        assert peak["peak_bytes"] <= peak["capacity_bytes"]
+        assert memory["errors"] == []
+
+
+@case
+class ExpertParallelForward(AnalysisCase):
+    path: Path = PLACED / "expert_parallel_cuda.py"
+    name: str | None = "ExpertParallelForward"
+    dims: Mapping[str, int] | None = MappingProxyType({"n": 4})
+    api: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 2_080})
+
+    def program(self):
+        return _differentiated("expert_parallel_cuda", "ExpertParallel", ("tokens", "w"), 0)
+
+
+@case
+class ExpertParallelBackward(AnalysisCase):
+    path: Path = PLACED / "expert_parallel_cuda.py"
+    name: str | None = "ExpertParallelBackward"
+    dims: Mapping[str, int] | None = MappingProxyType({"n": 4})
+    api: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 3_104})
+
+    def program(self):
+        return _differentiated("expert_parallel_cuda", "ExpertParallel", ("tokens", "w"), 1)
+
+    def guard(self, state, problems):
+        assert _moved(state.report, "v7", "communication") == {"gpu": (128, 256, 256)}
+
+
+@case
+class PipelineOneLoop(AnalysisCase):
+    """Each microbatch goes straight on: stage 1 holds w1 256 + moved 128 + y 128 + acc 128."""
+
+    path: Path = PLACED / "pipeline_loops_cuda.py"
+    name: str | None = "OneLoop"
+    internal: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 1_024, "rmem": 0})
+
+    def guard(self, state, problems):
+        assert _region_peaks(state.result) == [896, 640, 1_024]
+
+
+@case
+class PipelineTwoLoops(AnalysisCase):
+    """The stack is held on stage 1: 512 more than OneLoop there.
+
+    That is the 512-byte stack less the one 128-byte microbatch OneLoop moves,
+    plus the 128-byte microbatch picked out of the stack each step.
+    """
+
+    path: Path = PLACED / "pipeline_loops_cuda.py"
+    name: str | None = "TwoLoops"
+    internal: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 1_536, "rmem": 0})
+
+    def guard(self, state, problems):
+        assert _region_peaks(state.result) == [1_536, 1_152, 1_536]
+
+
 @case
 class ReshardUnitSets(AnalysisCase):
     """Each way the GPUs holding a value can change, priced as one copy per GPU that gains it."""

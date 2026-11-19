@@ -388,7 +388,7 @@ def combine_operand_attrs(result, others: tuple, ctx) -> "types.TensorType":
     owners = target.storage_owners if target else expr.StorageOwners((), {})
     held = utils.attrs_by_axis(result, shard.mesh, owners)
     states = tuple(utils.attrs_by_axis(type_, shard.mesh, owners) for type_ in others)
-    attrs = []
+    attrs, promoted = [], False
     for mesh_axis, key in enumerate(held):
         attr = shard.attrs[mesh_axis] if mesh_axis < len(shard.attrs) else types.Broadcast()
         if any(isinstance(state[key], types.Varying) for state in states):
@@ -398,7 +398,10 @@ def combine_operand_attrs(result, others: tuple, ctx) -> "types.TensorType":
                 )
             if isinstance(held[key], types.Broadcast) and owners.private(result.storage, key[0]):
                 attr = held[key] = types.Varying()
+                promoted = True
         attrs.append(attr)
+    if not promoted:
+        return result
     if all(isinstance(attr, types.Varying) for attr in held.values()):
         return replace(result, layout=types.Layout(result.shape))
     shard = replace(shard, attrs=tuple(attrs))

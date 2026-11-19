@@ -266,8 +266,9 @@ def shard_read_types(ctx, operands: tuple[Expr, ...]) -> tuple[Type, ...]: ...
     the result keeps its attr. A `Partial` result with a `Varying` operand MUST fail
     (`ValueError`). Every other pair leaves the result unchanged; the op's own
     checks own `Split` and `Partial`.
-  - A result that is `Varying` on every mesh axis is the plain `Layout` over its
-    shape. A plain result is returned unchanged.
+  - A result that this rule makes `Varying` on every mesh axis is the plain
+    `Layout` over its shape. A result the rule does not change, plain or not, is
+    returned as written.
   - The mesh and the address layout of the result do not change.
   - `shard_read_types` returns each operand's type. A literal with a plain
     layout is given an all-`Broadcast` `ShardLayout` on the mesh of the first
