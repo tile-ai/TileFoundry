@@ -24,6 +24,7 @@ from tilefoundry.interfaces import valuation
 from tilefoundry.ir import core, expr, hir, types, utils
 from tilefoundry.ir.hir import math, nn, tensor
 from tilefoundry.ir.tir import memory
+from tilefoundry.passes.transforms import differentiate
 from tilefoundry_nvidia import cuda
 from tilefoundry_nvidia.cuda.models.qwen3_1_7b.model import Qwen3_1_7B
 
@@ -165,7 +166,13 @@ class ChildOnCallerHierarchy(CrossModuleCase):
 
 
 class ReferenceProgram(CrossModuleCase):
-    """The shared programs measure as one root each; what a call means is not restated."""
+    """The shared programs measure as one root each; what a call means is not restated.
+
+    *halves* are the gmem peaks of the Forward and Backward Modules ``differentiate``
+    makes; their saved values come back as a tuple inside the returned tuple.
+    """
+
+    halves: tuple[int, int] | None = None
 
     def guard(self, state, problems):
         result = analysis.analyze(
@@ -178,12 +185,21 @@ class ReferenceProgram(CrossModuleCase):
             analysis.MemoryMetadata,
             analysis.RegionMemoryMetadata,
         }
+        if self.halves is None:
+            return
+        peaks = []
+        for half in differentiate.differentiate(state, wrt=("x",)):
+            measured = analysis.analyze(*analysis.check_program(half, half.entry_function()), analysis=("memory",))
+            (peak,) = expr.get_metadata(measured.function, analysis.RegionMemoryMetadata).peaks
+            peaks.append(peak.peak_bytes)
+        assert tuple(peaks) == self.halves
 
 
 @case
 class SameModuleReference(ReferenceProgram):
     path: Path = HIR_COMPOSITION
     name: str | None = "SameModule"
+    halves: tuple[int, int] | None = (256, 512)
 
 
 @case
@@ -192,6 +208,7 @@ class CrossModuleReference(ReferenceProgram):
 
     path: Path = HIR_COMPOSITION
     name: str | None = "CrossModule"
+    halves: tuple[int, int] | None = (512, 512)
 
     def guard(self, state, problems):
         super().guard(state, problems)

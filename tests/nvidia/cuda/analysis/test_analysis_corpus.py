@@ -1200,6 +1200,27 @@ class PipelineTwoLoops(AnalysisCase):
 
 
 @case
+class NestedTuple(AnalysisCase):
+    """A tuple read one level at a time costs what the same tensors in one flat tuple cost."""
+
+    path: Path = PLACED / "nested_tuple.py"
+    name: str | None = "NestedParam"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 384})
+
+    def guard(self, state, problems):
+        for nested, flat in (("NestedParam", "FlatParam"), ("NestedReturn", "FlatReturn")):
+            measured = []
+            for module in (nested, flat):
+                loaded = cli.load_authored_ir(f"{PLACED / 'nested_tuple.py'}:{module}")
+                result = analysis.analyze(
+                    *analysis.check_program(loaded, loaded.entry_function()), analysis=("memory",)
+                )
+                function = _report(result)["functions"][0]
+                measured.append((function["totals"], function["function_records"]["memory"]["peaks"]))
+            assert measured[0] == measured[1], nested
+
+
+@case
 class ReshardUnitSets(AnalysisCase):
     """Each way the GPUs holding a value can change, priced as one copy per GPU that gains it."""
 
