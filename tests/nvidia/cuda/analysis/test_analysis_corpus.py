@@ -971,11 +971,15 @@ def _moved(report, value: str, family: str) -> dict:
 
 @case
 class PipelineStages(AnalysisCase):
-    """A stage hands its activation to the next GPU: one 128-byte copy, not one per GPU."""
+    """A stage hands its activation to the next GPU: one 128-byte copy, not one per GPU.
+
+    Each stage holds 512 bytes on its own GPU, and the whole-mesh region around
+    both stages reports 512 too, not their sum.
+    """
 
     path: Path = PLACED / "pipeline_cuda.py"
     name: str | None = "Pipeline"
-    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 896})
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 512})
 
     def guard(self, state, problems):
         report = state.report
@@ -983,6 +987,29 @@ class PipelineStages(AnalysisCase):
         assert _moved(report, "moved", "storage") == {"gmem": (128, 128, 128)}
         downstream = report["functions"][0]["calls"][-1]["memory"]["footprint"]["buffers"]
         assert "moved" in downstream
+        memory = report["functions"][0]["function_records"]["memory"]
+        assert [peak["persistent_bytes"] for peak in memory["peaks"]] == [128 + 256]
+        regions = [mesh["memory"]["peaks"][0]["peak_bytes"] for mesh in report["functions"][0]["meshes"]]
+        assert regions == [512, 512, 512]
+
+
+@case
+class PipelineSharedWeight(AnalysisCase):
+    """A value on both GPUs costs each of them once; the fuller GPU sets the peak.
+
+    GPU 1 at its fullest holds shared 256 and w1 512, then y 256 and scaled 256
+    once moved is read.
+    """
+
+    path: Path = PLACED / "pipeline_shared_weight.py"
+    name: str | None = "SharedWeight"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 1_280, "rmem": 0})
+
+    def guard(self, state, problems):
+        memory = state.report["functions"][0]["function_records"]["memory"]
+        (peak,) = (item for item in memory["peaks"] if item["memory_level"] == "gmem")
+        assert peak["persistent_bytes"] == 256 + 512
+        assert peak["peak_bytes"] == 256 + 512 + 256 + 256
 
 
 @case
@@ -992,7 +1019,7 @@ class PipelineBackward(AnalysisCase):
     path: Path = PLACED / "pipeline_cuda.py"
     name: str | None = "PipelineBackward"
     api: bool = True
-    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 1_664})
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 896})
 
     def program(self):
         (module,) = _constants("pipeline_cuda", "Pipeline")

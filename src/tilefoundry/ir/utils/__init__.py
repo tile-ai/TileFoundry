@@ -37,6 +37,7 @@ from .mesh_scope import (
     topology_mesh,
     topology_names,
     unit_change,
+    unit_ids,
     unit_layout,
     within_mesh_scope,
 )

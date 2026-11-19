@@ -795,6 +795,22 @@ class MemoryLevelPeak:
     owned per unit of a topology other than the one analysed. Analysis MUST NOT
     assume that level. Domains that hold the same buffers are one question.
     Analysis decides it once.
+  - One address assignment answers every owning unit at once. Two roots
+    contend for addresses only when their lifetimes overlap and some owner
+    unit holds both: their exact unit sets
+    ([shard §5](./shard.md#5-mesh)) meet on every topology that owns the level
+    per unit. A root with no mesh, a mesh that omits such a topology, or a
+    symbolic selection is held by every unit there. Roots on disjoint units
+    MAY share addresses, so the solved high-water mark is the greatest one unit
+    reaches.
+  - Persistent roots are pinned before the solve: those held by every owner
+    unit first, then those held by more units, otherwise in root order. Each
+    sits at the aligned end of the pinned persistent roots it contends with.
+    A non-persistent root starts at or above the end of the persistent roots
+    it contends with. The seed uses the same per-root floors.
+  - A level without addresses (`rmem` and other summed levels) counts, at each
+    point, the greatest sum of live bytes that one owner unit holds, by the
+    same unit sets.
   - Carry, InsertSlice, window and in-place sharing MUST follow
     the pre-solve value links and acceptance conditions above. Simultaneously
     live values in overlapping address intervals MUST belong to the same root.

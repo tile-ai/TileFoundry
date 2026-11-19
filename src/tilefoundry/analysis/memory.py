@@ -17,6 +17,8 @@ from .access import AliasKind
 from .allocation import (
     AllocationConstraintVisitor,
     AllocationSummaryMetadata,
+    held_on_one_unit,
+    owner_units,
     solve_allocation,
 )
 from .compute_cost import accumulate_logical, grouped_breakdown, with_dependencies
@@ -630,6 +632,12 @@ def resident_peaks(model, windows, offsets, facts, sizes, *, interval=None):
         value = model.by_value.get(window.value)
         if value is not None:
             by_memory_level.setdefault(window.memory_level, []).append((model.root(value), window))
+    owners = model.context.target.storage_owners
+    units = {
+        value: owner_units(value.lifetime, owners)
+        for items in by_memory_level.values()
+        for value, _ in items
+    }
     peaks = []
     for name, items in sorted(by_memory_level.items()):
         events = {
@@ -648,7 +656,7 @@ def resident_peaks(model, windows, offsets, facts, sizes, *, interval=None):
                     size = sizes[value] if window.persistent else window.bytes
                     live[value] = max(live.get(value, 0), size)
             if name not in ("gmem", "smem"):
-                return sum(live.values())
+                return held_on_one_unit(live, units)
             end = amount = 0
             for start, stop in sorted(
                 (offsets[value], offsets[value] + size) for value, size in live.items()

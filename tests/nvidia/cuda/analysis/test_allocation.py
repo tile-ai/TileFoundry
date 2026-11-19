@@ -8,7 +8,7 @@ import pytest
 from tests.core._corpus import Case, case, check_case, special
 from tilefoundry import analysis, verifier
 from tilefoundry.ir import core, expr
-from tilefoundry.ir.hir import tensor
+from tilefoundry.ir.hir import nn, sharding, tensor
 from tilefoundry.schedule import finalize
 
 ANALYSIS = Path(__file__).parents[1] / "fixtures" / "analysis"
@@ -47,6 +47,22 @@ class SequentialCarries(AllocationCase):
             assert link.target.expr is insert.args[0]
             assert memory.buffer_bytes is None and memory.offsets == ()
         verifier.verify_module(finalize(result))
+
+
+@case
+class StagesShareAddresses(AllocationCase):
+    """Values on different GPUs do not contend: the Reshard's source and result share an address."""
+
+    path: Path = Path(__file__).parents[1] / "fixtures/placed/pipeline_cuda.py"
+    name: str | None = "Pipeline"
+
+    def guard(self, state, problems):
+        result = analysis.analyze(*analysis.check_program(state, state.entry_function()), analysis=("memory",))
+        calls = [value for value in core.collect_exprs(result.function.body) if isinstance(value, expr.Call)]
+        first_stage = next(value for value in calls if isinstance(value.target, nn.MatMul))
+        reshard = next(value for value in calls if isinstance(value.target, sharding.Reshard))
+        held, moved = (expr.get_metadata(value, analysis.MemoryMetadata) for value in (first_stage, reshard))
+        assert held.offsets == moved.offsets == (384,)
 
 
 @dataclass(frozen=True)
