@@ -11,6 +11,7 @@ import pytest
 import torch
 
 import tilefoundry
+from tests.nvidia.cuda.ops.tir.targets import CUDA_TARGETS, retarget
 from tilefoundry import cli, verifier
 from tilefoundry.dsl import *
 from tilefoundry.ir import core, expr, tir, types
@@ -116,3 +117,33 @@ def test_dot_tiers_match_torch() -> None:
         "post one partial and every thread folds all four, so the count of slots "
         "read comes off the operands' mesh (128 / 32) and not off blockDim"
     )
+
+
+@pytest.mark.parametrize("target", CUDA_TARGETS)
+@pytest.mark.parametrize(
+    ("name", "row"),
+    [
+        ("BlocksInMemory", 8),
+        ("BlocksInRegisters", 8),
+        ("BlocksInSwizzledShared", 8),
+        ("BlocksAtOddRows", 9),
+    ],
+)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_dot_pairs_registers_in_order(name: str, row: int, target: cuda.Target) -> None:
+    """A lane's (2, 4) block meets the (2, 4) parameter element by element.
+
+    TIR numbers both by register index, which for these row-major operands is
+    the memory offset. CuTe counts the block's first mode fastest, so pairing
+    by CuTe's number met ``a[l, 1, 0]`` with ``b[0, 1]``. Rows nine elements
+    apart start most blocks off the boundary of a wide read.
+    """
+    module = cli.load_authored_ir(f"{OPS / 'dot_register_order.py'}:{name}")
+    rm = tilefoundry.compile(retarget(module, target), target=target)
+    a = torch.arange(32 * row, dtype=torch.float32, device="cuda") % 7
+    blocks = a.as_strided((32, 2, 4), (row, 4, 1))
+    b = torch.arange(1, 9, dtype=torch.float32, device="cuda").view(2, 4)
+    c = torch.zeros(32, dtype=torch.float32, device="cuda")
+    rm(a if row == 9 else blocks, b, c)
+    torch.cuda.synchronize()
+    assert torch.equal(c, (blocks * b).sum().expand(32))

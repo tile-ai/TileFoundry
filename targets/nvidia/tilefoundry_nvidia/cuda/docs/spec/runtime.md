@@ -439,7 +439,8 @@ which would cost one register per row element.
 
 - constraints:
   - Without workspace, one warp's butterfly finishes the contraction. With workspace, warps post block-wide partials. Every unit gets the total.
-  - Derive load width from both projected layouts, capped by alignment and 16 bytes, as for `copy`. Publish no width or tier query ([§2.6](#26-cudaops)).
+  - Pair `lhs` and `rhs` by register index, as the `Dot` access relation does: each projected view is read from its smallest stride up, the order `register_strides` numbers it in. A view of several modes MUST have static strides.
+  - Derive load width from both projected layouts, capped by alignment and 16 bytes, as for `copy`. Read one element at a time when either base pointer is not aligned to that width. Publish no width or tier query ([§2.6](#26-cudaops)).
   - Use a fixed number of independent partial accumulators and a fixed combining tree. One dependent sum would serialize loads behind arithmetic. Accumulation is f32 regardless of operand type.
 
 #### 2.6.4 `ops/elementwise.cuh`
