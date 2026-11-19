@@ -105,9 +105,8 @@ def matmul_result_shape_and_layout(call: "expr.Call", ctx: "TypeInferContext") -
             "MatMul contraction dim K must be split on the same mesh axes for both operands",
         )
 
-    ir_utils.check_multilinear_partials(
-        (("lhs", lhs), ("rhs", rhs)), ctx.target, kind=expr.BinaryKind.MUL
-    )
+    read = typeinfer.shard_read_types(ctx, call.args)
+    ir_utils.check_multilinear_partials(tuple(zip(("lhs", "rhs"), read)), ctx.target, kind=expr.BinaryKind.MUL)
 
     relation = access.relations_of(call, ctx)
 
@@ -118,7 +117,7 @@ def matmul_result_shape_and_layout(call: "expr.Call", ctx: "TypeInferContext") -
     k_domain_dim = len(out_shape)
     try:
         shard = typeinfer.derive_output_shard_layout(
-            (lhs, rhs),
+            read,
             relation,
             out_shape,
             partial_reduction_dims=frozenset({k_domain_dim}),

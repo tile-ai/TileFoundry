@@ -228,8 +228,10 @@ def derive_output_shard_layout(
   - An ordinary multi-input op MUST inspect every tensor input for a `Partial`.
     Typeinfer MUST reject a secondary input whose axis-preserving state the
     result type cannot represent. It MUST name the `Reshard` remedy.
-  - Callers pass operand types from `shard_read_types`, which reads a literal
-    operand as `Broadcast` ([shard §6.1](./shard.md#61-shard-attr-semantics)).
+  - An op that reads more than one operand's shard attrs passes operand types
+    from `shard_read_types`, which reads a literal operand as `Broadcast`
+    ([shard §6.1](./shard.md#61-shard-attr-semantics)). A single-operand reader
+    needs no call: no other operand gives a mesh.
   - A fully-`Broadcast` input `ShardLayout` is replicated. It carries no real
     sharding. It contributes no `Split`/`Partial`. It does not pin a mesh. When
     no input carries real sharding, the output carries none.

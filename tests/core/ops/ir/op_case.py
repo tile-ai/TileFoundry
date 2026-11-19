@@ -57,7 +57,7 @@ def make_call(op, input_types) -> expr.Call:
         for i, t in enumerate(input_types)
     )
     return expr.Call(
-        type=input_types[0] if input_types else types.TensorType.from_umat_scalar(), target=op, args=args
+        type=args[0].type if args else types.TensorType.from_umat_scalar(), target=op, args=args
     )
 
 
