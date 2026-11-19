@@ -385,14 +385,11 @@ class Target:
         query: object | None = None,
     ) -> FactsT: ...
 
-    @cached_property
-    def storage_owners(self) -> StorageOwners: ...
+    storage_owners: StorageOwners  # cached projection
 
 
 class StorageOwners:
-    """The topology that owns each storage, and the topologies coarse to fine."""
-
-    order: tuple[str, ...] = ()
+    order: tuple[str, ...] = ()  # Target topologies, coarse to fine.
     owner: Mapping[StorageKind, str] = {}
 
     def private(self, storage, topology) -> bool: ...

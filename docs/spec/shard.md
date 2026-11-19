@@ -322,7 +322,7 @@ def from_meshes(*meshes: Mesh) -> Mesh:
     ...
 
 
-def within_mesh_scope(mesh: Mesh, current: Mesh) -> bool:
+def within_mesh_scope(mesh: Mesh, current: Mesh, names=None) -> bool:
     """Return whether each continuous unit set is contained in current."""
     ...
 
@@ -359,9 +359,10 @@ def equals_mesh_scope(mesh: Mesh, current: Mesh) -> bool:
     independent of mode order. Otherwise it MUST conservatively compare the
     filtered layouts and first unit ids for equality. It compares only the topologies that
     `mesh` names. The other topologies of `current` do not enter it.
-  - `covers_every_unit(mesh)` is True when each topology of `mesh` selects every
-    unit it has: the exact unit ids when they count, else a run of the
-    topology's size from unit 0. A sliced mesh selects fewer.
+  - `covers_every_unit(mesh)`: each topology of `mesh` selects every unit it has.
+  - An op input laid out on another mesh than its scope MUST be refused, unless
+    it is all-Broadcast and the scope's units are inside its mesh
+    (`within_mesh_scope(scope, mesh, names)` on the topologies `mesh` names).
   - `within_mesh_scope` MUST require both filtered selections to be continuous and
     prove containment of their half-open intervals `[start, start + size)`.
     Static continuity is `size == cosize`; symbolic continuity requires either
@@ -661,18 +662,14 @@ owner. A Partial on such a mesh axis holds one copy per unit of that mesh axis. 
 its own base address. Completing the reduction leaves one copy.
 A plain layout is Varying on every mesh axis. An unstated mesh axis of a
 `ShardLayout`, and a topology that its mesh omits, is Broadcast.
-A literal operand (`expr.Constant`) has the same value on every unit, so an
-operation reads it as Broadcast on every mesh axis. Its own type stays plain. A
-loop index whose start, extent and step are the same on every unit reads the
-same way. They are when each symbol in them is an integer, such an outer index,
-or a scalar tensor that reads as Broadcast; a `DimVar` is not, because each unit
-can bind its own value. A plain value that an operation computes from such
-operands reads the same way, except a `MeshCoord`; a function call's plain
-result does not. Any other plain variable (a
-parameter, a shape element) stays Varying.
-A result that reads as Varying on every mesh axis has the plain layout when its
-mesh covers every unit of its topologies. On a sliced mesh it keeps that mesh,
-written `@{V}`: a plain layout holds a copy on every unit.
+A literal is the same on every unit: a `Constant`, or a call of an Op marked
+`literal` (`Zeros`, an `Arange` with a static start). Its type stays plain; an
+operation reads it as Broadcast on the mesh of its other operands. A loop index
+is all-Broadcast on the mesh in force when each bound is an integer, a literal
+or all-Broadcast, and plain otherwise or when no topology of that mesh has more
+than one unit. Other values follow the rules below; a `DimVar`, a `MeshCoord`
+and a plain parameter stay Varying. A result Varying on every mesh axis is plain
+when its mesh covers every unit; on a sliced mesh it keeps the mesh (`@{V}`).
 
 The topologies a ShardLayout keeps include its Varying topologies. An explicit
 execution mesh may omit outside topologies that contain neither Split nor Partial.
@@ -710,25 +707,19 @@ Unary operations check their own Partial commutativity separately.
 `combine` rejects `None` with `ValueError`. Callers must first read plain layouts
 through `attrs_by_axis`. Error cells raise `ValueError`. The error names the kind and both attrs.
 It gives an explicit `bitcast(..., <its layout> @ {B()})` remedy where equal values are required.
-Only B → V is implicit. V → B and V → P are explicit `Bitcast`s that keep the
-layout and the mesh: the author states the copies are equal, or that the value
-is their sum, with no communication or runtime check
-([hir §1.3](./hir.md#13-op)).
+A change the types prove is a `Reshard`, priced from both ends' types; a fact
+only the author can state is a `Bitcast` form (ii) ([hir §1.3](./hir.md#13-op)).
 
 | Change | Op | Cost |
 | --- | --- | --- |
-| Unit set, S → B, S → S', P → B, P → S, storage | `Reshard` | From both ends' types |
-| B → S | `Reshard` | 0: the data is on the units already |
-| V → B, V → P | `Bitcast` | 0 |
-| Same bytes under another shape or stride | `Bitcast` | 0 |
+| Unit set, storage, S → B, S → S', S → V, P → B, P → S, P → V | `Reshard` | From both ends' types; 0 for a view (B → S, one unit) |
+| V → B, V → P; same bytes under another shape | `Bitcast` | 0 |
 | B → V | Implicit | 0 |
 
-A Reshard reads both ends' value states and checks each mesh axis. A plain
-source that `uniform` admits reads as Broadcast ([§6.1](#61-shard-attr-semantics)).
-On a mesh axis that separates the source's copies and spans more than one unit,
-a Varying source MUST NOT become Broadcast or Partial; the error names
-`tf.bitcast`. A plain source has no mesh, so the destination mesh gives the unit
-count. On one unit, V and B are one copy and the Reshard passes. A Partial
+A Reshard reads both ends' value states and checks each mesh axis; a literal
+source reads as Broadcast. On a mesh axis that separates copies and spans more
+than one unit, a Varying source MUST NOT become Broadcast or Partial; the error
+names `tf.bitcast`. A Partial
 end must come from the same Partial or from Varying. A Partial source may become
 any state, completing its reduction. Lowering chooses which collective moves data,
 for the whole Reshard.

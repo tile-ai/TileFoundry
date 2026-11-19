@@ -669,19 +669,12 @@ second presentation of the result.
   MUST remap its split modes through the registered relation with fresh
   strides. Lowering MUST copy the source's permuted-stride view into the new
   result storage.
-- `Bitcast(x, layout)` has two forms. Form (ii) keeps the address layout and
-  the mesh and changes only shard attrs: on each mesh axis the attr stays, or
-  Varying becomes Broadcast or Partial. The author states the copies are equal,
-  or that the value is their sum ([shard §6.1](./shard.md#61-shard-attr-semantics)).
-  Any storage is allowed. A plain source reads as Varying on the result's mesh;
-  its layout MUST equal the result's address layout. An offset around the
-  source's `ShardLayout` MUST be stated around the result's too, so every
-  address stays. Any other attr, mesh or
-  address change is form (i). Form (ii) aliases the source, has an identity
-  access relation, costs 0 and lowers to a view. Evaluation keeps every value
-  and changes only the type. Its gradient is the cotangent read back with the
-  source's attrs; form (i) has no autodiff rule.
-- Form (i), `Bitcast(x, layout)`, reinterprets the same bytes with a new shape and layout,
+- `Bitcast(x, layout)` form (ii) keeps the address layout, offset included, and
+  the mesh, in any storage; per mesh axis Varying (a plain source too) may become
+  Broadcast or Partial: the author states the copies are equal, or sum to the
+  value, unchecked. It aliases, costs 0, lowers to a view, keeps every value,
+  and its gradient reads the cotangent back with the source's attrs.
+- Form (i), any other `Bitcast(x, layout)`, has no autodiff rule. It reinterprets the same bytes with a new shape and layout,
   preserving the input dtype and storage. `layout` is a `LayoutBase`; the result
   shape for a plain layout is the product of the nested sizes in each top-level
   layout mode. For an rmem `ShardLayout`, the result preserves `x.shape` and
@@ -909,12 +902,8 @@ class RepeatInterleave(Op):
   - `axis` MUST resolve within the rank. The result extent at that axis MUST be
     the input extent multiplied by `repeats`. All other extents and storage are
     preserved.
-  - A `Split` or `Partial` input MUST be refused. A plain input gives a plain
-    result. An input that is `Broadcast` or `Varying` on every mesh axis keeps
-    its mesh and attrs on the new shape (`ShardLayout.from_logical`), so a
-    value the same on every unit stays so. An input that reads `Varying` on
-    every mesh axis of a mesh covering every unit gives a plain result, as
-    shard propagation does ([shard §6.1](./shard.md#61-shard-attr-semantics)).
+  - A `Split` or `Partial` input MUST be refused. Any other input keeps its
+    layout kind and attrs on the new shape ([shard §6.1](./shard.md#61-shard-attr-semantics)).
 
 ##### Split
 
@@ -1127,8 +1116,6 @@ operation and is not an HIR op.
     `Split` on `dim` becomes `Partial(sum)`, and a `Split` on another dim keeps
     its target. Multiple `Split`s including `dim`, or a composed shard layout,
     MUST fail closed.
-  - The result's shard attrs also read `index`, and for `IndexAdd` / `IndexCopy`
-    `index` and `src`, by `combine_operand_attrs` ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
   - `IndexSelect` is a pure value operation, not a copy. To stage dim-0
     selections into shared memory, schedule its inputs as
     `tf.schedule((x, tf.empty(Tensor[..., "smem"]), index), op=T.copy_async(fill=f))`.
@@ -1284,8 +1271,6 @@ class InsertSlice(Op):
   - When `dst` is complete, an `update` carrying a `Partial` MUST be rejected.
     The write result cannot preserve that secondary value state. An explicit
     `Reshard(update, Broadcast)` completes it.
-  - The result's shard attrs also read `update` and every tensor in `offsets`,
-    by `combine_operand_attrs` ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
   - `ComputeCostMetadata` charges no traffic for the untouched `dst`. It charges
     one window-sized `update` read, one read of the scalar or structural tuple
     `offsets`, and one window-sized result write.
@@ -1321,8 +1306,6 @@ class CacheUpdate(Op):
     runtime values.
   - This is a pure value-form op. Lowering MAY realize the output in place on
     the buffer of `cache`.
-  - The result's shard attrs also read `cur_pos`, `s` and `new`, by
-    `combine_operand_attrs` ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
   - A `cache` can carry `Partial(reduction)` on a mesh axis. Then `new` MUST
     carry the identical mesh and per-mesh-axis state. A complete `cache`
     rejects a `new` that carries `Partial`. Typeinfer rejects either mismatch.
@@ -1404,11 +1387,6 @@ Consensus torch.nn.functional ops.
     is `Broadcast` / replicated. On each mesh axis, one `Partial(sum)` is
     therefore allowed. A double-Partial input or a non-`sum` reduction is
     rejected.
-  - When the derived `MatMul` result is `Varying` on every mesh axis, its
-    layout is the plain `Layout` over the result shape
-    ([shard §6.1](./shard.md#61-shard-attr-semantics)).
-  - The `LayerNorm` result's shard attrs also read `weight` and `bias`, by
-    `combine_operand_attrs` ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
   - `MatMul.a_layout` is `"MK"` (the default) or `"KM"`. `MatMul.b_layout` is
     `"KN"` (the default) or `"NK"`. These literals state the physical order of
     the final two axes of each operand. The access relation maps them to logical
@@ -1533,8 +1511,6 @@ class RMSNorm(Op):
   - Normalization combines every value on the axis non-monotonically, so no
     mesh-axis reduction provably commutes. Typeinfer rejects any `Partial`
     operand.
-  - The result's shard attrs also read `weight`, by `combine_operand_attrs`
-    ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
 
 ##### RoPE
 ```python
@@ -1560,9 +1536,7 @@ class RoPE(Op):
     pair rotates by one angle. The autodiff rule relies on it; the evaluator
     does not check it.
   - The result is `(q_rope, k_rope)`. Each branch preserves the layout of its
-    corresponding `q` or `k` input, with its shard attrs also reading
-    `cos_cache`, `sin_cache` and `pos_ids` by `combine_operand_attrs`
-    ([semantic-analysis §3.2](./semantic-analysis.md#32-relation-driven-shard-propagation)).
+    corresponding `q` or `k` input.
   - On each mesh axis, a branch MAY preserve one `Partial(sum)` on its
     corresponding query or key input. The branch MAY do so only when
     `cos_cache`, `sin_cache`, and `pos_ids` are `Broadcast` / replicated on that
@@ -1617,9 +1591,8 @@ class Reshard(Op):
   - Omitting `layout` preserves `x.layout`; omitting `storage` preserves
     `x.storage`. The output preserves the input logical `TensorType.shape`.
   - Memory analysis and lowering MUST treat a Reshard as a view iff five
-    conditions hold. Storage is unchanged. The shape is literal. The destination
-    holds no unit the source does not, on every topology that owns the
-    destination storage per unit (`target.storage_owners`). Both structural
+    conditions hold. Storage is unchanged. The shape is literal. No unit is
+    added (`ir.utils.unit_change` below). Both structural
     address boxes agree. On every mesh axis with a `Partial` end, both ends are
     equal, or a Varying (or plain) source becomes Partial ([shard §6.1](./shard.md#61-shard-attr-semantics)). Each thread holds register storage
     privately. So an `rmem` Reshard with a `ShardLayout` is a view only when each
@@ -1654,14 +1627,10 @@ class Reshard(Op):
 
   - Every other Reshard MUST retain its independent buffer and instruction
     selection requirements. Destination storage is concrete.
-  - Units are compared with `ir.utils.unit_change`, by the exact unit set each
-    mesh selects ([shard §5](./shard.md#5-mesh)), on the topologies that own the
-    destination storage per unit. Typeinfer MUST reject a Reshard whose sets
-    differ there but cannot be counted because a selection is symbolic.
-    Typeinfer MUST reject a Reshard whose two ends share some, but not all,
-    of those units when either end carries a `Split` or `Partial`. A fully
-    `Broadcast` value MAY move between any unit sets. One unit to all units is
-    written as a destination of `Broadcast` over the whole mesh.
+  - `ir.utils.unit_change` compares the exact unit sets ([shard §5](./shard.md#5-mesh))
+    on the topologies that own the destination storage per unit. Typeinfer MUST
+    reject sets that differ but are symbolic, and ends that share some but not
+    all units when either end carries a `Split` or `Partial`.
   - One op covers zero-copy view, cross-storage copy, cross-CTA redistribute, and
     mixed cases. Typeinfer and the cost evaluator classify the call.
 

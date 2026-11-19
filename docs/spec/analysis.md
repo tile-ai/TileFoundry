@@ -69,17 +69,14 @@ selected Function.
 The JSON report carries `target`, `module`, `topology`, `requested`, and
 `executed` once. Its `functions` list
 contains each reached definition once in root-first DFS order. Each entry has
-`function` (`Module.fn`, where `Module` is the Module that defines `fn`),
+`function` (`Module.fn`, `Module` being the one that defines `fn`; two
+definitions with one name MUST raise an error naming both sources),
 `function_records`, operand-first `calls`, authored `loops`, and `totals` when
-compute cost or roofline work evidence is selected. Two definitions that would
-report the same `function` MUST raise an error naming both definitions' source
-locations. The error stops every surface of the result, the text report
-included, because one result is rendered once. Call rows carry `value` and selected-family records; loop rows use
-the induction variable. A call row whose target is a `FunctionRef` also carries
-`callee`, the `function` of the row it calls, and `callee_ref`, the reference
-as written (`FunctionRef.qualified_name`, relative to the caller's Module). Rows
-are per definition, so the path from the root is never a row name. Memory MUST
-NOT attach an empty loop record for a conclusion it has not computed.
+compute cost or roofline work evidence is selected.
+Call rows carry `value` and selected-family records; a call of a `FunctionRef`
+also carries `callee` (the called row's `function`) and `callee_ref`
+(`FunctionRef.qualified_name`). Loop rows use the induction variable. Rows have
+no call-path field. Memory MUST NOT attach an empty loop record for a conclusion it has not computed.
 
 One result is rendered once, and every surface reads that rendering:
 
@@ -348,10 +345,8 @@ counts one slice per index as an upper bound.
 - constraints:
   - A Call's traffic `total` MUST equal the counted unit's share multiplied by
     the number of units executing its mesh scope. The same rule holds for
-    `compute-cost`. One exception: a `Reshard` whose destination holds units
-    its source does not (hir `Reshard`) multiplies the share by the number of
-    those added units. One transfer is counted once: sending and receiving
-    are the same bytes. This holds for storage and communication alike.
+    `compute-cost`. A `Reshard` that adds units multiplies the share by the
+    added units instead; a transfer is counted once, sent and received alike.
     Storage MUST count the selected topology unit. Communication MUST count
     the topology unit named by its boundary. An undeclared communication
     boundary MUST raise `analysis.Error`. It MUST NOT use whole movement.
@@ -381,12 +376,9 @@ counts one slice per index as an upper bound.
     received and what it sent. A unit finer than the boundary MUST state no
     share of it. Crossing is what the units on either side do. Dividing
     the move among the units inside one states a move nobody made.
-  - When the units holding a `Reshard`'s value change, a unit's share is
-    the local bytes one added unit receives, at the coarsest topology whose
-    units differ. `logical` is that share times the added units. A
-    destination that holds no added unit sends nothing. Otherwise, the bytes a
-    unit sends are what each destination unit holds afterwards less what it
-    held before.
+  - When a `Reshard`'s units change, a unit's share is the local bytes one
+    added unit receives, at the coarsest topology whose units differ; `logical`
+    is that share times the added units.
   - When a same-mesh `Reshard` resolves a `Partial` mesh axis across multiple
     units, communication MUST be recorded at that topology boundary. This holds
     even when every `Split` mesh axis is unchanged. An extent-one mesh axis contributes no communication.
@@ -475,9 +467,8 @@ also use index zero, but do not create storage allocations.
 `Access.target`, `ReachedAddresses.target`, `BufferAlias.target`, and
 `ValueLifetime.value` MUST use this identity. Call boundary indices remain
 separate: they identify operands or output boundaries, rather than storage.
-A call states one output boundary per field of its result, and a field that
-is itself a tuple counts as its flattened leaves (`ir_utils.result_fields`), so
-output boundary *k* is leaf *k*.
+A call states one output boundary per leaf of its result, nested tuples
+flattened (`ir_utils.result_fields`).
 
 ##### `ValueLifetime`
 
@@ -804,22 +795,14 @@ class MemoryLevelPeak:
     owned per unit of a topology other than the one analysed. Analysis MUST NOT
     assume that level. Domains that hold the same buffers are one question.
     Analysis decides it once.
-  - One address assignment answers every owning unit at once. Two roots
-    contend for addresses only when their lifetimes overlap and some owner
-    unit holds both: their exact unit sets
-    ([shard §5](./shard.md#5-mesh)) meet on every topology that owns the level
-    per unit. A root with no mesh, a mesh that omits such a topology, or a
-    symbolic selection is held by every unit there. Roots on disjoint units
-    MAY share addresses, so the solved high-water mark is the greatest one unit
-    reaches.
-  - Persistent roots are pinned before the solve: those held by every owner
-    unit first, then those held by more units, otherwise in root order. Each
-    sits at the aligned end of the pinned persistent roots it contends with.
-    A non-persistent root starts at or above the end of the persistent roots
-    it contends with. The seed uses the same per-root floors.
-  - A level without addresses (`rmem` and other summed levels) counts, at each
-    point, the greatest sum of live bytes that one owner unit holds, by the
-    same unit sets.
+  - One address assignment answers every owning unit. Two roots contend only
+    when their lifetimes overlap and their exact unit sets ([shard §5](./shard.md#5-mesh))
+    meet on every topology that owns the level per unit; no mesh, an omitted
+    topology or a symbolic selection means every unit. The peak is the greatest
+    one unit reaches. Persistent roots are pinned first (held by more units
+    first), each at the aligned end of those it contends with; other roots start
+    above them. A level without addresses sums, at each point, the live bytes of
+    the one owner unit that holds most.
   - Carry, InsertSlice, window and in-place sharing MUST follow
     the pre-solve value links and acceptance conditions above. Simultaneously
     live values in overlapping address intervals MUST belong to the same root.

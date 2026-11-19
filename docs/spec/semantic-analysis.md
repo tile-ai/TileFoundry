@@ -178,9 +178,6 @@ def derive_output_shard_layout(
   - The service first projects every input onto the executing topologies, that
     is, each topology that any input distributes. So mesh axes keep one index
     across inputs. With no real input sharding, the service returns `None`.
-    A result Varying on every mesh axis is `None` too, the plain layout, only
-    when its mesh covers every unit; on a sliced mesh it keeps that mesh
-    ([shard §6.1](./shard.md#61-shard-attr-semantics)).
     Inputs with real sharding on different meshes MUST fail (`ValueError`).
   - When every propagated physical layout agrees, the result keeps it.
     Otherwise the result is `ShardLayout.from_logical` over the output shape.
@@ -231,10 +228,6 @@ def derive_output_shard_layout(
   - An ordinary multi-input op MUST inspect every tensor input for a `Partial`.
     Typeinfer MUST reject a secondary input whose axis-preserving state the
     result type cannot represent. It MUST name the `Reshard` remedy.
-  - An op that reads more than one operand's shard attrs passes operand types
-    from `shard_read_types`, which reads a literal operand as `Broadcast`
-    ([shard §6.1](./shard.md#61-shard-attr-semantics)). A single-operand reader
-    needs no call: no other operand gives a mesh.
   - A fully-`Broadcast` input `ShardLayout` is replicated. It carries no real
     sharding. It contributes no `Split`/`Partial`. It does not pin a mesh. When
     no input carries real sharding, the output carries none.
@@ -247,47 +240,26 @@ def derive_output_shard_layout(
     translated access.
   - `Split(axis)` indexes an output mode, not a logical tensor axis.
 
-An op whose result type is one operand's type reads the other tensor operands
-with one shared rule.
+An op that reads several operands' shard attrs reads them through
+`operand_types`; one whose result type is an operand's type then combines the
+others with `combine_operand_attrs`.
 
 ```python
-# typeinfer.combine_operand_attrs (interfaces/typeinfer/shard_propagate.py)
+# interfaces/typeinfer/shard_propagate.py
 def combine_operand_attrs(result: TensorType, others: tuple[TensorType, ...], ctx) -> TensorType: ...
-
-# typeinfer.shard_read_types (interfaces/typeinfer/shard_propagate.py)
-def shard_read_types(ctx, operands: tuple[Expr, ...]) -> tuple[Type, ...]: ...
-
-# typeinfer.uniform (interfaces/typeinfer/shard_propagate.py)
-def uniform(node: Expr | int, ctx, scope=None) -> bool: ...
+def operand_types(ctx, operands: tuple[Expr, ...]) -> tuple[Type, ...]: ...
+def induction_type(bounds, declared: TensorType, mesh: Mesh | None, type_of) -> TensorType: ...
 ```
 
 - constraints:
-  - Each operand is read on the result's shard mesh with the target's storage
-    owners ([shard §6.1](./shard.md#61-shard-attr-semantics)). A plain operand
-    reads as `Varying` on a topology that owns its storage per unit; a literal
-    operand, and a value the same on every unit, reads as `Broadcast` (through
-    `shard_read_types`).
-  - On each mesh axis whose topology owns the result's storage per unit: a
-    `Broadcast` result with a `Varying` operand becomes `Varying`. Where the
-    result storage has one shared copy, `Broadcast` and `Varying` read alike and
-    the result keeps its attr. A `Partial` result with a `Varying` operand MUST fail
-    (`ValueError`). Every other pair leaves the result unchanged; the op's own
-    checks own `Split` and `Partial`.
-  - A result that this rule makes `Varying` on every mesh axis is the plain
-    `Layout` over its shape when its mesh covers every unit; on a sliced mesh it
-    keeps the mesh. A result the rule does not change, plain or not, is
-    returned as written.
-  - The mesh and the address layout of the result do not change.
-  - `shard_read_types` returns each operand's type. A plain operand that
-    `uniform` admits is given an all-`Broadcast` `ShardLayout` on the mesh of
-    the first operand that has one, keeping its address layout. Without such
-    an operand, every type is returned as stored.
-  - `uniform` admits an integer, a literal, a tensor that reads as `Broadcast`
-    on every mesh axis, a loop index whose start, extent and step it admits, a
-    region capture whose argument it admits, and an `Op` call other than
-    `MeshCoord` whose operands it admits. It refuses a `DimVar`, a carried
-    value, a plain parameter, and a function call whose result is plain: the
-    callee can read `MeshCoord`. It decides each value once per inference run.
+  - `operand_types` gives a literal operand ([shard §6.1](./shard.md#61-shard-attr-semantics))
+    an all-`Broadcast` layout on the first operand mesh. `induction_type` gives
+    a loop index its shard type, for the visitor and the parser alike.
+  - On each mesh axis whose topology owns the result's storage per unit, a
+    `Broadcast` result with a `Varying` operand becomes `Varying`; a `Partial`
+    result with one MUST fail (`ValueError`). Other pairs leave the result.
+  - The ops that use this rule are `IndexSelect`, `IndexAdd`, `IndexCopy`,
+    `InsertSlice`, `CacheUpdate`, `LayerNorm`, `RMSNorm` and `RoPE`.
 
 ### 3.3 Output storage and mesh/layout compatibility
 
