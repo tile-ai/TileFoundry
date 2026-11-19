@@ -718,8 +718,8 @@ only the author can state is a `Bitcast` form (ii) ([hir §1.3](./hir.md#13-op))
 
 A Reshard reads both ends' value states and checks each mesh axis; a literal
 source reads as Broadcast. On a mesh axis that separates copies and spans more
-than one unit, a Varying source MUST NOT become Broadcast or Partial; the error
-names `tf.bitcast`. A Partial
+than one unit (for a plain source, the destination's mesh axis), a Varying
+source MUST NOT become Broadcast or Partial; the error names `tf.bitcast`. A Partial
 end must come from the same Partial or from Varying. A Partial source may become
 any state, completing its reduction. Lowering chooses which collective moves data,
 for the whole Reshard.
