@@ -228,6 +228,8 @@ def derive_output_shard_layout(
   - An ordinary multi-input op MUST inspect every tensor input for a `Partial`.
     Typeinfer MUST reject a secondary input whose axis-preserving state the
     result type cannot represent. It MUST name the `Reshard` remedy.
+  - Callers pass operand types from `shard_read_types`, which reads a literal
+    operand as `Broadcast` ([shard §6.1](./shard.md#61-shard-attr-semantics)).
   - A fully-`Broadcast` input `ShardLayout` is replicated. It carries no real
     sharding. It contributes no `Split`/`Partial`. It does not pin a mesh. When
     no input carries real sharding, the output carries none.
@@ -246,12 +248,16 @@ with one shared rule.
 ```python
 # typeinfer.combine_operand_attrs (interfaces/typeinfer/shard_propagate.py)
 def combine_operand_attrs(result: TensorType, others: tuple[TensorType, ...], ctx) -> TensorType: ...
+
+# typeinfer.shard_read_types (interfaces/typeinfer/shard_propagate.py)
+def shard_read_types(ctx, operands: tuple[Expr, ...]) -> tuple[Type, ...]: ...
 ```
 
 - constraints:
   - Each operand is read on the result's shard mesh with the target's storage
     owners ([shard §6.1](./shard.md#61-shard-attr-semantics)). A plain operand
-    reads as `Varying` on a topology that owns its storage per unit.
+    reads as `Varying` on a topology that owns its storage per unit; a literal
+    operand reads as `Broadcast` (through `shard_read_types`).
   - On each mesh axis whose topology owns the result's storage per unit: a
     `Broadcast` result with a `Varying` operand becomes `Varying`. Where the
     result storage has one shared copy, `Broadcast` and `Varying` read alike and
@@ -261,6 +267,10 @@ def combine_operand_attrs(result: TensorType, others: tuple[TensorType, ...], ct
   - A result that is `Varying` on every mesh axis is the plain `Layout` over its
     shape. A plain result is returned unchanged.
   - The mesh and the address layout of the result do not change.
+  - `shard_read_types` returns each operand's type. A literal with a plain
+    layout is given an all-`Broadcast` `ShardLayout` on the mesh of the first
+    non-literal operand that has one, keeping its address layout. Without such
+    an operand, every type is returned as stored.
 
 ### 3.3 Output storage and mesh/layout compatibility
 

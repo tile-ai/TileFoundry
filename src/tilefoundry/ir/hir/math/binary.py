@@ -97,7 +97,8 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     )
     la, lb = lhs_ty.layout, rhs_ty.layout
 
-    ir_utils.check_multilinear_partials((("lhs", lhs_ty), ("rhs", rhs_ty)), ctx.target, kind=op.kind)
+    lhs_read, rhs_read = typeinfer.shard_read_types(ctx, call.args)
+    ir_utils.check_multilinear_partials((("lhs", lhs_read), ("rhs", rhs_read)), ctx.target, kind=op.kind)
     storage = typeinfer.resolve_anchor_storage(ctx, call, lhs_ty.storage, rhs_ty.storage)
     try:
         relation = access.relations_of(call, ctx)
@@ -107,7 +108,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
         shard = None
         if types.shard_layout_of(la) is not None or types.shard_layout_of(lb) is not None:
             shard = typeinfer.derive_output_shard_layout(
-                (lhs_ty, rhs_ty), relation, out_shape, ctx=ctx, storage=storage
+                (lhs_read, rhs_read), relation, out_shape, ctx=ctx, storage=storage
             )
         layout = (
             shard

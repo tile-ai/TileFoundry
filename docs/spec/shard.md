@@ -658,6 +658,9 @@ owner. A Partial on such a mesh axis holds one copy per unit of that mesh axis. 
 its own base address. Completing the reduction leaves one copy.
 A plain layout is Varying on every mesh axis. An unstated mesh axis of a
 `ShardLayout`, and a topology that its mesh omits, is Broadcast.
+A literal operand (`expr.Constant`) has the same value on every unit, so an
+operation reads it as Broadcast on every mesh axis. Its own type stays plain. A
+plain variable (a parameter, a loop index, a shape element) stays Varying.
 
 The topologies a ShardLayout keeps include its Varying topologies. An explicit
 execution mesh may omit outside topologies that contain neither Split nor Partial.

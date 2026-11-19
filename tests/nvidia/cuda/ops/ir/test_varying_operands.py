@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
 from tilefoundry.ir import expr, types, utils
-from tilefoundry.ir.hir import nn, tensor
+from tilefoundry.ir.hir import math, nn, tensor
 from tilefoundry_nvidia import cuda
 
 _H200 = cuda.Target("nvidia.h200_sxm", device_count=2)
@@ -29,8 +29,47 @@ def plain(shape, dtype=expr.DType.f32):
 
 
 _INDEX = held((3,), _V, expr.DType.i64)
+_HALF = expr.Constant(type=types.TensorType.from_umat_scalar(expr.DType.f32), value=0.5)
+_ONE = expr.Constant(type=types.TensorType.from_umat_scalar(expr.DType.f32), value=1.0)
+_THREE = expr.Constant(type=types.TensorType.from_umat_scalar(expr.DType.i64), value=3)
+_MUL, _ADD = math.Binary(kind=expr.BinaryKind.MUL), math.Binary(kind=expr.BinaryKind.ADD)
 _ROPE_TABLE = held((16, 8), _B, expr.DType.bf16)
 CASES = (
+    OpCase(
+        "binary_literal_keeps_broadcast",
+        _MUL,
+        (held((4,), _B), _HALF),
+        type=held((4,), _B),
+        target=_H200,
+    ),
+    OpCase(
+        "insert_slice_literal_offset_keeps_broadcast",
+        tensor.InsertSlice(),
+        (held((8,), _B), held((2,), _B), expr.Tuple(type=types.TupleType(fields=(_THREE.type,)), elements=(_THREE,))),
+        type=held((8,), _B),
+        target=_H200,
+    ),
+    OpCase(
+        "binary_literal_scale_keeps_partial_sum",
+        _MUL,
+        (held((4,), _P), _HALF),
+        type=held((4,), _P),
+        target=_H200,
+    ),
+    OpCase(
+        "binary_literal_shift_refuses_partial_sum",
+        _ADD,
+        (held((4,), _P), _ONE),
+        error=ExpectedError(match=r"ADD.*Partial\(reduction='sum'\) and Broadcast\(\)"),
+        target=_H200,
+    ),
+    OpCase(
+        "binary_plain_scalar_variable_stays_varying",
+        _MUL,
+        (held((4,), _B), types.TensorType.from_umat_scalar(expr.DType.f32)),
+        type=plain((4,)),
+        target=_H200,
+    ),
     OpCase(
         "index_select_varying_index_makes_a_broadcast_table_plain",
         tensor.IndexSelect(dim=0),

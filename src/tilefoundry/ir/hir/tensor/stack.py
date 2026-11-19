@@ -46,7 +46,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> types.TensorType:
     try:
         relation = access.relations_of(call, ctx)
         layout = typeinfer.derive_output_shard_layout(
-            tuple(type_list),
+            typeinfer.shard_read_types(ctx, call.args),
             relation,
             new_shape,
             fresh_strides=True,

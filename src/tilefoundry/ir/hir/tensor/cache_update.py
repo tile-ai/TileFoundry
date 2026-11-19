@@ -145,7 +145,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     if isinstance(cap, int) and isinstance(s_cap, int) and s_cap > cap:
         ctx.error(call, f"S_CAP {s_cap} exceeds cache capacity {cap}")
     reject_split_rows(ctx, call, cache_ty, new_ty)
-    return typeinfer.combine_operand_attrs(cache_ty, (cur_ty, s_ty, new_ty), ctx)
+    return typeinfer.combine_operand_attrs(cache_ty, typeinfer.shard_read_types(ctx, call.args)[1:], ctx)
 
 
 def divided_axes(type_) -> set[int]:

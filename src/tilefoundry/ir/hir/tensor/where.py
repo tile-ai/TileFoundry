@@ -43,6 +43,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
         ir_utils.reject_partials(name, type_.layout)
 
     storage = typeinfer.resolve_anchor_storage(ctx, call, input_.storage, other.storage)
+    read = typeinfer.shard_read_types(ctx, call.args)
     try:
         relation = access.relations_of(call, ctx)
         out_shape = access.shape_from_relation(
@@ -50,7 +51,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
             access.broadcast_all((condition.shape, input_.shape, other.shape)),
         )
         data_shard = typeinfer.derive_output_shard_layout(
-            (input_, other), relation[1:], out_shape, ctx=ctx, storage=storage
+            read[1:], relation[1:], out_shape, ctx=ctx, storage=storage
         )
         layout = (
             data_shard
@@ -67,7 +68,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
             isinstance(attr, (types.Split, types.Partial)) for attr in condition_shard.attrs
         ):
             combined = typeinfer.derive_output_shard_layout(
-                (condition, input_, other), relation, out_shape, ctx=ctx, storage=storage
+                read, relation, out_shape, ctx=ctx, storage=storage
             )
             if combined != layout:
                 ctx.error(
@@ -77,7 +78,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
                 )
         elif condition_shard is not None or data_shard is not None:
             layout = typeinfer.derive_output_shard_layout(
-                (condition, input_, other), relation, out_shape, ctx=ctx, storage=storage
+                read, relation, out_shape, ctx=ctx, storage=storage
             )
     except ValueError as error:
         ctx.error(call, f"Where: {error}")

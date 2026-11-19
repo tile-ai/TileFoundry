@@ -341,6 +341,37 @@ def derive_output_shard_layout(
     return types.ShardLayout.from_logical(output_shape, mesh, tuple(attrs), storage=storage, owners=owners)
 
 
+def shard_read_types(ctx, operands) -> tuple:
+    """Operand types as shard readers see them: a literal is replicated.
+
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics). A plain
+    ``expr.Constant`` operand reads as ``Broadcast`` on the mesh of the first
+    distributed non-literal operand. Its stored type does not change.
+    """
+    typed = tuple(ctx.type_of(operand) for operand in operands)
+    mesh = next(
+        (
+            layout.mesh
+            for operand, type_ in zip(operands, typed)
+            if not isinstance(operand, expr.Constant)
+            and isinstance(type_, types.TensorType)
+            and (layout := types.shard_layout_of(type_.layout)) is not None
+        ),
+        None,
+    )
+    if mesh is None:
+        return typed
+    replicated = (types.Broadcast(),) * len(utils.axis_keys(mesh))
+    return tuple(
+        replace(type_, layout=types.ShardLayout(type_.layout, replicated, mesh))
+        if isinstance(operand, expr.Constant)
+        and isinstance(type_, types.TensorType)
+        and isinstance(type_.layout, types.Layout)
+        else type_
+        for operand, type_ in zip(operands, typed)
+    )
+
+
 def combine_operand_attrs(result, others: tuple, ctx) -> "types.TensorType":
     """Read the result's shard attrs together with the other tensor operands'.
 
@@ -375,4 +406,4 @@ def combine_operand_attrs(result, others: tuple, ctx) -> "types.TensorType":
     return replace(result, layout=layout)
 
 
-__all__ = ["combine_operand_attrs", "derive_output_shard_layout"]
+__all__ = ["combine_operand_attrs", "derive_output_shard_layout", "shard_read_types"]

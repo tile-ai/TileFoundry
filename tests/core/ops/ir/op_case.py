@@ -32,7 +32,7 @@ class Cost:
 class OpCase:
     name: str
     op: object
-    inputs: tuple[types.TensorType | torch.Tensor, ...]
+    inputs: tuple[types.TensorType | torch.Tensor | expr.Expr, ...]
     type: types.TensorType | types.TupleType | None = None
     error: ExpectedError | None = None
     value: torch.Tensor | tuple | None = None
@@ -48,8 +48,14 @@ class OpCase:
 
 
 def make_call(op, input_types) -> expr.Call:
-    """Build a Call over typed variables, with a placeholder for nullary ops."""
-    args = tuple(expr.Var(type=t, name=f"x{i}") for i, t in enumerate(input_types))
+    """Build a Call over typed variables, with a placeholder for nullary ops.
+
+    An input that is already an expression, such as a literal, is used as written.
+    """
+    args = tuple(
+        t if isinstance(t, expr.Expr) else expr.Var(type=t, name=f"x{i}")
+        for i, t in enumerate(input_types)
+    )
     return expr.Call(
         type=input_types[0] if input_types else types.TensorType.from_umat_scalar(), target=op, args=args
     )
@@ -58,7 +64,8 @@ def make_call(op, input_types) -> expr.Call:
 def _infer(call, target=None):
     if target is None:
         return typeinfer.TypeInferVisitor().visit(call, typeinfer.TypeInferContext())
-    function = core.Function.from_parts(name="case", params=call.args, body=call, return_type=call.type)
+    params = tuple(arg for arg in call.args if isinstance(arg, expr.Var))
+    function = core.Function.from_parts(name="case", params=params, body=call, return_type=call.type)
     module = core.Module(name="Case", functions=(function,), entry="case", target=target)
     return typeinfer.TypeInferVisitor().visit(call, typeinfer.TypeInferContext(module=module, function=function))
 
