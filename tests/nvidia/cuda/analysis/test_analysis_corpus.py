@@ -219,6 +219,11 @@ class FsdpTraining(AnalysisCase):
                 torch.testing.assert_close(
                     item, reference, rtol=1e-5, atol=1e-6, msg=lambda m: f"step {step}, state {index}: {m}"
                 )
+        functions = inspection.render_analysis(state.result).data["functions"]
+        names = [function["function"] for function in functions]
+        callees = [row["callee"] for function in functions for row in function["calls"] if "callee" in row]
+        assert callees, "the step calls its forward and backward functions"
+        assert all(names.count(callee) == 1 for callee in callees)
 
 
 @case
@@ -1052,7 +1057,8 @@ class TensorParallelBlock(AnalysisCase):
     """Megatron TP: each row-split matmul ends in an all-reduce of a (8, 16) f32 partial.
 
     A GPU sends half its 512-byte partial. The block writes no mesh scope, so
-    one unit executes it and the total equals that share.
+    one unit executes it and the total equals that share: a property of this
+    input, which analysis keeps as it is.
     """
 
     path: Path = PLACED / "megatron_block_cuda.py"
