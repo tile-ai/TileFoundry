@@ -1,5 +1,7 @@
 """One Reshard per way the units holding a value can change, on four GPUs."""
 
+from __future__ import annotations
+
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import cuda
 
@@ -14,7 +16,7 @@ def on(units, attr=Broadcast()):
         SHAPE, units, (attr,), storage="gmem", owners=target.storage_owners), "gmem")
 
 
-ALL, FIRST, SECOND, MIDDLE = on(mesh), on(mesh[0:1]), on(mesh[1:2]), on(mesh[1:3])
+FIRST, SECOND, MIDDLE = on(mesh[0:1]), on(mesh[1:2]), on(mesh[1:3])
 LAST_SPLIT = on(mesh[2:4], Split(0))
 grid = Mesh((gpu,), Layout((2, 2)), ("dp", "pp"))
 SECOND_STAGE = on(grid[:, 1])
@@ -22,18 +24,16 @@ SECOND_STAGE = on(grid[:, 1])
 
 @module(entry="run", target=target, topologies=(gpu, Topology("cta", 1)))
 class SameUnits:
-    @func
-    def run(x: on(mesh)):
-        with Mesh(("gpu",), layout=(4,), names=("g",)) as _m:
-            return tf.reshard(x, ALL.layout, "gmem")
+    @func(mesh=Mesh(("gpu",), (4,), names=("g",)))
+    def run(x: Tensor[(4, 8), "f32", (4, 8) @ {B()}, "gmem"]):
+        return tf.reshard(x, (4, 8) @ {B()}, "gmem")
 
 
 @module(entry="run", target=target, topologies=(gpu, Topology("cta", 1)))
 class SplitToBroadcast:
-    @func
-    def run(x: on(mesh, Split(0))):
-        with Mesh(("gpu",), layout=(4,), names=("g",)) as _m:
-            return tf.reshard(x, ALL.layout, "gmem")
+    @func(mesh=Mesh(("gpu",), (4,), names=("g",)))
+    def run(x: Tensor[(4, 8), "f32", (4 @ mesh.g, 8), "gmem"]):
+        return tf.reshard(x, (4, 8) @ {B()}, "gmem")
 
 
 @module(entry="run", target=target, topologies=(gpu, Topology("cta", 1)))
@@ -41,15 +41,14 @@ class OneToAll:
     @func
     def run(x: on(mesh[0:1])):
         with Mesh(("gpu",), layout=(4,), names=("g",)) as _m:
-            return tf.reshard(x, ALL.layout, "gmem")
+            return tf.reshard(x, (4, 8) @ {B()}, "gmem")
 
 
 @module(entry="run", target=target, topologies=(gpu, Topology("cta", 1)))
 class AllToOne:
-    @func
-    def run(x: on(mesh)):
-        with Mesh(("gpu",), layout=(4,), names=("g",)) as _m:
-            return tf.reshard(x, FIRST.layout, "gmem")
+    @func(mesh=Mesh(("gpu",), (4,), names=("g",)))
+    def run(x: Tensor[(4, 8), "f32", (4, 8) @ {B()}, "gmem"]):
+        return tf.reshard(x, FIRST.layout, "gmem")
 
 
 @module(entry="run", target=target, topologies=(gpu, Topology("cta", 1)))

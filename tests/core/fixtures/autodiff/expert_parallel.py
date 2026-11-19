@@ -5,34 +5,21 @@ split axis of the bucketed tokens is the all-to-all: before it a GPU holds what 
 sends, after it what its expert receives.
 """
 
+from __future__ import annotations
+
 from tilefoundry.dsl import *
 from tilefoundry.target import cpu
 
 P, NL, C, F = 2, 8, 8, 16
 n = DimVar("n", 1, NL)
-target = cpu.Target()
-gpu = Topology("gpu", P)
-mesh = Mesh((gpu,), Layout((P,)), ("ep",))
 
 
-def placed(shape, attr, dtype=DType.f32):
-    return TensorType(shape, dtype, ShardLayout.from_logical(
-        shape, mesh, (attr,), storage="gmem", owners=target.storage_owners), "gmem")
-
-
-Tokens = placed((P, NL, C), Split(0))
-Route = placed((P * n,), Varying(), DType.i32)
-Expert = placed((C, F), Varying())
-Received = placed((P, P * n, C), Split(1))
-Returned = placed((P, P * n, F), Split(0))
-
-
-@module(entry="forward", target=target, topologies=(gpu,))
+@module(entry="forward", target=cpu.Target(), topologies=(Topology("gpu", P),))
 class ExpertParallel:
-    @func
-    def forward(tokens: Tokens, route: Route, w: Expert):
-        with Mesh(("gpu",), layout=(P,), names=("ep",)) as _ep:
-            sent = tf.index_select(tokens, route, dim=1)
-            received = tf.reshard(sent, layout=Received.layout, storage="gmem")
-            applied = tf.matmul(received, w)
-            return tf.reshard(applied, layout=Returned.layout, storage="gmem")
+    @func(mesh=Mesh(("gpu",), (P,), names=("ep",)))
+    def forward(tokens: Tensor[(P @ mesh.ep, NL, C), "f32", "gmem"], route: Tensor[(P * n,), "i32", "gmem"],
+                w: Tensor[(C, F), "f32", "gmem"]):
+        sent = tf.index_select(tokens, route, dim=1)
+        received = tf.reshard(sent, layout=(P, P * n @ mesh.ep, C), storage="gmem")
+        applied = tf.matmul(received, w)
+        return tf.reshard(applied, layout=(P @ mesh.ep, P * n, F), storage="gmem")

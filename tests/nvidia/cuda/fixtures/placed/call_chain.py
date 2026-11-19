@@ -4,32 +4,22 @@ Differentiating it saves each callee's values inside its caller's, so the
 generated Forward returns a tuple three levels deep.
 """
 
+from __future__ import annotations
+
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import cuda
 
-target = cuda.Target("nvidia.h200_sxm", device_count=2)
-gpu = Topology("gpu", 2)
-mesh = Mesh((gpu,), Layout((2,)), ("dp",))
 
-
-def placed(shape, attr):
-    return TensorType(shape, DType.f32, ShardLayout.from_logical(
-        shape, mesh, (attr,), storage="gmem", owners=target.storage_owners), "gmem")
-
-
-X, W = placed((8, 16), Split(0)), placed((16, 16), Broadcast())
-
-
-@module(entry="forward", target=target, topologies=(gpu, Topology("cta", 1)))
+@module(entry="forward", target=cuda.Target("nvidia.h200_sxm", device_count=2), topologies=(Topology("gpu", 2), Topology("cta", 1)))
 class CallChain:
-    @func
-    def inner(x: X, w: W):
+    @func(mesh=Mesh(("gpu",), (2,), names=("dp",)))
+    def inner(x: Tensor[(8 @ mesh.dp, 16), "f32", "gmem"], w: Tensor[(16, 16), "f32", (16, 16) @ {B()}, "gmem"]):
         return tf.silu(tf.matmul(x, w))
 
-    @func
-    def middle(x: X, w: W):
+    @func(mesh=Mesh(("gpu",), (2,), names=("dp",)))
+    def middle(x: Tensor[(8 @ mesh.dp, 16), "f32", "gmem"], w: Tensor[(16, 16), "f32", (16, 16) @ {B()}, "gmem"]):
         return inner(x, w) * inner(x * x, w)
 
-    @func
-    def forward(x: X, w: W):
+    @func(mesh=Mesh(("gpu",), (2,), names=("dp",)))
+    def forward(x: Tensor[(8 @ mesh.dp, 16), "f32", "gmem"], w: Tensor[(16, 16), "f32", (16, 16) @ {B()}, "gmem"]):
         return tf.reduce(middle(x, w) + x, axes=(0, 1), kind=ReduceKind.SUM, keepdim=False)
