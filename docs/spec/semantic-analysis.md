@@ -240,6 +240,27 @@ def derive_output_shard_layout(
     translated access.
   - `Split(axis)` indexes an output mode, not a logical tensor axis.
 
+An op that reads several operands' shard attrs reads them through
+`operand_types`; one whose result type is an operand's type then combines the
+others with `combine_operand_attrs`.
+
+```python
+# interfaces/typeinfer/shard_propagate.py
+def combine_operand_attrs(result: TensorType, others: tuple[TensorType, ...], ctx) -> TensorType: ...
+def operand_types(ctx, operands: tuple[Expr, ...]) -> tuple[Type, ...]: ...
+def induction_type(bounds, declared: TensorType, mesh: Mesh | None, type_of) -> TensorType: ...
+```
+
+- constraints:
+  - `operand_types` gives a literal operand ([shard §6.1](./shard.md#61-shard-attr-semantics))
+    an all-`Broadcast` layout on the first operand mesh. `induction_type` gives
+    a loop index its shard type, for the visitor and the parser alike.
+  - On each mesh axis whose topology owns the result's storage per unit, a
+    `Broadcast` result with a `Varying` operand becomes `Varying`; a `Partial`
+    result with one MUST fail (`ValueError`). Other pairs leave the result.
+  - The ops that use this rule are `IndexSelect`, `IndexAdd`, `IndexCopy`,
+    `InsertSlice`, `CacheUpdate`, `LayerNorm`, `RMSNorm` and `RoPE`.
+
 ### 3.3 Output storage and mesh/layout compatibility
 
 - constraints:

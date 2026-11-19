@@ -14,6 +14,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry import core, utils
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import dim, expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
@@ -34,9 +35,7 @@ class RoPE(expr.Op):
 def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TupleType:
     q_ty = ctx.type_of(call.args[0])
     k_ty = ctx.type_of(call.args[1])
-    cos_ty = ctx.type_of(call.args[2])
-    sin_ty = ctx.type_of(call.args[3])
-    pos_ty = ctx.type_of(call.args[4])
+    cos_ty, sin_ty, pos_ty = typeinfer.operand_types(ctx, call.args)[2:]
     if not q_ty.shape or not k_ty.shape:
         ctx.error(call, "q and k must be at least rank-1")
     if len(q_ty.shape) != len(k_ty.shape):
@@ -50,21 +49,25 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TupleType:
     if isinstance(head_dim_q, int) and isinstance(head_dim_k, int) and head_dim_q != head_dim_k:
         ctx.error(call, f"q head_dim {head_dim_q} != k head_dim {head_dim_k}")
 
+    owners = ctx.target.storage_owners if ctx.target else tilefoundry_target.StorageOwners()
     ir_utils.check_multilinear_partials(
         (("q", q_ty), ("cos_cache", cos_ty), ("sin_cache", sin_ty)),
-        ctx.target,
+        owners,
         kind=expr.BinaryKind.MUL,
         anchor="q",
     )
     ir_utils.check_multilinear_partials(
         (("k", k_ty), ("cos_cache", cos_ty), ("sin_cache", sin_ty)),
-        ctx.target,
+        owners,
         kind=expr.BinaryKind.MUL,
         anchor="k",
     )
 
     ir_utils.reject_partials("pos_ids", pos_ty.layout)
-    return types.TupleType(fields=(q_ty, k_ty))
+    tables = (cos_ty, sin_ty, pos_ty)
+    return types.TupleType(
+        fields=tuple(typeinfer.combine_operand_attrs(ty, tables, ctx) for ty in (q_ty, k_ty))
+    )
 
 
 @access.register_relation(RoPE)

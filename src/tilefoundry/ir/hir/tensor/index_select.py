@@ -81,9 +81,10 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     new_shape = list(x_ty.shape)
     new_shape[dim] = index_ty.shape[0]
     new_layout = index_select_shard_layout(call, ctx, x_ty, dim, tuple(new_shape))
-    return types.TensorType(
+    result = types.TensorType(
         shape=tuple(new_shape), dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage
     )
+    return typeinfer.combine_operand_attrs(result, typeinfer.operand_types(ctx, call.args)[1:], ctx)
 
 
 @access.register_relation(IndexSelect)

@@ -13,7 +13,6 @@ from tilefoundry.ir import pattern
 from tilefoundry.ir.core import ModuleList, shape_of
 from tilefoundry.ir.dim import ceildiv
 from tilefoundry.ir.expr import (
-    TARGET_MEMORY_OWNER,
     BinaryKind,
     BoolDType,
     DimVar,
@@ -22,7 +21,6 @@ from tilefoundry.ir.expr import (
     IntegerDType,
     ReduceKind,
     StorageKind,
-    StorageOwners,
     UnaryKind,
     resolve_storage,
 )
@@ -61,6 +59,8 @@ from tilefoundry.ir.types import (
 from tilefoundry.ir.utils import make_shard_tensor_type
 from tilefoundry.parser import func, module, prim_func
 from tilefoundry.passes.transforms.differentiate import differentiate
+from tilefoundry.target import SHARED_OWNER as TARGET_MEMORY_OWNER
+from tilefoundry.target import StorageOwners
 
 from . import T, namespace, tf
 from .tensor import ConstTensor, Tensor

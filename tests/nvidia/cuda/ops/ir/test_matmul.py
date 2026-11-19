@@ -4,12 +4,24 @@ from __future__ import annotations
 
 from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
 from tests.core.ops.ir.test_matmul import _MM
-from tilefoundry.ir import expr, types
+from tilefoundry.ir import expr, types, utils
 from tilefoundry.ir.hir import nn
 from tilefoundry_nvidia import cuda
 
 _H200 = cuda.Target("nvidia.h200_sxm")
 _SM89 = cuda.Target("nvidia.rtx_6000_ada")
+_TWO_GPUS = cuda.Target("nvidia.h200_sxm", device_count=2)
+_M = types.Mesh((types.Topology("gpu", 2),), types.Layout((2,), (1,)), ("g",))
+
+
+def _held(shape, attr):
+    return utils.make_shard_tensor_type(shape, mesh=_M, attrs=(attr,))
+
+
+def _plain(shape):
+    return types.TensorType(shape=shape, dtype=expr.DType.f32, layout=types.Layout(shape), storage="gmem")
+
+
 CASES = (
     OpCase(
         "cuda_on_chip_result_is_where_the_mma_writes_it",
@@ -59,6 +71,20 @@ CASES = (
         (types.TensorType.from_shape((64, 16), expr.DType.bf16), types.TensorType.from_shape((16, 32), expr.DType.bf16)),
         type=types.TensorType.from_shape((64, 32), expr.DType.bf16),
         target=_H200,
+    ),
+    *(
+        OpCase(
+            f"cuda_varying_{name}_makes_the_product_plain",
+            _MM,
+            operands,
+            type=_plain((4, 6)),
+            target=_TWO_GPUS,
+        )
+        for name, operands in (
+            ("rhs", (_held((4, 8), types.Broadcast()), _held((8, 6), types.Varying()))),
+            ("plain_rhs", (_held((4, 8), types.Broadcast()), _plain((8, 6)))),
+            ("lhs", (_held((4, 8), types.Varying()), _held((8, 6), types.Broadcast()))),
+        )
     ),
 )
 test_op_case = op_case_test(CASES)

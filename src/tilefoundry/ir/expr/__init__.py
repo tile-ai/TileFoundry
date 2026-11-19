@@ -66,5 +66,5 @@ from .param_def import (
     variadic_item_annotation,
 )
 from .register import get_registered_name, register_op, register_type
-from .storage import TARGET_MEMORY_OWNER, StorageKind, StorageOwners, resolve_storage
+from .storage import StorageKind, resolve_storage
 from .visitor import Functor, Visitor

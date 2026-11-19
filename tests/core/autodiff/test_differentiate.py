@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 import torch
@@ -11,7 +13,7 @@ import torch
 from tests.core._corpus import Case, case, check_case, special
 from tilefoundry import cli, inspection, runtime
 from tilefoundry.interfaces import autodiff, evaluator
-from tilefoundry.ir import core, expr, types
+from tilefoundry.ir import core, dim, expr, types
 from tilefoundry.ir.hir import sharding
 from tilefoundry.passes.transforms import differentiate
 
@@ -66,12 +68,16 @@ def fields(type_: types.Type) -> tuple[types.Type, ...]:
 
 
 def check_gradients(
-    module: core.Module, forward: core.Module, backward: core.Module, wrt, rtol: float = 1e-5, atol: float = 1e-6
+    module: core.Module, forward: core.Module, backward: core.Module, wrt, rtol: float = 1e-5, atol: float = 1e-6,
+    dims: Mapping[str, int] = MappingProxyType({}),
 ) -> None:
-    """The backward's gradients equal autograd's through the evaluator, for ones (D36)."""
+    """The backward's gradients equal autograd's through the evaluator, for ones (D36).
+
+    *dims* binds each open dimension to the extent its inputs are drawn at.
+    """
     function = module.entry_function()
     generator = torch.Generator().manual_seed(0)
-    inputs = [inputs_for(param.type, generator) for param in function.params]
+    inputs = [inputs_for(dim.substitute_dims(param.type, dims), generator) for param in function.params]
     names = [param.name for param in function.params]
     trained = [leaf for name in wrt for leaf in leaves(inputs[names.index(name)])]
     for leaf in trained:
@@ -83,7 +89,8 @@ def check_gradients(
     )
     reference = torch.autograd.grad(total, trained, allow_unused=True)
     saved = detached(evaluator.evaluate(loaded(forward), *detached(tuple(inputs)))[-1])
-    gradients = [ones_like(type_) for type_ in fields(function.return_type) if is_float(type_)]
+    returned = dim.substitute_dims(function.return_type, dims)
+    gradients = [ones_like(type_) for type_ in fields(returned) if is_float(type_)]
     computed = evaluator.evaluate(loaded(backward), *gradients, saved)
     computed = computed if len(wrt) > 1 else (computed,)
     for want, got in zip(reference, leaves(computed), strict=True):
@@ -116,13 +123,14 @@ class Differentiated(Case):
     reshards: tuple[tuple[tuple, tuple], ...] = ()
     rtol: float = 1e-5
     atol: float = 1e-6
+    dims: Mapping[str, int] = MappingProxyType({})
 
     def guard(self, module, problems):
         before = inspection.as_script(module)
         forward, backward = differentiate.differentiate(module, wrt=self.wrt, recompute=self.recompute)
         assert inspection.as_script(module) == before, "differentiate changed its input Module"
         assert (forward.name, backward.name) == (f"{module.name}Forward", f"{module.name}Backward")
-        check_gradients(module, forward, backward, self.wrt, self.rtol, self.atol)
+        check_gradients(module, forward, backward, self.wrt, self.rtol, self.atol, self.dims)
         if self.saved is not None:
             assert {value.name for value in differentiate.saved_values(forward)} == self.saved
         params = {param.name: param for param in module.entry_function().params}
@@ -261,6 +269,25 @@ class CastFullLike(Differentiated):
 
 
 @case
+class BitcastAgreed(Differentiated):
+    path: Path = FIXTURES / "bitcast_agreed.py"
+    wrt: tuple[str, ...] = ("x", "w")
+
+
+@case
+class Pipeline(Differentiated):
+    path: Path = FIXTURES / "pipeline.py"
+    wrt: tuple[str, ...] = ("x", "w0", "w1")
+
+
+@case
+class ExpertParallel(Differentiated):
+    path: Path = FIXTURES / "expert_parallel.py"
+    wrt: tuple[str, ...] = ("tokens", "w")
+    dims: Mapping[str, int] = MappingProxyType({"n": 4})
+
+
+@case
 class IndexSelect(Differentiated):
     path: Path = FIXTURES / "index_select.py"
     wrt: tuple[str, ...] = ('table',)
@@ -340,18 +367,6 @@ class VoidCall(Differentiated):
 
 
 BLOCK_WEIGHTS = ("wq", "wk", "wv", "wo", "wu", "wd")
-
-
-@case
-class FsdpModel(Differentiated):
-    """examples/fsdp_training as written: tf.relu, tf.log, and every weight trained."""
-
-    path: Path = FIXTURES / "fsdp_model.py"
-    wrt: tuple[str, ...] = (
-        "we", "q1", "k1", "v1", "o1", "u1", "d1", "q2", "k2", "v2", "o2", "u2", "d2", "wh",
-    )
-    rtol: float = 1e-4
-    atol: float = 1e-5
 
 
 @case
@@ -442,7 +457,7 @@ def test_saved_values_report_name_type_and_origin() -> None:
     forward, _ = differentiate.differentiate(module, wrt=("x", "w"))
     rows = {value.name: value for value in differentiate.saved_values(forward)}
     assert rows["x"].origin == "parameter"
-    assert rows["full"].origin == "reshard  sharded.py:24"
+    assert rows["full"].origin == "reshard  sharded.py:15"
     assert rows["full"].type.shape == (6, 4)
     assert types.shard_layout_of(rows["full"].type.layout).attrs == (B,)
 

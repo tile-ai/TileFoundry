@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import pytest
 
+from tilefoundry import target
 from tilefoundry.interfaces import access
 from tilefoundry.ir import expr, types
 from tilefoundry.ir.hir import sharding
@@ -34,7 +35,7 @@ def test_partial_to_broadcast_not_aliased(move_axis):
         attrs = (types.Broadcast(),)
     dst = replace(src, layout=replace(src.layout, attrs=attrs))
     call = expr.Call(sharding.Reshard(layout=dst.layout, storage=dst.storage), (expr.Var("src", type=src),), type=dst)
-    assert access.aliased_operand(call) is None
+    assert access.aliased_operand(call, target.StorageOwners()) is None
 
 
 def test_broadcast_to_plain_aliases():
@@ -44,7 +45,7 @@ def test_broadcast_to_plain_aliases():
     call = expr.Call(
         sharding.Reshard(layout=dst.layout, storage=dst.storage), (expr.Var("src", type=src),), type=dst
     )
-    assert access.aliased_operand(call) == 0
+    assert access.aliased_operand(call, target.StorageOwners()) == 0
 
 
 @pytest.mark.parametrize(
@@ -65,4 +66,4 @@ def test_partial_alias_states(before, after, expected):
     call = expr.Call(
         sharding.Reshard(layout=dst.layout, storage=dst.storage), (expr.Var("src", type=src),), type=dst
     )
-    assert access.aliased_operand(call) == expected
+    assert access.aliased_operand(call, target.StorageOwners()) == expected

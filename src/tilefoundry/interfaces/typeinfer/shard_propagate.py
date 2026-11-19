@@ -14,6 +14,7 @@ from functools import reduce
 
 import isl
 
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.ir import expr, types, utils
 from tilefoundry.ir.types import int_tuple
 
@@ -186,7 +187,7 @@ def derive_output_shard_layout(
     any input distributes -- so mesh axes keep one index across the inputs.
     """
     target = getattr(ctx, "target", None)
-    owners = target.storage_owners if target else expr.StorageOwners((), {})
+    owners = target.storage_owners if target else tilefoundry_target.StorageOwners()
     states = tuple(utils.attrs_by_axis(type_, owners=owners) for type_ in input_types)
     layouts = tuple(
         replace(layout, attrs=tuple(state.values())) if layout is not None else None
@@ -310,7 +311,7 @@ def derive_output_shard_layout(
                 )
             attrs[p] = new_attr
 
-    if all(isinstance(attr, types.Varying) for attr in attrs):
+    if all(isinstance(attr, types.Varying) for attr in attrs) and utils.covers_every_unit(mesh):
         kept_topologies = {topology for topology, _ in keys}
         if all((topology in kept_topologies) == owners.private(storage, topology) for topology in topologies):
             return None
@@ -341,4 +342,95 @@ def derive_output_shard_layout(
     return types.ShardLayout.from_logical(output_shape, mesh, tuple(attrs), storage=storage, owners=owners)
 
 
-__all__ = ["derive_output_shard_layout"]
+def operand_types(ctx, operands) -> tuple:
+    """Operand types; a literal reads as Broadcast on the mesh of the first operand that has one.
+
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics). A literal (a
+    ``Constant``, a call of an Op marked ``literal`` such as ``Zeros``, or a
+    call whose arguments are all ``Constant``s) is the same on every unit and
+    names no mesh of its own.
+    """
+    typed = tuple(ctx.type_of(operand) for operand in operands)
+    mesh = next(
+        (
+            layout.mesh
+            for type_ in typed
+            if isinstance(type_, types.TensorType)
+            and (layout := types.shard_layout_of(type_.layout)) is not None
+        ),
+        None,
+    )
+    if mesh is None:
+        return typed
+    return tuple(
+        replace(type_, layout=types.ShardLayout(type_.layout, (types.Broadcast(),) * len(utils.axis_keys(mesh)), mesh))
+        if (
+            isinstance(operand, expr.Constant)
+            or getattr(getattr(operand, "target", None), "literal", False)
+            or (isinstance(operand, expr.Call) and operand.args and all(isinstance(arg, expr.Constant) for arg in operand.args))
+        )
+        and isinstance(type_.layout, types.Layout)
+        else type_
+        for operand, type_ in zip(operands, typed)
+    )
+
+
+def induction_type(bounds, declared: types.TensorType, mesh, type_of) -> types.TensorType:
+    """A loop index: Broadcast on *mesh* when each bound is an int, a literal, or all-Broadcast.
+
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics). *mesh* is the
+    mesh in force at the loop; without one, or when no topology of it has more
+    than one unit, the index is plain. *type_of* reads a bound's type.
+    """
+    plain = replace(declared, layout=types.Layout(tuple(declared.shape)))
+    if mesh is None or all(topology.size == 1 for topology in mesh.topologies):
+        return plain
+    for bound in bounds:
+        if isinstance(bound, (int, expr.Constant)):
+            continue
+        type_ = type_of(bound) if isinstance(bound, expr.Expr) else None
+        shard = types.shard_layout_of(type_.layout) if isinstance(type_, types.TensorType) else None
+        if shard is None or not all(isinstance(attr, types.Broadcast) for attr in shard.attrs):
+            return plain
+    attrs = (types.Broadcast(),) * len(utils.axis_keys(mesh))
+    return replace(plain, layout=types.ShardLayout(plain.layout, attrs, mesh))
+
+
+def combine_operand_attrs(result, others: tuple, ctx) -> "types.TensorType":
+    """Read the result's shard attrs together with the other tensor operands'.
+
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics) and
+    [semantic-analysis §3.2](docs/spec/semantic-analysis.md#32-relation-driven-shard-propagation).
+
+    Raises:
+        ValueError: A ``Partial`` result axis meets a ``Varying`` operand.
+    """
+    shard = types.shard_layout_of(result.layout)
+    if shard is None:
+        return result
+    target = getattr(ctx, "target", None)
+    owners = target.storage_owners if target else tilefoundry_target.StorageOwners()
+    held = utils.attrs_by_axis(result, shard.mesh, owners)
+    states = tuple(utils.attrs_by_axis(type_, shard.mesh, owners) for type_ in others)
+    attrs, promoted = [], False
+    for mesh_axis, key in enumerate(held):
+        attr = shard.attrs[mesh_axis] if mesh_axis < len(shard.attrs) else types.Broadcast()
+        if any(isinstance(state[key], types.Varying) for state in states):
+            if isinstance(held[key], types.Partial):
+                raise ValueError(
+                    f"mesh axis {mesh_axis}: a Partial result cannot combine with a Varying operand"
+                )
+            if isinstance(held[key], types.Broadcast) and owners.private(result.storage, key[0]):
+                attr = held[key] = types.Varying()
+                promoted = True
+        attrs.append(attr)
+    if not promoted:
+        return result
+    if all(isinstance(attr, types.Varying) for attr in held.values()) and utils.covers_every_unit(shard.mesh):
+        return replace(result, layout=types.Layout(result.shape))
+    shard = replace(shard, attrs=tuple(attrs))
+    layout = shard if isinstance(result.layout, types.ShardLayout) else replace(result.layout, outer=shard)
+    return replace(result, layout=layout)
+
+
+__all__ = ["combine_operand_attrs", "derive_output_shard_layout", "induction_type", "operand_types"]

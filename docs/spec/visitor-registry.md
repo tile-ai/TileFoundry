@@ -602,13 +602,15 @@ A second registry in the same package states which operand a view re-addresses:
 ```python
 access.alias_registry: Registry                # keyed by type[Op]
 def register_alias(op_cls: type) -> Callable[[Callable], Callable]: ...
-def aliased_operand(call: Call) -> int | None: ...
+def aliased_operand(call: Call, owners: StorageOwners) -> int | None: ...
 ```
 
 - constraints:
-  - A handler has the shape `(call: Call) -> int | None`. It returns the
-    position of the input whose bytes the Call's result re-addresses, or `None`
-    for a new value. `aliased_operand` answers `None` for an Op with no handler.
+  - A handler has the shape `(call: Call, owners: StorageOwners) -> int | None`.
+    It returns the position of the input whose bytes the Call's result
+    re-addresses, or `None` for a new value. `owners` names the topologies
+    that hold their own copy of each storage: `ctx.target.storage_owners`, or
+    `StorageOwners()` without a target. `aliased_operand` answers `None` for an Op with no handler.
     The registry is partial, and an unregistered Op is a value of its own.
 
 ## 5. Instance 2 — `verify`

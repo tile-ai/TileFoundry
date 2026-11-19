@@ -385,6 +385,15 @@ class Target:
         query: object | None = None,
     ) -> FactsT: ...
 
+    storage_owners: StorageOwners  # cached projection
+
+
+class StorageOwners:
+    order: tuple[str, ...] = ()  # Target topologies, coarse to fine.
+    owner: Mapping[StorageKind, str] = {}
+
+    def private(self, storage, topology) -> bool: ...
+
 
 class TopologyLimits:
     """The program-side and machine-side unit counts for one topology.
@@ -420,6 +429,10 @@ class MemoryExecutionFacts:
     `TopologyFacts.topologies`. An empty list admits no memory execution scope.
     Shared instruction matching MUST specialize the memory mesh wildcard from
     this projection before checking operands.
+  - `storage_owners` projects `MemoryHierarchyFacts` once: each storage's
+    owner topology, and `TopologyFacts` order. Storage is private to a unit of
+    its owner topology and of each coarser one; the owner `target` is shared.
+    `StorageOwners()` is the value for no target: no storage is private.
   - `max_logical_units` is the program-side declaration limit.
     `max_physical_units` is the machine-side count of units the topology
     divides over, independently of hardware residency limits.

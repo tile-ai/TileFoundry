@@ -11,6 +11,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry import core, utils
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import core as ir_core
 from tilefoundry.ir import dim, expr, pattern, types
@@ -172,7 +173,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TupleType:
                 storage=x_ty.storage,
                 owners=ctx.target.storage_owners
                 if ctx is not None and ctx.target is not None
-                else expr.StorageOwners((), {}),
+                else tilefoundry_target.StorageOwners(),
             )
         )
     values_ty = types.TensorType(

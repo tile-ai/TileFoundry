@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from functools import cache
 from math import prod
 
 import isl
 
 from tilefoundry import core, utils
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
 from tilefoundry.ir.types import int_tuple
@@ -128,10 +129,41 @@ def address_mapping(
     return tuple(source_at[address] for address in result_at)
 
 
+def restates_attrs(source: types.TensorType, layout) -> bool:
+    """Whether *layout* keeps the source's addresses and only states Varying copies equal or summed.
+
+    This is form (ii): the address layout and the mesh stay; on each mesh axis
+    the attr stays, or Varying becomes Broadcast or Partial. A plain source
+    reads as Varying on *layout*'s mesh. A source offset wrapping its shard
+    must be stated again around the new attrs. See [hir §1.3](docs/spec/hir.md#13-op).
+    """
+    stated = types.shard_layout_of(layout)
+    if stated is None:
+        return False
+    held = types.shard_layout_of(source.layout)
+    if held is None and (layout is not stated or source.layout != stated.layout):
+        return False
+    if held is not None and (
+        held.layout != stated.layout
+        or held.mesh != stated.mesh
+        or layout != (stated if source.layout is held else replace(source.layout, outer=stated))
+    ):
+        return False
+    before = ir_utils.attrs_by_axis(source, stated.mesh)
+    after = ir_utils.attrs_by_axis(types.TensorType(source.shape, source.dtype, layout, source.storage))
+    return all(
+        before[key] == attr
+        or (isinstance(before[key], types.Varying) and isinstance(attr, (types.Broadcast, types.Partial)))
+        for key, attr in after.items()
+    )
+
+
 @typeinfer.register(Bitcast)
 def _(call: expr.Call, ctx) -> types.TensorType:
     source = ctx.type_of(call.args[0])
     stated_layout = call.target.layout
+    if restates_attrs(source, stated_layout):
+        return types.TensorType(source.shape, source.dtype, stated_layout, source.storage)
     if not expr.is_literal_shape(source.shape):
         ctx.error(call, "source tensor shape must be literal")
     sharded = isinstance(source.layout, types.ShardLayout) or isinstance(stated_layout, types.ShardLayout)
@@ -197,7 +229,7 @@ def _(call: expr.Call, ctx) -> types.TensorType:
 
 
 @access.register_alias(Bitcast)
-def buffer_alias(call: expr.Call) -> int:
+def buffer_alias(call: expr.Call, owners: "StorageOwners") -> int:
     return 0
 
 
@@ -299,14 +331,22 @@ def address_relation(source_layout, result_layout, source_shape: tuple, result_s
 def bitcast_access(call: expr.Call, ctx) -> tuple[access.Relation, ...]:
     source = ctx.type_of(call.args[0])
     result = ctx.type_of(call)
+    if restates_attrs(source, result.layout):
+        rank = len(result.shape)
+        return access.iterating(result.shape, (access.identity(rank), access.identity(rank)))
     relation = address_relation(source.layout, result.layout, source.shape, result.shape)
     return access.iterating(result.shape, (access.Relation(relation), access.identity(len(result.shape))))
 
 
 @evaluator.register(Bitcast)
 def eval_bitcast(ctx):
-    """Apply the proven local mapping independently to each placement's data."""
+    """Apply the proven local mapping independently to each placement's data.
+
+    Form (ii) keeps every value and changes only the type.
+    """
     x = ctx.args[0].tensor
+    if restates_attrs(x.type, ctx.result_type.layout):
+        return evaluator.TensorValue(x.reshard(ctx.result_type))
     if x.is_global:
         held = bitcast(x.tensor, x.type, ctx.result_type)
     else:
@@ -335,6 +375,23 @@ def bitcast(data, source, result):
 @cost.register(Bitcast)
 def bitcast_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
     return cost.Cost({}, cost.idle(call))
+
+
+@autodiff.register(Bitcast)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """Form (ii) only: the gradient read back with the source's attrs.
+
+    Broadcast to Varying is implicit, so a Reshard back to the source's layout
+    moves nothing.
+    """
+    source = ctx.type_of(call.args[0])
+    if not restates_attrs(source, call.target.layout):
+        raise ValueError("a Bitcast that changes the layout has no autodiff rule")
+    wanted = autodiff.gradient_layout(source.layout)
+    held = ctx.type_of(cotangent)
+    if (held.layout, held.storage) == (wanted, source.storage):
+        return (cotangent,)
+    return (ctx.call("reshard", cotangent, layout=types.normalize_layout(wanted), storage=source.storage),)
 
 
 __all__ = ["Bitcast", "address_mapping", "address_relation", "eval_bitcast"]

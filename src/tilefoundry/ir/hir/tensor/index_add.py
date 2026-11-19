@@ -65,7 +65,7 @@ def infer_index_write(
     for name, ty in (("dst", dst_ty), ("index", index_ty), ("src", src_ty)):
         utils.reject_partials(name, ty.layout)
     reject_splits(ctx, call, dim, dst_ty, index_ty, src_ty)
-    return dst_ty
+    return typeinfer.combine_operand_attrs(dst_ty, typeinfer.operand_types(ctx, call.args)[1:], ctx)
 
 
 def reject_splits(ctx, call: "expr.Call", dim: int, dst, index, src) -> None:

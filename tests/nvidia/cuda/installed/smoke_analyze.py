@@ -77,9 +77,12 @@ def test_mega_kernel_reports_four_families(tf, tmp_path) -> None:
         assert 1 <= line <= len(source_lines)
         assert f"{name} =" in source_lines[line - 1]
     assert all(
-        set(row) - {"performance"} == {"value", "compute-cost", "memory", "roofline"}
+        set(row) - {"performance", "callee", "callee_ref"} == {"value", "compute-cost", "memory", "roofline"}
+        and ("callee" in row) == ("callee_ref" in row)
         for row in cost_rows
     )
+    names = {function["function"] for function in payload["functions"]}
+    assert all(row["callee"] in names for row in rows if "callee" in row)
     assert [index for index, row in enumerate(rows) if "performance" in row] == [
         0,
         1,

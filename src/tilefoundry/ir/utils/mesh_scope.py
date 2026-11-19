@@ -10,6 +10,8 @@ and topology ``t``'s unit ids are ``idx2crd(index, sizes)[t]``. See
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from tilefoundry import services
 from tilefoundry.ir import expr, types
 from tilefoundry.ir.types import int_tuple, layout_algebra
@@ -129,13 +131,16 @@ def runs(mesh: types.Mesh, names) -> dict:
     }
 
 
-def within_mesh_scope(mesh: types.Mesh, current: types.Mesh) -> bool:
+def within_mesh_scope(mesh: types.Mesh, current: types.Mesh, names=None) -> bool:
     """Whether each topology of *mesh* selects a contiguous run inside the one *current* selects.
 
     Both runs must be contiguous; the bounds compare by the conservative range of dims.
+    *names*, when given, limits the comparison to those topologies.
     """
     scope = runs(current, topology_names(current))
     for t, name in enumerate(topology_names(mesh)):
+        if names is not None and name not in names:
+            continue
         if name not in scope:
             return False
         (count, first_unit_id), (bound, scope_first_unit_id) = selected_units(mesh, t), scope[name]
@@ -158,6 +163,92 @@ def equals_mesh_scope(mesh: types.Mesh, current: types.Mesh) -> bool:
         name in scope and selected_units(mesh, t) == scope[name]
         for t, name in enumerate(topology_names(mesh))
     )
+
+
+def covers_every_unit(mesh: types.Mesh) -> bool:
+    """Whether each topology of *mesh* selects every unit that topology has.
+
+    A sliced mesh selects fewer. See [shard §5](docs/spec/shard.md#5-mesh).
+    """
+    for t, topology in enumerate(mesh.topologies):
+        run = selected_units(mesh, t)
+        held = unit_ids(run)
+        if held is not None and isinstance(topology.size, int):
+            if held != frozenset(range(topology.size)):
+                return False
+        elif run != (services.normalize_dim(topology.size), 0):
+            return False
+    return True
+
+
+@dataclass(frozen=True)
+class UnitChange:
+    """How the units of two meshes relate, over the topologies both name.
+
+    ``topology`` is the coarsest of them whose selection differs; the counts are
+    the units each mesh selects and the units both select.
+    """
+
+    topology: str
+    source: int
+    destination: int
+    shared: int
+
+    @property
+    def added(self) -> int:
+        """Units the destination holds and the source does not."""
+        return self.destination - self.shared
+
+    @property
+    def overlap_in_part(self) -> bool:
+        """Whether the two share some units; their selections differ, so not all of them."""
+        return self.shared > 0
+
+
+def unit_ids(run) -> frozenset[int] | None:
+    """The exact unit ids a ``selected_units`` run names; None when they are symbolic."""
+    held, first = run
+    if isinstance(held, types.LayoutBase):
+        count = types.size(held)
+        ids = tuple(first + held(index) for index in range(count)) if isinstance(count, int) else ()
+    else:
+        ids = tuple(range(first, first + held)) if isinstance(held, int) and isinstance(first, int) else ()
+    return frozenset(ids) if ids and all(isinstance(unit, int) for unit in ids) else None
+
+
+def unit_change(source: types.Mesh, destination: types.Mesh, topologies) -> UnitChange | None:
+    """Compare the exact unit sets two meshes select, on the named *topologies*.
+
+    See [shard §5](docs/spec/shard.md#5-mesh). None when they select the same
+    units there or name none of them in common.
+
+    Raises:
+        ValueError: The selections differ and a symbolic run cannot be counted.
+    """
+    before = runs(source, topology_names(source))
+    after = runs(destination, topology_names(destination))
+    common = [name for name in after if name in before and name in topologies]
+    counts, changed = {"source": 1, "destination": 1, "shared": 1}, None
+    for name in common:
+        if before[name] == after[name]:
+            held = unit_ids(before[name])
+            if held is not None:
+                counts["source"] *= len(held)
+                counts["destination"] *= len(held)
+                counts["shared"] *= len(held)
+            continue
+        held, wanted = unit_ids(before[name]), unit_ids(after[name])
+        if held is None or wanted is None:
+            raise ValueError(
+                f"the {name} units {before[name]} and {after[name]} differ, and a symbolic "
+                "selection cannot say how many units gain the value"
+            )
+        counts["source"] *= len(held)
+        counts["destination"] *= len(wanted)
+        counts["shared"] *= len(held & wanted)
+        if changed is None and held != wanted:
+            changed = name
+    return None if changed is None else UnitChange(changed, **counts)
 
 
 def from_meshes(*meshes: types.Mesh) -> types.Mesh:
@@ -273,6 +364,7 @@ def sub_box(parent: types.Mesh, mesh: types.Mesh) -> tuple[slice, ...] | None:
 
 __all__ = [
     "axis_keys",
+    "covers_every_unit",
     "equals_mesh_scope",
     "first_unit_ids",
     "flat_layout",
@@ -283,6 +375,9 @@ __all__ = [
     "sub_box",
     "topology_mesh",
     "topology_names",
+    "unit_change",
+    "unit_ids",
     "unit_layout",
     "within_mesh_scope",
+    "UnitChange",
 ]

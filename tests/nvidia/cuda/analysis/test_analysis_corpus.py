@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 import torch
 
 from tests.core._corpus import Case, Problems, case, special
+from tests.core.autodiff.test_differentiate import check_gradients
 from tests.nvidia.cuda.analysis._contracts import (
     PersistentSchedule,
     _assert_persistent_schedule,
@@ -25,6 +27,7 @@ from tilefoundry import analysis, cli, inspection, target
 from tilefoundry.interfaces import evaluator
 from tilefoundry.ir import core, expr
 from tilefoundry.ir.hir import nn, sharding, tensor
+from tilefoundry.passes.transforms import differentiate
 
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 
@@ -230,6 +233,82 @@ class FsdpReleaseStep(FsdpTraining):
 class FsdpRetainStep(FsdpTraining):
     path: Path = PLACED / "fsdp_mlp.py"
     name: str | None = "Training.retain_step"
+
+
+@dataclass(frozen=True)
+class GeneratedHalves(AnalysisCase):
+    """The Forward and Backward that ``tilefoundry autodiff`` writes for *wrt*.
+
+    The halves are loaded from the written file, which they print back to, so
+    the checked program went through the parser. They match autograd and have
+    the gmem peaks in *halves*. With *graph*, each call row names the one
+    function row it calls, so the rows join into one graph.
+    """
+
+    internal: bool = True
+    wrt: tuple[str, ...] = ()
+    halves: tuple[int, int] = (0, 0)
+    graph: bool = False
+
+    def guard(self, state, problems):
+        module = state.result.module
+        with tempfile.TemporaryDirectory() as folder:
+            written = Path(folder) / "trained.py"
+            assert cli.main(["autodiff", str(self.path), "--wrt", ",".join(self.wrt), str(written)]) == 0
+            namespace, _ = cli.load_namespace(str(written))
+            generated = tuple(namespace[f"{module.name}{half}"] for half in ("Forward", "Backward"))
+            assert inspection.as_script(generated) == written.read_text()
+        check_gradients(module, *generated, self.wrt, rtol=1e-4, atol=1e-5)
+        peaks = []
+        for half in generated:
+            result = analysis.analyze(*analysis.check_program(half, half.entry_function()), analysis=("memory",))
+            (gmem,) = (
+                peak.peak_bytes
+                for peak in expr.get_metadata(result.function, analysis.RegionMemoryMetadata).peaks
+                if peak.memory_level == "gmem"
+            )
+            peaks.append(gmem)
+            if self.graph:
+                functions = inspection.render_analysis(result).data["functions"]
+                names = [function["function"] for function in functions]
+                callees = [row["callee"] for function in functions for row in function["calls"] if "callee" in row]
+                assert callees and all(names.count(callee) == 1 for callee in callees), half.name
+                assert set(names) == {names[0], *callees}, half.name
+        assert tuple(peaks) == self.halves
+
+
+@case
+class FsdpModel(GeneratedHalves):
+    """examples/fsdp_training on two H200s, trained in every weight."""
+
+    path: Path = PLACED / "fsdp_model.py"
+    name: str | None = "FsdpModel"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 40_704, "rmem": 0})
+    wrt: tuple[str, ...] = ("we", "q1", "k1", "v1", "o1", "u1", "d1", "q2", "k2", "v2", "o2", "u2", "d2", "wh")
+    halves: tuple[int, int] = (164_096, 188_304)
+    graph: bool = True
+
+
+@case
+class CallChain(GeneratedHalves):
+    """Two levels of calls save a tuple three levels deep (D51)."""
+
+    path: Path = PLACED / "call_chain.py"
+    name: str | None = "CallChain"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 2_048})
+    wrt: tuple[str, ...] = ("x", "w")
+    halves: tuple[int, int] = (2_820, 6_928)
+
+
+@case
+class FsdpGqaLoop(GeneratedHalves):
+    """repeat_interleave keeps Broadcast, so the backward needs no V-to-B Reshard (D52)."""
+
+    path: Path = PLACED / "fsdp_gqa_loop.py"
+    name: str | None = "FsdpGqaLoop"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 7_296, "rmem": 0})
+    wrt: tuple[str, ...] = ("x", "wq", "wk", "wv", "wo")
+    halves: tuple[int, int] = (12_928, 15_120)
 
 
 @case
@@ -957,6 +1036,304 @@ class RmsnormQuantSeq2(AnalysisCase):
         assert liveness.interval_of(core.SSAValue(reshaped)).last_used_at == 21
         assert expr.get_metadata(reshaped, analysis.MemoryMetadata).buffer_bytes is None
         assert not expr.get_metadata(reshaped, analysis.MemoryMetadata).offsets
+
+
+def _moved(report, value: str, family: str) -> dict:
+    """One call's traffic in *family*, by memory level or boundary: (per_unit, total) reads."""
+    row = next(c for c in report["functions"][0]["calls"] if c["value"].split(":")[0] == value)
+    return {
+        name: (spread["per_unit"][0]["read"], spread["total"]["read"], spread["logical"]["read"])
+        for name, spread in row["memory"]["traffic"][family].items()
+    }
+
+
+@case
+class PipelineStages(AnalysisCase):
+    """A stage hands its activation to the next GPU: one 128-byte copy, not one per GPU.
+
+    Each stage holds 512 bytes on its own GPU, and the whole-mesh region around
+    both stages reports 512 too, not their sum.
+    """
+
+    path: Path = PLACED / "pipeline_cuda.py"
+    name: str | None = "Pipeline"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 512})
+
+    def guard(self, state, problems):
+        report = state.report
+        assert _moved(report, "moved", "communication") == {"gpu": (128, 128, 128)}
+        assert _moved(report, "moved", "storage") == {"gmem": (128, 128, 128)}
+        downstream = report["functions"][0]["calls"][-1]["memory"]["footprint"]["buffers"]
+        assert "moved" in downstream
+        memory = report["functions"][0]["function_records"]["memory"]
+        assert [peak["persistent_bytes"] for peak in memory["peaks"]] == [128 + 256]
+        regions = [mesh["memory"]["peaks"][0]["peak_bytes"] for mesh in report["functions"][0]["meshes"]]
+        assert regions == [512, 512, 512]
+
+
+@case
+class PipelineSharedWeight(AnalysisCase):
+    """A value on both GPUs costs each of them once; the fuller GPU sets the peak.
+
+    GPU 1 at its fullest holds shared 256 and w1 512, then y 256 and scaled 256
+    once moved is read.
+    """
+
+    path: Path = PLACED / "pipeline_shared_weight.py"
+    name: str | None = "SharedWeight"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 1_280, "rmem": 0})
+
+    def guard(self, state, problems):
+        memory = state.report["functions"][0]["function_records"]["memory"]
+        (peak,) = (item for item in memory["peaks"] if item["memory_level"] == "gmem")
+        assert peak["persistent_bytes"] == 256 + 512
+        assert peak["peak_bytes"] == 256 + 512 + 256 + 256
+
+
+@case
+class PipelineForward(AnalysisCase):
+    """The generated forward keeps the stages' peak: GPU 0 holds x 128 + w0 256 + h 128."""
+
+    path: Path = PLACED / "pipeline_cuda.py"
+    name: str | None = "PipelineForward"
+    api: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 512})
+
+    def program(self):
+        (module,) = _constants("pipeline_cuda", "Pipeline")
+        forward, _ = differentiate.differentiate(module, wrt=("x", "w0", "w1"))
+        return forward, forward.entry_function()
+
+
+@case
+class PipelineBackward(AnalysisCase):
+    """The gradient goes back from the second GPU to the first at the same price."""
+
+    path: Path = PLACED / "pipeline_cuda.py"
+    name: str | None = "PipelineBackward"
+    api: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 896})
+
+    def program(self):
+        (module,) = _constants("pipeline_cuda", "Pipeline")
+        _, backward = differentiate.differentiate(module, wrt=("x", "w0", "w1"))
+        return backward, backward.entry_function()
+
+    def guard(self, state, problems):
+        assert _moved(state.report, "grad", "communication") == {"gpu": (128, 128, 128)}
+
+
+def _region_peaks(result) -> list[int]:
+    """Each mesh region's gmem peak, in body order."""
+    return [
+        peak.peak_bytes
+        for node in core.collect_exprs(result.function.body)
+        if isinstance(node, core.MeshRegion)
+        for peak in expr.get_metadata(node, analysis.RegionMemoryMetadata).peaks
+        if peak.memory_level == "gmem"
+    ]
+
+
+def _differentiated(stem: str, root: str, wrt: tuple[str, ...], half: int):
+    (module,) = _constants(stem, root)
+    generated = differentiate.differentiate(module, wrt=wrt)[half]
+    return generated, generated.entry_function()
+
+
+@case
+class TensorParallelBlock(AnalysisCase):
+    """Megatron TP: each row-split matmul ends in an all-reduce of a (8, 16) f32 partial.
+
+    A GPU sends half its 512-byte partial. The block has a function mesh, so
+    both GPUs execute it and the total is twice that share.
+    """
+
+    path: Path = PLACED / "megatron_block_cuda.py"
+    name: str | None = "TensorParallel"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 8_064, "rmem": 0})
+
+    def guard(self, state, problems):
+        for value in ("o", "d"):
+            assert _moved(state.report, value, "communication") == {"gpu": (256, 512, 256)}
+
+
+@case
+class TensorParallelForward(AnalysisCase):
+    path: Path = PLACED / "megatron_block_cuda.py"
+    name: str | None = "TensorParallelForward"
+    api: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 10_880, "rmem": 0})
+
+    def program(self):
+        return _differentiated("megatron_block_cuda", "TensorParallel", ("x", "wq"), 0)
+
+
+@case
+class TensorParallelBackward(AnalysisCase):
+    path: Path = PLACED / "megatron_block_cuda.py"
+    name: str | None = "TensorParallelBackward"
+    api: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 12_704, "rmem": 0})
+
+    def program(self):
+        return _differentiated("megatron_block_cuda", "TensorParallel", ("x", "wq"), 1)
+
+
+@case
+class HsdpBlockCuda(AnalysisCase):
+    """HSDP on a (replicate, shard) mesh of four GPUs."""
+
+    path: Path = PLACED / "hsdp_block_cuda.py"
+    name: str | None = "HsdpBlock"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 13_568, "rmem": 0})
+
+
+@case
+class ExpertParallelBound(AnalysisCase):
+    """EP with n = 4 tokens per expert per GPU: the all-to-all moves half of each local tensor.
+
+    Bucketed tokens are (2, 2n, 8) f32 split on axis 0: 256 bytes per GPU, 128
+    sent; the result coming back is 512 per GPU, 256 sent.
+    """
+
+    path: Path = PLACED / "expert_parallel_cuda.py"
+    name: str | None = "ExpertParallel"
+    dims: Mapping[str, int] | None = MappingProxyType({"n": 4})
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 1_824})
+
+    def guard(self, state, problems):
+        assert _moved(state.report, "received", "communication") == {"gpu": (128, 256, 256)}
+        assert _moved(state.report, "v3", "communication") == {"gpu": (256, 512, 512)}
+
+
+@case
+class ExpertParallelUpperBound(AnalysisCase):
+    """At n's upper bound of 8 the peak is still a number the capacity check reads."""
+
+    path: Path = PLACED / "expert_parallel_cuda.py"
+    name: str | None = "ExpertParallel"
+    dims: Mapping[str, int] | None = MappingProxyType({"n": 8})
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 2_880})
+
+    def guard(self, state, problems):
+        memory = state.report["functions"][0]["function_records"]["memory"]
+        (peak,) = memory["peaks"]
+        assert peak["peak_bytes"] <= peak["capacity_bytes"]
+        assert memory["errors"] == []
+
+
+@case
+class ExpertParallelForward(AnalysisCase):
+    path: Path = PLACED / "expert_parallel_cuda.py"
+    name: str | None = "ExpertParallelForward"
+    dims: Mapping[str, int] | None = MappingProxyType({"n": 4})
+    api: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 2_080})
+
+    def program(self):
+        return _differentiated("expert_parallel_cuda", "ExpertParallel", ("tokens", "w"), 0)
+
+
+@case
+class ExpertParallelBackward(AnalysisCase):
+    path: Path = PLACED / "expert_parallel_cuda.py"
+    name: str | None = "ExpertParallelBackward"
+    dims: Mapping[str, int] | None = MappingProxyType({"n": 4})
+    api: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 3_104})
+
+    def program(self):
+        return _differentiated("expert_parallel_cuda", "ExpertParallel", ("tokens", "w"), 1)
+
+    def guard(self, state, problems):
+        assert _moved(state.report, "v7", "communication") == {"gpu": (128, 256, 256)}
+
+
+@case
+class PipelineOneLoop(AnalysisCase):
+    """Each microbatch goes straight on, one 128-byte copy per step.
+
+    Stage 0 holds x 512 + w0 256 + picked 128 + h 128 = 1024, the function's
+    peak; stage 1 holds w1 256 + moved 128 + y 128 + acc 128 = 640.
+    """
+
+    path: Path = PLACED / "pipeline_loops_cuda.py"
+    name: str | None = "OneLoop"
+    internal: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 1_024, "rmem": 0})
+
+    def guard(self, state, problems):
+        assert _region_peaks(state.result) == [896, 640, 1_024]
+        report = _report(state.result)
+        assert _moved(report, "moved", "communication") == {"gpu": (128, 128, 128)}
+        assert _moved(report, "moved", "storage") == {"gmem": (128, 128, 128)}
+
+
+@case
+class PipelineTwoLoops(AnalysisCase):
+    """The stack is held on stage 1: 512 more than OneLoop there.
+
+    That is the 512-byte stack less the one 128-byte microbatch OneLoop moves,
+    plus the 128-byte microbatch picked out of the stack each step.
+    """
+
+    path: Path = PLACED / "pipeline_loops_cuda.py"
+    name: str | None = "TwoLoops"
+    internal: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 1_536, "rmem": 0})
+
+    def guard(self, state, problems):
+        assert _region_peaks(state.result) == [1_536, 1_152, 1_536]
+
+
+@case
+class NestedTuple(AnalysisCase):
+    """A tuple read one level at a time costs what the same tensors in one flat tuple cost."""
+
+    path: Path = PLACED / "nested_tuple.py"
+    name: str | None = "NestedParam"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 384})
+
+    def guard(self, state, problems):
+        for nested, flat in (("NestedParam", "FlatParam"), ("NestedReturn", "FlatReturn"), ("NestedDeep", "FlatDeep")):
+            measured = []
+            for module in (nested, flat):
+                loaded = cli.load_authored_ir(f"{PLACED / 'nested_tuple.py'}:{module}")
+                result = analysis.analyze(
+                    *analysis.check_program(loaded, loaded.entry_function()), analysis=("memory",)
+                )
+                function = _report(result)["functions"][0]
+                measured.append((function["totals"], function["function_records"]["memory"]["peaks"]))
+            assert measured[0] == measured[1], nested
+
+
+@case
+class ReshardUnitSets(AnalysisCase):
+    """Each way the GPUs holding a value can change, priced as one copy per GPU that gains it."""
+
+    path: Path = PLACED / "reshard_unit_sets.py"
+    name: str | None = "OneToAll"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 256})
+
+    def guard(self, state, problems):
+        for module, communication, storage in (
+            ("SameUnits", {}, {}),
+            ("AllToOne", {}, {}),
+            ("SplitToBroadcast", {"gpu": (24, 96, 96)}, {"gmem": (32, 128, 128)}),
+            ("OneToAll", {"gpu": (128, 384, 384)}, {"gmem": (128, 384, 128)}),
+            ("ShiftedPair", {"gpu": (128, 128, 128)}, {"gmem": (128, 128, 128)}),
+            ("SplitToDisjointPair", {"gpu": (64, 128, 128)}, {"gmem": (64, 128, 128)}),
+            ("StageColumns", {"gpu": (128, 256, 256)}, {"gmem": (128, 256, 128)}),
+            ("ScaledHandoff", {"gpu": (128, 128, 128)}, {"gmem": (128, 128, 128)}),
+        ):
+            loaded = cli.load_authored_ir(f"{PLACED / 'reshard_unit_sets.py'}:{module}")
+            result = analysis.analyze(
+                *analysis.check_program(loaded, loaded.entry_function()), analysis=("memory",)
+            )
+            report = _report(result)
+            value = "moved" if module == "ScaledHandoff" else "v0"
+            assert _moved(report, value, "communication") == communication, module
+            assert _moved(report, value, "storage") == storage, module
 
 
 EXPECTED = {

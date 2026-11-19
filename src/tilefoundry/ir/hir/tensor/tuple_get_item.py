@@ -5,7 +5,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
-from tilefoundry.ir import expr, pattern, types, utils
+from tilefoundry.ir import dim, expr, pattern, types, utils
 
 
 @expr.register_op(name="tuple_get_item", dialect='tf', category='tensor')
@@ -41,6 +41,12 @@ def access_relations(call: "expr.Call", ctx: "AccessContext") -> tuple[access.Re
             raise ValueError("TupleGetItem dynamic access requires a non-empty TupleType")
         result = held.fields[0]
         begin, count = 0, len(utils.leaves_of(held))
+    if isinstance(result, types.TupleType):
+        reads = access.Relation(isl.map(f"{{ [] -> [l] : {begin} <= l < {begin + count} }}"))
+        return access.iterating(
+            (),
+            (reads, access.control_read(0, ctx, index), *map(whole_leaf, utils.leaves_of(result))),
+        )
     walks = getattr(result, "shape", ()) or ()
     rank = len(walks)
     coordinates = ", ".join(f"d{axis}" for axis in range(rank))
@@ -51,6 +57,14 @@ def access_relations(call: "expr.Call", ctx: "AccessContext") -> tuple[access.Re
         walks,
         (reads, access.control_read(rank, ctx, index), access.identity(rank)),
     )
+
+
+def whole_leaf(leaf: types.TensorType) -> access.Relation:
+    """Every coordinate of one leaf of a picked inner tuple, from the single step that picks it."""
+    image = ", ".join(f"s{axis}" for axis in range(len(leaf.shape)))
+    values = {}
+    relation = isl.map(f"{{ [] -> [{image}] }}").intersect_range(dim.shape_to_isl_set(leaf.shape, values))
+    return access.Relation(relation, values)
 
 
 @typeinfer.register(TupleGetItem)

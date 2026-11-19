@@ -21,7 +21,6 @@ ROUND_TRIP = (
     ("loop_nested.py", "LoopNested", "x,w"),
     ("mesh_data_parallel.py", "MeshDataParallel", "x,w"),
     ("mesh_two_regions.py", "MeshTwoRegions", "x,w"),
-    ("fsdp_model.py", "FsdpModel", "we,q1,k1,v1,o1,u1,d1,q2,k2,v2,o2,u2,d2,wh"),
     ("megatron_block.py", "TensorParallel", "x,wn1,wq,wk,wv,wo,wn2,wg,wu,wd"),
     ("layers_loop.py", "Layers", "x,wn0,norms,up,down"),
 )

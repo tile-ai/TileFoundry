@@ -8,7 +8,6 @@ service facts stay unsupported rather than guessed.
 from __future__ import annotations
 
 from tilefoundry import target
-from tilefoundry.ir import expr
 
 
 def memory_hierarchy(tgt: target.Target, query: object = None) -> target.MemoryHierarchyFacts:
@@ -20,7 +19,7 @@ def memory_hierarchy(tgt: target.Target, query: object = None) -> target.MemoryH
                 name="gmem",
                 capacity_bytes=device.unified_memory_capacity_bytes,
                 scope="device",
-                owner=expr.TARGET_MEMORY_OWNER,
+                owner=target.SHARED_OWNER,
             ),
             target.ExplicitMemoryLevelFacts(
                 name="smem",

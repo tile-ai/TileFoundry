@@ -111,7 +111,7 @@ def combine_attrs(kind: expr.BinaryKind | None, a: ShardAttr, b: ShardAttr) -> S
                 return partial
         raise ValueError(
             f"cannot combine {kind!r}: {a!r} and {b!r}; "
-            "reshard(..., @ {B()}) to declare equal values where required"
+            "bitcast(..., <its layout> @ {B()}) to declare equal values where required"
         )
     if isinstance(a, Split):
         return a
@@ -220,7 +220,10 @@ class ShardLayout(LayoutBase):
 
     @classmethod
     def from_modes(cls, shape, mesh, attrs, *, storage, owners):
-        """Construct authored modes with the owner's compact local strides."""
+        """Construct authored modes with the owner's compact local strides.
+
+        With no *owners* (no target), no storage is private to a unit.
+        """
         topologies = tuple(
             topology_name(topology)
             for topology, mode in zip(mesh.topologies, plain_layout(mesh.layout).shape)
@@ -234,7 +237,7 @@ class ShardLayout(LayoutBase):
                 raise ValueError(f"Split({attr.axis}) has no matching mesh axis {mesh_axis}")
             private.append(
                 attr
-                if isinstance(attr, Split) and owners.private(storage, topologies[mesh_axis])
+                if isinstance(attr, Split) and owners is not None and owners.private(storage, topologies[mesh_axis])
                 else Broadcast()
             )
         local = divided_shape(flatten_to_tuple(shape), mesh, tuple(private), require_static=False)

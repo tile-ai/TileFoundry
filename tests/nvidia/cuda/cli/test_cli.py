@@ -90,6 +90,17 @@ def test_root_selector_ignores_sibling_roots(tmp_path, capsys) -> None:
     assert "nope" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("flags", [("--compute-cost",), ("--compute-cost", "--json")])
+def test_same_named_children_are_refused_with_both_locations(tmp_path, capsys, flags) -> None:
+    """Two Modules named Expert would give two rows one name; both surfaces refuse and say where."""
+    source = FIXTURES / "diagnostics" / "analysis_same_named_children.py"
+    assert cli.main(["analyze", f"{source}:Root", str(tmp_path / "report"), *flags]) == 1
+    error = capsys.readouterr().err
+    assert "two definitions report as 'Expert.run'" in error
+    lines = re.findall(r"analysis_same_named_children\.py:(\d+):\d+", error)
+    assert sorted(lines) == ["13", "23"]
+
+
 def test_models_source_names_checkout_directory(capsys) -> None:
     assert cli.main(["models", "qwen3_1_7b", "--source"]) == 0
     source = capsys.readouterr()
@@ -520,9 +531,14 @@ def test_analyze_reports_retained_occurrences(tmp_path) -> None:
     cost_rows = [row for row in rows if "compute-cost" in row]
     assert len(cost_rows) == 9
     assert all(
-        set(row) - {"performance"} == {"value", "compute-cost", "memory", "roofline"}
+        set(row) - {"performance", "callee", "callee_ref"} == {"value", "compute-cost", "memory", "roofline"}
         for row in cost_rows
     )
+    names = [function["function"] for function in payload["functions"]]
+    assert len(names) == len(set(names))
+    called = [(row["callee"], row["callee_ref"]) for row in rows if "callee" in row]
+    assert [ref for _, ref in called] == ["routed_expert", "shared_expert"]
+    assert all(names.count(callee) == 1 for callee, _ in called)
     assert [row["value"] for row in payload["functions"][0]["calls"][:2]] == ["v0:9", "v1:10"]
     timed = [index for index, row in enumerate(rows) if "performance" in row]
     assert timed == [0, 1, 2, 4, 7]

@@ -11,11 +11,14 @@ from tilefoundry import target, utils
 from tilefoundry.interfaces import access, cost, valuation
 from tilefoundry.ir import core, expr, types
 from tilefoundry.ir import utils as ir_utils
+from tilefoundry.ir.hir import sharding
 
 from .access import AliasKind
 from .allocation import (
     AllocationConstraintVisitor,
     AllocationSummaryMetadata,
+    held_on_one_unit,
+    owner_units,
     solve_allocation,
 )
 from .compute_cost import accumulate_logical, grouped_breakdown, with_dependencies
@@ -202,7 +205,8 @@ def call_traffic(
     moves and whether it materialises; how much crosses it is what that
     boundary's own relation reaches, in whichever window is being asked about.
     The Type of the leaf it reached names the level those bytes are charged at,
-    and an allocation does not correct either answer.
+    and an allocation does not correct either answer. A Reshard onto new units
+    counts one copy per added unit.
     """
     storage_whole: dict[str, cost.TrafficBytes] = {}
     storage_per_unit: dict[str, dict[str, cost.TrafficBytes]] = {}
@@ -233,7 +237,12 @@ def call_traffic(
                 crossing_per_unit.setdefault(boundary, {})[topology] = moved
         if topology is None:
             operands = positional
-    units = scope.mesh_units if scope is not None else lambda _: 1
+    added = (
+        sharding.added_units(node, whole.target.storage_owners)
+        if isinstance(node.target, sharding.Reshard)
+        else 0
+    )
+    units = (lambda _: added) if added else scope.mesh_units if scope is not None else lambda _: 1
     counted = counted or next(iter(locals_by_unit))
     return MemoryMetadata(
         topologies=tuple(locals_by_unit),
@@ -409,7 +418,7 @@ def values_in_region(
         declared = facts.explicit(lifetime.memory_level)
         if declared is None or not declared.owner:
             raise Error(f"memory: level {lifetime.memory_level!r} has no declared owner")
-        if declared.owner == expr.TARGET_MEMORY_OWNER:
+        if declared.owner == target.SHARED_OWNER:
             continue
         try:
             private = owners.private(lifetime.memory_level, topology_names[outermost_region])
@@ -623,6 +632,12 @@ def resident_peaks(model, windows, offsets, facts, sizes, *, interval=None):
         value = model.by_value.get(window.value)
         if value is not None:
             by_memory_level.setdefault(window.memory_level, []).append((model.root(value), window))
+    owners = model.context.target.storage_owners
+    units = {
+        value: owner_units(value.lifetime, owners)
+        for items in by_memory_level.values()
+        for value, _ in items
+    }
     peaks = []
     for name, items in sorted(by_memory_level.items()):
         events = {
@@ -641,7 +656,7 @@ def resident_peaks(model, windows, offsets, facts, sizes, *, interval=None):
                     size = sizes[value] if window.persistent else window.bytes
                     live[value] = max(live.get(value, 0), size)
             if name not in ("gmem", "smem"):
-                return sum(live.values())
+                return held_on_one_unit(live, units)
             end = amount = 0
             for start, stop in sorted(
                 (offsets[value], offsets[value] + size) for value, size in live.items()

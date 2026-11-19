@@ -322,7 +322,7 @@ def from_meshes(*meshes: Mesh) -> Mesh:
     ...
 
 
-def within_mesh_scope(mesh: Mesh, current: Mesh) -> bool:
+def within_mesh_scope(mesh: Mesh, current: Mesh, names=None) -> bool:
     """Return whether each continuous unit set is contained in current."""
     ...
 
@@ -359,6 +359,10 @@ def equals_mesh_scope(mesh: Mesh, current: Mesh) -> bool:
     independent of mode order. Otherwise it MUST conservatively compare the
     filtered layouts and first unit ids for equality. It compares only the topologies that
     `mesh` names. The other topologies of `current` do not enter it.
+  - `covers_every_unit(mesh)`: each topology of `mesh` selects every unit it has.
+  - An op input laid out on another mesh than its scope MUST be refused, unless
+    it is all-Broadcast and the scope's units are inside its mesh
+    (`within_mesh_scope(scope, mesh, names)` on the topologies `mesh` names).
   - `within_mesh_scope` MUST require both filtered selections to be continuous and
     prove containment of their half-open intervals `[start, start + size)`.
     Static continuity is `size == cosize`; symbolic continuity requires either
@@ -658,6 +662,14 @@ owner. A Partial on such a mesh axis holds one copy per unit of that mesh axis. 
 its own base address. Completing the reduction leaves one copy.
 A plain layout is Varying on every mesh axis. An unstated mesh axis of a
 `ShardLayout`, and a topology that its mesh omits, is Broadcast.
+A literal is the same on every unit: a `Constant`, a call of an Op marked
+`literal` (`Zeros`, an `Arange` with a static start), or a call of `Constant`s. Its type stays plain; an
+operation reads it as Broadcast on the mesh of its other operands. A loop index
+is all-Broadcast on the mesh in force when each bound is an integer, a literal
+or all-Broadcast, and plain otherwise or when no topology of that mesh has more
+than one unit. Other values follow the rules below; a `DimVar`, a `MeshCoord`
+and a plain parameter stay Varying. A result Varying on every mesh axis is plain
+when its mesh covers every unit; on a sliced mesh it keeps the mesh (`@{V}`).
 
 The topologies a ShardLayout keeps include its Varying topologies. An explicit
 execution mesh may omit outside topologies that contain neither Split nor Partial.
@@ -694,11 +706,20 @@ Unary operations check their own Partial commutativity separately.
 
 `combine` rejects `None` with `ValueError`. Callers must first read plain layouts
 through `attrs_by_axis`. Error cells raise `ValueError`. The error names the kind and both attrs.
-It gives an explicit `reshard(..., @ {B()})` remedy where equal values are required.
-Only B → V is implicit. V → B is an explicit view. The author promises equal
-values, with no communication or runtime check. V → P is also an explicit view.
+It gives an explicit `bitcast(..., <its layout> @ {B()})` remedy where equal values are required.
+A change the types prove is a `Reshard`, priced from both ends' types; a fact
+only the author can state is a `Bitcast` form (ii) ([hir §1.3](./hir.md#13-op)).
 
-A Reshard reads both ends' value states and checks each mesh axis. A Partial
+| Change | Op | Cost |
+| --- | --- | --- |
+| Unit set, storage, S → B, S → S', S → V, P → B, P → S, P → V | `Reshard` | From both ends' types; 0 for a view (B → S, one unit) |
+| V → B, V → P; same bytes under another shape | `Bitcast` | 0 |
+| B → V | Implicit | 0 |
+
+A Reshard reads both ends' value states and checks each mesh axis; a literal
+source reads as Broadcast. On a mesh axis that separates copies and spans more
+than one unit (for a plain source, the destination's mesh axis), a Varying
+source MUST NOT become Broadcast or Partial; the error names `tf.bitcast`. A Partial
 end must come from the same Partial or from Varying. A Partial source may become
 any state, completing its reduction. Lowering chooses which collective moves data,
 for the whole Reshard.
@@ -1011,13 +1032,6 @@ class NotProjectableError(ValueError):
     """Report that a layout cannot serve as a mesh execution scope."""
 
 
-class StorageOwners:
-    order: tuple[str, ...]  # Target topologies, coarse to fine.
-    owner: Mapping[StorageKind, str]
-
-    def private(self, storage, topology) -> bool: ...
-
-
 class ShardLayout:
     @classmethod
     def from_logical(cls, shape, mesh, attrs, *, storage, owners) -> ShardLayout:
@@ -1064,7 +1078,8 @@ def shard_layout_local_shape(
     (extent one for a fully factored Split). So one unit has no holes. The
     target supplies the storage owner and the coarse-to-fine topology order. The
     owner topology and every coarser one are private. The owner `target` is
-    shared. Absent memory facts mean an empty owner table.
+    shared. Absent memory facts mean an empty owner table
+    ([target §11](./target.md#11-target-facts-projection)).
   - `ShardLayout.from_logical` MUST factor each logical axis split by one or more
     mesh axes in mesh-axis order. It MUST remap each `Split` to its factor. It MUST append
     a non-unit residual factor. Symbolic multi-axis splits MUST use successive

@@ -1,41 +1,35 @@
 """One examples/fsdp_training block on a (replicate, shard) mesh of four GPUs."""
 
+from __future__ import annotations
+
 from tilefoundry.dsl import *
 from tilefoundry.target import cpu
 
 B, T, C, H, G, D, F = 8, 8, 16, 4, 2, 4, 64
 N = B * T
 EPS = 1e-6
-target = cpu.Target()
-gpu = Topology("gpu", 4)
-mesh = Mesh((gpu,), Layout((2, 2)), ("replicate", "shard"))
 
 
-def placed(shape, attrs=(Broadcast(), Split(0))):
-    return TensorType(shape, DType.f32, ShardLayout.from_logical(
-        shape, mesh, attrs, storage="gmem", owners=target.storage_owners), "gmem")
-
-
-WHOLE = (Broadcast(), Broadcast())
-A = placed((N, C), (Split(0), Split(0)))
-Square, FullSquare = placed((C, C)), placed((C, C), WHOLE)
-Kv, FullKv = placed((G * D, C)), placed((G * D, C), WHOLE)
-Up, FullUp = placed((F, C)), placed((F, C), WHOLE)
-Down, FullDown = placed((C, F)), placed((C, F), WHOLE)
-Rotation = placed((1, 1, 1, T, D, D), WHOLE)
-Mask = placed((1, 1, 1, T, T), WHOLE)
-
-
-@module(entry="forward", target=target, topologies=(gpu,))
+@module(entry="forward", target=cpu.Target(), topologies=(Topology("gpu", 4),))
 class HsdpBlock:
-    @func
-    def forward(x: A, wq: Square, wk: Kv, wv: Kv, wo: Square, wu: Up, wd: Down, rotation: Rotation, mask: Mask):
-        q_full = tf.reshard(wq, layout=FullSquare.layout, storage="gmem")
-        k_full = tf.reshard(wk, layout=FullKv.layout, storage="gmem")
-        v_full = tf.reshard(wv, layout=FullKv.layout, storage="gmem")
-        o_full = tf.reshard(wo, layout=FullSquare.layout, storage="gmem")
-        u_full = tf.reshard(wu, layout=FullUp.layout, storage="gmem")
-        d_full = tf.reshard(wd, layout=FullDown.layout, storage="gmem")
+    @func(mesh=Mesh(("gpu",), (2, 2), names=("replicate", "shard")))
+    def forward(
+        x: Tensor[(N @ (mesh.replicate, mesh.shard), C), "f32", "gmem"],
+        wq: Tensor[(C @ mesh.shard, C), "f32", "gmem"],
+        wk: Tensor[(G * D @ mesh.shard, C), "f32", "gmem"],
+        wv: Tensor[(G * D @ mesh.shard, C), "f32", "gmem"],
+        wo: Tensor[(C @ mesh.shard, C), "f32", "gmem"],
+        wu: Tensor[(F @ mesh.shard, C), "f32", "gmem"],
+        wd: Tensor[(C @ mesh.shard, F), "f32", "gmem"],
+        rotation: Tensor[(1, 1, 1, T, D, D), "f32", (1, 1, 1, T, D, D) @ {B()}, "gmem"],
+        mask: Tensor[(1, 1, 1, T, T), "f32", (1, 1, 1, T, T) @ {B()}, "gmem"],
+    ):
+        q_full = tf.reshard(wq, layout=(C, C) @ {B()}, storage="gmem")
+        k_full = tf.reshard(wk, layout=(G * D, C) @ {B()}, storage="gmem")
+        v_full = tf.reshard(wv, layout=(G * D, C) @ {B()}, storage="gmem")
+        o_full = tf.reshard(wo, layout=(C, C) @ {B()}, storage="gmem")
+        u_full = tf.reshard(wu, layout=(F, C) @ {B()}, storage="gmem")
+        d_full = tf.reshard(wd, layout=(C, F) @ {B()}, storage="gmem")
         ix = tf.rsqrt(tf.reduce(x * x, axes=(-1,)) + EPS)
         a = x * ix
         q0 = tf.transpose(tf.reshape(tf.matmul(a, q_full, b_layout="NK"), (B, T, G, H // G, D)), perm=(0, 2, 3, 1, 4))

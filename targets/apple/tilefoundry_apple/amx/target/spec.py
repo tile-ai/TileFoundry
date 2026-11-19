@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tilefoundry import target
 from tilefoundry.ir import expr
 from tilefoundry.target import hardware
 
@@ -18,7 +19,7 @@ APPLE_M2_PRO_ID = "apple.m2_pro"
 def memory_owner(reader: hardware.SchemaReader, path: str) -> str:
     """Read an owner in the AMX target's topology vocabulary."""
     owner = reader.text(path)
-    allowed = (expr.TARGET_MEMORY_OWNER, "thread")
+    allowed = (target.SHARED_OWNER, "thread")
     if owner not in allowed:
         raise hardware.SchemaValidationError(
             f"{reader.document.id}: memory owner {owner!r} at {path!r} must be "

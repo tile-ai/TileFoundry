@@ -5,6 +5,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry import core, services, utils
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.interfaces import access, cost, evaluator, typeinfer
 from tilefoundry.ir import dim, expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
@@ -181,7 +182,7 @@ def require_exact_partial_state(call, ctx, x, weight, bias) -> None:
     mesh = placed[0][1].mesh if placed else None
 
     ir_utils.check_multilinear_partials(
-        (("input", x), ("weight", weight)), ctx.target, kind=expr.BinaryKind.MUL
+        (("input", x), ("weight", weight)), ctx.target.storage_owners if ctx.target else tilefoundry_target.StorageOwners(), kind=expr.BinaryKind.MUL
     )
     contraction_splits: dict[int, tuple[str, int]] = {}
     channel_split_axes: dict[str, set[int]] = {"input": set(), "weight": set()}
@@ -257,12 +258,13 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
         if static is not None and static <= 0:
             ctx.error(call, f"output {name} extent must be positive, got {static}")
 
-    require_exact_partial_state(call, ctx, x, w, bias)
+    read = typeinfer.operand_types(ctx, call.args)
+    require_exact_partial_state(call, ctx, *read)
     require_group_aligned_output_split(call, ctx, w, bias, group_count)
     relation = access.relations_of(call, ctx)
     try:
         shard = typeinfer.derive_output_shard_layout(
-            (x, w, bias),
+            read,
             relation,
             out_shape,
             partial_reduction_dims=frozenset({4, 5, 6}),

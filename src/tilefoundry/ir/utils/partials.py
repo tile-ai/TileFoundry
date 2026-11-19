@@ -21,7 +21,7 @@ __all__ = [
 def attrs_by_axis(
     type_: types.TensorType,
     mesh: types.Mesh | None = None,
-    owners: expr.StorageOwners | None = None,
+    owners: "StorageOwners | None" = None,
 ) -> dict[tuple[str, int], types.ShardAttr]:
     """Read mesh-axis states keyed by topology and ordinal.
 
@@ -91,7 +91,7 @@ def reject_partials(
 
 def check_multilinear_partials(
     operands: tuple[tuple[str, types.TensorType], ...],
-    target,
+    owners: "StorageOwners",
     *,
     kind: expr.BinaryKind = expr.BinaryKind.MUL,
     anchor: str | None = None,
@@ -104,14 +104,13 @@ def check_multilinear_partials(
 
     Args:
         operands: Operand names and types in combination order.
-        target: Target holding storage owner facts, or None.
+        owners: The target's storage owners; empty without a target.
         kind: Operation's combination kind.
         anchor: Only this operand may carry Partial when specified.
 
     Raises:
         ValueError: Partial states cannot be preserved by the operation.
     """
-    owners = target.storage_owners if target else expr.StorageOwners((), {})
     layouts = tuple(types.shard_layout_of(type_.layout) for _, type_ in operands)
     meshes = []
     for layout in layouts:

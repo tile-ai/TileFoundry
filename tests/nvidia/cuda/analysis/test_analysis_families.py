@@ -99,7 +99,7 @@ def test_reshard_across_cards_is_communication() -> None:
     )
     namespace = cli.load_namespace(str(PLACED / "tp_all_to_all.py"))[0]
     held, sent, cards = namespace["HELD_BYTES"], namespace["SENT_BYTES"], namespace["GPUS"]
-    assert access.aliased_operand(reshard) is None
+    assert access.aliased_operand(reshard, target.StorageOwners()) is None
     record = expr.get_metadata(reshard, analysis.MemoryMetadata)
     assert record.buffer_bytes == held
     moved = record.traffic.communication.of("gpu").total

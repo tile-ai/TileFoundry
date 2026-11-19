@@ -23,7 +23,13 @@ def check_input_reachability(op, operand_types, mesh):
         if layout is None:
             continue
         projected = utils.filter_topologies(layout)
-        if not utils.equals_mesh_scope(projected.mesh, mesh):
+        held = utils.topology_names(projected.mesh)
+        replicated = (
+            all(isinstance(attr, types.Broadcast) for attr in layout.attrs)
+            and set(held) <= set(utils.topology_names(mesh))
+            and utils.within_mesh_scope(mesh, projected.mesh, held)
+        )
+        if not replicated and not utils.equals_mesh_scope(projected.mesh, mesh):
             raise ValueError(
                 f"input {index} is laid out more finely than the scope it runs in; write it inside that scope, or reshard it back first"
             )

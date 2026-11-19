@@ -308,7 +308,7 @@ def infer_schedule(call: expr.Call, ctx) -> types.TensorType:
 
 
 @access.register_alias(ScheduleOp)
-def schedule_result_operand(call: expr.Call) -> int:
+def schedule_result_operand(call: expr.Call, owners: "StorageOwners") -> int:
     params, writes = instruction_schema(call.target.op, len(call.args))
     return params.index(writes[0])
 

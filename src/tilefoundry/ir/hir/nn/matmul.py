@@ -6,6 +6,7 @@ import math
 from typing import Literal
 
 from tilefoundry import core, utils
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
@@ -105,9 +106,8 @@ def matmul_result_shape_and_layout(call: "expr.Call", ctx: "TypeInferContext") -
             "MatMul contraction dim K must be split on the same mesh axes for both operands",
         )
 
-    ir_utils.check_multilinear_partials(
-        (("lhs", lhs), ("rhs", rhs)), ctx.target, kind=expr.BinaryKind.MUL
-    )
+    read = typeinfer.operand_types(ctx, call.args)
+    ir_utils.check_multilinear_partials(tuple(zip(("lhs", "rhs"), read)), ctx.target.storage_owners if ctx.target else tilefoundry_target.StorageOwners(), kind=expr.BinaryKind.MUL)
 
     relation = access.relations_of(call, ctx)
 
@@ -118,7 +118,7 @@ def matmul_result_shape_and_layout(call: "expr.Call", ctx: "TypeInferContext") -
     k_domain_dim = len(out_shape)
     try:
         shard = typeinfer.derive_output_shard_layout(
-            (lhs, rhs),
+            read,
             relation,
             out_shape,
             partial_reduction_dims=frozenset({k_domain_dim}),
@@ -129,21 +129,9 @@ def matmul_result_shape_and_layout(call: "expr.Call", ctx: "TypeInferContext") -
         ctx.error(call, str(e))
     layout = shard
     if layout is None:
-        held = types.shard_layout_of(lhs.layout) or lhs.layout
-        if isinstance(held, types.ShardLayout):
-            layout = types.ShardLayout.from_logical(
-                out_shape,
-                held.mesh,
-                held.attrs,
-                storage=lhs.storage,
-                owners=ctx.target.storage_owners
-                if ctx is not None and ctx.target is not None
-                else expr.StorageOwners((), {}),
-            )
-        elif tuple(held.shape) == tuple(out_shape):
-            layout = held
-        else:
-            layout = types.Layout(out_shape)
+        sharded = any(types.shard_layout_of(type_.layout) is not None for type_ in (lhs, rhs))
+        same = not sharded and tuple(lhs.layout.shape) == tuple(out_shape)
+        layout = lhs.layout if same else types.Layout(out_shape)
     return out_shape, layout
 
 

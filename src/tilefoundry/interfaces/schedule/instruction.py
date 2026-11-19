@@ -8,6 +8,7 @@ from itertools import accumulate
 from math import prod
 
 from tilefoundry import services
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.interfaces import access, typeinfer, verify
 from tilefoundry.ir import expr, pattern, types, utils
 from tilefoundry.ir.types import int_tuple, layout_algebra
@@ -499,7 +500,7 @@ def check_call(op, operands, mesh, *, ctx, repeat=None, order=None, projection=N
         mesh=mesh,
         owners=ctx.target.storage_owners
         if ctx is not None and ctx.target is not None
-        else expr.StorageOwners((), {}),
+        else tilefoundry_target.StorageOwners(),
     )
     admit_fields(op, whole, mesh, matcher, target=None if ctx is None else ctx.target)
     try:
@@ -563,7 +564,7 @@ def check_call(op, operands, mesh, *, ctx, repeat=None, order=None, projection=N
                     if required == types.Broadcast() and isinstance(held, types.Varying):
                         refusal = RefusalError(
                             f"{refusal.reason}; mesh axis {mesh_axis} ({topology}) is Varying; "
-                            f"reshard({param.name}, @ {{B()}}) to declare equal values",
+                            f"bitcast({param.name}, <its layout> @ {{B()}}) to declare equal values",
                             path=refusal.path,
                             op=op,
                         )

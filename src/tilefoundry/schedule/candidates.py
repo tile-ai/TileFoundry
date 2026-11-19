@@ -53,7 +53,7 @@ def candidates(
         ):
             continue
         instructions = schedule.candidate_ops(type(call.target), call=call)
-        if not instructions or access.aliased_operand(call) is not None:
+        if not instructions or access.aliased_operand(call, tgt.storage_owners) is not None:
             continue
         if call.type.storage is expr.StorageKind.UMAT and call.type.shape == ():
             continue

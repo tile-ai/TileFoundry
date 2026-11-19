@@ -13,6 +13,7 @@ from tilefoundry.ir.types import int_tuple
 from .context import TypeInferContext, TypeInferResults
 from .reachability import check_input_reachability
 from .registry import registry
+from .shard_propagate import induction_type
 
 
 def require_axis_groups(node, type_, ctx):
@@ -226,8 +227,10 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
                 f"{len(region.params)} params",
             )
         memo = self.region_memo(region, ctx)
-        induction_type = region.induction_var.type
-        memo[id(region.induction_var)] = (region.induction_var, induction_type)
+        index_type = induction_type(
+            (region.start, region.extent, region.step), region.induction_var.type, ctx.mesh_scope, ctx.type_of
+        )
+        memo[id(region.induction_var)] = (region.induction_var, index_type)
         if self.ranges:
             step = expr.static_dim_value(region.step)
             bounds = None
@@ -240,7 +243,7 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
                     bounds = None
             record_range(
                 region.induction_var,
-                TypeInferResults(induction_type, value_range=bounds),
+                TypeInferResults(index_type, value_range=bounds),
             )
         inner = TypeInferVisitor(
             memo=memo,
@@ -273,9 +276,10 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
                                 f"and leaves {labels.get(after, repr(after))}"
                             )
                             if before in labels and after in labels:
+                                entry, held = ("reshard", "bitcast") if after == types.Varying() else ("bitcast", "reshard")
                                 hint += (
-                                    f"; reshard the entry to {labels[after]} "
-                                    f"or the yield to {labels[before]}"
+                                    f"; {entry} the entry to {labels[after]} "
+                                    f"or {held} the yield to {labels[before]}"
                                 )
                             break
                     if hint:

@@ -189,7 +189,7 @@ def renaming_relation(call, ctx, local_relations: tuple[Relation, ...]) -> Relat
             "one leaf of it rather than a coordinate change to fold"
         )
     written = local_relations[len(call.args)].relation
-    reads = local_relations[aliased_operand(call)].relation
+    reads = local_relations[aliased_operand(call, ctx.target.storage_owners)].relation
     folded = written.reverse().apply_range(reads)
     bindings = values_of(local_relations)
     names = parameter_names(folded)

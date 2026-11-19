@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from functools import cached_property
-from itertools import combinations
+from itertools import combinations, product
 from math import prod
 from typing import Protocol
 
@@ -807,7 +807,8 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
     def allocate(self, node, ctx):
         if isinstance(node.type, types.TupleType) and result_copies(node) > 1:
             raise Error("allocation: staged tuple results are not supported")
-        view = access.aliased_operand(node) if isinstance(node, expr.Call) else None
+        owners = ctx.target.storage_owners
+        view = access.aliased_operand(node, owners) if isinstance(node, expr.Call) else None
         for index, leaf in enumerate(ir_utils.leaves_of(node.type)):
             key = core.SSAValue(node, index)
             cached = ctx.scope.provenance.snapshot.get(key)
@@ -966,8 +967,68 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
         self.windows.extend(window for window in resolved.windows if window.value in self.by_value)
 
 
-def build_interference_graph(values, windows, by_value):
-    """Interference uses translated windows, never the local lifetime envelope."""
+def owner_units(lifetime: ValueLifetime, owners: target.StorageOwners) -> dict:
+    """The units holding a value on each topology that owns its storage per unit.
+
+    A topology maps to the exact unit ids the value's mesh selects there, or to
+    None -- every unit -- when the value has no mesh, its mesh omits that
+    topology, or the selection is symbolic.
+    """
+    held = ir_utils.leaves_of(lifetime.value.expr.type)[lifetime.value.index]
+    layout = types.shard_layout_of(getattr(held, "layout", None))
+    selected = {} if layout is None else ir_utils.runs(layout.mesh, ir_utils.topology_names(layout.mesh))
+    return {
+        name: ir_utils.unit_ids(selected[name]) if name in selected else None
+        for name in owners.order
+        if owners.private(lifetime.memory_level, name)
+    }
+
+
+def shares_owner_unit(left: dict, right: dict) -> bool:
+    """Whether some unit of the storage's owner holds both values: their sets meet everywhere.
+
+    See [analysis §1.2.2](docs/spec/analysis.md#122-memory).
+    """
+    return all(
+        left[name] is None or right[name] is None or bool(left[name] & right[name])
+        for name in left
+    )
+
+
+def held_on_one_unit(sizes: dict, units: dict) -> int:
+    """The most bytes one owner unit holds at once: each value counts where its units reach.
+
+    Units that the same values hold are one candidate, so the search stays exact and small.
+    """
+    signatures = {tuple(sorted(units[value].items(), key=lambda item: item[0])) for value in sizes}
+    if len(signatures) <= 1:
+        return sum(sizes.values())
+    names = tuple(units[next(iter(sizes))])
+    candidates = []
+    for name in names:
+        classes = {}
+        for unit in sorted({unit for value in sizes for unit in (units[value][name] or ())}):
+            holders = frozenset(value for value in sizes if units[value][name] and unit in units[value][name])
+            classes.setdefault(holders, unit)
+        candidates.append(list(classes.values()) or [None])
+    return max(
+        sum(
+            size
+            for value, size in sizes.items()
+            if all(
+                units[value][name] is None or unit is None or unit in units[value][name]
+                for name, unit in zip(names, chosen, strict=True)
+            )
+        )
+        for chosen in product(*candidates)
+    )
+
+
+def build_interference_graph(values, windows, by_value, units):
+    """Interference uses translated windows, never the local lifetime envelope.
+
+    Two roots interfere only where some owner unit holds both (*units* by root).
+    """
     intervals = defaultdict(list)
     for window in windows:
         if window.value in by_value:
@@ -975,7 +1036,8 @@ def build_interference_graph(values, windows, by_value):
     return {
         (i, j)
         for i, j in combinations(range(len(values)), 2)
-        if any(
+        if shares_owner_unit(units[values[i]], units[values[j]])
+        and any(
             max(a.defined_at, b.defined_at) <= min(a.last_used_at, b.last_used_at)
             for a in intervals[values[i]]
             for b in intervals[values[j]]
@@ -983,7 +1045,7 @@ def build_interference_graph(values, windows, by_value):
     }
 
 
-def partial_copies(held: types.TensorType, owners: expr.StorageOwners) -> int:
+def partial_copies(held: types.TensorType, owners: target.StorageOwners) -> int:
     """Count Partial contributions not already separated by storage ownership."""
     layout = types.shard_layout_of(held.layout)
     if layout is None:
@@ -1081,7 +1143,7 @@ def first_fit(
     alignments: tuple[int, ...],
     limit: int,
     pinned: dict[int, int],
-    floor: int,
+    floors: dict[int, int],
     sizes,
 ) -> tuple[tuple[int, ...], int] | None:
     """Place each root at its lowest aligned address left free by its conflicts."""
@@ -1093,7 +1155,7 @@ def first_fit(
         alignment = alignments[index]
         blocked = tuple(item for item in placed if tuple(sorted((index, item[0]))) in interference)
         pins = {pinned[index]} if index in pinned else set()
-        lowest = aligned(floor, alignment)
+        lowest = aligned(floors.get(index, 0), alignment)
         candidates = sorted(
             pins
             or {
@@ -1131,7 +1193,7 @@ def satisfies(
     alignments: tuple[int, ...],
     limit: int,
     pinned: dict[int, int],
-    floor: int,
+    floors: dict[int, int],
     sizes,
 ) -> bool:
     """Whether a seed meets every constraint the solver states about addresses."""
@@ -1142,7 +1204,7 @@ def satisfies(
             return False
         if index in pinned and address != pinned[index]:
             return False
-        if index not in pinned and address < floor:
+        if index not in pinned and address < floors.get(index, 0):
             return False
     return all(
         addresses[left] + sizes[values[left]] <= addresses[right]
@@ -1158,7 +1220,7 @@ def calculate_starts(
     limit: int,
     *,
     pinned: dict[int, int],
-    floor: int,
+    floors: dict[int, int],
     sizes,
     starts,
 ) -> tuple[tuple[int, ...], int] | None:
@@ -1175,16 +1237,16 @@ def calculate_starts(
     by_definition = sorted(indices, key=lambda i: (starts[values[i]], -sizes[values[i]]))
     largest_first = sorted(indices, key=lambda i: (-sizes[values[i]], starts[values[i]]))
     attempts = (
-        (by_definition, {}, 0),
-        (by_definition, pinned, floor),
-        (largest_first, pinned, floor),
+        (by_definition, {}, {}),
+        (by_definition, pinned, floors),
+        (largest_first, pinned, floors),
     )
     seeds = [
         seed
         for order, pins, lowest in attempts
         if (seed := first_fit(order, values, interference, alignments, limit, pins, lowest, sizes))
         is not None
-        and satisfies(seed[0], values, interference, alignments, limit, pinned, floor, sizes)
+        and satisfies(seed[0], values, interference, alignments, limit, pinned, floors, sizes)
     ]
     return min(seeds, key=lambda seed: seed[1]) if seeds else None
 
@@ -1223,23 +1285,34 @@ def solve_allocation(
         model.add(address + sizes[item] <= peak)
         model.add_modulo_equality(0, address, alignment).with_name(f"align_{index}")
 
-    persistent_end = 0
+    owners = ctx.target.storage_owners
+    units = {item: owner_units(item.lifetime, owners) for item in values}
     pinned: dict[int, int] = {}
-    for index, (address, item, alignment) in enumerate(
-        zip(addresses, values, alignments, strict=True)
-    ):
-        if item not in persistent:
-            continue
-        persistent_end = aligned(persistent_end, alignment)
-        offset = persistent_end
-        persistent_end += sizes[item]
-        model.add(address == offset)
-        pinned[index] = offset
-    for address, item in zip(addresses, values, strict=True):
-        if item not in persistent:
-            model.add(address >= persistent_end)
 
-    interference = build_interference_graph(values, summary.windows, summary.by_value)
+    def held_below(index: int) -> int:
+        """The end of the pinned persistent roots that share an owner unit with root *index*."""
+        return max(
+            (
+                pinned[other] + sizes[values[other]]
+                for other in pinned
+                if shares_owner_unit(units[values[index]], units[values[other]])
+            ),
+            default=0,
+        )
+
+    def reach(index: int) -> tuple:
+        """Roots every owner unit holds come first, then those on more units; ties keep order."""
+        held = units[values[index]].values()
+        return (sum(ids is not None for ids in held), -sum(len(ids) for ids in held if ids is not None))
+
+    for index in sorted((i for i, item in enumerate(values) if item in persistent), key=reach):
+        pinned[index] = aligned(held_below(index), alignments[index])
+        model.add(addresses[index] == pinned[index])
+    floors = {index: held_below(index) for index in range(len(values)) if index not in pinned}
+    for index, floor in floors.items():
+        model.add(addresses[index] >= floor)
+
+    interference = build_interference_graph(values, summary.windows, summary.by_value, units)
     order_choices: dict[tuple[int, int], tuple[cp_model.IntVar, cp_model.IntVar]] = {}
     for left, right in sorted(interference):
         if values[left] in persistent or values[right] in persistent:
@@ -1261,7 +1334,7 @@ def solve_allocation(
         alignments,
         limit,
         pinned=pinned,
-        floor=persistent_end,
+        floors=floors,
         sizes=sizes,
         starts={
             value: min(
@@ -1333,6 +1406,8 @@ __all__ = [
     "AllocationConstraintVisitor",
     "AllocationSummaryMetadata",
     "AllocationValue",
+    "held_on_one_unit",
+    "owner_units",
     "aligned",
     "covers_result",
     "solve_allocation",

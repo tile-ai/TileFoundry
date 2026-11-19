@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry import services
+from tilefoundry import services, target
 from tilefoundry.ir import expr, types
 
 DIVIDED = [
@@ -115,7 +115,7 @@ def test_symbolic_split_local_extent_decidable(
                     mesh,
                     (types.Split(0), types.Split(0)),
                     storage=expr.StorageKind.GMEM,
-                    owners=expr.StorageOwners((), {}),
+                    owners=target.StorageOwners(),
                 )
             return
         layout = types.ShardLayout.from_logical(
@@ -123,7 +123,7 @@ def test_symbolic_split_local_extent_decidable(
             mesh,
             (types.Split(0), types.Split(0)),
             storage=expr.StorageKind.GMEM,
-            owners=expr.StorageOwners((), {}),
+            owners=target.StorageOwners(),
         )
     else:
         layout = _symbolic_layout(extent, _N, split=True)

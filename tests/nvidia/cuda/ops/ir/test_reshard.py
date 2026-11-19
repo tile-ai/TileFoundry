@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from tests.core.ops.ir.op_case import OpCase, op_case_test
 from tests.core.ops.ir.test_reshard import (
     _MESH_DYN,
@@ -11,8 +15,9 @@ from tests.core.ops.ir.test_reshard import (
     _SL_H2L,
     _materialized,
 )
+from tilefoundry import cli
 from tilefoundry.dsl import storage
-from tilefoundry.ir import types
+from tilefoundry.ir import expr, types
 from tilefoundry.ir.hir import sharding
 from tilefoundry_nvidia import cuda
 
@@ -59,3 +64,10 @@ CASES = (
     ),
 )
 test_op_case = op_case_test(CASES)
+
+
+def test_split_between_overlapping_slices_is_refused_at_its_line():
+    """GPUs both slices hold would send and receive a share at once; it is not priced."""
+    fixture = Path(__file__).parents[2] / "fixtures" / "diagnostics" / "reshard_split_overlapping_slices.py"
+    with pytest.raises(expr.VerifyError, match=r"share some gpu units(.|\n)*overlapping_slices\.py:24:"):
+        cli.load_authored_ir(str(fixture))

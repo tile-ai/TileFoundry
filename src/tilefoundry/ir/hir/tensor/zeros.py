@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from tilefoundry import core, utils
 from tilefoundry.interfaces import access, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, types
@@ -10,9 +12,13 @@ from tilefoundry.ir import utils as ir_utils
 
 @expr.register_op(dialect='tf', category='tensor')
 class Zeros(expr.Op):
-    """Allocate a zero-initialised tensor with the given complete type."""
+    """Allocate a zero-initialised tensor with the given complete type.
+
+    Like a literal, its value is the same on every unit.
+    """
 
     type = expr.ParamDef(kind="attribute", annotation=types.TensorType)
+    literal: ClassVar[bool] = True
 
 
 @typeinfer.register(Zeros)

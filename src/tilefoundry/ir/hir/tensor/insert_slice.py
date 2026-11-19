@@ -142,7 +142,9 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
                 "dst needs a per-axis offset tuple",
             )
         check_axis(0, dst_ty.shape[0], upd_ty.shape[0], off_expr, ctx, call)
-    return dst_ty
+    offsets = off_expr.elements if isinstance(off_expr, expr.Tuple) else (off_expr,)
+    read = typeinfer.operand_types(ctx, (*call.args[:2], *offsets))
+    return typeinfer.combine_operand_attrs(dst_ty, read[1:], ctx)
 
 
 def inserted_slice(dst, upd, *starts):

@@ -563,7 +563,7 @@ class Binary(Op):
     (`op(reduction(x)) == reduction(op(x))`). Otherwise typeinfer rejects it. The rejection names the offending operand and the fix (an explicit `Reshard` to
     `Broadcast`).
     States follow [shard §6.1](./shard.md#61-shard-attr-semantics). A Varying
-    peer is rejected with an explicit `reshard(..., @ {B()})` remedy.
+    peer is rejected with an explicit `bitcast(..., <its layout> @ {B()})` remedy.
     Typeinfer decides each mesh axis independently. `Partial` states on different axes are not interchangeable. `ADD` rejects two Partial inputs
     when their states occupy different mesh axes.
     - `ADD` with both operands `Partial`: commutes (passes) only when both
@@ -669,7 +669,12 @@ second presentation of the result.
   MUST remap its split modes through the registered relation with fresh
   strides. Lowering MUST copy the source's permuted-stride view into the new
   result storage.
-- `Bitcast(x, layout)` reinterprets the same bytes with a new shape and layout,
+- `Bitcast(x, layout)` form (ii) keeps the address layout, offset included, and
+  the mesh, in any storage; per mesh axis Varying (a plain source too) may become
+  Broadcast or Partial: the author states the copies are equal, or sum to the
+  value, unchecked. It aliases, costs 0, lowers to a view, keeps every value,
+  and its gradient reads the cotangent back with the source's attrs.
+- Form (i), any other `Bitcast(x, layout)`, has no autodiff rule. It reinterprets the same bytes with a new shape and layout,
   preserving the input dtype and storage. `layout` is a `LayoutBase`; the result
   shape for a plain layout is the product of the nested sizes in each top-level
   layout mode. For an rmem `ShardLayout`, the result preserves `x.shape` and
@@ -897,8 +902,8 @@ class RepeatInterleave(Op):
   - `axis` MUST resolve within the rank. The result extent at that axis MUST be
     the input extent multiplied by `repeats`. All other extents and storage are
     preserved.
-  - The result layout is unsharded. A genuinely sharded input MUST be refused;
-    an unsharded or fully broadcast input is accepted.
+  - A `Split` or `Partial` input MUST be refused. Any other input keeps its
+    layout kind and attrs on the new shape ([shard §6.1](./shard.md#61-shard-attr-semantics)).
 
 ##### Split
 
@@ -1585,8 +1590,9 @@ class Reshard(Op):
 - constraints:
   - Omitting `layout` preserves `x.layout`; omitting `storage` preserves
     `x.storage`. The output preserves the input logical `TensorType.shape`.
-  - Memory analysis and lowering MUST treat a Reshard as a view iff four
-    conditions hold. Storage is unchanged. The shape is literal. Both structural
+  - Memory analysis and lowering MUST treat a Reshard as a view iff five
+    conditions hold. Storage is unchanged. The shape is literal. No unit is
+    added (`ir.utils.unit_change` below). Both structural
     address boxes agree. On every mesh axis with a `Partial` end, both ends are
     equal, or a Varying (or plain) source becomes Partial ([shard §6.1](./shard.md#61-shard-attr-semantics)). Each thread holds register storage
     privately. So an `rmem` Reshard with a `ShardLayout` is a view only when each
@@ -1621,6 +1627,10 @@ class Reshard(Op):
 
   - Every other Reshard MUST retain its independent buffer and instruction
     selection requirements. Destination storage is concrete.
+  - `ir.utils.unit_change` compares the exact unit sets ([shard §5](./shard.md#5-mesh))
+    on the topologies that own the destination storage per unit. Typeinfer MUST
+    reject sets that differ but are symbolic, and ends that share some but not
+    all units when either end carries a `Split` or `Partial`.
   - One op covers zero-copy view, cross-storage copy, cross-CTA redistribute, and
     mixed cases. Typeinfer and the cost evaluator classify the call.
 

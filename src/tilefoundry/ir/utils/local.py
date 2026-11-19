@@ -140,6 +140,7 @@ def make_shard_tensor_type(
     storage: "str | expr.StorageKind" = "gmem",
     mesh: Optional[types.Mesh] = None,
     attrs: tuple = (),
+    owners: "StorageOwners | None" = None,
 ) -> "types.TensorType":
     """Build a canonical sharded ``TensorType`` from its logical description.
 
@@ -152,7 +153,7 @@ def make_shard_tensor_type(
     shape = tuple(shape)
     if mesh is None or not attrs:
         return types.TensorType(shape=shape, dtype=dtype, layout=types.Layout(shape), storage=storage)
-    layout = types.ShardLayout.from_logical(shape, mesh, attrs, storage=storage, owners=expr.StorageOwners((), {}))
+    layout = types.ShardLayout.from_logical(shape, mesh, attrs, storage=storage, owners=owners)
     return types.TensorType(shape=shape, dtype=dtype, layout=layout, storage=storage)
 
 

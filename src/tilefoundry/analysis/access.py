@@ -87,7 +87,7 @@ def buffer_alias(
     call: expr.Call, ctx: typeinfer.TypeInferContext, local_relations: tuple[access.Relation, ...]
 ) -> BufferAlias | None:
     """A registered view's bytes and coordinates, proving the declaration on every ask."""
-    position = access.aliased_operand(call)
+    position = access.aliased_operand(call, ctx.target.storage_owners)
     if position is None:
         return None
     operand = call.args[position]
@@ -247,7 +247,7 @@ def resolve_access(
     indexes = (
         range(len(type_list))
         if whole_tuple
-        else (ir_utils.leaf_span(held, output_index)[0] if isinstance(held, types.TupleType) else 0,)
+        else (output_index if isinstance(held, types.TupleType) else 0,)
     )
     built = []
     for index in indexes:

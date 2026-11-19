@@ -157,6 +157,22 @@ def selected_types(
     return tuple(dict.fromkeys(item for item in metadata_types if item in owned))
 
 
+def defining_module(body: core.Function, owners: Mapping[int, core.Module], root: core.Module) -> core.Module:
+    """The Module that defines *body*: the definition itself first, then where it came from."""
+    return owners.get(id(body)) or owners.get(id(valuation.origin_of(body)), root)
+
+
+def callee_fields(node, scope: core.Module, owners: Mapping[int, core.Module], root: core.Module) -> dict[str, str]:
+    """Which row a call of a function reaches, and the reference as written."""
+    if not isinstance(node, expr.Call) or not isinstance(node.target, core.FunctionRef):
+        return {}
+    _, callee = core.resolve(scope, node.target)
+    return {
+        "callee": f"{defining_module(callee, owners, root).name}.{callee.name}",
+        "callee_ref": node.target.qualified_name,
+    }
+
+
 def report_data(
     *,
     module: core.Module,
@@ -177,15 +193,24 @@ def report_data(
     selected = frozenset(selected_types(module, analyses, metadata_types))
     target = module.resolve_target()
     owners = {
-        id(candidate): context.module.name
+        id(candidate): context.module
         for context in valuation.collect_functions(module).values()
         for candidate in (context.function, *getattr(context.function, "variants", ()))
     }
-    rows = []
+
+    rows, defined = [], {}
     for body in functions or (function,):
         local_printer = printer.definition_printer(body)
+        scope = defining_module(body, owners, module)
+        name = f"{scope.name}.{body.name}"
+        if name in defined:
+            raise ValueError(
+                f"two definitions report as {name!r}: {expr.span_text(defined[name].body)} and "
+                f"{expr.span_text(body.body)}; rename one Module so each row names one definition"
+            )
+        defined[name] = body
         row = {
-            "function": f"{owners.get(id(valuation.origin_of(body) or body), module.name)}.{body.name}",
+            "function": name,
             "function_records": records_of(body, selected, local_printer),
             "calls": [],
             "loops": [],
@@ -200,7 +225,7 @@ def report_data(
                 continue
             kind, label = classifier
             value = (labels.get(id(node)) if labels is not None else None) or (local_printer.print(node) if isinstance(node, expr.Call) else label(node, row))
-            row[kind].append({"value": value, **held})
+            row[kind].append({"value": value, **callee_fields(node, scope, owners, module), **held})
         asked = {analysis.ComputeCostMetadata, analysis.MemoryMetadata, analysis.RegionMemoryMetadata}
         if asked & selected or ("roofline" in analyses and asked & set(metadata_types)):
             row["totals"] = work_totals(body)
