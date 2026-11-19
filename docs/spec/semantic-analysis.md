@@ -284,9 +284,10 @@ def uniform(node: Expr | int, ctx, scope=None) -> bool: ...
     an operand, every type is returned as stored.
   - `uniform` admits an integer, a literal, a tensor that reads as `Broadcast`
     on every mesh axis, a loop index whose start, extent and step it admits, a
-    region capture whose argument it admits, and a call other than `MeshCoord`
-    whose operands it admits. It refuses a `DimVar`, a carried value and a
-    parameter.
+    region capture whose argument it admits, and an `Op` call other than
+    `MeshCoord` whose operands it admits. It refuses a `DimVar`, a carried
+    value, a plain parameter, and a function call whose result is plain: the
+    callee can read `MeshCoord`. It decides each value once per inference run.
 
 ### 3.3 Output storage and mesh/layout compatibility
 

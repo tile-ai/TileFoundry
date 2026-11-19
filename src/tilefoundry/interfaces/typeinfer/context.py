@@ -23,6 +23,7 @@ class TypeInferContext(valuation.Context):
 
     memo: dict[int, tuple[expr.Expr, types.Type]] = field(default_factory=dict, repr=False, compare=False)
     instantiated_memo: dict[tuple, types.Type] = field(default_factory=dict, repr=False, compare=False)
+    uniform_memo: dict[tuple, tuple] = field(default_factory=dict, repr=False, compare=False)
 
     def type_of(self, node: expr.Expr) -> types.Type:
         """The type this inference derived or bound for *expr*.
@@ -39,6 +40,14 @@ class TypeInferContext(valuation.Context):
     def remember_instance(self, key: tuple, result: types.Type) -> None:
         """Keep the type one function instance inferred, so a repeat call reuses it."""
         self.instantiated_memo[key] = result
+
+    def remember_uniform(self, key: tuple, held: tuple) -> bool:
+        """Keep whether one value is the same on every unit; return that answer.
+
+        *held* keeps the objects the key names alive, so their ids are not reused.
+        """
+        self.uniform_memo[key] = held
+        return held[-1]
 
     def local_type_of(self, node: expr.Expr) -> types.Type:
         """Read an expression type without topology projection."""

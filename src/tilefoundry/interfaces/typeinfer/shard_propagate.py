@@ -346,16 +346,26 @@ def uniform(node, ctx, scope=None) -> bool:
 
     See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics). An integer, a
     literal and a ``Broadcast`` tensor are. A loop index is when its start,
-    extent and step are; a region capture is when its argument is; a call with
-    a plain result is when its operands are, except ``MeshCoord``. A ``DimVar``
-    is not: each unit can bind its own value. *scope* is the context whose
-    enclosing regions bind *node*; it defaults to *ctx*.
+    extent and step are; a region capture is when its argument is; an Op call
+    with a plain result is when its operands are, except ``MeshCoord``. A
+    ``DimVar`` is not: each unit can bind its own value, and neither is a
+    function call with a plain result. *scope* is the context whose enclosing
+    regions bind *node*; it defaults to *ctx*. Each answer lasts the run.
     """
     scope = ctx if scope is None else scope
     if isinstance(node, int):
         return True
     if not isinstance(node, expr.Expr):
         return False
+    key = (id(node), id(ctx.memo), id(scope.owner))
+    held = ctx.uniform_memo.get(key)
+    if held is not None:
+        return held[-1]
+    return ctx.remember_uniform(key, (node, ctx.memo, scope.owner, decide_uniform(node, ctx, scope)))
+
+
+def decide_uniform(node: expr.Expr, ctx, scope) -> bool:
+    """The rule ``uniform`` applies to *node*, before it keeps the answer."""
     if isinstance(node, expr.Constant):
         return True
     if isinstance(node, expr.Tuple):
@@ -366,7 +376,11 @@ def uniform(node, ctx, scope=None) -> bool:
         owners = target.storage_owners if target else expr.StorageOwners((), {})
         return all(isinstance(attr, types.Broadcast) for attr in utils.attrs_by_axis(type_, owners=owners).values())
     if isinstance(node, expr.Call):
-        return not isinstance(node.target, dim.MeshCoord) and all(uniform(arg, ctx, scope) for arg in node.args)
+        return (
+            isinstance(node.target, expr.Op)
+            and not isinstance(node.target, dim.MeshCoord)
+            and all(uniform(arg, ctx, scope) for arg in node.args)
+        )
     for level in scope.ancestors():
         region = level.owner
         if isinstance(region, core.LoopRegion) and node is region.induction_var:

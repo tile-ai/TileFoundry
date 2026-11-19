@@ -1,5 +1,8 @@
 """One loop per way a loop index's bounds decide whether it is the same on every GPU.
 
+DirectCoord and HiddenCoord pick at the GPU's own coordinate instead, read
+directly or returned by a function, so the row differs per GPU.
+
 Each loop picks a row of a Broadcast table at the index. On the GPU target the
 accumulator is plain, so every loop types and the picked row shows how the
 index reads. On the CPU target Broadcast and Varying read alike.
@@ -73,6 +76,27 @@ class OuterIndexStart:
                 for t in range(i + 1, 4):
                     acc = acc + tf.index_select(x, tf.reshape(t, new_shape=(1,)), dim=0)
             return acc
+
+
+@module(entry="forward", target=target, topologies=(gpu, cta))
+class DirectCoord:
+    @func
+    def forward(x: TABLE):
+        with Mesh(("gpu",), layout=(2,), names=("g",)) as m:
+            return tf.index_select(x, tf.reshape(m.g, new_shape=(1,)), dim=0)
+
+
+@module(entry="forward", target=target, topologies=(gpu, cta))
+class HiddenCoord:
+    @func
+    def rank():
+        with Mesh(("gpu",), layout=(2,), names=("g",)) as m:
+            return tf.reshape(m.g, new_shape=(1,))
+
+    @func
+    def forward(x: TABLE):
+        with Mesh(("gpu",), layout=(2,), names=("g",)) as _m:
+            return tf.index_select(x, rank(), dim=0)
 
 
 host = cpu.Target()

@@ -666,8 +666,9 @@ operation reads it as Broadcast on every mesh axis. Its own type stays plain. A
 loop index whose start, extent and step are the same on every unit reads the
 same way. They are when each symbol in them is an integer, such an outer index,
 or a scalar tensor that reads as Broadcast; a `DimVar` is not, because each unit
-can bind its own value. A plain value that a call computes from such operands
-reads the same way, except a `MeshCoord`. Any other plain variable (a
+can bind its own value. A plain value that an operation computes from such
+operands reads the same way, except a `MeshCoord`; a function call's plain
+result does not. Any other plain variable (a
 parameter, a shape element) stays Varying.
 A result that reads as Varying on every mesh axis has the plain layout when its
 mesh covers every unit of its topologies. On a sliced mesh it keeps that mesh,

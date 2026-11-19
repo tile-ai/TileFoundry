@@ -189,6 +189,8 @@ test_op_case = op_case_test(CASES)
         ("PlainCount", False),
         ("DimVarExtent", False),
         ("OuterIndexStart", True),
+        ("DirectCoord", False),
+        ("HiddenCoord", False),
         ("HostDimVarExtent", True),
     ),
 )
@@ -205,4 +207,4 @@ def test_loop_index_reads_broadcast_when_its_bounds_are_the_same_everywhere(modu
     )
     shard = types.shard_layout_of(picked.type.layout)
     assert (shard is not None and shard.attrs == (_B,)) is replicated
-    assert replicated or picked.type.layout == types.Layout((1, 8))
+    assert replicated or picked.type.layout == types.Layout(picked.type.shape)
