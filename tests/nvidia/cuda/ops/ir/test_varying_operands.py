@@ -9,8 +9,13 @@ the core op tables.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
-from tilefoundry.ir import expr, types, utils
+from tilefoundry import cli
+from tilefoundry.ir import core, expr, types, utils
 from tilefoundry.ir.hir import math, nn, tensor
 from tilefoundry_nvidia import cuda
 
@@ -68,6 +73,13 @@ CASES = (
         _MUL,
         (held((4,), _B), types.TensorType.from_umat_scalar(expr.DType.f32)),
         type=plain((4,)),
+        target=_H200,
+    ),
+    OpCase(
+        "binary_plain_scalar_on_a_slice_keeps_its_mesh",
+        _MUL,
+        (utils.make_shard_tensor_type((4,), mesh=_M[0], attrs=(_B,)), types.TensorType.from_umat_scalar(expr.DType.f32)),
+        type=utils.make_shard_tensor_type((4,), mesh=_M[0], attrs=(_V,)),
         target=_H200,
     ),
     OpCase(
@@ -167,3 +179,30 @@ CASES = (
     ),
 )
 test_op_case = op_case_test(CASES)
+
+
+@pytest.mark.parametrize(
+    ("module", "replicated"),
+    (
+        ("LiteralBounds", True),
+        ("BroadcastCount", True),
+        ("PlainCount", False),
+        ("DimVarExtent", False),
+        ("OuterIndexStart", True),
+        ("HostDimVarExtent", True),
+    ),
+)
+def test_loop_index_reads_broadcast_when_its_bounds_are_the_same_everywhere(module, replicated) -> None:
+    """A row picked at the index stays Broadcast exactly when the index is the same on every GPU.
+
+    On the CPU target Broadcast and Varying read alike, so the row stays Broadcast either way.
+    """
+    loaded = cli.load_authored_ir(f"{Path(__file__).parents[2] / 'fixtures' / 'ops' / 'loop_index_reads.py'}:{module}")
+    (picked,) = (
+        node
+        for node in core.collect_exprs(loaded.entry_function().body)
+        if isinstance(node, expr.Call) and isinstance(node.target, tensor.IndexSelect)
+    )
+    shard = types.shard_layout_of(picked.type.layout)
+    assert (shard is not None and shard.attrs == (_B,)) is replicated
+    assert replicated or picked.type.layout == types.Layout((1, 8))

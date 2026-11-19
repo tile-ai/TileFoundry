@@ -162,6 +162,22 @@ def equals_mesh_scope(mesh: types.Mesh, current: types.Mesh) -> bool:
     )
 
 
+def covers_every_unit(mesh: types.Mesh) -> bool:
+    """Whether each topology of *mesh* selects every unit that topology has.
+
+    A sliced mesh selects fewer. See [shard §5](docs/spec/shard.md#5-mesh).
+    """
+    for t, topology in enumerate(mesh.topologies):
+        run = selected_units(mesh, t)
+        held = unit_ids(run)
+        if held is not None and isinstance(topology.size, int):
+            if held != frozenset(range(topology.size)):
+                return False
+        elif run != (services.normalize_dim(topology.size), 0):
+            return False
+    return True
+
+
 @dataclass(frozen=True)
 class UnitChange:
     """How the units of two meshes relate, over the topologies both name.
@@ -345,6 +361,7 @@ def sub_box(parent: types.Mesh, mesh: types.Mesh) -> tuple[slice, ...] | None:
 
 __all__ = [
     "axis_keys",
+    "covers_every_unit",
     "equals_mesh_scope",
     "first_unit_ids",
     "flat_layout",

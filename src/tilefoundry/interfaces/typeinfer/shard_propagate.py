@@ -14,7 +14,7 @@ from functools import reduce
 
 import isl
 
-from tilefoundry.ir import expr, types, utils
+from tilefoundry.ir import core, dim, expr, types, utils
 from tilefoundry.ir.types import int_tuple
 
 
@@ -310,7 +310,7 @@ def derive_output_shard_layout(
                 )
             attrs[p] = new_attr
 
-    if all(isinstance(attr, types.Varying) for attr in attrs):
+    if all(isinstance(attr, types.Varying) for attr in attrs) and utils.covers_every_unit(mesh):
         kept_topologies = {topology for topology, _ in keys}
         if all((topology in kept_topologies) == owners.private(storage, topology) for topology in topologies):
             return None
@@ -341,20 +341,56 @@ def derive_output_shard_layout(
     return types.ShardLayout.from_logical(output_shape, mesh, tuple(attrs), storage=storage, owners=owners)
 
 
+def uniform(node, ctx, scope=None) -> bool:
+    """Whether *node* takes the same value on every unit that runs it.
+
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics). An integer, a
+    literal and a ``Broadcast`` tensor are. A loop index is when its start,
+    extent and step are; a region capture is when its argument is; a call with
+    a plain result is when its operands are, except ``MeshCoord``. A ``DimVar``
+    is not: each unit can bind its own value. *scope* is the context whose
+    enclosing regions bind *node*; it defaults to *ctx*.
+    """
+    scope = ctx if scope is None else scope
+    if isinstance(node, int):
+        return True
+    if not isinstance(node, expr.Expr):
+        return False
+    if isinstance(node, expr.Constant):
+        return True
+    if isinstance(node, expr.Tuple):
+        return all(uniform(element, ctx, scope) for element in node.elements)
+    type_ = ctx.memo.get(id(node), (None, None))[1]
+    if isinstance(type_, types.TensorType) and types.shard_layout_of(type_.layout) is not None:
+        target = getattr(ctx, "target", None)
+        owners = target.storage_owners if target else expr.StorageOwners((), {})
+        return all(isinstance(attr, types.Broadcast) for attr in utils.attrs_by_axis(type_, owners=owners).values())
+    if isinstance(node, expr.Call):
+        return not isinstance(node.target, dim.MeshCoord) and all(uniform(arg, ctx, scope) for arg in node.args)
+    for level in scope.ancestors():
+        region = level.owner
+        if isinstance(region, core.LoopRegion) and node is region.induction_var:
+            return all(uniform(bound, ctx, level.parent) for bound in (region.start, region.extent, region.step))
+        if isinstance(region, (core.LoopRegion, core.MeshRegion)):
+            for param, arg in region.captures():
+                if param is node:
+                    return uniform(arg, ctx, level.parent)
+    return False
+
+
 def shard_read_types(ctx, operands) -> tuple:
-    """Operand types as shard readers see them: a literal is replicated.
+    """Operand types as shard readers see them: a uniform value is replicated.
 
     See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics). A plain
-    ``expr.Constant`` operand reads as ``Broadcast`` on the mesh of the first
-    distributed non-literal operand. Its stored type does not change.
+    operand that ``uniform`` admits reads as ``Broadcast`` on the mesh of the
+    first distributed operand. Its stored type does not change.
     """
     typed = tuple(ctx.type_of(operand) for operand in operands)
     mesh = next(
         (
             layout.mesh
-            for operand, type_ in zip(operands, typed)
-            if not isinstance(operand, expr.Constant)
-            and isinstance(type_, types.TensorType)
+            for type_ in typed
+            if isinstance(type_, types.TensorType)
             and (layout := types.shard_layout_of(type_.layout)) is not None
         ),
         None,
@@ -364,9 +400,9 @@ def shard_read_types(ctx, operands) -> tuple:
     replicated = (types.Broadcast(),) * len(utils.axis_keys(mesh))
     return tuple(
         replace(type_, layout=types.ShardLayout(type_.layout, replicated, mesh))
-        if isinstance(operand, expr.Constant)
-        and isinstance(type_, types.TensorType)
+        if isinstance(type_, types.TensorType)
         and isinstance(type_.layout, types.Layout)
+        and uniform(operand, ctx)
         else type_
         for operand, type_ in zip(operands, typed)
     )
@@ -402,11 +438,11 @@ def combine_operand_attrs(result, others: tuple, ctx) -> "types.TensorType":
         attrs.append(attr)
     if not promoted:
         return result
-    if all(isinstance(attr, types.Varying) for attr in held.values()):
+    if all(isinstance(attr, types.Varying) for attr in held.values()) and utils.covers_every_unit(shard.mesh):
         return replace(result, layout=types.Layout(result.shape))
     shard = replace(shard, attrs=tuple(attrs))
     layout = shard if isinstance(result.layout, types.ShardLayout) else replace(result.layout, outer=shard)
     return replace(result, layout=layout)
 
 
-__all__ = ["combine_operand_attrs", "derive_output_shard_layout", "shard_read_types"]
+__all__ = ["combine_operand_attrs", "derive_output_shard_layout", "shard_read_types", "uniform"]

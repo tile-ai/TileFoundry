@@ -4,10 +4,9 @@ OneLoop hands each microbatch to the second stage as soon as the first stage
 makes it. TwoLoops runs every microbatch through the first stage, moves the
 whole stack, and then runs the second stage, so the stack is held there at once.
 
-The loop index is a plain variable, so what it writes or picks varies per unit
-([shard §6.1](docs/spec/shard.md#61-shard-attr-semantics)) until a Reshard
-states it is the same everywhere: the stack is Varying, and a picked microbatch
-is resharded to Broadcast.
+The loop index counts from literal bounds, so it is the same on every unit and
+what it picks or writes stays Broadcast
+([shard §6.1](docs/spec/shard.md#61-shard-attr-semantics)).
 """
 
 from tilefoundry.dsl import *
@@ -25,8 +24,7 @@ def on(stage, shape, attr=Broadcast()):
 
 
 H1 = on(mesh[1], (T, C))
-STACK1 = on(mesh[1], (M, T, C))
-STACK0 = on(mesh[0], (M, T, C), Varying())
+STACK0, STACK1 = on(mesh[0], (M, T, C)), on(mesh[1], (M, T, C))
 
 
 @module(entry="forward", target=target, topologies=(gpu,))
@@ -64,6 +62,5 @@ class TwoLoops:
                 for t in range(M):
                     index = tf.reshape(t, new_shape=(1,))
                     picked = tf.reshape(tf.index_select(moved, index, dim=0), new_shape=(T, C))
-                    one = tf.reshard(picked, H1.layout, "gmem")
-                    acc = acc + tf.matmul(one, w1)
+                    acc = acc + tf.matmul(picked, w1)
             return acc

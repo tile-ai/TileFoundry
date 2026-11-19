@@ -14,7 +14,7 @@ def on(units, attr=Broadcast()):
         SHAPE, units, (attr,), storage="gmem", owners=target.storage_owners), "gmem")
 
 
-ALL, FIRST, MIDDLE = on(mesh), on(mesh[0:1]), on(mesh[1:3])
+ALL, FIRST, SECOND, MIDDLE = on(mesh), on(mesh[0:1]), on(mesh[1:2]), on(mesh[1:3])
 LAST_SPLIT = on(mesh[2:4], Split(0))
 grid = Mesh((gpu,), Layout((2, 2)), ("dp", "pp"))
 SECOND_STAGE = on(grid[:, 1])
@@ -76,3 +76,16 @@ class StageColumns:
     def run(x: on(grid[:, 0])):
         with Mesh(("gpu",), layout=(2, 2), names=("dp", "pp")) as _m:
             return tf.reshard(x, SECOND_STAGE.layout, "gmem")
+
+
+@module(entry="run", target=target, topologies=(gpu, Topology("cta", 1)))
+class ScaledHandoff:
+    """GPU 0 scales by a plain parameter, so the product varies there and keeps GPU 0's mesh."""
+
+    @func
+    def run(x: on(mesh[0:1]), s: Tensor[SHAPE, "f32", "gmem"]):
+        with Mesh(("gpu",), layout=(4,), names=("g",)) as units:
+            with Mesh(units[0:1], layout=(1,), names=("s",)) as _first:
+                scaled = x * s
+            moved = tf.reshard(scaled, SECOND.layout, "gmem")
+            return moved

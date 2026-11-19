@@ -359,6 +359,9 @@ def equals_mesh_scope(mesh: Mesh, current: Mesh) -> bool:
     independent of mode order. Otherwise it MUST conservatively compare the
     filtered layouts and first unit ids for equality. It compares only the topologies that
     `mesh` names. The other topologies of `current` do not enter it.
+  - `covers_every_unit(mesh)` is True when each topology of `mesh` selects every
+    unit it has: the exact unit ids when they count, else a run of the
+    topology's size from unit 0. A sliced mesh selects fewer.
   - `within_mesh_scope` MUST require both filtered selections to be continuous and
     prove containment of their half-open intervals `[start, start + size)`.
     Static continuity is `size == cosize`; symbolic continuity requires either
@@ -660,7 +663,15 @@ A plain layout is Varying on every mesh axis. An unstated mesh axis of a
 `ShardLayout`, and a topology that its mesh omits, is Broadcast.
 A literal operand (`expr.Constant`) has the same value on every unit, so an
 operation reads it as Broadcast on every mesh axis. Its own type stays plain. A
-plain variable (a parameter, a loop index, a shape element) stays Varying.
+loop index whose start, extent and step are the same on every unit reads the
+same way. They are when each symbol in them is an integer, such an outer index,
+or a scalar tensor that reads as Broadcast; a `DimVar` is not, because each unit
+can bind its own value. A plain value that a call computes from such operands
+reads the same way, except a `MeshCoord`. Any other plain variable (a
+parameter, a shape element) stays Varying.
+A result that reads as Varying on every mesh axis has the plain layout when its
+mesh covers every unit of its topologies. On a sliced mesh it keeps that mesh,
+written `@{V}`: a plain layout holds a copy on every unit.
 
 The topologies a ShardLayout keeps include its Varying topologies. An explicit
 execution mesh may omit outside topologies that contain neither Split nor Partial.

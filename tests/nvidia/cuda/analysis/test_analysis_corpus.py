@@ -1164,7 +1164,11 @@ class ExpertParallelBackward(AnalysisCase):
 
 @case
 class PipelineOneLoop(AnalysisCase):
-    """Each microbatch goes straight on: stage 1 holds w1 256 + moved 128 + y 128 + acc 128."""
+    """Each microbatch goes straight on, one 128-byte copy per step.
+
+    Stage 0 holds x 512 + w0 256 + picked 128 + h 128 = 1024, the function's
+    peak; stage 1 holds w1 256 + moved 128 + y 128 + acc 128 = 640.
+    """
 
     path: Path = PLACED / "pipeline_loops_cuda.py"
     name: str | None = "OneLoop"
@@ -1173,6 +1177,9 @@ class PipelineOneLoop(AnalysisCase):
 
     def guard(self, state, problems):
         assert _region_peaks(state.result) == [896, 640, 1_024]
+        report = _report(state.result)
+        assert _moved(report, "moved", "communication") == {"gpu": (128, 128, 128)}
+        assert _moved(report, "moved", "storage") == {"gmem": (128, 128, 128)}
 
 
 @case
@@ -1209,14 +1216,16 @@ class ReshardUnitSets(AnalysisCase):
             ("ShiftedPair", {"gpu": (128, 128, 128)}, {"gmem": (128, 128, 128)}),
             ("SplitToDisjointPair", {"gpu": (64, 128, 128)}, {"gmem": (64, 128, 128)}),
             ("StageColumns", {"gpu": (128, 256, 256)}, {"gmem": (128, 256, 128)}),
+            ("ScaledHandoff", {"gpu": (128, 128, 128)}, {"gmem": (128, 128, 128)}),
         ):
             loaded = cli.load_authored_ir(f"{PLACED / 'reshard_unit_sets.py'}:{module}")
             result = analysis.analyze(
                 *analysis.check_program(loaded, loaded.entry_function()), analysis=("memory",)
             )
             report = _report(result)
-            assert _moved(report, "v0", "communication") == communication, module
-            assert _moved(report, "v0", "storage") == storage, module
+            value = "moved" if module == "ScaledHandoff" else "v0"
+            assert _moved(report, value, "communication") == communication, module
+            assert _moved(report, value, "storage") == storage, module
 
 
 EXPECTED = {

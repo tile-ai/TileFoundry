@@ -26,6 +26,7 @@ from .local import (
 from .mesh_scope import (
     UnitChange,
     axis_keys,
+    covers_every_unit,
     equals_mesh_scope,
     first_unit_ids,
     flat_layout,
