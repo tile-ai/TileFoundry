@@ -1144,9 +1144,8 @@ def _differentiated(stem: str, root: str, wrt: tuple[str, ...], half: int):
 class TensorParallelBlock(AnalysisCase):
     """Megatron TP: each row-split matmul ends in an all-reduce of a (8, 16) f32 partial.
 
-    A GPU sends half its 512-byte partial. The block writes no mesh scope, so
-    one unit executes it and the total equals that share: a property of this
-    input, which analysis keeps as it is.
+    A GPU sends half its 512-byte partial. The block has a function mesh, so
+    both GPUs execute it and the total is twice that share.
     """
 
     path: Path = PLACED / "megatron_block_cuda.py"
@@ -1155,7 +1154,7 @@ class TensorParallelBlock(AnalysisCase):
 
     def guard(self, state, problems):
         for value in ("o", "d"):
-            assert _moved(state.report, value, "communication") == {"gpu": (256, 256, 256)}
+            assert _moved(state.report, value, "communication") == {"gpu": (256, 512, 256)}
 
 
 @case
