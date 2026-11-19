@@ -346,8 +346,9 @@ def operand_types(ctx, operands) -> tuple:
     """Operand types; a literal reads as Broadcast on the mesh of the first operand that has one.
 
     See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics). A literal (a
-    ``Constant``, or a call of an Op marked ``literal`` such as ``Zeros``) is
-    the same on every unit and names no mesh of its own.
+    ``Constant``, a call of an Op marked ``literal`` such as ``Zeros``, or a
+    call whose arguments are all ``Constant``s) is the same on every unit and
+    names no mesh of its own.
     """
     typed = tuple(ctx.type_of(operand) for operand in operands)
     mesh = next(
@@ -363,7 +364,11 @@ def operand_types(ctx, operands) -> tuple:
         return typed
     return tuple(
         replace(type_, layout=types.ShardLayout(type_.layout, (types.Broadcast(),) * len(utils.axis_keys(mesh)), mesh))
-        if (isinstance(operand, expr.Constant) or getattr(getattr(operand, "target", None), "literal", False))
+        if (
+            isinstance(operand, expr.Constant)
+            or getattr(getattr(operand, "target", None), "literal", False)
+            or (isinstance(operand, expr.Call) and operand.args and all(isinstance(arg, expr.Constant) for arg in operand.args))
+        )
         and isinstance(type_.layout, types.Layout)
         else type_
         for operand, type_ in zip(operands, typed)

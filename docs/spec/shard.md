@@ -662,8 +662,8 @@ owner. A Partial on such a mesh axis holds one copy per unit of that mesh axis. 
 its own base address. Completing the reduction leaves one copy.
 A plain layout is Varying on every mesh axis. An unstated mesh axis of a
 `ShardLayout`, and a topology that its mesh omits, is Broadcast.
-A literal is the same on every unit: a `Constant`, or a call of an Op marked
-`literal` (`Zeros`, an `Arange` with a static start). Its type stays plain; an
+A literal is the same on every unit: a `Constant`, a call of an Op marked
+`literal` (`Zeros`, an `Arange` with a static start), or a call of `Constant`s. Its type stays plain; an
 operation reads it as Broadcast on the mesh of its other operands. A loop index
 is all-Broadcast on the mesh in force when each bound is an integer, a literal
 or all-Broadcast, and plain otherwise or when no topology of that mesh has more

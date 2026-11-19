@@ -83,6 +83,13 @@ CASES = (
         target=_H200,
     ),
     OpCase(
+        "binary_literal_arithmetic_keeps_broadcast",
+        _MUL,
+        (held((4,), _B), expr.Call(_MUL, (_HALF, _ONE), type=_HALF.type)),
+        type=held((4,), _B),
+        target=_H200,
+    ),
+    OpCase(
         "binary_literal_scale_keeps_partial_sum",
         _MUL,
         (held((4,), _P), _HALF),
