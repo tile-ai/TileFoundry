@@ -996,15 +996,21 @@ def shares_owner_unit(left: dict, right: dict) -> bool:
 
 
 def held_on_one_unit(sizes: dict, units: dict) -> int:
-    """The most bytes one owner unit holds at once: each value counts where its units reach."""
+    """The most bytes one owner unit holds at once: each value counts where its units reach.
+
+    Units that the same values hold are one candidate, so the search stays exact and small.
+    """
     signatures = {tuple(sorted(units[value].items(), key=lambda item: item[0])) for value in sizes}
     if len(signatures) <= 1:
         return sum(sizes.values())
     names = tuple(units[next(iter(sizes))])
-    candidates = [
-        sorted({unit for value in sizes for unit in (units[value][name] or ())}) or [None]
-        for name in names
-    ]
+    candidates = []
+    for name in names:
+        classes = {}
+        for unit in sorted({unit for value in sizes for unit in (units[value][name] or ())}):
+            holders = frozenset(value for value in sizes if units[value][name] and unit in units[value][name])
+            classes.setdefault(holders, unit)
+        candidates.append(list(classes.values()) or [None])
     return max(
         sum(
             size
