@@ -217,7 +217,10 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
                 f"Reshard mesh axis {key}: {src!r} cannot become {dst!r}; "
                 "only Varying or the same Partial becomes Partial",
             )
-    change = moved_units(x_ty, result, owners)
+    try:
+        change = moved_units(x_ty, result, owners)
+    except ValueError as error:
+        ctx.error(call, str(error))
     if change is not None and change.overlap_in_part and any(
         isinstance(attr, (types.Split, types.Partial))
         for layout in layouts

@@ -1638,8 +1638,10 @@ class Reshard(Op):
 
   - Every other Reshard MUST retain its independent buffer and instruction
     selection requirements. Destination storage is concrete.
-  - Units are compared with `ir.utils.unit_change`, by the runs each mesh
-    selects, on the topologies that own the destination storage per unit.
+  - Units are compared with `ir.utils.unit_change`, by the exact unit set each
+    mesh selects ([shard §5](./shard.md#5-mesh)), on the topologies that own the
+    destination storage per unit. Typeinfer MUST reject a Reshard whose sets
+    differ there but cannot be counted because a selection is symbolic.
     Typeinfer MUST reject a Reshard whose two ends share some, but not all,
     of those units when either end carries a `Split` or `Partial`. A fully
     `Broadcast` value MAY move between any unit sets. One unit to all units is

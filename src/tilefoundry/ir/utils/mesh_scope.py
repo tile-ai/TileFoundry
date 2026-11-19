@@ -186,27 +186,50 @@ class UnitChange:
         return self.shared > 0
 
 
-def unit_change(source: types.Mesh, destination: types.Mesh, topologies) -> UnitChange | None:
-    """Compare the unit runs ``selected_units`` gives two meshes, on the named *topologies*.
+def unit_ids(run) -> frozenset[int] | None:
+    """The exact unit ids a ``selected_units`` run names; None when they are symbolic."""
+    held, first = run
+    if isinstance(held, types.LayoutBase):
+        count = types.size(held)
+        ids = tuple(first + held(index) for index in range(count)) if isinstance(count, int) else ()
+    else:
+        ids = tuple(range(first, first + held)) if isinstance(held, int) and isinstance(first, int) else ()
+    return frozenset(ids) if ids and all(isinstance(unit, int) for unit in ids) else None
 
-    None when they select the same units there, name none of them in common, or
-    a run is symbolic or not contiguous.
+
+def unit_change(source: types.Mesh, destination: types.Mesh, topologies) -> UnitChange | None:
+    """Compare the exact unit sets two meshes select, on the named *topologies*.
+
+    See [shard §5](docs/spec/shard.md#5-mesh). None when they select the same
+    units there or name none of them in common.
+
+    Raises:
+        ValueError: The selections differ and a symbolic run cannot be counted.
     """
     before = runs(source, topology_names(source))
     after = runs(destination, topology_names(destination))
     common = [name for name in after if name in before and name in topologies]
-    if not common or all(before[name] == after[name] for name in common):
-        return None
-    counts = {"source": 1, "destination": 1, "shared": 1}
+    counts, changed = {"source": 1, "destination": 1, "shared": 1}, None
     for name in common:
-        (held, first), (wanted, start) = before[name], after[name]
-        if not all(isinstance(value, int) for value in (held, first, wanted, start)):
-            return None
-        counts["source"] *= held
-        counts["destination"] *= wanted
-        counts["shared"] *= max(0, min(first + held, start + wanted) - max(first, start))
-    changed = next(name for name in common if before[name] != after[name])
-    return UnitChange(changed, **counts)
+        if before[name] == after[name]:
+            held = unit_ids(before[name])
+            if held is not None:
+                counts["source"] *= len(held)
+                counts["destination"] *= len(held)
+                counts["shared"] *= len(held)
+            continue
+        held, wanted = unit_ids(before[name]), unit_ids(after[name])
+        if held is None or wanted is None:
+            raise ValueError(
+                f"the {name} units {before[name]} and {after[name]} differ, and a symbolic "
+                "selection cannot say how many units gain the value"
+            )
+        counts["source"] *= len(held)
+        counts["destination"] *= len(wanted)
+        counts["shared"] *= len(held & wanted)
+        if changed is None and held != wanted:
+            changed = name
+    return None if changed is None else UnitChange(changed, **counts)
 
 
 def from_meshes(*meshes: types.Mesh) -> types.Mesh:
@@ -333,6 +356,7 @@ __all__ = [
     "topology_mesh",
     "topology_names",
     "unit_change",
+    "unit_ids",
     "unit_layout",
     "within_mesh_scope",
     "UnitChange",

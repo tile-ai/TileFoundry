@@ -1019,6 +1019,7 @@ class ReshardUnitSets(AnalysisCase):
             ("OneToAll", {"gpu": (128, 384, 384)}, {"gmem": (128, 384, 128)}),
             ("ShiftedPair", {"gpu": (128, 128, 128)}, {"gmem": (128, 128, 128)}),
             ("SplitToDisjointPair", {"gpu": (64, 128, 128)}, {"gmem": (64, 128, 128)}),
+            ("StageColumns", {"gpu": (128, 256, 256)}, {"gmem": (128, 256, 128)}),
         ):
             loaded = cli.load_authored_ir(f"{PLACED / 'reshard_unit_sets.py'}:{module}")
             result = analysis.analyze(

@@ -16,6 +16,8 @@ def on(units, attr=Broadcast()):
 
 ALL, FIRST, MIDDLE = on(mesh), on(mesh[0:1]), on(mesh[1:3])
 LAST_SPLIT = on(mesh[2:4], Split(0))
+grid = Mesh((gpu,), Layout((2, 2)), ("dp", "pp"))
+SECOND_STAGE = on(grid[:, 1])
 
 
 @module(entry="run", target=target, topologies=(gpu, Topology("cta", 1)))
@@ -64,3 +66,13 @@ class SplitToDisjointPair:
     def run(x: on(mesh[0:2], Split(0))):
         with Mesh(("gpu",), layout=(4,), names=("g",)) as _m:
             return tf.reshard(x, LAST_SPLIT.layout, "gmem")
+
+
+@module(entry="run", target=target, topologies=(gpu, Topology("cta", 1)))
+class StageColumns:
+    """Data-parallel GPUs {0, 2} hand a stage to {1, 3}: units that are not contiguous."""
+
+    @func
+    def run(x: on(grid[:, 0])):
+        with Mesh(("gpu",), layout=(2, 2), names=("dp", "pp")) as _m:
+            return tf.reshard(x, SECOND_STAGE.layout, "gmem")
