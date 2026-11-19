@@ -16,7 +16,8 @@ class ReshardLocations:
                 exchanged = tf.reshard(held, ((2, 2 @ threads.t, 2), (4, 2, 1)), "rmem")
                 repartitioned = tf.reshard(y, ((2 @ cta.b, 4), (4, 1)), "gmem")
                 same = tf.reshard(repartitioned, ((2 @ cta.b, 4), (4, 1)), "gmem")
-                shared_view = tf.reshard(shared, ((2 @ threads.t, 4, 8), (32, 8, 1)), "smem")
+                agreed = tf.bitcast(shared, Layout((8, 8), (8, 1)) @ {B()})
+                shared_view = tf.reshard(agreed, ((2 @ threads.t, 4, 8), (32, 8, 1)), "smem")
                 placed = tf.reshard(x, ((2 @ cta.b, 4, 8), (32, 8, 1)), "gmem")
                 window = placed[:, 1:8]
                 shifted = tf.reshard(window, ((2 @ cta.b, 4, 7), (32, 8, 1)), "gmem")

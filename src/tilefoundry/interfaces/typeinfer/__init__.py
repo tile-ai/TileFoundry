@@ -5,5 +5,10 @@ from .anchor_storage import resolve_anchor_storage
 from .context import TypeInferContext, TypeInferResults
 from .reachability import check_input_reachability
 from .registry import register, registry
-from .shard_propagate import combine_operand_attrs, derive_output_shard_layout, shard_read_types
+from .shard_propagate import (
+    combine_operand_attrs,
+    derive_output_shard_layout,
+    shard_read_types,
+    uniform,
+)
 from .visitor import TypeInferVisitor, infer_function, inference_type

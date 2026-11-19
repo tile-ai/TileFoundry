@@ -269,6 +269,12 @@ class CastFullLike(Differentiated):
 
 
 @case
+class BitcastAgreed(Differentiated):
+    path: Path = FIXTURES / "bitcast_agreed.py"
+    wrt: tuple[str, ...] = ("x", "w")
+
+
+@case
 class Pipeline(Differentiated):
     path: Path = FIXTURES / "pipeline.py"
     wrt: tuple[str, ...] = ("x", "w0", "w1")

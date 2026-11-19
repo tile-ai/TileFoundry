@@ -111,7 +111,7 @@ def combine_attrs(kind: expr.BinaryKind | None, a: ShardAttr, b: ShardAttr) -> S
                 return partial
         raise ValueError(
             f"cannot combine {kind!r}: {a!r} and {b!r}; "
-            "reshard(..., @ {B()}) to declare equal values where required"
+            "bitcast(..., <its layout> @ {B()}) to declare equal values where required"
         )
     if isinstance(a, Split):
         return a

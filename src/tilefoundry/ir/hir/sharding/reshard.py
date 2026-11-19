@@ -153,6 +153,18 @@ def buffer_alias(call: expr.Call, owners: expr.StorageOwners) -> int | None:
     return 0 if boxes[0] == boxes[1] else None
 
 
+def axis_units(mesh: types.Mesh | None) -> dict[tuple[str, int], object]:
+    """The units each mesh axis of *mesh* spans, keyed by topology and ordinal."""
+    if mesh is None:
+        return {}
+    counts, units = {}, {}
+    for (topology, _), extent in zip(utils.axis_keys(mesh), mesh.shape, strict=True):
+        ordinal = counts.get(topology, 0)
+        counts[topology] = ordinal + 1
+        units[topology, ordinal] = extent
+    return units
+
+
 @access.register_relation(Reshard)
 def reshard_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """Every logical index reads itself. Where those bytes go is a separate fact.
@@ -209,8 +221,22 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
         utils.attrs_by_axis(held, None if layout is not None else shard_mesh, owners)
         for held, layout in zip((x_ty, result), layouts)
     )
+    if layouts[0] is None and typeinfer.uniform(call.args[0], ctx):
+        states = ({key: types.Broadcast() for key in states[0]}, states[1])
+    units = axis_units(next((layout.mesh for layout in layouts if layout is not None), None))
     for key in states[0].keys() | states[1].keys():
         src, dst = (state.get(key, types.Broadcast()) for state in states)
+        if (
+            isinstance(src, types.Varying)
+            and isinstance(dst, (types.Broadcast, types.Partial))
+            and units.get(key, 1) != 1
+        ):
+            ctx.error(
+                call,
+                f"Reshard mesh axis {key}: Varying cannot become {dst!r}. A Reshard moves "
+                "data; this step only states the copies are equal (or a sum), so use "
+                "tf.bitcast with the same layout",
+            )
         if isinstance(dst, types.Partial) and src != dst and not isinstance(src, types.Varying):
             ctx.error(
                 call,

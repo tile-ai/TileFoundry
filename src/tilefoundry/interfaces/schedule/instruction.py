@@ -563,7 +563,7 @@ def check_call(op, operands, mesh, *, ctx, repeat=None, order=None, projection=N
                     if required == types.Broadcast() and isinstance(held, types.Varying):
                         refusal = RefusalError(
                             f"{refusal.reason}; mesh axis {mesh_axis} ({topology}) is Varying; "
-                            f"reshard({param.name}, @ {{B()}}) to declare equal values",
+                            f"bitcast({param.name}, <its layout> @ {{B()}}) to declare equal values",
                             path=refusal.path,
                             op=op,
                         )

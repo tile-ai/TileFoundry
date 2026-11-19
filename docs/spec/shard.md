@@ -709,11 +709,26 @@ Unary operations check their own Partial commutativity separately.
 
 `combine` rejects `None` with `ValueError`. Callers must first read plain layouts
 through `attrs_by_axis`. Error cells raise `ValueError`. The error names the kind and both attrs.
-It gives an explicit `reshard(..., @ {B()})` remedy where equal values are required.
-Only B → V is implicit. V → B is an explicit view. The author promises equal
-values, with no communication or runtime check. V → P is also an explicit view.
+It gives an explicit `bitcast(..., <its layout> @ {B()})` remedy where equal values are required.
+Only B → V is implicit. V → B and V → P are explicit `Bitcast`s that keep the
+layout and the mesh: the author states the copies are equal, or that the value
+is their sum, with no communication or runtime check
+([hir §1.3](./hir.md#13-op)).
 
-A Reshard reads both ends' value states and checks each mesh axis. A Partial
+| Change | Op | Cost |
+| --- | --- | --- |
+| Unit set, S → B, S → S', P → B, P → S, storage | `Reshard` | From both ends' types |
+| B → S | `Reshard` | 0: the data is on the units already |
+| V → B, V → P | `Bitcast` | 0 |
+| Same bytes under another shape or stride | `Bitcast` | 0 |
+| B → V | Implicit | 0 |
+
+A Reshard reads both ends' value states and checks each mesh axis. A plain
+source that `uniform` admits reads as Broadcast ([§6.1](#61-shard-attr-semantics)).
+On a mesh axis that separates the source's copies and spans more than one unit,
+a Varying source MUST NOT become Broadcast or Partial; the error names
+`tf.bitcast`. A plain source has no mesh, so the destination mesh gives the unit
+count. On one unit, V and B are one copy and the Reshard passes. A Partial
 end must come from the same Partial or from Varying. A Partial source may become
 any state, completing its reduction. Lowering chooses which collective moves data,
 for the whole Reshard.

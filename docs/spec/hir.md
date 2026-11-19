@@ -563,7 +563,7 @@ class Binary(Op):
     (`op(reduction(x)) == reduction(op(x))`). Otherwise typeinfer rejects it. The rejection names the offending operand and the fix (an explicit `Reshard` to
     `Broadcast`).
     States follow [shard §6.1](./shard.md#61-shard-attr-semantics). A Varying
-    peer is rejected with an explicit `reshard(..., @ {B()})` remedy.
+    peer is rejected with an explicit `bitcast(..., <its layout> @ {B()})` remedy.
     Typeinfer decides each mesh axis independently. `Partial` states on different axes are not interchangeable. `ADD` rejects two Partial inputs
     when their states occupy different mesh axes.
     - `ADD` with both operands `Partial`: commutes (passes) only when both
@@ -669,7 +669,17 @@ second presentation of the result.
   MUST remap its split modes through the registered relation with fresh
   strides. Lowering MUST copy the source's permuted-stride view into the new
   result storage.
-- `Bitcast(x, layout)` reinterprets the same bytes with a new shape and layout,
+- `Bitcast(x, layout)` has two forms. Form (ii) keeps the address layout and
+  the mesh and changes only shard attrs: on each mesh axis the attr stays, or
+  Varying becomes Broadcast or Partial. The author states the copies are equal,
+  or that the value is their sum ([shard §6.1](./shard.md#61-shard-attr-semantics)).
+  Any storage is allowed. A plain source reads as Varying on the result's mesh;
+  its layout MUST equal the result's address layout. Any other attr, mesh or
+  address change is form (i). Form (ii) aliases the source, has an identity
+  access relation, costs 0 and lowers to a view. Evaluation keeps every value
+  and changes only the type. Its gradient is the cotangent read back with the
+  source's attrs; form (i) has no autodiff rule.
+- Form (i), `Bitcast(x, layout)`, reinterprets the same bytes with a new shape and layout,
   preserving the input dtype and storage. `layout` is a `LayoutBase`; the result
   shape for a plain layout is the product of the nested sizes in each top-level
   layout mode. For an rmem `ShardLayout`, the result preserves `x.shape` and
