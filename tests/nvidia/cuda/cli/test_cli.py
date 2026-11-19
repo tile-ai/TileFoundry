@@ -520,9 +520,14 @@ def test_analyze_reports_retained_occurrences(tmp_path) -> None:
     cost_rows = [row for row in rows if "compute-cost" in row]
     assert len(cost_rows) == 9
     assert all(
-        set(row) - {"performance"} == {"value", "compute-cost", "memory", "roofline"}
+        set(row) - {"performance", "callee", "callee_ref"} == {"value", "compute-cost", "memory", "roofline"}
         for row in cost_rows
     )
+    names = [function["function"] for function in payload["functions"]]
+    assert len(names) == len(set(names))
+    called = [(row["callee"], row["callee_ref"]) for row in rows if "callee" in row]
+    assert [ref for _, ref in called] == ["routed_expert", "shared_expert"]
+    assert all(names.count(callee) == 1 for callee, _ in called)
     assert [row["value"] for row in payload["functions"][0]["calls"][:2]] == ["v0:9", "v1:10"]
     timed = [index for index, row in enumerate(rows) if "performance" in row]
     assert timed == [0, 1, 2, 4, 7]

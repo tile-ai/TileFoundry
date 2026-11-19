@@ -69,11 +69,16 @@ selected Function.
 The JSON report carries `target`, `module`, `topology`, `requested`, and
 `executed` once. Its `functions` list
 contains each reached definition once in root-first DFS order. Each entry has
-`function` (`Module.fn`), `function_records`, operand-first `calls`, authored
-`loops`, and `totals` when compute cost or roofline work evidence is selected.
-Call rows carry `value` and selected-family records; loop rows use the induction
-variable. Rows have no call-path field. Memory MUST NOT attach an empty loop
-record for a conclusion it has not computed.
+`function` (`Module.fn`, where `Module` is the Module that defines `fn`),
+`function_records`, operand-first `calls`, authored `loops`, and `totals` when
+compute cost or roofline work evidence is selected. Two definitions that would
+report the same `function` MUST raise an error naming both definitions' source
+locations. Call rows carry `value` and selected-family records; loop rows use
+the induction variable. A call row whose target is a `FunctionRef` also carries
+`callee`, the `function` of the row it calls, and `callee_ref`, the reference
+as written (`FunctionRef.qualified_name`, relative to the caller's Module). Rows
+are per definition, so the path from the root is never a row name. Memory MUST
+NOT attach an empty loop record for a conclusion it has not computed.
 
 One result is rendered once, and every surface reads that rendering:
 

@@ -18,7 +18,7 @@ import pytest
 
 from tests.core._corpus import Case, case, check_case, special
 from tests.nvidia.cuda.models.qwen3_1_7b.case import CASE as QWEN_CASE
-from tilefoundry import analysis, cli, target
+from tilefoundry import analysis, cli, inspection, target
 from tilefoundry.dsl import *
 from tilefoundry.interfaces import valuation
 from tilefoundry.ir import core, expr, hir, types, utils
@@ -188,8 +188,18 @@ class SameModuleReference(ReferenceProgram):
 
 @case
 class CrossModuleReference(ReferenceProgram):
+    """The child's row is named after the child Module, and the call row points at it."""
+
     path: Path = HIR_COMPOSITION
     name: str | None = "CrossModule"
+
+    def guard(self, state, problems):
+        super().guard(state, problems)
+        result = analysis.analyze(*analysis.check_program(state, state.entry_function()), analysis=("memory",))
+        functions = inspection.render_analysis(result).data["functions"]
+        assert [function["function"] for function in functions] == ["CrossModule.root", "Expert.run"]
+        (call,) = functions[0]["calls"]
+        assert (call["callee"], call["callee_ref"]) == ("Expert.run", "expert")
 
 
 @case
