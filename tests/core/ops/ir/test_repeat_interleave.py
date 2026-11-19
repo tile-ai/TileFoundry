@@ -1,8 +1,9 @@
-"""RepeatInterleave's fail-closed boundaries.
+"""RepeatInterleave's layouts and fail-closed boundaries.
 
-The growing axis invalidates the input layout, so a genuinely-sharded input
+A replicated input keeps its mesh and attrs on the grown shape. A split input
 fails closed rather than emit a stale layout, and an out-of-range axis is named
-rather than normalized.
+rather than normalized. How Varying reads depends on the target's storage
+owners, so those rows are in tests/nvidia/cuda/ops/ir/test_varying_operands.py.
 """
 
 from __future__ import annotations
@@ -14,6 +15,12 @@ from tilefoundry.ir.hir import tensor
 _F = expr.DType.f32
 _M = types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",))
 CASES = (
+    OpCase(
+        "broadcast_keeps_its_mesh_on_the_new_shape",
+        tensor.RepeatInterleave(repeats=2, axis=1),
+        (utils.make_shard_tensor_type((4, 8), mesh=_M, attrs=(types.Broadcast(),)),),
+        type=utils.make_shard_tensor_type((4, 16), mesh=_M, attrs=(types.Broadcast(),)),
+    ),
     OpCase(
         "sharded_fails_closed",
         tensor.RepeatInterleave(repeats=2, axis=1),

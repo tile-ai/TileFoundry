@@ -912,7 +912,9 @@ class RepeatInterleave(Op):
   - A `Split` or `Partial` input MUST be refused. A plain input gives a plain
     result. An input that is `Broadcast` or `Varying` on every mesh axis keeps
     its mesh and attrs on the new shape (`ShardLayout.from_logical`), so a
-    value the same on every unit stays so.
+    value the same on every unit stays so. An input that reads `Varying` on
+    every mesh axis of a mesh covering every unit gives a plain result, as
+    shard propagation does ([shard §6.1](./shard.md#61-shard-attr-semantics)).
 
 ##### Split
 

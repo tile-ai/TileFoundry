@@ -83,6 +83,20 @@ CASES = (
         target=_H200,
     ),
     OpCase(
+        "repeat_interleave_varying_on_a_slice_keeps_its_mesh",
+        tensor.RepeatInterleave(repeats=2, axis=0),
+        (utils.make_shard_tensor_type((4,), mesh=_M[0], attrs=(_V,)),),
+        type=utils.make_shard_tensor_type((8,), mesh=_M[0], attrs=(_V,)),
+        target=_H200,
+    ),
+    OpCase(
+        "repeat_interleave_varying_on_every_unit_is_plain",
+        tensor.RepeatInterleave(repeats=2, axis=0),
+        (held((4,), _V),),
+        type=plain((8,)),
+        target=_H200,
+    ),
+    OpCase(
         "index_select_varying_index_makes_a_broadcast_table_plain",
         tensor.IndexSelect(dim=0),
         (held((8, 4), _B), _INDEX),

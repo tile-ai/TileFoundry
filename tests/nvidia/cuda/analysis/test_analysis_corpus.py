@@ -235,60 +235,29 @@ class FsdpRetainStep(FsdpTraining):
     name: str | None = "Training.retain_step"
 
 
-FSDP_WEIGHTS = ("we", "q1", "k1", "v1", "o1", "u1", "d1", "q2", "k2", "v2", "o2", "u2", "d2", "wh")
-
-
-@case
-class FsdpModel(AnalysisCase):
-    """examples/fsdp_training on two H200s, trained in every weight.
-
-    The generated Forward and Backward match autograd, print back to the file
-    the CLI writes, have the gmem peaks below, and each call row names the one
-    function row it calls, so the rows join into one graph.
-    """
-
-    path: Path = PLACED / "fsdp_model.py"
-    name: str | None = "FsdpModel"
-    internal: bool = True
-    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 40_704, "rmem": 0})
-    halves: tuple[int, int] = (164_096, 188_304)
-
-    def guard(self, state, problems):
-        with tempfile.TemporaryDirectory() as folder:
-            written = Path(folder) / "trained.py"
-            assert cli.main(["autodiff", str(self.path), "--wrt", ",".join(FSDP_WEIGHTS), str(written)]) == 0
-            namespace, _ = cli.load_namespace(str(written))
-            halves = (namespace["FsdpModelForward"], namespace["FsdpModelBackward"])
-            assert inspection.as_script(halves) == written.read_text()
-        check_gradients(state.result.module, *halves, FSDP_WEIGHTS, rtol=1e-4, atol=1e-5)
-        peaks = []
-        for half in halves:
-            result = analysis.analyze(*analysis.check_program(half, half.entry_function()), analysis=("memory",))
-            (gmem,) = (
-                peak.peak_bytes
-                for peak in expr.get_metadata(result.function, analysis.RegionMemoryMetadata).peaks
-                if peak.memory_level == "gmem"
-            )
-            peaks.append(gmem)
-            functions = inspection.render_analysis(result).data["functions"]
-            names = [function["function"] for function in functions]
-            callees = [row["callee"] for function in functions for row in function["calls"] if "callee" in row]
-            assert callees and all(names.count(callee) == 1 for callee in callees), half.name
-            assert set(names) == {names[0], *callees}, half.name
-        assert tuple(peaks) == self.halves
-
-
 @dataclass(frozen=True)
 class GeneratedHalves(AnalysisCase):
-    """The generated Forward and Backward match autograd and have the gmem peaks in *halves*."""
+    """The Forward and Backward that ``tilefoundry autodiff`` writes for *wrt*.
+
+    The halves are loaded from the written file, which they print back to, so
+    the checked program went through the parser. They match autograd and have
+    the gmem peaks in *halves*. With *graph*, each call row names the one
+    function row it calls, so the rows join into one graph.
+    """
 
     internal: bool = True
     wrt: tuple[str, ...] = ()
     halves: tuple[int, int] = (0, 0)
+    graph: bool = False
 
     def guard(self, state, problems):
         module = state.result.module
-        generated = differentiate.differentiate(module, wrt=self.wrt)
+        with tempfile.TemporaryDirectory() as folder:
+            written = Path(folder) / "trained.py"
+            assert cli.main(["autodiff", str(self.path), "--wrt", ",".join(self.wrt), str(written)]) == 0
+            namespace, _ = cli.load_namespace(str(written))
+            generated = tuple(namespace[f"{module.name}{half}"] for half in ("Forward", "Backward"))
+            assert inspection.as_script(generated) == written.read_text()
         check_gradients(module, *generated, self.wrt, rtol=1e-4, atol=1e-5)
         peaks = []
         for half in generated:
@@ -299,7 +268,25 @@ class GeneratedHalves(AnalysisCase):
                 if peak.memory_level == "gmem"
             )
             peaks.append(gmem)
+            if self.graph:
+                functions = inspection.render_analysis(result).data["functions"]
+                names = [function["function"] for function in functions]
+                callees = [row["callee"] for function in functions for row in function["calls"] if "callee" in row]
+                assert callees and all(names.count(callee) == 1 for callee in callees), half.name
+                assert set(names) == {names[0], *callees}, half.name
         assert tuple(peaks) == self.halves
+
+
+@case
+class FsdpModel(GeneratedHalves):
+    """examples/fsdp_training on two H200s, trained in every weight."""
+
+    path: Path = PLACED / "fsdp_model.py"
+    name: str | None = "FsdpModel"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 40_704, "rmem": 0})
+    wrt: tuple[str, ...] = ("we", "q1", "k1", "v1", "o1", "u1", "d1", "q2", "k2", "v2", "o2", "u2", "d2", "wh")
+    halves: tuple[int, int] = (164_096, 188_304)
+    graph: bool = True
 
 
 @case

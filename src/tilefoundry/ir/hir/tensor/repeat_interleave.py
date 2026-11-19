@@ -7,6 +7,7 @@ import isl
 from tilefoundry import core, utils
 from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
 
 @expr.register_op(name="repeat_interleave", dialect='tf', category='tensor')
@@ -45,9 +46,12 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
             "replicated layout first",
         )
     new_layout = types.Layout(tuple(shape))
-    if shard is not None:
-        target = getattr(ctx, "target", None)
-        owners = target.storage_owners if target else expr.StorageOwners((), {})
+    target = getattr(ctx, "target", None)
+    owners = target.storage_owners if target else expr.StorageOwners((), {})
+    if shard is not None and not (
+        all(isinstance(attr, types.Varying) for attr in ir_utils.attrs_by_axis(x_ty, shard.mesh, owners).values())
+        and ir_utils.covers_every_unit(shard.mesh)
+    ):
         new_layout = types.ShardLayout.from_logical(
             tuple(shape), shard.mesh, shard.attrs, storage=x_ty.storage, owners=owners
         )
