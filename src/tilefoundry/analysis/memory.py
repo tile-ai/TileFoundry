@@ -11,6 +11,7 @@ from tilefoundry import target, utils
 from tilefoundry.interfaces import access, cost, valuation
 from tilefoundry.ir import core, expr, types
 from tilefoundry.ir import utils as ir_utils
+from tilefoundry.ir.hir import sharding
 
 from .access import AliasKind
 from .allocation import (
@@ -202,7 +203,8 @@ def call_traffic(
     moves and whether it materialises; how much crosses it is what that
     boundary's own relation reaches, in whichever window is being asked about.
     The Type of the leaf it reached names the level those bytes are charged at,
-    and an allocation does not correct either answer.
+    and an allocation does not correct either answer. A Reshard onto new units
+    counts one copy per added unit.
     """
     storage_whole: dict[str, cost.TrafficBytes] = {}
     storage_per_unit: dict[str, dict[str, cost.TrafficBytes]] = {}
@@ -233,7 +235,12 @@ def call_traffic(
                 crossing_per_unit.setdefault(boundary, {})[topology] = moved
         if topology is None:
             operands = positional
-    units = scope.mesh_units if scope is not None else lambda _: 1
+    added = (
+        sharding.added_units(node, access.target_owners(whole.target))
+        if isinstance(node.target, sharding.Reshard)
+        else 0
+    )
+    units = (lambda _: added) if added else scope.mesh_units if scope is not None else lambda _: 1
     counted = counted or next(iter(locals_by_unit))
     return MemoryMetadata(
         topologies=tuple(locals_by_unit),

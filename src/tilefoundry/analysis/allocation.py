@@ -807,7 +807,8 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
     def allocate(self, node, ctx):
         if isinstance(node.type, types.TupleType) and result_copies(node) > 1:
             raise Error("allocation: staged tuple results are not supported")
-        view = access.aliased_operand(node) if isinstance(node, expr.Call) else None
+        owners = access.target_owners(ctx.target)
+        view = access.aliased_operand(node, owners) if isinstance(node, expr.Call) else None
         for index, leaf in enumerate(ir_utils.leaves_of(node.type)):
             key = core.SSAValue(node, index)
             cached = ctx.scope.provenance.snapshot.get(key)

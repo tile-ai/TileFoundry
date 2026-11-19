@@ -87,7 +87,7 @@ def buffer_alias(
     call: expr.Call, ctx: typeinfer.TypeInferContext, local_relations: tuple[access.Relation, ...]
 ) -> BufferAlias | None:
     """A registered view's bytes and coordinates, proving the declaration on every ask."""
-    position = access.aliased_operand(call)
+    position = access.aliased_operand(call, access.target_owners(ctx.target))
     if position is None:
         return None
     operand = call.args[position]

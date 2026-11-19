@@ -1,7 +1,7 @@
 """Access relations and buffer aliases registered per Op."""
 
 from . import mesh_coord
-from .alias import alias_registry, aliased_operand, register_alias
+from .alias import alias_registry, aliased_operand, register_alias, target_owners
 from .builders import (
     broadcast,
     broadcast_all,

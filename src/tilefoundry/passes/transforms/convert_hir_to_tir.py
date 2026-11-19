@@ -527,7 +527,11 @@ class StoragePlan:
             if ctx is None:
                 continue
             forwarded = analysis.forwarded_leaves(leaf.expr, ctx)
-            position = access.aliased_operand(leaf.expr) if isinstance(leaf.expr, expr.Call) else None
+            position = (
+                access.aliased_operand(leaf.expr, access.target_owners(ctx.target))
+                if isinstance(leaf.expr, expr.Call)
+                else None
+            )
             if forwarded is not None:
                 partner = forwarded[leaf.index]
                 kind = analysis.AliasKind.FORWARD
@@ -877,7 +881,8 @@ class StoragePlan:
         alias = analysis.buffer_alias(call, region, access.relations_of(call, region))
         if alias is None:
             raise LoweringError(self.answers[core.SSAValue(call)].refusal)
-        return self.view(operands[access.aliased_operand(call)], alias.relation, call.type, values=values)
+        position = access.aliased_operand(call, access.target_owners(region.target))
+        return self.view(operands[position], alias.relation, call.type, values=values)
 
     def source(self, leaf, memo):
         """Read a storage binding; HIR evaluation remains exclusively in Visit."""

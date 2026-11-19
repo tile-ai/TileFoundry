@@ -10,6 +10,8 @@ and topology ``t``'s unit ids are ``idx2crd(index, sizes)[t]``. See
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from tilefoundry import services
 from tilefoundry.ir import expr, types
 from tilefoundry.ir.types import int_tuple, layout_algebra
@@ -160,6 +162,53 @@ def equals_mesh_scope(mesh: types.Mesh, current: types.Mesh) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class UnitChange:
+    """How the units of two meshes relate, over the topologies both name.
+
+    ``topology`` is the coarsest of them whose selection differs; the counts are
+    the units each mesh selects and the units both select.
+    """
+
+    topology: str
+    source: int
+    destination: int
+    shared: int
+
+    @property
+    def added(self) -> int:
+        """Units the destination holds and the source does not."""
+        return self.destination - self.shared
+
+    @property
+    def overlap_in_part(self) -> bool:
+        """Whether the two share some units; their selections differ, so not all of them."""
+        return self.shared > 0
+
+
+def unit_change(source: types.Mesh, destination: types.Mesh, topologies) -> UnitChange | None:
+    """Compare the unit runs ``selected_units`` gives two meshes, on the named *topologies*.
+
+    None when they select the same units there, name none of them in common, or
+    a run is symbolic or not contiguous.
+    """
+    before = runs(source, topology_names(source))
+    after = runs(destination, topology_names(destination))
+    common = [name for name in after if name in before and name in topologies]
+    if not common or all(before[name] == after[name] for name in common):
+        return None
+    counts = {"source": 1, "destination": 1, "shared": 1}
+    for name in common:
+        (held, first), (wanted, start) = before[name], after[name]
+        if not all(isinstance(value, int) for value in (held, first, wanted, start)):
+            return None
+        counts["source"] *= held
+        counts["destination"] *= wanted
+        counts["shared"] *= max(0, min(first + held, start + wanted) - max(first, start))
+    changed = next(name for name in common if before[name] != after[name])
+    return UnitChange(changed, **counts)
+
+
 def from_meshes(*meshes: types.Mesh) -> types.Mesh:
     """Compose nested mesh scopes, preserving slices in the index over all topologies.
 
@@ -283,6 +332,8 @@ __all__ = [
     "sub_box",
     "topology_mesh",
     "topology_names",
+    "unit_change",
     "unit_layout",
     "within_mesh_scope",
+    "UnitChange",
 ]

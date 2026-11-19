@@ -23,8 +23,33 @@ class Reshard(expr.Op):
     storage = expr.ParamDef(kind="attribute", default=None)
 
 
+def moved_units(source, destination, owners: expr.StorageOwners) -> "utils.UnitChange | None":
+    """How the units holding *destination* differ from those holding *source*.
+
+    Only topologies that hold their own copy of the destination storage count
+    ([shard §6.1](docs/spec/shard.md#61-shard-attr-semantics)): elsewhere every
+    unit reads the same bytes. None when either end is plain or both are held
+    by the same units.
+    """
+    layouts = tuple(types.shard_layout_of(held.layout) for held in (source, destination))
+    if any(layout is None for layout in layouts):
+        return None
+    owning = {
+        name
+        for name in utils.topology_names(layouts[1].mesh)
+        if owners.private(destination.storage, name)
+    }
+    return utils.unit_change(layouts[0].mesh, layouts[1].mesh, owning)
+
+
+def added_units(call: expr.Call, owners: expr.StorageOwners) -> int:
+    """Units a Reshard's result holds that its source does not: each receives one copy."""
+    change = moved_units(call.args[0].type, call.type, owners)
+    return 0 if change is None else change.added
+
+
 @access.register_alias(Reshard)
-def buffer_alias(call: expr.Call) -> int | None:
+def buffer_alias(call: expr.Call, owners: expr.StorageOwners) -> int | None:
     """0 when both sides' structural boxes agree, so the result is a view; None for a copy.
 
     Each thread holds its registers privately, so the box of an ``rmem`` ShardLayout also
@@ -34,6 +59,8 @@ def buffer_alias(call: expr.Call) -> int | None:
     """
     source, result = call.args[0].type, call.type
     if result.storage is not source.storage or not expr.is_literal_shape(result.shape):
+        return None
+    if added_units(call, owners):
         return None
     layouts = tuple(types.shard_layout_of(held.layout) for held in (source, result))
     shard_mesh = next((layout.mesh for layout in layouts if layout is not None), None)
@@ -55,7 +82,7 @@ def buffer_alias(call: expr.Call) -> int | None:
         physical = physical.layout if isinstance(physical, types.ShardLayout) else physical
         if isinstance(physical, types.ComposedLayout):
             break
-        position = access.aliased_operand(view)
+        position = access.aliased_operand(view, owners)
         if position is None:
             break
         parent = view.args[position]
@@ -190,6 +217,18 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
                 f"Reshard mesh axis {key}: {src!r} cannot become {dst!r}; "
                 "only Varying or the same Partial becomes Partial",
             )
+    change = moved_units(x_ty, result, owners)
+    if change is not None and change.overlap_in_part and any(
+        isinstance(attr, (types.Split, types.Partial))
+        for layout in layouts
+        for attr in layout.attrs
+    ):
+        ctx.error(
+            call,
+            f"mesh slices that share some {change.topology} units, but not all, cannot "
+            "exchange a Split or Partial value; reshard it to Broadcast on its own "
+            "units first, or move it to units it does not hold",
+        )
     return result
 
 
@@ -211,15 +250,36 @@ def split_axes(type_) -> "dict[int, int] | None":
     }
 
 
-def sent_traffic(source, destination, *, logical_source=None, logical_destination=None) -> tuple[tuple[str, cost.TrafficBytes], ...]:
+def sent_traffic(
+    source,
+    destination,
+    *,
+    logical_source=None,
+    logical_destination=None,
+    whole=False,
+    owners: expr.StorageOwners,
+) -> tuple[tuple[str, cost.TrafficBytes], ...]:
     """Count boundary movement for split changes and completed partial reductions.
 
     Whole logical layouts select communicating mesh axes; projected types
     supply each unit's source bytes. At each boundary, retain one uniform
-    share across the selected mesh axes and charge the remaining bytes.
+    share across the selected mesh axes and charge the remaining bytes. A
+    destination holding units the source does not instead charges one added
+    unit's received bytes at the coarsest topology whose units differ; the
+    *whole* view counts every added unit's copy.
     """
     logical_source = source if logical_source is None else logical_source
     logical_destination = destination if logical_destination is None else logical_destination
+    change = moved_units(logical_source, logical_destination, owners)
+    if change is not None and change.added:
+        received = utils.tensor_bytes(destination)
+        if whole:
+            mesh = types.shard_layout_of(destination.layout).mesh
+            held = utils.local_type_of(
+                destination, topology=change.topology, topologies=mesh.topologies
+            )
+            received = utils.tensor_bytes(held) * change.added
+        return ((change.topology, cost.TrafficBytes(read=received, write=received)),)
     before = split_axes(logical_source)
     after = split_axes(logical_destination)
     if before is None or after is None:
@@ -253,13 +313,16 @@ def sent_traffic(source, destination, *, logical_source=None, logical_destinatio
 
 @cost.register(Reshard)
 def reshard_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
-    if access.aliased_operand(call) is not None:
+    owners = access.target_owners(ctx.target)
+    if access.aliased_operand(call, owners) is not None:
         return cost.Cost({}, cost.idle(call))
     source = cost.input_types(call, ctx)[0]
     destination = cost.output_type(call, ctx)
     sent = sent_traffic(
         source, destination,
         logical_source=ctx.type_of(call.args[0]), logical_destination=ctx.type_of(call),
+        whole=ctx.topology is None,
+        owners=owners,
     )
     return cost.Cost({}, (
         cost.TrafficBytes(read=utils.tensor_bytes(source)),
@@ -282,4 +345,4 @@ def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
     return (ctx.call("reshard", cotangent, layout=types.normalize_layout(wanted), storage=source.storage),)
 
 
-__all__ = ["Reshard"]
+__all__ = ["Reshard", "added_units"]

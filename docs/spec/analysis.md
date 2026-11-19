@@ -342,7 +342,10 @@ counts one slice per index as an upper bound.
 - constraints:
   - A Call's traffic `total` MUST equal the counted unit's share multiplied by
     the number of units executing its mesh scope. The same rule holds for
-    `compute-cost`.
+    `compute-cost`. One exception: a `Reshard` whose destination holds units
+    its source does not (hir `Reshard`) multiplies the share by the number of
+    those added units. One transfer is counted once: sending and receiving
+    are the same bytes. This holds for storage and communication alike.
     Storage MUST count the selected topology unit. Communication MUST count
     the topology unit named by its boundary. An undeclared communication
     boundary MUST raise `analysis.Error`. It MUST NOT use whole movement.
@@ -372,6 +375,12 @@ counts one slice per index as an upper bound.
     received and what it sent. A unit finer than the boundary MUST state no
     share of it. Crossing is what the units on either side do. Dividing
     the move among the units inside one states a move nobody made.
+  - When the units holding a `Reshard`'s value change, a unit's share is
+    the local bytes one added unit receives, at the coarsest topology whose
+    units differ. `logical` is that share times the added units. A
+    destination that holds no added unit sends nothing. Otherwise, the bytes a
+    unit sends are what each destination unit holds afterwards less what it
+    held before.
   - When a same-mesh `Reshard` resolves a `Partial` mesh axis across multiple
     units, communication MUST be recorded at that topology boundary. This holds
     even when every `Split` mesh axis is unchanged. An extent-one mesh axis contributes no communication.

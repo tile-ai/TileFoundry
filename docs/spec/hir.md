@@ -1600,8 +1600,10 @@ class Reshard(Op):
 - constraints:
   - Omitting `layout` preserves `x.layout`; omitting `storage` preserves
     `x.storage`. The output preserves the input logical `TensorType.shape`.
-  - Memory analysis and lowering MUST treat a Reshard as a view iff four
-    conditions hold. Storage is unchanged. The shape is literal. Both structural
+  - Memory analysis and lowering MUST treat a Reshard as a view iff five
+    conditions hold. Storage is unchanged. The shape is literal. The destination
+    holds no unit the source does not, on every topology that owns the
+    destination storage per unit (`target.storage_owners`). Both structural
     address boxes agree. On every mesh axis with a `Partial` end, both ends are
     equal, or a Varying (or plain) source becomes Partial ([shard §6.1](./shard.md#61-shard-attr-semantics)). Each thread holds register storage
     privately. So an `rmem` Reshard with a `ShardLayout` is a view only when each
@@ -1636,6 +1638,12 @@ class Reshard(Op):
 
   - Every other Reshard MUST retain its independent buffer and instruction
     selection requirements. Destination storage is concrete.
+  - Units are compared with `ir.utils.unit_change`, by the runs each mesh
+    selects, on the topologies that own the destination storage per unit.
+    Typeinfer MUST reject a Reshard whose two ends share some, but not all,
+    of those units when either end carries a `Split` or `Partial`. A fully
+    `Broadcast` value MAY move between any unit sets. One unit to all units is
+    written as a destination of `Broadcast` over the whole mesh.
   - One op covers zero-copy view, cross-storage copy, cross-CTA redistribute, and
     mixed cases. Typeinfer and the cost evaluator classify the call.
 

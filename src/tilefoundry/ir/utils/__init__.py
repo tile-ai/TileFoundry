@@ -24,6 +24,7 @@ from .local import (
     topology_level,
 )
 from .mesh_scope import (
+    UnitChange,
     axis_keys,
     equals_mesh_scope,
     first_unit_ids,
@@ -35,6 +36,7 @@ from .mesh_scope import (
     sub_box,
     topology_mesh,
     topology_names,
+    unit_change,
     unit_layout,
     within_mesh_scope,
 )

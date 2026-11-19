@@ -315,7 +315,8 @@ def analyze_liveness(
     ranks = {}
     for item in first.intervals:
         ranks.setdefault(id(item.value.expr), len(ranks))
-    orders, unordered = scope_orders(function, scope, ranks)
+    owners = access.target_owners(getattr(context, "target", None))
+    orders, unordered = scope_orders(function, scope, ranks, owners)
     if unordered:
         raise Error(
             "liveness: cannot order every use of the data these schedules overwrite "
@@ -329,7 +330,7 @@ def analyze_liveness(
     return visitor.finish()
 
 
-def scope_orders(function: core.Function, scope, ranks):
+def scope_orders(function: core.Function, scope, ranks, owners):
     """The scopes a destination overwrite reorders, each with its children's order.
 
     A read of data a schedule replaces comes first, or the loop whose carry took
@@ -349,7 +350,7 @@ def scope_orders(function: core.Function, scope, ranks):
         for loop in loops.values()
         for param, initial, yielded in loop.carries()
     }
-    writes, shared = schedule_writes(scope, nodes, snapshot, ranks)
+    writes, shared = schedule_writes(scope, nodes, snapshot, ranks, owners)
     if not writes:
         return {}, ()
     constraints, unordered = {}, []
@@ -361,18 +362,22 @@ def scope_orders(function: core.Function, scope, ranks):
     for earlier, later in shared:
         precede(earlier, later)
     for node in nodes:
-        for index in read_positions(node, snapshot):
+        for index in read_positions(node, snapshot, owners):
             replaced = [
                 found
                 for leaf in core.ssa_leaves(node.args[index])
-                for found in replaced_by_writes(leaf, snapshot, carries, writes, locations, loops)
+                for found in replaced_by_writes(
+                    leaf, snapshot, carries, writes, locations, loops, owners=owners
+                )
                 if found[0] is not node
             ]
             window = reached_window(scope, node, index) if replaced else None
             for write, written, loop, source in replaced:
                 if windows_meet(window if loop is None else held_elements(scope, locations, source), written):
                     precede(node if loop is None else loop, write)
-    for write, loop in handed_on(function, scope, carries, writes, locations, snapshot, loops):
+    for write, loop in handed_on(
+        function, scope, carries, writes, locations, snapshot, loops, owners=owners
+    ):
         if loop is None:
             unordered.append(write)
         else:
@@ -403,7 +408,7 @@ def scope_orders(function: core.Function, scope, ranks):
     return orders, tuple({id(write): write for write in unordered}.values())
 
 
-def handed_on(function, scope, carries, writes, locations, snapshot, loops):
+def handed_on(function, scope, carries, writes, locations, snapshot, loops, *, owners):
     """The writes replacing data a hand-off passes on, each with the loop that must precede it.
 
     A yield passes its data to the next round after every child of the body,
@@ -419,7 +424,7 @@ def handed_on(function, scope, carries, writes, locations, snapshot, loops):
     handoffs.extend((None, leaf) for leaf in core.ssa_leaves(function.body))
     for holder, leaf in handoffs:
         for write, written, loop, source in replaced_by_writes(
-            leaf, snapshot, None, writes, locations, loops
+            leaf, snapshot, None, writes, locations, loops, owners=owners
         ):
             if holder is not None and not within_loop(locations, write, holder):
                 continue
@@ -427,14 +432,14 @@ def handed_on(function, scope, carries, writes, locations, snapshot, loops):
                 yield write, loop
 
 
-def replaced_by_writes(leaf: core.SSAValue, snapshot, carries, writes, locations, loops):
+def replaced_by_writes(leaf: core.SSAValue, snapshot, carries, writes, locations, loops, *, owners):
     """The writes replacing data *leaf* may hold, each with the loop that must precede it.
 
     The loop is None where *leaf* holds that data in the storage the write
     overwrites, so the reader itself must precede the write; otherwise it comes
     with the value its carry took. A write in that loop needs no order.
     """
-    for version, entries in versions_of(leaf, snapshot, carries).items():
+    for version, entries in versions_of(leaf, snapshot, carries, owners=owners).items():
         for write, written in writes.get(version, ()):
             for entry in entries:
                 if entry is None:
@@ -443,7 +448,7 @@ def replaced_by_writes(leaf: core.SSAValue, snapshot, carries, writes, locations
                     yield write, written, loops[entry[0]], entry[1]
 
 
-def schedule_writes(scope, nodes, snapshot, ranks):
+def schedule_writes(scope, nodes, snapshot, ranks, owners):
     """Each schedule's in-place write, under the values whose data it replaces.
 
     A write replaces the data its result operand holds in the storage it
@@ -455,10 +460,10 @@ def schedule_writes(scope, nodes, snapshot, ranks):
     for node in nodes:
         if not isinstance(node, expr.Call) or not isinstance(node.target, hir.schedule.ScheduleOp):
             continue
-        index = access.aliased_operand(node)
+        index = access.aliased_operand(node, owners)
         operand = core.SSAValue(node.args[index])
         window = reached_window(scope, node, index)
-        for version, entries in versions_of(operand, snapshot).items():
+        for version, entries in versions_of(operand, snapshot, owners=owners).items():
             if None in entries:
                 writes.setdefault(version, []).append((node, window))
         entry = snapshot.get(operand)
@@ -492,7 +497,7 @@ def held_elements(scope, locations, leaf: core.SSAValue):
     return ((entry.root, elements),)
 
 
-def versions_of(leaf: core.SSAValue, snapshot, carries=None, opened=frozenset()):
+def versions_of(leaf: core.SSAValue, snapshot, carries=None, opened=frozenset(), *, owners):
     """The values whose data *leaf* may hold, each with the loops whose carries took it.
 
     Forwards and views write nothing; a schedule's result is new data. A call's
@@ -506,14 +511,14 @@ def versions_of(leaf: core.SSAValue, snapshot, carries=None, opened=frozenset())
     while True:
         entry = snapshot.get(leaf)
         if isinstance(leaf.expr, core.LoopRegion):
-            found = carried_versions(leaf, entry, snapshot, carries, opened)
+            found = carried_versions(leaf, entry, snapshot, carries, opened, owners)
             if found is not None:
                 return found
         if carries is not None and id(leaf.expr) in carries and leaf not in opened:
             loop, initial, yielded = carries[id(leaf.expr)]
             found = {leaf: {None}}
             for source in (core.SSAValue(initial, leaf.index), core.SSAValue(yielded, leaf.index)):
-                add_versions(found, loop, source, versions_of(source, snapshot, carries, opened | {leaf}))
+                add_versions(found, loop, source, versions_of(source, snapshot, carries, opened | {leaf}, owners=owners))
             return found
         if entry is not None and entry.forward is not None:
             leaf = entry.forward
@@ -521,13 +526,13 @@ def versions_of(leaf: core.SSAValue, snapshot, carries=None, opened=frozenset())
         node = leaf.expr
         if not isinstance(node, expr.Call) or isinstance(node.target, hir.schedule.ScheduleOp):
             return {leaf: {None}}
-        index = access.aliased_operand(node)
+        index = access.aliased_operand(node, owners)
         if index is None:
-            return shared_versions(leaf, entry, snapshot, carries, opened)
+            return shared_versions(leaf, entry, snapshot, carries, opened, owners)
         leaf = core.SSAValue(node.args[index])
 
 
-def shared_versions(leaf: core.SSAValue, entry, snapshot, carries, opened):
+def shared_versions(leaf: core.SSAValue, entry, snapshot, carries, opened, owners):
     """The data a call's result *leaf* holds: its own, and its arguments' in the same root."""
     found = {leaf: {None}}
     if entry is None or entry.root == leaf:
@@ -536,12 +541,12 @@ def shared_versions(leaf: core.SSAValue, entry, snapshot, carries, opened):
         for operand in core.ssa_leaves(argument):
             bound = snapshot.get(operand)
             if bound is not None and bound.root == entry.root:
-                for version, entries in versions_of(operand, snapshot, carries, opened).items():
+                for version, entries in versions_of(operand, snapshot, carries, opened, owners=owners).items():
                     found.setdefault(version, set()).update(entries)
     return found
 
 
-def carried_versions(leaf: core.SSAValue, entry, snapshot, carries, opened):
+def carried_versions(leaf: core.SSAValue, entry, snapshot, carries, opened, owners):
     """The data loop result *leaf* may hold, by what its body yields; None without a carry."""
     loop = leaf.expr
     phi = None if entry is None else entry.forward
@@ -549,10 +554,10 @@ def carried_versions(leaf: core.SSAValue, entry, snapshot, carries, opened):
         if phi is not None and param is phi.expr:
             found = {leaf: {None}}
             handed, start = core.SSAValue(yielded, phi.index), core.SSAValue(initial, phi.index)
-            through = versions_of(handed, snapshot, carries, opened)
+            through = versions_of(handed, snapshot, carries, opened, owners=owners)
             add_versions(found, loop, handed, through)
             if phi in through or may_skip(loop):
-                add_versions(found, loop, start, versions_of(start, snapshot, carries, opened))
+                add_versions(found, loop, start, versions_of(start, snapshot, carries, opened, owners=owners))
             return found
     return None
 
@@ -603,12 +608,14 @@ def windows_meet(first, second) -> bool:
         return True
 
 
-def read_positions(node: expr.Expr, snapshot) -> tuple[int, ...]:
+def read_positions(node: expr.Expr, snapshot, owners) -> tuple[int, ...]:
     """The arguments *node* reads data from, by position; forwards and views read nothing.
 
     A schedule does not read an argument its instruction only writes.
     """
-    if not isinstance(node, expr.Call) or core.SSAValue(node) not in versions_of(core.SSAValue(node), snapshot):
+    if not isinstance(node, expr.Call) or core.SSAValue(node) not in versions_of(
+        core.SSAValue(node), snapshot, owners=owners
+    ):
         return ()
     if isinstance(node.target, hir.schedule.ScheduleOp):
         params, _ = hir.schedule.instruction_schema(node.target.op, len(node.args))

@@ -197,7 +197,7 @@ def _(call: expr.Call, ctx) -> types.TensorType:
 
 
 @access.register_alias(Bitcast)
-def buffer_alias(call: expr.Call) -> int:
+def buffer_alias(call: expr.Call, owners: expr.StorageOwners) -> int:
     return 0
 
 

@@ -25,6 +25,7 @@ from tilefoundry import analysis, cli, inspection, target
 from tilefoundry.interfaces import evaluator
 from tilefoundry.ir import core, expr
 from tilefoundry.ir.hir import nn, sharding, tensor
+from tilefoundry.passes.transforms import differentiate
 
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 
@@ -957,6 +958,75 @@ class RmsnormQuantSeq2(AnalysisCase):
         assert liveness.interval_of(core.SSAValue(reshaped)).last_used_at == 21
         assert expr.get_metadata(reshaped, analysis.MemoryMetadata).buffer_bytes is None
         assert not expr.get_metadata(reshaped, analysis.MemoryMetadata).offsets
+
+
+def _moved(report, value: str, family: str) -> dict:
+    """One call's traffic in *family*, by memory level or boundary: (per_unit, total) reads."""
+    row = next(c for c in report["functions"][0]["calls"] if c["value"].split(":")[0] == value)
+    return {
+        name: (spread["per_unit"][0]["read"], spread["total"]["read"], spread["logical"]["read"])
+        for name, spread in row["memory"]["traffic"][family].items()
+    }
+
+
+@case
+class PipelineStages(AnalysisCase):
+    """A stage hands its activation to the next GPU: one 128-byte copy, not one per GPU."""
+
+    path: Path = PLACED / "pipeline_cuda.py"
+    name: str | None = "Pipeline"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 896})
+
+    def guard(self, state, problems):
+        report = state.report
+        assert _moved(report, "moved", "communication") == {"gpu": (128, 128, 128)}
+        assert _moved(report, "moved", "storage") == {"gmem": (128, 128, 128)}
+        downstream = report["functions"][0]["calls"][-1]["memory"]["footprint"]["buffers"]
+        assert "moved" in downstream
+
+
+@case
+class PipelineBackward(AnalysisCase):
+    """The gradient goes back from the second GPU to the first at the same price."""
+
+    path: Path = PLACED / "pipeline_cuda.py"
+    name: str | None = "PipelineBackward"
+    api: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 1_664})
+
+    def program(self):
+        (module,) = _constants("pipeline_cuda", "Pipeline")
+        _, backward = differentiate.differentiate(module, wrt=("x", "w0", "w1"))
+        return backward, backward.entry_function()
+
+    def guard(self, state, problems):
+        assert _moved(state.report, "grad", "communication") == {"gpu": (128, 128, 128)}
+
+
+@case
+class ReshardUnitSets(AnalysisCase):
+    """Each way the GPUs holding a value can change, priced as one copy per GPU that gains it."""
+
+    path: Path = PLACED / "reshard_unit_sets.py"
+    name: str | None = "OneToAll"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 256})
+
+    def guard(self, state, problems):
+        for module, communication, storage in (
+            ("SameUnits", {}, {}),
+            ("AllToOne", {}, {}),
+            ("SplitToBroadcast", {"gpu": (24, 96, 96)}, {"gmem": (32, 128, 128)}),
+            ("OneToAll", {"gpu": (128, 384, 384)}, {"gmem": (128, 384, 128)}),
+            ("ShiftedPair", {"gpu": (128, 128, 128)}, {"gmem": (128, 128, 128)}),
+            ("SplitToDisjointPair", {"gpu": (64, 128, 128)}, {"gmem": (64, 128, 128)}),
+        ):
+            loaded = cli.load_authored_ir(f"{PLACED / 'reshard_unit_sets.py'}:{module}")
+            result = analysis.analyze(
+                *analysis.check_program(loaded, loaded.entry_function()), analysis=("memory",)
+            )
+            report = _report(result)
+            assert _moved(report, "v0", "communication") == communication, module
+            assert _moved(report, "v0", "storage") == storage, module
 
 
 EXPECTED = {

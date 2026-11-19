@@ -179,7 +179,7 @@ def slice_relations(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
 
 
 @access.register_alias(Slice)
-def buffer_alias(call: "expr.Call") -> int:
+def buffer_alias(call: "expr.Call", owners: "expr.StorageOwners") -> int:
     return 0
 
 
