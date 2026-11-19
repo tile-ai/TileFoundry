@@ -993,7 +993,10 @@ class FunctionDifferentiator(expr.Functor[None]):
         corner = ctx.remember(pack(starts), types.TupleType(tuple(ctx.type_of(start) for start in starts)))
         rank = len(type_.shape) + 1
         taken = ctx.call("slice", stacks, corner, sizes=(1, *type_.shape), strides=(1,) * rank)
-        return ctx.call("reshape", taken, new_shape=tuple(type_.shape))
+        value = ctx.call("reshape", taken, new_shape=tuple(type_.shape))
+        if ctx.type_of(value).layout == type_.layout:
+            return value
+        return ctx.call("reshard", value, layout=types.normalize_layout(type_.layout), storage=type_.storage)
 
     def key_node(self, key: tuple) -> expr.Expr:
         """The forward value *key* comes from: an inner region's value for an extra result."""

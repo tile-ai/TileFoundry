@@ -37,14 +37,19 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
         ctx.error(call, f"RepeatInterleave: axis {op.axis} out of range for rank {len(shape)}")
     shape[ax] = shape[ax] * op.repeats
 
-    new_layout = types.Layout(tuple(shape))
-    if isinstance(x_ty.layout, types.ShardLayout) and any(
-        isinstance(a, (types.Split, types.Partial)) for a in x_ty.layout.attrs
-    ):
+    shard = types.shard_layout_of(x_ty.layout)
+    if shard is not None and any(isinstance(a, (types.Split, types.Partial)) for a in shard.attrs):
         ctx.error(
             call,
             "RepeatInterleave cannot express a sharded layout; reshard to a "
             "replicated layout first",
+        )
+    new_layout = types.Layout(tuple(shape))
+    if shard is not None:
+        target = getattr(ctx, "target", None)
+        owners = target.storage_owners if target else expr.StorageOwners((), {})
+        new_layout = types.ShardLayout.from_logical(
+            tuple(shape), shard.mesh, shard.attrs, storage=x_ty.storage, owners=owners
         )
     return types.TensorType(
         shape=tuple(shape),

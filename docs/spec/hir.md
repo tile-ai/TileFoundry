@@ -909,8 +909,10 @@ class RepeatInterleave(Op):
   - `axis` MUST resolve within the rank. The result extent at that axis MUST be
     the input extent multiplied by `repeats`. All other extents and storage are
     preserved.
-  - The result layout is unsharded. A genuinely sharded input MUST be refused;
-    an unsharded or fully broadcast input is accepted.
+  - A `Split` or `Partial` input MUST be refused. A plain input gives a plain
+    result. An input that is `Broadcast` or `Varying` on every mesh axis keeps
+    its mesh and attrs on the new shape (`ShardLayout.from_logical`), so a
+    value the same on every unit stays so.
 
 ##### Split
 

@@ -15,12 +15,18 @@ def leaves_of(type_: "types.Type") -> tuple:
 
 
 def result_fields(type_: "types.Type") -> tuple:
-    """The result boundaries of one value: a tuple's fields, else the value itself.
+    """The result boundaries of one value: a tuple's fields, a nested tuple's own leaves in place.
 
-    ``TupleType.Void`` is one boundary: an effect Op states one relation for it.
+    Boundaries count as ``core.SSAValue`` indexes do, so a field holding a tuple
+    is as many boundaries as it has leaves. ``TupleType.Void`` is one boundary:
+    an effect Op states one relation for it.
     """
     if isinstance(type_, types.TupleType) and type_ != types.TupleType.Void:
-        return type_.fields
+        return tuple(
+            boundary
+            for field in type_.fields
+            for boundary in (leaves_of(field) if isinstance(field, types.TupleType) else (field,))
+        )
     return (type_,)
 
 

@@ -247,7 +247,7 @@ def resolve_access(
     indexes = (
         range(len(type_list))
         if whole_tuple
-        else (ir_utils.leaf_span(held, output_index)[0] if isinstance(held, types.TupleType) else 0,)
+        else (output_index if isinstance(held, types.TupleType) else 0,)
     )
     built = []
     for index in indexes:

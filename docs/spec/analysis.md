@@ -475,6 +475,9 @@ also use index zero, but do not create storage allocations.
 `Access.target`, `ReachedAddresses.target`, `BufferAlias.target`, and
 `ValueLifetime.value` MUST use this identity. Call boundary indices remain
 separate: they identify operands or output boundaries, rather than storage.
+A call states one output boundary per field of its result, and a field that
+is itself a tuple counts as its flattened leaves (`ir_utils.result_fields`), so
+output boundary *k* is leaf *k*.
 
 ##### `ValueLifetime`
 

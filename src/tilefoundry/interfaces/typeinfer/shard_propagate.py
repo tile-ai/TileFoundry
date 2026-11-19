@@ -389,7 +389,11 @@ def decide_uniform(node: expr.Expr, ctx, scope) -> bool:
             for param, arg in region.captures():
                 if param is node:
                     return uniform(arg, ctx, level.parent)
-    return False
+    for induction, *bounds in scope.loops:
+        if node is induction:
+            return all(uniform(bound, ctx, scope) for bound in bounds)
+    root = scope.capture_root(node)
+    return root is not node and uniform(root, ctx, scope)
 
 
 def shard_read_types(ctx, operands) -> tuple:

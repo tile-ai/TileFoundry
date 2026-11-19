@@ -2,8 +2,9 @@
 
 NestedParam takes its tensors as Tuple[Tensor, Tuple[Tensor]] and picks the
 inner tuple before its tensor. NestedReturn calls a function that returns
-(out, (saved,)), the shape differentiate gives a forward with calls. The Flat
-twins hold the same tensors in one level.
+(out, (saved,)), the shape differentiate gives a forward with calls. NestedDeep
+picks a tuple whose second field is a tuple again, so the picked value has more
+leaves than fields. The Flat twins hold the same tensors in one level.
 """
 
 from typing import Tuple
@@ -54,3 +55,19 @@ class FlatReturn:
     def forward(x: Tensor[(4, 8), "f32"]):
         held = step(x)
         return held[0] + held[1]
+
+
+@module(entry="forward", target=target, topologies=(Topology("cta", 1),))
+class NestedDeep:
+    @func
+    def forward(saved: Tuple[Tensor[(4, 8), "f32"], Tuple[Tensor[(4, 8), "f32"], Tuple[Tensor[(4, 8), "f32"], Tensor[(4, 8), "f32"]]]]):
+        inner = saved[1]
+        deeper = inner[1]
+        return saved[0] * inner[0] + deeper[0] * deeper[1]
+
+
+@module(entry="forward", target=target, topologies=(Topology("cta", 1),))
+class FlatDeep:
+    @func
+    def forward(saved: Tuple[Tensor[(4, 8), "f32"], Tensor[(4, 8), "f32"], Tensor[(4, 8), "f32"], Tensor[(4, 8), "f32"]]):
+        return saved[0] * saved[1] + saved[2] * saved[3]

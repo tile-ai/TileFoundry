@@ -278,6 +278,52 @@ class FsdpModel(AnalysisCase):
         assert tuple(peaks) == self.halves
 
 
+@dataclass(frozen=True)
+class GeneratedHalves(AnalysisCase):
+    """The generated Forward and Backward match autograd and have the gmem peaks in *halves*."""
+
+    internal: bool = True
+    wrt: tuple[str, ...] = ()
+    halves: tuple[int, int] = (0, 0)
+
+    def guard(self, state, problems):
+        module = state.result.module
+        generated = differentiate.differentiate(module, wrt=self.wrt)
+        check_gradients(module, *generated, self.wrt, rtol=1e-4, atol=1e-5)
+        peaks = []
+        for half in generated:
+            result = analysis.analyze(*analysis.check_program(half, half.entry_function()), analysis=("memory",))
+            (gmem,) = (
+                peak.peak_bytes
+                for peak in expr.get_metadata(result.function, analysis.RegionMemoryMetadata).peaks
+                if peak.memory_level == "gmem"
+            )
+            peaks.append(gmem)
+        assert tuple(peaks) == self.halves
+
+
+@case
+class CallChain(GeneratedHalves):
+    """Two levels of calls save a tuple three levels deep (D51)."""
+
+    path: Path = PLACED / "call_chain.py"
+    name: str | None = "CallChain"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 2_048})
+    wrt: tuple[str, ...] = ("x", "w")
+    halves: tuple[int, int] = (2_820, 6_928)
+
+
+@case
+class FsdpGqaLoop(GeneratedHalves):
+    """repeat_interleave keeps Broadcast, so the backward needs no V-to-B Reshard (D52)."""
+
+    path: Path = PLACED / "fsdp_gqa_loop.py"
+    name: str | None = "FsdpGqaLoop"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 7_296, "rmem": 0})
+    wrt: tuple[str, ...] = ("x", "wq", "wk", "wv", "wo")
+    halves: tuple[int, int] = (12_928, 15_120)
+
+
 @case
 class CausalStartReuse(AnalysisCase):
     path: Path = PLACED / "hand_checked.py"
@@ -1263,7 +1309,7 @@ class NestedTuple(AnalysisCase):
     memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 384})
 
     def guard(self, state, problems):
-        for nested, flat in (("NestedParam", "FlatParam"), ("NestedReturn", "FlatReturn")):
+        for nested, flat in (("NestedParam", "FlatParam"), ("NestedReturn", "FlatReturn"), ("NestedDeep", "FlatDeep")):
             measured = []
             for module in (nested, flat):
                 loaded = cli.load_authored_ir(f"{PLACED / 'nested_tuple.py'}:{module}")
