@@ -254,14 +254,13 @@ class FsdpModel(AnalysisCase):
     halves: tuple[int, int] = (164_096, 188_304)
 
     def guard(self, state, problems):
-        module = state.result.module
-        halves = differentiate.differentiate(module, wrt=FSDP_WEIGHTS)
-        check_gradients(module, *halves, FSDP_WEIGHTS, rtol=1e-4, atol=1e-5)
         with tempfile.TemporaryDirectory() as folder:
             written = Path(folder) / "trained.py"
             assert cli.main(["autodiff", str(self.path), "--wrt", ",".join(FSDP_WEIGHTS), str(written)]) == 0
-            loaded = tuple(cli.load_authored_ir(f"{written}:FsdpModel{half}") for half in ("Forward", "Backward"))
-            assert inspection.as_script(loaded) == written.read_text()
+            namespace, _ = cli.load_namespace(str(written))
+            halves = (namespace["FsdpModelForward"], namespace["FsdpModelBackward"])
+            assert inspection.as_script(halves) == written.read_text()
+        check_gradients(state.result.module, *halves, FSDP_WEIGHTS, rtol=1e-4, atol=1e-5)
         peaks = []
         for half in halves:
             result = analysis.analyze(*analysis.check_program(half, half.entry_function()), analysis=("memory",))
