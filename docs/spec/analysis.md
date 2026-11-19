@@ -73,7 +73,8 @@ contains each reached definition once in root-first DFS order. Each entry has
 `function_records`, operand-first `calls`, authored `loops`, and `totals` when
 compute cost or roofline work evidence is selected. Two definitions that would
 report the same `function` MUST raise an error naming both definitions' source
-locations. Call rows carry `value` and selected-family records; loop rows use
+locations. The error stops every surface of the result, the text report
+included, because one result is rendered once. Call rows carry `value` and selected-family records; loop rows use
 the induction variable. A call row whose target is a `FunctionRef` also carries
 `callee`, the `function` of the row it calls, and `callee_ref`, the reference
 as written (`FunctionRef.qualified_name`, relative to the caller's Module). Rows

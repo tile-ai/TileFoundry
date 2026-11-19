@@ -205,8 +205,8 @@ def report_data(
         name = f"{scope.name}.{body.name}"
         if name in defined:
             raise ValueError(
-                f"two definitions report as {name!r}: {expr.span_text(defined[name])} and "
-                f"{expr.span_text(body)}; rename one Module so each row names one definition"
+                f"two definitions report as {name!r}: {expr.span_text(defined[name].body)} and "
+                f"{expr.span_text(body.body)}; rename one Module so each row names one definition"
             )
         defined[name] = body
         row = {

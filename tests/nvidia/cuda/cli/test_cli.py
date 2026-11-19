@@ -90,6 +90,17 @@ def test_root_selector_ignores_sibling_roots(tmp_path, capsys) -> None:
     assert "nope" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("flags", [("--compute-cost",), ("--compute-cost", "--json")])
+def test_same_named_children_are_refused_with_both_locations(tmp_path, capsys, flags) -> None:
+    """Two Modules named Expert would give two rows one name; both surfaces refuse and say where."""
+    source = FIXTURES / "diagnostics" / "analysis_same_named_children.py"
+    assert cli.main(["analyze", f"{source}:Root", str(tmp_path / "report"), *flags]) == 1
+    error = capsys.readouterr().err
+    assert "two definitions report as 'Expert.run'" in error
+    lines = re.findall(r"analysis_same_named_children\.py:(\d+):\d+", error)
+    assert sorted(lines) == ["13", "23"]
+
+
 def test_models_source_names_checkout_directory(capsys) -> None:
     assert cli.main(["models", "qwen3_1_7b", "--source"]) == 0
     source = capsys.readouterr()
