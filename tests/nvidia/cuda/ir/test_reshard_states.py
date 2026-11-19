@@ -75,3 +75,23 @@ def test_bitcast_keeping_the_layout_reads_a_plain_source_as_varying(source, allo
     else:
         with pytest.raises(expr.VerifyError):
             infer_call(operation, source, target=cuda.Target("nvidia.h200_sxm"))
+
+
+@pytest.mark.parametrize("kept", (True, False), ids=("offset_stated_again", "offset_dropped"))
+def test_bitcast_keeping_the_layout_keeps_a_source_offset(kept):
+    """Form (ii) keeps every address: an offset around the source shard stays around the result."""
+    mesh = types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)))
+    source = types.TensorType(
+        (8,),
+        expr.DType.f32,
+        types.make_composed_layout(None, 4, types.ShardLayout(ADDRESS, (types.V(),), mesh)),
+        expr.StorageKind.GMEM,
+    )
+    stated = types.ShardLayout(ADDRESS, (types.B(),), mesh)
+    layout = types.make_composed_layout(None, 4, stated) if kept else stated
+    operation = tensor.Bitcast(layout=layout)
+    if kept:
+        assert infer_call(operation, source, target=cuda.Target("nvidia.h200_sxm")).layout == layout
+    else:
+        with pytest.raises(expr.VerifyError):
+            infer_call(operation, source, target=cuda.Target("nvidia.h200_sxm"))

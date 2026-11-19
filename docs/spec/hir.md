@@ -674,7 +674,9 @@ second presentation of the result.
   Varying becomes Broadcast or Partial. The author states the copies are equal,
   or that the value is their sum ([shard §6.1](./shard.md#61-shard-attr-semantics)).
   Any storage is allowed. A plain source reads as Varying on the result's mesh;
-  its layout MUST equal the result's address layout. Any other attr, mesh or
+  its layout MUST equal the result's address layout. An offset around the
+  source's `ShardLayout` MUST be stated around the result's too, so every
+  address stays. Any other attr, mesh or
   address change is form (i). Form (ii) aliases the source, has an identity
   access relation, costs 0 and lowers to a view. Evaluation keeps every value
   and changes only the type. Its gradient is the cotangent read back with the

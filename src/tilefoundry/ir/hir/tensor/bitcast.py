@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from functools import cache
 from math import prod
 
@@ -133,16 +134,22 @@ def restates_attrs(source: types.TensorType, layout) -> bool:
 
     This is form (ii): the address layout and the mesh stay; on each mesh axis
     the attr stays, or Varying becomes Broadcast or Partial. A plain source
-    reads as Varying on *layout*'s mesh. See [hir §1.3](docs/spec/hir.md#13-op).
+    reads as Varying on *layout*'s mesh. A source offset wrapping its shard
+    must be stated again around the new attrs. See [hir §1.3](docs/spec/hir.md#13-op).
     """
-    if not isinstance(layout, types.ShardLayout):
+    stated = types.shard_layout_of(layout)
+    if stated is None:
         return False
     held = types.shard_layout_of(source.layout)
-    if held is None and source.layout != layout.layout:
+    if held is None and (layout is not stated or source.layout != stated.layout):
         return False
-    if held is not None and (held.layout != layout.layout or held.mesh != layout.mesh):
+    if held is not None and (
+        held.layout != stated.layout
+        or held.mesh != stated.mesh
+        or layout != (stated if source.layout is held else replace(source.layout, outer=stated))
+    ):
         return False
-    before = ir_utils.attrs_by_axis(source, layout.mesh)
+    before = ir_utils.attrs_by_axis(source, stated.mesh)
     after = ir_utils.attrs_by_axis(types.TensorType(source.shape, source.dtype, layout, source.storage))
     return all(
         before[key] == attr
