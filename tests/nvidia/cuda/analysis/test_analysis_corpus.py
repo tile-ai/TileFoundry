@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 import torch
 
 from tests.core._corpus import Case, Problems, case, special
+from tests.core.autodiff.test_differentiate import check_gradients
 from tests.nvidia.cuda.analysis._contracts import (
     PersistentSchedule,
     _assert_persistent_schedule,
@@ -219,11 +221,6 @@ class FsdpTraining(AnalysisCase):
                 torch.testing.assert_close(
                     item, reference, rtol=1e-5, atol=1e-6, msg=lambda m: f"step {step}, state {index}: {m}"
                 )
-        functions = inspection.render_analysis(state.result).data["functions"]
-        names = [function["function"] for function in functions]
-        callees = [row["callee"] for function in functions for row in function["calls"] if "callee" in row]
-        assert callees, "the step calls its forward and backward functions"
-        assert all(names.count(callee) == 1 for callee in callees)
 
 
 @case
@@ -236,6 +233,50 @@ class FsdpReleaseStep(FsdpTraining):
 class FsdpRetainStep(FsdpTraining):
     path: Path = PLACED / "fsdp_mlp.py"
     name: str | None = "Training.retain_step"
+
+
+FSDP_WEIGHTS = ("we", "q1", "k1", "v1", "o1", "u1", "d1", "q2", "k2", "v2", "o2", "u2", "d2", "wh")
+
+
+@case
+class FsdpModel(AnalysisCase):
+    """examples/fsdp_training on two H200s, trained in every weight.
+
+    The generated Forward and Backward match autograd, print back to the file
+    the CLI writes, have the gmem peaks below, and each call row names the one
+    function row it calls, so the rows join into one graph.
+    """
+
+    path: Path = PLACED / "fsdp_model.py"
+    name: str | None = "FsdpModel"
+    internal: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 40_704, "rmem": 0})
+    halves: tuple[int, int] = (164_096, 188_304)
+
+    def guard(self, state, problems):
+        module = state.result.module
+        halves = differentiate.differentiate(module, wrt=FSDP_WEIGHTS)
+        check_gradients(module, *halves, FSDP_WEIGHTS, rtol=1e-4, atol=1e-5)
+        with tempfile.TemporaryDirectory() as folder:
+            written = Path(folder) / "trained.py"
+            assert cli.main(["autodiff", str(self.path), "--wrt", ",".join(FSDP_WEIGHTS), str(written)]) == 0
+            loaded = tuple(cli.load_authored_ir(f"{written}:FsdpModel{half}") for half in ("Forward", "Backward"))
+            assert inspection.as_script(loaded) == written.read_text()
+        peaks = []
+        for half in halves:
+            result = analysis.analyze(*analysis.check_program(half, half.entry_function()), analysis=("memory",))
+            (gmem,) = (
+                peak.peak_bytes
+                for peak in expr.get_metadata(result.function, analysis.RegionMemoryMetadata).peaks
+                if peak.memory_level == "gmem"
+            )
+            peaks.append(gmem)
+            functions = inspection.render_analysis(result).data["functions"]
+            names = [function["function"] for function in functions]
+            callees = [row["callee"] for function in functions for row in function["calls"] if "callee" in row]
+            assert callees and all(names.count(callee) == 1 for callee in callees), half.name
+            assert set(names) == {names[0], *callees}, half.name
+        assert tuple(peaks) == self.halves
 
 
 @case
@@ -1015,6 +1056,21 @@ class PipelineSharedWeight(AnalysisCase):
         (peak,) = (item for item in memory["peaks"] if item["memory_level"] == "gmem")
         assert peak["persistent_bytes"] == 256 + 512
         assert peak["peak_bytes"] == 256 + 512 + 256 + 256
+
+
+@case
+class PipelineForward(AnalysisCase):
+    """The generated forward keeps the stages' peak: GPU 0 holds x 128 + w0 256 + h 128."""
+
+    path: Path = PLACED / "pipeline_cuda.py"
+    name: str | None = "PipelineForward"
+    api: bool = True
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 512})
+
+    def program(self):
+        (module,) = _constants("pipeline_cuda", "Pipeline")
+        forward, _ = differentiate.differentiate(module, wrt=("x", "w0", "w1"))
+        return forward, forward.entry_function()
 
 
 @case

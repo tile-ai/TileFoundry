@@ -1,16 +1,16 @@
-"""The examples/fsdp_training model on two GPUs: embedding, two GQA blocks, head, cross entropy.
+"""The examples/fsdp_training model on two H200s: embedding, two GQA blocks, head, cross entropy.
 
 Each block gathers its Split(0) weights to Broadcast; the embedding is a one-hot matmul.
 """
 
 from tilefoundry.dsl import *
-from tilefoundry.target import cpu
+from tilefoundry_nvidia import cuda
 
 B, T, C, H, G, D, F, V = 8, 8, 16, 4, 2, 4, 64, 32
 N = B * T
 EPS = 1e-6
 MEAN = 1.0 / N
-target = cpu.Target()
+target = cuda.Target("nvidia.h200_sxm", device_count=2)
 gpu = Topology("gpu", 2)
 mesh = Mesh((gpu,), Layout((2,)), ("shard",))
 
@@ -30,7 +30,7 @@ Rotation = placed((1, 1, 1, T, D, D), Broadcast())
 Mask = placed((1, 1, 1, T, T), Broadcast())
 
 
-@module(entry="forward", target=target, topologies=(gpu,))
+@module(entry="forward", target=target, topologies=(gpu, Topology("cta", 1)))
 class FsdpModel:
     @func
     def block(x: A, wq: Square, wk: Kv, wv: Kv, wo: Square, wu: Up, wd: Down, rotation: Rotation, mask: Mask):

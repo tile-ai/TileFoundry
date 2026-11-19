@@ -370,18 +370,6 @@ BLOCK_WEIGHTS = ("wq", "wk", "wv", "wo", "wu", "wd")
 
 
 @case
-class FsdpModel(Differentiated):
-    """examples/fsdp_training as written: tf.relu, tf.log, and every weight trained."""
-
-    path: Path = FIXTURES / "fsdp_model.py"
-    wrt: tuple[str, ...] = (
-        "we", "q1", "k1", "v1", "o1", "u1", "d1", "q2", "k2", "v2", "o2", "u2", "d2", "wh",
-    )
-    rtol: float = 1e-4
-    atol: float = 1e-5
-
-
-@case
 class HsdpBlock(Differentiated):
     path: Path = FIXTURES / "hsdp_block.py"
     wrt: tuple[str, ...] = ("x", *BLOCK_WEIGHTS)
