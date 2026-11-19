@@ -62,6 +62,27 @@ CASES = (
         target=_H200,
     ),
     OpCase(
+        "binary_static_arange_keeps_broadcast",
+        _MUL,
+        (held((4,), _B, expr.DType.i64), expr.Call(tensor.Arange(type=plain((4,), expr.DType.i64)), (), type=plain((4,), expr.DType.i64))),
+        type=held((4,), _B, expr.DType.i64),
+        target=_H200,
+    ),
+    OpCase(
+        "binary_dimvar_arange_stays_varying",
+        _MUL,
+        (
+            held((4,), _B, expr.DType.i64),
+            expr.Call(
+                tensor.Arange(type=plain((4,), expr.DType.i64), start=expr.DimVar("s", 0, 8)),
+                (),
+                type=plain((4,), expr.DType.i64),
+            ),
+        ),
+        type=plain((4,), expr.DType.i64),
+        target=_H200,
+    ),
+    OpCase(
         "binary_literal_scale_keeps_partial_sum",
         _MUL,
         (held((4,), _P), _HALF),
