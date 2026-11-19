@@ -14,6 +14,7 @@ from functools import reduce
 
 import isl
 
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.ir import core, dim, expr, types, utils
 from tilefoundry.ir.types import int_tuple
 
@@ -186,7 +187,7 @@ def derive_output_shard_layout(
     any input distributes -- so mesh axes keep one index across the inputs.
     """
     target = getattr(ctx, "target", None)
-    owners = target.storage_owners if target else expr.StorageOwners((), {})
+    owners = target.storage_owners if target else tilefoundry_target.StorageOwners()
     states = tuple(utils.attrs_by_axis(type_, owners=owners) for type_ in input_types)
     layouts = tuple(
         replace(layout, attrs=tuple(state.values())) if layout is not None else None
@@ -373,7 +374,7 @@ def decide_uniform(node: expr.Expr, ctx, scope) -> bool:
     type_ = ctx.memo.get(id(node), (None, None))[1]
     if isinstance(type_, types.TensorType) and types.shard_layout_of(type_.layout) is not None:
         target = getattr(ctx, "target", None)
-        owners = target.storage_owners if target else expr.StorageOwners((), {})
+        owners = target.storage_owners if target else tilefoundry_target.StorageOwners()
         return all(isinstance(attr, types.Broadcast) for attr in utils.attrs_by_axis(type_, owners=owners).values())
     if isinstance(node, expr.Call):
         return (
@@ -439,7 +440,7 @@ def combine_operand_attrs(result, others: tuple, ctx) -> "types.TensorType":
     if shard is None:
         return result
     target = getattr(ctx, "target", None)
-    owners = target.storage_owners if target else expr.StorageOwners((), {})
+    owners = target.storage_owners if target else tilefoundry_target.StorageOwners()
     held = utils.attrs_by_axis(result, shard.mesh, owners)
     states = tuple(utils.attrs_by_axis(type_, shard.mesh, owners) for type_ in others)
     attrs, promoted = [], False

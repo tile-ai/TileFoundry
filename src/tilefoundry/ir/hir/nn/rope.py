@@ -14,6 +14,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry import core, utils
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import dim, expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
@@ -48,15 +49,16 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TupleType:
     if isinstance(head_dim_q, int) and isinstance(head_dim_k, int) and head_dim_q != head_dim_k:
         ctx.error(call, f"q head_dim {head_dim_q} != k head_dim {head_dim_k}")
 
+    owners = ctx.target.storage_owners if ctx.target else tilefoundry_target.StorageOwners()
     ir_utils.check_multilinear_partials(
         (("q", q_ty), ("cos_cache", cos_ty), ("sin_cache", sin_ty)),
-        ctx.target,
+        owners,
         kind=expr.BinaryKind.MUL,
         anchor="q",
     )
     ir_utils.check_multilinear_partials(
         (("k", k_ty), ("cos_cache", cos_ty), ("sin_cache", sin_ty)),
-        ctx.target,
+        owners,
         kind=expr.BinaryKind.MUL,
         anchor="k",
     )

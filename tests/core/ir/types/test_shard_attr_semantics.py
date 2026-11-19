@@ -8,11 +8,12 @@ from itertools import product
 from math import prod
 from multiprocessing import get_context
 
+from tilefoundry import target
 from tilefoundry.ir import expr, types, utils
 
 LEVELS = ("gpu", "cta", "thread")
 STORAGES = (expr.StorageKind.GMEM, expr.StorageKind.SMEM, expr.StorageKind.RMEM)
-OWNERS = expr.StorageOwners(LEVELS, dict(zip(STORAGES, LEVELS, strict=True)))
+OWNERS = target.StorageOwners(LEVELS, dict(zip(STORAGES, LEVELS, strict=True)))
 ATTRS = (types.S(0), types.S(1), types.B(), types.P("sum"), types.V())
 SHAPE = (4, 4)
 

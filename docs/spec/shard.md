@@ -1041,13 +1041,6 @@ class NotProjectableError(ValueError):
     """Report that a layout cannot serve as a mesh execution scope."""
 
 
-class StorageOwners:
-    order: tuple[str, ...]  # Target topologies, coarse to fine.
-    owner: Mapping[StorageKind, str]
-
-    def private(self, storage, topology) -> bool: ...
-
-
 class ShardLayout:
     @classmethod
     def from_logical(cls, shape, mesh, attrs, *, storage, owners) -> ShardLayout:
@@ -1094,7 +1087,8 @@ def shard_layout_local_shape(
     (extent one for a fully factored Split). So one unit has no holes. The
     target supplies the storage owner and the coarse-to-fine topology order. The
     owner topology and every coarser one are private. The owner `target` is
-    shared. Absent memory facts mean an empty owner table.
+    shared. Absent memory facts mean an empty owner table
+    ([target §11](./target.md#11-target-facts-projection)).
   - `ShardLayout.from_logical` MUST factor each logical axis split by one or more
     mesh axes in mesh-axis order. It MUST remap each `Split` to its factor. It MUST append
     a non-unit residual factor. Symbolic multi-axis splits MUST use successive

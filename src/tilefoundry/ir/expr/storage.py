@@ -10,11 +10,9 @@ See [types §2](docs/spec/types.md#2-tensortype).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
 from enum import IntEnum
 
-__all__ = ["TARGET_MEMORY_OWNER", "StorageKind", "StorageOwners", "resolve_storage"]
+__all__ = ["StorageKind", "resolve_storage"]
 
 
 class StorageKind(IntEnum):
@@ -30,28 +28,6 @@ class StorageKind(IntEnum):
     def __str__(self) -> str:
         """The lower-case level name."""
         return self.name.lower()
-
-
-TARGET_MEMORY_OWNER = "target"
-
-
-@dataclass(frozen=True)
-class StorageOwners:
-    """Storage owners and the target's topology order, coarse to fine."""
-
-    order: tuple[str, ...]
-    owner: Mapping[StorageKind, str]
-
-    def private(self, storage, topology) -> bool:
-        """Whether *storage* is private to one unit of *topology* under these owners."""
-        storage = resolve_storage(storage)
-        storage = StorageKind.RMEM if storage is StorageKind.UMAT else storage
-        owner = self.owner.get(storage, TARGET_MEMORY_OWNER)
-        return (
-            owner != TARGET_MEMORY_OWNER
-            and topology in self.order
-            and self.order.index(topology) <= self.order.index(owner)
-        )
 
 
 def resolve_storage(value: "str | StorageKind | None") -> "StorageKind | None":

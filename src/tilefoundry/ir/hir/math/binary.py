@@ -10,6 +10,7 @@ the TIR effect-form ``Binary`` Stmt that writes into ``dst``.
 from __future__ import annotations
 
 from tilefoundry import core
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
@@ -98,7 +99,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     la, lb = lhs_ty.layout, rhs_ty.layout
 
     lhs_read, rhs_read = typeinfer.shard_read_types(ctx, call.args)
-    ir_utils.check_multilinear_partials((("lhs", lhs_read), ("rhs", rhs_read)), ctx.target, kind=op.kind)
+    ir_utils.check_multilinear_partials((("lhs", lhs_read), ("rhs", rhs_read)), ctx.target.storage_owners if ctx.target else tilefoundry_target.StorageOwners(), kind=op.kind)
     storage = typeinfer.resolve_anchor_storage(ctx, call, lhs_ty.storage, rhs_ty.storage)
     try:
         relation = access.relations_of(call, ctx)

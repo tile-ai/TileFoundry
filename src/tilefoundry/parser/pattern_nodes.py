@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, ClassVar, Literal, get_args, get_origin
 
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.ir import clause, core, dim, expr, pattern, tir, types, utils
 from tilefoundry.ir.hir import nn
 from tilefoundry.ir.types import layout_algebra
@@ -738,7 +739,7 @@ class ShardLayoutConstructionRule:
                 value.mesh,
                 value.attrs,
                 storage=storage,
-                owners=target.storage_owners if target else expr.StorageOwners((), {}),
+                owners=target.storage_owners if target else tilefoundry_target.StorageOwners(),
             )
         except (TypeError, ValueError) as error:
             raise ParseError.from_node(match.node, context, str(error)) from error
@@ -2198,7 +2199,7 @@ class StaticCallConstructionRule:
                     arguments["mesh"],
                     arguments["attrs"],
                     storage=context.values.get("layout_storage", runtime.StorageKind.GMEM),
-                    owners=target.storage_owners if target else expr.StorageOwners((), {}),
+                    owners=target.storage_owners if target else tilefoundry_target.StorageOwners(),
                 )
             return callee(*args, **kwargs)
         except (TypeError, ValueError) as error:

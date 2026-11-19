@@ -6,6 +6,7 @@ import copy
 from dataclasses import dataclass, field
 from typing import ClassVar
 
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.ir import dim, expr, types, utils
 from tilefoundry.ir.types import int_tuple
 
@@ -88,7 +89,7 @@ class Matcher:
     """Match one pattern tree while retaining bindings and match evidence."""
 
     def __init__(self, bindings=None, *, owners=None, mesh=None):
-        self.owners = owners if owners is not None else expr.StorageOwners((), {})
+        self.owners = owners if owners is not None else tilefoundry_target.StorageOwners()
         self.mesh = mesh
         self.bindings: Bindings = Bindings(self, bindings or {})
         self.memo: dict[int, object] = {}

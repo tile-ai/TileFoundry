@@ -20,6 +20,7 @@ from .facts import (
 )
 from .registry import Catalog, LoadError, catalog, load, register, registered, unregister
 from .spec import HardwareSpec, architecture_of, available_device_ids, check_compatible, select
+from .storage import SHARED_OWNER, StorageOwners
 from .target import (
     Architecture,
     Device,

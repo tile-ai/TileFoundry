@@ -20,6 +20,7 @@ from .facts import (
     TopologyFacts,
     facts_result,
 )
+from .storage import SHARED_OWNER, StorageOwners
 
 T = TypeVar("T")
 bindings: dispatch.Registry[tuple[type, type], type] = dispatch.Registry("target bindings")
@@ -132,21 +133,21 @@ class Target:
         return "cpu"
 
     @cached_property
-    def storage_owners(self) -> expr.StorageOwners:
+    def storage_owners(self) -> StorageOwners:
         """Project storage owners once from this target's immutable facts."""
         try:
             hierarchy = self.get_facts(MemoryHierarchyFacts)
         except UnsupportedCapabilityError:
-            return expr.StorageOwners((), {})
+            return StorageOwners()
         order = tuple(item.name for item in self.get_facts(TopologyFacts).topologies)
         owners = {}
         for item in hierarchy.explicit_levels:
-            if item.owner != expr.TARGET_MEMORY_OWNER and (not item.owner or item.owner not in order):
+            if item.owner != SHARED_OWNER and (not item.owner or item.owner not in order):
                 raise ValueError(
                     f"storage {item.name!r}: memory owner {item.owner!r} is not a target topology in {order}"
                 )
             owners[expr.resolve_storage(item.name)] = item.owner
-        return expr.StorageOwners(order, MappingProxyType(owners))
+        return StorageOwners(order, MappingProxyType(owners))
 
     @property
     def identity(self) -> str:

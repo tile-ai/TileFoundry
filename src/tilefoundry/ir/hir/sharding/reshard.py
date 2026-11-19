@@ -6,6 +6,7 @@ from dataclasses import replace
 from itertools import zip_longest
 from math import prod
 
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types, utils
 from tilefoundry.ir.hir import tensor
@@ -23,7 +24,7 @@ class Reshard(expr.Op):
     storage = expr.ParamDef(kind="attribute", default=None)
 
 
-def moved_units(source, destination, owners: expr.StorageOwners) -> "utils.UnitChange | None":
+def moved_units(source, destination, owners: "StorageOwners") -> "utils.UnitChange | None":
     """How the units holding *destination* differ from those holding *source*.
 
     Only topologies that hold their own copy of the destination storage count
@@ -42,14 +43,14 @@ def moved_units(source, destination, owners: expr.StorageOwners) -> "utils.UnitC
     return utils.unit_change(layouts[0].mesh, layouts[1].mesh, owning)
 
 
-def added_units(call: expr.Call, owners: expr.StorageOwners) -> int:
+def added_units(call: expr.Call, owners: "StorageOwners") -> int:
     """Units a Reshard's result holds that its source does not: each receives one copy."""
     change = moved_units(call.args[0].type, call.type, owners)
     return 0 if change is None else change.added
 
 
 @access.register_alias(Reshard)
-def buffer_alias(call: expr.Call, owners: expr.StorageOwners) -> int | None:
+def buffer_alias(call: expr.Call, owners: "StorageOwners") -> int | None:
     """0 when both sides' structural boxes agree, so the result is a view; None for a copy.
 
     Each thread holds its registers privately, so the box of an ``rmem`` ShardLayout also
@@ -211,7 +212,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     new_storage = op.storage if op.storage is not None else x_ty.storage
     new_layout = op.layout
     target = getattr(ctx, "target", None)
-    owners = target.storage_owners if target else expr.StorageOwners((), {})
+    owners = target.storage_owners if target else tilefoundry_target.StorageOwners()
     layouts = tuple(types.shard_layout_of(layout) for layout in (x_ty.layout, new_layout))
     result = types.TensorType(
         shape=x_ty.shape, dtype=x_ty.dtype, layout=new_layout, storage=new_storage
@@ -286,7 +287,7 @@ def sent_traffic(
     logical_source=None,
     logical_destination=None,
     whole=False,
-    owners: expr.StorageOwners,
+    owners: "StorageOwners",
 ) -> tuple[tuple[str, cost.TrafficBytes], ...]:
     """Count boundary movement for split changes and completed partial reductions.
 
@@ -342,7 +343,7 @@ def sent_traffic(
 
 @cost.register(Reshard)
 def reshard_cost(call: expr.Call, ctx: cost.Context) -> cost.Cost:
-    owners = access.target_owners(ctx.target)
+    owners = ctx.target.storage_owners
     if access.aliased_operand(call, owners) is not None:
         return cost.Cost({}, cost.idle(call))
     source = cost.input_types(call, ctx)[0]

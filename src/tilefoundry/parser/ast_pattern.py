@@ -861,12 +861,7 @@ class FuncContext:
 
 @dataclass
 class AuthoredInferContext(typeinfer.TypeInferContext):
-    """The pending root carries the target until its Module is finalized."""
-
-    parser_target: object | None = None
-
-    def resolve_target(self):
-        return super().resolve_target() or self.parser_target
+    """Type inference while a function is parsed; it carries the parsed function's target."""
 
 
 @dataclass(frozen=True)
@@ -1284,7 +1279,7 @@ class MatchContext:
             AuthoredInferContext(
                 module=function.module,
                 mesh_scope=resolved_mesh,
-                parser_target=function.target,
+                target=function.target,
             ),
         )
         return context
@@ -1312,7 +1307,7 @@ class MatchContext:
                 TYPE_INFER_CONTEXT,
                 AuthoredInferContext(
                     module=function.module,
-                    parser_target=function.target,
+                    target=function.target,
                 ),
             )
         else:

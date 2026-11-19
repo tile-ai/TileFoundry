@@ -32,7 +32,7 @@ def reshape_relations(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
 
 
 @access.register_alias(Reshape)
-def buffer_alias(call: expr.Call, owners: expr.StorageOwners) -> int:
+def buffer_alias(call: expr.Call, owners: "StorageOwners") -> int:
     return 0
 
 

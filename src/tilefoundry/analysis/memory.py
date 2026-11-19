@@ -238,7 +238,7 @@ def call_traffic(
         if topology is None:
             operands = positional
     added = (
-        sharding.added_units(node, access.target_owners(whole.target))
+        sharding.added_units(node, whole.target.storage_owners)
         if isinstance(node.target, sharding.Reshard)
         else 0
     )
@@ -418,7 +418,7 @@ def values_in_region(
         declared = facts.explicit(lifetime.memory_level)
         if declared is None or not declared.owner:
             raise Error(f"memory: level {lifetime.memory_level!r} has no declared owner")
-        if declared.owner == expr.TARGET_MEMORY_OWNER:
+        if declared.owner == target.SHARED_OWNER:
             continue
         try:
             private = owners.private(lifetime.memory_level, topology_names[outermost_region])

@@ -51,7 +51,7 @@ def differentiate(
     if not wrt:
         raise ValueError(f"differentiate: {module.name!r}: wrt names no parameter")
     selected = {id(value): value for value in (select_value(module, item) for item in recompute)}
-    return Differentiator(selected).module(module, wrt)
+    return Differentiator(selected, module.target).module(module, wrt)
 
 
 def saved_values(forward: core.Module) -> tuple[Saved, ...]:
@@ -348,10 +348,14 @@ class RegionBackward:
 
 
 class Differentiator:
-    """Differentiate a Module tree, each Module and function once."""
+    """Differentiate a Module tree, each Module and function once.
 
-    def __init__(self, recompute: dict[int, expr.Expr]) -> None:
+    A child Module without its own target is typed under the root's *target*.
+    """
+
+    def __init__(self, recompute: dict[int, expr.Expr], target) -> None:
         self.recompute = recompute
+        self.target = target
         self.modules: dict[int, tuple[core.Module, core.Module]] = {}
         self.functions: dict[int, Derived] = {}
         self.owned: dict[int, list[tuple[core.Function, Derived]]] = {}
@@ -397,7 +401,10 @@ class Differentiator:
         )
         for generated in (forward, backward):
             for function in generated.functions:
-                typeinfer.infer_function(function, typeinfer.TypeInferContext(module=generated, function=function))
+                context = typeinfer.TypeInferContext(
+                    module=generated, function=function, target=generated.target or self.target
+                )
+                typeinfer.infer_function(function, context)
                 verifier.verify_function(function, module=generated)
         if wrt is None:
             self.modules[id(module)] = (forward, backward)
@@ -488,7 +495,7 @@ class FunctionDifferentiator(expr.Functor[None]):
         memo = {}
         for node in core.function_values(function):
             memo[id(node)] = (node, node.type)
-        ctx = autodiff.Context(module=module, function=function, memo=memo)
+        ctx = autodiff.Context(module=module, function=function, target=module.target or differ.target, memo=memo)
         active = {id(function.params[index]) for index in wrt}
         self.top = new_scope((function.body,), function.params, ctx, active)
         self.names = {

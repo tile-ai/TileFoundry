@@ -528,7 +528,7 @@ class StoragePlan:
                 continue
             forwarded = analysis.forwarded_leaves(leaf.expr, ctx)
             position = (
-                access.aliased_operand(leaf.expr, access.target_owners(ctx.target))
+                access.aliased_operand(leaf.expr, ctx.target.storage_owners)
                 if isinstance(leaf.expr, expr.Call)
                 else None
             )
@@ -881,7 +881,7 @@ class StoragePlan:
         alias = analysis.buffer_alias(call, region, access.relations_of(call, region))
         if alias is None:
             raise LoweringError(self.answers[core.SSAValue(call)].refusal)
-        position = access.aliased_operand(call, access.target_owners(region.target))
+        position = access.aliased_operand(call, region.target.storage_owners)
         return self.view(operands[position], alias.relation, call.type, values=values)
 
     def source(self, leaf, memo):

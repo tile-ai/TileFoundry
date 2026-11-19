@@ -10,7 +10,7 @@ from tilefoundry.ir import dim, expr, types
 from tilefoundry.ir import utils as ir_utils
 from tilefoundry.ir.types import int_tuple
 
-from .alias import aliased_operand, target_owners
+from .alias import aliased_operand
 from .reach import reached_image
 from .registry import iteration_universe, relations_of, values_of
 from .relation import Relation, parameter_names
@@ -189,7 +189,7 @@ def renaming_relation(call, ctx, local_relations: tuple[Relation, ...]) -> Relat
             "one leaf of it rather than a coordinate change to fold"
         )
     written = local_relations[len(call.args)].relation
-    reads = local_relations[aliased_operand(call, target_owners(ctx.target))].relation
+    reads = local_relations[aliased_operand(call, ctx.target.storage_owners)].relation
     folded = written.reverse().apply_range(reads)
     bindings = values_of(local_relations)
     names = parameter_names(folded)

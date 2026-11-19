@@ -807,7 +807,7 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
     def allocate(self, node, ctx):
         if isinstance(node.type, types.TupleType) and result_copies(node) > 1:
             raise Error("allocation: staged tuple results are not supported")
-        owners = access.target_owners(ctx.target)
+        owners = ctx.target.storage_owners
         view = access.aliased_operand(node, owners) if isinstance(node, expr.Call) else None
         for index, leaf in enumerate(ir_utils.leaves_of(node.type)):
             key = core.SSAValue(node, index)
@@ -967,7 +967,7 @@ class AllocationConstraintVisitor(valuation.Visitor[None]):
         self.windows.extend(window for window in resolved.windows if window.value in self.by_value)
 
 
-def owner_units(lifetime: ValueLifetime, owners: expr.StorageOwners) -> dict:
+def owner_units(lifetime: ValueLifetime, owners: target.StorageOwners) -> dict:
     """The units holding a value on each topology that owns its storage per unit.
 
     A topology maps to the exact unit ids the value's mesh selects there, or to
@@ -1045,7 +1045,7 @@ def build_interference_graph(values, windows, by_value, units):
     }
 
 
-def partial_copies(held: types.TensorType, owners: expr.StorageOwners) -> int:
+def partial_copies(held: types.TensorType, owners: target.StorageOwners) -> int:
     """Count Partial contributions not already separated by storage ownership."""
     layout = types.shard_layout_of(held.layout)
     if layout is None:

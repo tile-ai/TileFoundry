@@ -724,7 +724,7 @@ class ScopeBuilder(valuation.Visitor[None]):
             }
             alias = (
                 buffer_alias(call, logical, relations["narrow"])
-                if access.aliased_operand(call, access.target_owners(logical.target)) is not None
+                if access.aliased_operand(call, logical.target.storage_owners) is not None
                 else None
             )
             self.record_node(call, ctx, alias=alias, relations=relations, views=views)

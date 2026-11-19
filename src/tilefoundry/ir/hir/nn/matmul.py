@@ -6,6 +6,7 @@ import math
 from typing import Literal
 
 from tilefoundry import core, utils
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir import utils as ir_utils
@@ -106,7 +107,7 @@ def matmul_result_shape_and_layout(call: "expr.Call", ctx: "TypeInferContext") -
         )
 
     read = typeinfer.shard_read_types(ctx, call.args)
-    ir_utils.check_multilinear_partials(tuple(zip(("lhs", "rhs"), read)), ctx.target, kind=expr.BinaryKind.MUL)
+    ir_utils.check_multilinear_partials(tuple(zip(("lhs", "rhs"), read)), ctx.target.storage_owners if ctx.target else tilefoundry_target.StorageOwners(), kind=expr.BinaryKind.MUL)
 
     relation = access.relations_of(call, ctx)
 

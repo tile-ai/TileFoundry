@@ -5,6 +5,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry import core, utils
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.interfaces import access, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir.types import int_tuple
@@ -84,7 +85,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> types.TupleType:
             storage=x_ty.storage,
             owners=ctx.target.storage_owners
             if ctx is not None and ctx.target is not None
-            else expr.StorageOwners((), {}),
+            else tilefoundry_target.StorageOwners(),
         )
     else:
         part_layout = types.Layout(part_shape)

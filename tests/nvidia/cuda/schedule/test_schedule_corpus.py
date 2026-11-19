@@ -20,7 +20,7 @@ from tests.nvidia.cuda.schedule._support import (
     _region_key,
     _RetainedStatements,
 )
-from tilefoundry import analysis, codegen, inspection, verifier
+from tilefoundry import analysis, codegen, inspection, target, verifier
 from tilefoundry.interfaces import access, evaluator, valuation
 from tilefoundry.ir import core, dim, expr, hir, tir, types
 from tilefoundry.ir.expr import op_registry
@@ -88,7 +88,7 @@ def _analysis_metadata(case, result, analysis_value, metadata_type):
             if not isinstance(node, expr.Call):
                 continue
             record = expr.get_metadata(node, analysis.MemoryMetadata)
-            if access.aliased_operand(node) is not None:
+            if access.aliased_operand(node, target.StorageOwners()) is not None:
                 assert record.buffer_bytes is None
                 assert not record.offsets
             elif isinstance(node.target, tensor.Transpose) and node.type.storage is not expr.StorageKind.RMEM:

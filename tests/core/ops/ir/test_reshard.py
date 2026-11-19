@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
+from tilefoundry import target
 from tilefoundry.dsl import storage as dsl_storage
 from tilefoundry.interfaces import access
 from tilefoundry.ir import expr, types
@@ -45,7 +46,7 @@ def test_large_gmem_factorization_aliases_source():
 def aliases(source, result):
     value = expr.Var("source", type=source)
     call = expr.Call(sharding.Reshard(layout=result.layout, storage=result.storage), (value,), type=result)
-    return access.aliased_operand(call)
+    return access.aliased_operand(call, target.StorageOwners())
 
 
 @pytest.mark.parametrize("storage", (expr.StorageKind.GMEM, expr.StorageKind.RMEM))

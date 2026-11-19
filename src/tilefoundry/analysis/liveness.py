@@ -315,7 +315,7 @@ def analyze_liveness(
     ranks = {}
     for item in first.intervals:
         ranks.setdefault(id(item.value.expr), len(ranks))
-    owners = access.target_owners(getattr(context, "target", None))
+    owners = context.target.storage_owners
     orders, unordered = scope_orders(function, scope, ranks, owners)
     if unordered:
         raise Error(

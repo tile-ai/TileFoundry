@@ -27,6 +27,6 @@ def test_plain_multilinear_operand_reads_every_topology(levels):
     with pytest.raises(ValueError, match="carries Partial.*operand plain:.*Varying"):
         utils.check_multilinear_partials(
             (("a", operands[0]), ("b", operands[1]), ("plain", plain)),
-            target,
+            target.storage_owners,
             kind=expr.BinaryKind.ADD,
         )
