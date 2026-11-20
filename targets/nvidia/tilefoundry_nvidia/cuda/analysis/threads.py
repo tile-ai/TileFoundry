@@ -65,11 +65,14 @@ def projected(type_list) -> types.Mesh | None:
     the slice the unit owns, projected through the sharded side
     (``copy_impl::local_as``). The slices of different units are disjoint
     when the shard splits along every mesh axis of its thread topology. None otherwise.
+    An operand whose mesh holds no thread topology, such as a tile Varying per
+    CTA, is the same for every thread of a CTA, so it counts as plain here.
     """
     sharded = [
         type_
         for type_ in type_list
         if isinstance(getattr(type_, "layout", None), types.ShardLayout)
+        and "thread" in utils.topology_names(type_.layout.mesh)
     ]
     if len(type_list) != 2 or len(sharded) != 1:
         return None

@@ -313,6 +313,12 @@ def test_smem_tile_written_in_one_thread_slice_is_read_by_all_threads() -> None:
     assert tiles and all(utils.topology_names(types.shard_layout_of(t.layout).mesh) == ("cta",) for t in tiles)
 
 
+def test_per_cta_tiles_lower_through_thread_slices(tmp_path) -> None:
+    """A tile Varying per CTA is one plain tile to the threads: WGMMA reads it, a Copy writes it."""
+    fixture = _FIXTURES / "ops" / "varying_tile_from_fragments.py"
+    assert cli.main(["schedule", "finalize", str(fixture), str(tmp_path / "tir.py")]) == 0
+
+
 @pytest.mark.parametrize(("attr", "refused"), ((_B, False), (types.Split(0), True)))
 def test_reachability_omits_an_outside_topology_without_split_or_partial(attr, refused) -> None:
     """An execution mesh may omit outside topologies that contain neither Split nor Partial.
