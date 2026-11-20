@@ -281,10 +281,11 @@ def resolve(tree: core.Module, selection: Selection) -> tuple[expr.Expr, ...]:
 
 def selectable(function: core.Function) -> tuple[expr.Expr, ...]:
     """Each value of *function* a selector may name: an Op Call outside every loop body."""
-    looped = in_loops(function)
+    values = core.collect_exprs(function.body)
+    looped = in_loops(values)
     return tuple(
         value
-        for value in core.collect_exprs(function.body)
+        for value in values
         if isinstance(value, expr.Call) and id(value) not in looped and not is_call_result(value)
     )
 
@@ -384,16 +385,15 @@ def value_of(selector: str, module: core.Module, function_name: str | None, vari
     function = module.lookup(function_name) if function_name else module.entry_function()
     if any(param.name == variable for param in function.params):
         refuse(selector, f"{variable!r} is a parameter; the backward reads a parameter, it never computes one")
-    matches = {
-        id(value): value for value in core.collect_exprs(function.body) if expr.binding_name(value) == variable
-    }
+    values = core.collect_exprs(function.body)
+    matches = {id(value): value for value in values if expr.binding_name(value) == variable}
     if not matches:
         refuse(selector, f"{function.name!r} binds no value named {variable!r}")
     if len(matches) > 1:
         places = ", ".join(where(value) or "?" for value in matches.values())
         refuse(selector, f"{len(matches)} values are named {variable!r}: {places}")
     (value,) = matches.values()
-    if id(value) in in_loops(function):
+    if id(value) in in_loops(values):
         refuse(
             selector,
             f"{variable!r} is computed inside a loop; "
@@ -480,11 +480,11 @@ def merged(old: object | None, new: object) -> object:
     return old | new
 
 
-def in_loops(function: core.Function) -> set[int]:
-    """The ids of the values inside a loop body or yield of *function*."""
+def in_loops(values: tuple[expr.Expr, ...]) -> set[int]:
+    """The ids of the values inside a loop body or yield of a loop among *values*."""
     return {
         id(inner)
-        for loop in core.collect_exprs(function.body)
+        for loop in values
         if isinstance(loop, core.LoopRegion)
         for root in (loop.body, *loop.yield_values)
         for inner in core.collect_exprs(root)

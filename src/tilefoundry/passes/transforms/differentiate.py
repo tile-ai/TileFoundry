@@ -133,6 +133,18 @@ def pack(items: tuple[expr.Expr, ...]) -> expr.Tuple:
     return expr.Tuple(elements=tuple(items), type=types.TupleType(tuple(item.type for item in items)))
 
 
+def unpack(value: expr.Expr, fields: tuple[types.Type, ...]) -> tuple[expr.Expr, ...]:
+    """The projection of each field of *value*."""
+    return tuple(projection(value, index, item) for index, item in enumerate(fields))
+
+
+def repack(value: expr.Expr, type_: types.Type) -> expr.Expr:
+    """*value* read as *type_*: its one result, or a tuple of each field's projection."""
+    if not isinstance(type_, types.TupleType):
+        return projection(value, 0, type_)
+    return pack(unpack(value, type_.fields))
+
+
 def trip_count(loop: core.LoopRegion) -> int:
     """How many iterations *loop* runs; a domain that is not three integers is refused."""
     domain = (loop.start, loop.extent, loop.step)
@@ -232,14 +244,20 @@ class Scope:
     invariant: set[int] = field(default_factory=set)
     order: list[expr.Expr] = field(default_factory=list)
 
-    def activate(self, ids: set[int]) -> None:
-        self.active.update(ids)
-
     def rebuilt(self, owner: "FunctionDifferentiator", node: expr.Expr) -> expr.Expr:
-        """*node* through this scope's ``Rebuilder``, made on first use."""
+        """*node* of the backward with every forward value it reads replaced by its slot.
+
+        The scope's ``Rebuilder`` is made on first use.
+        """
         if self.rebuilder is None:
             self.rebuilder = Rebuilder(owner, self)
         return self.rebuilder.visit(node)
+
+    def remember_gradient(self, node: expr.Expr, gradient) -> None:
+        self.gradients[id(node)] = gradient
+
+    def remember_slot(self, slot: tuple, value: expr.Expr) -> None:
+        self.slots[slot] = value
 
     def walk(self, roots: tuple[expr.Expr, ...]) -> None:
         """Order the values *roots* reach, marking the active and the invariant ones."""
@@ -248,12 +266,6 @@ class Scope:
         for root in roots:
             walker.visit(root, self.order)
         self.nodes.update((id(node), node) for node in self.order)
-
-    def remember_gradient(self, node: expr.Expr, gradient) -> None:
-        self.gradients[id(node)] = gradient
-
-    def remember_slot(self, slot: tuple, value: expr.Expr) -> None:
-        self.slots[slot] = value
 
 
 
@@ -302,17 +314,18 @@ class Differentiator:
         names = [function.name for function, _ in functions]
         if "backward" in names[1:]:
             raise ValueError(f"differentiate: {module.name!r} declares a function named 'backward'")
-        children_forward = {key: tuple(pair[0] for pair in slot) for key, slot in self.slots[id(module)].items()}
-        children_backward = {key: tuple(pair[1] for pair in slot) for key, slot in self.slots[id(module)].items()}
-
-        def slot_of(key, derived):
-            return derived if isinstance(module.children[key], tuple) else derived[0]
+        children_forward, children_backward = {}, {}
+        for key, pairs in self.slots[id(module)].items():
+            forwards, backwards = zip(*pairs)
+            indexed = isinstance(module.children[key], tuple)
+            children_forward[key] = forwards if indexed else forwards[0]
+            children_backward[key] = backwards if indexed else backwards[0]
 
         forward = core.Module(
             name=f"{module.name}Forward",
             functions=tuple(derived.forward for _, derived in functions),
             entry=module.entry,
-            children={key: slot_of(key, value) for key, value in children_forward.items()},
+            children=children_forward,
             target=module.target,
             topologies=module.topologies,
             metadata={GENERATED: "forward", "saved": functions[0][1].saved_values},
@@ -321,7 +334,7 @@ class Differentiator:
             name=f"{module.name}Backward",
             functions=tuple(derived.backward for _, derived in functions),
             entry="backward",
-            children={key: slot_of(key, value) for key, value in children_backward.items()},
+            children=children_backward,
             target=module.target,
             topologies=module.topologies,
             metadata={GENERATED: "backward"},
@@ -354,8 +367,6 @@ class Differentiator:
         """Differentiate what *ref* calls from *module*, keeping the slot it lives in."""
         if not ref.path:
             _, function = core.resolve(module, ref)
-            if id(function) in self.functions:
-                return self.functions[id(function)]
             return self.function(module, function, None)
         if sum(isinstance(segment, str) for segment in ref.path) != 1 or ref.name is not None:
             raise ValueError(
@@ -413,25 +424,24 @@ class FunctionDifferentiator(expr.Functor[None]):
         self.placeholders: dict[int, tuple] = {}
         self.regions: dict[int, RegionBackward] = {}
         self.loops: dict[int, RegionBackward] = {}
+        values = core.function_values(function)
         self.callees: dict[int, Derived] = {
             id(value): differ.callee(module, value.target, value)
-            for value in core.collect_exprs(function.body)
+            for value in values
             if isinstance(value, expr.Call) and isinstance(value.target, core.FunctionRef)
         }
         self.saved_keys: list[tuple] = []
-        memo = {}
-        for node in core.function_values(function):
-            memo[id(node)] = (node, node.type)
+        memo = {id(node): (node, node.type) for node in values}
         ctx = autodiff.Context(module=module, function=function, target=module.target or differ.target, memo=memo)
         active = {id(function.params[index]) for index in wrt}
         self.top = new_scope((function.body,), function.params, ctx, active)
         self.names = {
             name
-            for node in core.function_values(function)
+            for node in values
             for name in (getattr(node, "name", None), expr.binding_name(node))
             if isinstance(name, str)
         }
-        for loop in core.collect_exprs(function.body):
+        for loop in values:
             if isinstance(loop, core.LoopRegion):
                 self.names.update(var.name for var in (loop.induction_var, *loop.params))
             elif isinstance(loop, core.MeshRegion):
@@ -470,7 +480,7 @@ class FunctionDifferentiator(expr.Functor[None]):
         )
         gradients = types.TupleType(tuple(gradient_type(function.params[index].type) for index in self.wrt))
         returned = outputs[0] if len(outputs) == 1 else pack(outputs)
-        body = self.rebuild(returned, self.top)
+        body = self.top.rebuilt(self, returned)
         meshes = {
             repr(node.mesh): node.mesh for node in self.top.nodes.values() if isinstance(node, core.MeshRegion)
         }
@@ -695,7 +705,7 @@ class FunctionDifferentiator(expr.Functor[None]):
             id(param) for param, value in zip(loop.params, loop.yield_values)
             if id(value) in inner.active and id(param) not in inner.active
         }:
-            inner.activate(woken)
+            inner.active.update(woken)
             inner.walk(roots)
         carries = [
             position for position in range(carried)
@@ -753,14 +763,10 @@ class FunctionDifferentiator(expr.Functor[None]):
         for position, structure in structures.items():
             self.accumulate(scope, loop.args[position], structure)
 
-    def rebuild(self, node: expr.Expr, scope: Scope) -> expr.Expr:
-        """*node* of the backward with every forward value it reads replaced by its slot."""
-        return scope.rebuilt(self, node)
-
     def rebuild_region(self, backward: RegionBackward, scope: Scope) -> core.MeshRegion:
         node = backward.node
         inner = backward.scope
-        body = self.rebuild(node.body, inner)
+        body = inner.rebuilt(self, node.body)
         args = tuple(self.named(arg, scope) for arg in node.args)
         captures = sorted((*zip(node.params, args), *inner.region_params), key=capture_name)
         return replace(
@@ -775,24 +781,21 @@ class FunctionDifferentiator(expr.Functor[None]):
 
         Every later read of *node* in *scope* gets the same named value.
         """
-        value = self.rebuild(node, scope)
-        if isinstance(value, expr.Var) or expr.binding_name(value):
-            return value
-        named = replace(value, metadata=(*value.metadata, expr.BindingMetadata(name=self.fresh("grad"))))
+        named = self.bound(scope.rebuilt(self, node), "grad")
         scope.rebuilder.keep(node, named)
         return named
 
     def rebuild_loop(self, backward: RegionBackward, scope: Scope) -> core.LoopRegion:
         node = backward.node
         inner = backward.scope
-        updates = tuple(self.rebuild(value, inner) for value in node.yield_values)
+        updates = tuple(inner.rebuilt(self, value) for value in node.yield_values)
         captures = sorted(inner.region_params, key=capture_name)
         return replace(
             node,
             body=updates[-1],
             yield_values=updates,
             params=(*node.params, *(param for param, _ in captures)),
-            args=(*(self.rebuild(arg, scope) for arg in node.args), *(value for _, value in captures)),
+            args=(*(scope.rebuilt(self, arg) for arg in node.args), *(value for _, value in captures)),
         )
 
     def materialize(self, key: tuple, scope: Scope) -> expr.Expr:
@@ -835,13 +838,15 @@ class FunctionDifferentiator(expr.Functor[None]):
         The parser sorts a region's captures by their printed names, so each one
         needs its name before the printer would make one up.
         """
-        value = self.materialize(key, scope)
-        if isinstance(value, expr.Var) or expr.binding_name(value):
-            return value
-        name = self.fresh(self.key_name(key)[0] or "saved")
-        named = replace(value, metadata=(*value.metadata, expr.BindingMetadata(name=name)))
+        named = self.bound(self.materialize(key, scope), self.key_name(key)[0] or "saved")
         scope.remember_slot((key[0], id(key[1]), *key[2:]), named)
         return named
+
+    def bound(self, value: expr.Expr, base: str) -> expr.Expr:
+        """*value*, bound to a fresh name from *base* unless it already has a name."""
+        if isinstance(value, expr.Var) or expr.binding_name(value):
+            return value
+        return replace(value, metadata=(*value.metadata, expr.BindingMetadata(name=self.fresh(base))))
 
     def saved_in(self, scope: Scope) -> expr.Var:
         """``saved`` as a parameter of the region *scope*, so its items are read inside the mesh."""
@@ -1021,7 +1026,7 @@ class FunctionDifferentiator(expr.Functor[None]):
         elif isinstance(body, expr.Tuple):
             kept = body.elements
         else:
-            kept = tuple(projection(body, index, item) for index, item in enumerate(results))
+            kept = unpack(body, results)
         saved = pack(tuple(cloner.saved_value(key, env) for key in self.saved_keys))
         return core.Function.from_parts(
             name=function.name,
@@ -1121,9 +1126,7 @@ class ForwardCloner(core.BindingSubstitutionCloner):
         if not isinstance(node.target, core.FunctionRef):
             return copied
         self.calls[id(node)] = copied
-        if not isinstance(node.type, types.TupleType):
-            return projection(copied, 0, node.type)
-        return pack(tuple(projection(copied, index, item) for index, item in enumerate(node.type.fields)))
+        return repack(copied, node.type)
 
     def visit_MeshRegion(self, node: core.MeshRegion, ctx) -> expr.Expr:
         copied = super().visit_MeshRegion(node, ctx)
@@ -1137,7 +1140,7 @@ class ForwardCloner(core.BindingSubstitutionCloner):
             kept = (
                 copied.body.elements
                 if isinstance(copied.body, expr.Tuple)
-                else tuple(projection(copied.body, index, item) for index, item in enumerate(results))
+                else unpack(copied.body, results)
             )
         else:
             kept = (copied.body,)
@@ -1145,9 +1148,7 @@ class ForwardCloner(core.BindingSubstitutionCloner):
         body = pack((*kept, *extras))
         region = replace(copied, body=body, type=body.type)
         self.regions[id(node)] = (region, len(results))
-        if not isinstance(node.type, types.TupleType):
-            return projection(region, 0, node.type)
-        return pack(tuple(projection(region, index, item) for index, item in enumerate(results)))
+        return repack(region, node.type)
 
     def visit_LoopRegion(self, node: core.LoopRegion, ctx) -> expr.Expr:
         """The loop with one more carry per tensor the backward reads from an iteration.
