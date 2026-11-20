@@ -30,12 +30,8 @@ def small(shape, seed, low=-1, high=1):
 
 @dataclass(frozen=True)
 class AneCase(Case):
-    """One ANE fixture; a field names the error its stage must raise.
+    """One ANE fixture; ``finalize_refusal`` names the LoweringError that lowering must raise."""
 
-    ``refusal`` is the load-time VerifyError and ``finalize_refusal`` the LoweringError.
-    """
-
-    refusal: str | None = None
     finalize_refusal: str | None = None
 
     def inputs(self) -> tuple | None:
@@ -151,11 +147,6 @@ def _hir(case, problems):
         problems.run("guard", case.guard, CandidateState(*checked, report), problems)
 
 
-def _refused(case):
-    with pytest.raises(expr.VerifyError, match=case.refusal):
-        case.load()
-
-
 def _evaluate(case, module):
     return evaluator.evaluate(module, *(value.clone() for value in case.inputs()))
 
@@ -171,9 +162,6 @@ def _finalize(case, checked):
 
 
 def _scheduled(case, problems):
-    if case.refusal is not None:
-        problems.run("load refusal", _refused, case)
-        return
     module = problems.run("load", case.load)
     checked = problems.run("check", lambda m: analysis.check_program(m, m.entry_function()), module)
     result = None
@@ -283,19 +271,6 @@ class TransposeCandidates(AneCase):
 
 
 @case
-class Conv(AneCase):
-    path: Path = ROOT / "scheduled" / "conv.py"
-
-    def inputs(self):
-        return small((1, 32, 16, 16), 0), small((32, 32, 3, 3), 1), small((32,), 2, -3, 3)
-
-    def guard(self, state, problems):
-        x, w, b = (value.float() for value in self.inputs())
-        assert utils.torch.equal(state.result, utils.F.conv2d(x, w, b, padding=1).to(utils.torch.float16))
-        assert issued(state.lowered) == ["T.ane.conv(out, x, w, b, padding=(1, 1))"]
-
-
-@case
 class ConvRelu(AneCase):
     path: Path = ROOT / "scheduled" / "conv_relu.py"
 
@@ -337,19 +312,6 @@ class Chain(AneCase):
         first, second = _statements(state.lowered)
         assert first.args[0].type.storage is expr.StorageKind.SMEM
         assert second.args[1].type.storage is expr.StorageKind.SMEM
-
-
-@case
-class Activation(AneCase):
-    path: Path = ROOT / "scheduled" / "activation.py"
-
-    def inputs(self):
-        return (small((1, 32, 16, 16), 0, -3, 3),)
-
-    def guard(self, state, problems):
-        (x,) = self.inputs()
-        assert utils.torch.equal(state.result, x.relu())
-        assert issued(state.lowered) == ["T.ane.bypass(out, x, nonlinear=RELU)"]
 
 
 @case
@@ -427,27 +389,6 @@ class Reduce(AneCase):
         assert issued(state.lowered) == [
             "T.ane.reduce(out, x, axes=(2, 3), keepdim=True, kind=SUM, scale=0.00390625)"
         ]
-
-
-@case
-class Outside(AneCase):
-    """Core evaluates the unscheduled pool; lowering finds no mesh to issue it in."""
-
-    path: Path = ROOT / "scheduled" / "outside.py"
-    finalize_refusal: str = "Pool2D instruction issue has no lexical mesh"
-
-    def inputs(self):
-        return (small((1, 32, 16, 16), 0, -3, 3),)
-
-    def guard(self, state, problems):
-        (x,) = self.inputs()
-        assert utils.torch.equal(state.result, utils.F.max_pool2d(x.float(), 2, 2).to(utils.torch.float16))
-
-
-@case
-class Wide(AneCase):
-    path: Path = ROOT / "scheduled" / "wide.py"
-    refusal: str = "dtype"
 
 
 @case

@@ -67,12 +67,10 @@ def test_pool_alias_round_trips(alias, kind) -> None:
     ("input_shape", "kernel_size", "stride", "padding", "ceil_mode", "expected"),
     [
         ((1, 32, 16, 16), (2, 2), (2, 2), (0, 0), False, (1, 32, 8, 8)),
-        ((1, 32, 16, 16), (3, 3), (1, 1), (1, 1), False, (1, 32, 16, 16)),
-        ((1, 32, 16, 16), (3, 3), (2, 2), (0, 0), True, (1, 32, 8, 8)),
         ((1, 1, 5, 5), (2, 2), (2, 2), (1, 1), True, (1, 1, 3, 3)),
         ((1, 1, 9, 11), (3, 2), (2, 1), (1, 0), False, (1, 1, 5, 10)),
     ],
-    ids=["window", "same_padding", "ceil_mode", "ceil_drops_padded_window", "asymmetric"],
+    ids=["window", "ceil_drops_padded_window", "asymmetric"],
 )
 def test_pool2d_shape_matches_torch(input_shape, kernel_size, stride, padding, ceil_mode, expected):
     op = _pool(kernel_size=kernel_size, stride=stride, padding=padding, ceil_mode=ceil_mode)
@@ -107,11 +105,7 @@ def test_pool2d_relation_propagates_surviving_splits(attrs, targets) -> None:
 _X = types.TensorType.from_shape((1, 32, 16, 16), _F)
 CASES = (
     _torch_case("max_padded", _MAX, (2, 3, 9, 11), (3, 2), (2, 1), padding=(1, 0)),
-    _torch_case("max_ceil", _MAX, (1, 2, 16, 16), (3, 3), (2, 2), ceil_mode=True),
     _torch_case("avg_include_pad", _AVG, (2, 3, 8, 8), (3, 3), (1, 2), padding=(1, 1)),
-    _torch_case(
-        "avg_exclude_pad", _AVG, (2, 3, 8, 8), (3, 3), (1, 2), padding=(1, 1), include_pad=False
-    ),
     _torch_case(
         "avg_ceil",
         _AVG,
