@@ -16,10 +16,10 @@ from tilefoundry import dispatch, verifier
 from tilefoundry.interfaces import autodiff, typeinfer
 from tilefoundry.ir import core, expr, types
 from tilefoundry.ir import utils as ir_utils
-from tilefoundry.ir.hir import sharding, tensor
+from tilefoundry.ir.hir import sharding
 
 from . import recompute_selection
-from .recompute_selection import is_projection, select_value, where
+from .recompute_selection import is_projection, located, projection, select_value
 
 __all__ = ["Saved", "differentiate", "saved_values", "select_value"]
 
@@ -65,11 +65,6 @@ def saved_values(forward: core.Module) -> tuple[Saved, ...]:
     if forward.metadata.get(GENERATED) != "forward":
         raise ValueError(f"saved_values: {forward.name!r} is not a forward that differentiate generated")
     return forward.metadata["saved"]
-
-
-def located(node: expr.Expr) -> str:
-    text = where(node)
-    return f"\n  at {text}" if text else ""
 
 
 def is_float(type_: types.Type) -> bool:
@@ -121,15 +116,6 @@ def placed(structure, path, value):
 
 def empty_like(type_: types.Type):
     return tuple(empty_like(item) for item in type_.fields) if isinstance(type_, types.TupleType) else None
-
-
-def projection(value: expr.Expr, index: int, type_: types.Type, name: str | None = None) -> expr.Call:
-    """``value[index]``, bound to *name* when one is given; the final inference types it."""
-    constant = expr.Constant(
-        type=types.TensorType.from_scalar(expr.DType.i64, storage=expr.StorageKind.UMAT), value=index
-    )
-    metadata = () if name is None else (expr.BindingMetadata(name=name),)
-    return expr.Call(tensor.TupleGetItem(), (value, constant), type=type_, metadata=metadata)
 
 
 def capture_name(pair: tuple[expr.Var, expr.Expr]) -> str:

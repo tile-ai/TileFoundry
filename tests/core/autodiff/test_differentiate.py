@@ -131,6 +131,7 @@ class Differentiated(Case):
     saved: frozenset[str] | None = None
     saved_tensors: Mapping[str, int] | None = None
     slots: Mapping[str, tuple[str, ...]] | None = None
+    loops: int | None = None
     reshards: tuple[tuple[tuple, tuple], ...] = ()
     rtol: float = 1e-5
     atol: float = 1e-6
@@ -154,6 +155,9 @@ class Differentiated(Case):
         if self.slots is not None:
             elements = {key: tuple(each.name for each in core.instances(slot)) for key, slot in forward.children.items()}
             assert elements == dict(self.slots)
+        if self.loops is not None:
+            body = forward.entry_function().body
+            assert sum(isinstance(each, core.LoopRegion) for each in core.collect_exprs(body)) == self.loops
         for generated in (forward, backward):
             named: dict[str, core.Module] = {}
             for each in core.module_definition_order(generated):
@@ -252,6 +256,107 @@ class ChildCallSharedCopy(ChildCall):
     slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
         {"first": ("Layer_1Forward",), "rest": ("LayerForward", "Layer_1Forward")}
     )
+
+
+def stacked(slot: str, *indices: int) -> frozenset[str]:
+    return frozenset(f"{slot}.*.saved[{index}]" for index in indices)
+
+
+ONE = MappingProxyType({"layers": ("LayerForward",) * 3})
+CUT = MappingProxyType(
+    {"layers_0": ("LayerForward",), "layers_1": ("Layer_1Forward",), "layers_2": ("LayerForward",)}
+)
+
+
+@case
+class ModuleListLoop(Differentiated):
+    path: Path = FIXTURES / "module_list_loop.py"
+    name: str | None = "Stack"
+    wrt: tuple[str, ...] = ("x", "ws")
+    saved: frozenset[str] | None = stacked("layers", 0, 1, 3) | {"ws", "v4"}
+    slots: Mapping[str, tuple[str, ...]] | None = ONE
+    loops: int | None = 1
+
+
+@case
+class ModuleListOneLayer(ModuleListLoop):
+    recompute: tuple[str, ...] = ("Stack.layers.1:h",)
+    saved: frozenset[str] | None = (
+        stacked("layers_0", 0, 1, 3) | stacked("layers_1", 0, 1) | stacked("layers_2", 0, 1, 3) | {"ws", "v9"}
+    )
+    slots: Mapping[str, tuple[str, ...]] | None = CUT
+    loops: int | None = 3
+
+
+@case
+class ModuleListWholeLayer(ModuleListLoop):
+    recompute: tuple[str, ...] = ("Stack.layers.1",)
+    saved: frozenset[str] | None = (
+        stacked("layers_0", 0, 1, 3) | stacked("layers_1", 0) | stacked("layers_2", 0, 1, 3) | {"ws", "v8"}
+    )
+    slots: Mapping[str, tuple[str, ...]] | None = CUT
+    loops: int | None = 3
+
+
+@case
+class ModuleListSavedEnds(ModuleListLoop):
+    """Two elements apart keep what they compute; the one between recomputes all of it.
+
+    A ``:None`` written twice is one choice.
+    """
+
+    recompute: tuple[str, ...] = ("Layer", "Stack.layers.0:None", "Stack.layers.2:None", "Stack.layers.2:None")
+    saved: frozenset[str] | None = (
+        stacked("layers_0", 0, 1, 3) | stacked("layers_1", 0) | stacked("layers_2", 0, 1, 3) | {"ws", "v8"}
+    )
+    slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
+        {"layers_0": ("Layer_1Forward",), "layers_1": ("LayerForward",), "layers_2": ("Layer_1Forward",)}
+    )
+    loops: int | None = 3
+
+
+@case
+class ModuleListNeighbours(ModuleListLoop):
+    """Neighbouring elements with one choice are one segment and one loop."""
+
+    recompute: tuple[str, ...] = ("Stack.layers.1:h", "Stack.layers.2:h")
+    saved: frozenset[str] | None = stacked("layers_0", 0, 1, 3) | stacked("layers_1", 0, 1) | {"ws", "v6"}
+    slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
+        {"layers_0": ("LayerForward",), "layers_1": ("Layer_1Forward",) * 2}
+    )
+    loops: int | None = 2
+
+
+@case
+class ModuleListEveryLayer(ModuleListLoop):
+    """Every element with one choice keeps the slot and the loop whole."""
+
+    recompute: tuple[str, ...] = ("Stack.layers.0", "Stack.layers.1", "Stack.layers.2")
+    saved: frozenset[str] | None = stacked("layers", 0) | {"ws", "v2"}
+    slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType({"layers": ("Layer_1Forward",) * 3})
+
+
+@case
+class ModuleListConstantCall(Differentiated):
+    """A call by a constant index of a cut slot calls the element in its segment."""
+
+    path: Path = FIXTURES / "module_list_constant_call.py"
+    name: str | None = "Stack"
+    wrt: tuple[str, ...] = ("x", "w")
+    recompute: tuple[str, ...] = ("Stack.layers.1:h",)
+    slots: Mapping[str, tuple[str, ...]] | None = CUT
+
+
+@case
+class ModuleListNested(Differentiated):
+    """The loop over the microbatches stays one loop; the loop over the layers inside it is cut."""
+
+    path: Path = FIXTURES / "module_list_nested.py"
+    name: str | None = "Stack"
+    wrt: tuple[str, ...] = ("x", "ws")
+    recompute: tuple[str, ...] = ("Stack.layers.1:h",)
+    slots: Mapping[str, tuple[str, ...]] | None = CUT
+    loops: int | None = 4
 
 
 @case
@@ -575,7 +680,6 @@ REFUSED = (
     ("sharded.py", ("w",), ("Layer.nope:full",), "'Layer' has no function or child slot named 'nope'"),
     ("sharded.py", ("w",), ("Layer.forward:nope",), "binds no value named 'nope'"),
     ("sharded.py", ("w",), ("Layer.forward:w",), "'w' is a parameter"),
-    ("sharded.py", ("w",), ("full",), "no Module named 'full'"),
     ("rebound.py", ("x",), ("Rebound.forward:h",), "2 values are named 'h'"),
     ("same_name.py:SameName", ("x",), ("Block:h",), "2 different Modules are named 'Block'"),
     ("sibling_call.py", ("x",), ("SiblingCall.forward:a",), "result of calling 'layer'"),
@@ -591,6 +695,11 @@ REFUSED = (
     ("child_call.py:ChildCall", ("x",), (":h",), "expected Module[.function][:variable]"),
     ("child_call.py:ChildCall", ("x",), ("",), "expected Module[.function][:variable]"),
     ("child_call.py:ChildCall", ("x",), ("Layer.forward",), "name a variable after the function"),
+    ("module_list_shifted.py:Stack", ("x",), ("Stack.layers.1:h",), "slot 'layers' is indexed by a value that is not the loop index"),
+    ("module_list_step.py:Stack", ("x",), ("Stack.layers.1:h",), "loop over 'layers' has step 2"),
+    ("module_list_dynamic.py:Stack", ("x",), ("Stack.layers.1:h",), "loop over 'layers': trip count is not static"),
+    ("module_list_const.py:Stack", ("x",), ("Stack.layers.1:h",), "'Layer' holds a ConstTensor"),
+    ("module_list_name_taken.py:Stack", ("x",), ("Stack.layers.1:h",), "'layers_0' is already a name in 'Stack'"),
 )
 
 

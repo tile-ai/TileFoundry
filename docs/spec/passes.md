@@ -536,7 +536,7 @@ through `saved`.
   respect to each of its floating point parameters that is not a `ConstTensor`.
   Each Module keeps one forward and one backward version of it under its own
   name. A child slot's Module is differentiated the same way and takes the same
-  slot in both generated Modules. A callee's `saved` is one item of its
+  slot in both generated Modules, except a slot that `recompute` cuts, below. A callee's `saved` is one item of its
   caller's `saved`; in a loop body its items are taken one at a time, as the
   loop rule below says.
 - A `MeshRegion` stays a region in both Modules. A value inside a forward
@@ -592,7 +592,7 @@ through `saved`.
   is written for a ModuleList slot and only for it. When the second segment
   after `Root` is a function of the root, the selector names a definition;
   when it is a child slot, an element. A value a selector may name is a call
-  of an Op outside every loop body. An element's own selectors **replace**
+  of an Op outside every loop body that is not a projection of a call's result. An element's own selectors **replace**
   what the selectors of definitions choose in its subtree; they do not add to
   them. Each selector is checked against *module* even when another replaces
   it.
@@ -601,7 +601,17 @@ through `saved`.
   number from 1 whose name no other Module of the tree has, so the generated
   `<Name>_<k>Forward` and `<Name>_<k>Backward` appear in the written file.
   Elements of one definition with the same selectors share one copy; the root
-  keeps its name and its slot keys.
+  keeps its name and, except a cut slot, its slot keys.
+- A ModuleList slot of the root that a loop calls by a run-time index, and
+  whose elements are no longer one definition, is cut: each maximal run of
+  consecutive elements of one definition, `[start, stop)`, becomes the slot
+  `<slot>_<n>`, `n` counting the runs from 0, and the original key is gone.
+  Each loop that calls the slot is cut into one loop per run that meets its
+  range, over `[max(start, loop start), min(stop, loop extent))`; each loop
+  carries what the one before it returns, and the last one stands for the
+  original loop. In a cut loop the call is `<slot>_<n>[t - start]`, and a call
+  by a constant index `i` is `<slot>_<n>[i - start]`. An enclosing loop is not
+  cut. A slot whose elements are all one definition is not cut.
 - `saved_values` lists the items of a generated forward's `saved` with the name
   the author bound (`v<index>` when there is none), the type, and the origin:
   `parameter`, `carry`, the Op and its source line, or the call whose `saved`
@@ -625,7 +635,12 @@ through `saved`.
     nor a child slot of the root, that leaves out the index of a ModuleList slot,
     gives an index past its end or to a slot that is not a ModuleList, or that
     goes through a second child slot; a `:None` that does not follow an element,
-    or that another selector of the same element joins; and a backward that
+    or that a different selector of the same element joins; a slot to cut that
+    is called by a run-time index that is not the induction value of the loop
+    around the call, from a loop whose step is not 1 or whose trip count is not
+    static, whose subtree has a `ConstTensor` parameter (the resource path of
+    the weight would move), or whose segment name `<slot>_<n>` is already a
+    function, child slot or method of the root; and a backward that
     `differentiate` generated, since a second derivative is not supported.
 
 ## 8. Directory layout
