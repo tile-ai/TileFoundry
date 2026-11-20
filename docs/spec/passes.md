@@ -511,6 +511,7 @@ class Saved:
     type: types.Type
     origin: str
     buffer: Saved | None = None
+    parameter: bool = False
 
 def saved_values(forward: core.Module) -> tuple[Saved, ...]: ...
 ```
@@ -581,21 +582,21 @@ through `saved`.
 
   | selector | recomputes |
   |---|---|
-  | `Name` | in each element of the Module named `Name`, and in its subtree, each value a selector may name |
-  | `Name[.function]:variable` | that value, in each element of `Name` |
+  | `Name` | in each use of the Module named `Name`, and in its subtree, each value a selector may name |
+  | `Name[.function]:variable` | that value, in each use of `Name` |
   | `Root.slot[.index]` | in that one element of a child slot of the root, and in its subtree, each value a selector may name |
   | `Root.slot[.index][.function]:variable` | that value, in that one element |
   | `Root.slot[.index]:None` | nothing in that one element: it saves what it computes |
 
   `Name` is resolved by `Module.name` among the Modules reachable from
   *module*, as the selector in [cli Commands](./cli.md#commands). `.index`
-  is written for a ModuleList slot and only for it. When the second segment
-  after `Root` is a function of the root, the selector names a definition;
-  when it is a child slot, an element. A value a selector may name is a call
-  of an Op outside every loop body that is not a projection of a call's result. An element's own selectors **replace**
-  what the selectors of definitions choose in its subtree; they do not add to
-  them. Each selector is checked against *module* even when another replaces
-  it.
+  is written for a ModuleList slot and only for it. When the segment after
+  `Root` is a child slot of the root, the selector names an element; otherwise
+  it names a definition. A value a selector may name is a call of an Op outside
+  every loop body that is not a projection of a call's result. An element's own
+  selectors **replace** what the selectors of definitions choose in its subtree;
+  they do not add to them. Each selector is checked against *module* even when
+  another replaces it.
 - An element with its own selectors is differentiated from a copy of its
   subtree. Each Module of a copy is named `<Name>_<k>`, `k` the smallest
   number from 1 whose name no other Module of the tree has, so the generated
@@ -619,11 +620,13 @@ through `saved`.
   keeps the bytes of what it views alive: its `buffer` is the value reached
   by following, from the saved value, the operand each view Op re-addresses
   under the target's storage owners, while there is one; that value is
-  reported like a saved one, a value without a name by its origin with `@`
-  for the gap (`matmul@f.py:11`). `buffer` is `None` for a value that is its
-  own buffer, and for a parameter, a carry, a callee's item and a stack. A
-  callee's item that is the callee's parameter is its own buffer: the
-  caller's value it stands for is not followed.
+  reported like a saved one, a value without a name as `v<index>`: its own
+  index when it is saved too, else the next index after `saved`, one per
+  buffer. `buffer` is `None` for a value that is its own buffer, and for a
+  parameter, a carry, a callee's item and a stack. A callee's item that is
+  the callee's parameter is its own buffer: the caller's value it stands for
+  is not followed. `parameter` is true for a parameter of the function, which
+  is held whatever the forward saves.
 - constraints:
   - `differentiate` MUST NOT change *module*.
   - Each refusal is a `ValueError` that names what it refuses, and the source

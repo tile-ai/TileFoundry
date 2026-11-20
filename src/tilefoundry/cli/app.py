@@ -287,7 +287,7 @@ def build_parser() -> argparse.ArgumentParser:
     autodiff.add_argument(
         "--recompute", action="append", default=[], metavar="SELECTOR",
         help="what the backward computes again instead of saving it: Module[.function][:variable] "
-        "for each element of a definition, Root.slot[.index][.function][:variable] for one element, "
+        "for each use of a definition, Root.slot[.index][.function][:variable] for one element, "
         "Root.slot[.index]:None to save all of one element; repeat for more",
     )
     autodiff.add_argument(

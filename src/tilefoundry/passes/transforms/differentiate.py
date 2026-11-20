@@ -16,10 +16,10 @@ from tilefoundry import dispatch, verifier
 from tilefoundry.interfaces import access, autodiff, typeinfer
 from tilefoundry.ir import core, expr, types
 from tilefoundry.ir import utils as ir_utils
-from tilefoundry.ir.hir import sharding
+from tilefoundry.ir.hir import sharding, tensor
 
 from . import element_copies
-from .element_copies import is_projection, located, projection, refuse, where
+from .element_copies import refuse
 
 __all__ = ["Saved", "differentiate", "saved_values"]
 
@@ -32,12 +32,14 @@ class Saved:
 
     *buffer* is the value whose bytes a view keeps alive, reached through each
     view's aliased operand; ``None`` when the value is its own buffer.
+    *parameter* says the value is a parameter of the function, held anyway.
     """
 
     name: str
     type: types.Type
     origin: str
     buffer: Saved | None = None
+    parameter: bool = False
 
 
 def differentiate(
@@ -60,8 +62,8 @@ def differentiate(
     if not wrt:
         raise ValueError(f"differentiate: {module.name!r}: wrt names no parameter")
     selection = parse_selectors(module, tuple(recompute))
-    tree = element_copies.expand(module, selection.by_element, selection.named_by)
-    selected = {id(value): value for value in resolve(tree, selection)}
+    tree, copies = element_copies.expand(module, selection.by_element)
+    selected = {id(value): value for value in resolve(tree, selection, copies)}
     return Differentiator(selected, module.target).module(tree, wrt)
 
 
@@ -90,15 +92,12 @@ class Selection:
 
     by_definition: dict[str, object]
     by_element: dict[tuple[str, int | None], object]
-    named_by: dict[tuple[str, int | None], str] = field(default_factory=dict)
-    """The first selector of each element, which a refusal of its slot quotes."""
 
 
 def parse_selectors(module: core.Module, recompute: tuple[str, ...]) -> Selection:
     """Check each selector against *module* and gather what it chooses."""
     by_definition: dict[str, object] = {}
     by_element: dict[tuple[str, int | None], object] = {}
-    named_by: dict[tuple[str, int | None], str] = {}
     for selector in recompute:
         key, chosen_by = choice(module, selector)
         if isinstance(key, str):
@@ -107,35 +106,34 @@ def parse_selectors(module: core.Module, recompute: tuple[str, ...]) -> Selectio
         if key in by_element and NOTHING in (by_element[key], chosen_by) and by_element[key] != chosen_by:
             refuse(selector, "':None' and another selector name the same element")
         by_element[key] = merged(by_element.get(key), chosen_by)
-        named_by.setdefault(key, selector)
-    return Selection(by_definition, by_element, named_by)
+    return Selection(by_definition, by_element)
 
 
-def resolve(tree: core.Module, selection: Selection) -> tuple[expr.Expr, ...]:
-    """The values *selection* chooses in *tree*, which :func:`expand` returned."""
-    replaced = {
-        id(each)
-        for key, index in selection.by_element
-        for each in core.module_definition_order(element(tree, key, index))
-    }
+def resolve(tree: core.Module, selection: Selection, copies: dict) -> tuple[expr.Expr, ...]:
+    """The values *selection* chooses in *tree*, where *copies* holds each chosen element's copy.
+
+    A copy's Modules have names of their own, so a definition's name reaches
+    only the Modules no element replaced.
+    """
+    replaced = {id(each) for each in core.module_definition_order(*copies.values())}
     values: list[expr.Expr] = []
     for name, choice in selection.by_definition.items():
         for owner in core.module_definition_order(tree):
-            if owner.name == name and id(owner) not in replaced:
+            if owner.name == name:
                 values.extend(chosen(owner, choice, replaced))
-    for (key, index), choice in selection.by_element.items():
-        values.extend(chosen(element(tree, key, index), choice, frozenset()))
+    for position, choice in selection.by_element.items():
+        values.extend(chosen(copies[position], choice, frozenset()))
     return tuple(values)
 
 
 def selectable(function: core.Function) -> tuple[expr.Expr, ...]:
     """Each value of *function* a selector may name: an Op Call outside every loop body."""
     values = core.collect_exprs(function.body)
-    looped = in_loops(values)
+    looped = core.innermost_loops(values)
     return tuple(
         value
         for value in values
-        if isinstance(value, expr.Call) and id(value) not in looped and not is_call_result(value)
+        if isinstance(value, expr.Call) and id(value) not in looped and called(value) is None
     )
 
 
@@ -169,8 +167,10 @@ def choice(root: core.Module, selector: str) -> tuple[str | tuple[str, int | Non
 def choice_of(selector: str, module: core.Module, function, variable: str | None, element: bool) -> object:
     """What a selector chooses in *module*: NOTHING for ``:None``, WHOLE with no variable."""
     if variable == "None":
-        if not element or function is not None:
+        if not element:
             refuse(selector, "':None' names one element of a child slot of the root")
+        if function is not None:
+            refuse(selector, "':None' says the whole element saves; it follows the element, not a function")
         return NOTHING
     if variable is None:
         if function is not None:
@@ -202,20 +202,20 @@ def value_of(selector: str, module: core.Module, function_name: str | None, vari
     if not matches:
         refuse(selector, f"{function.name!r} binds no value named {variable!r}")
     if len(matches) > 1:
-        places = ", ".join(where(value) or "?" for value in matches.values())
+        places = ", ".join(expr.authored_at(value) or "?" for value in matches.values())
         refuse(selector, f"{len(matches)} values are named {variable!r}: {places}")
     (value,) = matches.values()
-    if id(value) in in_loops(values):
+    if id(value) in core.innermost_loops(values):
         refuse(
             selector,
             f"{variable!r} is computed inside a loop; "
             "the first version saves every value of a loop body and recomputes none",
         )
-    if is_call_result(value):
-        produced = value.args[0] if is_projection(value) else value
+    call = called(value)
+    if call is not None:
         refuse(
             selector,
-            f"{variable!r} is the result of calling {produced.target.qualified_name!r}; "
+            f"{variable!r} is the result of calling {call.target.qualified_name!r}; "
             "only a value an Op computes is recomputed",
         )
     if not isinstance(value, expr.Call):
@@ -237,18 +237,6 @@ def chosen(module: core.Module, choice: object, skipped) -> list[expr.Expr]:
     ]
 
 
-def element(tree: core.Module, key: str, index: int | None) -> core.Module:
-    """Element *index* of slot *key* of *tree*, found in its runs when the slot was cut."""
-    if key in tree.children:
-        slot = tree.children[key]
-        return slot if index is None else slot[index]
-    n = 0
-    while len(tree.children[f"{key}_{n}"]) <= index:
-        index -= len(tree.children[f"{key}_{n}"])
-        n += 1
-    return tree.children[f"{key}_{n}"][index]
-
-
 def merged(old: object | None, new: object) -> object:
     if old is None:
         return new
@@ -257,20 +245,12 @@ def merged(old: object | None, new: object) -> object:
     return old | new
 
 
-def in_loops(values: tuple[expr.Expr, ...]) -> set[int]:
-    """The ids of the values inside a loop body or yield of a loop among *values*."""
-    return {
-        id(inner)
-        for loop in values
-        if isinstance(loop, core.LoopRegion)
-        for root in (loop.body, *loop.yield_values)
-        for inner in core.collect_exprs(root)
-    }
-
-
-def is_call_result(value: expr.Expr) -> bool:
-    produced = value.args[0] if is_projection(value) else value
-    return isinstance(produced, expr.Call) and isinstance(produced.target, core.FunctionRef)
+def called(value: expr.Expr) -> expr.Call | None:
+    """The call of a function whose result *value* is, or one item of; ``None`` otherwise."""
+    produced = value.args[0] if tensor.is_get_item(value) else value
+    if isinstance(produced, expr.Call) and isinstance(produced.target, core.FunctionRef):
+        return produced
+    return None
 
 
 def is_float(type_: types.Type) -> bool:
@@ -330,28 +310,12 @@ def capture_name(pair: tuple[expr.Var, expr.Expr]) -> str:
     return value.name if isinstance(value, expr.Var) else expr.binding_name(value) or ""
 
 
-def pack(items: tuple[expr.Expr, ...]) -> expr.Tuple:
-    return expr.Tuple(elements=tuple(items), type=types.TupleType(tuple(item.type for item in items)))
-
-
-def unpack(value: expr.Expr, fields: tuple[types.Type, ...]) -> tuple[expr.Expr, ...]:
-    """The projection of each field of *value*."""
-    return tuple(projection(value, index, item) for index, item in enumerate(fields))
-
-
-def repack(value: expr.Expr, type_: types.Type) -> expr.Expr:
-    """*value* read as *type_*: its one result, or a tuple of each field's projection."""
-    if not isinstance(type_, types.TupleType):
-        return projection(value, 0, type_)
-    return pack(unpack(value, type_.fields))
-
-
 def trip_count(loop: core.LoopRegion) -> int:
     """How many iterations *loop* runs; a domain that is not three integers is refused."""
     domain = (loop.start, loop.extent, loop.step)
     if not all(isinstance(bound, int) and not isinstance(bound, bool) for bound in domain):
         raise ValueError(
-            f"differentiate: a loop whose trip count is not static is not differentiated{located(loop)}"
+            f"differentiate: a loop whose trip count is not static is not differentiated{expr.diagnostic_suffix(loop)}"
         )
     return len(range(*domain))
 
@@ -446,19 +410,10 @@ class Scope:
     order: list[expr.Expr] = field(default_factory=list)
 
     def rebuilt(self, owner: "FunctionDifferentiator", node: expr.Expr) -> expr.Expr:
-        """*node* of the backward with every forward value it reads replaced by its slot.
-
-        The scope's ``Rebuilder`` is made on first use.
-        """
+        """*node* through this scope's ``Rebuilder``, made on first use."""
         if self.rebuilder is None:
             self.rebuilder = Rebuilder(owner, self)
         return self.rebuilder.visit(node)
-
-    def remember_gradient(self, node: expr.Expr, gradient) -> None:
-        self.gradients[id(node)] = gradient
-
-    def remember_slot(self, slot: tuple, value: expr.Expr) -> None:
-        self.slots[slot] = value
 
     def walk(self, roots: tuple[expr.Expr, ...]) -> None:
         """Order the values *roots* reach, marking the active and the invariant ones."""
@@ -467,6 +422,12 @@ class Scope:
         for root in roots:
             walker.visit(root, self.order)
         self.nodes.update((id(node), node) for node in self.order)
+
+    def remember_gradient(self, node: expr.Expr, gradient) -> None:
+        self.gradients[id(node)] = gradient
+
+    def remember_slot(self, slot: tuple, value: expr.Expr) -> None:
+        self.slots[slot] = value
 
 
 
@@ -572,7 +533,7 @@ class Differentiator:
         if sum(isinstance(segment, str) for segment in ref.path) != 1 or ref.name is not None:
             raise ValueError(
                 f"differentiate: the call of {ref.qualified_name!r} reaches past one child slot; "
-                f"only a call of a child slot's entry is differentiated{located(call)}"
+                f"only a call of a child slot's entry is differentiated{expr.diagnostic_suffix(call)}"
             )
         key = ref.path[0]
         slot = core.instances(module.children[key])
@@ -631,6 +592,7 @@ class FunctionDifferentiator(expr.Functor[None]):
             if isinstance(value, expr.Call) and isinstance(value.target, core.FunctionRef)
         }
         self.saved_keys: list[tuple] = []
+        self.unsaved: dict[int, str] = {}
         memo = {id(node): (node, node.type) for node in values}
         ctx = autodiff.Context(module=module, function=function, target=module.target or differ.target, memo=memo)
         active = {id(function.params[index]) for index in wrt}
@@ -679,7 +641,7 @@ class FunctionDifferentiator(expr.Functor[None]):
             for index in self.wrt
         )
         gradients = types.TupleType(tuple(gradient_type(function.params[index].type) for index in self.wrt))
-        returned = outputs[0] if len(outputs) == 1 else pack(outputs)
+        returned = outputs[0] if len(outputs) == 1 else tensor.pack(outputs)
         body = self.top.rebuilt(self, returned)
         meshes = {
             repr(node.mesh): node.mesh for node in self.top.nodes.values() if isinstance(node, core.MeshRegion)
@@ -726,7 +688,7 @@ class FunctionDifferentiator(expr.Functor[None]):
         """*gradient* of a *type_* value, completed with zeros and laid out as ``gradient_type``."""
         if isinstance(type_, types.TupleType):
             parts = gradient if isinstance(gradient, tuple) else empty_like(type_)
-            packed = pack(tuple(self.finish(part, item, ctx) for part, item in zip(parts, type_.fields)))
+            packed = tensor.pack(tuple(self.finish(part, item, ctx) for part, item in zip(parts, type_.fields)))
             return ctx.remember(packed, gradient_type(type_))
         if gradient is None:
             return ctx.call("zeros", type=gradient_type(type_))
@@ -807,13 +769,13 @@ class FunctionDifferentiator(expr.Functor[None]):
         try:
             rule = autodiff.registry.require(op)
         except dispatch.MissingHandlerError as error:
-            raise ValueError(f"differentiate: {op.__name__} has no autodiff rule{located(call)}") from error
+            raise ValueError(f"differentiate: {op.__name__} has no autodiff rule{expr.diagnostic_suffix(call)}") from error
         if op is not sharding.Reshard:
             gradient = self.laid_out(gradient, call.type, scope.ctx)
         try:
             gradients = rule(call, gradient, scope.ctx)
         except (ValueError, expr.VerifyError) as error:
-            raise ValueError(f"differentiate: {error}{located(call)}") from error
+            raise ValueError(f"differentiate: {error}{expr.diagnostic_suffix(call)}") from error
         for arg, part in zip(call.args, gradients):
             self.accumulate(scope, arg, part)
 
@@ -863,7 +825,7 @@ class FunctionDifferentiator(expr.Functor[None]):
                 outputs.append((index, path, value))
         if not outputs:
             return
-        body = pack(tuple(value for _, _, value in outputs))
+        body = tensor.pack(tuple(value for _, _, value in outputs))
         ctx.remember(body, body.type)
         node = core.MeshRegion(mesh=region.mesh, body=body, params=tuple(params), args=tuple(args), type=body.type)
         scope.ctx.remember(node, body.type)
@@ -886,7 +848,7 @@ class FunctionDifferentiator(expr.Functor[None]):
         trip = trip_count(loop)
         carried = len(loop.yield_values)
         if not carried:
-            raise ValueError(f"differentiate: a gradient reaches a loop with no carries{located(loop)}")
+            raise ValueError(f"differentiate: a gradient reaches a loop with no carries{expr.diagnostic_suffix(loop)}")
         parts = gradient if isinstance(loop.type, types.TupleType) else (gradient,)
         if trip == 0:
             for arg, part in zip(loop.args, parts):
@@ -913,7 +875,7 @@ class FunctionDifferentiator(expr.Functor[None]):
         ]
         for position in carries:
             if isinstance(loop.params[position].type, types.TupleType):
-                raise ValueError(f"differentiate: a loop carry of tuple type is not differentiated{located(loop)}")
+                raise ValueError(f"differentiate: a loop carry of tuple type is not differentiated{expr.diagnostic_suffix(loop)}")
         captures = [
             position for position in range(carried, len(loop.params))
             if id(loop.params[position]) in inner.active and is_float(loop.params[position].type)
@@ -1012,7 +974,7 @@ class FunctionDifferentiator(expr.Functor[None]):
         elif key[0] == "node" and (id(value) in self.differ.recompute or self.recomputed(value, scope)):
             result = replace(value, args=tuple(self.materialize(("node", arg), scope) for arg in value.args))
         elif scope.parent is None:
-            result = projection(self.saved, len(self.saved_keys), self.key_type(key), self.read_name(key))
+            result = tensor.get_item(self.saved, len(self.saved_keys), self.key_type(key), self.read_name(key))
             self.saved_keys.append(key)
         elif isinstance(scope.region, core.LoopRegion):
             result = self.materialize_in_loop(key, scope)
@@ -1023,9 +985,9 @@ class FunctionDifferentiator(expr.Functor[None]):
             else:
                 scope.extras.append(key)
                 outer = self.capture(("extra", scope, len(scope.extras) - 1), scope.parent)
-            if is_projection(outer) and outer.args[0] is self.saved:
+            if tensor.is_get_item(outer) and outer.args[0] is self.saved:
                 index = outer.args[1].value
-                result = projection(self.saved_in(scope), index, self.key_type(key), self.read_name(key))
+                result = tensor.get_item(self.saved_in(scope), index, self.key_type(key), self.read_name(key))
             else:
                 result = expr.Var(name=self.fresh(self.key_name(key)[0] or "saved"), type=self.key_type(key))
                 scope.region_params.append((result, outer))
@@ -1095,7 +1057,7 @@ class FunctionDifferentiator(expr.Functor[None]):
         outer = self.capture(("extra", scope, len(scope.extras) - 1), scope.parent)
         stacks = expr.Var(
             name=self.fresh(f"stack_{self.key_name(key)[0] or 'saved'}"),
-            type=stacked(held, trip, owners, located(self.key_node(key))),
+            type=stacked(held, trip, owners, expr.diagnostic_suffix(self.key_node(key))),
         )
         ctx.remember(stacks, stacks.type)
         scope.region_params.append((stacks, outer))
@@ -1131,18 +1093,18 @@ class FunctionDifferentiator(expr.Functor[None]):
                 items.append(self.materialize(("node", arg), scope))
             else:
                 items.append(self.materialize(("callee", call, position), scope))
-        return scope.ctx.remember(pack(tuple(items)), derived.saved)
+        return scope.ctx.remember(tensor.pack(tuple(items)), derived.saved)
 
     def row(self, stacks: expr.Expr, type_: types.Type, row: expr.Expr, ctx: autodiff.Context) -> expr.Expr:
         """Row *row*, a scalar, of the stacks of a value of *type_*, shaped as that value."""
         if isinstance(type_, types.TupleType):
-            value = pack(tuple(
+            value = tensor.pack(tuple(
                 self.row(ctx.call("tuple_get_item", stacks, ctx.constant(index)), field, row, ctx)
                 for index, field in enumerate(type_.fields)
             ))
             return ctx.remember(value, type_)
         starts = (row, *(ctx.constant(0, ctx.type_of(row).dtype) for _ in type_.shape))
-        corner = ctx.remember(pack(starts), types.TupleType(tuple(ctx.type_of(start) for start in starts)))
+        corner = ctx.remember(tensor.pack(starts), types.TupleType(tuple(ctx.type_of(start) for start in starts)))
         rank = len(type_.shape) + 1
         taken = ctx.call("slice", stacks, corner, sizes=(1, *type_.shape), strides=(1,) * rank)
         value = ctx.call("reshape", taken, new_shape=tuple(type_.shape))
@@ -1172,23 +1134,31 @@ class FunctionDifferentiator(expr.Functor[None]):
 
     def record(self, index: int, key: tuple) -> Saved:
         name, origin = self.key_name(key)
-        return Saved(name or f"v{index}", self.key_type(key), origin, self.buffer(key))
+        return Saved(name or f"v{index}", self.key_type(key), origin, self.buffer(key), self.is_parameter(key))
 
     def buffer(self, key: tuple) -> Saved | None:
-        """The buffer a saved view keeps alive; None for a value that is its own, or not a node."""
+        """The buffer a saved view keeps alive; None for a value that is its own, or not a node.
+
+        A buffer without a name is ``v<i>`` as a saved value is: its own index when
+        it is saved too, else the next index after ``saved``, one per buffer.
+        """
         if key[0] != "node":
             return None
-        owners = (self.module.target or self.differ.target).storage_owners
+        owners = self.top.ctx.resolve_target().storage_owners
         root = key[1]
-        while isinstance(root, expr.Call) and not isinstance(root.target, core.FunctionRef):
-            position = access.aliased_operand(root, owners)
-            if position is None:
-                break
+        while isinstance(root, expr.Call) and (position := access.aliased_operand(root, owners)) is not None:
             root = root.args[position]
         if root is key[1]:
             return None
         name, origin = self.key_name(("node", root))
-        return Saved(name or origin.replace("  ", "@"), root.type, origin)
+        if name is None:
+            index = next((i for i, held in enumerate(self.saved_keys) if held[0] == "node" and held[1] is root), None)
+            fallback = f"v{len(self.saved_keys) + len(self.unsaved)}"
+            name = f"v{index}" if index is not None else self.unsaved.setdefault(id(root), fallback)
+        return Saved(name, root.type, origin, parameter=self.is_parameter(("node", root)))
+
+    def is_parameter(self, key: tuple) -> bool:
+        return key[0] == "node" and any(key[1] is param for param in self.function.params)
 
     def key_name(self, key: tuple) -> tuple[str | None, str]:
         """The name and the origin a saved value is reported with."""
@@ -1226,12 +1196,12 @@ class FunctionDifferentiator(expr.Functor[None]):
         elif isinstance(body, expr.Tuple):
             kept = body.elements
         else:
-            kept = unpack(body, results)
-        saved = pack(tuple(cloner.saved_value(key, env) for key in self.saved_keys))
+            kept = tensor.unpack(body, results)
+        saved = tensor.pack(tuple(cloner.saved_value(key, env) for key in self.saved_keys))
         return core.Function.from_parts(
             name=function.name,
             params=params,
-            body=pack((*kept, saved)),
+            body=tensor.pack((*kept, saved)),
             return_type=types.TupleType((*results, self.saved.type)),
         )
 
@@ -1239,7 +1209,7 @@ class FunctionDifferentiator(expr.Functor[None]):
 def rebuild_structure(type_: types.Type, found) -> expr.Expr:
     """The values *found*, one per tensor leaf of *type_*, packed as *type_* nests them."""
     if isinstance(type_, types.TupleType):
-        return pack(tuple(rebuild_structure(item, found) for item in type_.fields))
+        return tensor.pack(tuple(rebuild_structure(item, found) for item in type_.fields))
     return next(found)
 
 
@@ -1290,7 +1260,7 @@ class Inliner(core.BindingSubstitutionCloner):
     def visit_Call(self, node: expr.Call, ctx) -> expr.Expr:
         copied = super().visit_Call(node, ctx)
         held, index = copied.args[0] if copied.args else None, copied.args[-1] if copied.args else None
-        if is_projection(copied) and isinstance(held, expr.Tuple) and isinstance(index, expr.Constant):
+        if tensor.is_get_item(copied) and isinstance(held, expr.Tuple) and isinstance(index, expr.Constant):
             return held.elements[index.value]
         return copied
 
@@ -1326,7 +1296,7 @@ class ForwardCloner(core.BindingSubstitutionCloner):
         if not isinstance(node.target, core.FunctionRef):
             return copied
         self.calls[id(node)] = copied
-        return repack(copied, node.type)
+        return tensor.repack(copied, node.type)
 
     def visit_MeshRegion(self, node: core.MeshRegion, ctx) -> expr.Expr:
         copied = super().visit_MeshRegion(node, ctx)
@@ -1340,15 +1310,15 @@ class ForwardCloner(core.BindingSubstitutionCloner):
             kept = (
                 copied.body.elements
                 if isinstance(copied.body, expr.Tuple)
-                else unpack(copied.body, results)
+                else tensor.unpack(copied.body, results)
             )
         else:
             kept = (copied.body,)
         extras = tuple(self.saved_value(key, inner) for key in scope.extras)
-        body = pack((*kept, *extras))
+        body = tensor.pack((*kept, *extras))
         region = replace(copied, body=body, type=body.type)
         self.regions[id(node)] = (region, len(results))
-        return repack(region, node.type)
+        return tensor.repack(region, node.type)
 
     def visit_LoopRegion(self, node: core.LoopRegion, ctx) -> expr.Expr:
         """The loop with one more carry per tensor the backward reads from an iteration.
@@ -1380,12 +1350,12 @@ class ForwardCloner(core.BindingSubstitutionCloner):
             for path, leaf in found:
                 piece = value
                 for index in path:
-                    piece = projection(piece, index, leaf)
+                    piece = tensor.get_item(piece, index, leaf)
                 stack_type = stacked(leaf, trip, scope.ctx.resolve_target().storage_owners, "")
                 stack = expr.Var(name=self.owner.fresh(f"stack_{self.owner.key_name(key)[0] or 'v'}"), type=stack_type)
                 stacks.append(stack)
                 inits.append(autodiff.build("zeros", type=stack_type))
-                corner = pack((ordinal, *(autodiff.scalar(0, dtype) for _ in leaf.shape)))
+                corner = tensor.pack((ordinal, *(autodiff.scalar(0, dtype) for _ in leaf.shape)))
                 updates.append(autodiff.build(
                     "insert_slice", stack, autodiff.build("reshape", piece, new_shape=(1, *leaf.shape)), corner
                 ))
@@ -1399,8 +1369,8 @@ class ForwardCloner(core.BindingSubstitutionCloner):
         )
         self.loops[id(node)] = (loop, carried, tuple(counts))
         if carried == 1:
-            return projection(loop, 0, node.type)
-        return pack(tuple(projection(loop, index, item) for index, item in enumerate(node.type.fields)))
+            return tensor.get_item(loop, 0, node.type)
+        return tensor.pack(tuple(tensor.get_item(loop, index, item) for index, item in enumerate(node.type.fields)))
 
     def saved_value(self, key: tuple, env) -> expr.Expr:
         """The forward value *key* names, in the scope *env* binds."""
@@ -1408,15 +1378,15 @@ class ForwardCloner(core.BindingSubstitutionCloner):
             return self.visit(key[1], env)
         if key[0] == "callee":
             derived = self.owner.callees[id(key[1])]
-            saved = projection(self.calls[id(key[1])], derived.results, derived.saved)
-            return saved if len(key) == 2 else projection(saved, key[2], derived.saved.fields[key[2]])
+            saved = tensor.get_item(self.calls[id(key[1])], derived.results, derived.saved)
+            return saved if len(key) == 2 else tensor.get_item(saved, key[2], derived.saved.fields[key[2]])
         _, scope, index = key
         self.visit(scope.region, env)
         if isinstance(scope.region, core.LoopRegion):
             loop, carried, counts = self.loops[id(scope.region)]
             type_ = self.owner.key_type(key)
             first = carried + sum(counts[:index])
-            found = [projection(loop, first + offset, leaf) for offset, (_, leaf) in enumerate(leaves(flat(type_)))]
+            found = [tensor.get_item(loop, first + offset, leaf) for offset, (_, leaf) in enumerate(leaves(flat(type_)))]
             return rebuild_structure(type_, iter(found))
         region, results = self.regions[id(scope.region)]
-        return projection(region, results + index, self.owner.key_type(key))
+        return tensor.get_item(region, results + index, self.owner.key_type(key))

@@ -43,6 +43,7 @@ from .visitor import (
     collect_exprs,
     expr_children,
     function_values,
+    innermost_loops,
     rewrite_prim_function,
     stmt_expr_fields,
     walk_prim_function,

@@ -46,19 +46,18 @@ def saved_table(forward) -> str:
     a name can be bound twice.
     """
     rows = [COLUMNS]
-    buffers: dict[tuple[str, str], types.Type] = {}
+    buffers: dict[tuple[str, str], tuple[types.Type, bool]] = {}
     for value in differentiate.saved_values(forward):
         for name, type_ in tensor_leaves(value.name, value.type):
-            buffer = value.buffer or differentiate.Saved(name, type_, value.origin)
-            buffers.setdefault((buffer.name, buffer.origin), buffer.type)
-            rows.append(
-                (name, str(tuple(type_.shape)), str(local_bytes(type_)), layout_text(type_), buffer.name, value.origin)
-            )
+            buffer = value.buffer
+            key = (name, value.origin) if buffer is None else (buffer.name, buffer.origin)
+            buffers.setdefault(key, (type_, value.parameter) if buffer is None else (buffer.type, buffer.parameter))
+            rows.append((name, str(tuple(type_.shape)), str(local_bytes(type_)), layout_text(type_), key[0], value.origin))
     widths = [max(len(row[column]) for row in rows) for column in range(len(COLUMNS) - 1)]
     totals = {"held": 0, "parameters": 0}
-    for (_, origin), type_ in buffers.items():
+    for type_, parameter in buffers.values():
         whole = sum(local_bytes(leaf) for _, leaf in tensor_leaves("", type_))
-        totals["parameters" if origin == "parameter" else "held"] += whole
+        totals["parameters" if parameter else "held"] += whole
     label = max(widths[0] + 2 + widths[1], len("parameters"))
     return "".join(
         "  ".join(cell.ljust(width) for cell, width in zip(row, widths)) + "  " + row[-1] + "\n"
