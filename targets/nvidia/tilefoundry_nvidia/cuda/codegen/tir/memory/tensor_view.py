@@ -356,7 +356,7 @@ def emit_paired(op: str, operands, ctx: context.Context, rest: tuple[str, ...] =
     """
     names, views = [], []
     for index, var in enumerate(operands):
-        layout = getattr(var.type, "layout", None)
+        layout = context.materialised_layout(getattr(var.type, "layout", None))
         reference = tensor_reference(var, ctx)
         if (
             not ctx.is_kernel_param(var)
@@ -388,7 +388,7 @@ def pointer_reference(pointer, ctx: context.Context) -> tuple[str, object | None
         source = pointer.args[0]
         if isinstance(source, expr.Call) and isinstance(source.target, tensor.Slice):
             base = source.args[0]
-            layout = base.type.layout
+            layout = context.materialised_layout(base.type.layout)
             if not isinstance(layout, types.Layout):
                 raise NotImplementedError("CUDA pointer slices require a plain source layout")
             origin = source.args[1]
@@ -432,7 +432,7 @@ def emit(let: core.LetStmt, ctx: context.Context) -> None:
     pointer = call.args[0]
     pointer_ref, memory_var = pointer_reference(pointer, ctx)
     var_name = ctx.name_for(let.var)
-    layout = call.target.layout
+    layout = context.materialised_layout(call.target.layout)
 
     if len(call.args) > 1:
         if memory_var is None:
@@ -443,7 +443,7 @@ def emit(let: core.LetStmt, ctx: context.Context) -> None:
 
         if len(call.args) > 2:
             logical_coords = call.args[1:]
-            dst_layout = getattr(memory_var.type, "layout", None)
+            dst_layout = context.materialised_layout(getattr(memory_var.type, "layout", None))
             if isinstance(dst_layout, types.ShardLayout):
                 tensor_ref = f"tilefoundry::local({mem_name})"
                 dst_local = types.shard_layout_local_shape(dst_layout)
@@ -499,9 +499,10 @@ def emit(let: core.LetStmt, ctx: context.Context) -> None:
             )
             return
         index_var = call.args[1]
-        if isinstance(getattr(memory_var.type, "layout", None), types.ShardLayout):
+        memory_layout = context.materialised_layout(getattr(memory_var.type, "layout", None))
+        if isinstance(memory_layout, types.ShardLayout):
             tensor_ref = f"tilefoundry::local({mem_name})"
-            win_layout = getattr(let.var.type, "layout", None)
+            win_layout = context.materialised_layout(getattr(let.var.type, "layout", None))
             if isinstance(win_layout, types.ShardLayout):
                 local_shape = types.shard_layout_local_shape(win_layout)
             else:

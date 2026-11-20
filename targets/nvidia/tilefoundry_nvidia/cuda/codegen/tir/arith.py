@@ -37,7 +37,7 @@ def materialised_shape(ty) -> tuple:
     allocation.
     See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
-    layout = getattr(ty, "layout", None)
+    layout = context.materialised_layout(getattr(ty, "layout", None))
     if isinstance(layout, types.ShardLayout):
 
         return types.shard_layout_local_shape(layout)
@@ -51,7 +51,7 @@ def materialised_shape_dyn(ty) -> tuple:
     the caller can ask for a runtime (string) iteration count.
     See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
-    layout = getattr(ty, "layout", None)
+    layout = context.materialised_layout(getattr(ty, "layout", None))
     if isinstance(layout, types.ShardLayout):
         return types.shard_layout_local_shape(layout)
     return tuple(ty.shape)
@@ -132,8 +132,8 @@ def broadcast_view(rhs_n: str, modes, ctx: context.Context) -> str:
 
 def dyn_clip(dst, operands, ctx: context.Context) -> str | None:
     """The run-time count a plain dynamic operand set has to be clipped to."""
-    if any(isinstance(getattr(v.type, "layout", None), types.ShardLayout)
-           for v in (dst, *operands)):
+    held = (getattr(v.type, "layout", None) for v in (dst, *operands))
+    if any(isinstance(context.materialised_layout(layout), types.ShardLayout) for layout in held):
         return None
     if not expr.shape_has_dim_var(dst.type.shape):
         return None

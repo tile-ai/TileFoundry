@@ -15,7 +15,7 @@ from types import MappingProxyType
 
 from tilefoundry import codegen
 from tilefoundry import target as tilefoundry_target
-from tilefoundry.ir import expr
+from tilefoundry.ir import expr, types, utils
 from tilefoundry_nvidia.cuda import target as cuda_target
 
 Geometry = tuple[tuple[object, object, object], tuple[object, object, object]]
@@ -51,6 +51,16 @@ def topology_enumerator(name: str) -> str:
 def float_literal(value) -> str:
     """A C++ float literal spelling of a Python number."""
     return repr(float(value)) + "f"
+
+
+def materialised_layout(layout):
+    """The layout a value is written in: the physical projection of a shard layout.
+
+    Every emitter that wraps a value or asks how it was wrapped reads this. A tile
+    that varies only per CTA is then plain to the threads of that CTA. See
+    [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics).
+    """
+    return utils.physical_layout(layout) if isinstance(layout, types.ShardLayout) else layout
 
 
 def scalar_read(var, ctx: "Context") -> str:
@@ -177,4 +187,4 @@ class Context(codegen.EmitContext):
         return t
 
 
-__all__ = ["Context", "float_literal", "scalar_read", "topology_enumerator"]
+__all__ = ["Context", "float_literal", "materialised_layout", "scalar_read", "topology_enumerator"]

@@ -78,7 +78,7 @@ def emit(let: core.LetStmt, ctx: context.Context) -> None:
     var = let.var
     name = ctx.name_for(var)
     storage = var.type.storage
-    layout_obj = var.type.layout
+    layout_obj = context.materialised_layout(var.type.layout)
 
     if isinstance(layout_obj, types.ShardLayout):
         engine_layout = shard_engine_layout(layout_obj, storage)

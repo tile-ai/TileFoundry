@@ -14,7 +14,7 @@ from tilefoundry import codegen
 from tilefoundry.ir import core, types
 from tilefoundry_nvidia.cuda import target
 
-from .context import Context
+from .context import Context, materialised_layout
 from .tir import stmts
 
 UNIT_ID_CTYPE = "long long"
@@ -65,7 +65,7 @@ def check_parameter_names(path, params) -> None:
         signature = codegen.tensor_signature_of(param)
         generated = [f"{name}_tensor"]
         generated += [signature.extent_name(axis) for axis in signature.dynamic_axes]
-        if isinstance(param.type.layout, types.ShardLayout):
+        if isinstance(materialised_layout(param.type.layout), types.ShardLayout):
             generated.append(f"{name}_mesh")
         for spelling in (name, *generated):
             if spelling in occupied:
@@ -115,7 +115,7 @@ def kernel_arguments(kernel: codegen.CallableSignature, ctx: Context) -> str:
         element = ctx.dtype_to_cpp(param.type.dtype.name)
         written.append(f"static_cast<{element}*>({param.name})")
         written += [f"static_cast<int>({param.extent_name(axis)})" for axis in param.dynamic_axes]
-        layout = param.type.layout
+        layout = materialised_layout(param.type.layout)
         if isinstance(layout, types.ShardLayout):
             written.append(f"{stmts.mesh_type(layout.mesh)}{{}}")
     return ", ".join(written)
@@ -167,7 +167,7 @@ def declare_tensor(sig: codegen.TensorSignature, ctx: codegen.EmitContext) -> tu
         f"{pointer} {sig.name}",
         *(f"{extent} {sig.extent_name(axis)}" for axis in sig.dynamic_axes),
     ]
-    layout = sig.type.layout
+    layout = materialised_layout(sig.type.layout)
     if not ctx.exported and isinstance(layout, types.ShardLayout):
         declared.append(f"{stmts.mesh_type(layout.mesh)} {sig.name}_mesh")
     return tuple(declared)

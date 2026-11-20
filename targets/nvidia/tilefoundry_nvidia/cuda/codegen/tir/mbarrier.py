@@ -14,7 +14,8 @@ def barrier_word(var, ctx: context.Context) -> str:
     base = ctx.name_for(var)
     if ctx.is_kernel_param(var):
         base = f"{base}_tensor"
-    if isinstance(getattr(getattr(var, "type", None), "layout", None), types.ShardLayout):
+    layout = getattr(getattr(var, "type", None), "layout", None)
+    if isinstance(context.materialised_layout(layout), types.ShardLayout):
         base = f"tilefoundry::local({base})"
     return f"&{base}(0)"
 

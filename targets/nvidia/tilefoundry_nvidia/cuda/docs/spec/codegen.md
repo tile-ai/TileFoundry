@@ -62,6 +62,16 @@ class Context(EmitContext):
     bulk instruction copies bytes in memory order. `Dot` pairs its operands by
     register index, which for a parameter is memory order, and takes the flat
     wrap.
+  - Codegen writes every tensor value, parameters included, in the physical
+    projection of its layout
+    ([shard §6.1](../../../../../../docs/spec/shard.md#61-shard-attr-semantics)),
+    and every emitter that asks how a value was written reads that projection.
+    A tile that varies only per CTA is plain to the threads of that CTA.
+  - A `Copy` of two plain operands with a dynamic shape reads each through its
+    own layout, swizzle and offset included, at the run-time extents. An
+    operand with no stated layout is read as one contiguous run. Each entry of
+    the affine layout is an int, a bound dimension variable, or dimension
+    arithmetic over them. A layout with any other entry is refused.
 
 Every `LetStmt` binding a `Tuple` declares one C++ variable:
 `cute::array<decltype(e0), N>` when the elements share one type, otherwise
