@@ -380,24 +380,15 @@ class MeshAxisNameRule:
             ) from error
 
 
-def static_mesh_key(node: ast.AST):
-    """The integers and step-1 slices of a mesh subscript, read from its literals."""
-    if isinstance(node, ast.Tuple):
-        return tuple(static_mesh_key(item) for item in node.elts)
-    if isinstance(node, ast.Slice):
-        parts = (node.lower, node.upper, node.step)
-        return slice(*(None if part is None else ast.literal_eval(part) for part in parts))
-    return ast.literal_eval(node)
-
-
 def mesh_reference(node: ast.AST, context) -> tuple[object, str]:
     """The mesh a lexical binding, or its constant slice, names; and the binding's name."""
     name = node.value if isinstance(node, ast.Subscript) else node
     mesh = context.lexical_scope.lookup_mesh(name.id)
     if isinstance(node, ast.Subscript) and isinstance(mesh, runtime.Mesh):
+        key = parse_node(StaticValuePattern(), node.slice, context.child(situation="static_mesh", role="mesh"))
         try:
-            mesh = mesh[static_mesh_key(node.slice)]
-        except (ValueError, SyntaxError) as error:
+            mesh = mesh[key]
+        except (TypeError, ValueError) as error:
             raise ParseError.from_node(node, context, str(error)) from error
     return mesh, name.id
 
