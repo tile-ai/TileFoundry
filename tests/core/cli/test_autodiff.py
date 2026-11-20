@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import NamedTuple
 
 import pytest
 
@@ -13,48 +12,15 @@ from tilefoundry.passes.transforms import differentiate
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "autodiff"
 
 
-class RoundTrip(NamedTuple):
-    fixture: str
-    name: str
-    wrt: str
-    recompute: tuple[str, ...] = ()
-    same_text: bool = True
-    """False: both Modules only load; a dim operand that is not a dim prints inline, and reloads bound."""
-
-
-ROUND_TRIP = (
-    RoundTrip("elementwise.py", "Elementwise", "x,w,b"),
-    RoundTrip("sharded.py", "Layer", "x,w"),
-    RoundTrip("child_call.py:ChildCall", "ChildCall", "x,w1,w2"),
-    RoundTrip("child_call.py:ChildCall", "ChildCall", "x,w1,w2", ("ChildCall.rest.1:h",)),
-    RoundTrip("inactive_call.py:InactiveCall", "InactiveCall", "x"),
-    RoundTrip("loop_range.py", "LoopRange", "x,w,h0"),
-    RoundTrip("two_loops.py", "TwoLoops", "x,w"),
-    RoundTrip("module_list_loop.py:Stack", "Stack", "x,ws", ("Stack.layers.1:h",), same_text=False),
-    RoundTrip("loop_call.py", "LoopCall", "keys,decay"),
-    RoundTrip("loop_nested.py", "LoopNested", "x,w"),
-    RoundTrip("mesh_data_parallel.py", "MeshDataParallel", "x,w"),
-    RoundTrip("mesh_two_regions.py", "MeshTwoRegions", "x,w"),
-    RoundTrip("megatron_block.py", "TensorParallel", "x,wn1,wq,wk,wv,wo,wn2,wg,wu,wd"),
-    RoundTrip("layers_loop.py", "Layers", "x,wn0,norms,up,down"),
-)
-
-
-@pytest.mark.parametrize("row", ROUND_TRIP, ids=lambda row: str(tuple(row[:4])))
-def test_written_file_loads_both_modules_and_reprints_the_same(tmp_path, capsys, row: RoundTrip) -> None:
-    """D44: one file, one header, each class once; both Modules load and print back to the file."""
-    fixture, name, wrt, recompute, same_text = row
+def test_written_file_is_the_printed_pair(tmp_path, capsys) -> None:
+    """D44: PATH holds the two Modules as one script; each fixture's case reloads it."""
     written = tmp_path / "trained.py"
-    selected = [word for selector in recompute for word in ("--recompute", selector)]
-    assert cli.main(["autodiff", str(FIXTURES / fixture), "--wrt", wrt, *selected, str(written)]) == 0
+    command = ["autodiff", str(FIXTURES / "child_call.py:ChildCall"), "--wrt", "x,w1,w2"]
+    assert cli.main([*command, "--recompute", "ChildCall.rest.1:h", str(written)]) == 0
     assert capsys.readouterr().out == ""
-    text = written.read_text()
-    assert text.count("from __future__ import annotations") == 1
-    classes = [line for line in text.splitlines() if line.startswith("class ")]
-    assert len(classes) == len(set(classes))
-    forward = cli.load_authored_ir(f"{written}:{name}Forward")
-    backward = cli.load_authored_ir(f"{written}:{name}Backward")
-    assert not same_text or inspection.as_script((forward, backward)) == text
+    module = cli.load_authored_ir(str(FIXTURES / "child_call.py:ChildCall"))
+    generated = differentiate.differentiate(module, wrt=("x", "w1", "w2"), recompute=("ChildCall.rest.1:h",))
+    assert written.read_text() == inspection.as_script(generated)
 
 
 def test_without_path_prints_both_modules(capsys) -> None:

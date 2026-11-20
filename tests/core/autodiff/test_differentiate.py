@@ -10,7 +10,7 @@ from types import MappingProxyType
 import pytest
 import torch
 
-from tests.core._corpus import Case, case, check_case, special
+from tests.core._corpus import Case, case, check_case, reload, special
 from tilefoundry import cli, inspection, runtime
 from tilefoundry.interfaces import autodiff, evaluator
 from tilefoundry.ir import core, dim, expr, types, utils
@@ -132,6 +132,8 @@ class Differentiated(Case):
     saved_tensors: Mapping[str, int] | None = None
     slots: Mapping[str, tuple[str, ...]] | None = None
     loops: int | None = None
+    same_text: bool = True
+    """False: both Modules load, but the printer spells a dim operand that is not a dim inline."""
     reshards: tuple[tuple[tuple, tuple], ...] = ()
     rtol: float = 1e-5
     atol: float = 1e-6
@@ -162,6 +164,12 @@ class Differentiated(Case):
             named: dict[str, core.Module] = {}
             for each in core.module_definition_order(generated):
                 assert named.setdefault(each.name, each) is each, f"two Modules are named {each.name!r}"
+        text = inspection.as_script((forward, backward))
+        assert text.count("from __future__ import annotations") == 1
+        classes = [line for line in text.splitlines() if line.startswith("class ")]
+        assert len(classes) == len(set(classes)), "a class is written twice"
+        reloaded = tuple(reload(text, generated.name) for generated in (forward, backward))
+        assert not self.same_text or inspection.as_script(reloaded) == text, "the reloaded Modules print other text"
         params = {param.name: param for param in module.entry_function().params}
         returned = fields(backward.entry_function().return_type) if len(self.wrt) > 1 else (
             backward.entry_function().return_type,
@@ -276,6 +284,7 @@ class ModuleListLoop(Differentiated):
     saved: frozenset[str] | None = stacked("layers", 0, 1, 3) | {"ws", "v4"}
     slots: Mapping[str, tuple[str, ...]] | None = ONE
     loops: int | None = 1
+    same_text: bool = False
 
 
 @case
@@ -357,6 +366,7 @@ class ModuleListNested(Differentiated):
     recompute: tuple[str, ...] = ("Stack.layers.1:h",)
     slots: Mapping[str, tuple[str, ...]] | None = CUT
     loops: int | None = 4
+    same_text: bool = False
 
 
 @case
@@ -485,6 +495,12 @@ class Topk(Differentiated):
 class LoopRange(Differentiated):
     path: Path = FIXTURES / "loop_range.py"
     wrt: tuple[str, ...] = ('x', 'w', 'h0')
+
+
+@case
+class TwoLoops(Differentiated):
+    path: Path = FIXTURES / "two_loops.py"
+    wrt: tuple[str, ...] = ("x", "w")
 
 
 @case
