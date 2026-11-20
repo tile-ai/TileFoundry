@@ -1,0 +1,46 @@
+[spec]
+schema = "tilefoundry.ane.architecture/v1"
+kind = "architecture"
+id = "apple.h14"
+
+[facts.identity.name]
+value = "apple_h14"
+unit = "name"
+origin = "reference"
+source = "ANE generation in Apple M2-family chips"
+conditions = "H14 is the ANE generation of the Apple M2 family."
+
+[facts.capabilities]
+value = ["ne.conv", "ne.bypass", "pe.pool", "pe.unary", "pe.binary", "pe.reduce"]
+unit = "name"
+origin = "measured"
+source = "Core ML programs compiled for Apple M2 Pro, macOS 26.6"
+conditions = "Each name is one instruction form seen in compiled single-operator programs. The programs were compiled only, never run by TileFoundry."
+
+[facts.tensor.max_channels]
+value = 65536
+unit = "count"
+origin = "reference"
+source = "H14 task descriptor field range"
+conditions = "Largest channel extent that the task descriptor field of one instruction encodes."
+
+[facts.tensor.max_height]
+value = 16384
+unit = "count"
+origin = "reference"
+source = "H14 task descriptor field range"
+conditions = "Largest height extent that the task descriptor field of one instruction encodes."
+
+[facts.tensor.max_width]
+value = 16384
+unit = "count"
+origin = "reference"
+source = "H14 task descriptor field range"
+conditions = "Largest width extent that the task descriptor field of one instruction encodes."
+
+[facts.conv.max_kernel]
+value = 32
+unit = "count"
+origin = "reference"
+source = "H14 task descriptor field range"
+conditions = "Largest kernel extent that the task descriptor field of one convolution encodes."
