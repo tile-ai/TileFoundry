@@ -11,6 +11,6 @@ M, K, N = 8, 4, 6
 @module(entry="forward", target=cpu.Target(), topologies=(Topology("gpu", 2),))
 class MeshDataParallel:
     @func(mesh=Mesh(("gpu",), (2,), names=("data",)))
-    def forward(x: Tensor[(M @ mesh.data, K), "f32", "gmem"], w: Tensor[(K, N), "f32", (K, N) @ {B()}, "gmem"]):
+    def forward(x: Tensor[(M @ mesh.data, K), "f32", "gmem"], w: Tensor[(K, N), "f32", (K, N), "gmem"]):
         h = tf.matmul(x, w)
         return h * h

@@ -12,6 +12,6 @@ M, K, N = 8, 4, 6
 class Layer:
     @func(mesh=Mesh(("gpu",), (2,), names=("shard",)))
     def forward(x: Tensor[(M @ mesh.shard, K), "f32", "gmem"], w: Tensor[(N @ mesh.shard, K), "f32", "gmem"]):
-        full = tf.reshard(w, layout=(N, K) @ {B()}, storage="gmem")
+        full = tf.reshard(w, layout=(N, K), storage="gmem")
         h = tf.matmul(x, full, b_layout="NK")
         return h * h

@@ -11,7 +11,7 @@ M, K, N = 8, 4, 6
 @module(entry="forward", target=cpu.Target(), topologies=(Topology("gpu", 2),))
 class MeshTwoRegions:
     @func(mesh=Mesh(("gpu",), (2,), names=("data",)))
-    def forward(x: Tensor[(M @ mesh.data, K), "f32", "gmem"], w: Tensor[(K, N), "f32", (K, N) @ {B()}, "gmem"]):
+    def forward(x: Tensor[(M @ mesh.data, K), "f32", "gmem"], w: Tensor[(K, N), "f32", (K, N), "gmem"]):
         with Mesh(("gpu",), layout=(2,), names=("data",)) as _a:
             h = tf.matmul(x, w)
         with Mesh(("gpu",), layout=(2,), names=("data",)) as _b:

@@ -73,7 +73,7 @@ class WgmmaBMnMajorGroupedN64:
                             )
                             lhs_view = T.tensor_view(
                                 T.ptr_of(value_6[0:0 + 64, 0:0 + 16]),
-                                layout=(Layout(((8, 8), 16), ((512, 64), 1)) | Swizzle(3, 4, 3)) @ {B()},
+                                layout=Layout(((8, 8), 16), ((512, 64), 1)) | Swizzle(3, 4, 3),
                                 shape=(64, 16),
                             )
                             value_3_2 = T.tensor_view(
@@ -90,7 +90,7 @@ class WgmmaBMnMajorGroupedN64:
                             )
                             rhs_view = T.tensor_view(
                                 T.ptr_of(value_7[0:0 + 16, 0:0 + 128]),
-                                layout=(Layout(((2, 8), (2, 1, 64)), ((512, 64), (4096, 0, 1))) | Swizzle(3, 4, 3)) @ {B()},
+                                layout=Layout(((2, 8), (2, 1, 64)), ((512, 64), (4096, 0, 1))) | Swizzle(3, 4, 3),
                                 shape=(16, 128),
                             )
                             T.tiled_mma(

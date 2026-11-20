@@ -150,9 +150,10 @@ def restates_attrs(source: types.TensorType, layout) -> bool:
     stated = types.shard_layout_of(layout)
     held = types.shard_layout_of(source.layout)
     if stated is None:
+        if held is None:
+            return layout == source.layout
         return (
-            held is not None
-            and layout == (held.layout if source.layout is held else replace(source.layout, outer=held.layout))
+            layout == (held.layout if source.layout is held else replace(source.layout, outer=held.layout))
             and all(isinstance(attr, (types.Broadcast, types.Varying)) for attr in held.attrs)
         )
     if held is None and (layout is not stated or source.layout != stated.layout):

@@ -458,7 +458,7 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], types.TypeFunctor[str])
                     types.Broadcast() for _ in range(len(current.shape))
                 ), current)).mesh
                 if current == value.mesh:
-                    return operand + " @ {B()}"
+                    return f"{operand} @ {ctx.mesh_bindings[-1][1]}"
         unit = None if ctx is None or operand is None else ctx.mesh_alias(value.mesh) or ctx.mesh_slice(value.mesh)
         if unit is not None and all(isinstance(attr, types.Broadcast) for attr in value.attrs):
             return f"{operand} @ {unit}"

@@ -96,13 +96,13 @@ class WgmmaOneTileOfLargerOutput:
                                     value_5 = lhs_ring_stages[(k // 16) % 2]
                                     lhs_view = T.tensor_view(
                                         T.ptr_of(value_5[0:0 + 64, 0:0 + 16]),
-                                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))) @ {B()},
+                                        layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))) @ scope_3,
                                         shape=(64, 16),
                                     )
                                     value_6 = rhs_ring_stages[(k // 16) % 2]
                                     rhs_view = T.tensor_view(
                                         T.ptr_of(value_6[0:0 + 16, 0:0 + 32]),
-                                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))) @ {B()},
+                                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))) @ scope_3,
                                         shape=(16, 32),
                                     )
                                     T.tiled_mma(

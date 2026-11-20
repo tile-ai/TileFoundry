@@ -82,7 +82,7 @@ class WgmmaBNk:
                             )
                             lhs_view = T.tensor_view(
                                 T.ptr_of(value_4[0:0 + 64, 0:0 + 16]),
-                                layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))) @ {B()},
+                                layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))),
                                 shape=(64, 16),
                             )
                             rhs_dst_2 = T.tensor_view(
@@ -99,7 +99,7 @@ class WgmmaBNk:
                             )
                             rhs_view = T.tensor_view(
                                 T.ptr_of(value_5[0:0 + 16, 0:0 + 16]),
-                                layout=Layout(((2, 8), (2, 8)), ((64, 1), (128, 8))) @ {B()},
+                                layout=Layout(((2, 8), (2, 8)), ((64, 1), (128, 8))),
                                 shape=(16, 16),
                             )
                             T.tiled_mma(

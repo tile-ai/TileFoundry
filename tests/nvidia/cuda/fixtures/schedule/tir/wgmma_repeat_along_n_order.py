@@ -105,13 +105,13 @@ class WgmmaRepeatAlongNOrder:
                                     value_5 = lhs_ring_stages[(k // 16) % 2]
                                     lhs_view = T.tensor_view(
                                         T.ptr_of(value_5[0:0 + 128, 0:0 + 16]),
-                                        layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))) @ {B()},
+                                        layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))) @ scope_3,
                                         shape=(128, 16),
                                     )
                                     value_6 = rhs_ring_stages[(k // 16) % 2]
                                     rhs_view = T.tensor_view(
                                         T.ptr_of(value_6[o_k:o_k + 16, o_n:o_n + 64]),
-                                        layout=Layout(((2, 8), (8, 8)), ((64, 8), (128, 1))) @ {B()},
+                                        layout=Layout(((2, 8), (8, 8)), ((64, 8), (128, 1))) @ scope_3,
                                         shape=(16, 64),
                                     )
                                     T.tiled_mma(

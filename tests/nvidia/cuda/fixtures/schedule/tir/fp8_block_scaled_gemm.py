@@ -106,13 +106,13 @@ class Fp8BlockScaledGemm:
                                     value_4 = lhs_ring_stages[kb % 2]
                                     lhs_view = T.tensor_view(
                                         T.ptr_of(value_4[o_m:o_m + 128, o_k:o_k + 32]),
-                                        layout=(Layout(((2, 8, 8), 32), ((8192, 1024, 128), 1)) | Swizzle(3, 4, 3)) @ {B()},
+                                        layout=(Layout(((2, 8, 8), 32), ((8192, 1024, 128), 1)) | Swizzle(3, 4, 3)) @ scope_3,
                                         shape=(128, 32),
                                     )
                                     value_5 = rhs_ring_stages[kb % 2]
                                     rhs_view = T.tensor_view(
                                         T.ptr_of(value_5[o_k:o_k + 32, o_n:o_n + 128]),
-                                        layout=(Layout((32, (16, 8)), (1, (1024, 128))) | Swizzle(3, 4, 3)) @ {B()},
+                                        layout=(Layout((32, (16, 8)), (1, (1024, 128))) | Swizzle(3, 4, 3)) @ scope_3,
                                         shape=(32, 128),
                                     )
                                     T.tiled_mma(
@@ -123,12 +123,12 @@ class Fp8BlockScaledGemm:
                                     )
                                     lhs_view_1 = T.tensor_view(
                                         T.ptr_of(value_4[o_m:o_m + 128, o_k + 32:o_k + 32 + 32]),
-                                        layout=(Layout(((2, 8, 8), 32), ((8192, 1024, 128), 1)) + 32 | Swizzle(3, 4, 3)) @ {B()},
+                                        layout=(Layout(((2, 8, 8), 32), ((8192, 1024, 128), 1)) + 32 | Swizzle(3, 4, 3)) @ scope_3,
                                         shape=(128, 32),
                                     )
                                     rhs_view_1 = T.tensor_view(
                                         T.ptr_of(value_5[o_k + 32:o_k + 32 + 32, o_n:o_n + 128]),
-                                        layout=(Layout((32, (16, 8)), (1, (1024, 128))) + 32 | Swizzle(3, 4, 3)) @ {B()},
+                                        layout=(Layout((32, (16, 8)), (1, (1024, 128))) + 32 | Swizzle(3, 4, 3)) @ scope_3,
                                         shape=(32, 128),
                                     )
                                     T.tiled_mma(
@@ -139,12 +139,12 @@ class Fp8BlockScaledGemm:
                                     )
                                     lhs_view_2 = T.tensor_view(
                                         T.ptr_of(value_4[o_m:o_m + 128, o_k + 64:o_k + 64 + 32]),
-                                        layout=(Layout(((2, 8, 8), 32), ((8192, 1024, 128), 1)) + 64 | Swizzle(3, 4, 3)) @ {B()},
+                                        layout=(Layout(((2, 8, 8), 32), ((8192, 1024, 128), 1)) + 64 | Swizzle(3, 4, 3)) @ scope_3,
                                         shape=(128, 32),
                                     )
                                     rhs_view_2 = T.tensor_view(
                                         T.ptr_of(value_5[o_k + 64:o_k + 64 + 32, o_n:o_n + 128]),
-                                        layout=(Layout((32, (16, 8)), (1, (1024, 128))) + 64 | Swizzle(3, 4, 3)) @ {B()},
+                                        layout=(Layout((32, (16, 8)), (1, (1024, 128))) + 64 | Swizzle(3, 4, 3)) @ scope_3,
                                         shape=(32, 128),
                                     )
                                     T.tiled_mma(
@@ -155,12 +155,12 @@ class Fp8BlockScaledGemm:
                                     )
                                     lhs_view_3 = T.tensor_view(
                                         T.ptr_of(value_4[o_m:o_m + 128, o_k + 96:o_k + 96 + 32]),
-                                        layout=(Layout(((2, 8, 8), 32), ((8192, 1024, 128), 1)) + 96 | Swizzle(3, 4, 3)) @ {B()},
+                                        layout=(Layout(((2, 8, 8), 32), ((8192, 1024, 128), 1)) + 96 | Swizzle(3, 4, 3)) @ scope_3,
                                         shape=(128, 32),
                                     )
                                     rhs_view_3 = T.tensor_view(
                                         T.ptr_of(value_5[o_k + 96:o_k + 96 + 32, o_n:o_n + 128]),
-                                        layout=(Layout((32, (16, 8)), (1, (1024, 128))) + 96 | Swizzle(3, 4, 3)) @ {B()},
+                                        layout=(Layout((32, (16, 8)), (1, (1024, 128))) + 96 | Swizzle(3, 4, 3)) @ scope_3,
                                         shape=(32, 128),
                                     )
                                     T.tiled_mma(

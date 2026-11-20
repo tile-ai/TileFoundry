@@ -106,7 +106,7 @@ def reject_partials(
             continue
         raise ValueError(
             f"{name} carries Partial({reduction}) on mesh axis {mesh_axis}, "
-            f"which does not commute; insert reshard({name}, @ {{B()}}) before this consumer"
+            f"which does not commute; insert reshard({name}, <its layout>) before this consumer"
         )
 
 
@@ -152,7 +152,7 @@ def check_multilinear_partials(
             if anchor is not None and name != anchor:
                 raise ValueError(
                     f"{name} carries {attr!r} on mesh axis {mesh_axis}; "
-                    f"reshard({name}, @ {{B()}}) before this consumer"
+                    f"reshard({name}, <its layout>) before this consumer"
                 )
             state = None
             for (other_name, _), other in zip(operands, states):
@@ -205,13 +205,13 @@ def require_matching_partial_state(
             raise ValueError(
                 f"{dst_name} carries a Partial({reduction}) on mesh axis {mesh_axis}; "
                 f"{update_name} must carry the identical per-mesh-axis state. "
-                f"Insert reshard({update_name}, @ {{B()}}) or match {dst_name} before this consumer"
+                f"Insert reshard({update_name}, <its layout>) or match {dst_name} before this consumer"
             )
     elif update_partials:
         mesh_axis, reduction = update_partials[0]
         raise ValueError(
             f"{update_name} carries Partial({reduction}) on mesh axis {mesh_axis}, "
-            f"but {dst_name} is complete; insert reshard({update_name}, @ {{B()}}) before this consumer"
+            f"but {dst_name} is complete; insert reshard({update_name}, <its layout>) before this consumer"
         )
 
 
@@ -244,5 +244,5 @@ def require_uniform_partial_slices(
                 raise ValueError(
                     f"input {index} does not carry {output_attr!r} on mesh axis "
                     f"{mesh_axis}; every input must carry the same Partial state: "
-                    f"reshard the Partial inputs with @ {{B()}} before {op_name}"
+                    f"reshard the Partial inputs to <their layout> before {op_name}"
                 )

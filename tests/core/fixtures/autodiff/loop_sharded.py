@@ -9,7 +9,7 @@ from tilefoundry.target import cpu
 @module(entry="forward", target=cpu.Target(), topologies=(Topology("gpu", 2),))
 class LoopSharded:
     @func(mesh=Mesh(("gpu",), (2,), names=("data",)))
-    def forward(h0: Tensor[(4 @ mesh.data, 3), "f32", "gmem"], w: Tensor[(3, 3), "f32", (3, 3) @ {B()}, "gmem"]):
+    def forward(h0: Tensor[(4 @ mesh.data, 3), "f32", "gmem"], w: Tensor[(3, 3), "f32", (3, 3), "gmem"]):
         h = h0
         for _ in range(3):
             h = tf.matmul(h * h, w)

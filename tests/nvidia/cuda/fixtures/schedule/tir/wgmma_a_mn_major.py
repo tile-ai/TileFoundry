@@ -96,13 +96,13 @@ class WgmmaAMnMajor:
                                     value_5 = lhs_ring_stages[(k // 16) % 2]
                                     lhs_view = T.tensor_view(
                                         T.ptr_of(value_5[0:0 + 64, 0:0 + 16]),
-                                        layout=(Layout(((1, 64), (2, 8)), ((0, 1), (512, 64))) | Swizzle(3, 4, 3)) @ {B()},
+                                        layout=(Layout(((1, 64), (2, 8)), ((0, 1), (512, 64))) | Swizzle(3, 4, 3)) @ scope_3,
                                         shape=(64, 16),
                                     )
                                     value_6 = rhs_ring_stages[(k // 16) % 2]
                                     rhs_view = T.tensor_view(
                                         T.ptr_of(value_6[0:0 + 16, 0:0 + 32]),
-                                        layout=(Layout(((2, 8), (1, 32)), ((256, 32), (0, 1))) | Swizzle(2, 4, 3)) @ {B()},
+                                        layout=(Layout(((2, 8), (1, 32)), ((256, 32), (0, 1))) | Swizzle(2, 4, 3)) @ scope_3,
                                         shape=(16, 32),
                                     )
                                     T.tiled_mma(

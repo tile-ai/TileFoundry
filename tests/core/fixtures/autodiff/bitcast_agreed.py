@@ -11,7 +11,7 @@ M, K = 4, 6
 @module(entry="forward", target=cpu.Target(), topologies=(Topology("gpu", 2),))
 class BitcastAgreed:
     @func(mesh=Mesh(("gpu",), (2,), names=("dp",)))
-    def forward(x: Tensor[(M, K), "f32", "gmem"], w: Tensor[(M, K), "f32", (M, K) @ {B()}, "gmem"]):
+    def forward(x: Tensor[(M, K), "f32", "gmem"], w: Tensor[(M, K), "f32", (M, K), "gmem"]):
         h = x * x
-        agreed = tf.bitcast(h, (M, K) @ {B()})
+        agreed = tf.bitcast(h, (M, K))
         return agreed * w

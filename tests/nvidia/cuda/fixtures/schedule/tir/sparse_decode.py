@@ -131,7 +131,7 @@ class SparseDecode:
                                 )
                                 lhs_view = T.tensor_view(
                                     T.ptr_of(value_9[o_m:o_m + 64, o_k:o_k + 16]),
-                                    layout=(Layout(((8, 8), 16), ((512, 64), 1)) | Swizzle(3, 4, 3)) @ {B()},
+                                    layout=(Layout(((8, 8), 16), ((512, 64), 1)) | Swizzle(3, 4, 3)) @ scope_3,
                                     shape=(64, 16),
                                 )
                                 ks_3 = T.tensor_view(
@@ -148,7 +148,7 @@ class SparseDecode:
                                 )
                                 rhs_view = T.tensor_view(
                                     T.ptr_of(value_10[o_k:o_k + 16, o_n:o_n + 64]),
-                                    layout=(Layout((16, (8, 8)), (1, (512, 64))) | Swizzle(3, 4, 3)) @ {B()},
+                                    layout=(Layout((16, (8, 8)), (1, (512, 64))) | Swizzle(3, 4, 3)) @ scope_3,
                                     shape=(16, 64),
                                 )
                                 T.tiled_mma(
@@ -159,12 +159,12 @@ class SparseDecode:
                                 )
                                 lhs_view_1 = T.tensor_view(
                                     T.ptr_of(value_9[o_m:o_m + 64, o_k + 16:o_k + 16 + 16]),
-                                    layout=(Layout(((8, 8), 16), ((512, 64), 1)) + 16 | Swizzle(3, 4, 3)) @ {B()},
+                                    layout=(Layout(((8, 8), 16), ((512, 64), 1)) + 16 | Swizzle(3, 4, 3)) @ scope_3,
                                     shape=(64, 16),
                                 )
                                 rhs_view_1 = T.tensor_view(
                                     T.ptr_of(value_10[o_k + 16:o_k + 16 + 16, o_n:o_n + 64]),
-                                    layout=(Layout((16, (8, 8)), (1, (512, 64))) + 16 | Swizzle(3, 4, 3)) @ {B()},
+                                    layout=(Layout((16, (8, 8)), (1, (512, 64))) + 16 | Swizzle(3, 4, 3)) @ scope_3,
                                     shape=(16, 64),
                                 )
                                 T.tiled_mma(
@@ -175,12 +175,12 @@ class SparseDecode:
                                 )
                                 lhs_view_2 = T.tensor_view(
                                     T.ptr_of(value_9[o_m:o_m + 64, o_k + 32:o_k + 32 + 16]),
-                                    layout=(Layout(((8, 8), 16), ((512, 64), 1)) + 32 | Swizzle(3, 4, 3)) @ {B()},
+                                    layout=(Layout(((8, 8), 16), ((512, 64), 1)) + 32 | Swizzle(3, 4, 3)) @ scope_3,
                                     shape=(64, 16),
                                 )
                                 rhs_view_2 = T.tensor_view(
                                     T.ptr_of(value_10[o_k + 32:o_k + 32 + 16, o_n:o_n + 64]),
-                                    layout=(Layout((16, (8, 8)), (1, (512, 64))) + 32 | Swizzle(3, 4, 3)) @ {B()},
+                                    layout=(Layout((16, (8, 8)), (1, (512, 64))) + 32 | Swizzle(3, 4, 3)) @ scope_3,
                                     shape=(16, 64),
                                 )
                                 T.tiled_mma(
@@ -191,12 +191,12 @@ class SparseDecode:
                                 )
                                 lhs_view_3 = T.tensor_view(
                                     T.ptr_of(value_9[o_m:o_m + 64, o_k + 48:o_k + 48 + 16]),
-                                    layout=(Layout(((8, 8), 16), ((512, 64), 1)) + 48 | Swizzle(3, 4, 3)) @ {B()},
+                                    layout=(Layout(((8, 8), 16), ((512, 64), 1)) + 48 | Swizzle(3, 4, 3)) @ scope_3,
                                     shape=(64, 16),
                                 )
                                 rhs_view_3 = T.tensor_view(
                                     T.ptr_of(value_10[o_k + 48:o_k + 48 + 16, o_n:o_n + 64]),
-                                    layout=(Layout((16, (8, 8)), (1, (512, 64))) + 48 | Swizzle(3, 4, 3)) @ {B()},
+                                    layout=(Layout((16, (8, 8)), (1, (512, 64))) + 48 | Swizzle(3, 4, 3)) @ scope_3,
                                     shape=(16, 64),
                                 )
                                 T.tiled_mma(
@@ -309,7 +309,7 @@ class SparseDecode:
                                 )
                                 rhs_view_4 = T.tensor_view(
                                     T.ptr_of(value_17[o_k_1:o_k_1 + 16, o_n_1:o_n_1 + 64]),
-                                    layout=(Layout(((2, 8), (1, 64)), ((512, 64), (0, 1))) | Swizzle(3, 4, 3)) @ {B()},
+                                    layout=(Layout(((2, 8), (1, 64)), ((512, 64), (0, 1))) | Swizzle(3, 4, 3)) @ scope_3,
                                     shape=(16, 64),
                                 )
                                 T.tiled_mma(

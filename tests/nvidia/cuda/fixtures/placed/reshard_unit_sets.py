@@ -13,15 +13,15 @@ SHAPE = (4, 8)
 @module(entry="run", target=target, topologies=(gpu, Topology("cta", 1)))
 class SameUnits:
     @func(mesh=Mesh(("gpu",), (4,), names=("g",)))
-    def run(x: Tensor[(4, 8), "f32", (4, 8) @ {B()}, "gmem"]):
-        return tf.reshard(x, (4, 8) @ {B()}, "gmem")
+    def run(x: Tensor[(4, 8), "f32", (4, 8), "gmem"]):
+        return tf.reshard(x, (4, 8), "gmem")
 
 
 @module(entry="run", target=target, topologies=(gpu, Topology("cta", 1)))
 class SplitToBroadcast:
     @func(mesh=Mesh(("gpu",), (4,), names=("g",)))
     def run(x: Tensor[(4, 8), "f32", (4 @ mesh.g, 8), "gmem"]):
-        return tf.reshard(x, (4, 8) @ {B()}, "gmem")
+        return tf.reshard(x, (4, 8), "gmem")
 
 
 @module(entry="run", target=target, topologies=(gpu, Topology("cta", 1)))
@@ -29,13 +29,13 @@ class OneToAll:
     @func(mesh=Mesh(("gpu",), (4,), names=("g",)))
     def run(x: Tensor[(4, 8), "f32", (4, 8) @ mesh[0:1], "gmem"]):
         with Mesh(("gpu",), layout=(4,), names=("g",)) as _m:
-            return tf.reshard(x, (4, 8) @ {B()}, "gmem")
+            return tf.reshard(x, (4, 8), "gmem")
 
 
 @module(entry="run", target=target, topologies=(gpu, Topology("cta", 1)))
 class AllToOne:
     @func(mesh=Mesh(("gpu",), (4,), names=("g",)))
-    def run(x: Tensor[(4, 8), "f32", (4, 8) @ {B()}, "gmem"]):
+    def run(x: Tensor[(4, 8), "f32", (4, 8), "gmem"]):
         return tf.reshard(x, (4, 8) @ mesh[0:1], "gmem")
 
 

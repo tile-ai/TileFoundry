@@ -118,7 +118,7 @@ class WgmmaRsAFromSmem:
                                     value_8 = rhs_ring_stages[(k // 32) % 2]
                                     rhs_view = T.tensor_view(
                                         T.ptr_of(value_8[0:0 + 32, 0:0 + 32]),
-                                        layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))) @ {B()},
+                                        layout=Layout(((2, 16), (4, 8)), ((128, 1), (256, 16))) @ scope_3,
                                         shape=(32, 32),
                                     )
                                     T.tiled_mma(

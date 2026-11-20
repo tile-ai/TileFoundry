@@ -17,5 +17,5 @@ class Model:
         ],
     ):
         return tf.reshard(
-            x, ((8, 16) + 4 | Swizzle(2, 4, 3)) @ {B()}, "smem"
+            x, ((8, 16) + 4 | Swizzle(2, 4, 3)), "smem"
         )

@@ -10,6 +10,6 @@ class BroadcastOtherSlice:
     def run(x: Tensor[(8,), "f32"]):
         with Mesh(("gpu",), (2,), names=("pp",)) as stages:
             with Mesh(stages[0], (1,), names=("s",)) as _first:
-                held = tf.reshard(x, (8,) @ {B()}, "gmem")
+                held = tf.reshard(x, (8,) @ _first, "gmem")
             with Mesh(stages[1], (1,), names=("s",)) as _second:
                 return tf.add(held, held)

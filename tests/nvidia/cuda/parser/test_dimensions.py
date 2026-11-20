@@ -21,9 +21,9 @@ PARSER = FIXTURES / "parser"
     [
         ("empty", "layout states must be"),
         ("bare_split", "layout states must be"),
-        ("mixed", "layout states must be"),
         ("empty_partial", "layout states must be"),
         ("scalar_shape", "layout states require"),
+        ("broadcast", r"Broadcast is the default; remove '@ \{B\(\)\}'(.|\n)*parser_layout_states_broadcast\.py:12:"),
     ],
 )
 def test_layout_states_reject_invalid_forms(fixture: str, message: str) -> None:

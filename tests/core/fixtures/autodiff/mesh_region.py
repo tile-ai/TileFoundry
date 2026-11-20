@@ -13,7 +13,7 @@ class MeshBody:
     @func(mesh=Mesh(("gpu",), (2,), names=("shard",)))
     def forward(x: Tensor[(M @ mesh.shard, K), "f32", "gmem"], w: Tensor[(N @ mesh.shard, K), "f32", "gmem"]):
         with Mesh(("gpu",), layout=(2,), names=("shard",)) as _gather:
-            full = tf.reshard(w, layout=(N, K) @ {B()}, storage="gmem")
+            full = tf.reshard(w, layout=(N, K), storage="gmem")
             h = tf.matmul(x, full, b_layout="NK")
         with Mesh(("gpu",), layout=(2,), names=("shard",)) as _square:
             return h * tf.exp(h)

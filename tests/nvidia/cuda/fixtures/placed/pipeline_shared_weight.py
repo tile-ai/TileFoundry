@@ -15,7 +15,7 @@ class SharedWeight:
     def forward(
         x: Tensor[(4, 8), "f32", (4, 8) @ mesh[0], "gmem"],
         w0: Tensor[(8, 8), "f32", (8, 8) @ mesh[0], "gmem"],
-        shared: Tensor[(8, 8), "f32", (8, 8) @ {B()}, "gmem"],
+        shared: Tensor[(8, 8), "f32", (8, 8), "gmem"],
         w1: Tensor[(8, 16), "f32", (8, 16) @ mesh[1], "gmem"],
     ):
         with Mesh(mesh[0], layout=(1,), names=("s",)) as _s0:

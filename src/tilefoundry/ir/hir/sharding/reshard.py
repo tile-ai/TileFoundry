@@ -249,6 +249,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     if change is not None and change.overlap_in_part and any(
         isinstance(attr, (types.Split, types.Partial))
         for layout in layouts
+        if layout is not None
         for attr in layout.attrs
     ):
         ctx.error(

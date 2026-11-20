@@ -21,15 +21,15 @@ class HsdpBlock:
         wo: Tensor[(C @ mesh.shard, C), "f32", "gmem"],
         wu: Tensor[(F @ mesh.shard, C), "f32", "gmem"],
         wd: Tensor[(C @ mesh.shard, F), "f32", "gmem"],
-        rotation: Tensor[(1, 1, 1, T, D, D), "f32", (1, 1, 1, T, D, D) @ {B()}, "gmem"],
-        mask: Tensor[(1, 1, 1, T, T), "f32", (1, 1, 1, T, T) @ {B()}, "gmem"],
+        rotation: Tensor[(1, 1, 1, T, D, D), "f32", (1, 1, 1, T, D, D), "gmem"],
+        mask: Tensor[(1, 1, 1, T, T), "f32", (1, 1, 1, T, T), "gmem"],
     ):
-        q_full = tf.reshard(wq, layout=(C, C) @ {B()}, storage="gmem")
-        k_full = tf.reshard(wk, layout=(G * D, C) @ {B()}, storage="gmem")
-        v_full = tf.reshard(wv, layout=(G * D, C) @ {B()}, storage="gmem")
-        o_full = tf.reshard(wo, layout=(C, C) @ {B()}, storage="gmem")
-        u_full = tf.reshard(wu, layout=(F, C) @ {B()}, storage="gmem")
-        d_full = tf.reshard(wd, layout=(C, F) @ {B()}, storage="gmem")
+        q_full = tf.reshard(wq, layout=(C, C), storage="gmem")
+        k_full = tf.reshard(wk, layout=(G * D, C), storage="gmem")
+        v_full = tf.reshard(wv, layout=(G * D, C), storage="gmem")
+        o_full = tf.reshard(wo, layout=(C, C), storage="gmem")
+        u_full = tf.reshard(wu, layout=(F, C), storage="gmem")
+        d_full = tf.reshard(wd, layout=(C, F), storage="gmem")
         ix = tf.rsqrt(tf.reduce(x * x, axes=(-1,)) + EPS)
         a = x * ix
         q0 = tf.transpose(tf.reshape(tf.matmul(a, q_full, b_layout="NK"), (B, T, G, H // G, D)), perm=(0, 2, 3, 1, 4))

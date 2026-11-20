@@ -529,9 +529,8 @@ def state_call(name: str, *args) -> AstPattern[Any]:
 
 
 def value_states() -> AstPattern[Any]:
-    """One Broadcast call, or axis-bound Partial/Varying calls."""
+    """Axis-bound Partial/Varying calls; Broadcast is the default and is not written."""
     return ChoicePattern(
-        AstNodePattern(ast.Set, FieldPattern("elts", SequencePattern(state_call("B")))),
         AstNodePattern(
             ast.Set,
             FieldPattern(
@@ -565,17 +564,16 @@ def value_states() -> AstPattern[Any]:
 @dataclass(frozen=True)
 class ValueStatesFormRule:
     STATEMENT: ClassVar[str] = (
-        "Layout states are one B() alone, or one or more mesh axis @ P(nonempty string) "
-        "or mesh axis @ V() entries. Empty states are rejected. A mesh axis @ B() entry is "
-        "rejected. B() mixed with other entries is rejected."
+        "Layout states are one or more mesh axis @ P(nonempty string) or mesh axis @ V() "
+        "entries. Empty states are rejected. Broadcast is the default: B() is never written."
     )
 
     def apply(self, value, *, node, context):
-        if isinstance(node, ast.Set) and len(node.elts) == 1:
-            item = node.elts[0]
-            if isinstance(item, ast.Call) and isinstance(item.func, ast.Name):
-                if item.func.id == "B" and not item.args and not item.keywords:
-                    return value
+        if isinstance(node, ast.Set) and any(
+            isinstance(item, ast.Call) and isinstance(item.func, ast.Name) and item.func.id == "B"
+            for item in node.elts
+        ):
+            raise ParseError.from_node(node, context, "Broadcast is the default; remove '@ {B()}'")
         if (
             isinstance(node, ast.Set)
             and node.elts
@@ -583,7 +581,7 @@ class ValueStatesFormRule:
         ):
             return value
         raise ParseError.from_node(
-            node, context, 'layout states must be {B()} or {mesh_axis @ P("reduction") | mesh_axis @ V(), ...}'
+            node, context, 'layout states must be {mesh_axis @ P("reduction") | mesh_axis @ V(), ...}'
         )
 
 
@@ -700,6 +698,18 @@ def units_within(mesh: types.Mesh, scope: types.Mesh) -> bool:
     return True
 
 
+def unit_set_in_scope(unit: types.Mesh, scope: types.Mesh) -> types.Mesh:
+    """*scope* with the topologies *unit* names replaced by *unit*'s; its other topologies stay."""
+    held, named = utils.topology_names(scope), utils.topology_names(unit)
+    if set(named) >= set(held):
+        return unit
+    if held[-len(named):] == named:
+        return utils.from_meshes(scope, unit)
+    return utils.from_meshes(
+        *(utils.topology_mesh(unit if name in named else scope, name) for name in held)
+    )
+
+
 @dataclass(frozen=True)
 class UnitSetRule:
     STATEMENT: ClassVar[str] = (
@@ -765,8 +775,8 @@ class ShardLayoutScopeRule:
         "A shard layout requires and covers the current mesh scope, or the function "
         "mesh in a signature. Each referenced mesh axis must "
         "map uniquely to a mesh axis of that scope. A layout naming a unit set (a slice, or "
-        "the mesh after '@') takes that mesh instead, inside the current scope. Unstated mesh "
-        "axes are Broadcast. "
+        "the mesh after '@') takes the scope with the topologies that set names replaced by its "
+        "own; its units lie in the scope. Unstated mesh axes are Broadcast. "
         "In a Varying layout without Split or Partial, a topology that holds only "
         "Broadcast and does not own the storage is dropped."
     )
@@ -782,7 +792,8 @@ class ShardLayoutScopeRule:
                     context,
                     f"the layout's units ({unit_set_text(value.unit_set)}) are outside the current mesh scope",
                 )
-            mesh = value.unit_set
+            in_body = mesh is not None and context.values.get("position") is None
+            mesh = unit_set_in_scope(value.unit_set, mesh) if in_body else value.unit_set
         if mesh is None:
             raise ParseError.from_node(
                 match.node, context, "shard layout requires a current mesh scope"

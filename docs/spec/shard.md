@@ -717,7 +717,7 @@ Unary operations check their own Partial commutativity separately.
 
 `combine` rejects `None` with `ValueError`. Callers must first read plain layouts
 through `attrs_by_axis`. Error cells raise `ValueError`. The error names the kind and both attrs.
-It gives an explicit `bitcast(..., <its layout> @ {B()})` remedy where equal values are required.
+It gives an explicit `bitcast(..., <its layout>)` remedy where equal values are required.
 A change the types prove is a `Reshard`, priced from both ends' types; a fact
 only the author can state is a `Bitcast` form (ii) ([hir §1.3](./hir.md#13-op)).
 
@@ -743,8 +743,7 @@ for the whole Reshard.
 | `(8, 16)` | Plain row-major `Layout` |
 | `((8, 16), (1, 8))` | Plain `Layout` with explicit strides |
 | `(8 @ t.w, 16)` | `ShardLayout` splitting a tensor dimension over `t.w` |
-| `(8, 16) @ {B()}` | All-Broadcast `ShardLayout` |
-| `((8, 16) + 4 \| Swizzle(2, 4, 3)) @ {B()}` | All-Broadcast `ShardLayout` based on a `ComposedLayout` |
+| `((8, 16) + 4 \| Swizzle(2, 4, 3)) @ s` | All-Broadcast `ShardLayout` on `s`, based on a `ComposedLayout` |
 | `(8 @ t.w, 16) @ {t.l @ V()}` | Split shard attr with Varying values on `t.l` |
 | `(8 @ t.w, 16) @ {t.l @ P("sum")}` | Split shard attr with Partial values on `t.l` |
 | `(4, 8) @ m[0]` | All-Broadcast `ShardLayout` on the slice `m[0]` |
@@ -758,7 +757,11 @@ A shard layout covers the current composed mesh scope, or the function mesh in a
 signature. A layout that names a slice, or a mesh after `@`, takes that mesh
 instead; it names one unit set (two are refused: `a layout names two unit sets`),
 and in a body its units are units of the current scope. Unstated mesh axes are
-Broadcast. A `with` scope may omit `as name`. An annotation with `layout=None`
+Broadcast. Broadcast is the default and is never written as a state: a `B()` state
+is refused, and the error names what to remove. In a body, `@ s` names the current
+composed scope with the topologies `s` names replaced by `s`'s own; the others stay,
+so `@ <innermost scope name>` is Broadcast on the current scope. In a signature `@ s`
+is `s`'s own mesh. A `with` scope may omit `as name`. An annotation with `layout=None`
 imposes no layout constraint. A plain `Layout` and an all-Broadcast `ShardLayout`
 over every unit state the same fact; type inference keeps the plain one
 ([shard §6.1](./shard.md#61-shard-attr-semantics)). Written shape and stride

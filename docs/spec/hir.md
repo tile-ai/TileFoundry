@@ -562,7 +562,7 @@ class Binary(Op):
     (`op(reduction(x)) == reduction(op(x))`). Otherwise typeinfer rejects it. The rejection names the offending operand and the fix (an explicit `Reshard` to
     `Broadcast`).
     States follow [shard §6.1](./shard.md#61-shard-attr-semantics). A Varying
-    peer is rejected with an explicit `bitcast(..., <its layout> @ {B()})` remedy.
+    peer is rejected with an explicit `bitcast(..., <its layout>)` remedy.
     Typeinfer decides each mesh axis independently. `Partial` states on different axes are not interchangeable. `ADD` rejects two Partial inputs
     when their states occupy different mesh axes.
     - `ADD` with both operands `Partial`: commutes (passes) only when both

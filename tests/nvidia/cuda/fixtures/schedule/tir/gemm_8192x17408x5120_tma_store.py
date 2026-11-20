@@ -121,13 +121,13 @@ class Gemm8192x17408x5120TmaStore:
                                             value_5 = lhs_ring_stages[(((((m // 128) * 68) + (n // 256)) * 80) + (k // 64)) % 3]
                                             lhs_view = T.tensor_view(
                                                 T.ptr_of(value_5[o_m:o_m + 128, o_k:o_k + 16]),
-                                                layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) | Swizzle(3, 4, 3)) @ {B()},
+                                                layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) | Swizzle(3, 4, 3)) @ scope_3,
                                                 shape=(128, 16),
                                             )
                                             value_6 = rhs_ring_stages[(((((m // 128) * 68) + (n // 256)) * 80) + (k // 64)) % 3]
                                             rhs_view = T.tensor_view(
                                                 T.ptr_of(value_6[o_k:o_k + 16, o_n:o_n + 256]),
-                                                layout=(Layout(((2, 8), (4, 64)), ((512, 64), (1024, 1))) | Swizzle(3, 4, 3)) @ {B()},
+                                                layout=(Layout(((2, 8), (4, 64)), ((512, 64), (1024, 1))) | Swizzle(3, 4, 3)) @ scope_3,
                                                 shape=(16, 256),
                                             )
                                             T.tiled_mma(
@@ -138,12 +138,12 @@ class Gemm8192x17408x5120TmaStore:
                                             )
                                             lhs_view_1 = T.tensor_view(
                                                 T.ptr_of(value_5[o_m:o_m + 128, o_k + 16:o_k + 16 + 16]),
-                                                layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) + 16 | Swizzle(3, 4, 3)) @ {B()},
+                                                layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) + 16 | Swizzle(3, 4, 3)) @ scope_3,
                                                 shape=(128, 16),
                                             )
                                             rhs_view_1 = T.tensor_view(
                                                 T.ptr_of(value_6[o_k + 16:o_k + 16 + 16, o_n:o_n + 256]),
-                                                layout=(Layout(((2, 8), (4, 64)), ((512, 64), (1024, 1))) | Swizzle(3, 4, 3)) @ {B()},
+                                                layout=(Layout(((2, 8), (4, 64)), ((512, 64), (1024, 1))) | Swizzle(3, 4, 3)) @ scope_3,
                                                 shape=(16, 256),
                                             )
                                             T.tiled_mma(
@@ -154,12 +154,12 @@ class Gemm8192x17408x5120TmaStore:
                                             )
                                             lhs_view_2 = T.tensor_view(
                                                 T.ptr_of(value_5[o_m:o_m + 128, o_k + 32:o_k + 32 + 16]),
-                                                layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) + 32 | Swizzle(3, 4, 3)) @ {B()},
+                                                layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) + 32 | Swizzle(3, 4, 3)) @ scope_3,
                                                 shape=(128, 16),
                                             )
                                             rhs_view_2 = T.tensor_view(
                                                 T.ptr_of(value_6[o_k + 32:o_k + 32 + 16, o_n:o_n + 256]),
-                                                layout=(Layout(((2, 8), (4, 64)), ((512, 64), (1024, 1))) | Swizzle(3, 4, 3)) @ {B()},
+                                                layout=(Layout(((2, 8), (4, 64)), ((512, 64), (1024, 1))) | Swizzle(3, 4, 3)) @ scope_3,
                                                 shape=(16, 256),
                                             )
                                             T.tiled_mma(
@@ -170,12 +170,12 @@ class Gemm8192x17408x5120TmaStore:
                                             )
                                             lhs_view_3 = T.tensor_view(
                                                 T.ptr_of(value_5[o_m:o_m + 128, o_k + 48:o_k + 48 + 16]),
-                                                layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) + 48 | Swizzle(3, 4, 3)) @ {B()},
+                                                layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) + 48 | Swizzle(3, 4, 3)) @ scope_3,
                                                 shape=(128, 16),
                                             )
                                             rhs_view_3 = T.tensor_view(
                                                 T.ptr_of(value_6[o_k + 48:o_k + 48 + 16, o_n:o_n + 256]),
-                                                layout=(Layout(((2, 8), (4, 64)), ((512, 64), (1024, 1))) | Swizzle(3, 4, 3)) @ {B()},
+                                                layout=(Layout(((2, 8), (4, 64)), ((512, 64), (1024, 1))) | Swizzle(3, 4, 3)) @ scope_3,
                                                 shape=(16, 256),
                                             )
                                             T.tiled_mma(
