@@ -19,8 +19,15 @@ PADDING = pattern.Sequence(
         pattern.Wildcard("padding_w") < pattern.Wildcard("kernel_w"),
     ),
 )
-BOUND = MappingProxyType({name: pattern.Wildcard(name) for name in (
-    "kernel_size", "stride", "padding", "ceil_mode", "count_include_pad", "kind")})
+SAME_AVERAGE = (
+    pattern.In(pattern.Wildcard("kind"), (expr.PoolKind.MAX,))
+    | pattern.In(pattern.Wildcard("ceil_mode"), (False,))
+    | pattern.In(pattern.Wildcard("count_include_pad"), (False,))
+)
+BOUND = MappingProxyType({
+    **{name: pattern.Wildcard(name) for name in ("kernel_size", "stride", "padding", "ceil_mode", "kind")},
+    "count_include_pad": pattern.Wildcard("count_include_pad", predicates=(SAME_AVERAGE,)),
+})
 
 
 @expr.register_op(dialect="T", category="pe", namespace="ane", name="pool")
@@ -28,7 +35,9 @@ class Pool(expr.Op):
     """dst = pooling of src over kernel_size windows; padding is zero for the average.
 
     An average divides by the window size, or by the elements the window holds
-    that are not padding, as a multiplication by the fp16 reciprocal.
+    that are not padding, as a multiplication by the fp16 reciprocal. A ceil_mode
+    window past the padded input still divides by the window size, so an HIR average
+    with ceil_mode and count_include_pad is not paired.
     """
 
     capability = expr.OpCapability("pe.pool")
