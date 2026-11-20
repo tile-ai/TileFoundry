@@ -28,7 +28,7 @@ from .dim import (
 from .dtype import BoolDType, DType, FloatDType, IntegerDType, dtype_members
 from .errors import VerifyError
 from .expr import Call, Constant, Expr, Tuple, Var, child_exprs
-from .kinds import BinaryKind, ReduceKind, UnaryKind
+from .kinds import BinaryKind, PoolKind, ReduceKind, UnaryKind
 from .metadata import (
     Annotated,
     BindingMetadata,
