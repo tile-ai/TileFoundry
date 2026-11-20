@@ -80,7 +80,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
             ctx.error(call, f"output {name} extent must be positive, got {extent}")
 
     ir_utils.reject_partials("input", x.layout)
-    read = typeinfer.operand_types(ctx, call.args)
+    read = tuple(map(ctx.type_of, call.args))
     relation = access.relations_of(call, ctx)
     try:
         shard = typeinfer.derive_output_shard_layout(
