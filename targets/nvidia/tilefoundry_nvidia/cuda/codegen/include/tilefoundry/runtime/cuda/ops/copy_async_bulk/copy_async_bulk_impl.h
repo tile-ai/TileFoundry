@@ -34,8 +34,6 @@ CUTE_HOST_DEVICE constexpr void check_operands() {
                   "ops::copy_async_bulk: both operands must leave the tile "
                   "whole on every "
                   "unit");
-    static_assert(tilefoundry::ShardTensorLike<Dst>,
-                  "ops::copy_async_bulk: the destination must name a mesh");
     static_assert(one_run_v<s_view> && one_run_v<d_view>,
                   "ops::copy_async_bulk: both projected views must be one "
                   "static unbroken run");
@@ -48,25 +46,25 @@ CUTE_HOST_DEVICE constexpr void check_operands() {
                   "elements");
 }
 
-template <int Units> struct StridedCopy {
-    template <class SV, class DV>
-    __device__ void operator()(SV const &sv, DV &dv) const {
-        const int n = int(cute::size(dv));
-        const int first =
-            int(tilefoundry::unit_id<tilefoundry::TopologyLevel::thread>());
-        for (int i = first; i < n; i += Units)
-            dv(i) = static_cast<cute::remove_cvref_t<decltype(dv(0))>>(sv(i));
-    }
-};
-
-struct Strided {
+/// Each thread of ``ExecutionMesh`` copies every ``units``-th element, then
+/// the mesh syncs and one thread arrives on ``bar``.
+template <class ExecutionMesh> struct Strided {
     template <class Src, class Dst>
     __device__ void operator()(Src const &src, Dst &dst, uint64_t *bar) const {
         auto s = tilefoundry::local_tensor(src);
         auto &&d = tilefoundry::local_tensor(dst);
-        StridedCopy<tilefoundry::shard_mesh_units<Dst>()>{}(s, d);
+        constexpr int units = int(
+            cute::size(tilefoundry::detail::topology_mode<
+                       tilefoundry::TopologyLevel::thread>(ExecutionMesh{})));
+        const int n = int(cute::size(d));
+        const int lane =
+            int(tilefoundry::unit_id<tilefoundry::TopologyLevel::thread>()) -
+            tilefoundry::detail::first_id<tilefoundry::TopologyLevel::thread>(
+                ExecutionMesh{});
+        for (int i = lane; i < n; i += units)
+            d(i) = static_cast<cute::remove_cvref_t<decltype(d(0))>>(s(i));
         __threadfence_block();
-        ops::sync(dst.shard_layout.mesh_value);
+        ops::sync(ExecutionMesh{});
         if (tilefoundry::shuffle_elect())
             asm volatile("{\n"
                          "  .reg .b64 state;\n"
@@ -75,7 +73,7 @@ struct Strided {
     }
 };
 
-struct Bulk {
+template <class ExecutionMesh> struct Bulk {
     template <class Src, class Dst>
     __device__ void operator()(Src const &src, Dst &dst, uint64_t *bar) const {
         auto s = tilefoundry::local_tensor(src);
@@ -92,11 +90,11 @@ struct Bulk {
                       unsigned(sizeof(elem))
                 : 0u;
         if constexpr (static_layout && ((static_bytes & 15u) != 0u)) {
-            Strided{}(src, dst, bar);
+            Strided<ExecutionMesh>{}(src, dst, bar);
             return;
         } else if constexpr (!static_layout) {
             if ((bytes & 15u) != 0u) {
-                Strided{}(src, dst, bar);
+                Strided<ExecutionMesh>{}(src, dst, bar);
                 return;
             }
         }

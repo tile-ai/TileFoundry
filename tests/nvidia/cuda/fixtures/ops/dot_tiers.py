@@ -19,23 +19,15 @@ class DotWarp:
         with Mesh((Topology("thread", 32),), Layout(shape=(32,), strides=(1,)), ("t",)) as mw:
             warp_a_view = T.tensor_view(
                 T.ptr_of(warp_a),
-                layout=ShardLayout(
-                    layout=Layout(shape=(32, 32), strides=(32, 1)),
-                    attrs=(Split(0),),
-                    mesh=mw,
-                ),
+                layout=(32 @ mw.t, 32),
             )
             warp_b_view = T.tensor_view(
                 T.ptr_of(warp_b),
-                layout=ShardLayout(
-                    layout=Layout(shape=(32,), strides=(1,)), attrs=(types.Broadcast(),), mesh=mw
-                ),
+                layout=ShardLayout(Layout((32,), (1,)), (types.Broadcast(),), mw),
             )
             warp_c_view = T.tensor_view(
                 T.ptr_of(warp_c),
-                layout=ShardLayout(
-                    layout=Layout(shape=(32,), strides=(1,)), attrs=(Split(0),), mesh=mw
-                ),
+                layout=(32 @ mw.t,),
             )
             T.dot(warp_a_view, warp_b_view, warp_c_view)
 
@@ -48,10 +40,10 @@ class DotCta:
     ):
         with Mesh((Topology("thread", 128),), Layout(shape=(128,), strides=(1,)), ("t",)) as mc:
             cta_a_view = T.tensor_view(
-                T.ptr_of(cta_a), layout=ShardLayout(Layout((128,), (1,)), (Split(0),), mc)
+                T.ptr_of(cta_a), layout=(128 @ mc.t,)
             )
             cta_b_view = T.tensor_view(
-                T.ptr_of(cta_b), layout=ShardLayout(Layout((128,), (1,)), (Split(0),), mc)
+                T.ptr_of(cta_b), layout=(128 @ mc.t,)
             )
             cta_c_view = T.tensor_view(
                 T.ptr_of(cta_c), layout=ShardLayout(Layout((1,), (1,)), (types.Broadcast(),), mc)

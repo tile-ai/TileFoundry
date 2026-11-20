@@ -23,15 +23,6 @@ _CUDA = cuda.Target("nvidia.h200_sxm", device_count=GPUS)
 _TOPOLOGIES = (Topology("gpu", GPUS), Topology("cta", CTAS), Topology("thread", THREADS))
 
 
-def _split_rows(mesh) -> ShardLayout:
-    """The rows one unit of *mesh* holds: each level cuts what is left."""
-    return ShardLayout(
-        layout=Layout(shape=(ROWS, COLS), strides=(COLS, 1)),
-        attrs=(Split(0), Split(0), Split(0)),
-        mesh=mesh,
-    )
-
-
 @module(entry="copy_rows_host", topologies=_TOPOLOGIES, target=_CUDA)
 class GpuPlacedRows:
     """A copy whose source and destination are both one thread's share."""
@@ -43,9 +34,8 @@ class GpuPlacedRows:
             layout=(GPUS, CTAS, THREADS),
             names=("g", "c", "t"),
         ) as m:
-            rows = _split_rows(m)
-            source = T.tensor_view(T.ptr_of(a), layout=rows)
-            written = T.tensor_view(T.ptr_of(out), layout=rows)
+            source = T.tensor_view(T.ptr_of(a), layout=((ROWS @ m.g @ m.c @ m.t, COLS), (COLS, 1)))
+            written = T.tensor_view(T.ptr_of(out), layout=((ROWS @ m.g @ m.c @ m.t, COLS), (COLS, 1)))
             T.copy(source, written)
 
     @prim_func(target=cpu.Target())

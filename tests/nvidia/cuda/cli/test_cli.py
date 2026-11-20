@@ -464,8 +464,8 @@ def test_analyze_reports_retained_occurrences(tmp_path) -> None:
     assert annotated.count("reshard(tokens") == 2
     assert "local = tf.reshard(tokens" in annotated
     assert annotated.count("local = tf.reshard(tokens") == 2
-    assert "with mesh[:120] as cta:" in annotated
-    assert "with mesh[120:] as cta:" in annotated
+    assert "with cta[:120] as cta_2:" in annotated
+    assert "with cta[120:] as cta_2:" in annotated
 
     summary = payload["functions"][0]["function_records"]["performance"]
     cost = payload["functions"][0]["function_records"]["compute-cost"]
@@ -518,12 +518,12 @@ def test_analyze_reports_retained_occurrences(tmp_path) -> None:
         if line.lstrip().startswith("with ")
     }
     assert hoisted == set()
-    assert scoped == {"cta"}
+    assert scoped == {"cta", "cta_2"}
     annotated_types = [
         line.split("  # ", 1)[1].split("; ", 1)[0] for line in lines if "  # Tensor[" in line
     ]
-    assert 'Tensor[(120, 64), "f32", (120 @ cta.tile, 64)]' in annotated_types
-    assert 'Tensor[(120, 64), "f32", (12 @ cta.tile, 10, 64)]' in annotated_types
+    assert 'Tensor[(120, 64), "f32", (120 @ cta_2.tile, 64)]' in annotated_types
+    assert 'Tensor[(120, 64), "f32", (12 @ cta_2.tile, 10, 64)]' in annotated_types
     assert 'Tensor[(120, 64), "f32"]' in annotated_types
 
     rows = [row for function in payload["functions"] for row in function["calls"]]
@@ -539,7 +539,7 @@ def test_analyze_reports_retained_occurrences(tmp_path) -> None:
     called = [(row["callee"], row["callee_ref"]) for row in rows if "callee" in row]
     assert [ref for _, ref in called] == ["routed_expert", "shared_expert"]
     assert all(names.count(callee) == 1 for callee, _ in called)
-    assert [row["value"] for row in payload["functions"][0]["calls"][:2]] == ["v0:9", "v1:10"]
+    assert [row["value"] for row in payload["functions"][0]["calls"][:2]] == ["v0:10", "v1:11"]
     timed = [index for index, row in enumerate(rows) if "performance" in row]
     assert timed == [0, 1, 2, 4, 7]
     rendered = {

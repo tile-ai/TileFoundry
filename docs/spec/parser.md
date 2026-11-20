@@ -168,7 +168,8 @@ common field type for every possible result.
 ; expression: Python syntax composed from literals, names, primaries, and operators
 ; runtime-expression: expression lowered to a TileFoundry IR Expr
 mesh-axis             ::= identifier
-                          | identifier '.' identifier
+                          | identifier '[' expression ']'
+                          | (identifier | identifier '[' expression ']') '.' identifier
 dim-expr              ::= integer-literal
                           | identifier
                           | primary '.' identifier
@@ -216,10 +217,10 @@ composed-layout       ::= (placed-layout | plain-layout | expression) '+' dim-ex
                             placed-layout | plain-layout | expression) '|' expression
 shard-layout-operand  ::= '(' layout-dims ',' layout-strides ')'
                           | layout-dims
-value-states          ::= '{' 'B' '(' ')' '}'
-                          | '{' mesh-axis '@' ('P' '(' string-literal ')' | 'V' '(' ')') (','
-                            mesh-axis '@' ('P' '(' string-literal ')' | 'V' '(' ')'))* '}'
-stated-layout         ::= (composed-layout | shard-layout-operand | expression) '@' value-states
+value-states          ::= '{' mesh-axis '@' ('P' '(' string-literal ')' | 'V' '(' ')') (','
+                          mesh-axis '@' ('P' '(' string-literal ')' | 'V' '(' ')'))* '}'
+stated-layout         ::= (composed-layout | shard-layout-operand | expression) '@' (identifier |
+                          identifier '[' expression ']' | value-states)
 shape                 ::= '(' (dim-expr (',' dim-expr)*)? ')'
                           | identifier
                           | primary '.' identifier
@@ -269,7 +270,7 @@ mesh-context          ::= ('Mesh' | primary '.' 'Mesh') '(' (expression | ('layo
                             expression) (',' (expression | ('layout' | 'names') '=' expression))*
                             ')'
                           | expression
-with                  ::= 'with' mesh-context ('as' identifier)? ':' block
+with                  ::= 'with' mesh-context ('as' (identifier | None))? ':' block
 slice-endpoint-binary ::= index-endpoint dim-op index-endpoint
 mesh-coordinate       ::= identifier '.' string-literal
 index-endpoint        ::= literal
@@ -365,7 +366,7 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | layout, plain_layout | call_attribute, mesh_layout, tensor_optional_slot | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
 | loop_header | loop_header | TileIteratorQualificationRule | A tiled loop uses tf.tile rather than a bare tile call. | src/tilefoundry/parser/pattern_nodes.py |
 | mesh_axis | call_attribute, layout, mesh_layout, tensor_optional_slot, tensor_shape | BareMeshAxisRule | A bare Mesh in a shard layout names a mesh with one mesh axis. | src/tilefoundry/parser/pattern_nodes.py |
-| mesh_axis | call_attribute, layout, mesh_layout, tensor_optional_slot, tensor_shape | MeshAxisBindingRule | A mesh axis of a shard layout resolves to a lexical Mesh binding. | src/tilefoundry/parser/pattern_nodes.py |
+| mesh_axis | call_attribute, layout, mesh_layout, tensor_optional_slot, tensor_shape | MeshAxisBindingRule | A mesh axis or unit set of a shard layout resolves to a lexical Mesh binding. | src/tilefoundry/parser/pattern_nodes.py |
 | mesh_axis | call_attribute, layout, mesh_layout, tensor_optional_slot, tensor_shape | MeshAxisNameRule | A named mesh axis of a shard layout exists in its lexical Mesh. | src/tilefoundry/parser/pattern_nodes.py |
 | mesh_context | mesh_context | SelectionBindingRule | A mesh selection names a lexical Mesh binding or its constant slice. | src/tilefoundry/parser/pattern_nodes.py |
 | mesh_context | mesh_context | SelectionConstructionRule | A checked selection constructs a Mesh with its topology. The Mesh starts at the first index of the selection, unless the selection holds its whole topology. The Mesh enters its execution scope and defines its lexical binding. | src/tilefoundry/parser/pattern_nodes.py |
@@ -387,24 +388,26 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | placed_layout, stated_layout | call_attribute, mesh_layout, tensor_optional_slot, tensor_shape | ShardLayoutAnswerRule | Shard layout sugar states both the shape as written and the layout it implies. | src/tilefoundry/parser/pattern_nodes.py |
 | placed_layout, stated_layout | call_attribute, mesh_layout, tensor_optional_slot, tensor_shape | ShardLayoutConstructionRule | Shard layout sugar must construct a valid shard layout. Without splits, partials or stated strides, it uses row-major strides; Broadcast states do not affect this default. A composed operand is retained directly without canonical split decomposition. | src/tilefoundry/parser/pattern_nodes.py |
 | placed_layout, stated_layout | call_attribute, mesh_layout, tensor_optional_slot, tensor_shape | ShardLayoutMeshResolutionRule | A shard layout's mesh must be a lexical mesh binding. | src/tilefoundry/parser/pattern_nodes.py |
-| placed_layout, stated_layout | call_attribute, mesh_layout, tensor_optional_slot, tensor_shape | ShardLayoutScopeRule | A shard layout requires and covers the current mesh scope, or the function mesh in a signature. Each referenced mesh axis must map uniquely to a mesh axis of that scope. Unstated mesh axes are Broadcast. | src/tilefoundry/parser/pattern_nodes.py |
+| placed_layout, stated_layout | call_attribute, mesh_layout, tensor_optional_slot, tensor_shape | ShardLayoutScopeRule | A shard layout covers the current mesh scope, or in a signature the meshes it names. A Varying state may name a topology outside the scope, which joins it (an execution mesh may omit outside topologies without Split or Partial). Each other referenced mesh axis must map uniquely to a mesh axis of that scope. A layout naming a unit set (a slice, or the mesh after '@') takes the scope with the topologies that set names replaced by its own; its units lie in the scope. Unstated mesh axes are Broadcast. In a Varying layout without Split or Partial, a topology that holds only Broadcast and does not own the storage is dropped. | src/tilefoundry/parser/pattern_nodes.py |
 | placed_layout, stated_layout | call_attribute, mesh_layout, tensor_optional_slot, tensor_shape | ShardLayoutTopologyRule | A shard layout's meshes cannot name the same topology. | src/tilefoundry/parser/pattern_nodes.py |
+| placed_layout, stated_layout | call_attribute, mesh_layout, tensor_optional_slot, tensor_shape | UnitSetRule | A layout names one unit set: a mesh slice or the mesh after '@' is the only mesh its axes come from. | src/tilefoundry/parser/pattern_nodes.py |
 | reference | annotation, call_attribute, expression, slice_endpoint, subscript_index, tensor_dtype, tensor_optional_slot, type_annotation, variadic_input | LexicalMeshReferenceRule | Inside an open mesh scope, an external Mesh or mesh-bearing ShardLayout cannot stand in for a lexical Mesh binding. | src/tilefoundry/parser/ast_pattern.py |
 | shape | tensor_shape | ShapeTupleRule | A shape must construct a tuple of dimensions. | src/tilefoundry/parser/ast_pattern.py |
 | stated_layout | call_attribute, tensor_optional_slot, tensor_shape | StatedLayoutOperandRule | States attach to shard layout dimensions, a plain Layout, or a ComposedLayout whose outer is a plain Layout. | src/tilefoundry/parser/pattern_nodes.py |
 | storage | call_attribute, tensor_optional_slot | StorageValueRule | Storage must resolve to a StorageKind. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, call_attribute, expression, slice_endpoint, subscript_index, type_annotation, variadic_input | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, call_attribute, expression, slice_endpoint, subscript_index, type_annotation, variadic_input | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |
-| value_states | call_attribute, tensor_optional_slot, tensor_shape | ValueStatesFormRule | Layout states are one B() alone, or one or more mesh axis @ P(nonempty string) or mesh axis @ V() entries. Empty states are rejected. A mesh axis @ B() entry is rejected. B() mixed with other entries is rejected. | src/tilefoundry/parser/pattern_nodes.py |
+| value_states | call_attribute, tensor_optional_slot, tensor_shape | ValueStatesFormRule | Layout states are one or more mesh axis @ P(nonempty string) or mesh axis @ V() entries. Empty states are rejected. Broadcast is the default: B() is never written. | src/tilefoundry/parser/pattern_nodes.py |
 | where_annotation | annotation | WhereTopologyStatesRule | Where layout states constrain named topologies with topology @ B() or topology @ P(nonempty string); they do not bind lexical mesh axes. | src/tilefoundry/parser/pattern_nodes.py |
 <!-- parser-constraints:end -->
 
 A `mesh-axis` used by shard layout sugar MUST resolve to a mesh binding in the
-current lexical scope. A module or closure name that resolves to a `Mesh` does
-not become a shard layout binding. Such an external value remains valid as the
-context expression of `with ... as ...` outside an open mesh scope, or as the
-value supplied to `@func(mesh=...)`. The resulting lexical binding is the name
-that shard layout sugar may use.
+current lexical scope: a `Mesh` the `@module` class body declares (bound by
+name in every function of that class, signature and body), or a `with ... as
+name` binding. A module or closure name that resolves to a `Mesh` does not become
+a shard layout binding; the error asks to declare the Mesh in the class body. Such
+an external value remains valid as the context expression of `with ... as ...`
+outside an open mesh scope.
 
 ## 3. Implementation Overview
 

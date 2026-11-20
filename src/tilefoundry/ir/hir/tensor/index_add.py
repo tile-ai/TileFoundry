@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry import core
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types, utils
 
 from .index_select import norm_dim
@@ -12,6 +12,8 @@ from .index_select import norm_dim
 @expr.register_op(name="index_add", dialect='tf', category='tensor')
 class IndexAdd(expr.Op):
     """Return ``dst`` with ``src`` slices accumulated at ``index`` along ``dim``."""
+
+    result_rule = "into"
 
     dst = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
     index = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
@@ -65,7 +67,7 @@ def infer_index_write(
     for name, ty in (("dst", dst_ty), ("index", index_ty), ("src", src_ty)):
         utils.reject_partials(name, ty.layout)
     reject_splits(ctx, call, dim, dst_ty, index_ty, src_ty)
-    return typeinfer.combine_operand_attrs(dst_ty, typeinfer.operand_types(ctx, call.args)[1:], ctx)
+    return dst_ty
 
 
 def reject_splits(ctx, call: "expr.Call", dim: int, dst, index, src) -> None:
@@ -120,6 +122,13 @@ def eval_index_add(ctx):
         else tuple((p, index_add(*(x.to_local(p) for x in xs))) for p in placements)
     )
     return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
+
+
+@autodiff.register(IndexAdd)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """The cotangent for dst, and its rows at the index for src; no index gradient."""
+    _, index, _ = call.args
+    return cotangent, None, ctx.call("index_select", cotangent, index, dim=call.target.dim)
 
 
 __all__ = ["IndexAdd", "infer_index_write"]

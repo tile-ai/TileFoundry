@@ -123,7 +123,7 @@ class Gemm_MNK_NN64x128x32_w11x12:
             layout=(WAVE_OTHER, WAVE_G),
             names=("x", "y"),
         ) as cta:
-            result = tf.zeros(Tensor[(WAVE_BM, WAVE_BN), "bf16", (WAVE_BM, WAVE_BN), "rmem"])
+            result = tf.zeros(Tensor[(WAVE_BM, WAVE_BN), "bf16", (WAVE_BM, WAVE_BN) @ {cta.y @ V()}, "rmem"])
             a_groups = tf.reshape(a, (WAVE_OTHER, WAVE_M // WAVE_OTHER, WAVE_K))
             b_groups = tf.reshape(b, (WAVE_K, WAVE_G, WAVE_N // WAVE_G))
             for xi in range(cta.x, WAVE_OTHER, WAVE_OTHER):
@@ -165,7 +165,7 @@ class Gemm_MNK_NN64x128x32_w12x11:
             layout=(WAVE_G, WAVE_OTHER),
             names=("x", "y"),
         ) as cta:
-            result = tf.zeros(Tensor[(WAVE_BM, WAVE_BN), "bf16", (WAVE_BM, WAVE_BN), "rmem"])
+            result = tf.zeros(Tensor[(WAVE_BM, WAVE_BN), "bf16", (WAVE_BM, WAVE_BN) @ {cta.y @ V()}, "rmem"])
             a_groups = tf.reshape(a, (WAVE_G, WAVE_M // WAVE_G, WAVE_K))
             b_groups = tf.reshape(b, (WAVE_K, WAVE_OTHER, WAVE_N // WAVE_OTHER))
             for xi in range(cta.x, WAVE_G, WAVE_G):
@@ -217,7 +217,7 @@ class Gemm_MNK_NN128x128x64_w12x11_k4096:
                 Tensor[
                     (RESIDENT_BM, RESIDENT_BN),
                     "bf16",
-                    (RESIDENT_BM, RESIDENT_BN),
+                    (RESIDENT_BM, RESIDENT_BN) @ {cta.y @ V()},
                     "rmem",
                 ]
             )
@@ -276,7 +276,7 @@ class Gemm_MNK_NN128x128x64_w12x11_k16384:
                 Tensor[
                     (RESIDENT_BM, RESIDENT_BN),
                     "bf16",
-                    (RESIDENT_BM, RESIDENT_BN),
+                    (RESIDENT_BM, RESIDENT_BN) @ {cta.y @ V()},
                     "rmem",
                 ]
             )
@@ -336,7 +336,7 @@ class Gemm_MNK_NT128x128x64_w17x8:
                 Tensor[
                     (RESIDENT_BM, RESIDENT_BN),
                     "bf16",
-                    (RESIDENT_BM, RESIDENT_BN),
+                    (RESIDENT_BM, RESIDENT_BN) @ {cta.y @ V()},
                     "rmem",
                 ]
             )

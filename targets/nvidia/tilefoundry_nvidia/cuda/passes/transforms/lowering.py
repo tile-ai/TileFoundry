@@ -307,7 +307,10 @@ class CudaLowering(transforms.Lowering):
             self.emit_steps(call, "after", ctx)
 
     def local_operands(self, op, issue: Issue, ctx) -> list:
-        """Each operand as a unit of *op*'s execution mesh holds it, in parameter order."""
+        """Each operand as a unit of *op*'s execution mesh holds it, in parameter order.
+
+        An operand is read physically: a topology where it is only Varying is omitted.
+        """
         plan, type_list, execution_mesh = issue.plan, issue.types, issue.execution_mesh
         required = analysis.required_execution_mesh(op)
         for region in ctx.builder.blocks[:-1]:
@@ -319,7 +322,8 @@ class CudaLowering(transforms.Lowering):
             base = ctx.builder.value(ctx.storage.operand(value, type_, whole_tensor=True), ctx=ctx)
             binding_mesh = rest.mesh if isinstance(rest, types.ShardLayout) else execution_mesh
             _, dropped = utils.find_execution_mesh(binding_mesh, required)
-            source = types.shard_layout_of(base.type.layout)
+            held = types.shard_layout_of(base.type.layout)
+            source = None if held is None else types.shard_layout_of(utils.physical_layout(held))
             attrs = (
                 list(source.attrs)
                 if source is not None
@@ -343,7 +347,7 @@ class CudaLowering(transforms.Lowering):
                         )
                     coordinate = unit_coordinates[key]
                 coords[mesh_axis] = coordinate
-            address = source.layout if source is not None else base.type.layout
+            address = source.layout if source is not None else utils.address_layout(base.type.layout)
             local, offset = types.local_layout(
                 types.ShardLayout(address, tuple(attrs), binding_mesh), base.type.shape, tuple(coords)
             )

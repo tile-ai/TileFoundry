@@ -54,76 +54,78 @@ class GqaOnline:
     owns, and every body here names the same ``cta`` level.
     """
 
-    @func(mesh=Mesh(("cta",), layout=(NUM_CTA,), names=("cta",)))
+    mesh = Mesh(("cta",), layout=(NUM_CTA,), names=("cta",))
+
+    @func
     def gqa_online_attend(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
-        k_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D) @ {B()}],
-        v_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D) @ {B()}],
-        k_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D) @ {B()}],
-        v_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D) @ {B()}],
+        k_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D)],
+        v_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D)],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D)],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D)],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
         pass
 
     @gqa_online_attend.specialize(
         pattern.Range("ctx_len", 0, SMALL_CONTEXT_T),
-        mesh=Mesh(("cta",), layout=(NUM_CTA,), names=("cta",)),
     )
     def head_on_cta(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
-        k_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D) @ {B()}],
-        v_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D) @ {B()}],
-        k_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D) @ {B()}],
-        v_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D) @ {B()}],
+        k_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D)],
+        v_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D)],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D)],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D)],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
-        with Mesh(("cta",), layout=(NUM_CTA,)) as cta:
-            q_sh = tf.reshard(q, layout=(1, S, _HKV, _G @ cta, _D))
-            q_f = tf.cast(q_sh, dtype="f32")
-            q_groups = tf.transpose(
-                tf.reshape(q_f, new_shape=(1, S, _HKV, _G, _D)),
-                perm=(0, 1, 3, 2, 4),
-            )
-            q_s = q_groups * tf.full_like(q_groups, value=_SCALE)
-            tmpl = tf.reduce(q_groups, axes=(-1,), keepdim=True, kind="sum")
-            m = tf.full_like(tmpl, value=-1e30)
-            l = tf.full_like(tmpl, value=0.0)
-            o = tf.zeros(Tensor[(1, S, _G, _HKV, _D), "f32", ((1, S, _G @ cta, _HKV, _D), (S * _G * _HKV * _D, _G * _HKV * _D, _HKV * _D, _D, 1))])
-            for i in range(C):
-                i_sh = tf.reshard(
-                    tf.reshape(i, new_shape=(1,)),
-                    layout=(1,),
-                    storage="gmem",
+        with mesh:
+            with Mesh(("cta",), layout=(NUM_CTA,)) as cta:
+                q_sh = tf.reshard(q, layout=(1, S, _HKV, _G @ cta, _D))
+                q_f = tf.cast(q_sh, dtype="f32")
+                q_groups = tf.transpose(
+                    tf.reshape(q_f, new_shape=(1, S, _HKV, _G, _D)),
+                    perm=(0, 1, 3, 2, 4),
                 )
-                k_i = tf.cast(
-                    tf.index_select(k_cache, i_sh, dim=1),
-                    dtype="f32",
-                )
-                v_i = tf.cast(
-                    tf.index_select(v_cache, i_sh, dim=1),
-                    dtype="f32",
-                )
-                score = tf.reduce(q_s * k_i, axes=(-1,), keepdim=True, kind="sum")
-                m_new = tf.max(m, score)
-                p = tf.exp(score - m_new)
-                corr = tf.exp(m - m_new)
-                l = l * corr + p
-                o = o * corr + p * v_i
-                m = m_new
+                q_s = q_groups * tf.full_like(q_groups, value=_SCALE)
+                tmpl = tf.reduce(q_groups, axes=(-1,), keepdim=True, kind="sum")
+                m = tf.full_like(tmpl, value=-1e30)
+                l = tf.full_like(tmpl, value=0.0)
+                o = tf.zeros(Tensor[(1, S, _G, _HKV, _D), "f32", ((1, S, _G @ cta, _HKV, _D), (S * _G * _HKV * _D, _G * _HKV * _D, _HKV * _D, _D, 1))])
+                for i in range(C):
+                    i_sh = tf.reshard(
+                        tf.reshape(i, new_shape=(1,)),
+                        layout=(1,),
+                        storage="gmem",
+                    )
+                    k_i = tf.cast(
+                        tf.index_select(k_cache, i_sh, dim=1),
+                        dtype="f32",
+                    )
+                    v_i = tf.cast(
+                        tf.index_select(v_cache, i_sh, dim=1),
+                        dtype="f32",
+                    )
+                    score = tf.reduce(q_s * k_i, axes=(-1,), keepdim=True, kind="sum")
+                    m_new = tf.max(m, score)
+                    p = tf.exp(score - m_new)
+                    corr = tf.exp(m - m_new)
+                    l = l * corr + p
+                    o = o * corr + p * v_i
+                    m = m_new
 
-            k_n = tf.cast(k_new, dtype="f32")
-            v_n = tf.cast(v_new, dtype="f32")
-            score_n = tf.reduce(q_s * k_n, axes=(-1,), keepdim=True, kind="sum")
-            m_all = tf.max(m, score_n)
-            p_n = tf.exp(score_n - m_all)
-            corr_n = tf.exp(m - m_all)
-            l = l * corr_n + p_n
-            o = o * corr_n + p_n * v_n
-            grouped = tf.transpose(o / l, perm=(0, 1, 3, 2, 4))
-            return tf.cast(
-                tf.reshape(grouped, new_shape=(1, S, _HQ, _D)),
-                dtype="bf16",
-            )
+                k_n = tf.cast(k_new, dtype="f32")
+                v_n = tf.cast(v_new, dtype="f32")
+                score_n = tf.reduce(q_s * k_n, axes=(-1,), keepdim=True, kind="sum")
+                m_all = tf.max(m, score_n)
+                p_n = tf.exp(score_n - m_all)
+                corr_n = tf.exp(m - m_all)
+                l = l * corr_n + p_n
+                o = o * corr_n + p_n * v_n
+                grouped = tf.transpose(o / l, perm=(0, 1, 3, 2, 4))
+                return tf.cast(
+                    tf.reshape(grouped, new_shape=(1, S, _HQ, _D)),
+                    dtype="bf16",
+                )
 
     @func
     def _ctx_partials(
@@ -202,18 +204,18 @@ class GqaOnline:
 
     @gqa_online_attend.specialize(
         pattern.Range("ctx_len", SMALL_CONTEXT_T + 1, MAX_CTX),
-        mesh=Mesh(("cta",), layout=(NUM_CTA,), names=("cta",)),
     )
     def ctx_split_kv(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
-        k_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D) @ {B()}],
-        v_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D) @ {B()}],
-        k_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D) @ {B()}],
-        v_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D) @ {B()}],
+        k_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D)],
+        v_cache: Tensor[(1, C, _HKV, _D), "bf16", (1, C, _HKV, _D)],
+        k_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D)],
+        v_new: Tensor[(1, S, _HKV, _D), "bf16", (1, S, _HKV, _D)],
     ) -> Tensor[(1, S, _HQ, _D), "bf16"]:
 
-        m_p, l_p, o_p = _ctx_partials(q, k_cache, v_cache)
-        return _ctx_combine(m_p, l_p, o_p, q, k_new, v_new)
+        with mesh:
+            m_p, l_p, o_p = _ctx_partials(q, k_cache, v_cache)
+            return _ctx_combine(m_p, l_p, o_p, q, k_new, v_new)
 
 
 gqa_online_attend = GqaOnline.lookup("gqa_online_attend")

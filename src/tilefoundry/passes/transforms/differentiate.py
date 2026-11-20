@@ -142,9 +142,7 @@ def is_float(type_: types.Type) -> bool:
 
 def gradient_type(type_: types.Type) -> types.Type:
     """The type of the gradient of a value of *type_*: its layout without ``Partial``."""
-    if isinstance(type_, types.TupleType):
-        return types.TupleType(tuple(gradient_type(item) for item in type_.fields))
-    return replace(type_, layout=autodiff.gradient_layout(type_.layout))
+    return ir_utils.map_tensor_types(type_, lambda leaf: replace(leaf, layout=autodiff.gradient_layout(leaf.layout)))
 
 
 def fields_of(type_: types.Type) -> tuple[types.Type, ...]:
@@ -596,12 +594,25 @@ class FunctionDifferentiator(expr.Functor[None]):
         return self.laid_out(gradient, type_, ctx)
 
     def laid_out(self, gradient, type_: types.Type, ctx: autodiff.Context):
-        """*gradient* of a *type_* value, resharded to ``gradient_layout``; None stays None."""
+        """*gradient* of a *type_* value, resharded to ``gradient_layout``; None stays None.
+
+        Where the value is Broadcast and its gradient Varying, every unit used the
+        same value, so the units' gradients sum: a Bitcast states the sum first.
+        """
         if gradient is None:
             return None
         if isinstance(type_, types.TupleType):
             return tuple(self.laid_out(part, item, ctx) for part, item in zip(gradient, type_.fields))
         wanted = gradient_type(type_)
+        held = types.shard_layout_of(ctx.type_of(gradient).layout)
+        if held is not None:
+            states = ir_utils.attrs_by_axis(wanted, held.mesh)
+            attrs = tuple(
+                types.Partial() if attr == types.Varying() and states[key] == types.Broadcast() else attr
+                for key, attr in zip(ir_utils.attrs_by_axis(ctx.type_of(gradient)), held.attrs, strict=True)
+            )
+            if attrs != held.attrs:
+                gradient = ctx.call("bitcast", gradient, layout=replace(held, attrs=attrs))
         if ctx.type_of(gradient).layout != wanted.layout:
             gradient = ctx.call(
                 "reshard", gradient, layout=types.normalize_layout(wanted.layout), storage=wanted.storage
@@ -1137,9 +1148,9 @@ class Inliner(core.BindingSubstitutionCloner):
 def enclose(body: expr.Expr, mesh: types.Mesh, params: tuple[expr.Var, ...]) -> core.MeshRegion:
     """*body* as the whole-function region of *mesh*, the backward regions of that mesh inlined.
 
-    A function that opens a mesh runs no op outside it. The region has the
-    shape the parser gives ``@func(mesh=...)``: one copy of each parameter,
-    in order, bound to that parameter.
+    A function that opens a mesh runs no op outside it. The region binds one
+    copy of each parameter, in order, to that parameter; it prints as a
+    ``with`` on the class body's mesh.
     """
     inner = tuple(replace(param) for param in params)
     region_body = Inliner(mesh).visit(body, {id(old): new for old, new in zip(params, inner)})

@@ -5,6 +5,7 @@ The cases live in ``sync_cases``, one module per category.
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -20,6 +21,7 @@ from tests.nvidia.cuda.analysis.sync_cases import (
     wgmma,
 )
 from tilefoundry import analysis, cli
+from tilefoundry.cli import schedule
 from tilefoundry.ir import tir
 
 
@@ -44,3 +46,17 @@ CASES = special(SyncCase)
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
 def test_sync_case(case: SyncCase) -> None:
     check_case(case)
+
+
+@pytest.mark.parametrize(("fixture", "module"), (("tma_store_cta_windows", "TmaStoreCtaWindows"), ("tma_store_cta_slice", "TmaStoreCtaSlice")))
+def test_a_varying_smem_tile_is_still_shared_by_the_threads_of_its_cta(tmp_path, fixture, module):
+    """A tile Varying on the CTA axis is one copy per CTA, which its threads share.
+
+    Its layout names no thread topology, but the executing threads share the
+    bytes, so the TMA load into it waits for the previous TMA store from it: the
+    loop starts with a barrier, as for a plain tile.
+    """
+    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / f"{fixture}.py"
+    out = tmp_path / "lowered.py"
+    schedule.run_finalize(f"{source}:{module}", str(out))
+    assert out.read_text().count("T.sync(") == 2

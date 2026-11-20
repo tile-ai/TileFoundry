@@ -53,10 +53,10 @@ class HirPrinter(PythonPrinter):
             return text if owner.function is self.function else f"{owner.function.name}::{text}"
         return super().print(value, ctx, indent)
 
-    def render(self, fn: core.Function, *, options=None, target=None) -> PythonRendering:
+    def render(self, fn: core.Function, *, options=None, target=None, module=None) -> PythonRendering:
         if options is not None and options.comment_metadata_types:
-            render_hir_function(fn, printer=self, target=target)
-        return render_hir_function(fn, options=options, printer=self, target=target)
+            render_hir_function(fn, printer=self, target=target, module=module)
+        return render_hir_function(fn, options=options, printer=self, target=target, module=module)
 
     def bind_def(
         self,
@@ -466,9 +466,6 @@ def emit_def(
     """
     lines: list[str] = []
     printer = HirPrinter()
-    root_mesh = fn.body.mesh if isinstance(fn.body, core.MeshRegion) and not fn.specializations else None
-    if root_mesh is not None:
-        ctx.push_mesh(root_mesh, "mesh")
 
     names: dict[int, str] = {}
 
@@ -699,8 +696,6 @@ def emit_def(
             lines.append(line)
     if fn.body is None:
         lines.append(f"{indent}pass")
-        if root_mesh is not None:
-            ctx.pop_mesh()
         return lines
 
     printed: set[int] = {id(param) for param in fn.params}
@@ -811,20 +806,17 @@ def emit_def(
             return
         for arg in region.args:
             emit_expr(arg, prefix)
-        if root_mesh is not None and region is fn.body:
-            printed.add(key)
-            emit_expr(region.body, prefix)
-            if terminal:
-                lines.append(f"{prefix}return {printer.reference(region.body, ctx)}")
-            return
-        mesh_text = printer.mesh_context(region.mesh, ctx)
-        mesh_name = ctx.mesh_name(region.mesh)
-        lines.append(
-            f"{prefix}with {mesh_text} as {mesh_name}:{metadata_comments(region, options, printer, ctx)}"
-        )
+        bound = ctx.mesh_alias(region.mesh)
+        comments = metadata_comments(region, options, printer, ctx)
+        if bound is not None:
+            lines.append(f"{prefix}with {bound}:{comments}")
+        else:
+            mesh_text = printer.mesh_context(region.mesh, ctx)
+            bound = ctx.mesh_name(region.mesh)
+            lines.append(f"{prefix}with {mesh_text} as {bound}:{comments}")
         printed.add(key)
         inner = prefix + "    "
-        ctx.push_mesh(region.mesh, mesh_name)
+        ctx.push_mesh(region.mesh, bound)
         try:
             if terminal and isinstance(region.body, core.MeshRegion):
                 emit_mesh_region(region.body, inner, terminal=True)
@@ -893,8 +885,6 @@ def emit_def(
         else:
             body_name = printer.reference(fn.body)
             lines.append(f"{indent}return {body_name}")
-    if root_mesh is not None:
-        ctx.pop_mesh()
     return lines
 
 
@@ -932,15 +922,7 @@ def emit_decorated_defs(
     render identically.
     See [inspection §2.6](docs/spec/inspection.md#26-specialization-printing).
     """
-    printer = HirPrinter()
-    decorator = "@func"
-    if isinstance(fn.body, core.MeshRegion) and not fn.specializations:
-        root_ctx = HirPrintContext()
-        with printer.type_surface(indent=indent):
-            mesh_text = printer.visit(fn.body.mesh, root_ctx)
-        ctx.imports.update(root_ctx.imports)
-        decorator = f"@func(mesh={mesh_text})"
-    lines: list[str] = [decorator]
+    lines: list[str] = ["@func"]
     lines.extend(
         emit_def(
             fn,
@@ -978,25 +960,39 @@ def render_hir_function(
     options: PythonPrintOptions | None = None,
     printer: HirPrinter | None = None,
     target=None,
+    module: core.Module | None = None,
 ) -> PythonRendering:
     """Render a HIR Function and locate every Call equation in the same pass.
 
     A normal function prints as a single ``@func``. A dispatch prototype
     (``variants != ()``) prints as a ``pass``-bodied ``@func`` base followed by
     one ``@<name>.specialize(pattern)`` block per variant. Shard layout sugar is
-    emitted only where an explicit mesh-scope binding dominates its use.
+    emitted only where an explicit mesh-scope binding dominates its use. When its
+    types name a mesh and *module* owns it, the Module's class header and mesh
+    declarations come first and the function prints inside the class.
     """
     indent = "    "
     ctx = HirPrintContext(target=target, value_printer=printer or HirPrinter())
     statements: dict[int, PrintedStatement] = {}
+    meshes = class_meshes((fn,)) if module is not None else []
+    prefix: list[str] = []
+    if meshes:
+        ctx.enter_module(module.target, module.topologies)
+        try:
+            decorator = module_decorator_line(module, module.entry, ctx)
+        except TypeError:
+            decorator = "@module()" if module.entry is None else f'@module(entry="{module.entry}")'
+        prefix = [decorator, f"class {module.name}:", *(indent + line for line in declare_meshes(meshes, ctx)), ""]
     lines = emit_decorated_defs(
         fn,
         ctx,
         indent,
         options or PythonPrintOptions(),
-        line_offset=0,
+        line_offset=len(prefix),
         statements=statements,
     )
+    if meshes:
+        lines = prefix + [f"{indent}{line}" if line else line for line in lines]
     header = ctx.header()
     header_lines = physical_line_count(header)
     statements = {
@@ -1101,6 +1097,9 @@ def emit_module_class(
     ordered = emission_order(mod)
     bindings = [slot_binding(key, slot, names_by_id) for key, slot in mod.children.items()]
     blocks: list[list[str]] = [bindings] if bindings else []
+    meshes = class_meshes(ordered)
+    if meshes:
+        blocks.append(declare_meshes(meshes, ctx))
     for fn in ordered:
         if isinstance(fn, core.Function):
             blocks.append(emit_decorated_defs(fn, ctx, indent, options))
@@ -1114,8 +1113,38 @@ def emit_module_class(
         if index:
             lines.append("")
         lines.extend(f"{indent}{ln}" if ln else ln for ln in block)
+    ctx.class_bindings.clear()
     ctx.leave_module(previous)
     return lines
+
+
+def declare_meshes(meshes, ctx) -> list[str]:
+    """One ``name = Mesh(...)`` line per class mesh, each bound in *ctx* for the class body."""
+    lines = []
+    for mesh in meshes:
+        name = ctx.mesh_name(mesh)
+        lines.append(f"{name} = {HirPrinter().mesh_text(mesh, ctx, layout_position=len(mesh.topologies) == 1)}")
+        ctx.class_bindings.append((mesh, name))
+    return lines
+
+
+def class_meshes(functions) -> list[types.Mesh]:
+    """The meshes a Module's signatures name, a slice by its parent, first written first.
+
+    The class body declares each once, so every signature and body refers to it by name.
+    """
+    found: list[types.Mesh] = []
+    for fn in functions:
+        for variant in (fn, *getattr(fn, "variants", ())):
+            for param_type in (*(param.type for param in variant.params), getattr(variant, "return_type", None)):
+                for leaf in ir_utils.tensor_types(param_type):
+                    shard = types.shard_layout_of(leaf.layout)
+                    if shard is None:
+                        continue
+                    mesh = shard.mesh if shard.mesh.parent is None else shard.mesh.parent
+                    if not isinstance(mesh.layout, types.ComposedLayout) and mesh not in found:
+                        found.append(mesh)
+    return found
 
 
 def module_source(

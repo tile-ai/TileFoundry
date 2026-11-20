@@ -101,7 +101,6 @@ def parse_authored(
     key: object | None = None,
     target: object | None = None,
     topologies: tuple | None = None,
-    mesh: types.Mesh | None = None,
     output_count: int = 1,
     module_context=None,
     closure: Mapping[str, Any] | None = None,
@@ -128,7 +127,6 @@ def parse_authored(
             closure=closure,
             base=base,
             key=key,
-            mesh=mesh,
             output_count=output_count,
         )
         if dialect == "tir" and target is not None:
@@ -147,7 +145,6 @@ def parse_authored(
             base=base,
             key=key,
             target=target,
-            mesh=mesh,
             output_count=output_count,
             hardware_context=target_hardware_context(target),
             binding_name=binding_name,
@@ -167,12 +164,6 @@ def capture_function_closure(fn_inner: FunctionType) -> dict[str, Any]:
     return closure
 
 
-def validate_mesh(mesh: types.Mesh | None, decorator: str) -> None:
-    """Share the explicit execution-mesh check across authoring decorators."""
-    if mesh is not None and not isinstance(mesh, types.Mesh):
-        raise TypeError(f"tilefoundry.{decorator}: mesh must be a Mesh, got {type(mesh).__name__}")
-
-
 @dataclass
 class DeferredFunction:
     module_context: Any
@@ -181,7 +172,6 @@ class DeferredFunction:
     role: FunctionRole
     binding_name: str
     closure: Mapping[str, Any]
-    mesh: types.Mesh | None = None
     target: object | None = None
     base: object | None = None
     key: object | None = None
@@ -200,7 +190,6 @@ class DeferredFunction:
             binding_name=self.binding_name,
             base=base,
             key=self.key,
-            mesh=self.mesh,
             output_count=self.output_count,
             target=self.target,
             module_context=self.module_context,
@@ -213,9 +202,8 @@ class DeferredFunction:
                 self.parsed.relabel(f"{base.name}.converter[{self.key}]")
         return self.parsed
 
-    def specialize(self, declared: Any, *, mesh: types.Mesh | None = None):
+    def specialize(self, declared: Any):
         pat = validate_one_pattern(declared)
-        validate_mesh(mesh, "specialize")
 
         def wrap_variant(fn_inner):
             declaration = DeferredFunction(
@@ -227,7 +215,6 @@ class DeferredFunction:
                 capture_function_closure(fn_inner),
                 base=self,
                 key=pat,
-                mesh=mesh,
                 target=self.target,
             )
             self.module_context.declarations.append(declaration)
@@ -253,18 +240,17 @@ class DeferredFunction:
         return wrap_converter
 
 
-def func(fn=None, *, topologies=UNDECLARED, target=None, mesh=None):
+def func(fn=None, *, topologies=UNDECLARED, target=None):
     """Decorator: parse an ``@func``-decorated function into HIR.
 
     Plain ``@func`` inherits its owning module's topology. Supplying a target or
     topology makes an implicit single-function module with its own execution
-    domain. ``mesh`` names the function's outer execution domain in both its
-    signature and body. A ``pass`` body declares a dispatch prototype whose
-    implementations are registered through :meth:`Function.specialize`.
+    domain. Meshes are declared in the owning ``@module`` class body. A ``pass``
+    body declares a dispatch prototype whose implementations are registered
+    through :meth:`Function.specialize`.
     """
     if target is not None:
         tilefoundry_target.instance(target)
-    validate_mesh(mesh, "func")
     resolved_target = target
     declares_context = resolved_target is not None or topologies is not UNDECLARED
     declared_topologies = None if topologies is UNDECLARED else tuple(topologies)
@@ -279,7 +265,6 @@ def func(fn=None, *, topologies=UNDECLARED, target=None, mesh=None):
                 FunctionRole.ROOT,
                 fn_inner.__name__,
                 capture_function_closure(fn_inner),
-                mesh=mesh,
             )
             module_context.declarations.append(declaration)
             return declaration
@@ -290,7 +275,6 @@ def func(fn=None, *, topologies=UNDECLARED, target=None, mesh=None):
             binding_name=fn_inner.__name__,
             target=resolved_target,
             topologies=declared_topologies,
-            mesh=mesh,
         )
         verifier.verify_function(ir)
         if not declares_context:
@@ -308,9 +292,7 @@ def func(fn=None, *, topologies=UNDECLARED, target=None, mesh=None):
     return wrap
 
 
-def specialize_function(
-    self: core.Function, declared: Any, *, mesh: types.Mesh | None = None
-):
+def specialize_function(self: core.Function, declared: Any):
     """``@base.specialize(pattern.Range(...))`` — register a shape variant.
 
     Parses the decorated ``def`` into a variant ``hir.Function`` and appends it to
@@ -319,7 +301,6 @@ def specialize_function(
     Legal only before ``base`` enters a ``Module`` (a later call raises).
     """
     pat = validate_one_pattern(declared)
-    validate_mesh(mesh, "specialize")
 
     def wrap_variant(fn_inner):
         dialect = "tir" if isinstance(self, core.PrimFunction) else "hir"
@@ -331,7 +312,6 @@ def specialize_function(
             base=self,
             key=pat,
             topologies=enclosing_topologies(),
-            mesh=mesh,
         )
         if ir.body is None:
             raise TypeError(

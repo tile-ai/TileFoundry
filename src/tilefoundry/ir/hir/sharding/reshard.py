@@ -18,6 +18,7 @@ class Reshard(expr.Op):
     """Convert *x* to a target layout / storage in place, preserving the logical shape."""
 
     scope_inputs = ()
+    result_rule = "stated"
 
     x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
     layout = expr.ParamDef(kind="attribute", annotation=types.LayoutBase, default=None)
@@ -29,18 +30,17 @@ def moved_units(source, destination, owners: "StorageOwners") -> "utils.UnitChan
 
     Only topologies that hold their own copy of the destination storage count
     ([shard §6.1](docs/spec/shard.md#61-shard-attr-semantics)): elsewhere every
-    unit reads the same bytes. None when either end is plain or both are held
-    by the same units.
+    unit reads the same bytes. A plain destination is held by every unit of the
+    source's topologies. None when the source is plain or both ends are held by
+    the same units.
     """
-    layouts = tuple(types.shard_layout_of(held.layout) for held in (source, destination))
-    if any(layout is None for layout in layouts):
+    held, stated = (types.shard_layout_of(end.layout) for end in (source, destination))
+    if held is None:
         return None
-    owning = {
-        name
-        for name in utils.topology_names(layouts[1].mesh)
-        if owners.private(destination.storage, name)
-    }
-    return utils.unit_change(layouts[0].mesh, layouts[1].mesh, owning)
+    topologies = held.mesh.topologies
+    mesh = types.Mesh(topologies, types.Layout(types.topology_sizes(topologies))) if stated is None else stated.mesh
+    owning = {name for name in utils.topology_names(mesh) if owners.private(destination.storage, name)}
+    return utils.unit_change(held.mesh, mesh, owning)
 
 
 def added_units(call: expr.Call, owners: "StorageOwners") -> int:
@@ -55,7 +55,7 @@ def buffer_alias(call: expr.Call, owners: "StorageOwners") -> int | None:
 
     Each thread holds its registers privately, so the box of an ``rmem`` ShardLayout also
     holds the threads its mesh numbers, and steps by register, where every Split steps 0
-    and is recorded with its mesh axis. A plain register end reads as Varying
+    and is recorded with its mesh axis. A plain register end reads as Broadcast
     on the other end's mesh while comparing those boxes.
     """
     source, result = call.args[0].type, call.type
@@ -64,11 +64,7 @@ def buffer_alias(call: expr.Call, owners: "StorageOwners") -> int | None:
     if added_units(call, owners):
         return None
     layouts = tuple(types.shard_layout_of(held.layout) for held in (source, result))
-    shard_mesh = next((layout.mesh for layout in layouts if layout is not None), None)
-    states = tuple(
-        utils.attrs_by_axis(held, None if layout is not None else shard_mesh)
-        for held, layout in zip((source, result), layouts)
-    )
+    states = tuple(utils.attrs_by_axis(held) for held in (source, result))
     for key in states[0].keys() | states[1].keys():
         before, after = (state.get(key, types.Broadcast()) for state in states)
         if isinstance(before, types.Partial) or isinstance(after, types.Partial):
@@ -106,7 +102,7 @@ def buffer_alias(call: expr.Call, owners: "StorageOwners") -> int | None:
             peer = next((sl for sl in layouts if sl is not None), None)
             if peer is not None:
                 shard = types.ShardLayout(
-                    layout, tuple(types.Varying() for _ in peer.attrs), peer.mesh
+                    layout, tuple(types.Broadcast() for _ in peer.attrs), peer.mesh
                 )
                 layout = shard
         physical = shard.layout if shard is not None else layout
@@ -217,13 +213,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     result = types.TensorType(
         shape=x_ty.shape, dtype=x_ty.dtype, layout=new_layout, storage=new_storage
     )
-    shard_mesh = next((layout.mesh for layout in layouts if layout is not None), None)
-    states = tuple(
-        utils.attrs_by_axis(held, None if layout is not None else shard_mesh, owners)
-        for held, layout in zip((x_ty, result), layouts)
-    )
-    if layouts[0] is None and isinstance(call.args[0], expr.Constant):
-        states = ({key: types.Broadcast() for key in states[0]}, states[1])
+    states = tuple(utils.attrs_by_axis(held, owners=owners) for held in (x_ty, result))
     units = axis_units(next((layout.mesh for layout in layouts if layout is not None), None))
     for key in states[0].keys() | states[1].keys():
         src, dst = (state.get(key, types.Broadcast()) for state in states)
@@ -251,6 +241,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     if change is not None and change.overlap_in_part and any(
         isinstance(attr, (types.Split, types.Partial))
         for layout in layouts
+        if layout is not None
         for attr in layout.attrs
     ):
         ctx.error(
@@ -269,7 +260,7 @@ def eval_reshard(ctx):
 
 
 def split_axes(type_) -> "dict[int, int] | None":
-    """Which tensor axis each mesh axis splits, or ``None`` when undistributed."""
+    """Which tensor axis each mesh axis splits, or ``None`` for a plain type."""
     layout = types.shard_layout_of(type_.layout)
     if layout is None:
         return None
@@ -304,16 +295,16 @@ def sent_traffic(
     if change is not None and change.added:
         received = utils.tensor_bytes(destination)
         if whole:
-            mesh = types.shard_layout_of(destination.layout).mesh
+            mesh = (types.shard_layout_of(destination.layout) or types.shard_layout_of(logical_source.layout)).mesh
             held = utils.local_type_of(
                 destination, topology=change.topology, topologies=mesh.topologies
             )
             received = utils.tensor_bytes(held) * change.added
         return ((change.topology, cost.TrafficBytes(read=received, write=received)),)
     before = split_axes(logical_source)
-    after = split_axes(logical_destination)
-    if before is None or after is None:
+    if before is None:
         return ()
+    after = split_axes(logical_destination) or {}
     completed = {
         mesh_axis
         for mesh_axis, (pending, remaining) in enumerate(zip_longest(

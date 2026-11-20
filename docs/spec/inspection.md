@@ -225,7 +225,10 @@ stable mesh names across a whole function.
 The print context records imports and declarations while the printer visits the
 program. After the printer visits the body, the context emits the file header.
 The header MUST contain only imports and `DimVar` declarations reached by the output.
-There is no module-level mesh hoist or global mesh name map.
+Each `@module` class declares, before its functions, the meshes its signatures
+name (a slice by its parent), each once, named after its topology with a numeric
+suffix on a clash. A function printed alone whose types name a mesh prints its
+Module's `@module` line, class header and those declarations around it.
 
 TIR binding names MUST be allocated independently for each `def`, including
 every specialization and each parent or child function. Collect all bindings
@@ -265,11 +268,13 @@ attributes use double quotes, and TIR tuple elements occupy separate lines.
 
 Recoverable mesh selections MUST print relative to an active lexical parent;
 a matching slice uses the slice form. Otherwise the printer emits a complete
-mesh constructor. The function's execution mesh is available while printing
-its signature and body; a named constant outside those bindings does not
-create a printable lexical name.
+mesh constructor. A mesh region whose mesh is a class-body mesh prints as
+`with <name>:`; a named constant outside those bindings does not create a
+printable lexical name.
 A sharded type uses shard layout sugar only when each referenced mesh topology has
-an active binding with the same geometry. Equal mesh axis names and topology sizes
+an active binding with the same geometry: in a signature, the class-body mesh
+equal to its own; in a body, a `with` binding, or a class-body mesh only for a
+Varying axis outside the current scope. Equal mesh axis names and topology sizes
 alone do not establish that binding. Otherwise it MUST print the complete
 `ShardLayout(..., mesh=Mesh(...))` value, including in a register allocation
 outside the scope that uses it.

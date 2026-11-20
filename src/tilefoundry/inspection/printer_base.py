@@ -458,7 +458,16 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], types.TypeFunctor[str])
                     types.Broadcast() for _ in range(len(current.shape))
                 ), current)).mesh
                 if current == value.mesh:
-                    return operand + " @ {B()}"
+                    return f"{operand} @ {ctx.mesh_bindings[-1][1]}"
+        in_body = ctx is not None and ctx.mesh_scope is not None
+        unit = (
+            None
+            if ctx is None or operand is None
+            else ctx.mesh_alias(value.mesh, declared=not in_body)
+            or ctx.mesh_slice(value.mesh, declared=not in_body)
+        )
+        if unit is not None and all(isinstance(attr, types.Broadcast) for attr in value.attrs):
+            return f"{operand} @ {unit}"
         names = value.mesh.names
         if (
             (not isinstance(layout, types.Layout) and operand is None)
@@ -471,7 +480,17 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], types.TypeFunctor[str])
             isinstance(entry, tuple) for entry in (*layout.shape, *(layout.strides or ()))
         ):
             return None
-        refs = tuple(ctx.mesh_axis_alias(value.mesh, index) for index in range(len(names)))
+        scope = set(ir_utils.topology_names(ctx.mesh_scope)) if in_body else set()
+        refs = tuple(
+            (f"{unit}.{names[index]}" if unit is not None else None)
+            or ctx.mesh_axis_alias(value.mesh, index)
+            or (
+                ctx.mesh_axis_alias(value.mesh, index, declared=True)
+                if not in_body or (isinstance(attr, types.Varying) and topology not in scope)
+                else None
+            )
+            for index, (attr, (topology, _)) in enumerate(zip(value.attrs, ir_utils.axis_keys(value.mesh)))
+        )
         if any(ref is None for ref in refs):
             return None
 
@@ -693,7 +712,7 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], types.TypeFunctor[str])
         with self.type_surface(indent=child):
             layout_text = self.visit(value.layout, ctx)
             mesh_text = (
-                ctx.mesh_alias(value.mesh) if ctx is not None else None
+                ctx.mesh_alias(value.mesh, units=True) if ctx is not None else None
             ) or self.mesh_text(value.mesh, ctx)
         return (
             "ShardLayout(\n"

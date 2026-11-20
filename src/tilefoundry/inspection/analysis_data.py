@@ -189,7 +189,7 @@ def report_data(
     if printer is None:
         printer = HirPrinter()
         for ctx in reversed(valuation.definitions(valuation.Context(module, function))):
-            printer.render(ctx.function)
+            printer.render(ctx.function, module=ctx.module)
     selected = frozenset(selected_types(module, analyses, metadata_types))
     target = module.resolve_target()
     owners = {

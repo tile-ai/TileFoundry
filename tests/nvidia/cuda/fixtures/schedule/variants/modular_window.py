@@ -9,8 +9,8 @@ class ModularWindow:
     def gemm(x: Tensor[(64,), "f32"]):
         with Mesh(("cta",), layout=(1,), names=("b",)) as cta:
             with Mesh(("thread",), layout=(1,), names=("t",)) as thread:
-                out = tf.zeros(Tensor[(8,), "f32", "rmem"])
+                out = tf.zeros(Tensor[(8,), "f32", (8,) @ {cta.b @ V()}, "rmem"])
                 for u in range(cta.b, 8, 1):
                     start = (u % 4) * 8
-                    out = tf.schedule((x[start:start+8], tf.empty(Tensor[(8,), "f32", "rmem"])), op=T.copy())
+                    out = tf.schedule((x[start:start+8], tf.empty(Tensor[(8,), "f32", (8,) @ {cta.b @ V()}, "rmem"])), op=T.copy())
                 return out

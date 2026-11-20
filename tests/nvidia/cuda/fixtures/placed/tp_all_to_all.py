@@ -26,9 +26,11 @@ SENT_BYTES = HELD_BYTES - HELD_BYTES // GPUS
 class TransposeShard:
     """One card's rows become one card's columns, so most of its share leaves."""
 
+    gpu = Mesh(("gpu",), (GPUS,), names=("g",))
+
     @func
     def transpose_shard(
-        x: Tensor[(R, C), "f32", ShardLayout(Layout((GPUS, R // GPUS, C), (0, C, 1)), (Split(0),), Mesh((GPU,), Layout((GPUS,), (1,)), ("g",)))],
-    ) -> Tensor[(R, C), "f32", ShardLayout(Layout((R, GPUS, C // GPUS), (C // GPUS, 0, 1)), (Split(1),), Mesh((GPU,), Layout((GPUS,), (1,)), ("g",)))]:
+        x: Tensor[(R, C), "f32", (GPUS @ gpu.g, R // GPUS, C)],
+    ) -> Tensor[(R, C), "f32", (R, GPUS @ gpu.g, C // GPUS)]:
         with Mesh(("gpu",), layout=(GPUS,), names=("g",)) as g:
             return tf.reshard(x, (R, C @ g.g), "gmem")

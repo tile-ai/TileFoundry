@@ -51,15 +51,11 @@ class SM89_E4M3_GEMM:
                                 ]
                             )
                             lhs = tf.schedule((lhs_runs, lhs_stage), op=T.copy_async())
-                    lhs = tf.reshard(lhs, Layout((M, BK), (BK, 1)))
+                    lhs = tf.reshard(lhs, (M, BK))
                     lhs_frag_dst = tf.empty(
                         Tensor[
                             (M, BK), "fp8e4m3",
-                            ShardLayout(
-                                layout=Layout((2, 8, 2, 4, 4), (256, 32, 16, 4, 1)),
-                                attrs=(S(3), S(1)),
-                                mesh=threads,
-                            ),
+                            ((2, 8 @ threads.lane, 2, 4 @ threads.warp, 4), (256, 32, 16, 4, 1)),
                             "rmem",
                         ]
                     )
@@ -78,15 +74,11 @@ class SM89_E4M3_GEMM:
                                 ]
                             )
                             rhs = tf.schedule((rhs_runs, rhs_stage), op=T.copy_async())
-                    rhs = tf.reshard(rhs, Layout((BK, N), (1, BK)))
+                    rhs = tf.reshard(rhs, ((BK, N), (1, BK)))
                     rhs_frag_dst = tf.empty(
                         Tensor[
                             (BK, N), "fp8e4m3",
-                            ShardLayout(
-                                layout=Layout((2, 4, 4, 8), (128, 32, 8, 1)),
-                                attrs=(S(1), S(3)),
-                                mesh=threads,
-                            ),
+                            ((2, 4 @ threads.warp, 4, 8 @ threads.lane), (128, 32, 8, 1)),
                             "rmem",
                         ]
                     )

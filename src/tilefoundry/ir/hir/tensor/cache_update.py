@@ -14,6 +14,8 @@ from tilefoundry.ir import expr, pattern, types, utils
 class CacheUpdate(expr.Op):
     """Cache-update HIR operation; see `spec hir § CacheUpdate`."""
 
+    result_rule = "into"
+
     cache = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
     cur_pos = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
     s = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
@@ -145,7 +147,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     if isinstance(cap, int) and isinstance(s_cap, int) and s_cap > cap:
         ctx.error(call, f"S_CAP {s_cap} exceeds cache capacity {cap}")
     reject_split_rows(ctx, call, cache_ty, new_ty)
-    return typeinfer.combine_operand_attrs(cache_ty, typeinfer.operand_types(ctx, call.args)[1:], ctx)
+    return cache_ty
 
 
 def divided_axes(type_) -> set[int]:

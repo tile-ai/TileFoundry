@@ -7,7 +7,8 @@ from tilefoundry_nvidia import cuda
 
 
 @pytest.mark.parametrize("levels", (("thread", "gpu"), ("gpu", "thread")))
-def test_plain_multilinear_operand_reads_every_topology(levels):
+def test_plain_multilinear_operand_reads_broadcast_on_every_topology(levels):
+    """ADD keeps Partial(max) beside Broadcast: a plain operand beside two Partials passes."""
     target = cuda.Target("nvidia.h200_sxm")
     address = types.Layout((8,), (1,))
     operands = tuple(
@@ -24,9 +25,8 @@ def test_plain_multilinear_operand_reads_every_topology(levels):
         for level in levels
     )
     plain = types.TensorType((8,), expr.DType.f32, address, expr.StorageKind.SMEM)
-    with pytest.raises(ValueError, match="carries Partial.*operand plain:.*Varying"):
-        utils.check_multilinear_partials(
-            (("a", operands[0]), ("b", operands[1]), ("plain", plain)),
-            target.storage_owners,
-            kind=expr.BinaryKind.ADD,
-        )
+    utils.check_multilinear_partials(
+        (("a", operands[0]), ("b", operands[1]), ("plain", plain)),
+        target.storage_owners,
+        kind=expr.BinaryKind.ADD,
+    )

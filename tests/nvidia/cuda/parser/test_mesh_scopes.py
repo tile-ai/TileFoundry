@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from tests.core._corpus import Case, case, check_case, special
-from tilefoundry import cli, parser
-from tilefoundry.ir import core, expr
+from tests.core._corpus import Case, case, check_case, reload, special
+from tilefoundry import cli, inspection, parser
+from tilefoundry.ir import core, expr, types, utils
 from tilefoundry.ir.hir import nn, sharding, tensor
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -71,12 +71,12 @@ class ValuefulRegionEscape(MeshScopeCase):
 
 @case
 class RootMeshWithoutWith(MeshScopeCase):
-    """A function mesh opens no with: a Mesh value and an external layout stay legal."""
+    """A body that opens no with: a Mesh value and an external layout stay legal, unscoped."""
 
     path: Path = PARSER / "root_mesh_without_with.py"
 
     def guard(self, state, problems):
-        assert isinstance(state.entry_function().body, core.MeshRegion)
+        assert not isinstance(state.entry_function().body, core.MeshRegion)
 
 
 CASES = special(MeshScopeCase)
@@ -118,3 +118,37 @@ def test_placement_rejects_external_mesh() -> None:
         parser.ParseError, match="'_EXTERNAL_PLACEMENT_MESH' is not a lexical Mesh binding"
     ):
         cli.load_authored_ir(str(DIAGNOSTICS / "parser_placement_external_mesh.py"))
+
+
+def smem_types(module) -> list:
+    body = module.entry_function().body
+    return [
+        node.type
+        for node in core.collect_exprs(body)
+        if isinstance(node, expr.Call) and node.type.storage is expr.StorageKind.SMEM
+    ]
+
+
+def test_a_scope_name_in_a_body_is_broadcast_on_the_composed_scope() -> None:
+    """'@ warp' in cta x a thread slice keeps cta and takes warp's threads: B on that scope."""
+    loaded = cli.load_authored_ir(str(PARSER / "scope_name_layout.py"))
+    body = loaded.entry_function().body
+    regions = [region.mesh for region in core.collect_exprs(body) if isinstance(region, core.MeshRegion)]
+    scope = utils.from_meshes(*reversed(regions))
+    tiles = smem_types(loaded)
+    assert tiles and all(
+        tile.layout
+        == types.ShardLayout(types.Layout((16, 16)), (types.Broadcast(),) * len(utils.axis_keys(scope)), scope)
+        for tile in tiles
+    )
+    printed = inspection.as_script(loaded)
+    assert '(16, 16) @ thread_2, "smem"' in printed
+    assert smem_types(reload(printed, loaded.name)) == tiles
+
+
+def test_a_tir_signature_names_a_class_body_mesh() -> None:
+    """prim_func signatures see the meshes the class body declares, as @func signatures do."""
+    loaded = cli.load_authored_ir(str(PARSER / "class_mesh_prim_func.py"))
+    (function,) = loaded.functions
+    lanes = types.Mesh((types.Topology("thread", 8),), types.Layout((8,), (1,)), ("lane",))
+    assert function.params[0].type.layout == types.ShardLayout(types.Layout((8, 16), (0, 1)), (types.Split(0),), lanes)

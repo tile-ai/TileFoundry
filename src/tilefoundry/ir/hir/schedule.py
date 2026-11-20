@@ -10,6 +10,7 @@ import isl
 from tilefoundry import utils
 from tilefoundry.interfaces import access, cost, evaluator, schedule, typeinfer
 from tilefoundry.ir import expr, pattern, types
+from tilefoundry.ir import utils as ir_utils
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,7 @@ class ScheduleOp(expr.Op):
     """Apply one TIR instruction repeatedly over a tuple of HIR operands."""
 
     scope_inputs = ()
+    result_rule = "stated"
 
     operands = expr.ParamDef(
         kind="input", annotation=Tuple[pattern.is_ranked_tensor()], pattern=pattern.is_ranked_tensor()
@@ -304,7 +306,17 @@ def infer_schedule(call: expr.Call, ctx) -> types.TensorType:
     except schedule.RefusalError as error:
         ctx.error(call, str(error))
     params, writes = instruction_schema(op, len(call.args))
-    return ctx.type_of(call.args[params.index(writes[0])])
+    written = ctx.type_of(call.args[params.index(writes[0])])
+    if ctx.target is not None:
+        for param, arg in zip(params, call.args, strict=True):
+            varying = None if param in writes else ir_utils.varying_axis(written, ctx.type_of(arg), ctx)
+            if varying is not None:
+                ctx.error(
+                    call,
+                    f"{type(op).__name__} operand {param.name!r} is Varying on {varying[0]}; "
+                    f"the target is Broadcast there: write the target as {varying[1]}",
+                )
+    return written
 
 
 @access.register_alias(ScheduleOp)

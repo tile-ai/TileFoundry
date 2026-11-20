@@ -14,7 +14,8 @@ from .tensor_view import emit_paired
 @codegen.register(target.Target, codegen.Role.EMIT, memory.CopyAsyncBulk)
 def emit(call, ctx: context.Context) -> None:
     bar = f"reinterpret_cast<uint64_t *>({mbarrier.barrier_word(call.args[2], ctx)})"
-    emit_paired("tilefoundry::ops::copy_async_bulk", call.args[:2], ctx, (bar,))
+    mesh_type = next(reversed(ctx.mesh_aliases.values()))[0]
+    emit_paired(f"tilefoundry::ops::copy_async_bulk<{mesh_type}>", call.args[:2], ctx, (bar,))
 
 
 __all__: list[str] = []

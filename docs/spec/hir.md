@@ -276,10 +276,9 @@ freeze** below).
   not the authored signature. A variant
   runs in the same execution domain as its base because both are owned by the
   same `Module`.
-- `.specialize(pattern, *, mesh=None)` accepts an explicit function mesh with
-  the same semantics and Mesh type check as `@func(mesh=...)`. It does not
-  inherit the prototype's mesh; variant and base parameter and return types
-  MUST still match. Authored layout forms and their acceptance rules are owned
+- `.specialize(pattern)` takes no mesh: a variant opens the meshes its body
+  needs with `with`, naming the meshes its Module's class body declares. Variant
+  and base parameter and return types MUST still match. Authored layout forms and their acceptance rules are owned
   by [shard §6](./shard.md#6-shardattr) and [parser §2](./parser.md#2-syntax-and-rules).
 - A variant carries exactly one `pattern.Range` in `specializations`.
   The canonical signature is
@@ -553,9 +552,8 @@ class Binary(Op):
     fallback MUST NOT accept an incompatible `ShardLayout` pair.
   - Sharded results merge value states using
     [shard §6.1](./shard.md#61-shard-attr-semantics), including plain inputs.
-    All-Broadcast inputs retain Broadcast. A result may use plain layout for
-    Varying only when plain reads back to the same states on every mesh axis. These
-    are the mesh axes of the original input shard mesh, including omitted Broadcast topologies.
+    All-Broadcast inputs give a Broadcast result, which is plain when its mesh
+    covers every unit.
   - If the fallback result is a shaped `rmem` or `smem` value, Binary MUST give it its own C-order `Layout`. A concrete local
     result cannot reach authored analysis with an unresolved layout.
   - A `ShardLayout` operand carrying `Partial(reduction)` propagates to the
@@ -563,7 +561,7 @@ class Binary(Op):
     (`op(reduction(x)) == reduction(op(x))`). Otherwise typeinfer rejects it. The rejection names the offending operand and the fix (an explicit `Reshard` to
     `Broadcast`).
     States follow [shard §6.1](./shard.md#61-shard-attr-semantics). A Varying
-    peer is rejected with an explicit `bitcast(..., <its layout> @ {B()})` remedy.
+    peer is rejected with an explicit `bitcast(..., <its layout>)` remedy.
     Typeinfer decides each mesh axis independently. `Partial` states on different axes are not interchangeable. `ADD` rejects two Partial inputs
     when their states occupy different mesh axes.
     - `ADD` with both operands `Partial`: commutes (passes) only when both
@@ -670,9 +668,9 @@ second presentation of the result.
   strides. Lowering MUST copy the source's permuted-stride view into the new
   result storage.
 - `Bitcast(x, layout)` form (ii) keeps the address layout, offset included, and
-  the mesh, in any storage; per mesh axis Varying (a plain source too) may become
-  Broadcast or Partial: the author states the copies are equal, or sum to the
-  value, unchecked. It aliases, costs 0, lowers to a view, keeps every value,
+  the mesh, in any storage; per mesh axis Varying may become Broadcast (or a
+  plain result) or Partial: the author states the copies are equal, or sum to the
+  value, unchecked. Broadcast (a plain source too) may become Varying. It aliases, costs 0, lowers to a view, keeps every value,
   and its gradient reads the cotangent back with the source's attrs.
 - Form (i), any other `Bitcast(x, layout)`, has no autodiff rule. It reinterprets the same bytes with a new shape and layout,
   preserving the input dtype and storage. `layout` is a `LayoutBase`; the result
@@ -681,7 +679,11 @@ second presentation of the result.
   changes only its layout. Its layout modes and `Split` modes MUST be valid
   for that logical shape under the existing layout-mode-to-tensor-axis rules.
   Both layouts MUST be plain `Layout` / `ComposedLayout` without `ShardLayout`
-  components. Otherwise both layouts MUST be rmem `ShardLayout` on the same mesh.
+  components, or a source `ShardLayout` with neither `Split` nor `Partial`, in any
+  storage, whose stated end states the same attrs and mesh: each unit's copy is
+  re-laid out alone as a plain layout. A plain stated end of a Varying source is
+  rejected, naming the mesh axis to state Varying. Otherwise both layouts MUST be rmem
+  `ShardLayout` on the same mesh.
   That `ShardLayout` MUST contain only `Split` and `Varying` attributes ([shard §6.1](./shard.md#61-shard-attr-semantics)). Bitcast type inference MUST materialize omitted authored strides, using the same default and storage-owner rules as Reshard and TensorView. Every resulting `Layout` component has concrete strides.
   For rmem shards, an address is the owning mesh coordinate paired with the
   offset within that unit. Varying mesh axes do not enter that unit coordinate:
@@ -902,8 +904,13 @@ class RepeatInterleave(Op):
   - `axis` MUST resolve within the rank. The result extent at that axis MUST be
     the input extent multiplied by `repeats`. All other extents and storage are
     preserved.
-  - A `Split` or `Partial` input MUST be refused. Any other input keeps its
-    layout kind and attrs on the new shape ([shard §6.1](./shard.md#61-shard-attr-semantics)).
+  - Each unit repeats its own elements, so the result keeps the input's attrs
+    (`Split`, `Partial`, `Varying` and `Broadcast`) on the new shape
+    ([shard §6.1](./shard.md#61-shard-attr-semantics)). A `Partial` input stays
+    the same `Partial`: repetition commutes with every reduction.
+  - A `Split` on `axis` MUST hold contiguous blocks; local repetition of a
+    cyclic or strided distribution is not the global repetition, so such an
+    input MUST be refused with a reshard to contiguous blocks as the remedy.
 
 ##### Split
 
@@ -1138,6 +1145,8 @@ operation and is not an HIR op.
     logical HIR types.
   - `IndexAdd` and `IndexCopy` have type inference, cost, and evaluator
     semantics only. No HIR-to-TIR lowering is registered.
+  - The gradient of `IndexAdd` is the cotangent for `dst`, and
+    `index_select(cotangent, index, dim)` for `src`; `index` has none.
   - `IndexAdd` charges one add and reads `src`, `index`, and the addressed `dst`
     slices before writing those slices. `IndexCopy` charges no arithmetic and
     does not read the overwritten `dst` slices. Neither cost scales with the
@@ -1594,7 +1603,7 @@ class Reshard(Op):
     conditions hold. Storage is unchanged. The shape is literal. No unit is
     added (`ir.utils.unit_change` below). Both structural
     address boxes agree. On every mesh axis with a `Partial` end, both ends are
-    equal, or a Varying (or plain) source becomes Partial ([shard §6.1](./shard.md#61-shard-attr-semantics)). Each thread holds register storage
+    equal, or a Varying source becomes Partial ([shard §6.1](./shard.md#61-shard-attr-semantics)). Each thread holds register storage
     privately. So an `rmem` Reshard with a `ShardLayout` is a view only when each
     logical element keeps its threads and its register on each thread. The box
     of an `rmem` `ShardLayout` also holds the mesh's thread numbering. That
@@ -1683,6 +1692,10 @@ class Local(Op):
   - The result shape contracts each `Split` axis by the extent of that mesh axis.
   - The result keeps `dtype` and `storage`.
   - The result uses the corresponding local `Layout`. Its domain matches the contracted result shape.
+  - The result is `Varying` on each mesh axis where the input is not `Broadcast`,
+    on the input's mesh: each unit's view is its own
+    ([shard §6.1](./shard.md#61-shard-attr-semantics)). An all-`Broadcast` input
+    gives the plain local `Layout`.
   - The `Local` call MUST reject a noncanonical input and report its source location.
   - A static split size divides by the mesh extent. A symbolic size passes through.
   - `Local` only names the existing view of the current unit. It materializes no value. It moves no bytes.

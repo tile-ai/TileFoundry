@@ -18,7 +18,7 @@ The split:
   fills / refreshes `Expr.type`.
 - **`verify`** dispatches on TIR `Stmt` (control-flow / binding /
   `Evaluate`) plus cross-function invariants (`Evaluate(FunctionRef)`
-  callee resolution, mesh scope, layout homogeneity). A Stmt verify
+  callee resolution, mesh scope). A Stmt verify
   rule MAY recursively retrigger `typeinfer` on embedded Expr fields.
 
 Concrete per-node rules belong with the node owner ([tir](./tir.md) /

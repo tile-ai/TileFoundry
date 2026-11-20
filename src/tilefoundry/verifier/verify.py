@@ -264,7 +264,6 @@ def verify_prim_function(fn: core.PrimFunction, *, ctx: valuation.Context | None
     """
     for param in fn.params:
         verify_value_layouts(param)
-    verify_param_homogeneity(fn)
     for variant in fn.variants:
         if len(variant.specializations) != 1 or not isinstance(
             variant.specializations[0], pattern.Range
@@ -284,25 +283,6 @@ def verify_prim_function(fn: core.PrimFunction, *, ctx: valuation.Context | None
             module=ctx.module, function=fn, target=ctx.target, topologies=ctx.topologies
         )
     Visitor(fn).visit(fn.body, verify_ctx)
-
-
-def verify_param_homogeneity(fn: core.PrimFunction) -> None:
-    """Param homogeneity ([tir §1.3](docs/spec/tir.md#13-primfunction)).
-
-    Param homogeneity ([tir §1.3](docs/spec/tir.md#13-primfunction)): all params' layouts must be
-    consistently ShardLayout or all non-ShardLayout. Mixed is error.
-    """
-    kinds = []
-    for p in fn.params:
-        ty = p.type
-        if not isinstance(ty, types.TensorType):
-            continue
-        kinds.append(isinstance(ty.layout, types.ShardLayout))
-    if kinds and len(set(kinds)) > 1:
-        raise expr.VerifyError(
-            f"PrimFunction {fn.name!r}: {utils.spec_ref_render(PRIM_FUNCTION)} param layouts "
-            f"must be homogeneously ShardLayout or non-ShardLayout, got mixed"
-        )
 
 
 class Visitor(core.StmtExprVisitor[None]):
@@ -499,7 +479,7 @@ def iter_op_attrs(op):
 
 def assert_mesh_in_scope(mesh: types.Mesh, ctx, fn):
     scope = ctx.enclosing_meshes()
-    if any(mesh == m for m in scope) or (scope and mesh == ir_utils.from_meshes(*scope)):
+    if any(ir_utils.same_mesh(mesh, m) for m in scope) or (scope and ir_utils.same_mesh(mesh, ir_utils.from_meshes(*scope))):
         return
     for p in fn.params:
         if isinstance(p.type, types.TensorType) and isinstance(p.type.layout, types.ShardLayout):

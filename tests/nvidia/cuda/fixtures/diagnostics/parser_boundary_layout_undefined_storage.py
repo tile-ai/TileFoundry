@@ -10,11 +10,15 @@ from tilefoundry_nvidia import cuda
     topologies=(Topology("cta", 8),),
 )
 class LayoutUndefinedStorageMismatch:
-    @func(mesh=Mesh(("cta",), (8,), names=("b",)))
-    def stage(x: Tensor[(8, 8), "bf16", None, "smem"]):
-        return tf.add(x, x)
+    mesh = Mesh(("cta",), (8,), names=("b",))
 
-    @func(mesh=Mesh(("cta",), (8,), names=("b",)))
+    @func
+    def stage(x: Tensor[(8, 8), "bf16", None, "smem"]):
+        with mesh:
+            return tf.add(x, x)
+
+    @func
     def root(x: Tensor[(8, 8), "f32"]):
-        actual = tf.reshard(tf.cast(x, dtype="bf16"), (8, 8), "rmem")
-        return stage(actual)
+        with mesh:
+            actual = tf.reshard(tf.cast(x, dtype="bf16"), (8, 8), "rmem")
+            return stage(actual)

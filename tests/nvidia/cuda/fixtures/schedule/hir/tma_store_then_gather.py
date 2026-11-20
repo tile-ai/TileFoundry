@@ -27,7 +27,7 @@ class TmaStoreThenGather:
         with Mesh(("cta",), layout=(CTAS,), names=("block",)) as cta:
             with Mesh(("thread",), layout=(32,), names=("lane",)) as _warp:
                 row = cta.block * ROWS
-                staged_dst = tf.empty(Tensor[(ROWS, COLS), "f32", (ROWS, COLS), "smem"])
+                staged_dst = tf.empty(Tensor[(ROWS, COLS), "f32", (ROWS, COLS) @ {cta.block @ V()}, "smem"])
                 staged = tf.schedule(
                     (x[row:row + ROWS, :], staged_dst), op=T.copy_async_tensor()
                 )

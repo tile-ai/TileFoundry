@@ -43,7 +43,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
         ir_utils.reject_partials(name, type_.layout)
 
     storage = typeinfer.resolve_anchor_storage(ctx, call, input_.storage, other.storage)
-    read = typeinfer.operand_types(ctx, call.args)
+    read = tuple(map(ctx.type_of, call.args))
     try:
         relation = access.relations_of(call, ctx)
         out_shape = access.shape_from_relation(

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.core._corpus import Case, case, check_case, special
+from tests.core._corpus import Case, case, check_case, reload, special
 from tilefoundry import inspection
 from tilefoundry.interfaces import valuation
 from tilefoundry.ir import expr
@@ -14,6 +14,7 @@ from tilefoundry.ir.hir import math
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 GQA_DECODE = FIXTURES / "placed" / "gqa_decode.py"
 SIGNED_LITERALS = FIXTURES / "parser" / "signed_literals.py"
+SLICE_LAYOUTS = FIXTURES / "parser" / "slice_layouts.py"
 
 
 class RoundtripCase(Case):
@@ -101,6 +102,30 @@ class NegatedValue(RoundtripCase):
         assert isinstance(result.target, math.Unary)
         assert result.target.kind is expr.UnaryKind.NEG
         assert result.args[0] is function.params[0]
+
+
+@case
+class SliceLayouts(RoundtripCase):
+    """A type on a slice prints as the slice it names and reparses to the same type."""
+
+    path: Path = SLICE_LAYOUTS
+
+    def guard(self, state, problems):
+        printed = inspection.as_script(state)
+        assert "ShardLayout(" not in printed
+        for written in (
+            '(4, 8) @ gpu[:1]]',
+            '(4, 8) @ {gpu[:1].pp @ V()}]',
+            '@ gpu[1:].cp',
+            'layout=(4, 8) @ gpu[1:]',
+            '((8, 8) | Swizzle(1, 2, 3)) @ gpu[1:]]',
+        ):
+            assert written in printed
+        again = reload(printed, state.name)
+        assert inspection.as_script(again) == printed
+        assert [param.type for param in again.entry_function().params] == [
+            param.type for param in state.entry_function().params
+        ]
 
 
 CASES = special(RoundtripCase)

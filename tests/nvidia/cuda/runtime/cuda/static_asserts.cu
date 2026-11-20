@@ -470,7 +470,7 @@ __global__ void k(float *p, float *q, uint64_t *bar) {
     auto dst = make_shard_tensor(
         cute::make_tensor(cute::make_smem_ptr(q), dst_lay), dst_lay,
         make_shard_layout(dst_lay, mesh, cute::make_tuple(shard::B{})));
-    tilefoundry::ops::copy_async_bulk(src, dst, bar);
+    tilefoundry::ops::copy_async_bulk<decltype(mesh)>(src, dst, bar);
 }
 }
 #endif

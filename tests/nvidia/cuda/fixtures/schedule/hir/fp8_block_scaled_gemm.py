@@ -80,11 +80,7 @@ class FP8_BLOCK_SCALED_GEMM:
                         row_scale_dst = tf.empty(
                             Tensor[
                                 (128, 1), "f32",
-                                ShardLayout(
-                                    layout=Layout((2, 8, 2, 4), (64, 1, 8, 16)),
-                                    attrs=(S(0), S(3), S(1), B()),
-                                    mesh=_compute,
-                                ),
+                                ((2 @ _compute.group, 8 @ _compute.lane8, 2, 4 @ _compute.warp), (64, 1, 8, 16)),
                                 "rmem",
                             ],
                         )

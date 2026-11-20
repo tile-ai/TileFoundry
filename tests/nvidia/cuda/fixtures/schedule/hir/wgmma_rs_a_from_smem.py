@@ -74,11 +74,7 @@ class WGMMA_RS_A_FROM_SMEM:
                         frag_dst = tf.empty(
                             Tensor[
                                 (64, 32), "fp8e4m3",
-                                ShardLayout(
-                                    layout=Layout((4, 2, 8, 2, 4, 4,), (16, 8, 1, 1024, 256, 64)),
-                                    attrs=(S(0), S(2), S(4)),
-                                    mesh=_compute,
-                                ),
+                                ((4 @ _compute.warp, 2, 8 @ _compute.lane8, 2, 4 @ _compute.lane4, 4), (16, 8, 1, 1024, 256, 64)),
                                 "rmem",
                             ],
                         )

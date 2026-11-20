@@ -28,20 +28,15 @@ def _held(shape, attr, dtype=expr.DType.bf16):
 
 CASES = (
     OpCase(
-        "varying_new_makes_a_broadcast_cache_plain",
+        "varying_new_makes_a_plain_cache_varying",
         tensor.CacheUpdate(),
         (
-            _held((1, 8, 2, 4), types.Broadcast()),
-            _held((), types.Broadcast(), expr.DType.i32),
-            _held((), types.Broadcast(), expr.DType.i32),
+            utils.canonical(_held((1, 8, 2, 4), types.Broadcast())),
+            utils.canonical(_held((), types.Broadcast(), expr.DType.i32)),
+            utils.canonical(_held((), types.Broadcast(), expr.DType.i32)),
             _held((1, 2, 2, 4), types.Varying()),
         ),
-        type=types.TensorType(
-            shape=(1, 8, 2, 4),
-            dtype=expr.DType.bf16,
-            layout=types.Layout((1, 8, 2, 4)),
-            storage="gmem",
-        ),
+        type=_held((1, 8, 2, 4), types.Varying()),
         target=cuda.Target("nvidia.h200_sxm", device_count=2),
     ),
 )

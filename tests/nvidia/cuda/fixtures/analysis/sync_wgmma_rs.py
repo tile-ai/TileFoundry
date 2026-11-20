@@ -5,10 +5,6 @@ from typing import Tuple
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import cuda
 
-V_SMEM = ComposedLayout(
-    Swizzle(3, 4, 3), 0, Layout(((4, 2, 8), (1, 64)), ((1024, 512, 64), (1024, 1)))
-)
-
 
 @module(
     entry="gemm",
@@ -22,18 +18,13 @@ class WgmmaRs:
     ) -> Tuple[Tensor[(64, 64), "f32", "umat"], Tensor[(64, 64), "bf16", "umat"]]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(4, 8, 4), names=("warp", "lane8", "lane4")) as m:
-                a_fragment = ShardLayout(
-                    layout=Layout((4, 2, 8, 4, 2, 4, 2), (16, 8, 1, 1024, 512, 128, 64)),
-                    attrs=(S(0), S(2), S(5)),
-                    mesh=m,
-                )
                 pr = tf.schedule(
-                    (p, tf.empty(Tensor[(64, 64), "bf16", a_fragment, "rmem"])), op=T.copy()
+                    (p, tf.empty(Tensor[(64, 64), "bf16", ((4 @ m.warp, 2, 8 @ m.lane8, 4, 2, 4 @ m.lane4, 2), (16, 8, 1, 1024, 512, 128, 64)), "rmem"])), op=T.copy()
                 )
-                kept = tf.zeros(Tensor[(64, 64), "bf16", a_fragment, "rmem"])
+                kept = tf.zeros(Tensor[(64, 64), "bf16", ((4 @ m.warp, 2, 8 @ m.lane8, 4, 2, 4 @ m.lane4, 2), (16, 8, 1, 1024, 512, 128, 64)), "rmem"])
                 with m[0, 0, 0] as _writer:
                     vs = tf.schedule(
-                        (v, tf.empty(Tensor[(64, 64), "bf16", V_SMEM, "smem"])), op=T.copy()
+                        (v, tf.empty(Tensor[(64, 64), "bf16", (Layout(((4, 2, 8), (1, 64)), ((1024, 512, 64), (1024, 1))) | Swizzle(3, 4, 3)), "smem"])), op=T.copy()
                     )
                 o = tf.zeros(Tensor[
                     (64, 64), "f32",

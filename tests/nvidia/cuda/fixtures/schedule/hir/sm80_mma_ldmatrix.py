@@ -68,11 +68,7 @@ class SM80_MMA_LDMATRIX:
                         lhs_frag_dst = tf.empty(
                             Tensor[
                                 (16, 16), "bf16",
-                                ShardLayout(
-                                    layout=Layout((2, 8, 2, 4, 2), (128, 16, 8, 2, 1)),
-                                    attrs=(S(3), S(1)),
-                                    mesh=_compute,
-                                ),
+                                ((2, 8 @ _compute.lane, 2, 4 @ _compute.warp, 2), (128, 16, 8, 2, 1)),
                                 "rmem",
                             ],
                         )
@@ -80,11 +76,7 @@ class SM80_MMA_LDMATRIX:
                         rhs_frag_dst = tf.empty(
                             Tensor[
                                 (16, 8), "bf16",
-                                ShardLayout(
-                                    layout=Layout((2, 4, 2, 8), (64, 16, 8, 1)),
-                                    attrs=(S(1), S(3)),
-                                    mesh=_compute,
-                                ),
+                                ((2, 4 @ _compute.warp, 2, 8 @ _compute.lane), (64, 16, 8, 1)),
                                 "rmem",
                             ],
                         )

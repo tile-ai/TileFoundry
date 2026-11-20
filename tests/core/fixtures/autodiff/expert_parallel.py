@@ -16,10 +16,13 @@ n = DimVar("n", 1, NL)
 
 @module(entry="forward", target=cpu.Target(), topologies=(Topology("gpu", P),))
 class ExpertParallel:
-    @func(mesh=Mesh(("gpu",), (P,), names=("ep",)))
+    mesh = Mesh(("gpu",), (P,), names=("ep",))
+
+    @func
     def forward(tokens: Tensor[(P @ mesh.ep, NL, C), "f32", "gmem"], route: Tensor[(P * n,), "i32", "gmem"],
                 w: Tensor[(C, F), "f32", "gmem"]):
-        sent = tf.index_select(tokens, route, dim=1)
-        received = tf.reshard(sent, layout=(P, P * n @ mesh.ep, C), storage="gmem")
-        applied = tf.matmul(received, w)
-        return tf.reshard(applied, layout=(P @ mesh.ep, P * n, F), storage="gmem")
+        with mesh:
+            sent = tf.index_select(tokens, route, dim=1)
+            received = tf.reshard(sent, layout=(P, P * n @ mesh.ep, C), storage="gmem")
+            applied = tf.matmul(received, w)
+            return tf.reshard(applied, layout=(P @ mesh.ep, P * n, F), storage="gmem")

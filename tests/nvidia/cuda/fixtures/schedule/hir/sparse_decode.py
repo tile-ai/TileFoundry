@@ -13,14 +13,6 @@ from tilefoundry_nvidia import cuda
 
 NEG_INF = float("-inf")
 
-NATURAL = ComposedLayout(Swizzle(3, 4, 3), 0, Layout((64, 64), (64, 1)))
-ROW = Layout((1, 64), (64, 1))
-Q_GROUPED = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((8, 8), (4, 16)), ((512, 64), (16, 1))))
-K_TRANSPOSED = ComposedLayout(Swizzle(3, 4, 3), 0, Layout(((4, 16), (8, 8)), ((16, 1), (512, 64))))
-V_GROUPED = ComposedLayout(
-    Swizzle(3, 4, 3), 0, Layout(((4, 2, 8), (1, 64)), ((1024, 512, 64), (1024, 1)))
-)
-
 
 @module(
     entry="gemm",
@@ -41,8 +33,8 @@ class SparseDecode:
             table = tf.reshape(kv, (256, 64))
             with Mesh(("thread",), layout=(2, 128), names=("role", "participant")) as th:
                 with th[0, :32] as _loader:
-                    qs = tf.zeros(Tensor[(64, 64), "bf16", NATURAL, "smem"])
-                    ks = tf.zeros(Tensor[(64, 64), "bf16", NATURAL, "smem"])
+                    qs = tf.zeros(Tensor[(64, 64), "bf16", (64, 64) | Swizzle(3, 4, 3), "smem"])
+                    ks = tf.zeros(Tensor[(64, 64), "bf16", (64, 64) | Swizzle(3, 4, 3), "smem"])
                     for r in range(64):
                         row_index = idx[r : r + 1]
                         with th[0, :1] as _carry:
@@ -78,8 +70,8 @@ class SparseDecode:
                 with Mesh(
                     th[1, :], layout=(4, 8, 4), names=("warp", "lane8", "lane4")
                 ) as m:
-                    qg = tf.bitcast(qs, Q_GROUPED)
-                    kt = tf.bitcast(ks, K_TRANSPOSED)
+                    qg = tf.bitcast(qs, Layout(((8, 8), (4, 16)), ((512, 64), (16, 1))) | Swizzle(3, 4, 3))
+                    kt = tf.bitcast(ks, Layout(((4, 16), (8, 8)), ((16, 1), (512, 64))) | Swizzle(3, 4, 3))
                     s = tf.zeros(Tensor[
                         (64, 64), "f32",
                         ((4 @ m.warp, 2, 8 @ m.lane8, 8, 4 @ m.lane4, 2,),
@@ -126,11 +118,7 @@ class SparseDecode:
                     pr_dst = tf.empty(
                         Tensor[
                             (64, 64), "bf16",
-                            ShardLayout(
-                                layout=Layout((4, 2, 8, 4, 2, 4, 2,), (16, 8, 1, 1024, 512, 128, 64)),
-                                attrs=(S(0), S(2), S(5)),
-                                mesh=m,
-                            ),
+                            ((4 @ m.warp, 2, 8 @ m.lane8, 4, 2, 4 @ m.lane4, 2), (16, 8, 1, 1024, 512, 128, 64)),
                             "rmem",
                         ],
                     )
@@ -138,7 +126,7 @@ class SparseDecode:
                         (p, pr_dst),
                         op=T.copy(),
                     )
-                    v = tf.bitcast(ks, V_GROUPED)
+                    v = tf.bitcast(ks, Layout(((4, 2, 8), (1, 64)), ((1024, 512, 64), (1024, 1))) | Swizzle(3, 4, 3))
                     o = tf.zeros(Tensor[
                         (64, 64), "f32",
                         ((4 @ m.warp, 2, 8 @ m.lane8, 8, 4 @ m.lane4, 2,),

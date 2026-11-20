@@ -251,6 +251,9 @@ The complete program below makes the structural decisions explicit:
 - `Topology("cta", 132)` plus `g / bn / mi` states persistent G=16 traversal.
 - `buffers=3` on the two `tf.empty` load destinations states the BK64 TMA ring.
 - `threads[0, :32]` is the producer; `threads[1:3, :]` are two consumers.
+- Each CTA loads, accumulates and stages its own tiles, so their layouts end in
+  `@ {cta.persistent @ V()}`: the values differ from CTA to CTA. An unmarked layout
+  would say that every CTA holds the same values.
 - `Wgmma(n=256, dtype=bf16, form=SS, a_major=K)` with `repeat=(2, 1, 4)` states eight K16 atoms.
 - `tf.empty(Tensor[..., OUT_SMEM, "smem"])` keeps the 64 KiB output staging tile outside all six
   load-ring slots, then `T.copy_async_tensor` writes it to global memory.
@@ -310,14 +313,14 @@ class GEMM_8192X17408X5120_OPTIMAL:
                     m = (g * GROUP_M + mi) * BM
                     n = bn * BN
                     with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
-                        acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ _compute.group, 4 @ _compute.warp, 2, 8 @ _compute.lane8, 32, 4 @ _compute.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
+                        acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ _compute.group, 4 @ _compute.warp, 2, 8 @ _compute.lane8, 32, 4 @ _compute.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)) @ {cta.persistent @ V()}, "rmem"])
 
                     for k in tf.tile(K, BK):
                         with threads[0, :32] as _loader:
                             lhs_ring = tf.empty(
                                 Tensor[
                                     (128, 64), "bf16",
-                                    Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
+                                    (Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)) @ {cta.persistent @ V()},
                                     "smem",
                                 ],
                                 buffers=STAGES,
@@ -329,7 +332,7 @@ class GEMM_8192X17408X5120_OPTIMAL:
                             rhs_ring = tf.empty(
                                 Tensor[
                                     (64, 256), "bf16",
-                                    Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
+                                    (Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3)) @ {cta.persistent @ V()},
                                     "smem",
                                 ],
                                 buffers=STAGES,
@@ -351,7 +354,7 @@ class GEMM_8192X17408X5120_OPTIMAL:
                         staged_dst = tf.empty(
                             Tensor[
                                 (128, 256), "bf16",
-                                Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3),
+                                (Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)) @ {cta.persistent @ V()},
                                 "smem",
                             ],
                         )
@@ -360,7 +363,7 @@ class GEMM_8192X17408X5120_OPTIMAL:
                         )
 
                     with threads[0, :32] as _storer:
-                        tile_dst = tf.empty(Tensor[(128, 256), "bf16", (128, 256)])
+                        tile_dst = tf.empty(Tensor[(128, 256), "bf16", (128, 256) @ {cta.persistent @ V()}])
                         tile = tf.schedule((staged, tile_dst), op=T.copy_async_tensor())
                         out = tf.insert_slice(out, tile, (m, n))
 
@@ -459,12 +462,12 @@ class GEMM_8192X17408X5120_OPTIMAL:
                             "f32",
                             ShardLayout(
                             layout=Layout((2, 4, 2, 8, 32, 4, 2), (16384, 16, 8, 1, 512, 128, 64)),
-                            attrs=(S(0), S(1), S(3), S(5)),
-                            mesh=Mesh((Topology("thread", 384),), layout=ComposedLayout(
+                            attrs=(V(), S(0), S(1), S(3), S(5)),
+                            mesh=Mesh((Topology("cta", 132), Topology("thread", 384)), layout=ComposedLayout(
                                 inner=None,
                                 offset=128,
-                                outer=Layout((2, 4, 8, 4), (128, 32, 4, 1)),
-                            ), names=("group", "warp", "lane8", "lane4")),
+                                outer=Layout((132, 2, 4, 8, 4), (384, 128, 32, 4, 1)),
+                            ), names=("persistent", "group", "warp", "lane8", "lane4")),
                         ),
                             "rmem",
                         ]
@@ -483,7 +486,7 @@ class GEMM_8192X17408X5120_OPTIMAL:
                             )
                             value = T.tensor_view(
                                 T.ptr_of(a[(((task // (68 * 16)) * 16) + (task % 16)) * 128:(((task // (68 * 16)) * 16) + (task % 16)) * 128 + 1, k:k + 1]),
-                                layout=((128, 64), (5120, 1)),
+                                layout=((128, 64), (5120, 1)) @ {cta.persistent @ V()},
                                 shape=(128, 64),
                             )
                             lhs_ring_4 = lhs_ring_stages[((((task - cta.persistent) // 132) * 80) + (k // 64)) % 3]

@@ -49,6 +49,7 @@ class PrintContext:
         self.imports: set[str] = set()
         self.dim_declarations: dict[str, tuple[object, str]] = {}
         self.mesh_bindings: list[tuple[types.Mesh, str]] = []
+        self.class_bindings: list[tuple[types.Mesh, str]] = []
         self.used_mesh_names: set[str] = set()
         self.topologies = ()
         self.target = target
@@ -113,14 +114,19 @@ class PrintContext:
     def mesh_scope(self) -> types.Mesh | None:
         return ir_utils.from_meshes(*(mesh for mesh, _ in self.mesh_bindings)) if self.mesh_bindings else None
 
-    def mesh_alias(self, mesh: types.Mesh) -> str | None:
-        for bound, name in reversed(self.mesh_bindings):
-            if bound == mesh:
+    def mesh_alias(self, mesh: types.Mesh, *, units: bool = False, declared: bool = True) -> str | None:
+        """The binding of *mesh*; with *units*, also one naming its axes over the same units.
+
+        A ``with`` binding wins over a mesh the class body declares; *declared* False skips those.
+        """
+        bindings = (*self.class_bindings, *self.mesh_bindings) if declared else self.mesh_bindings
+        for bound, name in reversed(bindings):
+            if bound == mesh or (units and ir_utils.same_mesh(bound, mesh)):
                 return name
         return None
 
-    def mesh_axis_alias(self, mesh: types.Mesh, mesh_axis: int) -> str | None:
-        """Name one mesh axis through an active scope binding, if one dominates it."""
+    def mesh_axis_alias(self, mesh: types.Mesh, mesh_axis: int, *, declared: bool = False) -> str | None:
+        """Name one mesh axis through an active scope binding, or with *declared* a class mesh."""
         names = mesh.names
         if mesh_axis >= len(names):
             return None
@@ -128,8 +134,9 @@ class PrintContext:
         target_topology = next(
             (topology for topology in mesh.topologies if topology.name == target_topology_name), None
         )
-        for binding_index in range(len(self.mesh_bindings) - 1, -1, -1):
-            bound, alias = self.mesh_bindings[binding_index]
+        bindings = self.class_bindings if declared else self.mesh_bindings
+        for binding_index in range(len(bindings) - 1, -1, -1):
+            bound, alias = bindings[binding_index]
             if not bound.names or target_name not in bound.names:
                 continue
             for bound_topology_name, bound_name in ir_utils.axis_keys(bound):
@@ -146,11 +153,17 @@ class PrintContext:
                     return f"{alias}.{bound_name}"
         return None
 
-    def mesh_slice(self, mesh: types.Mesh) -> str | None:
-        """Recover ``binding[start:stop]`` for a sliced active mesh."""
+    def mesh_slice(self, mesh: types.Mesh, *, declared: bool = True) -> str | None:
+        """Recover ``binding[start:stop]`` for a sliced active mesh, through its parent if any."""
+        bindings = (*self.class_bindings, *self.mesh_bindings) if declared else self.mesh_bindings
+        if mesh.parent is not None:
+            for bound, alias in reversed(bindings):
+                box = ir_utils.sub_box(bound, mesh) if bound == mesh.parent else None
+                if box is not None:
+                    return box_text(bound, box, alias)
         if not isinstance(mesh.layout, types.ComposedLayout):
             return None
-        for parent, alias in reversed(self.mesh_bindings):
+        for parent, alias in reversed(bindings):
             text = slice_from_parent(parent, mesh, alias)
             if text is not None:
                 return text

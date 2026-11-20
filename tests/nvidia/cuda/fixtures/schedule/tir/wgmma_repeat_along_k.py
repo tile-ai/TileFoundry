@@ -100,13 +100,13 @@ class WgmmaRepeatAlongK:
                                     value_5 = lhs_ring_stages[(k // 64) % 2]
                                     lhs_view = T.tensor_view(
                                         T.ptr_of(value_5[o_m:o_m + 128, o_k:o_k + 16]),
-                                        layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) | Swizzle(3, 4, 3)) @ {B()},
+                                        layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) | Swizzle(3, 4, 3)) @ scope_3,
                                         shape=(128, 16),
                                     )
                                     value_6 = rhs_ring_stages[(k // 64) % 2]
                                     rhs_view = T.tensor_view(
                                         T.ptr_of(value_6[o_k:o_k + 16, o_n:o_n + 16]),
-                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
+                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ scope_3,
                                         shape=(16, 16),
                                     )
                                     T.tiled_mma(
@@ -117,12 +117,12 @@ class WgmmaRepeatAlongK:
                                     )
                                     lhs_view_1 = T.tensor_view(
                                         T.ptr_of(value_5[o_m:o_m + 128, o_k + 16:o_k + 16 + 16]),
-                                        layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) + 16 | Swizzle(3, 4, 3)) @ {B()},
+                                        layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) + 16 | Swizzle(3, 4, 3)) @ scope_3,
                                         shape=(128, 16),
                                     )
                                     rhs_view_1 = T.tensor_view(
                                         T.ptr_of(value_6[o_k + 16:o_k + 16 + 16, o_n:o_n + 16]),
-                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
+                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ scope_3,
                                         shape=(16, 16),
                                     )
                                     T.tiled_mma(
@@ -133,12 +133,12 @@ class WgmmaRepeatAlongK:
                                     )
                                     lhs_view_2 = T.tensor_view(
                                         T.ptr_of(value_5[o_m:o_m + 128, o_k + 32:o_k + 32 + 16]),
-                                        layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) + 32 | Swizzle(3, 4, 3)) @ {B()},
+                                        layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) + 32 | Swizzle(3, 4, 3)) @ scope_3,
                                         shape=(128, 16),
                                     )
                                     rhs_view_2 = T.tensor_view(
                                         T.ptr_of(value_6[o_k + 32:o_k + 32 + 16, o_n:o_n + 16]),
-                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
+                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ scope_3,
                                         shape=(16, 16),
                                     )
                                     T.tiled_mma(
@@ -149,12 +149,12 @@ class WgmmaRepeatAlongK:
                                     )
                                     lhs_view_3 = T.tensor_view(
                                         T.ptr_of(value_5[o_m:o_m + 128, o_k + 48:o_k + 48 + 16]),
-                                        layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) + 48 | Swizzle(3, 4, 3)) @ {B()},
+                                        layout=(Layout(((2, 8, 8), 16), ((4096, 512, 64), 1)) + 48 | Swizzle(3, 4, 3)) @ scope_3,
                                         shape=(128, 16),
                                     )
                                     rhs_view_3 = T.tensor_view(
                                         T.ptr_of(value_6[o_k + 48:o_k + 48 + 16, o_n:o_n + 16]),
-                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ {B()},
+                                        layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))) @ scope_3,
                                         shape=(16, 16),
                                     )
                                     T.tiled_mma(

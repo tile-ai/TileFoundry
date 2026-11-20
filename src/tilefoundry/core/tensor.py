@@ -78,18 +78,15 @@ class ShardTensor:
     def to_global(self) -> "ShardTensor":
         """One global tensor, by the meaning of ``type``.
 
-        ``Split`` pieces are placed side by side, ``Broadcast`` pieces are one
-        value so any of them serves, and ``Partial`` pieces combine by their
-        reduction.
+        ``Split`` pieces are placed side by side, ``Broadcast`` pieces (and a
+        plain type's) are one value so any of them serves, and ``Partial``
+        pieces combine by their reduction.
         """
         if self.is_global:
             return self
         shard = types.shard_layout_of(self.type.layout)
         if shard is None:
-            raise ValueError(
-                "ShardTensor: a local view whose type has no ShardLayout has no "
-                "global value to assemble"
-            )
+            return ShardTensor(self.type, self.tensor[0][1])
         by_axis = types.partial_reductions_by_axis(shard)
         partial = [axis for axis, kind in enumerate(by_axis) if kind is not None]
         reductions = {kind for kind in by_axis if kind is not None}
@@ -114,11 +111,19 @@ class ShardTensor:
     def reshard(self, type: types.TensorType) -> "ShardTensor":
         """The same value under *type*: a global view only changes type.
 
-        A local view is assembled first, unless neither type has a ShardLayout:
-        then each placement only moves its own value, which stays its own.
+        A local view is assembled first, unless each placement keeps its own
+        value: neither type has a ShardLayout, or both have the same attrs on
+        the same mesh and none is a Split, so only the address layout changes.
         """
-        if not self.is_global and types.shard_layout_of(self.type.layout) is None and (
-            types.shard_layout_of(type.layout) is None
+        held, wanted = types.shard_layout_of(self.type.layout), types.shard_layout_of(type.layout)
+        if not self.is_global and (
+            held is wanted is None
+            or (
+                held is not None
+                and wanted is not None
+                and (held.attrs, held.mesh) == (wanted.attrs, wanted.mesh)
+                and not any(isinstance(attr, types.Split) for attr in held.attrs)
+            )
         ):
             return ShardTensor(type, self.tensor)
         return ShardTensor(type, self.to_global().tensor)

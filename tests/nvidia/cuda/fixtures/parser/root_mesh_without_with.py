@@ -9,7 +9,9 @@ SUMMED = ShardLayout(Layout((8, 16), (16, 1)), (Partial("sum"),), LANES)
 
 @module(entry="f", target=cuda.Target("nvidia.h200_sxm"))
 class Model:
-    @func(mesh=LANES)
+    mesh = LANES
+
+    @func
     def f(x: Tensor[(8, 16), "f32", SUMMED, "rmem"]):
         lanes = Mesh((Topology("thread", 8),), layout=(8,), names=("lane",))
         return tf.reshard(x, SUMMED, "rmem")

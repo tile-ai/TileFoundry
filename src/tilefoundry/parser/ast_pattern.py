@@ -449,7 +449,7 @@ class LexicalMeshReferenceRule:
             or isinstance(value, types.ShardLayout) and value.mesh is not None
         ):
             raise ParseError.from_node(
-                node, context, f"layout mesh {node.id!r} is not a lexical Mesh binding"
+                node, context, f"layout mesh {node.id!r} is not a lexical Mesh binding; declare the Mesh in the @module class body"
             )
         return value
 
@@ -822,7 +822,7 @@ class FuncContext:
     base: object | None = None
     key: object | None = None
     target: object | None = None
-    mesh: object | None = None
+    meshes: Mapping[str, object] = field(default_factory=dict)
     output_count: int = 1
     hardware_context: Mapping[str, object] = field(default_factory=dict)
     binding_name: str | None = None
@@ -937,6 +937,7 @@ class ModuleBuildContext:
     converter_keys: dict[int, set[str]] = field(default_factory=dict)
     declarations: list[object] = field(default_factory=list)
     children: dict[str, object] = field(default_factory=dict)
+    meshes: dict[str, object] = field(default_factory=dict)
     consumed: bool = False
     FUNCTION_RULES: ClassVar[tuple[object, ...]] = (
         ModuleFunctionValidationRule(),
@@ -961,7 +962,6 @@ class ModuleBuildContext:
         closure: Mapping[str, object] | None = None,
         base: object | None = None,
         key: object | None = None,
-        mesh: object | None = None,
         output_count: int = 1,
     ) -> FuncContext:
         topology_scope = {
@@ -979,7 +979,7 @@ class ModuleBuildContext:
             base=base,
             key=key,
             target=self.target,
-            mesh=mesh,
+            meshes=self.meshes,
             output_count=output_count,
             hardware_context=target_hardware_context(self.target),
             binding_name=binding_name,
@@ -1101,6 +1101,8 @@ class ModuleBuildContext:
                 if id(value) in self.owned:
                     continue
                 functions.append(value)
+            elif isinstance(value, types.Mesh):
+                self.meshes[name] = value
             elif getattr(value, "is_deferred", False):
                 continue
             elif callable(value):
@@ -1109,8 +1111,8 @@ class ModuleBuildContext:
                 raise TypeError(
                     f"@module {cls.__name__!r}: member {name!r} is a "
                     f"{type(value).__name__}, not an @func / @prim_func result, a "
-                    "Module / ModuleList, or a plain function; a "
-                    "@module class body may contain only these three member kinds"
+                    "Module / ModuleList, a Mesh, or a plain function; a "
+                    "@module class body may contain only these member kinds"
                 )
         for binding, role in self.bindings.items():
             value = vars(cls).get(binding)
@@ -1257,7 +1259,6 @@ class MatchContext:
     @classmethod
     def from_function(cls, function: FuncContext) -> MatchContext:
         scope = LexicalScope()
-        resolved_mesh = None
         context = cls(
             function=function,
             module=None,
@@ -1266,22 +1267,14 @@ class MatchContext:
             lexical_scope=scope,
             values=function.hardware_context,
         )
-        if function.mesh is not None:
+        for name, mesh in function.meshes.items():
             topologies = resolve_mesh_topologies_at(
-                function.mesh.topologies,
-                function.topologies,
-                ast.Name(id="mesh"),
-                context,
+                mesh.topologies, function.topologies, ast.Name(id=name), context
             )
-            resolved_mesh = dataclasses.replace(function.mesh, topologies=topologies)
-            scope.define_mesh("mesh", resolved_mesh)
+            scope.define_mesh(name, dataclasses.replace(mesh, topologies=topologies))
         scope.define(
             TYPE_INFER_CONTEXT,
-            AuthoredInferContext(
-                module=function.module,
-                mesh_scope=resolved_mesh,
-                target=function.target,
-            ),
+            AuthoredInferContext(module=function.module, mesh_scope=None, target=function.target),
         )
         return context
 

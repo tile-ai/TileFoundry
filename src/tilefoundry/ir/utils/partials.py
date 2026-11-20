@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from tilefoundry.ir import expr, types
 
+from .leaves import tensor_types
 from .mesh_scope import axis_keys
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "reject_partials",
     "require_matching_partial_state",
     "require_uniform_partial_slices",
+    "varying_axis",
 ]
 
 
@@ -28,13 +30,14 @@ def attrs_by_axis(
     See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics).
 
     Args:
-        type_: Tensor whose plain layout reads as Varying.
+        type_: Tensor whose plain layout reads as Broadcast.
         mesh: Shard mesh to read; defaults to the tensor's shard mesh.
         owners: Target facts used to normalize shared copies. None reads attrs
             as written; empty facts instead normalize Broadcast and Varying alike.
 
     Returns:
-        States in mesh axis order; omitted shard axes and topologies read as Broadcast.
+        States in mesh axis order; omitted shard axes and topologies, and a plain
+        layout, read as Broadcast.
     """
     shard = types.shard_layout_of(type_.layout)
     stated, counts = {}, {}
@@ -54,7 +57,7 @@ def attrs_by_axis(
             keys[topology, ordinal] = None
     result = {}
     for key in keys:
-        attr = stated.get(key, types.Broadcast()) if shard is not None else types.Varying()
+        attr = stated.get(key, types.Broadcast())
         if (
             owners is not None
             and isinstance(attr, (types.Broadcast, types.Varying))
@@ -63,6 +66,36 @@ def attrs_by_axis(
             attr = types.Broadcast()
         result[key] = attr
     return result
+
+
+def varying_axis(declared: types.Type, actual: types.Type, ctx=None) -> tuple[str, str] | None:
+    """Where *actual* is Varying while *declared* is Broadcast, and how to write that axis Varying.
+
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics). Returns the mesh
+    axis, as an error names it, and a spelling to copy. The IR keeps no binding
+    name, so the spelling names the mesh ``<mesh>`` and says which mesh it is.
+    With *ctx*, an axis whose topology shares the declared storage on its target
+    is not counted.
+    """
+    owners = None if ctx is None or ctx.target is None else ctx.target.storage_owners
+    for stated, held in zip(tensor_types(declared), tensor_types(actual)):
+        shard = types.shard_layout_of(held.layout)
+        if shard is None:
+            continue
+        before, after = attrs_by_axis(stated, shard.mesh, owners), attrs_by_axis(held, shard.mesh)
+        for (key, attr), (topology, name) in zip(after.items(), axis_keys(shard.mesh), strict=True):
+            if attr == types.Varying() and before[key] == types.Broadcast():
+                if owners is None or owners.private(stated.storage, topology):
+                    names = [axis for held_topology, axis in axis_keys(shard.mesh) if held_topology == topology]
+                    if name:
+                        return f"mesh axis {name}", (
+                            f"'@ {{<mesh>.{name} @ V()}}', where <mesh> is your binding of the "
+                            f"{topology} mesh (axes {', '.join(names)})"
+                        )
+                    return f"{topology} mesh axis {key[1]}", (
+                        f"'@ {{<mesh>.<axis> @ V()}}' once the axes of your {topology} mesh have names"
+                    )
+    return None
 
 
 def reject_partials(
@@ -85,7 +118,7 @@ def reject_partials(
             continue
         raise ValueError(
             f"{name} carries Partial({reduction}) on mesh axis {mesh_axis}, "
-            f"which does not commute; insert reshard({name}, @ {{B()}}) before this consumer"
+            f"which does not commute; insert reshard({name}, <its layout>) before this consumer"
         )
 
 
@@ -131,7 +164,7 @@ def check_multilinear_partials(
             if anchor is not None and name != anchor:
                 raise ValueError(
                     f"{name} carries {attr!r} on mesh axis {mesh_axis}; "
-                    f"reshard({name}, @ {{B()}}) before this consumer"
+                    f"reshard({name}, <its layout>) before this consumer"
                 )
             state = None
             for (other_name, _), other in zip(operands, states):
@@ -184,13 +217,13 @@ def require_matching_partial_state(
             raise ValueError(
                 f"{dst_name} carries a Partial({reduction}) on mesh axis {mesh_axis}; "
                 f"{update_name} must carry the identical per-mesh-axis state. "
-                f"Insert reshard({update_name}, @ {{B()}}) or match {dst_name} before this consumer"
+                f"Insert reshard({update_name}, <its layout>) or match {dst_name} before this consumer"
             )
     elif update_partials:
         mesh_axis, reduction = update_partials[0]
         raise ValueError(
             f"{update_name} carries Partial({reduction}) on mesh axis {mesh_axis}, "
-            f"but {dst_name} is complete; insert reshard({update_name}, @ {{B()}}) before this consumer"
+            f"but {dst_name} is complete; insert reshard({update_name}, <its layout>) before this consumer"
         )
 
 
@@ -223,5 +256,5 @@ def require_uniform_partial_slices(
                 raise ValueError(
                     f"input {index} does not carry {output_attr!r} on mesh axis "
                     f"{mesh_axis}; every input must carry the same Partial state: "
-                    f"reshard the Partial inputs with @ {{B()}} before {op_name}"
+                    f"reshard the Partial inputs to <their layout> before {op_name}"
                 )

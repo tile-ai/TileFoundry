@@ -10,10 +10,13 @@ M, K, N = 8, 4, 6
 
 @module(entry="forward", target=cpu.Target(), topologies=(Topology("gpu", 2),))
 class MeshBody:
-    @func(mesh=Mesh(("gpu",), (2,), names=("shard",)))
+    mesh = Mesh(("gpu",), (2,), names=("shard",))
+
+    @func
     def forward(x: Tensor[(M @ mesh.shard, K), "f32", "gmem"], w: Tensor[(N @ mesh.shard, K), "f32", "gmem"]):
-        with Mesh(("gpu",), layout=(2,), names=("shard",)) as _gather:
-            full = tf.reshard(w, layout=(N, K) @ {B()}, storage="gmem")
-            h = tf.matmul(x, full, b_layout="NK")
-        with Mesh(("gpu",), layout=(2,), names=("shard",)) as _square:
-            return h * tf.exp(h)
+        with mesh:
+            with Mesh(("gpu",), layout=(2,), names=("shard",)) as _gather:
+                full = tf.reshard(w, layout=(N, K), storage="gmem")
+                h = tf.matmul(x, full, b_layout="NK")
+            with Mesh(("gpu",), layout=(2,), names=("shard",)) as _square:
+                return h * tf.exp(h)

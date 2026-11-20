@@ -13,7 +13,7 @@ import torch
 from tests.core._corpus import Case, case, check_case, special
 from tilefoundry import cli, inspection, runtime
 from tilefoundry.interfaces import autodiff, evaluator
-from tilefoundry.ir import core, dim, expr, types
+from tilefoundry.ir import core, dim, expr, types, utils
 from tilefoundry.ir.hir import sharding
 from tilefoundry.passes.transforms import differentiate
 
@@ -67,6 +67,13 @@ def fields(type_: types.Type) -> tuple[types.Type, ...]:
     return type_.fields if isinstance(type_, types.TupleType) else (type_,)
 
 
+def pieces(value) -> tuple:
+    """Each unit's own piece of a local view, which the loss sums; a tensor is one piece."""
+    if isinstance(value, torch.Tensor) or value.is_global:
+        return (value,)
+    return tuple(data for _, data in value.tensor)
+
+
 def check_gradients(
     module: core.Module, forward: core.Module, backward: core.Module, wrt, rtol: float = 1e-5, atol: float = 1e-6,
     dims: Mapping[str, int] = MappingProxyType({}),
@@ -85,7 +92,10 @@ def check_gradients(
     results = evaluator.evaluate(loaded(module), *inputs)
     results = results if isinstance(function.return_type, types.TupleType) else (results,)
     total = sum(
-        value.sum() for value, type_ in zip(results, fields(function.return_type)) if is_float(type_)
+        piece.sum()
+        for value, type_ in zip(results, fields(function.return_type))
+        if is_float(type_)
+        for piece in pieces(value)
     )
     reference = torch.autograd.grad(total, trained, allow_unused=True)
     saved = detached(evaluator.evaluate(loaded(forward), *detached(tuple(inputs)))[-1])
@@ -103,14 +113,13 @@ def where(value: expr.Expr) -> str:
 
 
 def reshards(backward: core.Module) -> list[tuple[tuple, tuple]]:
-    """``(source attrs, result attrs)`` of every Reshard in the backward's entry."""
+    """``(source attrs, result attrs)`` of each Reshard in the backward's entry; plain is B."""
     found = []
     for value in core.collect_exprs(backward.entry_function().body):
         if isinstance(value, expr.Call) and isinstance(value.target, sharding.Reshard):
             source = types.shard_layout_of(value.args[0].type.layout)
-            result = types.shard_layout_of(value.type.layout)
-            if source is not None and result is not None:
-                found.append((source.attrs, result.attrs))
+            if source is not None:
+                found.append((source.attrs, tuple(utils.attrs_by_axis(value.type, source.mesh).values())))
     return found
 
 
@@ -288,6 +297,12 @@ class ExpertParallel(Differentiated):
 
 
 @case
+class IndexAdd(Differentiated):
+    path: Path = FIXTURES / "index_add.py"
+    wrt: tuple[str, ...] = ("dst", "src")
+
+
+@case
 class IndexSelect(Differentiated):
     path: Path = FIXTURES / "index_select.py"
     wrt: tuple[str, ...] = ('table',)
@@ -457,9 +472,9 @@ def test_saved_values_report_name_type_and_origin() -> None:
     forward, _ = differentiate.differentiate(module, wrt=("x", "w"))
     rows = {value.name: value for value in differentiate.saved_values(forward)}
     assert rows["x"].origin == "parameter"
-    assert rows["full"].origin == "reshard  sharded.py:15"
+    assert rows["full"].origin == "reshard  sharded.py:18"
     assert rows["full"].type.shape == (6, 4)
-    assert types.shard_layout_of(rows["full"].type.layout).attrs == (B,)
+    assert types.shard_layout_of(rows["full"].type.layout) is None
 
 
 def test_a_loop_stacks_what_changes_per_step_and_keeps_one_copy_of_the_rest() -> None:

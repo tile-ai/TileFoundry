@@ -26,19 +26,18 @@ class CastWindow:
     ):
         with Mesh((Topology("cta", _CTAS),), layout=(_CTAS,), names=("d0",)) as cta:
             with Mesh((Topology("thread", _THREADS),), layout=(_THREADS,), names=("d0",)) as thread:
-                row = ShardLayout(Layout((_THREADS,), (1,)), (Split(0),), thread)
                 source = T.tensor_view(
                     T.ptr_of(a[(cta.d0 // 2) * 16 + (cta.d0 % 2) * 8:(cta.d0 // 2) * 16 + (cta.d0 % 2) * 8 + 1]),
-                    layout=row,
+                    layout=(_THREADS @ thread.d0,),
                     shape=(_THREADS,),
                 )
                 written = T.tensor_view(
                     T.ptr_of(out[(cta.d0 // 2) * 16 + (cta.d0 % 2) * 8:(cta.d0 // 2) * 16 + (cta.d0 % 2) * 8 + 1]),
-                    layout=row,
+                    layout=(_THREADS @ thread.d0,),
                     shape=(_THREADS,),
                 )
-                held = T.alloc_tensor(Tensor[(_THREADS,), "f32", row, "rmem"])
-                narrowed = T.alloc_tensor(Tensor[(_THREADS,), "f16", row, "rmem"])
+                held = T.alloc_tensor(Tensor[(_THREADS,), "f32", ((_THREADS @ thread.d0,), (1,)), "rmem"])
+                narrowed = T.alloc_tensor(Tensor[(_THREADS,), "f16", ((_THREADS @ thread.d0,), (1,)), "rmem"])
                 T.copy(source, held)
                 T.cast(held, narrowed, dtype="f16")
                 T.copy(narrowed, written)

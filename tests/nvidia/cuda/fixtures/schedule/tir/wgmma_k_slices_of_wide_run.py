@@ -96,13 +96,13 @@ class WgmmaKSlicesOfWideRun:
                                     value_5 = lhs_ring_stages[(k // 32) % 2]
                                     lhs_view = T.tensor_view(
                                         T.ptr_of(value_5[o_m:o_m + 64, o_k:o_k + 16]),
-                                        layout=(Layout(((8, 8), 16), ((256, 32), 1)) | Swizzle(2, 4, 3)) @ {B()},
+                                        layout=(Layout(((8, 8), 16), ((256, 32), 1)) | Swizzle(2, 4, 3)) @ scope_3,
                                         shape=(64, 16),
                                     )
                                     value_6 = rhs_ring_stages[(k // 32) % 2]
                                     rhs_view = T.tensor_view(
                                         T.ptr_of(value_6[o_k:o_k + 16, o_n:o_n + 32]),
-                                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))) @ {B()},
+                                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))) @ scope_3,
                                         shape=(16, 32),
                                     )
                                     T.tiled_mma(
@@ -113,12 +113,12 @@ class WgmmaKSlicesOfWideRun:
                                     )
                                     lhs_view_1 = T.tensor_view(
                                         T.ptr_of(value_5[o_m:o_m + 64, o_k + 16:o_k + 16 + 16]),
-                                        layout=(Layout(((8, 8), 16), ((256, 32), 1)) + 16 | Swizzle(2, 4, 3)) @ {B()},
+                                        layout=(Layout(((8, 8), 16), ((256, 32), 1)) + 16 | Swizzle(2, 4, 3)) @ scope_3,
                                         shape=(64, 16),
                                     )
                                     rhs_view_1 = T.tensor_view(
                                         T.ptr_of(value_6[o_k + 16:o_k + 16 + 16, o_n:o_n + 32]),
-                                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))) @ {B()},
+                                        layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))) @ scope_3,
                                         shape=(16, 32),
                                     )
                                     T.tiled_mma(

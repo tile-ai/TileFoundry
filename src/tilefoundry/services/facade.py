@@ -93,9 +93,9 @@ def dim_range(value: object) -> tuple[int, int] | None:
     return registry.require(dim_range)(value)
 
 
-def specialize(base: object, declared: object, mesh: object) -> object:
+def specialize(base: object, declared: object) -> object:
     """The decorator that registers a shape variant of the Function *base* over *declared*."""
-    return registry.require(specialize)(base, declared, mesh=mesh)
+    return registry.require(specialize)(base, declared)
 
 
 def converter(base: object, weight_name: str) -> object:

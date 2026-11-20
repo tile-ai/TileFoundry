@@ -571,6 +571,9 @@ through `saved`.
   backward has `gradient_layout` of its result's layout. A `wrt` gradient whose
   layout differs from `gradient_layout` of its parameter's layout gets a final
   `Reshard` to it, so a broadcast weight's partial gradient is all-reduced.
+  Where the value is `Broadcast` and its gradient `Varying`, every unit used the
+  same value and the units' gradients sum: a `Bitcast` restates that axis as
+  `Partial("sum")` before the `Reshard`.
 - Each Op that can be differentiated registers one rule
   ([visitor-registry §12](./visitor-registry.md#12-instance-5--autodiff)).
 - `recompute` items are `Module[.function]:variable`. The part before `:` is a

@@ -85,9 +85,9 @@ class Function(expr.Expr):
         if display_name is not None:
             self.display_name = display_name
 
-    def specialize(self, declared, *, mesh=None):
+    def specialize(self, declared):
         """``@base.specialize(pattern.Range(...))``: the decorator registering a shape variant."""
-        return services.specialize(self, declared, mesh)
+        return services.specialize(self, declared)
 
     def converter(self, weight_name: str):
         """``@base.converter(weight_name)``: the decorator that registers a per-weight converter."""

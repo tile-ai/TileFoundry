@@ -11,7 +11,9 @@ import pytest
 import torch
 
 import tilefoundry
+from tests.nvidia.cuda.schedule._support import _finalized, _RetainedStatements
 from tilefoundry import cli
+from tilefoundry.ir.tir import sync
 from tilefoundry_nvidia import cuda
 
 OPS = Path(__file__).parents[2] / "fixtures" / "ops"
@@ -42,3 +44,19 @@ def test_warp_slices_exchange_values() -> None:
     torch.cuda.synchronize()
     torch.testing.assert_close(one_out, one, rtol=0, atol=0)
     torch.testing.assert_close(two_out, two, rtol=0, atol=0)
+
+
+def test_a_sync_on_the_current_sliced_scope_is_its_own_threads_barrier() -> None:
+    """The scope a sliced ``with`` binds is a legal sync mesh: a bar.sync on its 256 threads."""
+    module = cli.load_authored_ir(f"{OPS / 'sync_current_slice.py'}:SyncCurrentSlice")
+    statements = _RetainedStatements()
+    statements.visit(_finalized(module).lookup(module.entry_function().name).body)
+    sliced = [
+        op.mesh for op in statements.operations if isinstance(op, sync.Sync) and op.mesh.names[0] == "group"
+    ]
+    assert sliced
+    for mesh in sliced:
+        scope = sync.sync_scope(mesh)
+        assert sync.classify(mesh) is sync.SyncBarrier.BAR_SYNC
+        assert (scope.base, scope.count) == (128, 256)
+

@@ -12,7 +12,10 @@ from tilefoundry.target import cpu
     topologies=(Topology("cta", 2), Topology("thread", 4)),
 )
 class CoarseRmem:
-    @func(mesh=Mesh(("cta",), (2,), names=("block",)))
+    mesh = Mesh(("cta",), (2,), names=("block",))
+
+    @func
     def run(x: Tensor[(8 @ mesh.block,), "f32", "rmem"]):
-        with Mesh(("thread",), (4,), names=("lane",)) as _lanes:
-            return tf.add(x, x)
+        with mesh:
+            with Mesh(("thread",), (4,), names=("lane",)) as _lanes:
+                return tf.add(x, x)

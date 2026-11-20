@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import ClassVar
 
 from tilefoundry import target as tilefoundry_target
@@ -409,6 +409,8 @@ class Matcher:
     def visit_ComposedLayout(self, pattern, subject) -> bool:
         if isinstance(subject, types.Layout):
             subject = types.ComposedLayout(None, 0, subject)
+        if isinstance(subject, types.ShardLayout) and isinstance(subject.layout, types.ComposedLayout):
+            subject = replace(subject.layout, outer=replace(subject, layout=subject.layout.outer))
         if not isinstance(subject, types.ComposedLayout):
             return self.fail(pattern, subject)
         return all(

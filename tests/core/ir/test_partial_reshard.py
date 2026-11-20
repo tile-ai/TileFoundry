@@ -53,7 +53,7 @@ def test_broadcast_to_plain_aliases():
     (
         (types.Partial("sum"), types.Partial("sum"), 0),
         (types.Varying(), types.Partial("sum"), 0),
-        (None, types.Partial("sum"), 0),
+        (None, types.Partial("sum"), None),
         (types.Partial("sum"), types.Partial("max"), None),
         (types.Broadcast(), types.Partial("sum"), None),
     ),

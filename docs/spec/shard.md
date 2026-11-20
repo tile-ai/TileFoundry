@@ -469,6 +469,9 @@ value is consumed by a region.
     in order. The box is `make_layout` of the selected extents with the mesh's
     strides. CuTe `domain_offset` moves it to its first coord, and the index it
     returns is the slice offset.
+  - A slice keeps the mesh it was taken from as `parent` (`m[0].parent is m`).
+    `parent` takes no part in equality, hash or `repr`; a mesh a `with Mesh(...)`
+    builds, a selection included, has no parent. A slice of a slice is refused.
   - Nested one-topology Mesh scopes compose to exactly that shape. The mesh axes join
     outermost first. Each outer stride is scaled by the units below it.
     A value distributed at two topologies at once may therefore be written either
@@ -631,7 +634,7 @@ Field meanings:
   splitting; the value is replicated across this mesh axis.
 - `Varying` — the current mesh axis does not split the value. Every copy holds
   all coordinates. Values may differ between units. A plain layout is
-  Varying on every mesh axis ([shard §6.1](./shard.md#61-shard-attr-semantics)).
+  Broadcast on every mesh axis ([shard §6.1](./shard.md#61-shard-attr-semantics)).
 - `Partial(reduction)` — the current mesh axis carries an **un-reduced
   partial value**. The full result over this mesh axis is the
   `reduction` (`sum` / `max` / `min`) of the per-shard values. A
@@ -660,16 +663,22 @@ A mesh axis separates copies when its topology is the storage owner's topology o
 Partial mesh axes always separate contributions, including mesh axes finer than the storage
 owner. A Partial on such a mesh axis holds one copy per unit of that mesh axis. Each copy is at
 its own base address. Completing the reduction leaves one copy.
-A plain layout is Varying on every mesh axis. An unstated mesh axis of a
-`ShardLayout`, and a topology that its mesh omits, is Broadcast.
-A literal is the same on every unit: a `Constant`, a call of an Op marked
-`literal` (`Zeros`, an `Arange` with a static start), or a call of `Constant`s. Its type stays plain; an
-operation reads it as Broadcast on the mesh of its other operands. A loop index
-is all-Broadcast on the mesh in force when each bound is an integer, a literal
-or all-Broadcast, and plain otherwise or when no topology of that mesh has more
-than one unit. Other values follow the rules below; a `DimVar`, a `MeshCoord`
-and a plain parameter stay Varying. A result Varying on every mesh axis is plain
-when its mesh covers every unit; on a sliced mesh it keeps the mesh (`@{V}`).
+A plain layout is Broadcast on every mesh axis, and so are an unstated mesh axis
+of a `ShardLayout` and a topology that its mesh omits. Varying is only stated (a
+parameter's `V()`, `tf.local`) or read: a `MeshCoord` is Varying on each mesh
+axis it reads, and every other value takes it from its operands.
+
+| Value | Type |
+| --- | --- |
+| Plain parameter, literal, constant arithmetic, `DimVar` | Broadcast |
+| Op call | Each tensor operand (inputs, indices, starts, offsets) that is Varying on a mesh axis makes the result Varying there, whatever the result's storage: inference states equal values only where it can prove them, and `tf.bitcast` states the rest. An Op that writes into its destination (`insert_slice`, `index_add`, `index_copy`, `cache_update`) keeps the one-copy rule: its result becomes Varying only where each unit of that topology holds its own copy of the storage. In either case a Broadcast result axis becomes Varying, a Split one stays, a Partial one is an error. The result reads each topology of its own mesh and of the Varying operands'; a plain result starts from the first Varying operand's mesh. An operand Varying on a topology whose mesh has another axis structure than the result's makes every mesh axis of that topology Varying. `tuple_get_item` has its field's type; only its index is read. Without a target nothing changes |
+| `Bitcast`, `Reshard`, `tf.schedule` call | The stated result; the Op's own rule checks a Varying operand. A `tf.schedule` operand Varying on a mesh axis where the target is Broadcast, and the target's storage is held per unit, is an error |
+| Loop index and loop results | The index is Varying on each mesh axis where a bound is Varying, in force at the loop or not; plain otherwise. The loop results take the index's Varying axes by the Op call rule: the trip count differs there. The carried values keep their entry types |
+| Function call | A Broadcast argument binds a Varying parameter, also one declared on a slice: a plain argument, or one Broadcast on units that include the slice's, is Broadcast on the slice. A Varying argument MUST NOT bind a Broadcast or plain parameter |
+
+Each meaning has one spelling: a `ShardLayout` that is Broadcast on every mesh
+axis and whose mesh covers every unit is its plain layout. A result Varying on
+every mesh axis keeps its `ShardLayout`.
 
 The topologies a ShardLayout keeps include its Varying topologies. An explicit
 execution mesh may omit outside topologies that contain neither Split nor Partial.
@@ -679,12 +688,14 @@ Broadcast. It does not change the stored value type. When physical projection
 omits every topology, the value uses the plain layout. Topologies containing only
 Broadcast stay in the shard mesh.
 
-Type compatibility compares shard attrs as written and reads no storage owner:
-plain, Broadcast, and Varying are distinct; an omitted topology reads as Broadcast.
+Type compatibility reads both types in their one spelling and no storage owner:
+a declared Varying mesh axis accepts a Broadcast value, a declared Broadcast one
+(or a plain declaration) refuses a Varying value, and other attrs compare as
+written; an omitted topology reads as Broadcast.
 
 `attrs_by_axis(type_, mesh=None, owners=None)` reads states keyed by topology
-and mesh axis ordinal. Without owners it reads shard attrs as written. Plain is
-Varying. Omitted shard mesh axes and topologies are Broadcast. With target owners,
+and mesh axis ordinal. Without owners it reads shard attrs as written. Plain,
+omitted shard mesh axes and omitted topologies are Broadcast. With target owners,
 Broadcast and Varying on mesh axes finer than their storage owner both read as
 Broadcast. An empty owner mapping is not the same as omitting owners: it states
 no separate storage copies.
@@ -706,7 +717,7 @@ Unary operations check their own Partial commutativity separately.
 
 `combine` rejects `None` with `ValueError`. Callers must first read plain layouts
 through `attrs_by_axis`. Error cells raise `ValueError`. The error names the kind and both attrs.
-It gives an explicit `bitcast(..., <its layout> @ {B()})` remedy where equal values are required.
+It gives an explicit `bitcast(..., <its layout>)` remedy where equal values are required.
 A change the types prove is a `Reshard`, priced from both ends' types; a fact
 only the author can state is a `Bitcast` form (ii) ([hir §1.3](./hir.md#13-op)).
 
@@ -716,11 +727,12 @@ only the author can state is a `Bitcast` form (ii) ([hir §1.3](./hir.md#13-op))
 | V → B, V → P; same bytes under another shape | `Bitcast` | 0 |
 | B → V | Implicit | 0 |
 
-A Reshard reads both ends' value states and checks each mesh axis; a literal
-source reads as Broadcast. On a mesh axis that separates copies and spans more
-than one unit (for a plain source, the destination's mesh axis), a Varying
-source MUST NOT become Broadcast or Partial; the error names `tf.bitcast`. A Partial
-end must come from the same Partial or from Varying. A Partial source may become
+A Reshard reads both ends' value states and checks each mesh axis; a plain end
+reads as Broadcast on the other end's mesh, and a plain destination is held by
+every unit of the source's topologies. On a mesh axis that separates copies and
+spans more than one unit, a Varying source MUST NOT become Broadcast or Partial;
+the error names `tf.bitcast`. A Partial end must come from the same Partial or
+from Varying. A Partial source may become
 any state, completing its reduction. Lowering chooses which collective moves data,
 for the whole Reshard.
 
@@ -731,20 +743,38 @@ for the whole Reshard.
 | `(8, 16)` | Plain row-major `Layout` |
 | `((8, 16), (1, 8))` | Plain `Layout` with explicit strides |
 | `(8 @ t.w, 16)` | `ShardLayout` splitting a tensor dimension over `t.w` |
-| `(8, 16) @ {B()}` | All-Broadcast `ShardLayout` |
-| `((8, 16) + 4 \| Swizzle(2, 4, 3)) @ {B()}` | All-Broadcast `ShardLayout` based on a `ComposedLayout` |
+| `((8, 16) + 4 \| Swizzle(2, 4, 3)) @ s` | All-Broadcast `ShardLayout` on `s`, based on a `ComposedLayout` |
 | `(8 @ t.w, 16) @ {t.l @ V()}` | Split shard attr with Varying values on `t.l` |
 | `(8 @ t.w, 16) @ {t.l @ P("sum")}` | Split shard attr with Partial values on `t.l` |
+| `(4, 8) @ m[0]` | All-Broadcast `ShardLayout` on the slice `m[0]` |
+| `(4, 8) @ s` | All-Broadcast `ShardLayout` on the mesh bound to `s`; plain when `s` covers every unit |
+| `(4, 8) @ {m[0].pp @ V()}` | Varying on mesh axis `pp` of the slice `m[0]` |
+| `(8 @ m[1].cp, 16)` | Split over mesh axis `cp` of the slice `m[1]` |
 | `((8 @ t.w, 16), (16, 1)) @ {t.l @ P("sum")}` | Shard layout with explicit strides and Partial values |
 | `where(layout=(_, _, dim) @ {cta @ B()})` | Broadcast constraint on the named topology `cta` |
 
-A shard layout covers the current composed mesh scope, or the function mesh in a
-signature. Unstated mesh axes are Broadcast. An annotation with `layout=None`
-imposes no layout constraint. On a mesh axis that separates copies, plain `Layout` and an all-Broadcast `ShardLayout` state different facts:
-Varying and Broadcast ([shard §6.1](./shard.md#61-shard-attr-semantics)). Written shape and stride
+A shard layout covers the current composed mesh scope; in a signature, or a body
+outside every `with`, it takes the meshes it names. A Varying state may name a
+topology outside the current scope (an execution mesh may omit outside topologies
+that contain neither Split nor Partial); that topology joins the layout. Meshes are
+declared in the `@module` class body (`pp = Mesh(...)`) and named by every function of
+the class; a file-level `Mesh` is not a lexical binding. A layout that names a slice, or a mesh after `@`, takes that mesh
+instead; it names one unit set (two are refused: `a layout names two unit sets`),
+and in a body its units are units of the current scope. Unstated mesh axes are
+Broadcast. Broadcast is the default and is never written as a state: a `B()` state
+is refused, and the error names what to remove. In a body, `@ s` names the current
+composed scope with the topologies `s` names replaced by `s`'s own; the others stay,
+so `@ <innermost scope name>` is Broadcast on the current scope. In a signature `@ s`
+is `s`'s own mesh. A `with` scope may omit `as name`. An annotation with `layout=None`
+imposes no layout constraint. A plain `Layout` and an all-Broadcast `ShardLayout`
+over every unit state the same fact; type inference keeps the plain one
+([shard §6.1](./shard.md#61-shard-attr-semantics)). Written shape and stride
 constraints remain.
-Shared-memory distribution belongs to CTA or coarser topologies. Author-written tiles
-in thread scope use plain layouts. A `where` clause constrains named topologies.
+Shared-memory distribution belongs to CTA or coarser topologies. A body layout
+that states Varying and neither Split nor Partial drops each topology that holds
+only Broadcast and does not own its storage (the target's storage owners): a
+per-CTA shared-memory tile written `@ {cta.x @ V()}` in thread scope names no
+thread topology. A `where` clause constrains named topologies.
 Acceptance rules are generated in [parser §2](./parser.md#2-syntax-and-rules).
 
 ---

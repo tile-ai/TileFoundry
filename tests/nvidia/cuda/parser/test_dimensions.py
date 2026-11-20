@@ -21,9 +21,9 @@ PARSER = FIXTURES / "parser"
     [
         ("empty", "layout states must be"),
         ("bare_split", "layout states must be"),
-        ("mixed", "layout states must be"),
         ("empty_partial", "layout states must be"),
         ("scalar_shape", "layout states require"),
+        ("broadcast", r"Broadcast is the default; remove '@ \{B\(\)\}'(.|\n)*parser_layout_states_broadcast\.py:12:"),
     ],
 )
 def test_layout_states_reject_invalid_forms(fixture: str, message: str) -> None:
@@ -45,7 +45,7 @@ class ComposedLayoutStates(DimensionCase):
         execution_mesh = Mesh((Topology("thread", 8),), (8,), ("lane",))
         composed = ComposedLayout(Swizzle(2, 4, 3), 4, Layout((8, 16), (16, 1)))
         assert function.params[0].type.layout == ShardLayout(composed, (P("sum"),), execution_mesh)
-        assert function.body.type.layout == ShardLayout(composed, (B(),), execution_mesh)
+        assert function.body.type.layout == composed
         assert function.body.type.storage is StorageKind.SMEM
         printed = inspection.as_script(state)
         assert inspection.as_script(reload(printed, "Model")) == printed

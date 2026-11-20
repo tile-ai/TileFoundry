@@ -1,4 +1,4 @@
-"""Local is a zero-traffic view at every requested topology level."""
+"""Local is a Varying, zero-traffic view at every requested topology level."""
 
 from __future__ import annotations
 
@@ -27,8 +27,8 @@ def test_local_view_zero_traffic(name, shape, dims) -> None:
         if isinstance(node, expr.Call) and isinstance(node.target, sharding.Local)
     )
     assert local.type.shape == shape
-    assert tuple(local.type.layout.shape) == shape
-    assert isinstance(local.type.layout, Layout)
+    assert tuple(local.type.layout.layout.shape) == shape
+    assert local.type.layout.attrs == (Varying(),), "each lane's view is its own"
     relations = schedule.operand_relations(local.target, tuple(arg.type for arg in local.args))
     values = (local.args[0].type, local.type)
     for boundary, value in zip(relations, values, strict=True):
