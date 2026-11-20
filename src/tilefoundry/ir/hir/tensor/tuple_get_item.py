@@ -16,6 +16,8 @@ class TupleGetItem(expr.Op):
     SSA expression model. See [hir §1](docs/spec/hir.md#1-hir-expr-constructs).
     """
 
+    selects_field = True
+
     tuple_value = expr.ParamDef(kind="input")
     index = expr.ParamDef(kind="input", pattern=pattern.is_scalar_tensor())
 

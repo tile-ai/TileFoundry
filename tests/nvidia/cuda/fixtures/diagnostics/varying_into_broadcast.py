@@ -2,6 +2,7 @@
 
 Each GPU's coordinate differs, so a value read from it is Varying; a plain
 parameter or buffer is Broadcast, and each must be written Varying instead.
+``LoopCarryWritten`` is ``LoopCarry`` written as its error says.
 """
 
 from __future__ import annotations
@@ -34,6 +35,21 @@ class LoopCarry:
 
     @func
     def forward(x: Tensor[(8, 8), "f32", "gmem"], acc0: Tensor[(1, 8), "f32", "gmem"]):
+        with mesh:
+            acc = acc0
+            for _t in range(4):
+                acc = acc + tf.index_select(x, tf.reshape(mesh.g, new_shape=(1,)), dim=0)
+            return acc
+
+
+@module(entry="forward", target=target, topologies=(gpu, cta))
+class LoopCarryWritten:
+    """LoopCarry with the carry written as the error says, its <mesh> replaced by the binding."""
+
+    mesh = Mesh(("gpu",), (2,), names=("g",))
+
+    @func
+    def forward(x: Tensor[(8, 8), "f32", "gmem"], acc0: Tensor[(1, 8), "f32", (1, 8) @ {mesh.g @ V()}, "gmem"]):
         with mesh:
             acc = acc0
             for _t in range(4):

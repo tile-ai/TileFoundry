@@ -309,12 +309,12 @@ def infer_schedule(call: expr.Call, ctx) -> types.TensorType:
     written = ctx.type_of(call.args[params.index(writes[0])])
     if ctx.target is not None:
         for param, arg in zip(params, call.args, strict=True):
-            axis = None if param in writes else ir_utils.varying_axis(written, ctx.type_of(arg), ctx.target.storage_owners)
-            if axis is not None:
+            varying = None if param in writes else ir_utils.varying_axis(written, ctx.type_of(arg), ctx)
+            if varying is not None:
                 ctx.error(
                     call,
-                    f"{type(op).__name__} operand {param.name!r} is Varying on mesh axis {axis}; "
-                    f"the target is Broadcast there: write the target as '@ {{{axis} @ V()}}'",
+                    f"{type(op).__name__} operand {param.name!r} is Varying on {varying[0]}; "
+                    f"the target is Broadcast there: write the target as {varying[1]}",
                 )
     return written
 

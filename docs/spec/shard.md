@@ -671,10 +671,10 @@ axis it reads, and every other value takes it from its operands.
 | Value | Type |
 | --- | --- |
 | Plain parameter, literal, constant arithmetic, `DimVar` | Broadcast |
-| Op call | Each tensor operand (inputs, indices, starts, offsets) that is Varying on a mesh axis makes the result Varying there, when each unit of that topology holds its own copy of the result's storage, or when the Op is a view (registered in `access.alias_registry`), whatever the result's storage: a Broadcast result axis becomes Varying, a Split one stays, a Partial one is an error. The result reads each topology of its own mesh and of the Varying operands'; a plain result starts from the first Varying operand's mesh. Without a target nothing changes |
+| Op call | Each tensor operand (inputs, indices, starts, offsets) that is Varying on a mesh axis makes the result Varying there, when each unit of that topology holds its own copy of the result's storage, or when the Op is a view (registered in `access.alias_registry`), whatever the result's storage: a Broadcast result axis becomes Varying, a Split one stays, a Partial one is an error. The result reads each topology of its own mesh and of the Varying operands'; a plain result starts from the first Varying operand's mesh. An operand Varying on a topology whose mesh has another axis structure than the result's makes every mesh axis of that topology Varying. `tuple_get_item` has its field's type; only its index is read. Without a target nothing changes |
 | `Bitcast`, `Reshard`, `tf.schedule` call | The stated result; the Op's own rule checks a Varying operand. A `tf.schedule` operand Varying on a mesh axis where the target is Broadcast, and the target's storage is held per unit, is an error |
-| Loop index | Varying on each mesh axis where a bound is Varying; plain otherwise |
-| Function call | A Broadcast argument binds a Varying parameter; a Varying argument MUST NOT bind a Broadcast or plain parameter |
+| Loop index and loop results | The index is Varying on each mesh axis where a bound is Varying, in force at the loop or not; plain otherwise. The loop results take the index's Varying axes by the Op call rule: the trip count differs there. The carried values keep their entry types |
+| Function call | A Broadcast argument binds a Varying parameter, also one declared on a slice: a plain argument, or one Broadcast on units that include the slice's, is Broadcast on the slice. A Varying argument MUST NOT bind a Broadcast or plain parameter |
 
 Each meaning has one spelling: a `ShardLayout` that is Broadcast on every mesh
 axis and whose mesh covers every unit is its plain layout. A result Varying on

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from tests.core._corpus import reload
-from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
+from tests.core.ops.ir.op_case import ExpectedError, OpCase, infer_call, op_case_test
 from tilefoundry import cli, inspection
 from tilefoundry.interfaces import typeinfer
 from tilefoundry.ir import core, expr, types, utils
@@ -265,15 +265,51 @@ def test_broadcast_index_binds_a_plain_parameter() -> None:
 @pytest.mark.parametrize(
     ("module", "message"),
     (
-        ("CoordArgument", r"argument 1 is Varying on mesh axis g; parameter i is Broadcast\. Write the parameter as '@ \{g @ V\(\)\}'"),
-        ("LoopCarry", r"enters B and leaves V; write the target as '@ \{g @ V\(\)\}'"),
-        ("ScheduleTarget", r"'src' is Varying on mesh axis lane; the target is Broadcast there: write the target as '@ \{lane @ V\(\)\}'"),
+        ("CoordArgument", r"argument 1 is Varying on mesh axis g; parameter i is Broadcast\. Write the parameter as '@ \{<mesh>\.g @ V\(\)\}', where <mesh> is your binding of the gpu mesh \(axes g\)"),
+        ("LoopCarry", r"enters B and leaves V; write the target as '@ \{<mesh>\.g @ V\(\)\}', where <mesh> is your binding of the gpu mesh \(axes g\)"),
+        ("ScheduleTarget", r"'src' is Varying on mesh axis lane; the target is Broadcast there: write the target as '@ \{<mesh>\.lane @ V\(\)\}', where <mesh> is your binding of the thread mesh \(axes lane\)"),
     ),
 )
 def test_varying_into_broadcast_names_the_axis_to_write(module, message) -> None:
     """A Varying value where the type says Broadcast is refused; the remedy names the mesh axis."""
     with pytest.raises(expr.VerifyError, match=message):
         cli.load_authored_ir(f"{_FIXTURES / 'diagnostics' / 'varying_into_broadcast.py'}:{module}")
+
+
+@pytest.mark.parametrize(
+    ("module", "varying"),
+    (("TripCount", ("gpu",)), ("OutsideBound", ("cta",)), ("TupleField", None)),
+)
+def test_loop_results_and_tuple_fields_read_their_own_operands(module, varying) -> None:
+    """A Varying trip count makes a loop result Varying; a field read is its field."""
+    returned = _fixture("varying_loops_and_fields.py", module).entry_function().return_type
+    shard = types.shard_layout_of(returned.layout)
+    assert (None if shard is None else utils.topology_names(shard.mesh)) == varying
+    assert shard is None or shard.attrs == (_V,)
+
+
+def test_varying_on_another_axis_structure_of_the_same_topology_is_kept() -> None:
+    """A (32,) thread mesh matches no axis of a (4, 8) one by ordinal: the whole topology is V."""
+    t48 = types.Mesh((types.Topology("thread", 32),), types.Layout((4, 8), (8, 1)), ("w", "l"))
+    t32 = types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,)), ("t",))
+    x = types.TensorType((16, 4), expr.DType.f32, types.ShardLayout(types.Layout((16, 4)), (_V, _B), t48), "rmem")
+    index = types.TensorType((2,), expr.DType.i64, types.ShardLayout(types.Layout((2,)), (_V,), t32), "rmem")
+    result = infer_call(tensor.IndexSelect(dim=0), x, index, target=cuda.Target("nvidia.h200_sxm"))
+    assert result.layout.attrs == (_V, _V)
+
+
+def test_the_written_hint_loads() -> None:
+    """The spelling an error gives, with <mesh> replaced by the binding, is a program that loads."""
+    cli.load_authored_ir(f"{_FIXTURES / 'diagnostics' / 'varying_into_broadcast.py'}:LoopCarryWritten")
+
+
+def test_an_unnamed_mesh_axis_is_named_by_topology_and_ordinal() -> None:
+    """IR keeps no binding name, and an unnamed axis has none to write; the hint says which axis."""
+    unnamed = types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,)))
+    held = types.TensorType((4,), expr.DType.f32, types.ShardLayout(types.Layout((4,)), (_V,), unnamed), "rmem")
+    where, spelling = utils.varying_axis(types.TensorType((4,), expr.DType.f32, types.Layout((4,)), "rmem"), held)
+    assert where == "thread mesh axis 0"
+    assert spelling == "'@ {<mesh>.<axis> @ V()}' once the axes of your thread mesh have names"
 
 
 def _fixture(fixture: str, module: str):
@@ -339,7 +375,7 @@ def test_reachability_omits_an_outside_topology_without_split_or_partial(attr, r
 
 def test_bitcast_to_a_plain_layout_refuses_a_varying_source() -> None:
     """Plain is Broadcast: re-laying a Varying window as plain names the axis to state."""
-    with pytest.raises(expr.VerifyError, match=r"Varying on mesh axis n; write the layout as '\.\.\. @ \{n @ V\(\)\}'"):
+    with pytest.raises(expr.VerifyError, match=r"Varying on mesh axis n; end the layout with '@ \{<mesh>\.n @ V\(\)\}', where <mesh> is your binding"):
         cli.load_authored_ir(f"{_FIXTURES / 'diagnostics' / 'varying_bitcast_plain_end.py'}:BitcastPlainEnd")
 
 

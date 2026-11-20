@@ -331,29 +331,17 @@ def derive_output_shard_layout(
     return types.ShardLayout.from_logical(output_shape, mesh, tuple(attrs), storage=storage, owners=owners)
 
 
-def induction_type(bounds, declared: types.TensorType, mesh, type_of) -> types.TensorType:
-    """A loop index: Varying on each axis of *mesh* where a bound is Varying; plain otherwise.
+def induction_type(bounds, declared: types.TensorType, owners, type_of) -> types.TensorType:
+    """A loop index: Varying on each mesh axis where a bound is Varying; plain otherwise.
 
-    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics). *mesh* is the
-    mesh in force at the loop; *type_of* reads a bound's type.
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics). Every topology
+    of a bound counts, in force at the loop or not; *type_of* reads a bound's type.
     """
     plain = replace(declared, layout=types.Layout(tuple(declared.shape)))
-    if mesh is None:
-        return plain
-    states = tuple(
-        utils.attrs_by_axis(type_, mesh)
-        for bound in bounds
-        if isinstance(bound, expr.Expr) and isinstance(type_ := type_of(bound), types.TensorType)
+    bound_types = tuple(
+        type_ for bound in bounds if isinstance(bound, expr.Expr) and isinstance(type_ := type_of(bound), types.TensorType)
     )
-    attrs = tuple(
-        types.Varying()
-        if any(isinstance(state[key], types.Varying) for state in states)
-        else types.Broadcast()
-        for key in utils.attrs_by_axis(plain, mesh)
-    )
-    if types.Varying() not in attrs:
-        return plain
-    return replace(plain, layout=types.ShardLayout(plain.layout, attrs, mesh))
+    return unite(plain, varying_operands(bound_types), view=True, owners=owners)
 
 
 def unite_varying(call: expr.Call, result: types.Type, ctx) -> types.Type:
@@ -364,25 +352,39 @@ def unite_varying(call: expr.Call, result: types.Type, ctx) -> types.Type:
     A Broadcast axis becomes Varying when each unit of that topology holds the
     leaf's storage alone, or when *call* is a view (in ``access.alias_registry``); a
     Split axis stays. A plain leaf reads as Broadcast on the mesh of the first
-    Varying operand. Without a target nothing changes.
+    Varying operand. A field read (``selects_field``) already has its field's type,
+    so only its index is read, not the other fields. Without a target nothing changes.
 
     Raises:
         ValueError: A ``Partial`` result axis meets a ``Varying`` operand.
     """
     if ctx.target is None:
         return result
-    owners = ctx.target.storage_owners
-    operands = tuple(
+    args = call.args[1:] if getattr(call.target, "selects_field", False) else call.args
+    held = tuple(hit[1] for arg in args if (hit := ctx.memo.get(id(arg))) is not None)
+    view = access.alias_registry.has(type(call.target))
+    return unite(result, varying_operands(held), view=view, owners=ctx.target.storage_owners)
+
+
+def varying_operands(type_list) -> tuple[types.TensorType, ...]:
+    """The tensor leaves of *type_list* that are Varying on some mesh axis."""
+    return tuple(
         operand
-        for arg in call.args
-        if (hit := ctx.memo.get(id(arg))) is not None
-        for operand in utils.tensor_types(hit[1])
-        if (shard := types.shard_layout_of(operand.layout)) is not None
-        and types.Varying() in shard.attrs
+        for type_ in type_list
+        for operand in utils.tensor_types(type_)
+        if (shard := types.shard_layout_of(operand.layout)) is not None and types.Varying() in shard.attrs
     )
+
+
+def unite(result: types.Type, operands, *, view: bool, owners) -> types.Type:
+    """Read the Varying axes of *operands* into each tensor leaf of *result*, as unite_varying does.
+
+    An operand Varying on a topology whose mesh has another axis structure than
+    the one the leaf reads makes every mesh axis of that topology Varying: its
+    axes cannot be matched by ordinal, and a lost Varying would state equal values.
+    """
     if not operands:
         return result
-    view = access.alias_registry.has(type(call.target))
 
     def united(leaf: types.TensorType) -> types.TensorType:
         shard = types.shard_layout_of(leaf.layout)
@@ -403,9 +405,16 @@ def unite_varying(call: expr.Call, result: types.Type, ctx) -> types.Type:
         states = tuple(
             utils.attrs_by_axis(operand, mesh, None if view else owners) for operand in operands
         )
+        unmatched = {
+            topology
+            for operand in operands
+            for (topology, _), attr in utils.attrs_by_axis(operand, None, None if view else owners).items()
+            if attr == types.Varying()
+            and utils.topology_mesh(types.shard_layout_of(operand.layout).mesh, topology) != pieces[topology]
+        }
         attrs, grown = dict(stated), set()
         for mesh_axis, key in enumerate(held):
-            if any(isinstance(state[key], types.Varying) for state in states):
+            if key[0] in unmatched or any(isinstance(state[key], types.Varying) for state in states):
                 if isinstance(held[key], types.Partial):
                     raise ValueError(
                         f"mesh axis {mesh_axis}: a Partial result cannot combine with a Varying operand"
@@ -436,4 +445,4 @@ def unite_varying(call: expr.Call, result: types.Type, ctx) -> types.Type:
     return utils.map_tensor_types(result, united)
 
 
-__all__ = ["derive_output_shard_layout", "induction_type", "unite_varying"]
+__all__ = ["derive_output_shard_layout", "induction_type", "unite", "unite_varying", "varying_operands"]

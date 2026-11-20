@@ -372,6 +372,21 @@ def sub_box(parent: types.Mesh, mesh: types.Mesh) -> tuple[slice, ...] | None:
     return tuple(slice(first, stop + 1) for first, stop in zip(lower, upper))
 
 
+def units_within(mesh: types.Mesh, scope: types.Mesh) -> bool:
+    """Whether every unit *mesh* selects is one *scope* selects, contiguous or not."""
+    held = {name: t for t, name in enumerate(topology_names(scope))}
+    for t, name in enumerate(topology_names(mesh)):
+        if name not in held:
+            return False
+        inner = unit_ids(selected_units(mesh, t))
+        outer = unit_ids(selected_units(scope, held[name]))
+        if inner is None or outer is None:
+            return within_mesh_scope(mesh, scope)
+        if not inner <= outer:
+            return False
+    return True
+
+
 __all__ = [
     "axis_keys",
     "covers_every_unit",
@@ -389,6 +404,7 @@ __all__ = [
     "unit_change",
     "unit_ids",
     "unit_layout",
+    "units_within",
     "within_mesh_scope",
     "UnitChange",
 ]

@@ -670,21 +670,6 @@ def unit_set_text(mesh: types.Mesh) -> str:
     )
 
 
-def units_within(mesh: types.Mesh, scope: types.Mesh) -> bool:
-    """Whether every unit *mesh* selects is one *scope* selects, contiguous or not."""
-    held = {name: t for t, name in enumerate(utils.topology_names(scope))}
-    for t, name in enumerate(utils.topology_names(mesh)):
-        if name not in held:
-            return False
-        inner = utils.unit_ids(utils.selected_units(mesh, t))
-        outer = utils.unit_ids(utils.selected_units(scope, held[name]))
-        if inner is None or outer is None:
-            return utils.within_mesh_scope(mesh, scope)
-        if not inner <= outer:
-            return False
-    return True
-
-
 def unit_set_in_scope(unit: types.Mesh, scope: types.Mesh) -> types.Mesh:
     """*scope* with the topologies *unit* names replaced by *unit*'s; its other topologies stay."""
     held, named = utils.topology_names(scope), utils.topology_names(unit)
@@ -774,7 +759,7 @@ class ShardLayoutScopeRule:
             return value
         mesh = shard_layout_scope(context)
         if value.unit_set is not None:
-            if mesh is not None and not units_within(value.unit_set, mesh):
+            if mesh is not None and not utils.units_within(value.unit_set, mesh):
                 raise ParseError.from_node(
                     match.node,
                     context,
@@ -5317,12 +5302,11 @@ class LoopHeaderPattern(ElementPattern):
             step = runtime.normalize_dim(values["step"])
         except (TypeError, ValueError) as error:
             raise ParseError.from_node(match.node, context, str(error)) from error
-        inference = context.lexical_scope.lookup(TYPE_INFER_CONTEXT)
         induction_var = runtime.Var(
             type=runtime.induction_type(
                 (start, extent, step),
                 runtime.TensorType.from_scalar(runtime.DType.i64),
-                inference.mesh_scope,
+                tilefoundry_target.StorageOwners() if context.function.target is None else context.function.target.storage_owners,
                 lambda bound: bound.type,
             ),
             name=match.captures["target"],

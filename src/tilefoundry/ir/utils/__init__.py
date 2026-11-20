@@ -47,6 +47,7 @@ from .mesh_scope import (
     unit_change,
     unit_ids,
     unit_layout,
+    units_within,
     within_mesh_scope,
 )
 from .partials import (

@@ -8,7 +8,7 @@ from tilefoundry.ir import expr, types
 
 from .leaves import map_tensor_types
 from .local import filter_topologies
-from .mesh_scope import covers_every_unit, topology_names
+from .mesh_scope import covers_every_unit, topology_names, units_within
 
 __all__ = ["address_layout", "canonical", "canonical_layout", "is_unsharded_layout", "types_compatible"]
 
@@ -64,9 +64,14 @@ def layout_compatible(declared_layout, actual_layout) -> bool:
             and field_compatible(declared_layout.strides, actual_layout.strides)
         )
     if isinstance(declared_layout, types.ShardLayout):
-        if isinstance(actual_layout, types.Layout) and covers_every_unit(declared_layout.mesh):
+        if isinstance(actual_layout, types.Layout) or (
+            isinstance(actual_layout, types.ShardLayout)
+            and all(attr == types.Broadcast() for attr in actual_layout.attrs)
+            and units_within(declared_layout.mesh, actual_layout.mesh)
+        ):
+            address = actual_layout if isinstance(actual_layout, types.Layout) else actual_layout.layout
             broadcast = (types.Broadcast(),) * len(declared_layout.attrs)
-            actual_layout = types.ShardLayout(actual_layout, broadcast, declared_layout.mesh)
+            actual_layout = types.ShardLayout(address, broadcast, declared_layout.mesh)
         if not isinstance(actual_layout, types.ShardLayout):
             return False
         kept = (*topology_names(filter_topologies(declared_layout).mesh), *topology_names(filter_topologies(actual_layout).mesh))

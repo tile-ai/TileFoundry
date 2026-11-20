@@ -6,6 +6,7 @@ import typing
 from dataclasses import replace
 
 from tilefoundry import services
+from tilefoundry import target as tilefoundry_target
 from tilefoundry.interfaces import valuation
 from tilefoundry.ir import core, dim, expr, types, utils
 from tilefoundry.ir.types import int_tuple
@@ -13,7 +14,7 @@ from tilefoundry.ir.types import int_tuple
 from .context import TypeInferContext, TypeInferResults
 from .reachability import check_input_reachability
 from .registry import registry
-from .shard_propagate import induction_type, unite_varying
+from .shard_propagate import induction_type, unite, unite_varying, varying_operands
 
 
 def require_axis_groups(node, type_, ctx):
@@ -67,12 +68,12 @@ def call_function(
         index, arg_type = next(given)
         declared = param.annotation
         if not utils.types_compatible(declared, arg_type):
-            axis = utils.varying_axis(declared, arg_type)
+            varying = utils.varying_axis(declared, arg_type)
             ctx.error(
                 call,
-                f"argument {index} is Varying on mesh axis {axis}; parameter {param.name} is Broadcast. "
-                f"Write the parameter as '@ {{{axis} @ V()}}', or state equal copies with tf.bitcast"
-                if axis
+                f"argument {index} is Varying on {varying[0]}; parameter {param.name} is Broadcast. "
+                f"Write the parameter as {varying[1]}, or state equal copies with tf.bitcast"
+                if varying
                 else f"hir Function call {callee.name!r}: arg {index} type mismatch — "
                 f"callee param {param.name!r} expects {declared!r}, got {arg_type!r}",
             )
@@ -242,8 +243,9 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
                 f"{len(region.params)} params",
             )
         memo = self.region_memo(region, ctx)
+        owners = ctx.target.storage_owners if ctx.target is not None else tilefoundry_target.StorageOwners()
         index_type = induction_type(
-            (region.start, region.extent, region.step), region.induction_var.type, ctx.mesh_scope, ctx.type_of
+            (region.start, region.extent, region.step), region.induction_var.type, owners, ctx.type_of
         )
         memo[id(region.induction_var)] = (region.induction_var, index_type)
         if self.ranges:
@@ -286,7 +288,7 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
                                 f"and leaves {labels.get(after, repr(after))}"
                             )
                             if (before, after) == (types.Broadcast(), types.Varying()):
-                                hint += f"; write the target as '@ {{{utils.varying_axis(entry, yielded)} @ V()}}'"
+                                hint += f"; write the target as {utils.varying_axis(entry, yielded)[1]}"
                             break
                     if hint:
                         break
@@ -295,9 +297,14 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
                 )
         if not carried:
             return body_type
-        if len(carried) == 1:
-            return inner.visit(carried[0], ctx)
-        return types.TupleType(fields=tuple(inner.visit(phi, ctx) for phi in carried))
+        result = (
+            inner.visit(carried[0], ctx)
+            if len(carried) == 1
+            else types.TupleType(fields=tuple(inner.visit(phi, ctx) for phi in carried))
+        )
+        if ctx.target is None:
+            return result
+        return unite(result, varying_operands((index_type,)), view=False, owners=owners)
 
     def visit_MeshRegion(self, node: core.MeshRegion, ctx: TypeInferContext) -> types.Type:
         """Type a region against the units in force inside it.

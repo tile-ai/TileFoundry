@@ -68,12 +68,16 @@ def attrs_by_axis(
     return result
 
 
-def varying_axis(declared: types.Type, actual: types.Type, owners: "StorageOwners | None" = None) -> str | None:
-    """The first mesh axis on which *actual* is Varying while *declared* is Broadcast, by name.
+def varying_axis(declared: types.Type, actual: types.Type, ctx=None) -> tuple[str, str] | None:
+    """Where *actual* is Varying while *declared* is Broadcast, and how to write that axis Varying.
 
-    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics). With *owners*,
-    an axis whose topology shares the declared storage is not counted.
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics). Returns the mesh
+    axis, as an error names it, and a spelling to copy. The IR keeps no binding
+    name, so the spelling names the mesh ``<mesh>`` and says which mesh it is.
+    With *ctx*, an axis whose topology shares the declared storage on its target
+    is not counted.
     """
+    owners = None if ctx is None or ctx.target is None else ctx.target.storage_owners
     for stated, held in zip(tensor_types(declared), tensor_types(actual)):
         shard = types.shard_layout_of(held.layout)
         if shard is None:
@@ -82,7 +86,15 @@ def varying_axis(declared: types.Type, actual: types.Type, owners: "StorageOwner
         for (key, attr), (topology, name) in zip(after.items(), axis_keys(shard.mesh), strict=True):
             if attr == types.Varying() and before[key] == types.Broadcast():
                 if owners is None or owners.private(stated.storage, topology):
-                    return name or f"{topology}[{key[1]}]"
+                    names = [axis for held_topology, axis in axis_keys(shard.mesh) if held_topology == topology]
+                    if name:
+                        return f"mesh axis {name}", (
+                            f"'@ {{<mesh>.{name} @ V()}}', where <mesh> is your binding of the "
+                            f"{topology} mesh (axes {', '.join(names)})"
+                        )
+                    return f"{topology} mesh axis {key[1]}", (
+                        f"'@ {{<mesh>.<axis> @ V()}}' once the axes of your {topology} mesh have names"
+                    )
     return None
 
 
