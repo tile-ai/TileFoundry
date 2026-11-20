@@ -172,9 +172,12 @@ class SyncPlanMetadata(IRMetadata):
     family, so a JSON report that requests `sync` carries it.
   - **CTAs.** No step orders two CTAs of one launch. In an entry launched on
     more than one CTA, `ctas.py` pairs the global memory reads and writes of
-    its actions. Two accesses form a pair when one of the two goes through the
-    async proxy, one of the two writes, and their roots match. Each access
-    pairs with itself too. Each side is
+    its actions. Two accesses form a pair when one of the two writes, through
+    either proxy, unless both roots are known and differ. Each access pairs
+    with itself too. Two
+    CTAs that write one element form a pair even when both write the same value,
+    since the CUDA memory model makes two unordered writes a data race. Each
+    side is
     the device access relation of its action, constrained by the loops around
     it. The second side renames every coordinate except the entry's own
     parameters and module dimensions, so two iterations of one action pair as
