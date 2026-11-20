@@ -1,3 +1,3 @@
-"""ANE TIR instructions; importing the package registers each of them."""
+"""ANE TIR instructions and HIR result storage; importing the package registers each of them."""
 
-from . import tir
+from . import hir, tir

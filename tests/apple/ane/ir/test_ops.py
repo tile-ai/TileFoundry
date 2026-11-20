@@ -1,4 +1,4 @@
-"""ANE processing-engine instructions: values against torch, and the rules checked at load."""
+"""ANE instructions: values against torch, the rules checked at load, and where a MatMul lands."""
 
 from __future__ import annotations
 
@@ -8,9 +8,12 @@ from math import prod
 import pytest
 
 from tests.core._corpus import reload
+from tests.core.ops.ir import op_case
 from tilefoundry import utils
 from tilefoundry.interfaces import evaluator
-from tilefoundry.ir import expr
+from tilefoundry.ir import expr, types
+from tilefoundry.ir.hir import nn
+from tilefoundry_apple import ane
 from tilefoundry_apple.ane.ir.tir import evaluation
 
 torch = utils.torch
@@ -31,9 +34,9 @@ class Program:
 """
 
 
-def tensor(shape, dtype="f16", storage="gmem") -> str:
-    """Source of a row-major tensor type."""
-    strides = tuple(prod(shape[axis + 1:]) for axis in range(len(shape)))
+def tensor(shape, dtype="f16", storage="gmem", strides=None) -> str:
+    """Source of a tensor type, row-major unless *strides* say otherwise."""
+    strides = strides or tuple(prod(shape[axis + 1:]) for axis in range(len(shape)))
     return f'Tensor[{tuple(shape)}, "{dtype}", ({tuple(shape)}, {strides}), "{storage}"]'
 
 
@@ -44,14 +47,19 @@ def load(op: str, dst: str, *operands: str):
     return reload(PROGRAM.format(params=params, dst=dst, operands=", ".join(names), op=op), "Program")
 
 
-def run(op: str, shape, *inputs):
-    """Evaluate *op* over *inputs* into a destination of *shape*."""
-    module = load(op, tensor(shape), *(tensor(value.shape) for value in inputs))
+def run(op: str, shape, *inputs, strides=None):
+    """Evaluate *op* over *inputs* into a destination of *shape*.
+
+    *strides* maps an operand position (0 is the destination) to its strides.
+    """
+    strides = strides or {}
+    module = load(op, tensor(shape, strides=strides.get(0)),
+                  *(tensor(value.shape, strides=strides.get(index + 1)) for index, value in enumerate(inputs)))
     return evaluator.evaluate(module, *(value.clone() for value in inputs))
 
 
-def check(op: str, expected, *inputs) -> None:
-    assert torch.equal(run(op, expected.shape, *inputs), expected.to(torch.float16)), op
+def check(op: str, expected, *inputs, strides=None) -> None:
+    assert torch.equal(run(op, expected.shape, *inputs, strides=strides), expected.to(torch.float16)), op
 
 
 LINE = torch.arange(-4, 4).reshape(1, 1, 1, 8).half()
@@ -150,6 +158,75 @@ def test_reduce(attributes, expected):
     check(f"reduce({attributes})", expected, FEATURE)
 
 
+PERMUTED = (torch.arange(4096) - 2048).reshape(1, 32, 8, 16).half()
+
+
+def test_bypass_relu_is_max_with_zero():
+    check("bypass(nonlinear=T.ane.Nonlinear.RELU)", LINE.clamp(min=0), LINE)
+
+
+@pytest.mark.parametrize("perm", [perm for perm in itertools.permutations(range(3)) if perm != (0, 1, 2)])
+def test_bypass_permutes_channel_height_width(perm):
+    expected = PERMUTED.permute(0, *(1 + axis for axis in perm))
+    check(f"bypass(perm={perm})", expected, PERMUTED)
+
+
+ROWS = (torch.arange(8 * 16) % 9 - 4).reshape(8, 16).half()
+COLUMNS = (torch.arange(16 * 5) % 7 - 3).reshape(16, 5).half()
+OFFSETS = (torch.arange(5) % 4 - 1).half()
+CHANNEL_OUTER = {1: (1, 8)}
+
+
+def test_bypass_relays_a_matrix_channel_outer():
+    check("bypass(perm=(2, 1, 0))", ROWS, ROWS, strides={0: (1, 8)})
+
+
+IMAGE = (torch.arange(4 * 6 * 6) % 7 - 3).reshape(1, 4, 6, 6).half()
+KERNELS = (torch.arange(6 * 2 * 3 * 3) % 5 - 2).reshape(6, 2, 3, 3).half()
+BIASES = (torch.arange(6) % 4 - 1).half()
+CONVOLVED = F.conv2d(IMAGE.float(), KERNELS.float(), BIASES.float(), stride=2, padding=1, groups=2)
+CONV = "stride=(2, 2), padding=(1, 1), groups=2"
+PRODUCT = ROWS.float() @ COLUMNS.float()
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        ("", CONVOLVED),
+        (", nonlinear=T.ane.Nonlinear.RELU", CONVOLVED.relu()),
+    ],
+)
+def test_conv_feature_form_is_f_conv2d(extra, expected):
+    check(f"conv({CONV}{extra})", expected, IMAGE, KERNELS, BIASES)
+
+
+@pytest.mark.parametrize(
+    ("attributes", "operands", "expected"),
+    [
+        ("", (ROWS, COLUMNS), PRODUCT),
+        ("", (ROWS, COLUMNS, OFFSETS), PRODUCT + OFFSETS.float()),
+        ("nonlinear=T.ane.Nonlinear.RELU", (ROWS, COLUMNS, OFFSETS), (PRODUCT + OFFSETS.float()).relu()),
+    ],
+)
+def test_conv_matrix_form_is_a_product(attributes, operands, expected):
+    check(f"conv({attributes})", expected, *operands, strides=CHANNEL_OUTER)
+
+
+@pytest.mark.parametrize(
+    ("lhs", "rhs", "storage"),
+    [
+        ("smem", "gmem", expr.StorageKind.SMEM),
+        ("gmem", "smem", expr.StorageKind.SMEM),
+        ("gmem", "gmem", expr.StorageKind.GMEM),
+    ],
+)
+def test_ane_matmul_result_follows_an_on_chip_operand(lhs, rhs, storage):
+    lhs_type, rhs_type = (types.TensorType.from_shape(shape, expr.DType.f16, held)
+                          for shape, held in (((4, 8), lhs), ((8, 6), rhs)))
+    result = op_case.infer_call(nn.MatMul(), lhs_type, rhs_type, target=ane.Target())
+    assert result.storage is storage
+
+
 FEATURE_TYPE = tensor((1, 4, 6, 6))
 POOLED_TYPE = tensor((1, 4, 3, 3))
 SCALAR_TYPE = tensor((1, 4, 1, 1))
@@ -158,6 +235,9 @@ POOL = "pool(kernel_size=(2, 2), stride=(2, 2), kind=PoolKind.MAX)"
 REDUCE = "reduce(axes=(2, 3), keepdim=True, kind=ReduceKind.SUM)"
 HALF = tensor((1, 4, 6, 3))
 SINGLE = tensor((1, 4, 6, 6), "f32")
+KERNEL_TYPE = tensor((6, 4, 3, 3))
+CONVOLVED_TYPE = tensor((1, 6, 4, 4))
+SWAP = "bypass(perm=(2, 1, 0))"
 
 
 @pytest.mark.parametrize(
@@ -179,6 +259,27 @@ SINGLE = tensor((1, 4, 6, 6), "f32")
         (POOL, tensor((1, 4, 2, 3)), (FEATURE_TYPE,), "shape"),
         (REDUCE, tensor((1, 4, 6, 1)), (FEATURE_TYPE,), "shape"),
         ("unary(abs=True)", HALF, (FEATURE_TYPE,), "shape"),
+        ("conv()", tensor((1, 6, 4, 4), "f32"), (tensor((1, 4, 6, 6), "f32"), tensor((6, 4, 3, 3), "f32")), "dtype"),
+        ("bypass()", SINGLE, (SINGLE,), "dtype"),
+        ("conv()", tensor((6, 4, 4)), (tensor((4, 6, 6)), KERNEL_TYPE), "shape"),
+        ("conv()", tensor((1, 6, 1, 1)), (tensor((1, 70000, 2, 2)), tensor((6, 70000, 2, 2))), "shape"),
+        ("conv()", tensor((1, 6, 8, 8)), (tensor((1, 4, 40, 40)), tensor((6, 4, 33, 33))), "shape"),
+        (SWAP, tensor((1, 2, 2, 20000)), (tensor((1, 20000, 2, 2)),), "shape"),
+        ("conv()", CONVOLVED_TYPE, (FEATURE_TYPE, tensor((6, 4, 3, 3), storage="smem")), "storage"),
+        ("conv()", CONVOLVED_TYPE, (FEATURE_TYPE, KERNEL_TYPE, tensor((6,), storage="smem")), "storage"),
+        ("conv(stride=(3, 3))", CONVOLVED_TYPE, (FEATURE_TYPE, KERNEL_TYPE), "stride"),
+        ("conv(padding=(3, 0))", tensor((1, 6, 10, 4)), (FEATURE_TYPE, KERNEL_TYPE), "padding"),
+        ("conv(dilation=(2, 2))", CONVOLVED_TYPE, (FEATURE_TYPE, KERNEL_TYPE), "dilation"),
+        ("conv(groups=3)", CONVOLVED_TYPE, (FEATURE_TYPE, KERNEL_TYPE), "groups"),
+        ("conv()", tensor((8, 5)), (tensor((8, 16)), tensor((16, 5))), "layout"),
+        ("bypass(perm=(0, 0, 1))", FEATURE_TYPE, (FEATURE_TYPE,), "perm"),
+        ("bypass(perm=(1, 0, 2, 3))", FEATURE_TYPE, (FEATURE_TYPE,), "perm"),
+        ("conv()", tensor((1, 6, 4, 3)), (FEATURE_TYPE, KERNEL_TYPE), "shape"),
+        (SWAP, FEATURE_TYPE, (FEATURE_TYPE,), "shape"),
+        ("conv()", CONVOLVED_TYPE, (tensor((8, 16), strides=(1, 8)), KERNEL_TYPE), "shape"),
+        ("conv(stride=(2, 2))", tensor((8, 5)), (tensor((8, 16), strides=(1, 8)), tensor((16, 5))), "stride"),
+        ("bypass()", tensor((8, 16), strides=(1, 8)), (tensor((8, 16)),), "perm"),
+        (SWAP, tensor((8, 16)), (tensor((8, 16)),), "layout"),
     ],
 )
 def test_load_refuses(op, dst, operands, word):

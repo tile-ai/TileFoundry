@@ -9,7 +9,6 @@ from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir.hir import nn
 from tilefoundry_apple.ane.ir.tir import evaluation, layout
 
-STRIDES = ((1, 1), (1, 2), (2, 1), (2, 2))
 KINDS = (expr.PoolKind.MAX, expr.PoolKind.AVG)
 KERNEL = pattern.Sequence(pattern.Wildcard("kernel_h"), pattern.Wildcard("kernel_w"))
 PADDING = pattern.Sequence(
@@ -39,7 +38,7 @@ class Pool(expr.Op):
     )
 
     kernel_size = expr.ParamDef(kind="attribute", annotation=tuple, pattern=KERNEL)
-    stride = expr.ParamDef(kind="attribute", annotation=tuple, pattern=layout.one_of("stride", STRIDES))
+    stride = expr.ParamDef(kind="attribute", annotation=tuple, pattern=layout.one_of("stride", layout.STRIDES))
     padding = expr.ParamDef(kind="attribute", annotation=tuple, pattern=PADDING, default=(0, 0))
     ceil_mode = expr.ParamDef(kind="attribute", annotation=bool, pattern=pattern.Or(False, True), default=False)
     count_include_pad = expr.ParamDef(
