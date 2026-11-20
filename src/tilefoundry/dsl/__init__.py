@@ -19,6 +19,7 @@ from tilefoundry.ir.expr import (
     DType,
     FloatDType,
     IntegerDType,
+    PoolKind,
     ReduceKind,
     StorageKind,
     UnaryKind,
@@ -122,4 +123,5 @@ __all__ = [
     "ReduceKind",
     "UnaryKind",
     "BinaryKind",
+    "PoolKind",
 ]
