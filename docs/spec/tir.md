@@ -290,15 +290,16 @@ class Sync(Op):
   `base` is the minimum. `count = size(outer)`. The block
   domain is the product of the topology extents. `classify` / `sync_scope`
   are the single source of truth for verify and codegen.
-- **Legal-slice verification.** Verification accepts a sliced mesh only if its
+- **Legal-slice verification.** Verification accepts a mesh equal to an
+  enclosing mesh, sliced or not: a sync on the current sliced scope names that
+  scope. It accepts another sliced mesh only if its
   `ComposedLayout` `layout` reconstructs as a constant slice of an enclosing
   full mesh `e`. The slice MUST have the same strides as the enclosing mesh.
   The per mesh axis sub-extents MUST be bounded by `e`'s shape.
   The offset MUST decompose into in-range per mesh axis starts.
   The **full topology tuple** + names MUST be equal.
   The proof rebuilds `e[key]` and compares, so a forged
-  slice cannot pass. A full mesh (plain-`Layout` `layout`) is accepted only by
-  equality with an enclosing mesh.
+  slice cannot pass.
 
 The target's verifier determines which unit sets have a supported
 barrier. Lowering MUST synchronize exactly those units; unsupported

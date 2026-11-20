@@ -92,10 +92,9 @@ def _(call: "Call", ctx: "verify.Context") -> None:
             f"T.sync expects a Mesh argument (m or a slice m[...]), got {type(m).__name__}"
         )
     scope = ctx.enclosing_meshes()
-    if not isinstance(m.layout, types.ComposedLayout):
-        ok = any(m == e for e in scope)
-    else:
-        ok = any(legal_slice_of(m, e) for e in scope)
+    ok = any(m == e for e in scope) or (
+        isinstance(m.layout, types.ComposedLayout) and any(legal_slice_of(m, e) for e in scope)
+    )
     if not ok:
         raise no_enclosing_mesh_error(m, scope)
 
