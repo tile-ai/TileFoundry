@@ -174,12 +174,12 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
                 target.check_indices(target.indices(arg_types))
                 arg_types = target.arguments(arg_types)
                 callee_ctx = ctx.callee_context(call)
-                check_input_reachability(callee_ctx.function, arg_types, ctx.mesh_scope)
+                check_input_reachability(callee_ctx.function, arg_types, ctx.mesh_scope, ctx)
             except (KeyError, ValueError) as error:
                 ctx.error(call, str(error))
             return call_function(call, arg_types, ctx, callee_ctx)
         try:
-            check_input_reachability(target, arg_types, ctx.mesh_scope)
+            check_input_reachability(target, arg_types, ctx.mesh_scope, ctx)
         except ValueError as error:
             ctx.error(call, str(error))
         op_cls = type(target)

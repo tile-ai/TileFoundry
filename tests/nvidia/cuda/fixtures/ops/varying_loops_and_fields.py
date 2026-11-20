@@ -1,11 +1,11 @@
-"""Values a loop or a tuple field makes Varying, or leaves Broadcast.
+"""Values a loop or a tuple field makes Varying or leaves Broadcast, and a lane-Varying tile.
 
-``TripCount``: the loop runs a different number of times on each GPU, so its
-result is Varying although each iteration only adds the same ``x``.
-``OutsideBound``: the bound is Varying on the CTA topology, which the thread
-scope of the loop does not name; the index and the result are still Varying there.
-``TupleField``: reading the Broadcast field of a tuple whose other field is
-Varying gives a Broadcast value.
+``TripCount``: each GPU runs the loop a different number of times, so its result is
+Varying. ``OutsideBound``: the bound is Varying on the CTA topology, which the loop's
+thread scope does not name; the result is still Varying there. ``TupleField``: the
+Broadcast field of a tuple with a Varying field is Broadcast. ``LaneTile``: a register
+tile Varying only on the lanes, written in place, reaches every thread; ``OtherSlice``
+reads one in a thread slice that holds none of its copies.
 """
 
 from __future__ import annotations
@@ -60,3 +60,26 @@ class TupleField:
         with mesh:
             v, b = pair(x)
             return b
+
+
+@module(entry="forward", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 32)))
+class LaneTile:
+    @func
+    def forward(x: Tensor[(1, 8), "bf16", "rmem"]):
+        with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
+            with Mesh(("thread",), layout=(32,), names=("lane",)) as threads:
+                acc = tf.zeros(Tensor[(1, 8), "bf16", (1, 8) @ {threads.lane @ V()}, "rmem"])
+                return tf.insert_slice(acc, x, (0, 0))
+
+
+@module(entry="forward", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 64)))
+class OtherSlice:
+    @func
+    def forward(x: Tensor[(1, 8), "bf16", "rmem"]):
+        with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
+            with Mesh(("thread",), layout=(2, 32), names=("half", "lane")) as threads:
+                with threads[0:1, :] as writer:
+                    tile = tf.zeros(Tensor[(1, 8), "bf16", (1, 8) @ {writer.lane @ V()}, "rmem"])
+                with threads[1:2, :] as _reader:
+                    return tf.insert_slice(tile, x, (0, 0))
+

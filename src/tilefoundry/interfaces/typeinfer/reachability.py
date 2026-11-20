@@ -7,14 +7,18 @@ from tilefoundry.ir import expr, types, utils
 __all__ = ["check_input_reachability"]
 
 
-def check_input_reachability(op, operand_types, mesh):
+def check_input_reachability(op, operand_types, mesh, ctx=None):
     """Raise when a scoped Op's input is laid out more finely or more coarsely than *mesh*.
 
     A topology that holds only Broadcast or Varying limits no reader when *mesh*
     does not name it ([shard §6.1](docs/spec/shard.md#61-shard-attr-semantics):
     "An explicit execution mesh may omit outside topologies that contain neither
-    Split nor Partial").
+    Split nor Partial"). The physical projection says where the addresses are;
+    which units hold a copy is wider: with *ctx*'s target, the innermost topology of
+    *mesh* holds the value when the value is Varying there, each of its units keeps
+    its own copy of the storage, and every executing unit is one that holds a copy.
     """
+    owners = None if ctx is None or ctx.target is None else ctx.target.storage_owners
     if mesh is None:
         return
     scope = set(utils.topology_names(mesh))
@@ -27,6 +31,14 @@ def check_input_reachability(op, operand_types, mesh):
         layout = types.shard_layout_of(getattr(type_, "layout", None))
         if layout is None:
             continue
+        inner = mesh.topologies[-1].name
+        holds = any(
+            owners is not None
+            and attr == types.Varying()
+            and topology == inner
+            and owners.private(type_.storage, topology)
+            for attr, (topology, _) in zip(layout.attrs, utils.axis_keys(layout.mesh))
+        ) and utils.units_within(utils.topology_mesh(mesh, inner), utils.topology_mesh(layout.mesh, inner))
         layout = types.shard_layout_of(utils.physical_layout(layout))
         if layout is None:
             continue
@@ -54,7 +66,7 @@ def check_input_reachability(op, operand_types, mesh):
             raise ValueError(
                 f"input {index} is laid out more finely than the scope it runs in; write it inside that scope, or reshard it back first"
             )
-        if not utils.storage_reaches(type_.storage, projected.mesh, mesh):
+        if not holds and not utils.storage_reaches(type_.storage, projected.mesh, mesh):
             raise ValueError(
                 f"input {index} is laid out more coarsely and kept in {type_.storage.name.lower()}, which does not reach the units this runs on; reshard it to smem or gmem first"
             )

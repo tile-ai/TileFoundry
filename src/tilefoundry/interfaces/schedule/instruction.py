@@ -514,7 +514,7 @@ def check_call(op, operands, mesh, *, ctx, repeat=None, order=None, projection=N
     except ValueError as error:
         raise RefusalError(str(error), path=matcher.bindings, op=op) from error
     try:
-        typeinfer.check_input_reachability(op, whole, mesh)
+        typeinfer.check_input_reachability(op, whole, mesh, ctx)
     except ValueError as error:
         raise RefusalError(str(error), path=matcher.bindings, op=op) from error
     declaration = getattr(op, "atom", op)

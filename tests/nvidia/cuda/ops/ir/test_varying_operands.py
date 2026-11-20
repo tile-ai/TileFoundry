@@ -288,6 +288,19 @@ def test_loop_results_and_tuple_fields_read_their_own_operands(module, varying) 
     assert shard is None or shard.attrs == (_V,)
 
 
+def test_a_register_tile_varying_only_on_lanes_reaches_every_thread() -> None:
+    """Each thread holds its own registers, so lane-only V needs no V on the CTA to be written."""
+    returned = _fixture("varying_loops_and_fields.py", "LaneTile").entry_function().return_type
+    shard = types.shard_layout_of(returned.layout)
+    assert dict(zip(utils.axis_keys(shard.mesh), shard.attrs)) == {("cta", "block"): _B, ("thread", "lane"): _V}
+
+
+def test_a_lane_varying_register_tile_does_not_reach_another_thread_slice() -> None:
+    """The reading slice holds none of the writing slice's registers, so the read is refused."""
+    with pytest.raises(expr.VerifyError, match="does not reach the units this runs on"):
+        _fixture("varying_loops_and_fields.py", "OtherSlice")
+
+
 def test_varying_on_another_axis_structure_of_the_same_topology_is_kept() -> None:
     """A (32,) thread mesh matches no axis of a (4, 8) one by ordinal: the whole topology is V."""
     t48 = types.Mesh((types.Topology("thread", 32),), types.Layout((4, 8), (8, 1)), ("w", "l"))
