@@ -30,6 +30,7 @@ ROUND_TRIP = (
     RoundTrip("inactive_call.py:InactiveCall", "InactiveCall", "x"),
     RoundTrip("loop_range.py", "LoopRange", "x,w,h0"),
     RoundTrip("two_loops.py", "TwoLoops", "x,w"),
+    RoundTrip("module_list_loop.py:Stack", "Stack", "x,ws", ("Stack.layers.1:h",), same_text=False),
     RoundTrip("loop_call.py", "LoopCall", "keys,decay"),
     RoundTrip("loop_nested.py", "LoopNested", "x,w"),
     RoundTrip("mesh_data_parallel.py", "MeshDataParallel", "x,w"),
