@@ -42,20 +42,21 @@ def saved_table(forward) -> str:
     A row gives the global shape, the bytes on one device, the layout, the
     storage the tensor keeps alive, and the origin. ``held`` counts each storage
     that is not a parameter once, whole, view or not; ``parameters`` counts each
-    parameter storage once.
+    parameter storage once. A storage is told by its name and its origin, since
+    a name can be bound twice.
     """
     rows = [COLUMNS]
-    blocks: dict[str, tuple[types.Type, str]] = {}
+    blocks: dict[tuple[str, str], types.Type] = {}
     for value in differentiate.saved_values(forward):
         for name, type_ in tensor_leaves(value.name, value.type):
             block = value.storage or differentiate.Saved(name, type_, value.origin)
-            blocks.setdefault(block.name, (block.type, block.origin))
+            blocks.setdefault((block.name, block.origin), block.type)
             rows.append(
                 (name, str(tuple(type_.shape)), str(local_bytes(type_)), layout_text(type_), block.name, value.origin)
             )
     widths = [max(len(row[column]) for row in rows) for column in range(len(COLUMNS) - 1)]
     totals = {"held": 0, "parameters": 0}
-    for type_, origin in blocks.values():
+    for (_, origin), type_ in blocks.items():
         whole = sum(local_bytes(leaf) for _, leaf in tensor_leaves("", type_))
         totals["parameters" if origin == "parameter" else "held"] += whole
     label = max(widths[0] + 2 + widths[1], len("parameters"))

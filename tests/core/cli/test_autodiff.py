@@ -85,6 +85,11 @@ def test_a_saved_view_of_a_parameter_holds_nothing_new(capsys) -> None:
     assert totals == {"held": 512, "parameters": 3072}
 
 
+def test_two_values_of_one_name_are_two_storages(capsys) -> None:
+    _, totals = saved_rows(capsys, "rebound.py", "x")
+    assert totals == {"held": 96, "parameters": 48}
+
+
 def test_a_stack_and_a_callee_item_are_their_own_storage(capsys) -> None:
     rows, _ = saved_rows(capsys, "layers_loop.py", "x,wn0,norms,up,down")
     assert all(row[3] == name for name, row in rows.items())
