@@ -498,6 +498,18 @@ class LoopRange(Differentiated):
 
 
 @case
+class FusedViews(Differentiated):
+    path: Path = FIXTURES / "fused_views.py"
+    wrt: tuple[str, ...] = ("x", "w")
+
+
+@case
+class ParamView(Differentiated):
+    path: Path = FIXTURES / "param_view.py"
+    wrt: tuple[str, ...] = ("x", "w")
+
+
+@case
 class TwoLoops(Differentiated):
     path: Path = FIXTURES / "two_loops.py"
     wrt: tuple[str, ...] = ("x", "w")
@@ -650,6 +662,7 @@ def test_saved_values_report_name_type_and_origin() -> None:
     rows = {value.name: value for value in differentiate.saved_values(forward)}
     assert rows["x"].origin == "parameter"
     assert rows["full"].origin == "reshard  sharded.py:18"
+    assert rows["full"].storage is None
     assert rows["full"].type.shape == (6, 4)
     assert types.shard_layout_of(rows["full"].type.layout) is None
 

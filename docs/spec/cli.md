@@ -440,9 +440,14 @@ the root, `Root.slot[.index]:None` for an element that saves what it computes.
   parser refuses.
 - With `--saved`, the command writes one row per tensor the forward keeps for
   the backward: its name, global shape, bytes on one device (the local shape,
-  since memory is counted per device), the layout of each mesh axis, and its
-  origin. A tuple the forward keeps for a callee has one row per tensor, its
-  name indexed.
+  since memory is counted per device), the layout of each mesh axis, the
+  storage it keeps alive (`Saved.storage` of
+  [passes §7.4](./passes.md#74-differentiate), its own name when it is its
+  own), and its origin. A tuple the forward keeps for a callee has one row per
+  tensor, its name indexed. Two lines follow: `held`, the bytes on one device
+  of each storage that is not a parameter, counted once and whole even when
+  only a view of it is saved; and `parameters`, the same for each parameter
+  storage. Both are 0 when nothing is saved.
 - Without `PATH` the output goes to stdout.
 - constraints:
   - A missing `--wrt` is a usage error (exit 2). A refusal of `differentiate`

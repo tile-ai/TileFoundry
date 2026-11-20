@@ -13,7 +13,7 @@ from tilefoundry.passes.transforms import differentiate
 
 from .source import load_authored_ir
 
-COLUMNS = ("saved", "shape", "bytes", "layout", "from")
+COLUMNS = ("saved", "shape", "bytes", "layout", "storage", "from")
 
 
 def run_autodiff(
@@ -37,16 +37,32 @@ def run_autodiff(
 
 
 def saved_table(forward) -> str:
-    """One row per tensor the forward keeps: global shape, bytes on one device, layout, origin."""
+    """One row per tensor the forward keeps, then the bytes its storages hold.
+
+    A row gives the global shape, the bytes on one device, the layout, the
+    storage the tensor keeps alive, and the origin. ``held`` counts each storage
+    that is not a parameter once, whole, view or not; ``parameters`` counts each
+    parameter storage once.
+    """
     rows = [COLUMNS]
+    blocks: dict[str, tuple[types.Type, str]] = {}
     for value in differentiate.saved_values(forward):
         for name, type_ in tensor_leaves(value.name, value.type):
-            rows.append((name, str(tuple(type_.shape)), str(local_bytes(type_)), layout_text(type_), value.origin))
+            block = value.storage or differentiate.Saved(name, type_, value.origin)
+            blocks.setdefault(block.name, (block.type, block.origin))
+            rows.append(
+                (name, str(tuple(type_.shape)), str(local_bytes(type_)), layout_text(type_), block.name, value.origin)
+            )
     widths = [max(len(row[column]) for row in rows) for column in range(len(COLUMNS) - 1)]
+    totals = {"held": 0, "parameters": 0}
+    for type_, origin in blocks.values():
+        whole = sum(local_bytes(leaf) for _, leaf in tensor_leaves("", type_))
+        totals["parameters" if origin == "parameter" else "held"] += whole
+    label = max(widths[0] + 2 + widths[1], len("parameters"))
     return "".join(
         "  ".join(cell.ljust(width) for cell, width in zip(row, widths)) + "  " + row[-1] + "\n"
         for row in rows
-    )
+    ) + "".join(f"{name.ljust(label)}  {total}\n" for name, total in totals.items())
 
 
 def tensor_leaves(name: str, type_: types.Type):

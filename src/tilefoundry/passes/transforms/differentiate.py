@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 
 from tilefoundry import dispatch, verifier
-from tilefoundry.interfaces import autodiff, typeinfer
+from tilefoundry.interfaces import access, autodiff, typeinfer
 from tilefoundry.ir import core, expr, types
 from tilefoundry.ir import utils as ir_utils
 from tilefoundry.ir.hir import sharding
@@ -28,11 +28,16 @@ GENERATED = "autodiff"
 
 @dataclass(frozen=True)
 class Saved:
-    """One value the forward keeps for the backward."""
+    """One value the forward keeps for the backward.
+
+    *storage* is the value whose bytes a view keeps alive, reached through each
+    view's aliased operand; ``None`` when the value is its own storage.
+    """
 
     name: str
     type: types.Type
     origin: str
+    storage: Saved | None = None
 
 
 def differentiate(
@@ -962,7 +967,23 @@ class FunctionDifferentiator(expr.Functor[None]):
 
     def record(self, index: int, key: tuple) -> Saved:
         name, origin = self.key_name(key)
-        return Saved(name or f"v{index}", self.key_type(key), origin)
+        return Saved(name or f"v{index}", self.key_type(key), origin, self.storage(key))
+
+    def storage(self, key: tuple) -> Saved | None:
+        """The storage a saved view keeps alive; None for a value that is its own, or not a node."""
+        if key[0] != "node":
+            return None
+        owners = (self.module.target or self.differ.target).storage_owners
+        root = key[1]
+        while isinstance(root, expr.Call) and not isinstance(root.target, core.FunctionRef):
+            position = access.aliased_operand(root, owners)
+            if position is None:
+                break
+            root = root.args[position]
+        if root is key[1]:
+            return None
+        name, origin = self.key_name(("node", root))
+        return Saved(name or origin.replace("  ", "@"), root.type, origin)
 
     def key_name(self, key: tuple) -> tuple[str | None, str]:
         """The name and the origin a saved value is reported with."""
