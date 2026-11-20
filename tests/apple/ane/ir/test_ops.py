@@ -21,7 +21,6 @@ F = utils.F
 
 PROGRAM = """
 from tilefoundry.dsl import *
-from tilefoundry.ir.expr import PoolKind
 from tilefoundry_apple import ane
 
 
