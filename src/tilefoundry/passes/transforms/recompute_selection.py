@@ -45,7 +45,7 @@ class Selection:
     """
 
     by_definition: dict[str, object]
-    by_instance: dict[tuple[str, int | None], object]
+    by_element: dict[tuple[str, int | None], object]
     named_by: dict[tuple[str, int | None], str] = field(default_factory=dict)
     """The first selector of each element, which a refusal of its slot quotes."""
 
@@ -62,22 +62,22 @@ class Segment:
 def parse_selectors(module: core.Module, recompute: tuple[str, ...]) -> Selection:
     """Check each selector against *module* and gather what it chooses."""
     by_definition: dict[str, object] = {}
-    by_instance: dict[tuple[str, int | None], object] = {}
+    by_element: dict[tuple[str, int | None], object] = {}
     named_by: dict[tuple[str, int | None], str] = {}
     for selector in recompute:
         key, choice = parse(module, selector)
         if isinstance(key, str):
             by_definition[key] = merged(by_definition.get(key), choice)
             continue
-        if key in by_instance and NOTHING in (by_instance[key], choice) and by_instance[key] != choice:
+        if key in by_element and NOTHING in (by_element[key], choice) and by_element[key] != choice:
             refuse(selector, "':None' and another selector name the same element")
-        by_instance[key] = merged(by_instance.get(key), choice)
+        by_element[key] = merged(by_element.get(key), choice)
         named_by.setdefault(key, selector)
-    return Selection(by_definition, by_instance, named_by)
+    return Selection(by_definition, by_element, named_by)
 
 
 def expand(module: core.Module, selection: Selection) -> core.Module:
-    """*module* with each element an instance selector names replaced by a copy of its subtree.
+    """*module* with each element an element selector names replaced by a copy of its subtree.
 
     Elements of one definition with the same choice share one copy. A slot
     that a loop indexes by its induction value, and whose elements differ, is
@@ -85,7 +85,7 @@ def expand(module: core.Module, selection: Selection) -> core.Module:
     loop per run. The root keeps its name; every other definition is the same
     object.
     """
-    if not selection.by_instance:
+    if not selection.by_element:
         return module
     taken = {each.name for each in core.module_definition_order(module)}
     copies: dict[tuple[int, object], core.Module] = {}
@@ -94,7 +94,7 @@ def expand(module: core.Module, selection: Selection) -> core.Module:
     for key, slot in module.children.items():
         elements, classes = [], []
         for index, definition in enumerate(core.instances(slot)):
-            choice = selection.by_instance.get((key, index if isinstance(slot, tuple) else None))
+            choice = selection.by_element.get((key, index if isinstance(slot, tuple) else None))
             kind = ("definition", id(definition)) if choice is None else (id(definition), choice)
             if choice is not None and kind not in copies:
                 copies[kind] = copied(definition, taken)
@@ -109,7 +109,7 @@ def expand(module: core.Module, selection: Selection) -> core.Module:
             parts = segments(module, selector, key, classes)
             holding_const(selector, slot)
             children.update((part.key, tuple(elements[part.start : part.stop])) for part in parts)
-            functions = tuple(split_loops(function, selector, key, parts) for function in functions)
+            functions = tuple(cut_loops(function, selector, key, parts) for function in functions)
     return replace(module, functions=functions, children=children)
 
 
@@ -128,7 +128,7 @@ def segments(module: core.Module, selector: str, key: str, classes: list) -> tup
     return tuple(parts)
 
 
-def split_loops(function, selector: str, key: str, parts: tuple[Segment, ...]):
+def cut_loops(function, selector: str, key: str, parts: tuple[Segment, ...]):
     """*function* with each loop that indexes slot *key* by its induction value cut by *parts*."""
     if not isinstance(function, core.Function) or function.body is None:
         return function
@@ -136,7 +136,7 @@ def split_loops(function, selector: str, key: str, parts: tuple[Segment, ...]):
         return function
     loops = slot_loops(function, selector, key, parts[-1].stop)
     kept = {id(param): param for param in function.params}
-    return replace(function, body=Splitter(selector, key, parts, loops).visit(function.body, kept))
+    return replace(function, body=LoopCutter(selector, key, parts, loops).visit(function.body, kept))
 
 
 def slot_loops(function: core.Function, selector: str, key: str, size: int) -> dict[int, core.LoopRegion]:
@@ -175,7 +175,7 @@ def slot_loops(function: core.Function, selector: str, key: str, size: int) -> d
     return loops
 
 
-class Splitter(core.BindingSubstitutionCloner):
+class LoopCutter(core.BindingSubstitutionCloner):
     """Copy a body, cutting each loop of *loops* by *parts* and calling each part's slot."""
 
     def __init__(self, selector, key, parts, loops, part: Segment | None = None, index=None) -> None:
@@ -201,7 +201,7 @@ class Splitter(core.BindingSubstitutionCloner):
             inner = dict(ctx)
             inner[id(region.induction_var)] = induction_var
             inner.update((id(old), new) for old, new in zip(region.params, params))
-            cloner = Splitter(self.selector, self.key, self.parts, self.loops, part, induction_var)
+            cloner = LoopCutter(self.selector, self.key, self.parts, self.loops, part, induction_var)
             loop = replace(
                 region,
                 start=start,
@@ -266,7 +266,7 @@ def resolve(tree: core.Module, selection: Selection) -> tuple[expr.Expr, ...]:
     """The values *selection* chooses in *tree*, which :func:`expand` returned."""
     replaced = {
         id(each)
-        for key, index in selection.by_instance
+        for key, index in selection.by_element
         for each in core.module_definition_order(element(tree, key, index))
     }
     values: list[expr.Expr] = []
@@ -274,7 +274,7 @@ def resolve(tree: core.Module, selection: Selection) -> tuple[expr.Expr, ...]:
         for owner in core.module_definition_order(tree):
             if owner.name == name and id(owner) not in replaced:
                 values.extend(chosen(owner, choice, replaced))
-    for (key, index), choice in selection.by_instance.items():
+    for (key, index), choice in selection.by_element.items():
         values.extend(chosen(element(tree, key, index), choice, frozenset()))
     return tuple(values)
 
@@ -318,11 +318,11 @@ def parse(root: core.Module, selector: str) -> tuple[str | tuple[str, int | None
     if segments[0] == root.name and len(segments) > 1 and segments[1] not in functions:
         if segments[1] not in root.children:
             refuse(selector, f"{root.name!r} has no function or child slot named {segments[1]!r}")
-        return instance(root, selector, segments[1], segments[2:], variable)
+        return element_choice(root, selector, segments[1], segments[2:], variable)
     if len(segments) > 2:
         if segments[0] == root.name:
             refuse(selector, "expected Module[.function][:variable]")
-        refuse(selector, f"an instance path starts at the root Module {root.name!r}")
+        refuse(selector, f"an element path starts at the root Module {root.name!r}")
     if variable == "None":
         refuse(selector, "':None' names one element of a child slot of the root")
     definition = named(root, selector, segments[0])
@@ -336,7 +336,7 @@ def parse(root: core.Module, selector: str) -> tuple[str | tuple[str, int | None
     return segments[0], frozenset({(function_name, variable)})
 
 
-def instance(
+def element_choice(
     root: core.Module, selector: str, key: str, rest: list[str], variable: str
 ) -> tuple[tuple[str, int | None], object]:
     """The key and the choice of a selector that names an element of slot *key* of *root*."""
@@ -353,7 +353,7 @@ def instance(
             refuse(selector, f"slot {key!r} is not a ModuleList")
         index, definition = None, slot
     if len(rest) > 1:
-        refuse(selector, "an instance path has one child slot")
+        refuse(selector, "an element path has one child slot")
     function_name = rest[0] if rest else None
     if function_name is not None:
         definition.lookup(function_name)
