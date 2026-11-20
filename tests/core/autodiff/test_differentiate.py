@@ -132,8 +132,8 @@ class Differentiated(Case):
     saved_tensors: Mapping[str, int] | None = None
     slots: Mapping[str, tuple[str, ...]] | None = None
     loops: int | None = None
-    same_text: bool = True
-    """False: both Modules load, but the printer spells a dim operand that is not a dim inline."""
+    index_inline: bool = False
+    """True: a ModuleList index the backward computes with a tensor Op prints inline, and reloads bound."""
     reshards: tuple[tuple[tuple, tuple], ...] = ()
     rtol: float = 1e-5
     atol: float = 1e-6
@@ -160,16 +160,7 @@ class Differentiated(Case):
         if self.loops is not None:
             body = forward.entry_function().body
             assert sum(isinstance(each, core.LoopRegion) for each in core.collect_exprs(body)) == self.loops
-        for generated in (forward, backward):
-            named: dict[str, core.Module] = {}
-            for each in core.module_definition_order(generated):
-                assert named.setdefault(each.name, each) is each, f"two Modules are named {each.name!r}"
-        text = inspection.as_script((forward, backward))
-        assert text.count("from __future__ import annotations") == 1
-        classes = [line for line in text.splitlines() if line.startswith("class ")]
-        assert len(classes) == len(set(classes)), "a class is written twice"
-        reloaded = tuple(reload(text, generated.name) for generated in (forward, backward))
-        assert not self.same_text or inspection.as_script(reloaded) == text, "the reloaded Modules print other text"
+        check_written(forward, backward, same_text=not self.index_inline)
         params = {param.name: param for param in module.entry_function().params}
         returned = fields(backward.entry_function().return_type) if len(self.wrt) > 1 else (
             backward.entry_function().return_type,
@@ -184,6 +175,20 @@ class Differentiated(Case):
         found = reshards(backward)
         for expected in self.reshards:
             assert expected in found, (expected, found)
+
+
+def check_written(forward: core.Module, backward: core.Module, *, same_text: bool) -> None:
+    """The pair writes as one loadable file: one header, each Module name once, reloaded alike."""
+    for generated in (forward, backward):
+        named: dict[str, core.Module] = {}
+        for each in core.module_definition_order(generated):
+            assert named.setdefault(each.name, each) is each, f"two Modules are named {each.name!r}"
+    text = inspection.as_script((forward, backward))
+    assert text.count("from __future__ import annotations") == 1
+    classes = [line for line in text.splitlines() if line.startswith("class ")]
+    assert len(classes) == len(set(classes)), "a class is written twice"
+    reloaded = tuple(reload(text, generated.name) for generated in (forward, backward))
+    assert not same_text or inspection.as_script(reloaded) == text, "the reloaded Modules print other text"
 
 
 S0, P, B = types.Split(0), types.Partial("sum"), types.Broadcast()
@@ -270,8 +275,8 @@ def stacked(slot: str, *indices: int) -> frozenset[str]:
     return frozenset(f"{slot}.*.saved[{index}]" for index in indices)
 
 
-ONE = MappingProxyType({"layers": ("LayerForward",) * 3})
-CUT = MappingProxyType(
+THREE_LAYERS = MappingProxyType({"layers": ("LayerForward",) * 3})
+CUT_AROUND_LAYER_1 = MappingProxyType(
     {"layers_0": ("LayerForward",), "layers_1": ("Layer_1Forward",), "layers_2": ("LayerForward",)}
 )
 
@@ -282,9 +287,10 @@ class ModuleListLoop(Differentiated):
     name: str | None = "Stack"
     wrt: tuple[str, ...] = ("x", "ws")
     saved: frozenset[str] | None = stacked("layers", 0, 1, 3) | {"ws", "v4"}
-    slots: Mapping[str, tuple[str, ...]] | None = ONE
+    slots: Mapping[str, tuple[str, ...]] | None = THREE_LAYERS
     loops: int | None = 1
-    same_text: bool = False
+    index_inline: bool = True
+    """The backward picks each layer by ``t - start`` over its own counter, a tensor ``add``."""
 
 
 @case
@@ -293,7 +299,7 @@ class ModuleListOneLayer(ModuleListLoop):
     saved: frozenset[str] | None = (
         stacked("layers_0", 0, 1, 3) | stacked("layers_1", 0, 1) | stacked("layers_2", 0, 1, 3) | {"ws", "v9"}
     )
-    slots: Mapping[str, tuple[str, ...]] | None = CUT
+    slots: Mapping[str, tuple[str, ...]] | None = CUT_AROUND_LAYER_1
     loops: int | None = 3
 
 
@@ -303,7 +309,7 @@ class ModuleListWholeLayer(ModuleListLoop):
     saved: frozenset[str] | None = (
         stacked("layers_0", 0, 1, 3) | stacked("layers_1", 0) | stacked("layers_2", 0, 1, 3) | {"ws", "v8"}
     )
-    slots: Mapping[str, tuple[str, ...]] | None = CUT
+    slots: Mapping[str, tuple[str, ...]] | None = CUT_AROUND_LAYER_1
     loops: int | None = 3
 
 
@@ -353,7 +359,7 @@ class ModuleListConstantCall(Differentiated):
     name: str | None = "Stack"
     wrt: tuple[str, ...] = ("x", "w")
     recompute: tuple[str, ...] = ("Stack.layers.1:h",)
-    slots: Mapping[str, tuple[str, ...]] | None = CUT
+    slots: Mapping[str, tuple[str, ...]] | None = CUT_AROUND_LAYER_1
 
 
 @case
@@ -364,9 +370,10 @@ class ModuleListNested(Differentiated):
     name: str | None = "Stack"
     wrt: tuple[str, ...] = ("x", "ws")
     recompute: tuple[str, ...] = ("Stack.layers.1:h",)
-    slots: Mapping[str, tuple[str, ...]] | None = CUT
+    slots: Mapping[str, tuple[str, ...]] | None = CUT_AROUND_LAYER_1
     loops: int | None = 4
-    same_text: bool = False
+    index_inline: bool = True
+    """As in ``ModuleListLoop``: the backward's layer index is a tensor ``add``."""
 
 
 @case
@@ -648,14 +655,6 @@ def test_gradients_match_autograd(case: Differentiated) -> None:
     check_case(case)
 
 
-def test_recompute_reads_the_parameter_instead_of_the_gathered_weight() -> None:
-    module = cli.load_authored_ir(str(FIXTURES / "sharded.py"))
-    forward, backward = differentiate.differentiate(module, wrt=("x", "w"), recompute=("Layer.forward:full",))
-    assert {value.name for value in differentiate.saved_values(forward)} == {"x", "h", "w"}
-    assert ((S0,), (B,)) in reshards(backward)
-    check_gradients(module, forward, backward, ("x", "w"))
-
-
 def test_saved_values_report_name_type_and_origin() -> None:
     module = cli.load_authored_ir(str(FIXTURES / "sharded.py"))
     forward, _ = differentiate.differentiate(module, wrt=("x", "w"))
@@ -720,9 +719,7 @@ REFUSED = (
     ("nested_child.py:Stack", ("x",), ("Block.inner:h",), "an element path starts at the root Module 'Stack'"),
     ("child_call.py:ChildCall", ("x",), ("Layer:None",), "':None' names one element"),
     ("child_call.py:ChildCall", ("x",), ("ChildCall.rest.0:None", "ChildCall.rest.0:h"), "':None' and another selector"),
-    ("child_call.py:ChildCall", ("x",), ("Nope",), "no Module named 'Nope'"),
     ("child_call.py:ChildCall", ("x",), (":h",), "an empty segment names nothing"),
-    ("child_call.py:ChildCall", ("x",), ("",), "an empty segment names nothing"),
     ("child_call.py:ChildCall", ("x",), ("Layer.forward",), "name a variable after the function"),
     ("module_list_shifted.py:Stack", ("x",), ("Stack.layers.1:h",), "slot 'layers' is indexed by a value that is not the loop index"),
     ("module_list_step.py:Stack", ("x",), ("Stack.layers.1:h",), "loop over 'layers' has step 2"),

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
+from typing import NamedTuple
 
 import pytest
 
@@ -31,68 +34,72 @@ def test_without_path_prints_both_modules(capsys) -> None:
     assert "class ElementwiseBackward:" in printed
 
 
-def saved_rows(capsys, fixture: str, wrt: str, *extra: str) -> tuple[dict[str, list[str]], dict[str, int]]:
-    """The cells of each row of the saved table by name, and its two totals."""
+def saved_rows(capsys, fixture: str, wrt: str, *extra: str) -> tuple[dict[str, dict[str, str]], dict[str, int]]:
+    """Each row of the saved table by name, its cells by column, and the two totals."""
     assert cli.main(["autodiff", str(FIXTURES / fixture), "--wrt", wrt, "--saved", *extra]) == 0
     header, *rows, held, parameters = capsys.readouterr().out.splitlines()
-    assert header.split() == ["saved", "shape", "bytes", "layout", "buffer", "from"]
+    columns = header.split()
+    assert columns == ["saved", "shape", "bytes", "layout", "buffer", "from"]
     totals = {line.split()[0]: int(line.split()[1]) for line in (held, parameters)}
     assert list(totals) == ["held", "parameters"]
-    cells = [re.split(" {2,}", row) for row in rows]
-    return {name: rest for name, *rest in cells}, totals
+    cells = [dict(zip(columns, re.split(" {2,}", row))) for row in rows]
+    return {row["saved"]: row for row in cells}, totals
 
 
 def test_saved_table_counts_bytes_per_device(capsys) -> None:
     """Two GPUs, f32: h (8, 6) Split(0) holds 4 x 6 x 4 bytes on each device; full is whole."""
     rows, totals = saved_rows(capsys, "sharded.py", "x,w")
     assert set(rows) == {"x", "h", "full"}
-    assert rows["h"][:4] == ["(8, 6)", "96", "Split(0)", "h"]
-    assert rows["full"][:4] == ["(6, 4)", "96", "-", "full"]
-    assert rows["x"][3:] == ["x", "parameter"]
+    assert [rows["h"][column] for column in ("shape", "bytes", "layout")] == ["(8, 6)", "96", "Split(0)"]
+    assert [rows["full"][column] for column in ("shape", "bytes", "layout")] == ["(6, 4)", "96", "-"]
+    assert rows["x"]["from"] == "parameter"
     assert totals == {"held": 192, "parameters": 64}
 
 
 def test_recompute_changes_the_saved_table(capsys) -> None:
     rows, _ = saved_rows(capsys, "sharded.py", "x,w", "--recompute", "Layer.forward:full")
     assert set(rows) == {"x", "h", "w"}
-    assert rows["w"][1:3] == ["48", "Split(0)"]
+    assert [rows["w"]["bytes"], rows["w"]["layout"]] == ["48", "Split(0)"]
 
 
-@pytest.mark.parametrize(
-    ("recompute", "saved", "held"),
-    (
-        ((), {"qk", "v", "q", "k"}, 2048),
-        (("Fused:k",), {"qk", "v", "q", "qkv"}, 2048),
-        (("Fused:q", "Fused:k", "Fused:v"), {"qk", "qkv"}, 2048),
-        (("Fused:qk",), {"v", "q", "k"}, 1536),
-    ),
-    ids=("none", "k", "q,k,v", "qk"),
+class Buffers(NamedTuple):
+    fixture: str
+    wrt: str
+    totals: tuple[int, int]
+    """``held`` and ``parameters``."""
+    recompute: tuple[str, ...] = ()
+    shared: Mapping[str, str] = MappingProxyType({})
+    """The rows whose buffer is another value; every other row is its own buffer."""
+    saved: frozenset[str] | None = None
+    """The rows, the parameters left out, when the case says which."""
+
+
+QKV = MappingProxyType({"q": "qkv", "k": "qkv", "v": "qkv"})
+BUFFERS = (
+    Buffers("fused_views.py", "w", (2048, 512), shared=QKV, saved=frozenset({"qk", "v", "q", "k"})),
+    Buffers("fused_views.py", "w", (2048, 512), ("Fused:k",), MappingProxyType({"q": "qkv", "v": "qkv"}),
+            frozenset({"qk", "v", "q", "qkv"})),
+    Buffers("fused_views.py", "w", (2048, 512), ("Fused:q", "Fused:k", "Fused:v"), saved=frozenset({"qk", "qkv"})),
+    Buffers("fused_views.py", "w", (1536, 512), ("Fused:qk",), QKV, frozenset({"v", "q", "k"})),
+    Buffers("param_view.py", "x", (512, 3072), shared=MappingProxyType({"head": "w"})),
+    Buffers("rebound.py", "x", (96, 48)),
+    Buffers("layers_loop.py", "x,wn0,norms,up,down", (2688, 3328)),
 )
-def test_a_saved_view_holds_its_whole_buffer_once(capsys, recompute, saved, held) -> None:
-    """Dropping a saved slice of qkv frees nothing while another slice keeps qkv."""
-    selected = [word for selector in recompute for word in ("--recompute", selector)]
-    rows, totals = saved_rows(capsys, "fused_views.py", "w", *selected)
-    assert set(rows) - {"x"} == saved
-    assert {name: row[3] for name, row in rows.items()} == {
-        name: "qkv" if name in ("q", "k", "v") else name for name in rows
-    }
-    assert totals == {"held": held, "parameters": 512}
 
 
-def test_a_saved_view_of_a_parameter_holds_nothing_new(capsys) -> None:
-    rows, totals = saved_rows(capsys, "param_view.py", "x")
-    assert rows["head"][3] == "w"
-    assert totals == {"held": 512, "parameters": 3072}
+@pytest.mark.parametrize("case", BUFFERS, ids=lambda case: f"{case.fixture}{list(case.recompute)}")
+def test_a_buffer_is_held_once_whole(capsys, case: Buffers) -> None:
+    """A saved view holds its whole buffer, once.
 
-
-def test_two_values_of_one_name_are_two_buffers(capsys) -> None:
-    _, totals = saved_rows(capsys, "rebound.py", "x")
-    assert totals == {"held": 96, "parameters": 48}
-
-
-def test_a_stack_and_a_callee_item_are_their_own_buffer(capsys) -> None:
-    rows, _ = saved_rows(capsys, "layers_loop.py", "x,wn0,norms,up,down")
-    assert all(row[3] == name for name, row in rows.items())
+    Dropping one slice of qkv frees nothing while another keeps it. A
+    parameter's buffer is held anyway; a stack, a callee's item and each binding
+    of a name are buffers of their own.
+    """
+    selected = [word for selector in case.recompute for word in ("--recompute", selector)]
+    rows, totals = saved_rows(capsys, case.fixture, case.wrt, *selected)
+    assert {name: row["buffer"] for name, row in rows.items()} == {name: case.shared.get(name, name) for name in rows}
+    assert (totals["held"], totals["parameters"]) == case.totals
+    assert case.saved is None or {name for name, row in rows.items() if row["from"] != "parameter"} == case.saved
 
 
 def test_missing_wrt_is_a_usage_error(capsys) -> None:

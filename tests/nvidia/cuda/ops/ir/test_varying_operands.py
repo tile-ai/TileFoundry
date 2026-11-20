@@ -9,6 +9,7 @@ the core op tables.
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -25,9 +26,9 @@ _H200 = cuda.Target("nvidia.h200_sxm", device_count=2)
 _M = types.Mesh((types.Topology("gpu", 2),), types.Layout((2,), (1,)), ("g",))
 _CTA = types.Mesh((types.Topology("cta", 4),), types.Layout((4,), (1,)), ("c",))
 _THREADS = types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,)), ("t",))
-_T48 = types.Mesh((types.Topology("thread", 32),), types.Layout((4, 8), (8, 1)), ("w", "l"))
-_T4 = types.Mesh((types.Topology("thread", 4),), types.Layout((4,), (1,)), ("t",))
-_CTA2 = types.Mesh((types.Topology("cta", 2),), types.Layout((2,), (1,)), ("n",))
+_WARPS_BY_LANES = types.Mesh((types.Topology("thread", 32),), types.Layout((4, 8), (8, 1)), ("w", "l"))
+_FOUR_THREADS = types.Mesh((types.Topology("thread", 4),), types.Layout((4,), (1,)), ("t",))
+_TWO_CTAS = types.Mesh((types.Topology("cta", 2),), types.Layout((2,), (1,)), ("n",))
 _ROW_MAJOR = (((10, 8), (4, 16)), ((512, 64), (16, 1)))
 _K_MAJOR = (((4, 16), (10, 8)), ((16, 1), (512, 64)))
 _RMEM = expr.StorageKind.RMEM
@@ -42,10 +43,10 @@ def plain(shape, dtype=expr.DType.f32, storage="gmem"):
     return types.TensorType(shape=shape, dtype=dtype, layout=types.Layout(shape), storage=storage)
 
 
-def _ring(outer):
+def _ring_per_cta(outer):
     """A swizzled smem ring that each of two CTAs holds its own copy of."""
     layout = types.ComposedLayout(inner=types.Swizzle(3, 4, 3), offset=0, outer=types.Layout(*outer))
-    return types.ShardLayout(layout, (_V,), _CTA2)
+    return types.ShardLayout(layout, (_V,), _TWO_CTAS)
 
 
 _INDEX = held((3,), _V, expr.DType.i64)
@@ -237,17 +238,17 @@ CASES = (
         "index_select_varying_on_another_axis_structure_of_one_topology_is_varying_everywhere",
         tensor.IndexSelect(dim=0),
         (
-            types.TensorType((16, 4), expr.DType.f32, types.ShardLayout(types.Layout((16, 4)), (_V, _B), _T48), "rmem"),
+            types.TensorType((16, 4), expr.DType.f32, types.ShardLayout(types.Layout((16, 4)), (_V, _B), _WARPS_BY_LANES), "rmem"),
             utils.make_shard_tensor_type((2,), expr.DType.i64, mesh=_THREADS, attrs=(_V,), storage=_RMEM),
         ),
-        type=types.TensorType((2, 4), expr.DType.f32, types.ShardLayout(types.Layout((2, 4), (1, 2)), (_V, _V), _T48), "rmem"),
+        type=types.TensorType((2, 4), expr.DType.f32, types.ShardLayout(types.Layout((2, 4), (1, 2)), (_V, _V), _WARPS_BY_LANES), "rmem"),
         target=cuda.Target("nvidia.h200_sxm"),
     ),
     OpCase(
         "index_select_from_a_shared_tile_by_a_varying_row_is_varying",
         tensor.IndexSelect(dim=0),
-        (plain((4, 3), storage="smem"), utils.make_shard_tensor_type((1,), expr.DType.i64, mesh=_T4, attrs=(_V,), storage=_RMEM)),
-        type=utils.make_shard_tensor_type((1, 3), mesh=_T4, attrs=(_V,), storage="smem"),
+        (plain((4, 3), storage="smem"), utils.make_shard_tensor_type((1,), expr.DType.i64, mesh=_FOUR_THREADS, attrs=(_V,), storage=_RMEM)),
+        type=utils.make_shard_tensor_type((1, 3), mesh=_FOUR_THREADS, attrs=(_V,), storage="smem"),
         target=cuda.Target("nvidia.h200_sxm"),
     ),
     OpCase(
@@ -259,9 +260,9 @@ CASES = (
     ),
     OpCase(
         "bitcast_of_a_varying_smem_ring_states_and_keeps_varying",
-        tensor.Bitcast(layout=_ring(_K_MAJOR)),
-        (types.TensorType((80, 64), expr.DType.bf16, _ring(_ROW_MAJOR), "smem"),),
-        type=types.TensorType((64, 80), expr.DType.bf16, _ring(_K_MAJOR), "smem"),
+        tensor.Bitcast(layout=_ring_per_cta(_K_MAJOR)),
+        (types.TensorType((80, 64), expr.DType.bf16, _ring_per_cta(_ROW_MAJOR), "smem"),),
+        type=types.TensorType((64, 80), expr.DType.bf16, _ring_per_cta(_K_MAJOR), "smem"),
         target=cuda.Target("nvidia.h200_sxm"),
     ),
 )
@@ -318,16 +319,18 @@ def test_a_varying_value_where_the_type_says_broadcast_is_refused(fixture, modul
         cli.load_authored_ir(f"{_FIXTURES / fixture}:{module}")
 
 
-def test_an_execution_mesh_may_omit_an_outside_topology_without_split_or_partial() -> None:
-    """A smem value Broadcast per CTA and Varying per thread is read in a thread-only scope.
+@pytest.mark.parametrize(("outside", "refused"), ((_B, False), (types.Split(0), True)), ids=("broadcast", "split"))
+def test_an_execution_mesh_may_omit_an_outside_topology_only_without_split_or_partial(outside, refused) -> None:
+    """A smem value Varying per thread is read in a thread-only scope unless its CTA axis splits it.
 
     See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics).
     """
     both = types.Mesh(
         (types.Topology("cta", 4), types.Topology("thread", 32)), types.Layout(((4,), (32,)), ((32,), (1,))), ("c", "t")
     )
-    value = types.TensorType((4,), expr.DType.f32, types.ShardLayout(types.Layout((4,)), (_B, _V), both), "smem")
-    typeinfer.check_input_reachability(tensor.Reshape(new_shape=(4,)), (value,), _THREADS)
+    value = types.TensorType((4,), expr.DType.f32, types.ShardLayout(types.Layout((4,)), (outside, _V), both), "smem")
+    with pytest.raises(ValueError) if refused else contextlib.nullcontext():
+        typeinfer.check_input_reachability(tensor.Reshape(new_shape=(4,)), (value,), _THREADS)
 
 
 def test_per_cta_tiles_lower_through_thread_slices(tmp_path) -> None:
