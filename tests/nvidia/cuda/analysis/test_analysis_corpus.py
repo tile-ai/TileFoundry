@@ -1102,12 +1102,23 @@ class PipelineSharedWeight(AnalysisCase):
     path: Path = PLACED / "pipeline_shared_weight.py"
     name: str | None = "SharedWeight"
     memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 1_280, "rmem": 0})
+    api: bool = True
 
     def guard(self, state, problems):
         memory = state.report["functions"][0]["function_records"]["memory"]
         (peak,) = (item for item in memory["peaks"] if item["memory_level"] == "gmem")
         assert peak["persistent_bytes"] == 256 + 512
         assert peak["peak_bytes"] == 256 + 512 + 256 + 256
+        owners = state.result.module.target.storage_owners
+        lifetimes = expr.get_metadata(state.result.function, analysis.RegionMemoryMetadata).lifetimes
+        units = {
+            lifetime.value.expr.name: analysis.owner_units(lifetime, owners)
+            for lifetime in lifetimes
+            if isinstance(lifetime.value.expr, expr.Var) and lifetime.memory_level == "gmem"
+        }
+        assert units["x"] == {"gpu": frozenset({0})}
+        assert units["w1"] == {"gpu": frozenset({1})}
+        assert units["shared"] == {"gpu": None}
 
 
 @case
