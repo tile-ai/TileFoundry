@@ -637,8 +637,8 @@ through `saved`.
     goes through a second child slot; a `:None` that does not follow an element,
     or that a different selector of the same element joins; a slot to cut that
     is called by a run-time index that is not the induction value of the loop
-    around the call, from a loop whose step is not 1 or whose trip count is not
-    static, whose subtree has a `ConstTensor` parameter (the resource path of
+    around the call, from a loop whose step is not 1, whose trip count is not
+    static, or whose range is empty or reaches past the slot, whose subtree has a `ConstTensor` parameter (the resource path of
     the weight would move), or whose segment name `<slot>_<n>` is already a
     function, child slot or method of the root; and a backward that
     `differentiate` generated, since a second derivative is not supported.

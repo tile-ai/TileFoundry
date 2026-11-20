@@ -134,14 +134,16 @@ def split_loops(function, selector: str, key: str, parts: tuple[Segment, ...]):
         return function
     if not calls_slot(function, key):
         return function
-    loops = slot_loops(function, selector, key)
+    loops = slot_loops(function, selector, key, parts[-1].stop)
     kept = {id(param): param for param in function.params}
     return replace(function, body=Splitter(selector, key, parts, loops).visit(function.body, kept))
 
 
-def slot_loops(function: core.Function, selector: str, key: str) -> dict[int, core.LoopRegion]:
-    """The loops whose own body calls slot *key*, checked: indexed by the induction value, step 1.
+def slot_loops(function: core.Function, selector: str, key: str, size: int) -> dict[int, core.LoopRegion]:
+    """The loops whose own body calls slot *key*, each checked against the *size* elements.
 
+    A loop is indexed by its induction value, steps by 1, and runs a range that
+    is not empty and inside the slot.
     ``collect_exprs`` lists what a loop holds before the loop, so the innermost
     loop around a value is the first to claim it.
     """
@@ -164,6 +166,11 @@ def slot_loops(function: core.Function, selector: str, key: str) -> dict[int, co
             refuse(selector, f"loop over {key!r}: trip count is not static{located(loop)}")
         if loop.step != 1:
             refuse(selector, f"loop over {key!r} has step {loop.step}{located(loop)}")
+        if not 0 <= loop.start < loop.extent <= size:
+            refuse(
+                selector,
+                f"loop over {key!r} runs [{loop.start}, {loop.extent}); the slot has {size} elements{located(loop)}",
+            )
         loops[id(loop)] = loop
     return loops
 
