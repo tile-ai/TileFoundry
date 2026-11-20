@@ -668,7 +668,7 @@ axis it reads, and every other value takes it from its operands.
 | Value | Type |
 | --- | --- |
 | Plain parameter, literal, constant arithmetic, `DimVar` | Broadcast |
-| Op call | Each tensor operand (inputs, indices, starts, offsets) that is Varying on a mesh axis makes the result Varying there, when each unit of that topology holds its own copy of the result's storage: a Broadcast result axis becomes Varying, a Split one stays, a Partial one is an error. A plain result takes that operand's mesh. Without a target no storage is held per unit, and nothing changes |
+| Op call | Each tensor operand (inputs, indices, starts, offsets) that is Varying on a mesh axis makes the result Varying there, when each unit of that topology holds its own copy of the result's storage, or when the Op is a view (registered in `access.alias_registry`), whatever the result's storage: a Broadcast result axis becomes Varying, a Split one stays, a Partial one is an error. The result reads each topology of its own mesh and of the Varying operands'; a plain result starts from the first Varying operand's mesh. Without a target nothing changes |
 | `Bitcast`, `Reshard`, `tf.schedule` call | The stated result; the Op's own rule checks a Varying operand. A `tf.schedule` operand Varying on a mesh axis where the target is Broadcast, and the target's storage is held per unit, is an error |
 | Loop index | Varying on each mesh axis where a bound is Varying; plain otherwise |
 | Function call | A Broadcast argument binds a Varying parameter; a Varying argument MUST NOT bind a Broadcast or plain parameter |
@@ -753,8 +753,11 @@ imposes no layout constraint. A plain `Layout` and an all-Broadcast `ShardLayout
 over every unit state the same fact; type inference keeps the plain one
 ([shard §6.1](./shard.md#61-shard-attr-semantics)). Written shape and stride
 constraints remain.
-Shared-memory distribution belongs to CTA or coarser topologies. Author-written tiles
-in thread scope use plain layouts. A `where` clause constrains named topologies.
+Shared-memory distribution belongs to CTA or coarser topologies. A body layout
+that states Varying and neither Split nor Partial drops each topology that holds
+only Broadcast and does not own its storage (the target's storage owners): a
+per-CTA shared-memory tile written `@ {cta.x @ V()}` in thread scope names no
+thread topology. A `where` clause constrains named topologies.
 Acceptance rules are generated in [parser §2](./parser.md#2-syntax-and-rules).
 
 ---

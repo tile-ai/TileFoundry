@@ -183,10 +183,14 @@ def _(call: expr.Call, ctx) -> types.TensorType:
         ctx.error(call, "source tensor shape must be literal")
     held = types.shard_layout_of(source.layout)
     stated = types.shard_layout_of(stated_layout)
+    axis = ir_utils.varying_axis(types.TensorType(source.shape, source.dtype, stated_layout, source.storage), source)
+    if stated is None and axis is not None:
+        ctx.error(call, f"the source is Varying on mesh axis {axis}; write the layout as '... @ {{{axis} @ V()}}'")
     if (
         held is not None
+        and stated is not None
         and not any(isinstance(attr, (types.Split, types.Partial)) for attr in held.attrs)
-        and (stated is None or (stated.mesh, stated.attrs) == (held.mesh, held.attrs))
+        and (stated.mesh, stated.attrs) == (held.mesh, held.attrs)
     ):
         source = replace(source, layout=address_layout(source.layout))
         stated_layout = address_layout(stated_layout)

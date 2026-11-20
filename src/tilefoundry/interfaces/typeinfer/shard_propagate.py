@@ -362,6 +362,11 @@ def induction_type(bounds, declared: types.TensorType, mesh, type_of) -> types.T
     return replace(plain, layout=types.ShardLayout(plain.layout, attrs, mesh))
 
 
+def topology_meshes(mesh: types.Mesh) -> dict[str, types.Mesh]:
+    """Each topology of *mesh* as a mesh of that topology alone, by name."""
+    return {name: utils.topology_mesh(mesh, name) for name in utils.topology_names(mesh)}
+
+
 def unite_varying(call: expr.Call, result: types.Type, ctx) -> types.Type:
     """Read the Varying axes of every tensor operand of *call* into each tensor leaf of *result*.
 
@@ -397,35 +402,41 @@ def unite_varying(call: expr.Call, result: types.Type, ctx) -> types.Type:
             or (isinstance(leaf.layout, types.ComposedLayout) and leaf.layout.inner is None)
         ):
             return leaf
-        mesh = types.shard_layout_of(operands[0].layout).mesh if shard is None else shard.mesh
+        base = types.shard_layout_of(operands[0].layout).mesh if shard is None else shard.mesh
+        pieces = topology_meshes(base)
+        for operand in operands:
+            for name, piece in topology_meshes(types.shard_layout_of(operand.layout).mesh).items():
+                pieces.setdefault(name, piece)
+        names = sorted(pieces, key=lambda name: owners.order.index(name) if name in owners.order else -1)
+        mesh = base if len(names) == len(utils.topology_names(base)) else utils.from_meshes(*map(pieces.get, names))
+        stated = utils.attrs_by_axis(leaf, mesh)
         held = utils.attrs_by_axis(leaf, mesh, owners)
         states = tuple(
             utils.attrs_by_axis(operand, mesh, None if view else owners) for operand in operands
         )
-        attrs, promoted = [], False
+        attrs, grown = dict(stated), set()
         for mesh_axis, key in enumerate(held):
-            attr = (
-                shard.attrs[mesh_axis]
-                if shard is not None and mesh_axis < len(shard.attrs)
-                else types.Broadcast()
-            )
             if any(isinstance(state[key], types.Varying) for state in states):
                 if isinstance(held[key], types.Partial):
                     raise ValueError(
                         f"mesh axis {mesh_axis}: a Partial result cannot combine with a Varying operand"
                     )
-                if isinstance(attr, types.Broadcast) and (
+                if isinstance(stated[key], types.Broadcast) and (
                     view or owners.private(leaf.storage, key[0])
                 ):
-                    attr, promoted = types.Varying(), True
-            attrs.append(attr)
-        if not promoted:
+                    attrs[key] = types.Varying()
+                    grown.add(key[0])
+        if not grown:
             return leaf
+        kept = tuple(name for name in names if name in grown or name in utils.topology_names(base))
+        if len(kept) < len(names):
+            mesh = utils.from_meshes(*map(pieces.get, kept))
+        attrs = tuple(attrs[key] for key in utils.attrs_by_axis(leaf, mesh))
         if shard is None:
             outer = leaf.layout if isinstance(leaf.layout, types.Layout) else leaf.layout.outer
-            shard = types.ShardLayout(outer, tuple(attrs), mesh)
+            shard = types.ShardLayout(outer, attrs, mesh)
         else:
-            shard = replace(shard, attrs=tuple(attrs))
+            shard = replace(shard, attrs=attrs, mesh=mesh)
         layout = (
             shard
             if not isinstance(leaf.layout, types.ComposedLayout)

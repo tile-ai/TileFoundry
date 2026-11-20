@@ -681,9 +681,9 @@ second presentation of the result.
   for that logical shape under the existing layout-mode-to-tensor-axis rules.
   Both layouts MUST be plain `Layout` / `ComposedLayout` without `ShardLayout`
   components, or a source `ShardLayout` with neither `Split` nor `Partial`, in any
-  storage, whose stated end is plain or states the same attrs and mesh: each unit's
-  copy is re-laid out alone as a plain layout, and the result keeps the source's
-  attrs and mesh. Otherwise both layouts MUST be rmem
+  storage, whose stated end states the same attrs and mesh: each unit's copy is
+  re-laid out alone as a plain layout. A plain stated end of a Varying source is
+  rejected, naming the mesh axis to state Varying. Otherwise both layouts MUST be rmem
   `ShardLayout` on the same mesh.
   That `ShardLayout` MUST contain only `Split` and `Varying` attributes ([shard §6.1](./shard.md#61-shard-attr-semantics)). Bitcast type inference MUST materialize omitted authored strides, using the same default and storage-owner rules as Reshard and TensorView. Every resulting `Layout` component has concrete strides.
   For rmem shards, an address is the owning mesh coordinate paired with the

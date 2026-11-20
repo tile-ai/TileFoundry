@@ -13,8 +13,9 @@ from pathlib import Path
 
 import pytest
 
+from tests.core._corpus import reload
 from tests.core.ops.ir.op_case import ExpectedError, OpCase, op_case_test
-from tilefoundry import cli
+from tilefoundry import cli, inspection
 from tilefoundry.interfaces import typeinfer
 from tilefoundry.ir import core, expr, types, utils
 from tilefoundry.ir.hir import math, nn, tensor
@@ -24,6 +25,8 @@ _FIXTURES = Path(__file__).parents[2] / "fixtures"
 _H200 = cuda.Target("nvidia.h200_sxm", device_count=2)
 _M = types.Mesh((types.Topology("gpu", 2),), types.Layout((2,), (1,)), ("g",))
 _CTA = types.Mesh((types.Topology("cta", 4),), types.Layout((4,), (1,)), ("c",))
+_THREADS = types.Mesh((types.Topology("thread", 32),), types.Layout((32,), (1,)), ("t",))
+_RMEM = expr.StorageKind.RMEM
 _B, _V, _P = types.Broadcast(), types.Varying(), types.Partial("sum")
 
 
@@ -157,6 +160,27 @@ CASES = (
         tensor.InsertSlice(),
         (plain((8,)), held((2,), _V), plain((), expr.DType.i32)),
         type=held((8,), _V),
+        target=_H200,
+    ),
+    OpCase(
+        "binary_reads_varying_on_a_topology_the_first_operand_omits",
+        _ADD,
+        (
+            utils.make_shard_tensor_type((4,), mesh=_CTA, attrs=(_V,), storage=_RMEM),
+            utils.make_shard_tensor_type((4,), mesh=_THREADS, attrs=(_V,), storage=_RMEM),
+        ),
+        type=utils.make_shard_tensor_type((4,), mesh=utils.from_meshes(_CTA, _THREADS), attrs=(_V, _V), storage=_RMEM),
+        target=_H200,
+    ),
+    OpCase(
+        "insert_slice_update_varying_on_a_topology_the_dst_omits",
+        tensor.InsertSlice(),
+        (
+            utils.make_shard_tensor_type((8,), mesh=_THREADS, attrs=(_V,), storage=_RMEM),
+            utils.make_shard_tensor_type((2,), mesh=_CTA, attrs=(_V,), storage=_RMEM),
+            plain((), expr.DType.i32),
+        ),
+        type=utils.make_shard_tensor_type((8,), mesh=utils.from_meshes(_CTA, _THREADS), attrs=(_V, _V), storage=_RMEM),
         target=_H200,
     ),
     OpCase(
@@ -305,3 +329,24 @@ def test_reachability_omits_an_outside_topology_without_split_or_partial(attr, r
             typeinfer.check_input_reachability(tensor.Reshape(new_shape=(4,)), (value,), threads)
     else:
         typeinfer.check_input_reachability(tensor.Reshape(new_shape=(4,)), (value,), threads)
+
+
+def test_bitcast_to_a_plain_layout_refuses_a_varying_source() -> None:
+    """Plain is Broadcast: re-laying a Varying window as plain names the axis to state."""
+    with pytest.raises(expr.VerifyError, match=r"Varying on mesh axis n; write the layout as '\.\.\. @ \{n @ V\(\)\}'"):
+        cli.load_authored_ir(f"{_FIXTURES / 'diagnostics' / 'varying_bitcast_plain_end.py'}:BitcastPlainEnd")
+
+
+def test_a_result_varying_on_every_axis_prints_its_state_and_reparses() -> None:
+    """A result Varying on every axis of a mesh over every unit keeps its ShardLayout, not plain."""
+    loaded = cli.load_authored_ir(f"{_FIXTURES / 'ops' / 'loop_index_reads.py'}:CoordStart")
+    returned = loaded.entry_function().return_type
+    assert types.shard_layout_of(returned.layout).attrs == (_V,)
+    printed = inspection.as_script(loaded)
+    assert ') -> Tensor[(1, 8), "f32", (1, 8) @ {mesh.g @ V()}]:' in printed
+    assert reload(printed, loaded.name).entry_function().return_type == returned
+
+
+def test_broadcast_argument_binds_a_varying_parameter() -> None:
+    """Equal copies are per-unit values too: a Broadcast argument binds a Varying parameter."""
+    cli.load_authored_ir(f"{_FIXTURES / 'ops' / 'loop_index_reads.py'}:VaryingParameter")

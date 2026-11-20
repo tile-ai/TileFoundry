@@ -254,10 +254,12 @@ def canonical(type_: Type) -> Type: ...
 - constraints:
   - `unite_varying` reads each tensor leaf of each operand, indices and offsets
     included ([shard §6.1](./shard.md#61-shard-attr-semantics)). On each mesh
-    axis whose topology owns the result's storage per unit, a `Broadcast`
+    axis whose topology owns the result's storage per unit, or on any axis when
+    the Op is a view (registered in `access.alias_registry`), a `Broadcast`
     result with a `Varying` operand becomes `Varying`; a `Partial` result with
-    one MUST fail (`ValueError`). Other pairs leave the result. A plain result
-    reads as `Broadcast` on the first `Varying` operand's mesh. It does not run
+    one MUST fail (`ValueError`). Other pairs leave the result. It reads each
+    topology of the result's mesh and of the `Varying` operands'; a plain result
+    starts from the first `Varying` operand's mesh. It does not run
     on a `FunctionRef` call, nor on an Op that states its result
     (`states_result`: `Bitcast`, `Reshard`, `ScheduleOp`), whose rule checks
     the operands itself.

@@ -66,18 +66,14 @@ def call_function(
             continue
         index, arg_type = next(given)
         declared = param.annotation
-        if not utils.types_compatible(declared, arg_type) and (
-            axis := utils.varying_axis(declared, arg_type)
-        ):
+        if not utils.types_compatible(declared, arg_type):
+            axis = utils.varying_axis(declared, arg_type)
             ctx.error(
                 call,
                 f"argument {index} is Varying on mesh axis {axis}; parameter {param.name} is Broadcast. "
-                f"Write the parameter as '@ {{{axis} @ V()}}', or state equal copies with tf.bitcast",
-            )
-        if not utils.types_compatible(declared, arg_type):
-            ctx.error(
-                call,
-                f"hir Function call {callee.name!r}: arg {index} type mismatch — "
+                f"Write the parameter as '@ {{{axis} @ V()}}', or state equal copies with tf.bitcast"
+                if axis
+                else f"hir Function call {callee.name!r}: arg {index} type mismatch — "
                 f"callee param {param.name!r} expects {declared!r}, got {arg_type!r}",
             )
         memo[id(param)] = (param, arg_type)
