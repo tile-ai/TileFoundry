@@ -97,11 +97,7 @@ class WGMMA_CAST_BETWEEN_SCHEDULES:
                     bias_r_dst = tf.empty(
                         Tensor[
                             (64, 32), "f32",
-                            ShardLayout(
-                                layout=Layout((4, 2, 8, 4, 4, 2,), (16, 8, 1, 512, 128, 64)),
-                                attrs=(S(0), S(2), S(4)),
-                                mesh=_compute,
-                            ),
+                            ((4 @ _compute.warp, 2, 8 @ _compute.lane8, 4, 4 @ _compute.lane4, 2), (16, 8, 1, 512, 128, 64)),
                             "rmem",
                         ],
                     )
@@ -110,11 +106,7 @@ class WGMMA_CAST_BETWEEN_SCHEDULES:
                     explicit_dst = tf.empty(
                         Tensor[
                             (64, 1), "f32",
-                            ShardLayout(
-                                layout=Layout((8, 2, 4, 1, 1, 1), (8, 4, 1, 0, 0, 0)),
-                                attrs=(S(2), S(0), B()),
-                                mesh=_compute,
-                            ),
+                            ((8 @ _compute.lane8, 2, 4 @ _compute.warp, 1, 1, 1), (8, 4, 1, 0, 0, 0)),
                             "rmem",
                         ],
                     )
@@ -126,11 +118,7 @@ class WGMMA_CAST_BETWEEN_SCHEDULES:
                     )
                     automatic = tf.reshard(
                         tf.reduce(acc, axes=(1,), keepdim=True, kind=ReduceKind.SUM),
-                        ShardLayout(
-                            layout=Layout((8, 2, 4, 1, 1, 1), (8, 4, 1, 0, 0, 0)),
-                            attrs=(S(2), S(0), B()),
-                            mesh=_compute,
-                        ),
+                        ((8 @ _compute.lane8, 2, 4 @ _compute.warp, 1, 1, 1), (8, 4, 1, 0, 0, 0)),
                         "rmem",
                     )
                     result = tf.cast(explicit + automatic, dtype="bf16")

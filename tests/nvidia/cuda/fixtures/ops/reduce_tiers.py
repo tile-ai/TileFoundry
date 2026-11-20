@@ -15,12 +15,8 @@ class _Plain:
     @prim_func(target=_CUDA)
     def plain(a_plain: Tensor[(128, 8), "f32"], out_plain: Tensor[(128,), "f32"]):
         with Mesh((Topology("thread", 128),), Layout(shape=(128,), strides=(1,)), ("t",)) as mp:
-            plain_src = T.tensor_view(
-                T.ptr_of(a_plain), layout=ShardLayout(Layout((128, 8), (8, 1)), (Split(0),), mp)
-            )
-            plain_dst = T.tensor_view(
-                T.ptr_of(out_plain), layout=ShardLayout(Layout((128,), (1,)), (Split(0),), mp)
-            )
+            plain_src = T.tensor_view(T.ptr_of(a_plain), layout=(128 @ mp.t, 8))
+            plain_dst = T.tensor_view(T.ptr_of(out_plain), layout=(128 @ mp.t,))
             T.reduce(
                 plain_src,
                 plain_dst,
@@ -35,9 +31,7 @@ class _Warp:
     @prim_func(target=_CUDA)
     def intra_warp(a_warp: Tensor[(32, 4), "f32"], out_warp: Tensor[(1,), "f32"]):
         with Mesh((Topology("thread", 32),), Layout(shape=(32,), strides=(1,)), ("t",)) as mw:
-            warp_src = T.tensor_view(
-                T.ptr_of(a_warp), layout=ShardLayout(Layout((32, 4), (4, 1)), (Split(0),), mw)
-            )
+            warp_src = T.tensor_view(T.ptr_of(a_warp), layout=(32 @ mw.t, 4))
             warp_dst = T.tensor_view(
                 T.ptr_of(out_warp), layout=ShardLayout(Layout((1,), (1,)), (types.Broadcast(),), mw)
             )
@@ -59,7 +53,7 @@ class _Cta:
         ) as mc:
             cta_src = T.tensor_view(
                 T.ptr_of(a_cta),
-                layout=ShardLayout(Layout((4, 32, 8), (256, 8, 1)), (Split(0), Split(1)), mc),
+                layout=(4 @ mc.w, 32 @ mc.t, 8),
             )
             cta_dst = T.tensor_view(
                 T.ptr_of(out_cta),
@@ -85,11 +79,11 @@ class _Cross:
         ) as mx:
             cross_src = T.tensor_view(
                 T.ptr_of(a_cross),
-                layout=ShardLayout(Layout((4, 32), (32, 1)), (Split(0), Split(1)), mx),
+                layout=(4 @ mx.w, 32 @ mx.t),
             )
             cross_dst = T.tensor_view(
                 T.ptr_of(out_cross),
-                layout=ShardLayout(Layout((1, 32), (32, 1)), (types.Broadcast(), Split(1)), mx),
+                layout=(1, 32 @ mx.t),
             )
             cross_ws = T.alloc_tensor(Tensor[(128,), "f32", None, "smem"])
             T.reduce(

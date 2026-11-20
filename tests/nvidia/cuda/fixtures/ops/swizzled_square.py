@@ -12,11 +12,6 @@ _ROWS, _COLS = 128, 4
 _SWIZZLE = Swizzle(2, 2, 2)
 
 
-def _rows(mesh: Mesh) -> ShardLayout:
-    """One row per thread, addressed as the tile is laid out."""
-    return ShardLayout(Layout((_ROWS, _COLS), (_COLS, 1)), (Split(0),), mesh)
-
-
 def _swizzled_rows(mesh: Mesh) -> ShardLayout:
     """The same rows, reached through the swizzle.
 
@@ -41,10 +36,10 @@ class SwizzledSquare:
         dst: Tensor[(_ROWS, _COLS), "f32"],
     ):
         with Mesh((Topology("thread", _ROWS),), Layout((_ROWS,), (1,)), ("t",)) as threads:
-            src_view = T.tensor_view(T.ptr_of(src), layout=_rows(threads))
-            dst_view = T.tensor_view(T.ptr_of(dst), layout=_rows(threads))
+            src_view = T.tensor_view(T.ptr_of(src), layout=(_ROWS @ threads.t, _COLS))
+            dst_view = T.tensor_view(T.ptr_of(dst), layout=(_ROWS @ threads.t, _COLS))
             tile = T.alloc_tensor(Tensor[(_ROWS, _COLS), "f32", _swizzled_rows(threads), "smem"])
-            fragment = T.alloc_tensor(Tensor[(_ROWS, _COLS), "f32", _rows(threads), "rmem"])
+            fragment = T.alloc_tensor(Tensor[(_ROWS, _COLS), "f32", ((_ROWS @ threads.t, _COLS), (_COLS, 1)), "rmem"])
             T.copy(src_view, tile)
             T.sync(threads)
             T.copy(tile, fragment)

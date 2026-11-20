@@ -28,9 +28,7 @@ class _TwoLevel:
         ) as ml:
             two_src = T.tensor_view(
                 T.ptr_of(a_two[ml.c * 2 : ml.c * 2 + 2, 0:4, 0:128, 0:4]),
-                layout=ShardLayout(
-                    Layout((2, 4, 128, 4), (2048, 512, 4, 1)), (types.Broadcast(), Split(2)), ml
-                ),
+                layout=(2, 4, 128 @ ml.t, 4),
                 shape=(2, 4, 128, 4),
             )
             two_dst = T.tensor_view(

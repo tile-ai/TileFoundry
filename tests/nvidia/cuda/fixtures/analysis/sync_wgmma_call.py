@@ -1,22 +1,23 @@
 """A retained callee reads a WGMMA accumulator before its group completes."""
 
+from __future__ import annotations
+
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import cuda
-
-WARPGROUP = Mesh(
-    (Topology("thread", 128),), Layout((4, 8, 4), (32, 4, 1)), ("warp", "lane8", "lane4")
-)
-ACC = ShardLayout(
-    layout=Layout((4, 2, 8, 2, 4, 2), (16, 8, 1, 512, 128, 64)),
-    attrs=(S(0), S(2), S(4)),
-    mesh=WARPGROUP,
-)
 
 
 @module(entry="drain")
 class Drain:
+    thread = Mesh((Topology("thread", 128),), layout=(4, 8, 4), names=("warp", "lane8", "lane4"))
+
     @func
-    def drain(acc: Tensor[(64, 16), "f32", ACC, "rmem"]) -> Tensor[(64, 16), "f32", "rmem"]:
+    def drain(
+        acc: Tensor[
+            (64, 16), "f32",
+            ((4 @ thread.warp, 2, 8 @ thread.lane8, 2, 4 @ thread.lane4, 2), (16, 8, 1, 512, 128, 64)),
+            "rmem",
+        ]
+    ) -> Tensor[(64, 16), "f32", "rmem"]:
         with Mesh(
             (Topology("thread", 128),), layout=(4, 8, 4), names=("warp", "lane8", "lane4")
         ) as threads:

@@ -795,12 +795,8 @@ class ShardLayoutScopeRule:
                 )
             mesh = value.unit_set if mesh is None else unit_set_in_scope(value.unit_set, mesh)
         meshes = shard_layout_meshes(value, context, match)
-        if mesh is None and meshes:
-            mesh = utils.from_meshes(*meshes_outermost_first(meshes, context))
         if mesh is None:
-            raise ParseError.from_node(
-                match.node, context, "shard layout requires a current mesh scope"
-            )
+            mesh = utils.from_meshes(*meshes_outermost_first(meshes, context))
         outside = tuple(
             utils.topology_mesh(source, name)
             for source, source_axis, *state in value.states

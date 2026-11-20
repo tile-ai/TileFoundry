@@ -69,10 +69,9 @@ class TwoLevels:
             Layout(shape=(_CTAS, _THREADS), strides=(_THREADS, 1)),
             ("c", "t"),
         ) as m:
-            row = ShardLayout(Layout((_ROWS,), (1,)), (Split(0), Split(0)), m)
-            source = T.tensor_view(T.ptr_of(a), layout=row)
-            written = T.tensor_view(T.ptr_of(out), layout=row)
-            held = T.alloc_tensor(Tensor[(_ROWS,), "f32", row, "rmem"])
+            source = T.tensor_view(T.ptr_of(a), layout=((_ROWS @ m.c @ m.t,), (1,)))
+            written = T.tensor_view(T.ptr_of(out), layout=((_ROWS @ m.c @ m.t,), (1,)))
+            held = T.alloc_tensor(Tensor[(_ROWS,), "f32", ((_ROWS @ m.c @ m.t,), (1,)), "rmem"])
             T.copy(source, held)
             T.binary(held, held, held, kind=expr.BinaryKind.MUL)
             T.copy(held, written)
@@ -89,10 +88,9 @@ class TwoAxes:
             Layout(shape=(_CTAS, _THREADS), strides=(_THREADS, 1)),
             ("w", "t"),
         ) as m:
-            row = ShardLayout(Layout((_ROWS,), (1,)), (Split(0), Split(0)), m)
-            source = T.tensor_view(T.ptr_of(a), layout=row)
-            written = T.tensor_view(T.ptr_of(out), layout=row)
-            held = T.alloc_tensor(Tensor[(_ROWS,), "f32", row, "rmem"])
+            source = T.tensor_view(T.ptr_of(a), layout=((_ROWS @ m.w @ m.t,), (1,)))
+            written = T.tensor_view(T.ptr_of(out), layout=((_ROWS @ m.w @ m.t,), (1,)))
+            held = T.alloc_tensor(Tensor[(_ROWS,), "f32", ((_ROWS @ m.w @ m.t,), (1,)), "rmem"])
             T.copy(source, held)
             T.binary(held, held, held, kind=expr.BinaryKind.MUL)
             T.copy(held, written)

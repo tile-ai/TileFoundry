@@ -24,7 +24,6 @@ class SplitCopyFewerThreads:
     def gemm(x: Tensor[(ROWS, COLS), "f32"]) -> Tensor[(ROWS, COLS), "f32", "smem"]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(("thread",), layout=(ROWS,), names=("row",)) as rows:
-                split = ShardLayout(layout=Layout((ROWS, COLS), (COLS, 1)), attrs=(S(0),), mesh=rows)
-                stage = tf.empty(Tensor[(ROWS, COLS), "f32", split, "smem"])
-                staged = tf.schedule((tf.reshard(x, split), stage), op=T.copy())
-                return tf.reshard(staged, Layout((ROWS, COLS), (COLS, 1)))
+                stage = tf.empty(Tensor[(ROWS, COLS), "f32", (ROWS @ rows.row, COLS), "smem"])
+                staged = tf.schedule((tf.reshard(x, (ROWS @ rows.row, COLS)), stage), op=T.copy())
+                return tf.reshard(staged, (ROWS, COLS))

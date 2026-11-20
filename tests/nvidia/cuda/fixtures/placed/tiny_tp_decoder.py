@@ -30,11 +30,13 @@ PROJECT_SHARDS = {
 class DecoderLayer:
     """One projection sharded by column and one replicated decode weight."""
 
+    gpu = Mesh(("gpu",), (GPUS,), names=("g",))
+
     @func
     def project(
         x: Tensor[(R, C), "f32"],
-        project_weight: ConstTensor[(R, C), "f32", ShardLayout(Layout((R, GPUS, C // GPUS), (C // GPUS, 0, 1)), (Split(1),), Mesh((GPU,), Layout((GPUS,), (1,)), ("g",)))],
-    ) -> Tensor[(R, C), "f32", ShardLayout(Layout((R, GPUS, C // GPUS), (C // GPUS, 0, 1)), (Split(1),), Mesh((GPU,), Layout((GPUS,), (1,)), ("g",)))]:
+        project_weight: ConstTensor[(R, C), "f32", (R, GPUS @ gpu.g, C // GPUS)],
+    ) -> Tensor[(R, C), "f32", (R, GPUS @ gpu.g, C // GPUS)]:
         with Mesh(("gpu",), layout=(GPUS,), names=("g",)) as g:
             return tf.reshard(project_weight, (R, C @ g.g), "gmem")
 
