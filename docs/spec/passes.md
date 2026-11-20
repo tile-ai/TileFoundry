@@ -649,9 +649,9 @@ through `saved`.
     around the call, from a loop whose step is not 1, whose trip count is not
     static, or whose range is empty or reaches past the slot; whose subtree has
     a `ConstTensor` parameter (the resource path of the weight would move); or
-    whose segment name `<slot>_<n>` is already a function, child slot or method
-    of the root; and a backward that `differentiate` generated, since a second
-    derivative is not supported.
+    whose run's slot name `<slot>_<n>` is already a function, child slot or
+    method of the root; and a backward that `differentiate` generated, since a
+    second derivative is not supported.
 
 ## 8. Directory layout
 

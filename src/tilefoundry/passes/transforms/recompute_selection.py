@@ -51,7 +51,7 @@ class Selection:
 
 
 @dataclass(frozen=True)
-class Segment:
+class Run:
     """A run of consecutive elements of one slot, ``[start, stop)``, which become slot *key*."""
 
     start: int
@@ -106,21 +106,21 @@ def expand(module: core.Module, selection: Selection) -> core.Module:
             children[key] = tuple(elements)
         else:
             selector = next(text for (slot_key, _), text in selection.named_by.items() if slot_key == key)
-            parts = segments(module, selector, key, classes)
+            parts = runs(module, selector, key, classes)
             holding_const(selector, slot)
             children.update((part.key, tuple(elements[part.start : part.stop])) for part in parts)
             functions = tuple(cut_loops(function, selector, key, parts) for function in functions)
     return replace(module, functions=functions, children=children)
 
 
-def segments(module: core.Module, selector: str, key: str, classes: list) -> tuple[Segment, ...]:
+def runs(module: core.Module, selector: str, key: str, classes: list) -> tuple[Run, ...]:
     """Maximal runs of consecutive elements of one class, named ``<key>_<n>``."""
     names = {function.name for function in module.functions} | set(module.children) | set(module.methods)
-    parts: list[Segment] = []
+    parts: list[Run] = []
     start = 0
     for stop in range(1, len(classes) + 1):
         if stop == len(classes) or classes[stop] != classes[start]:
-            part = Segment(start, stop, f"{key}_{len(parts)}")
+            part = Run(start, stop, f"{key}_{len(parts)}")
             if part.key in names:
                 refuse(selector, f"{part.key!r} is already a name in {module.name!r}")
             parts.append(part)
@@ -128,7 +128,7 @@ def segments(module: core.Module, selector: str, key: str, classes: list) -> tup
     return tuple(parts)
 
 
-def cut_loops(function, selector: str, key: str, parts: tuple[Segment, ...]):
+def cut_loops(function, selector: str, key: str, parts: tuple[Run, ...]):
     """*function* with each loop that indexes slot *key* by its induction value cut by *parts*."""
     if not isinstance(function, core.Function) or function.body is None:
         return function
@@ -178,7 +178,7 @@ def slot_loops(function: core.Function, selector: str, key: str, size: int) -> d
 class LoopCutter(core.BindingSubstitutionCloner):
     """Copy a body, cutting each loop of *loops* by *parts* and calling each part's slot."""
 
-    def __init__(self, selector, key, parts, loops, part: Segment | None = None, index=None) -> None:
+    def __init__(self, selector, key, parts, loops, part: Run | None = None, index=None) -> None:
         super().__init__()
         self.selector, self.key, self.parts, self.loops = selector, key, parts, loops
         self.part, self.index = part, index
@@ -461,7 +461,7 @@ def fresh(name: str, taken: set[str]) -> str:
 
 
 def element(tree: core.Module, key: str, index: int | None) -> core.Module:
-    """Element *index* of slot *key* of *tree*, found in its segments when the slot was cut."""
+    """Element *index* of slot *key* of *tree*, found in its runs when the slot was cut."""
     if key in tree.children:
         slot = tree.children[key]
         return slot if index is None else slot[index]
