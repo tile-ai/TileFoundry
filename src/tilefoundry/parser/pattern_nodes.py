@@ -616,7 +616,6 @@ class ShardLayoutCandidate:
     strides: tuple | None
     splits: tuple[tuple[object, int, int], ...]
     states: tuple[tuple[object, int, str, str | None], ...]
-    states_written: bool = False
     mesh: types.Mesh | None = None
     attrs: tuple[object, ...] = ()
     composed: types.ComposedLayout | None = None
@@ -755,7 +754,7 @@ class ShardLayoutScopeRule:
     )
 
     def apply(self, value, *, match, context):
-        if not value.splits and not value.states and not value.states_written:
+        if not value.splits and not value.states and value.unit_set is None:
             return value
         mesh = shard_layout_scope(context)
         if value.unit_set is not None:
@@ -803,13 +802,9 @@ class ShardLayoutScopeRule:
             storage = context.values.get("layout_storage", runtime.StorageKind.GMEM)
             kept = tuple(
                 name
-                for name in utils.topology_names(mesh)
+                for name, held in utils.attrs_by_topology(mesh, attrs).items()
                 if target.storage_owners.private(storage, name)
-                or any(
-                    not isinstance(attr, types.Broadcast)
-                    for attr, (held, _) in zip(attrs, keys)
-                    if held == name
-                )
+                or any(not isinstance(attr, types.Broadcast) for attr in held)
             )
             if kept and len(kept) < len(mesh.topologies):
                 attrs = [attr for attr, (held, _) in zip(attrs, keys) if held in kept]
@@ -1037,14 +1032,13 @@ class StatedLayoutOperandRule:
     def apply(self, value, *, match, context):
         operand, states, unit_set = value
         if isinstance(operand, ShardLayoutCandidate):
-            return dataclasses.replace(operand, states=states, states_written=True, unit_set=unit_set)
+            return dataclasses.replace(operand, states=states, unit_set=unit_set)
         if isinstance(operand, types.ComposedLayout):
             return ShardLayoutCandidate(
                 operand.shape,
                 None,
                 (),
                 states,
-                True,
                 composed=operand,
                 unit_set=unit_set,
             )
@@ -1057,7 +1051,6 @@ class StatedLayoutOperandRule:
             operand.strides,
             (),
             states,
-            True,
             unit_set=unit_set,
         )
 
