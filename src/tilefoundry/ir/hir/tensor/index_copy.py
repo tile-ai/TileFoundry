@@ -14,6 +14,8 @@ from .index_select import norm_dim
 class IndexCopy(expr.Op):
     """Return ``dst`` with ``src`` slices copied to ``index`` along ``dim``."""
 
+    result_rule = "into"
+
     dst = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
     index = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
     src = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())

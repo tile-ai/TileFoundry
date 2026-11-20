@@ -136,7 +136,7 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
                 not cached
                 and isinstance(node, expr.Call)
                 and not isinstance(node.target, core.FunctionRef)
-                and not getattr(node.target, "states_result", False)
+                and getattr(node.target, "result_rule", None) != "stated"
             ):
                 try:
                     result = unite_varying(node, result, ctx)
@@ -304,7 +304,7 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
         )
         if ctx.target is None:
             return result
-        return unite(result, varying_operands((index_type,)), view=False, owners=owners)
+        return unite(result, varying_operands((index_type,)), any_storage=False, owners=owners)
 
     def visit_MeshRegion(self, node: core.MeshRegion, ctx: TypeInferContext) -> types.Type:
         """Type a region against the units in force inside it.

@@ -14,6 +14,8 @@ from tilefoundry.ir import expr, pattern, types, utils
 class CacheUpdate(expr.Op):
     """Cache-update HIR operation; see `spec hir § CacheUpdate`."""
 
+    result_rule = "into"
+
     cache = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
     cur_pos = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
     s = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())

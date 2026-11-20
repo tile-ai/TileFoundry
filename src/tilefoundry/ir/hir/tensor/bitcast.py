@@ -19,7 +19,7 @@ from tilefoundry.ir.types import int_tuple
 class Bitcast(expr.Op):
     """Reinterpret a tensor's bytes under a new shape and layout."""
 
-    states_result = True
+    result_rule = "stated"
 
     x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
     layout = expr.ParamDef(kind="attribute", annotation=types.LayoutBase)

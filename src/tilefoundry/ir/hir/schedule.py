@@ -26,7 +26,7 @@ class ScheduleOp(expr.Op):
     """Apply one TIR instruction repeatedly over a tuple of HIR operands."""
 
     scope_inputs = ()
-    states_result = True
+    result_rule = "stated"
 
     operands = expr.ParamDef(
         kind="input", annotation=Tuple[pattern.is_ranked_tensor()], pattern=pattern.is_ranked_tensor()

@@ -311,6 +311,14 @@ def test_varying_on_another_axis_structure_of_the_same_topology_is_kept() -> Non
     assert result.layout.attrs == (_V, _V)
 
 
+def test_a_new_value_is_varying_whatever_its_storage_and_a_write_into_one_copy_is_not() -> None:
+    """D37: rows gathered per thread from a shared tile are V; an output written per CTA is B."""
+    gathered = _fixture("varying_shared_destinations.py", "SharedGather").entry_function().return_type
+    assert types.shard_layout_of(gathered.layout).attrs == (_V,)
+    stored = _fixture("varying_shared_destinations.py", "SharedStore").entry_function().return_type
+    assert types.shard_layout_of(stored.layout) is None
+
+
 def test_the_written_hint_loads() -> None:
     """The spelling an error gives, with <mesh> replaced by the binding, is a program that loads."""
     cli.load_authored_ir(f"{_FIXTURES / 'diagnostics' / 'varying_into_broadcast.py'}:LoopCarryWritten")

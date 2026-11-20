@@ -13,6 +13,8 @@ from .index_select import norm_dim
 class IndexAdd(expr.Op):
     """Return ``dst`` with ``src`` slices accumulated at ``index`` along ``dim``."""
 
+    result_rule = "into"
+
     dst = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
     index = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
     src = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())

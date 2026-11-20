@@ -11,6 +11,8 @@ from tilefoundry.ir import expr, pattern, types, utils
 class InsertSlice(expr.Op):
     """Return ``dst`` with ``update`` written into the window at ``offsets``."""
 
+    result_rule = "into"
+
     dst = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
     update = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
 

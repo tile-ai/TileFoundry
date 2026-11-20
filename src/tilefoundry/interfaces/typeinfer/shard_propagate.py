@@ -15,7 +15,6 @@ from functools import reduce
 import isl
 
 from tilefoundry import target as tilefoundry_target
-from tilefoundry.interfaces import access
 from tilefoundry.ir import expr, types, utils
 from tilefoundry.ir.types import int_tuple
 
@@ -341,7 +340,7 @@ def induction_type(bounds, declared: types.TensorType, owners, type_of) -> types
     bound_types = tuple(
         type_ for bound in bounds if isinstance(bound, expr.Expr) and isinstance(type_ := type_of(bound), types.TensorType)
     )
-    return unite(plain, varying_operands(bound_types), view=True, owners=owners)
+    return unite(plain, varying_operands(bound_types), any_storage=True, owners=owners)
 
 
 def unite_varying(call: expr.Call, result: types.Type, ctx) -> types.Type:
@@ -349,21 +348,21 @@ def unite_varying(call: expr.Call, result: types.Type, ctx) -> types.Type:
 
     See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics) and
     [semantic-analysis §3.2](docs/spec/semantic-analysis.md#32-relation-driven-shard-propagation).
-    A Broadcast axis becomes Varying when each unit of that topology holds the
-    leaf's storage alone, or when *call* is a view (in ``access.alias_registry``); a
-    Split axis stays. A plain leaf reads as Broadcast on the mesh of the first
-    Varying operand. A field read (``selects_field``) already has its field's type,
-    so only its index is read, not the other fields. Without a target nothing changes.
+    A Broadcast axis becomes Varying whatever the leaf's storage; for a write into a
+    destination (``result_rule = "into"``) only where each unit holds the storage alone.
+    A Split axis stays. A plain leaf reads as Broadcast on the first Varying operand's
+    mesh. A field read (``result_rule = "field"``) reads only its index. Without a
+    target nothing changes.
 
     Raises:
         ValueError: A ``Partial`` result axis meets a ``Varying`` operand.
     """
     if ctx.target is None:
         return result
-    args = call.args[1:] if getattr(call.target, "selects_field", False) else call.args
+    rule = getattr(call.target, "result_rule", None)
+    args = call.args[1:] if rule == "field" else call.args
     held = tuple(hit[1] for arg in args if (hit := ctx.memo.get(id(arg))) is not None)
-    view = access.alias_registry.has(type(call.target))
-    return unite(result, varying_operands(held), view=view, owners=ctx.target.storage_owners)
+    return unite(result, varying_operands(held), any_storage=rule != "into", owners=ctx.target.storage_owners)
 
 
 def varying_operands(type_list) -> tuple[types.TensorType, ...]:
@@ -376,7 +375,7 @@ def varying_operands(type_list) -> tuple[types.TensorType, ...]:
     )
 
 
-def unite(result: types.Type, operands, *, view: bool, owners) -> types.Type:
+def unite(result: types.Type, operands, *, any_storage: bool, owners) -> types.Type:
     """Read the Varying axes of *operands* into each tensor leaf of *result*, as unite_varying does.
 
     An operand Varying on a topology whose mesh has another axis structure than
@@ -403,12 +402,12 @@ def unite(result: types.Type, operands, *, view: bool, owners) -> types.Type:
         stated = utils.attrs_by_axis(leaf, mesh)
         held = utils.attrs_by_axis(leaf, mesh, owners)
         states = tuple(
-            utils.attrs_by_axis(operand, mesh, None if view else owners) for operand in operands
+            utils.attrs_by_axis(operand, mesh, None if any_storage else owners) for operand in operands
         )
         unmatched = {
             topology
             for operand in operands
-            for (topology, _), attr in utils.attrs_by_axis(operand, None, None if view else owners).items()
+            for (topology, _), attr in utils.attrs_by_axis(operand, None, None if any_storage else owners).items()
             if attr == types.Varying()
             and utils.topology_mesh(types.shard_layout_of(operand.layout).mesh, topology) != pieces[topology]
         }
@@ -420,7 +419,7 @@ def unite(result: types.Type, operands, *, view: bool, owners) -> types.Type:
                         f"mesh axis {mesh_axis}: a Partial result cannot combine with a Varying operand"
                     )
                 if isinstance(stated[key], types.Broadcast) and (
-                    view or owners.private(leaf.storage, key[0])
+                    any_storage or owners.private(leaf.storage, key[0])
                 ):
                     attrs[key] = types.Varying()
                     grown.add(key[0])

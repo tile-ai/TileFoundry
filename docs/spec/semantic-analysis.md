@@ -253,16 +253,17 @@ def canonical(type_: Type) -> Type: ...
 
 - constraints:
   - `unite_varying` reads each tensor leaf of each operand, indices and offsets
-    included ([shard §6.1](./shard.md#61-shard-attr-semantics)). On each mesh
-    axis whose topology owns the result's storage per unit, or on any axis when
-    the Op is a view (registered in `access.alias_registry`), a `Broadcast`
-    result with a `Varying` operand becomes `Varying`; a `Partial` result with
+    included ([shard §6.1](./shard.md#61-shard-attr-semantics)). On any mesh
+    axis, a `Broadcast` result with a `Varying` operand becomes `Varying`; for an
+    Op whose `result_rule` is `"into"` (it writes into its destination), only on
+    an axis whose topology owns the result's storage per unit; a `Partial` result with
     one MUST fail (`ValueError`). Other pairs leave the result. It reads each
     topology of the result's mesh and of the `Varying` operands'; a plain result
     starts from the first `Varying` operand's mesh. It does not run
     on a `FunctionRef` call, nor on an Op that states its result
-    (`states_result`: `Bitcast`, `Reshard`, `ScheduleOp`), whose rule checks
-    the operands itself.
+    (`result_rule = "stated"`: `Bitcast`, `Reshard`, `ScheduleOp`), whose rule
+    checks the operands itself. A field read (`result_rule = "field"`:
+    `TupleGetItem`) reads only its index.
   - `induction_type` gives a loop index its shard type, for the visitor and the
     parser alike.
   - `canonical` writes an all-`Broadcast` `ShardLayout` whose mesh covers every

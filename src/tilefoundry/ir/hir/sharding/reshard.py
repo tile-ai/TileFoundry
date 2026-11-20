@@ -18,7 +18,7 @@ class Reshard(expr.Op):
     """Convert *x* to a target layout / storage in place, preserving the logical shape."""
 
     scope_inputs = ()
-    states_result = True
+    result_rule = "stated"
 
     x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
     layout = expr.ParamDef(kind="attribute", annotation=types.LayoutBase, default=None)
