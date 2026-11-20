@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -11,27 +12,37 @@ from tilefoundry.passes.transforms import differentiate
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "autodiff"
 
+
+class RoundTrip(NamedTuple):
+    fixture: str
+    name: str
+    wrt: str
+    recompute: tuple[str, ...] = ()
+    same_text: bool = True
+    """False: both Modules only load; a dim operand that is not a dim prints inline, and reloads bound."""
+
+
 ROUND_TRIP = (
-    ("elementwise.py", "Elementwise", "x,w,b", ()),
-    ("sharded.py", "Layer", "x,w", ()),
-    ("child_call.py:ChildCall", "ChildCall", "x,w1,w2", ()),
-    ("child_call.py:ChildCall", "ChildCall", "x,w1,w2", ("ChildCall.rest.1:h",)),
-    ("inactive_call.py:InactiveCall", "InactiveCall", "x", ()),
-    ("loop_range.py", "LoopRange", "x,w,h0", ()),
-    ("loop_call.py", "LoopCall", "keys,decay", ()),
-    ("loop_nested.py", "LoopNested", "x,w", ()),
-    ("mesh_data_parallel.py", "MeshDataParallel", "x,w", ()),
-    ("mesh_two_regions.py", "MeshTwoRegions", "x,w", ()),
-    ("megatron_block.py", "TensorParallel", "x,wn1,wq,wk,wv,wo,wn2,wg,wu,wd", ()),
-    ("layers_loop.py", "Layers", "x,wn0,norms,up,down", ()),
+    RoundTrip("elementwise.py", "Elementwise", "x,w,b"),
+    RoundTrip("sharded.py", "Layer", "x,w"),
+    RoundTrip("child_call.py:ChildCall", "ChildCall", "x,w1,w2"),
+    RoundTrip("child_call.py:ChildCall", "ChildCall", "x,w1,w2", ("ChildCall.rest.1:h",)),
+    RoundTrip("inactive_call.py:InactiveCall", "InactiveCall", "x"),
+    RoundTrip("loop_range.py", "LoopRange", "x,w,h0"),
+    RoundTrip("two_loops.py", "TwoLoops", "x,w"),
+    RoundTrip("loop_call.py", "LoopCall", "keys,decay"),
+    RoundTrip("loop_nested.py", "LoopNested", "x,w"),
+    RoundTrip("mesh_data_parallel.py", "MeshDataParallel", "x,w"),
+    RoundTrip("mesh_two_regions.py", "MeshTwoRegions", "x,w"),
+    RoundTrip("megatron_block.py", "TensorParallel", "x,wn1,wq,wk,wv,wo,wn2,wg,wu,wd"),
+    RoundTrip("layers_loop.py", "Layers", "x,wn0,norms,up,down"),
 )
 
 
-@pytest.mark.parametrize(("fixture", "name", "wrt", "recompute"), ROUND_TRIP, ids=lambda value: str(value))
-def test_written_file_loads_both_modules_and_reprints_the_same(
-    tmp_path, capsys, fixture, name, wrt, recompute
-) -> None:
+@pytest.mark.parametrize("row", ROUND_TRIP, ids=lambda row: str(tuple(row[:4])))
+def test_written_file_loads_both_modules_and_reprints_the_same(tmp_path, capsys, row: RoundTrip) -> None:
     """D44: one file, one header, each class once; both Modules load and print back to the file."""
+    fixture, name, wrt, recompute, same_text = row
     written = tmp_path / "trained.py"
     selected = [word for selector in recompute for word in ("--recompute", selector)]
     assert cli.main(["autodiff", str(FIXTURES / fixture), "--wrt", wrt, *selected, str(written)]) == 0
@@ -42,7 +53,7 @@ def test_written_file_loads_both_modules_and_reprints_the_same(
     assert len(classes) == len(set(classes))
     forward = cli.load_authored_ir(f"{written}:{name}Forward")
     backward = cli.load_authored_ir(f"{written}:{name}Backward")
-    assert inspection.as_script((forward, backward)) == text
+    assert not same_text or inspection.as_script((forward, backward)) == text
 
 
 def test_without_path_prints_both_modules(capsys) -> None:

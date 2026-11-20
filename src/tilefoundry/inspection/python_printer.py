@@ -95,6 +95,10 @@ class HirPrinter(PythonPrinter):
         )
         return f"({inner}{',' if len(elements) == 1 else ''})"
 
+    def visit_Var(self, value: expr.Var, ctx=None) -> str:
+        """A Var inside an expression, such as a dim operand, by the name its binding printed."""
+        return self.names.get(id(value)) or value.name
+
     def reference(self, node: expr.Expr, ctx=None) -> str:
         """Return the binding that denotes one value in the current definition."""
         if isinstance(node, expr.Tuple):
@@ -768,7 +772,7 @@ def emit_def(
             region.args[: len(region.yield_values)],
             strict=True,
         ):
-            if isinstance(init, expr.Var) and names[id(carry)] != printer.reference(init):
+            if names[id(carry)] != printer.reference(init):
                 lines.append(f"{prefix}{names[id(carry)]} = {printer.reference(init)}")
             printed.add(id(carry))
         extent = printer.visit(region.extent, ctx)
