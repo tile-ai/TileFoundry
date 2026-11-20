@@ -1577,14 +1577,7 @@ CASES = cases(
 STAGES = {"hir": _hir, "plain": _plain, "tir": _tir, "dim": _dim}
 
 
-G3 = pytest.mark.xfail(strict=True, reason="G3: callee cannot name the caller cta axis; fixed in M3")
-
-
-@pytest.mark.parametrize(
-    "case",
-    [pytest.param(case, marks=G3) if case.id == "hir/tma_store_in_callee" else case for case in CASES],
-    ids=lambda case: case.id,
-)
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
 def test_schedule_case(case: ScheduleCase) -> None:
     problems = Problems(case)
     STAGES[case.path.parent.name](case, problems)

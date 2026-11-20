@@ -741,7 +741,7 @@ class TruncatedWaveReuse(AnalysisCase):
         )
         assert _reuse_conclusions(memory) == [
             {
-                "buffer": "view::viewed:10",
+                "buffer": "view::viewed:11",
                 "time": "",
                 "space": "cta.i",
                 "holds_bytes": 32,
@@ -1068,7 +1068,7 @@ class PipelineStages(AnalysisCase):
         memory = report["functions"][0]["function_records"]["memory"]
         assert [peak["persistent_bytes"] for peak in memory["peaks"]] == [128 + 256]
         regions = [mesh["memory"]["peaks"][0]["peak_bytes"] for mesh in report["functions"][0]["meshes"]]
-        assert regions == [512, 512, 512, 512]
+        assert regions == [512, 512, 512]
 
 
 @case
@@ -1263,7 +1263,7 @@ class PipelineOneLoop(AnalysisCase):
     memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 1_024, "rmem": 0})
 
     def guard(self, state, problems):
-        assert _region_peaks(state.result) == [896, 640, 1_024, 1_024]
+        assert _region_peaks(state.result) == [896, 640, 1_024]
         report = _report(state.result)
         assert _moved(report, "moved", "communication") == {"gpu": (128, 128, 128)}
         assert _moved(report, "moved", "storage") == {"gmem": (128, 128, 128)}
@@ -1283,7 +1283,7 @@ class PipelineTwoLoops(AnalysisCase):
     memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 1_536, "rmem": 0})
 
     def guard(self, state, problems):
-        assert _region_peaks(state.result) == [1_536, 1_152, 1_536, 1_536]
+        assert _region_peaks(state.result) == [1_536, 1_152, 1_536]
 
 
 @case

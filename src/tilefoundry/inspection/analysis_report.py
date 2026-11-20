@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from tilefoundry import analysis, services
+from tilefoundry.interfaces import valuation
 from tilefoundry.ir import core, expr
 
 from .analysis_data import render_json, report_data, selected_types
@@ -35,10 +36,15 @@ def render_analysis(result: analysis.Result, *, operands: bool = False) -> Analy
     selected_types_ = selected_types(result.module, result.analyses, result.metadata_types)
     labels, sources = {}, {}
     printer = HirPrinter()
+    owners = {
+        id(context.function): context.module
+        for context in valuation.collect_functions(result.module).values()
+    }
     for function in reversed(result.functions):
         rendered = printer.render(
             function,
             target=result.module.target,
+            module=owners.get(id(function), result.module),
             options=PythonPrintOptions(
                 show_types=True, comment_metadata_types=selected_types_,
                 comment_opt_in=frozenset({"operands"}) if operands else frozenset(),

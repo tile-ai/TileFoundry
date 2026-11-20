@@ -11,7 +11,9 @@ gpu = Topology("gpu", 4)
 
 @module(entry="run", target=target, topologies=(gpu,))
 class SplitOverlap:
-    @func(mesh=Mesh(("gpu",), (4,), names=("g",)))
+    mesh = Mesh(("gpu",), (4,), names=("g",))
+
+    @func
     def run(x: Tensor[(4, 8), "f32", (4 @ mesh[0:2].g, 8), "gmem"]):
-        with Mesh(("gpu",), layout=(4,), names=("g",)) as units:
-            return tf.reshard(x, (4 @ units[1:3].g, 8), "gmem")
+        with mesh:
+            return tf.reshard(x, (4 @ mesh[1:3].g, 8), "gmem")

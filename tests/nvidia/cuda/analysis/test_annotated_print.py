@@ -46,5 +46,5 @@ def test_annotation_keeps_printed_program(
     rendered = inspection.render_analysis(result, operands=operands)
     assert rendered.annotated == golden.read_text()
     assert _without_comments(rendered.annotated) == _without_comments(
-        inspection.HirPrinter().render(result.function, target=result.module.target).source
+        inspection.HirPrinter().render(result.function, target=result.module.target, module=result.module).source
     )

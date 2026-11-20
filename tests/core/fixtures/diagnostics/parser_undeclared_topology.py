@@ -8,6 +8,9 @@ from tilefoundry.target import cpu
 
 @module(entry="run", target=cpu.Target())
 class MissingTopology:
-    @func(mesh=Mesh(("cta",), (8,), names=("b",)))
+    mesh = Mesh(("cta",), (8,), names=("b",))
+
+    @func
     def run(x: Tensor[(8 @ mesh.b, 8), "f32"]):
-        return tf.add(x, x)
+        with mesh:
+            return tf.add(x, x)

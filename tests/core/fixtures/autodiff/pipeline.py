@@ -11,15 +11,17 @@ gpu = Topology("gpu", 2)
 
 @module(entry="forward", target=target, topologies=(gpu,))
 class Pipeline:
-    @func(mesh=Mesh(("gpu",), (2,), names=("pp",)))
+    mesh = Mesh(("gpu",), (2,), names=("pp",))
+
+    @func
     def forward(
         x: Tensor[(4, 8), "f32", (4, 8) @ mesh[0]],
         w0: Tensor[(8, 8), "f32", (8, 8) @ mesh[0]],
         w1: Tensor[(8, 8), "f32", (8, 8) @ mesh[1]],
     ):
-        with Mesh(("gpu",), layout=(2,), names=("pp",)) as stages:
-            with Mesh(stages[0], layout=(1,), names=("s",)) as _s0:
+        with mesh:
+            with Mesh(mesh[0], layout=(1,), names=("s",)) as _s0:
                 h = tf.matmul(x, w0)
-            moved = tf.reshard(h, (4, 8) @ stages[1], "gmem")
-            with Mesh(stages[1], layout=(1,), names=("s",)) as _s1:
+            moved = tf.reshard(h, (4, 8) @ mesh[1], "gmem")
+            with Mesh(mesh[1], layout=(1,), names=("s",)) as _s1:
                 return tf.matmul(moved, w1)

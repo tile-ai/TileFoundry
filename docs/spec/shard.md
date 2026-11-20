@@ -753,8 +753,12 @@ for the whole Reshard.
 | `((8 @ t.w, 16), (16, 1)) @ {t.l @ P("sum")}` | Shard layout with explicit strides and Partial values |
 | `where(layout=(_, _, dim) @ {cta @ B()})` | Broadcast constraint on the named topology `cta` |
 
-A shard layout covers the current composed mesh scope, or the function mesh in a
-signature. A layout that names a slice, or a mesh after `@`, takes that mesh
+A shard layout covers the current composed mesh scope; in a signature, or a body
+outside every `with`, it takes the meshes it names. A Varying state may name a
+topology outside the current scope (an execution mesh may omit outside topologies
+that contain neither Split nor Partial); that topology joins the layout. Meshes are
+declared in the `@module` class body (`pp = Mesh(...)`) and named by every function of
+the class; a file-level `Mesh` is not a lexical binding. A layout that names a slice, or a mesh after `@`, takes that mesh
 instead; it names one unit set (two are refused: `a layout names two unit sets`),
 and in a body its units are units of the current scope. Unstated mesh axes are
 Broadcast. Broadcast is the default and is never written as a state: a `B()` state

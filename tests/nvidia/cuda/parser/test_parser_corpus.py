@@ -203,7 +203,8 @@ class DerivedPrefill(ParserCase):
         assert 'topology_only = DimVar("topology_only", 1, 1024)' in printed
         assert 'Topology("cta", ((prefill_n - 1) // 8) + 1)' in printed
         assert 'Topology("thread", topology_only)' in printed
-        assert "ShardLayout(" in signature
+        assert 'cta = Mesh(("cta",), layout=(((prefill_n - 1) // 8) + 1,), names=("tile",))' in printed
+        assert "@ cta.tile, 8)]:" in signature
         assert rebuilt.topologies == ir.topologies
         assert rebuilt.entry_function().params[0].type == (ir.entry_function().params[0].type)
 

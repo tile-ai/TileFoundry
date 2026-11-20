@@ -10,12 +10,16 @@ from tilefoundry_nvidia import cuda
     topologies=(Topology("cta", 8),),
 )
 class AxisMismatch:
-    @func(mesh=Mesh(("cta",), (8,), names=("b",)))
-    def stage(x: Tensor[(8, 8 @ mesh.b), "f32", "smem"]):
-        return tf.add(x, x)
+    mesh = Mesh(("cta",), (8,), names=("b",))
 
-    @func(mesh=Mesh(("cta",), (8,), names=("b",)))
+    @func
+    def stage(x: Tensor[(8, 8 @ mesh.b), "f32", "smem"]):
+        with mesh:
+            return tf.add(x, x)
+
+    @func
     def root(x: Tensor[(8, 8), "f32"]):
-        return stage(
-            tf.reshard(x, (8 @ mesh.b, 8), "smem")
-        )
+        with mesh:
+            return stage(
+                tf.reshard(x, (8 @ mesh.b, 8), "smem")
+            )

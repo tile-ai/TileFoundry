@@ -114,11 +114,11 @@ class SliceLayouts(RoundtripCase):
         printed = inspection.as_script(state)
         assert "ShardLayout(" not in printed
         for written in (
-            '(4, 8) @ mesh[:1]]',
-            '(4, 8) @ {mesh[:1].pp @ V()}]',
-            '@ mesh[1:].cp',
+            '(4, 8) @ gpu[:1]]',
+            '(4, 8) @ {gpu[:1].pp @ V()}]',
+            '@ gpu[1:].cp',
             'layout=(4, 8) @ gpu[1:]',
-            '((8, 8) | Swizzle(1, 2, 3)) @ mesh[1:]]',
+            '((8, 8) | Swizzle(1, 2, 3)) @ gpu[1:]]',
         ):
             assert written in printed
         again = reload(printed, state.name)

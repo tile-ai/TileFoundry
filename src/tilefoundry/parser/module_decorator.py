@@ -69,14 +69,16 @@ def collect_module(cls, *, entry, target, topologies) -> core.Module:
         if isinstance(value, (core.Function, core.PrimFunction)):
             functions.append(value)
             continue
+        if isinstance(value, types.Mesh):
+            continue
         if inspect.isfunction(value):
             methods[name] = value
             continue
         raise TypeError(
             f"@module {cls.__name__!r}: member {name!r} is a "
             f"{type(value).__name__}, not an @func / @prim_func result, a "
-            f"Module / ModuleList, or a plain function; a "
-            f"@module class body may contain only these three member kinds"
+            f"Module / ModuleList, a Mesh, or a plain function; a "
+            f"@module class body may contain only these member kinds"
         )
 
     functions = [fn for fn in functions if not getattr(fn, "specializations", ())]

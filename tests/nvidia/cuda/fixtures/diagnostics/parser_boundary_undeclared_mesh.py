@@ -10,6 +10,9 @@ from tilefoundry_nvidia import cuda
     topologies=(Topology("cta", 8),),
 )
 class UndeclaredMesh:
-    @func(mesh=Mesh(("cta",), (8,), names=("b",)))
+    mesh = Mesh(("cta",), (8,), names=("b",))
+
+    @func
     def root(x: Tensor[(8 @ nope, 8), "f32"]):
-        return tf.add(x, x)
+        with mesh:
+            return tf.add(x, x)

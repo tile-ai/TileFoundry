@@ -459,7 +459,13 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], types.TypeFunctor[str])
                 ), current)).mesh
                 if current == value.mesh:
                     return f"{operand} @ {ctx.mesh_bindings[-1][1]}"
-        unit = None if ctx is None or operand is None else ctx.mesh_alias(value.mesh) or ctx.mesh_slice(value.mesh)
+        in_body = ctx is not None and ctx.mesh_scope is not None
+        unit = (
+            None
+            if ctx is None or operand is None
+            else ctx.mesh_alias(value.mesh, declared=not in_body)
+            or ctx.mesh_slice(value.mesh, declared=not in_body)
+        )
         if unit is not None and all(isinstance(attr, types.Broadcast) for attr in value.attrs):
             return f"{operand} @ {unit}"
         names = value.mesh.names
@@ -474,9 +480,16 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], types.TypeFunctor[str])
             isinstance(entry, tuple) for entry in (*layout.shape, *(layout.strides or ()))
         ):
             return None
+        scope = set(ir_utils.topology_names(ctx.mesh_scope)) if in_body else set()
         refs = tuple(
-            ctx.mesh_axis_alias(value.mesh, index) or (None if unit is None else f"{unit}.{names[index]}")
-            for index in range(len(names))
+            (f"{unit}.{names[index]}" if unit is not None else None)
+            or ctx.mesh_axis_alias(value.mesh, index)
+            or (
+                ctx.mesh_axis_alias(value.mesh, index, declared=True)
+                if not in_body or (isinstance(attr, types.Varying) and topology not in scope)
+                else None
+            )
+            for index, (attr, (topology, _)) in enumerate(zip(value.attrs, ir_utils.axis_keys(value.mesh)))
         )
         if any(ref is None for ref in refs):
             return None

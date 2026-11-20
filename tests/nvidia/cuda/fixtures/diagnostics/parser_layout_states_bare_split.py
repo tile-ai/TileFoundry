@@ -6,6 +6,9 @@ from tilefoundry_nvidia import cuda
 
 @module(target=cuda.Target("nvidia.h200_sxm"))
 class Model:
-    @func(mesh=Mesh((Topology("thread", 8),), layout=(8,), names=("lane",)))
+    mesh = Mesh((Topology("thread", 8),), layout=(8,), names=("lane",))
+
+    @func
     def f(x: Tensor[(8, 16), "f32", (8, 16) @ {mesh.lane @ B()}, "rmem"]):
-        return x
+        with mesh:
+            return x

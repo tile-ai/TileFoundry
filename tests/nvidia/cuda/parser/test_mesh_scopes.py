@@ -71,12 +71,12 @@ class ValuefulRegionEscape(MeshScopeCase):
 
 @case
 class RootMeshWithoutWith(MeshScopeCase):
-    """A function mesh opens no with: a Mesh value and an external layout stay legal."""
+    """A body that opens no with: a Mesh value and an external layout stay legal, unscoped."""
 
     path: Path = PARSER / "root_mesh_without_with.py"
 
     def guard(self, state, problems):
-        assert isinstance(state.entry_function().body, core.MeshRegion)
+        assert not isinstance(state.entry_function().body, core.MeshRegion)
 
 
 CASES = special(MeshScopeCase)
@@ -144,3 +144,11 @@ def test_a_scope_name_in_a_body_is_broadcast_on_the_composed_scope() -> None:
     printed = inspection.as_script(loaded)
     assert '(16, 16) @ thread_2, "smem"' in printed
     assert smem_types(reload(printed, loaded.name)) == tiles
+
+
+def test_a_tir_signature_names_a_class_body_mesh() -> None:
+    """prim_func signatures see the meshes the class body declares, as @func signatures do."""
+    loaded = cli.load_authored_ir(str(PARSER / "class_mesh_prim_func.py"))
+    (function,) = loaded.functions
+    lanes = types.Mesh((types.Topology("thread", 8),), types.Layout((8,), (1,)), ("lane",))
+    assert function.params[0].type.layout == types.ShardLayout(types.Layout((8, 16), (0, 1)), (types.Split(0),), lanes)

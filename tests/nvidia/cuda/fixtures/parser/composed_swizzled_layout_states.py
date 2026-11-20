@@ -8,7 +8,9 @@ from tilefoundry_nvidia import cuda
 
 @module(entry="f", target=cuda.Target("nvidia.h200_sxm"))
 class Model:
-    @func(mesh=Mesh((Topology("thread", 8),), layout=(8,), names=("lane",)))
+    mesh = Mesh((Topology("thread", 8),), layout=(8,), names=("lane",))
+
+    @func
     def f(
         x: Tensor[
             (8, 16), "f32",
@@ -16,6 +18,7 @@ class Model:
             "rmem",
         ],
     ):
-        return tf.reshard(
-            x, ((8, 16) + 4 | Swizzle(2, 4, 3)), "smem"
-        )
+        with mesh:
+            return tf.reshard(
+                x, ((8, 16) + 4 | Swizzle(2, 4, 3)), "smem"
+            )

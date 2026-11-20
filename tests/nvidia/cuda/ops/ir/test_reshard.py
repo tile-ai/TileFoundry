@@ -69,5 +69,5 @@ test_op_case = op_case_test(CASES)
 def test_split_between_overlapping_slices_is_refused_at_its_line():
     """GPUs both slices hold would send and receive a share at once; it is not priced."""
     fixture = Path(__file__).parents[2] / "fixtures" / "diagnostics" / "reshard_split_overlapping_slices.py"
-    with pytest.raises(expr.VerifyError, match=r"share some gpu units(.|\n)*overlapping_slices\.py:17:"):
+    with pytest.raises(expr.VerifyError, match=r"share some gpu units(.|\n)*overlapping_slices\.py:19:"):
         cli.load_authored_ir(str(fixture))

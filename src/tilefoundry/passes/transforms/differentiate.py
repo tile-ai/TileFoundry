@@ -1137,9 +1137,9 @@ class Inliner(core.BindingSubstitutionCloner):
 def enclose(body: expr.Expr, mesh: types.Mesh, params: tuple[expr.Var, ...]) -> core.MeshRegion:
     """*body* as the whole-function region of *mesh*, the backward regions of that mesh inlined.
 
-    A function that opens a mesh runs no op outside it. The region has the
-    shape the parser gives ``@func(mesh=...)``: one copy of each parameter,
-    in order, bound to that parameter.
+    A function that opens a mesh runs no op outside it. The region binds one
+    copy of each parameter, in order, to that parameter; it prints as a
+    ``with`` on the class body's mesh.
     """
     inner = tuple(replace(param) for param in params)
     region_body = Inliner(mesh).visit(body, {id(old): new for old, new in zip(params, inner)})

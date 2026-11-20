@@ -343,7 +343,7 @@ def test_a_result_varying_on_every_axis_prints_its_state_and_reparses() -> None:
     returned = loaded.entry_function().return_type
     assert types.shard_layout_of(returned.layout).attrs == (_V,)
     printed = inspection.as_script(loaded)
-    assert ') -> Tensor[(1, 8), "f32", (1, 8) @ {mesh.g @ V()}]:' in printed
+    assert ') -> Tensor[(1, 8), "f32", (1, 8) @ {gpu.g @ V()}]:' in printed
     assert reload(printed, loaded.name).entry_function().return_type == returned
 
 

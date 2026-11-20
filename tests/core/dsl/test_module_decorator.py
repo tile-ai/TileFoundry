@@ -55,7 +55,7 @@ def test_module_refuses_ambiguous_attribute():
         mod.lookup("dup")
 
 
-def test_module_accepts_three_member_kinds():
+def test_module_accepts_only_its_member_kinds():
     """A plain Python method is the third member kind.
 
     A plain Python method is the third member kind — an orchestration method,
@@ -66,7 +66,7 @@ def test_module_accepts_three_member_kinds():
 
     assert _WithMethod.describe() == "_WithMethod/only"
 
-    with pytest.raises(TypeError, match="only these three member kinds"):
+    with pytest.raises(TypeError, match="only these member kinds"):
         cli.load_authored_ir(str(DIAGNOSTICS / "dsl_module_constant_member.py"))
 
 

@@ -44,9 +44,9 @@ class PrimFunction(Stmt, expr.Annotated):
         if display_name is not None:
             self.display_name = display_name
 
-    def specialize(self, declared, *, mesh=None):
+    def specialize(self, declared):
         """``@base.specialize(pattern.Range(...))``: the decorator registering a shape variant."""
-        return services.specialize(self, declared, mesh)
+        return services.specialize(self, declared)
 
     def add_variant(self, variant: "PrimFunction") -> None:
         if self.sealed:

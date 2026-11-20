@@ -15,23 +15,30 @@ gpu, cta, thread = Topology("gpu", 2), Topology("cta", 1), Topology("thread", 32
 
 @module(entry="forward", target=target, topologies=(gpu, cta))
 class CoordArgument:
-    @func(mesh=Mesh(("gpu",), (2,), names=("g",)))
-    def pick(x: Tensor[(8, 8), "f32", "gmem"], i: Tensor[(1,), "i64", (1,), "rmem"]):
-        return tf.index_select(x, i, dim=0)
+    mesh = Mesh(("gpu",), (2,), names=("g",))
 
-    @func(mesh=Mesh(("gpu",), (2,), names=("g",)))
+    @func
+    def pick(x: Tensor[(8, 8), "f32", "gmem"], i: Tensor[(1,), "i64", (1,), "rmem"]):
+        with mesh:
+            return tf.index_select(x, i, dim=0)
+
+    @func
     def forward(x: Tensor[(8, 8), "f32", "gmem"]):
-        return pick(x, tf.reshape(mesh.g, new_shape=(1,)))
+        with mesh:
+            return pick(x, tf.reshape(mesh.g, new_shape=(1,)))
 
 
 @module(entry="forward", target=target, topologies=(gpu, cta))
 class LoopCarry:
-    @func(mesh=Mesh(("gpu",), (2,), names=("g",)))
+    mesh = Mesh(("gpu",), (2,), names=("g",))
+
+    @func
     def forward(x: Tensor[(8, 8), "f32", "gmem"], acc0: Tensor[(1, 8), "f32", "gmem"]):
-        acc = acc0
-        for _t in range(4):
-            acc = acc + tf.index_select(x, tf.reshape(mesh.g, new_shape=(1,)), dim=0)
-        return acc
+        with mesh:
+            acc = acc0
+            for _t in range(4):
+                acc = acc + tf.index_select(x, tf.reshape(mesh.g, new_shape=(1,)), dim=0)
+            return acc
 
 
 @module(entry="run", target=cuda.Target("nvidia.h200_sxm"), topologies=(cta, thread))

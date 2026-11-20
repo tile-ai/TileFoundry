@@ -346,7 +346,7 @@ class MeshAxisBindingRule:
         mesh, binding, _ = value
         if not isinstance(mesh, runtime.Mesh):
             raise ParseError.from_node(
-                match.node, context, f"{binding!r} is not a lexical Mesh binding"
+                match.node, context, f"{binding!r} is not a lexical Mesh binding; declare the Mesh in the @module class body"
             )
         return value
 
@@ -431,7 +431,7 @@ class UnitSetBindingRule:
     def apply(self, value, *, match, context):
         mesh, binding = value
         if not isinstance(mesh, runtime.Mesh):
-            raise ParseError.from_node(match.node, context, f"{binding!r} is not a lexical Mesh binding")
+            raise ParseError.from_node(match.node, context, f"{binding!r} is not a lexical Mesh binding; declare the Mesh in the @module class body")
         return mesh
 
 
@@ -772,9 +772,10 @@ def shard_layout_scope(context):
 @dataclass(frozen=True)
 class ShardLayoutScopeRule:
     STATEMENT: ClassVar[str] = (
-        "A shard layout requires and covers the current mesh scope, or the function "
-        "mesh in a signature. Each referenced mesh axis must "
-        "map uniquely to a mesh axis of that scope. A layout naming a unit set (a slice, or "
+        "A shard layout covers the current mesh scope, or in a signature the meshes it "
+        "names. A Varying state may name a topology outside the scope, which joins it "
+        "(an execution mesh may omit outside topologies without Split or Partial). Each other referenced "
+        "mesh axis must map uniquely to a mesh axis of that scope. A layout naming a unit set (a slice, or "
         "the mesh after '@') takes the scope with the topologies that set names replaced by its "
         "own; its units lie in the scope. Unstated mesh axes are Broadcast. "
         "In a Varying layout without Split or Partial, a topology that holds only "
@@ -792,12 +793,22 @@ class ShardLayoutScopeRule:
                     context,
                     f"the layout's units ({unit_set_text(value.unit_set)}) are outside the current mesh scope",
                 )
-            in_body = mesh is not None and context.values.get("position") is None
-            mesh = unit_set_in_scope(value.unit_set, mesh) if in_body else value.unit_set
+            mesh = value.unit_set if mesh is None else unit_set_in_scope(value.unit_set, mesh)
+        meshes = shard_layout_meshes(value, context, match)
+        if mesh is None and meshes:
+            mesh = utils.from_meshes(*meshes_outermost_first(meshes, context))
         if mesh is None:
             raise ParseError.from_node(
                 match.node, context, "shard layout requires a current mesh scope"
             )
+        outside = tuple(
+            utils.topology_mesh(source, name)
+            for source, source_axis, *state in value.states
+            if state[0] == "V"
+            and (name := utils.axis_keys(source)[source_axis][0]) not in utils.topology_names(mesh)
+        )
+        if outside:
+            mesh = utils.from_meshes(*meshes_outermost_first((*dict.fromkeys(outside), mesh), context))
         keys = utils.axis_keys(mesh)
         attrs = [runtime.Broadcast() for _ in keys]
         for source, source_axis, *state in (*value.splits, *value.states):
@@ -6154,20 +6165,6 @@ class FunctionPattern(ElementPattern):
         specializations = context.function.specializations
         converter = context.function.converter
         if context.function.dialect == "hir":
-            if body is not None and context.function.mesh is not None:
-                root_mesh = authored_infer_context(context).mesh_scope
-                if not isinstance(root_mesh, runtime.Mesh):
-                    raise ParseError.from_node(
-                        match.node, context, "function mesh could not be resolved"
-                    )
-                region_params = tuple(
-                    runtime.Var(type=param.type, name=param.name) for param in params
-                )
-                body = runtime.BindingSubstitutionCloner().visit(
-                    body,
-                    {id(old): new for old, new in zip(params, region_params, strict=True)},
-                )
-                body = scoped_region(root_mesh, body, params=region_params, args=params)
             declared_return = (
                 None if declared_return is None else dim.canonicalize_dims(declared_return)
             )

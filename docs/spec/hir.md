@@ -276,10 +276,9 @@ freeze** below).
   not the authored signature. A variant
   runs in the same execution domain as its base because both are owned by the
   same `Module`.
-- `.specialize(pattern, *, mesh=None)` accepts an explicit function mesh with
-  the same semantics and Mesh type check as `@func(mesh=...)`. It does not
-  inherit the prototype's mesh; variant and base parameter and return types
-  MUST still match. Authored layout forms and their acceptance rules are owned
+- `.specialize(pattern)` takes no mesh: a variant opens the meshes its body
+  needs with `with`, naming the meshes its Module's class body declares. Variant
+  and base parameter and return types MUST still match. Authored layout forms and their acceptance rules are owned
   by [shard §6](./shard.md#6-shardattr) and [parser §2](./parser.md#2-syntax-and-rules).
 - A variant carries exactly one `pattern.Range` in `specializations`.
   The canonical signature is
