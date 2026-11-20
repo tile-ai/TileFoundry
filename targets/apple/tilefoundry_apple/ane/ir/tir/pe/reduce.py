@@ -101,7 +101,7 @@ def _(ctx):
     op = ctx.op
     value = ctx.args[1].data.to(utils.torch.float32)
     if op.square:
-        value = value * value
+        value = evaluation.f16(value * value)
     reduced = evaluation.f16(REDUCTIONS[op.kind](value, op.axes, op.keepdim))
     return evaluation.write(ctx, evaluation.f16(POSTS[op.post](evaluation.f16(op.scale * reduced))))
 
