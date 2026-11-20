@@ -30,14 +30,14 @@ GENERATED = "autodiff"
 class Saved:
     """One value the forward keeps for the backward.
 
-    *storage* is the value whose bytes a view keeps alive, reached through each
-    view's aliased operand; ``None`` when the value is its own storage.
+    *buffer* is the value whose bytes a view keeps alive, reached through each
+    view's aliased operand; ``None`` when the value is its own buffer.
     """
 
     name: str
     type: types.Type
     origin: str
-    storage: Saved | None = None
+    buffer: Saved | None = None
 
 
 def differentiate(
@@ -971,10 +971,10 @@ class FunctionDifferentiator(expr.Functor[None]):
 
     def record(self, index: int, key: tuple) -> Saved:
         name, origin = self.key_name(key)
-        return Saved(name or f"v{index}", self.key_type(key), origin, self.storage(key))
+        return Saved(name or f"v{index}", self.key_type(key), origin, self.buffer(key))
 
-    def storage(self, key: tuple) -> Saved | None:
-        """The storage a saved view keeps alive; None for a value that is its own, or not a node."""
+    def buffer(self, key: tuple) -> Saved | None:
+        """The buffer a saved view keeps alive; None for a value that is its own, or not a node."""
         if key[0] != "node":
             return None
         owners = (self.module.target or self.differ.target).storage_owners

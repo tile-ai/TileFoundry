@@ -510,7 +510,7 @@ class Saved:
     name: str
     type: types.Type
     origin: str
-    storage: Saved | None = None
+    buffer: Saved | None = None
 
 def saved_values(forward: core.Module) -> tuple[Saved, ...]: ...
 def select_value(module: core.Module, selector: str) -> expr.Expr: ...
@@ -617,13 +617,13 @@ through `saved`.
   the author bound (`v<index>` when there is none), the type, and the origin:
   `parameter`, `carry`, the Op and its source line, or the call whose `saved`
   it is; a stack names the trip count first (`stack of 5: ...`). A saved view
-  keeps the bytes of what it views alive: its `storage` is the value reached
+  keeps the bytes of what it views alive: its `buffer` is the value reached
   by following, from the saved value, the operand each view Op re-addresses
   under the target's storage owners, while there is one; that value is
   reported like a saved one, a value without a name by its origin with `@`
-  for the gap (`matmul@f.py:11`). `storage` is `None` for a value that is its
-  own storage, and for a parameter, a carry, a callee's item and a stack. A
-  callee's item that is the callee's parameter is its own storage: the
+  for the gap (`matmul@f.py:11`). `buffer` is `None` for a value that is its
+  own buffer, and for a parameter, a carry, a callee's item and a stack. A
+  callee's item that is the callee's parameter is its own buffer: the
   caller's value it stands for is not followed.
 - constraints:
   - `differentiate` MUST NOT change *module*.

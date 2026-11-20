@@ -35,7 +35,7 @@ def saved_rows(capsys, fixture: str, wrt: str, *extra: str) -> tuple[dict[str, l
     """The cells of each row of the saved table by name, and its two totals."""
     assert cli.main(["autodiff", str(FIXTURES / fixture), "--wrt", wrt, "--saved", *extra]) == 0
     header, *rows, held, parameters = capsys.readouterr().out.splitlines()
-    assert header.split() == ["saved", "shape", "bytes", "layout", "storage", "from"]
+    assert header.split() == ["saved", "shape", "bytes", "layout", "buffer", "from"]
     totals = {line.split()[0]: int(line.split()[1]) for line in (held, parameters)}
     assert list(totals) == ["held", "parameters"]
     cells = [re.split(" {2,}", row) for row in rows]
@@ -68,7 +68,7 @@ def test_recompute_changes_the_saved_table(capsys) -> None:
     ),
     ids=("none", "k", "q,k,v", "qk"),
 )
-def test_a_saved_view_holds_its_whole_storage_once(capsys, recompute, saved, held) -> None:
+def test_a_saved_view_holds_its_whole_buffer_once(capsys, recompute, saved, held) -> None:
     """Dropping a saved slice of qkv frees nothing while another slice keeps qkv."""
     selected = [word for selector in recompute for word in ("--recompute", selector)]
     rows, totals = saved_rows(capsys, "fused_views.py", "w", *selected)
@@ -85,12 +85,12 @@ def test_a_saved_view_of_a_parameter_holds_nothing_new(capsys) -> None:
     assert totals == {"held": 512, "parameters": 3072}
 
 
-def test_two_values_of_one_name_are_two_storages(capsys) -> None:
+def test_two_values_of_one_name_are_two_buffers(capsys) -> None:
     _, totals = saved_rows(capsys, "rebound.py", "x")
     assert totals == {"held": 96, "parameters": 48}
 
 
-def test_a_stack_and_a_callee_item_are_their_own_storage(capsys) -> None:
+def test_a_stack_and_a_callee_item_are_their_own_buffer(capsys) -> None:
     rows, _ = saved_rows(capsys, "layers_loop.py", "x,wn0,norms,up,down")
     assert all(row[3] == name for name, row in rows.items())
 
