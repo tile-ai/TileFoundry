@@ -18,10 +18,10 @@ from tilefoundry.ir import core, expr, types
 from tilefoundry.ir import utils as ir_utils
 from tilefoundry.ir.hir import sharding
 
-from . import recompute_selection
-from .recompute_selection import is_projection, located, projection, select_value
+from . import element_copies
+from .element_copies import is_projection, located, projection, refuse, where
 
-__all__ = ["Saved", "differentiate", "saved_values", "select_value"]
+__all__ = ["Saved", "differentiate", "saved_values"]
 
 GENERATED = "autodiff"
 
@@ -59,9 +59,9 @@ def differentiate(
     wrt = tuple(wrt)
     if not wrt:
         raise ValueError(f"differentiate: {module.name!r}: wrt names no parameter")
-    selection = recompute_selection.parse_selectors(module, tuple(recompute))
-    tree = recompute_selection.expand(module, selection)
-    selected = {id(value): value for value in recompute_selection.resolve(tree, selection)}
+    selection = parse_selectors(module, tuple(recompute))
+    tree = element_copies.expand(module, selection.by_element, selection.named_by)
+    selected = {id(value): value for value in resolve(tree, selection)}
     return Differentiator(selected, module.target).module(tree, wrt)
 
 
@@ -70,6 +70,207 @@ def saved_values(forward: core.Module) -> tuple[Saved, ...]:
     if forward.metadata.get(GENERATED) != "forward":
         raise ValueError(f"saved_values: {forward.name!r} is not a forward that differentiate generated")
     return forward.metadata["saved"]
+
+
+WHOLE = object()
+"""The choice of a selector without ``:``: each value a selector may name, in the subtree."""
+
+NOTHING: frozenset[tuple[str | None, str]] = frozenset()
+"""The choice of ``:None``: the element saves what it computes."""
+
+
+@dataclass(frozen=True)
+class Selection:
+    """What the selectors choose: by Module name, and by root slot element.
+
+    A choice is :data:`WHOLE` or a set of ``(function name or None for the
+    entry, variable)``. The key of an element is ``(slot key, index)``, the
+    index ``None`` for a slot that is not a ModuleList.
+    """
+
+    by_definition: dict[str, object]
+    by_element: dict[tuple[str, int | None], object]
+    named_by: dict[tuple[str, int | None], str] = field(default_factory=dict)
+    """The first selector of each element, which a refusal of its slot quotes."""
+
+
+def parse_selectors(module: core.Module, recompute: tuple[str, ...]) -> Selection:
+    """Check each selector against *module* and gather what it chooses."""
+    by_definition: dict[str, object] = {}
+    by_element: dict[tuple[str, int | None], object] = {}
+    named_by: dict[tuple[str, int | None], str] = {}
+    for selector in recompute:
+        key, chosen_by = choice(module, selector)
+        if isinstance(key, str):
+            by_definition[key] = merged(by_definition.get(key), chosen_by)
+            continue
+        if key in by_element and NOTHING in (by_element[key], chosen_by) and by_element[key] != chosen_by:
+            refuse(selector, "':None' and another selector name the same element")
+        by_element[key] = merged(by_element.get(key), chosen_by)
+        named_by.setdefault(key, selector)
+    return Selection(by_definition, by_element, named_by)
+
+
+def resolve(tree: core.Module, selection: Selection) -> tuple[expr.Expr, ...]:
+    """The values *selection* chooses in *tree*, which :func:`expand` returned."""
+    replaced = {
+        id(each)
+        for key, index in selection.by_element
+        for each in core.module_definition_order(element(tree, key, index))
+    }
+    values: list[expr.Expr] = []
+    for name, choice in selection.by_definition.items():
+        for owner in core.module_definition_order(tree):
+            if owner.name == name and id(owner) not in replaced:
+                values.extend(chosen(owner, choice, replaced))
+    for (key, index), choice in selection.by_element.items():
+        values.extend(chosen(element(tree, key, index), choice, frozenset()))
+    return tuple(values)
+
+
+def selectable(function: core.Function) -> tuple[expr.Expr, ...]:
+    """Each value of *function* a selector may name: an Op Call outside every loop body."""
+    values = core.collect_exprs(function.body)
+    looped = in_loops(values)
+    return tuple(
+        value
+        for value in values
+        if isinstance(value, expr.Call) and id(value) not in looped and not is_call_result(value)
+    )
+
+
+def choice(root: core.Module, selector: str) -> tuple[str | tuple[str, int | None], object]:
+    """The key and the choice of one selector, checked against the tree of *root*.
+
+    A root name followed by a child slot is an element path; any other text
+    names a definition by its ``Module.name``.
+    """
+    try:
+        parsed = core.parse_selector(selector)
+    except ValueError as error:
+        refuse(selector, str(error))
+    is_element = parsed.root == root.name and parsed.segments[:1] != () and parsed.segments[0] in root.children
+    start = root if is_element else named(root, selector, parsed.root)
+    try:
+        ref, module, function = core.select(start, parsed.segments)
+    except ValueError as error:
+        refuse(selector, str(error))
+    if is_element:
+        if sum(isinstance(segment, str) for segment in ref.path) > 1:
+            refuse(selector, "an element path has one child slot")
+        key = (ref.path[0], ref.path[1] if len(ref.path) > 1 else None)
+    elif ref.path:
+        refuse(selector, f"an element path starts at the root Module {root.name!r}")
+    else:
+        key = parsed.root
+    return key, choice_of(selector, module, function, parsed.variable, is_element)
+
+
+def choice_of(selector: str, module: core.Module, function, variable: str | None, element: bool) -> object:
+    """What a selector chooses in *module*: NOTHING for ``:None``, WHOLE with no variable."""
+    if variable == "None":
+        if not element or function is not None:
+            refuse(selector, "':None' names one element of a child slot of the root")
+        return NOTHING
+    if variable is None:
+        if function is not None:
+            refuse(selector, "name a variable after the function")
+        return WHOLE
+    name = None if function is None else function.name
+    value_of(selector, module, name, variable)
+    return frozenset({(name, variable)})
+
+
+def named(root: core.Module, selector: str, name: str) -> core.Module:
+    """The one Module named *name* that *root* reaches."""
+    found = {id(each): each for each in core.module_definition_order(root) if each.name == name}
+    if not found:
+        refuse(selector, f"no Module named {name!r} is reachable from {root.name!r}")
+    if len(found) > 1:
+        refuse(selector, f"{len(found)} different Modules are named {name!r}")
+    (module,) = found.values()
+    return module
+
+
+def value_of(selector: str, module: core.Module, function_name: str | None, variable: str) -> expr.Expr:
+    """The value *variable* of a function of *module*, checked to be one a selector may name."""
+    function = module.lookup(function_name) if function_name else module.entry_function()
+    if any(param.name == variable for param in function.params):
+        refuse(selector, f"{variable!r} is a parameter; the backward reads a parameter, it never computes one")
+    values = core.collect_exprs(function.body)
+    matches = {id(value): value for value in values if expr.binding_name(value) == variable}
+    if not matches:
+        refuse(selector, f"{function.name!r} binds no value named {variable!r}")
+    if len(matches) > 1:
+        places = ", ".join(where(value) or "?" for value in matches.values())
+        refuse(selector, f"{len(matches)} values are named {variable!r}: {places}")
+    (value,) = matches.values()
+    if id(value) in in_loops(values):
+        refuse(
+            selector,
+            f"{variable!r} is computed inside a loop; "
+            "the first version saves every value of a loop body and recomputes none",
+        )
+    if is_call_result(value):
+        produced = value.args[0] if is_projection(value) else value
+        refuse(
+            selector,
+            f"{variable!r} is the result of calling {produced.target.qualified_name!r}; "
+            "only a value an Op computes is recomputed",
+        )
+    if not isinstance(value, expr.Call):
+        refuse(selector, f"{variable!r} is a {type(value).__name__}; only a value an Op computes is recomputed")
+    return value
+
+
+def chosen(module: core.Module, choice: object, skipped) -> list[expr.Expr]:
+    """The values *choice* names in *module*; :data:`WHOLE` reaches its subtree but *skipped*."""
+    if choice is not WHOLE:
+        return [value_of(module.name, module, name, variable) for name, variable in sorted(choice, key=str)]
+    return [
+        value
+        for owner in core.module_definition_order(module)
+        if id(owner) not in skipped
+        for function in owner.functions
+        if isinstance(function, core.Function) and function.body is not None
+        for value in selectable(function)
+    ]
+
+
+def element(tree: core.Module, key: str, index: int | None) -> core.Module:
+    """Element *index* of slot *key* of *tree*, found in its runs when the slot was cut."""
+    if key in tree.children:
+        slot = tree.children[key]
+        return slot if index is None else slot[index]
+    n = 0
+    while len(tree.children[f"{key}_{n}"]) <= index:
+        index -= len(tree.children[f"{key}_{n}"])
+        n += 1
+    return tree.children[f"{key}_{n}"][index]
+
+
+def merged(old: object | None, new: object) -> object:
+    if old is None:
+        return new
+    if WHOLE in (old, new):
+        return WHOLE
+    return old | new
+
+
+def in_loops(values: tuple[expr.Expr, ...]) -> set[int]:
+    """The ids of the values inside a loop body or yield of a loop among *values*."""
+    return {
+        id(inner)
+        for loop in values
+        if isinstance(loop, core.LoopRegion)
+        for root in (loop.body, *loop.yield_values)
+        for inner in core.collect_exprs(root)
+    }
+
+
+def is_call_result(value: expr.Expr) -> bool:
+    produced = value.args[0] if is_projection(value) else value
+    return isinstance(produced, expr.Call) and isinstance(produced.target, core.FunctionRef)
 
 
 def is_float(type_: types.Type) -> bool:

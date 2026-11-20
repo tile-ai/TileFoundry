@@ -22,8 +22,16 @@ summary restated in this project's source.
 
 ## Commands
 
-`SOURCE` is a Python file followed optionally by
-`:Module[.function]`. Without a selector, the source must define exactly one
+A selector is `root[.segment]*[:variable]`. The segments after the root spell
+a function reference: a child slot's key enters it, a number picks one element
+of a ModuleList, and a last segment that is not a child slot names a function.
+The variable is a name the author bound. An empty segment, and an empty
+variable after `:`, MUST be refused. What the root names is the command's to
+say.
+
+`SOURCE` is a Python file followed optionally by a selector
+`:Module[.function]`, its root a top-level binding of the file and without a
+variable. Without a selector, the source must define exactly one
 top-level HIR Module or Function. A selector chooses the named Module and its
 default entry, or one of that Module's own Functions. Child Module path segments
 MUST be refused; a child used independently is named by its own top-level binding.
@@ -425,11 +433,9 @@ tilefoundry autodiff SOURCE --wrt NAMES [--recompute SELECTOR ...] [--saved] [PA
 
 `autodiff` differentiates the selected Module with
 [passes §7.4](./passes.md#74-differentiate). `--wrt` is required and names the
-entry parameters, comma-separated. Each `--recompute` is a selector of
-[passes §7.4](./passes.md#74-differentiate), passed to `differentiate` as
-written: `Module[.function][:variable]` for each element of a definition,
-`Root.slot[.index][.function][:variable]` for one element of a child slot of
-the root, `Root.slot[.index]:None` for an element that saves what it computes.
+entry parameters, comma-separated. Each `--recompute` is a selector, its root
+a `Module.name`, passed to `differentiate` as written; what each form
+recomputes is in [passes §7.4](./passes.md#74-differentiate).
 
 - Without `--saved`, the command writes `<Name>Forward` and `<Name>Backward` as
   one DSL file: one header, and each Module class, child slot classes included,

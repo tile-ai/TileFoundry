@@ -513,7 +513,6 @@ class Saved:
     buffer: Saved | None = None
 
 def saved_values(forward: core.Module) -> tuple[Saved, ...]: ...
-def select_value(module: core.Module, selector: str) -> expr.Expr: ...
 ```
 
 `differentiate` is not a `Pass`: the author calls it with arguments, and it

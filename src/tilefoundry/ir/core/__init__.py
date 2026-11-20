@@ -24,6 +24,7 @@ from .module import (
 )
 from .prim_function import PrimFunction
 from .return_stmt import Return
+from .selector import Selector, parse_selector, select
 from .sequential import Sequential
 from .shape_of import ShapeOf, shape_of
 from .ssa_value import SSAValue, ssa_leaves
