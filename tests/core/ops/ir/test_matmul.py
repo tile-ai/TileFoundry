@@ -150,13 +150,6 @@ CARRIES = [
         (types.Split(axis=2),),
         id="lower_rank_batched_rhs_split_maps_to_output",
     ),
-    pytest.param(
-        _sharded((16, 8), (types.Broadcast(),)),
-        _sharded((8, 32), (types.Broadcast(),)),
-        (16, 32),
-        (types.Broadcast(),),
-        id="replicated_operands_give_a_replicated_result_of_its_own_shape",
-    ),
 ]
 
 

@@ -165,6 +165,16 @@ def equals_mesh_scope(mesh: types.Mesh, current: types.Mesh) -> bool:
     )
 
 
+def same_mesh(mesh: types.Mesh, other: types.Mesh) -> bool:
+    """Whether two meshes name the same axes over the same units, however each layout is written."""
+    return (
+        mesh.topologies == other.topologies
+        and mesh.names == other.names
+        and types.plain_layout(mesh.layout).shape == types.plain_layout(other.layout).shape
+        and equals_mesh_scope(mesh, other)
+    )
+
+
 def covers_every_unit(mesh: types.Mesh) -> bool:
     """Whether each topology of *mesh* selects every unit that topology has.
 
@@ -366,6 +376,7 @@ __all__ = [
     "axis_keys",
     "covers_every_unit",
     "equals_mesh_scope",
+    "same_mesh",
     "first_unit_ids",
     "flat_layout",
     "from_meshes",

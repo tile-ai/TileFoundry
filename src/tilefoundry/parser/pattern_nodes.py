@@ -672,7 +672,9 @@ class ShardLayoutScopeRule:
     STATEMENT: ClassVar[str] = (
         "A shard layout requires and covers the current mesh scope, or the function "
         "mesh in a signature. Each referenced mesh axis must "
-        "map uniquely to a mesh axis of that scope. Unstated mesh axes are Broadcast."
+        "map uniquely to a mesh axis of that scope. Unstated mesh axes are Broadcast. "
+        "In a Varying layout without Split or Partial, a topology that holds only "
+        "Broadcast and does not own the storage is dropped."
     )
 
     def apply(self, value, *, match, context):
@@ -700,6 +702,26 @@ class ShardLayoutScopeRule:
                 kind, reduction = state
                 attr = types.Varying() if kind == "V" else runtime.Partial(reduction)
             attrs[targets[0]] = attr
+        target = None if context.function is None else context.function.target
+        if (
+            target is not None
+            and types.Varying() in attrs
+            and not any(isinstance(attr, (types.Split, types.Partial)) for attr in attrs)
+        ):
+            storage = context.values.get("layout_storage", runtime.StorageKind.GMEM)
+            kept = tuple(
+                name
+                for name in utils.topology_names(mesh)
+                if target.storage_owners.private(storage, name)
+                or any(
+                    not isinstance(attr, types.Broadcast)
+                    for attr, (held, _) in zip(attrs, keys)
+                    if held == name
+                )
+            )
+            if kept and len(kept) < len(mesh.topologies):
+                attrs = [attr for attr, (held, _) in zip(attrs, keys) if held in kept]
+                mesh = utils.from_meshes(*(utils.topology_mesh(mesh, name) for name in kept))
         return dataclasses.replace(value, mesh=mesh, attrs=tuple(attrs))
 
 

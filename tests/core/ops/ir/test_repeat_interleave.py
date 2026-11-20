@@ -16,10 +16,10 @@ _F = expr.DType.f32
 _M = types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",))
 CASES = (
     OpCase(
-        "broadcast_keeps_its_mesh_on_the_new_shape",
+        "varying_keeps_its_mesh_on_the_new_shape",
         tensor.RepeatInterleave(repeats=2, axis=1),
-        (utils.make_shard_tensor_type((4, 8), mesh=_M, attrs=(types.Broadcast(),)),),
-        type=utils.make_shard_tensor_type((4, 16), mesh=_M, attrs=(types.Broadcast(),)),
+        (utils.make_shard_tensor_type((4, 8), mesh=_M, attrs=(types.Varying(),)),),
+        type=utils.make_shard_tensor_type((4, 16), mesh=_M, attrs=(types.Varying(),)),
     ),
     OpCase(
         "sharded_fails_closed",

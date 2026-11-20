@@ -60,7 +60,7 @@ def test_saved_table_counts_bytes_per_device(capsys) -> None:
     rows = saved_rows(capsys)
     assert set(rows) == {"x", "h", "full"}
     assert rows["h"][:4] == ["(8,", "6)", "96", "Split(0)"]
-    assert rows["full"][:4] == ["(6,", "4)", "96", "Broadcast"]
+    assert rows["full"][:4] == ["(6,", "4)", "96", "-"]
     assert rows["x"][4:] == ["parameter"]
 
 

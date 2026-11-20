@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from tilefoundry.interfaces import typeinfer
-from tilefoundry.ir import expr, types
+from tilefoundry.ir import expr, types, utils
 from tilefoundry.ir.expr import op_registry
 
 __all__ = ["Context", "build", "gradient_layout", "scalar"]
@@ -21,7 +21,7 @@ def gradient_layout(layout):
     if shard is None or not any(isinstance(attr, types.Partial) for attr in shard.attrs):
         return layout
     attrs = tuple(types.Broadcast() if isinstance(attr, types.Partial) else attr for attr in shard.attrs)
-    return replace(shard, attrs=attrs)
+    return utils.canonical_layout(replace(shard, attrs=attrs))
 
 
 def build(name: str, *args: expr.Expr, **attrs) -> expr.Call:

@@ -78,18 +78,15 @@ class ShardTensor:
     def to_global(self) -> "ShardTensor":
         """One global tensor, by the meaning of ``type``.
 
-        ``Split`` pieces are placed side by side, ``Broadcast`` pieces are one
-        value so any of them serves, and ``Partial`` pieces combine by their
-        reduction.
+        ``Split`` pieces are placed side by side, ``Broadcast`` pieces (and a
+        plain type's) are one value so any of them serves, and ``Partial``
+        pieces combine by their reduction.
         """
         if self.is_global:
             return self
         shard = types.shard_layout_of(self.type.layout)
         if shard is None:
-            raise ValueError(
-                "ShardTensor: a local view whose type has no ShardLayout has no "
-                "global value to assemble"
-            )
+            return ShardTensor(self.type, self.tensor[0][1])
         by_axis = types.partial_reductions_by_axis(shard)
         partial = [axis for axis, kind in enumerate(by_axis) if kind is not None]
         reductions = {kind for kind in by_axis if kind is not None}

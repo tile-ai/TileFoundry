@@ -15,6 +15,7 @@ from functools import reduce
 import isl
 
 from tilefoundry import target as tilefoundry_target
+from tilefoundry.interfaces import access
 from tilefoundry.ir import expr, types, utils
 from tilefoundry.ir.types import int_tuple
 
@@ -49,15 +50,15 @@ def result_access(ma: isl.multi_aff) -> dict[int, tuple[str, int | None]]:
     return out
 
 
-def involved_dims(access: "isl.multi_aff") -> "set[int]":
-    """Every domain dim any result axis of *access* reads.
+def involved_dims(ma: "isl.multi_aff") -> "set[int]":
+    """Every domain dim any result axis of *ma* reads.
 
     Includes dims that appear only inside an access that is not a projection.
     """
     dims: set[int] = set()
-    for out_axis in range(access.dim(isl.dim_type.OUT)):
-        affine = access.get_at(out_axis)
-        for in_dim in range(access.dim(isl.dim_type.IN)):
+    for out_axis in range(ma.dim(isl.dim_type.OUT)):
+        affine = ma.get_at(out_axis)
+        for in_dim in range(ma.dim(isl.dim_type.IN)):
             if int(affine.get_coefficient_val(isl.dim_type.IN, in_dim).num_si()) != 0:
                 dims.add(in_dim)
     return dims
@@ -197,10 +198,9 @@ def derive_output_shard_layout(
     topologies = {topology for state in states for topology, _ in state}
     required = {
         topology
-        for type_, layout, state in zip(input_types, layouts, states)
+        for state in states
         for topology in topologies
         if any(attr != types.Broadcast() for (at, _), attr in state.items() if at == topology)
-        or (layout is None and owners.private(type_.storage, topology))
     }
     parts, active = {}, set()
     for layout, state in zip(layouts, states, strict=True):
@@ -246,9 +246,9 @@ def derive_output_shard_layout(
         (i, t.layout) for i, t in enumerate(input_types) if isinstance(t.layout, types.ShardLayout)
     ]
 
-    if any(access.affine is None for access in relations):
+    if any(relation.affine is None for relation in relations):
         raise ValueError("shard propagation requires a single Op-written affine per boundary")
-    *input_maps, output_map = (access.affine for access in relations)
+    *input_maps, output_map = (relation.affine for relation in relations)
     out_access = result_access(output_map)
     domain_to_out_axis = {
         d: o for o, (kind, d) in out_access.items() if kind == "proj"
@@ -311,11 +311,6 @@ def derive_output_shard_layout(
                 )
             attrs[p] = new_attr
 
-    if all(isinstance(attr, types.Varying) for attr in attrs) and utils.covers_every_unit(mesh):
-        kept_topologies = {topology for topology, _ in keys}
-        if all((topology in kept_topologies) == owners.private(storage, topology) for topology in topologies):
-            return None
-
     carriers = [
         layout
         for i, sl in sharded
@@ -342,95 +337,103 @@ def derive_output_shard_layout(
     return types.ShardLayout.from_logical(output_shape, mesh, tuple(attrs), storage=storage, owners=owners)
 
 
-def operand_types(ctx, operands) -> tuple:
-    """Operand types; a literal reads as Broadcast on the mesh of the first operand that has one.
-
-    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics). A literal (a
-    ``Constant``, a call of an Op marked ``literal`` such as ``Zeros``, or a
-    call whose arguments are all ``Constant``s) is the same on every unit and
-    names no mesh of its own.
-    """
-    typed = tuple(ctx.type_of(operand) for operand in operands)
-    mesh = next(
-        (
-            layout.mesh
-            for type_ in typed
-            if isinstance(type_, types.TensorType)
-            and (layout := types.shard_layout_of(type_.layout)) is not None
-        ),
-        None,
-    )
-    if mesh is None:
-        return typed
-    return tuple(
-        replace(type_, layout=types.ShardLayout(type_.layout, (types.Broadcast(),) * len(utils.axis_keys(mesh)), mesh))
-        if (
-            isinstance(operand, expr.Constant)
-            or getattr(getattr(operand, "target", None), "literal", False)
-            or (isinstance(operand, expr.Call) and operand.args and all(isinstance(arg, expr.Constant) for arg in operand.args))
-        )
-        and isinstance(type_.layout, types.Layout)
-        else type_
-        for operand, type_ in zip(operands, typed)
-    )
-
-
 def induction_type(bounds, declared: types.TensorType, mesh, type_of) -> types.TensorType:
-    """A loop index: Broadcast on *mesh* when each bound is an int, a literal, or all-Broadcast.
+    """A loop index: Varying on each axis of *mesh* where a bound is Varying; plain otherwise.
 
     See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics). *mesh* is the
-    mesh in force at the loop; without one, or when no topology of it has more
-    than one unit, the index is plain. *type_of* reads a bound's type.
+    mesh in force at the loop; *type_of* reads a bound's type.
     """
     plain = replace(declared, layout=types.Layout(tuple(declared.shape)))
-    if mesh is None or all(topology.size == 1 for topology in mesh.topologies):
+    if mesh is None:
         return plain
-    for bound in bounds:
-        if isinstance(bound, (int, expr.Constant)):
-            continue
-        type_ = type_of(bound) if isinstance(bound, expr.Expr) else None
-        shard = types.shard_layout_of(type_.layout) if isinstance(type_, types.TensorType) else None
-        if shard is None or not all(isinstance(attr, types.Broadcast) for attr in shard.attrs):
-            return plain
-    attrs = (types.Broadcast(),) * len(utils.axis_keys(mesh))
+    states = tuple(
+        utils.attrs_by_axis(type_, mesh)
+        for bound in bounds
+        if isinstance(bound, expr.Expr) and isinstance(type_ := type_of(bound), types.TensorType)
+    )
+    attrs = tuple(
+        types.Varying()
+        if any(isinstance(state[key], types.Varying) for state in states)
+        else types.Broadcast()
+        for key in utils.attrs_by_axis(plain, mesh)
+    )
+    if types.Varying() not in attrs:
+        return plain
     return replace(plain, layout=types.ShardLayout(plain.layout, attrs, mesh))
 
 
-def combine_operand_attrs(result, others: tuple, ctx) -> "types.TensorType":
-    """Read the result's shard attrs together with the other tensor operands'.
+def unite_varying(call: expr.Call, result: types.Type, ctx) -> types.Type:
+    """Read the Varying axes of every tensor operand of *call* into each tensor leaf of *result*.
 
     See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics) and
     [semantic-analysis §3.2](docs/spec/semantic-analysis.md#32-relation-driven-shard-propagation).
+    A Broadcast axis becomes Varying when each unit of that topology holds the
+    leaf's storage alone, or when *call* is a view (in ``access.alias_registry``); a
+    Split axis stays. A plain leaf reads as Broadcast on the mesh of the first
+    Varying operand. Without a target nothing changes.
 
     Raises:
         ValueError: A ``Partial`` result axis meets a ``Varying`` operand.
     """
-    shard = types.shard_layout_of(result.layout)
-    if shard is None:
+    if ctx.target is None:
         return result
-    target = getattr(ctx, "target", None)
-    owners = target.storage_owners if target else tilefoundry_target.StorageOwners()
-    held = utils.attrs_by_axis(result, shard.mesh, owners)
-    states = tuple(utils.attrs_by_axis(type_, shard.mesh, owners) for type_ in others)
-    attrs, promoted = [], False
-    for mesh_axis, key in enumerate(held):
-        attr = shard.attrs[mesh_axis] if mesh_axis < len(shard.attrs) else types.Broadcast()
-        if any(isinstance(state[key], types.Varying) for state in states):
-            if isinstance(held[key], types.Partial):
-                raise ValueError(
-                    f"mesh axis {mesh_axis}: a Partial result cannot combine with a Varying operand"
-                )
-            if isinstance(held[key], types.Broadcast) and owners.private(result.storage, key[0]):
-                attr = held[key] = types.Varying()
-                promoted = True
-        attrs.append(attr)
-    if not promoted:
+    owners = ctx.target.storage_owners
+    operands = tuple(
+        operand
+        for arg in call.args
+        if (hit := ctx.memo.get(id(arg))) is not None
+        for operand in utils.tensor_types(hit[1])
+        if (shard := types.shard_layout_of(operand.layout)) is not None
+        and types.Varying() in shard.attrs
+    )
+    if not operands:
         return result
-    if all(isinstance(attr, types.Varying) for attr in held.values()) and utils.covers_every_unit(shard.mesh):
-        return replace(result, layout=types.Layout(result.shape))
-    shard = replace(shard, attrs=tuple(attrs))
-    layout = shard if isinstance(result.layout, types.ShardLayout) else replace(result.layout, outer=shard)
-    return replace(result, layout=layout)
+    view = access.alias_registry.has(type(call.target))
+
+    def united(leaf: types.TensorType) -> types.TensorType:
+        shard = types.shard_layout_of(leaf.layout)
+        if shard is None and not (
+            isinstance(leaf.layout, types.Layout)
+            or (isinstance(leaf.layout, types.ComposedLayout) and leaf.layout.inner is None)
+        ):
+            return leaf
+        mesh = types.shard_layout_of(operands[0].layout).mesh if shard is None else shard.mesh
+        held = utils.attrs_by_axis(leaf, mesh, owners)
+        states = tuple(
+            utils.attrs_by_axis(operand, mesh, None if view else owners) for operand in operands
+        )
+        attrs, promoted = [], False
+        for mesh_axis, key in enumerate(held):
+            attr = (
+                shard.attrs[mesh_axis]
+                if shard is not None and mesh_axis < len(shard.attrs)
+                else types.Broadcast()
+            )
+            if any(isinstance(state[key], types.Varying) for state in states):
+                if isinstance(held[key], types.Partial):
+                    raise ValueError(
+                        f"mesh axis {mesh_axis}: a Partial result cannot combine with a Varying operand"
+                    )
+                if isinstance(attr, types.Broadcast) and (
+                    view or owners.private(leaf.storage, key[0])
+                ):
+                    attr, promoted = types.Varying(), True
+            attrs.append(attr)
+        if not promoted:
+            return leaf
+        if shard is None:
+            outer = leaf.layout if isinstance(leaf.layout, types.Layout) else leaf.layout.outer
+            shard = types.ShardLayout(outer, tuple(attrs), mesh)
+        else:
+            shard = replace(shard, attrs=tuple(attrs))
+        layout = (
+            shard
+            if not isinstance(leaf.layout, types.ComposedLayout)
+            else replace(leaf.layout, outer=shard)
+        )
+        return replace(leaf, layout=layout)
+
+    return utils.map_tensor_types(result, united)
 
 
-__all__ = ["combine_operand_attrs", "derive_output_shard_layout", "induction_type", "operand_types"]
+__all__ = ["derive_output_shard_layout", "induction_type", "unite_varying"]

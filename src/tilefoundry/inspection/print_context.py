@@ -113,9 +113,10 @@ class PrintContext:
     def mesh_scope(self) -> types.Mesh | None:
         return ir_utils.from_meshes(*(mesh for mesh, _ in self.mesh_bindings)) if self.mesh_bindings else None
 
-    def mesh_alias(self, mesh: types.Mesh) -> str | None:
+    def mesh_alias(self, mesh: types.Mesh, *, units: bool = False) -> str | None:
+        """The binding of *mesh*; with *units*, also one naming its axes over the same units."""
         for bound, name in reversed(self.mesh_bindings):
-            if bound == mesh:
+            if bound == mesh or (units and ir_utils.same_mesh(bound, mesh)):
                 return name
         return None
 

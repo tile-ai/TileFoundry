@@ -20,7 +20,7 @@ class FootprintMeshCoord:
             with Mesh(("thread",), layout=(R,), names=("row",)) as rows:
                 r0 = cta.m * R
                 t = tf.schedule(
-                    (x[r0 : r0 + R], tf.empty(Tensor[(R,), "f32", ((R @ rows.row,), (1,)), "rmem"])),
+                    (x[r0 : r0 + R], tf.empty(Tensor[(R,), "f32", ((R @ rows.row,), (1,)) @ {cta.m @ V()}, "rmem"])),
                     op=T.copy(),
                 )
                 y = tf.schedule((t + t, tf.empty(Tensor[(R,), "f32", (R,)])), op=T.copy())

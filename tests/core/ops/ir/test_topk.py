@@ -91,14 +91,12 @@ def test_topk_layout_describes_selection():
 
 
 def test_topk_broadcast_handles_dynamic_dim():
-    """An all-Broadcast TopK layout handles a dynamic dim.
+    """An all-Broadcast TopK result is plain and handles a dynamic dim.
 
-    The canonical replicated fallback (an all-Broadcast layout has no
-    Split/Partial to propagate, but must still shrink the selected axis to k
-    rather than retain the stale input extent) must handle a dynamic (DimVar)
-    dim on a non-selected axis: no int() on a ShapeDim, and — per the HIR
-    invariant that every post-typeinfer ShardLayout has concrete strides — it
-    materializes symbolic row-major strides rather than leaving them None.
+    The replicated fallback must shrink the selected axis to k rather than
+    retain the stale input extent, handle a dynamic (DimVar) dim on a
+    non-selected axis with no int() on a ShapeDim, and materialize symbolic
+    row-major strides rather than leaving them None.
     """
     s = DimVar("S", 1, 63)
     x_ty = raw_shard_tensor_type(
@@ -112,10 +110,8 @@ def test_topk_broadcast_handles_dynamic_dim():
     values_ty, indices_ty = infer_call(tensor.TopK(k=6, axis=0), x_ty).fields
     assert values_ty.shape == (6, s) and indices_ty.shape == (6, s)
     for t in (values_ty, indices_ty):
-        assert isinstance(t.layout, types.ShardLayout)
-        assert all((isinstance(a, types.Broadcast) for a in t.layout.attrs)), "replication preserved"
-        assert t.layout.layout.shape == (6, s), t.layout.layout.shape
-        assert t.layout.layout.strides == (s, 1), "symbolic row-major strides, never None"
+        assert t.layout.shape == (6, s), t.layout.shape
+        assert t.layout.strides == (s, 1), "symbolic row-major strides, never None"
 
 
 def test_topk_parser_preserves_largest_sorted():

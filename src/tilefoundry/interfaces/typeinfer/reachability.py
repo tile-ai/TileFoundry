@@ -8,8 +8,16 @@ __all__ = ["check_input_reachability"]
 
 
 def check_input_reachability(op, operand_types, mesh):
+    """Raise when a scoped Op's input is laid out more finely or more coarsely than *mesh*.
+
+    A topology that holds only Broadcast or Varying limits no reader when *mesh*
+    does not name it ([shard §6.1](docs/spec/shard.md#61-shard-attr-semantics):
+    "An explicit execution mesh may omit outside topologies that contain neither
+    Split nor Partial").
+    """
     if mesh is None:
         return
+    scope = set(utils.topology_names(mesh))
     names = getattr(op, "scope_inputs", None)
     params = getattr(expr.schema_of(type(op)), "signature", ())
     inputs = tuple(p.name for p in params if p.kind == "input")
@@ -22,6 +30,19 @@ def check_input_reachability(op, operand_types, mesh):
         layout = types.shard_layout_of(utils.physical_layout(layout))
         if layout is None:
             continue
+        kept = tuple(
+            name
+            for name in utils.topology_names(layout.mesh)
+            if any(
+                isinstance(attr, (types.Split, types.Partial))
+                for attr, (held, _) in zip(layout.attrs, utils.axis_keys(layout.mesh))
+                if held == name
+            )
+            or name in scope
+        )
+        if not kept:
+            continue
+        layout = utils.filter_topologies(layout, kept)
         projected = utils.filter_topologies(layout)
         held = utils.topology_names(projected.mesh)
         replicated = (

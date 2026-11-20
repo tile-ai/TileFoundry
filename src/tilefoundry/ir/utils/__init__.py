@@ -12,8 +12,8 @@ from .bounds import (
     shape_upper_bound,
     upper_bound,
 )
-from .compatible import is_unsharded_layout, types_compatible
-from .leaves import leaf_rank, leaf_span, leaves_of, result_fields, tensor_types
+from .compatible import canonical, canonical_layout, is_unsharded_layout, types_compatible
+from .leaves import leaf_rank, leaf_span, leaves_of, map_tensor_types, result_fields, tensor_types
 from .local import (
     divided_axes,
     filter_topologies,
@@ -32,6 +32,7 @@ from .mesh_scope import (
     flat_layout,
     from_meshes,
     runs,
+    same_mesh,
     selected_units,
     storage_reaches,
     sub_box,
@@ -48,6 +49,7 @@ from .partials import (
     reject_partials,
     require_matching_partial_state,
     require_uniform_partial_slices,
+    varying_axis,
 )
 from .sizes import (
     bytes_by_storage,

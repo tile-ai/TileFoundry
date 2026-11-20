@@ -12,4 +12,4 @@ class StridedReturnWindow:
             matrix = tf.reshape(row, new_shape=(24, 512))
             window = matrix[:, :256]
             with Mesh(("thread",), layout=(1,), names=("t",)) as _thread:
-                return tf.schedule((window, tf.empty(Tensor[(24, 256), "bf16", (24, 256), "rmem"])), op=T.copy())
+                return tf.schedule((window, tf.empty(Tensor[(24, 256), "bf16", (24, 256) @ {cta.t @ V()}, "rmem"])), op=T.copy())

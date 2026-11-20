@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from tilefoundry.ir import expr, types
 
+from .leaves import tensor_types
 from .mesh_scope import axis_keys
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "reject_partials",
     "require_matching_partial_state",
     "require_uniform_partial_slices",
+    "varying_axis",
 ]
 
 
@@ -28,13 +30,14 @@ def attrs_by_axis(
     See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics).
 
     Args:
-        type_: Tensor whose plain layout reads as Varying.
+        type_: Tensor whose plain layout reads as Broadcast.
         mesh: Shard mesh to read; defaults to the tensor's shard mesh.
         owners: Target facts used to normalize shared copies. None reads attrs
             as written; empty facts instead normalize Broadcast and Varying alike.
 
     Returns:
-        States in mesh axis order; omitted shard axes and topologies read as Broadcast.
+        States in mesh axis order; omitted shard axes and topologies, and a plain
+        layout, read as Broadcast.
     """
     shard = types.shard_layout_of(type_.layout)
     stated, counts = {}, {}
@@ -54,7 +57,7 @@ def attrs_by_axis(
             keys[topology, ordinal] = None
     result = {}
     for key in keys:
-        attr = stated.get(key, types.Broadcast()) if shard is not None else types.Varying()
+        attr = stated.get(key, types.Broadcast())
         if (
             owners is not None
             and isinstance(attr, (types.Broadcast, types.Varying))
@@ -63,6 +66,24 @@ def attrs_by_axis(
             attr = types.Broadcast()
         result[key] = attr
     return result
+
+
+def varying_axis(declared: types.Type, actual: types.Type, owners: "StorageOwners | None" = None) -> str | None:
+    """The first mesh axis on which *actual* is Varying while *declared* is Broadcast, by name.
+
+    See [shard §6.1](docs/spec/shard.md#61-shard-attr-semantics). With *owners*,
+    an axis whose topology shares the declared storage is not counted.
+    """
+    for stated, held in zip(tensor_types(declared), tensor_types(actual)):
+        shard = types.shard_layout_of(held.layout)
+        if shard is None:
+            continue
+        before, after = attrs_by_axis(stated, shard.mesh, owners), attrs_by_axis(held, shard.mesh)
+        for (key, attr), (topology, name) in zip(after.items(), axis_keys(shard.mesh), strict=True):
+            if attr == types.Varying() and before[key] == types.Broadcast():
+                if owners is None or owners.private(stated.storage, topology):
+                    return name or f"{topology}[{key[1]}]"
+    return None
 
 
 def reject_partials(

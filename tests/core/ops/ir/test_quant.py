@@ -114,12 +114,12 @@ def test_quant_accepts_factorized_groups() -> None:
     assert types.split_target_axes(scale.layout, scale.shape) == (1,)
 
 
-def test_quant_preserves_broadcast_ownership() -> None:
+def test_quant_preserves_varying_ownership() -> None:
     source = utils.make_shard_tensor_type(
         (2, 256),
         _BF,
         mesh=types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",)),
-        attrs=(types.Broadcast(),),
+        attrs=(types.Varying(),),
     )
     quantized, scale = infer_call(tensor.Quant(group=128), source).fields
     assert quantized.layout == types.ShardLayout(

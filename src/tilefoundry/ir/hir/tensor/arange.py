@@ -15,11 +15,6 @@ class Arange(expr.Op):
     start = expr.ParamDef(kind="attribute", annotation=types.ShapeDim, default=0)
     step = expr.ParamDef(kind="attribute", annotation=int, default=1)
 
-    @property
-    def literal(self) -> bool:
-        """With a static start, the sequence is the same on every unit, like a literal."""
-        return expr.static_dim_value(self.start) is not None
-
 
 @access.register_relation(Arange)
 def arange_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:

@@ -19,6 +19,8 @@ from tilefoundry.ir.types import int_tuple
 class Bitcast(expr.Op):
     """Reinterpret a tensor's bytes under a new shape and layout."""
 
+    states_result = True
+
     x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
     layout = expr.ParamDef(kind="attribute", annotation=types.LayoutBase)
 
@@ -129,18 +131,30 @@ def address_mapping(
     return tuple(source_at[address] for address in result_at)
 
 
+def address_layout(layout):
+    """*layout* without its ShardLayout: the address layout one unit's copy uses."""
+    shard = types.shard_layout_of(layout)
+    if shard is None:
+        return layout
+    return shard.layout if layout is shard else replace(layout, outer=shard.layout)
+
+
 def restates_attrs(source: types.TensorType, layout) -> bool:
     """Whether *layout* keeps the source's addresses and only states Varying copies equal or summed.
 
     This is form (ii): the address layout and the mesh stay; on each mesh axis
-    the attr stays, or Varying becomes Broadcast or Partial. A plain source
-    reads as Varying on *layout*'s mesh. A source offset wrapping its shard
+    the attr stays, Varying becomes Broadcast or Partial, or Broadcast becomes
+    Varying. A plain end reads as Broadcast. A source offset wrapping its shard
     must be stated again around the new attrs. See [hir §1.3](docs/spec/hir.md#13-op).
     """
     stated = types.shard_layout_of(layout)
-    if stated is None:
-        return False
     held = types.shard_layout_of(source.layout)
+    if stated is None:
+        return (
+            held is not None
+            and layout == (held.layout if source.layout is held else replace(source.layout, outer=held.layout))
+            and all(isinstance(attr, (types.Broadcast, types.Varying)) for attr in held.attrs)
+        )
     if held is None and (layout is not stated or source.layout != stated.layout):
         return False
     if held is not None and (
@@ -154,6 +168,7 @@ def restates_attrs(source: types.TensorType, layout) -> bool:
     return all(
         before[key] == attr
         or (isinstance(before[key], types.Varying) and isinstance(attr, (types.Broadcast, types.Partial)))
+        or (isinstance(before[key], types.Broadcast) and isinstance(attr, types.Varying))
         for key, attr in after.items()
     )
 
@@ -166,10 +181,26 @@ def _(call: expr.Call, ctx) -> types.TensorType:
         return types.TensorType(source.shape, source.dtype, stated_layout, source.storage)
     if not expr.is_literal_shape(source.shape):
         ctx.error(call, "source tensor shape must be literal")
+    held = types.shard_layout_of(source.layout)
+    stated = types.shard_layout_of(stated_layout)
+    if (
+        held is not None
+        and not any(isinstance(attr, (types.Split, types.Partial)) for attr in held.attrs)
+        and (stated is None or (stated.mesh, stated.attrs) == (held.mesh, held.attrs))
+    ):
+        source = replace(source, layout=address_layout(source.layout))
+        stated_layout = address_layout(stated_layout)
+    else:
+        held = None
     sharded = isinstance(source.layout, types.ShardLayout) or isinstance(stated_layout, types.ShardLayout)
     shape = source.shape if sharded else tuple(prod(types.flatten_to_tuple(mode)) for mode in stated_layout.shape)
-    result = types.TensorType(shape, source.dtype, stated_layout, source.storage)
-    layout = result.layout
+    result = types.TensorType(
+        shape,
+        source.dtype,
+        stated_layout if held is None else types.ShardLayout(stated_layout, held.attrs, held.mesh),
+        source.storage,
+    )
+    layout = stated_layout
     if sharded:
         if source.storage is not expr.StorageKind.RMEM:
             ctx.error(call, "sharded bitcast requires rmem storage")

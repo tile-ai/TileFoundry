@@ -13,7 +13,7 @@ from tilefoundry.ir.types import int_tuple
 from .context import TypeInferContext, TypeInferResults
 from .reachability import check_input_reachability
 from .registry import registry
-from .shard_propagate import induction_type
+from .shard_propagate import induction_type, unite_varying
 
 
 def require_axis_groups(node, type_, ctx):
@@ -66,6 +66,14 @@ def call_function(
             continue
         index, arg_type = next(given)
         declared = param.annotation
+        if not utils.types_compatible(declared, arg_type) and (
+            axis := utils.varying_axis(declared, arg_type)
+        ):
+            ctx.error(
+                call,
+                f"argument {index} is Varying on mesh axis {axis}; parameter {param.name} is Broadcast. "
+                f"Write the parameter as '@ {{{axis} @ V()}}', or state equal copies with tf.bitcast",
+            )
         if not utils.types_compatible(declared, arg_type):
             ctx.error(
                 call,
@@ -127,6 +135,17 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
             if not isinstance(results, TypeInferResults):
                 results = TypeInferResults(results)
             result = dim.canonicalize_dims(results.type)
+            if (
+                not cached
+                and isinstance(node, expr.Call)
+                and not isinstance(node.target, core.FunctionRef)
+                and not getattr(node.target, "states_result", False)
+            ):
+                try:
+                    result = unite_varying(node, result, ctx)
+                except ValueError as error:
+                    ctx.error(node, str(error))
+            result = utils.canonical(result)
             if isinstance(node, expr.Call):
                 require_axis_groups(node, result, ctx)
             self.memo[id(node)] = (node, result)
@@ -275,12 +294,8 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
                                 f": mesh axis {key} enters {labels.get(before, repr(before))} "
                                 f"and leaves {labels.get(after, repr(after))}"
                             )
-                            if before in labels and after in labels:
-                                entry, held = ("reshard", "bitcast") if after == types.Varying() else ("bitcast", "reshard")
-                                hint += (
-                                    f"; {entry} the entry to {labels[after]} "
-                                    f"or {held} the yield to {labels[before]}"
-                                )
+                            if (before, after) == (types.Broadcast(), types.Varying()):
+                                hint += f"; write the target as '@ {{{utils.varying_axis(entry, yielded)} @ V()}}'"
                             break
                     if hint:
                         break

@@ -693,7 +693,7 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], types.TypeFunctor[str])
         with self.type_surface(indent=child):
             layout_text = self.visit(value.layout, ctx)
             mesh_text = (
-                ctx.mesh_alias(value.mesh) if ctx is not None else None
+                ctx.mesh_alias(value.mesh, units=True) if ctx is not None else None
             ) or self.mesh_text(value.mesh, ctx)
         return (
             "ShardLayout(\n"

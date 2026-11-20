@@ -8,7 +8,6 @@ from tilefoundry import core, utils
 from tilefoundry import target as tilefoundry_target
 from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
-from tilefoundry.ir import utils as ir_utils
 
 
 @expr.register_op(name="repeat_interleave", dialect='tf', category='tensor')
@@ -49,10 +48,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     new_layout = types.Layout(tuple(shape))
     target = getattr(ctx, "target", None)
     owners = target.storage_owners if target else tilefoundry_target.StorageOwners()
-    if shard is not None and not (
-        all(isinstance(attr, types.Varying) for attr in ir_utils.attrs_by_axis(x_ty, shard.mesh, owners).values())
-        and ir_utils.covers_every_unit(shard.mesh)
-    ):
+    if shard is not None:
         new_layout = types.ShardLayout.from_logical(
             tuple(shape), shard.mesh, shard.attrs, storage=x_ty.storage, owners=owners
         )

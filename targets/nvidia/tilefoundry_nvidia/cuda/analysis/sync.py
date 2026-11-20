@@ -199,12 +199,14 @@ def overlap(a, b) -> bool:
     return a is None or b is None or (a[0] < b[1] and b[0] < a[1])
 
 
-def threads_of(op, type_, owners) -> types.ShardLayout | None:
+def threads_of(op, type_, owners, mesh=None) -> types.ShardLayout | None:
     """The layout giving each byte of a shared memory operand of *type_* to one executing thread.
 
     Each thread executes *op* on its own shard when *op* declares no execution
     mesh. A layout that splits along every mesh axis whose units share shared
     memory, as *owners* states, gives each shard's bytes to that thread alone.
+    A topology of the executing *mesh* whose units share shared memory and that
+    the layout does not split shares those bytes too.
     """
     if required_execution_mesh(op) is not None or not isinstance(type_, types.TensorType):
         return None
@@ -212,7 +214,10 @@ def threads_of(op, type_, owners) -> types.ShardLayout | None:
     if type_.storage is not expr.StorageKind.SMEM or not isinstance(layout, types.ShardLayout):
         return None
     mesh_axes = zip(layout.attrs, utils.axis_keys(layout.mesh), strict=True)
-    shared = (topology for attr, (topology, _) in mesh_axes if not isinstance(attr, types.Split))
+    split = {topology for attr, (topology, _) in mesh_axes if isinstance(attr, types.Split)}
+    held = {topology for topology, _ in utils.axis_keys(layout.mesh)}
+    executing = set() if mesh is None else {topology for topology, _ in utils.axis_keys(mesh)}
+    shared = (held | executing) - split
     return layout if all(owners.private(type_.storage, topology) for topology in shared) else None
 
 
@@ -373,7 +378,7 @@ class Planner:
         }
         owners = self.context.target.storage_owners
         threads = {
-            param.name: threads_of(op, type_, owners)
+            param.name: threads_of(op, type_, owners, mesh or scope.mesh)
             for param, type_ in zip(params, type_list, strict=True)
         }
         effects = completion_of(Issued(op, params, tuple(type_list)))

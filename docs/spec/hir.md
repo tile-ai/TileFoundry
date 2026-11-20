@@ -553,9 +553,8 @@ class Binary(Op):
     fallback MUST NOT accept an incompatible `ShardLayout` pair.
   - Sharded results merge value states using
     [shard §6.1](./shard.md#61-shard-attr-semantics), including plain inputs.
-    All-Broadcast inputs retain Broadcast. A result may use plain layout for
-    Varying only when plain reads back to the same states on every mesh axis. These
-    are the mesh axes of the original input shard mesh, including omitted Broadcast topologies.
+    All-Broadcast inputs give a Broadcast result, which is plain when its mesh
+    covers every unit.
   - If the fallback result is a shaped `rmem` or `smem` value, Binary MUST give it its own C-order `Layout`. A concrete local
     result cannot reach authored analysis with an unresolved layout.
   - A `ShardLayout` operand carrying `Partial(reduction)` propagates to the
@@ -670,9 +669,9 @@ second presentation of the result.
   strides. Lowering MUST copy the source's permuted-stride view into the new
   result storage.
 - `Bitcast(x, layout)` form (ii) keeps the address layout, offset included, and
-  the mesh, in any storage; per mesh axis Varying (a plain source too) may become
-  Broadcast or Partial: the author states the copies are equal, or sum to the
-  value, unchecked. It aliases, costs 0, lowers to a view, keeps every value,
+  the mesh, in any storage; per mesh axis Varying may become Broadcast (or a
+  plain result) or Partial: the author states the copies are equal, or sum to the
+  value, unchecked. Broadcast (a plain source too) may become Varying. It aliases, costs 0, lowers to a view, keeps every value,
   and its gradient reads the cotangent back with the source's attrs.
 - Form (i), any other `Bitcast(x, layout)`, has no autodiff rule. It reinterprets the same bytes with a new shape and layout,
   preserving the input dtype and storage. `layout` is a `LayoutBase`; the result
@@ -681,7 +680,11 @@ second presentation of the result.
   changes only its layout. Its layout modes and `Split` modes MUST be valid
   for that logical shape under the existing layout-mode-to-tensor-axis rules.
   Both layouts MUST be plain `Layout` / `ComposedLayout` without `ShardLayout`
-  components. Otherwise both layouts MUST be rmem `ShardLayout` on the same mesh.
+  components, or a source `ShardLayout` with neither `Split` nor `Partial`, in any
+  storage, whose stated end is plain or states the same attrs and mesh: each unit's
+  copy is re-laid out alone as a plain layout, and the result keeps the source's
+  attrs and mesh. Otherwise both layouts MUST be rmem
+  `ShardLayout` on the same mesh.
   That `ShardLayout` MUST contain only `Split` and `Varying` attributes ([shard §6.1](./shard.md#61-shard-attr-semantics)). Bitcast type inference MUST materialize omitted authored strides, using the same default and storage-owner rules as Reshard and TensorView. Every resulting `Layout` component has concrete strides.
   For rmem shards, an address is the owning mesh coordinate paired with the
   offset within that unit. Varying mesh axes do not enter that unit coordinate:
@@ -1594,7 +1597,7 @@ class Reshard(Op):
     conditions hold. Storage is unchanged. The shape is literal. No unit is
     added (`ir.utils.unit_change` below). Both structural
     address boxes agree. On every mesh axis with a `Partial` end, both ends are
-    equal, or a Varying (or plain) source becomes Partial ([shard §6.1](./shard.md#61-shard-attr-semantics)). Each thread holds register storage
+    equal, or a Varying source becomes Partial ([shard §6.1](./shard.md#61-shard-attr-semantics)). Each thread holds register storage
     privately. So an `rmem` Reshard with a `ShardLayout` is a view only when each
     logical element keeps its threads and its register on each thread. The box
     of an `rmem` `ShardLayout` also holds the mesh's thread numbering. That

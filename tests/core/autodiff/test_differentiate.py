@@ -13,7 +13,7 @@ import torch
 from tests.core._corpus import Case, case, check_case, special
 from tilefoundry import cli, inspection, runtime
 from tilefoundry.interfaces import autodiff, evaluator
-from tilefoundry.ir import core, dim, expr, types
+from tilefoundry.ir import core, dim, expr, types, utils
 from tilefoundry.ir.hir import sharding
 from tilefoundry.passes.transforms import differentiate
 
@@ -103,14 +103,13 @@ def where(value: expr.Expr) -> str:
 
 
 def reshards(backward: core.Module) -> list[tuple[tuple, tuple]]:
-    """``(source attrs, result attrs)`` of every Reshard in the backward's entry."""
+    """``(source attrs, result attrs)`` of each Reshard in the backward's entry; plain is B."""
     found = []
     for value in core.collect_exprs(backward.entry_function().body):
         if isinstance(value, expr.Call) and isinstance(value.target, sharding.Reshard):
             source = types.shard_layout_of(value.args[0].type.layout)
-            result = types.shard_layout_of(value.type.layout)
-            if source is not None and result is not None:
-                found.append((source.attrs, result.attrs))
+            if source is not None:
+                found.append((source.attrs, tuple(utils.attrs_by_axis(value.type, source.mesh).values())))
     return found
 
 
@@ -459,7 +458,7 @@ def test_saved_values_report_name_type_and_origin() -> None:
     assert rows["x"].origin == "parameter"
     assert rows["full"].origin == "reshard  sharded.py:15"
     assert rows["full"].type.shape == (6, 4)
-    assert types.shard_layout_of(rows["full"].type.layout).attrs == (B,)
+    assert types.shard_layout_of(rows["full"].type.layout) is None
 
 
 def test_a_loop_stacks_what_changes_per_step_and_keeps_one_copy_of_the_rest() -> None:

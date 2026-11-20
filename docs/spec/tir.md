@@ -180,8 +180,6 @@ parameters; omitting it means one output.
 `valuation.Context` of the Module declaring `fn`; without it no reference is
 resolved and an `Evaluate(FunctionRef)` is rejected):
 
-- **Param homogeneity**. All parameters' layouts MUST be uniformly
-  `ShardLayout` or uniformly non-`ShardLayout`; mixing is rejected.
 - **Fresh `Var` identity**. The same `Var` object MUST NOT be bound
   by more than one `LetStmt` / `For` / `MeshScope` across the
   function. Parameters seed the bound set.

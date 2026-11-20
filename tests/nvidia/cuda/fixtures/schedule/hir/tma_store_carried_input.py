@@ -27,7 +27,7 @@ class TmaStoreCarriedInput:
             with Mesh(("thread",), layout=(32,), names=("lane",)) as _warp:
                 out = x
                 for row in range(cta.block * ROWS, CTAS * ROWS, CTAS * ROWS):
-                    staged_dst = tf.empty(Tensor[(ROWS, COLS), "f32", (ROWS, COLS), "smem"])
+                    staged_dst = tf.empty(Tensor[(ROWS, COLS), "f32", (ROWS, COLS) @ {cta.block @ V()}, "smem"])
                     staged = tf.schedule(
                         (y[row:row + ROWS, :], staged_dst), op=T.copy_async_tensor()
                     )

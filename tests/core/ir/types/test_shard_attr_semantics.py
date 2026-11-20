@@ -20,7 +20,7 @@ SHAPE = (4, 4)
 
 def reference(extents, attrs, selected):
     """Enumerate each unit's coordinates and value states without layout helpers."""
-    attrs = attrs or (types.V(),) * len(extents)
+    attrs = attrs or (types.B(),) * len(extents)
     if any(
         SHAPE[axis] % prod(n for n, a in zip(extents, attrs, strict=True) if a == types.S(axis))
         for axis in range(2)

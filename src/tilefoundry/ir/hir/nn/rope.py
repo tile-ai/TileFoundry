@@ -35,7 +35,7 @@ class RoPE(expr.Op):
 def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TupleType:
     q_ty = ctx.type_of(call.args[0])
     k_ty = ctx.type_of(call.args[1])
-    cos_ty, sin_ty, pos_ty = typeinfer.operand_types(ctx, call.args)[2:]
+    cos_ty, sin_ty, pos_ty = map(ctx.type_of, call.args[2:])
     if not q_ty.shape or not k_ty.shape:
         ctx.error(call, "q and k must be at least rank-1")
     if len(q_ty.shape) != len(k_ty.shape):
@@ -64,10 +64,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TupleType:
     )
 
     ir_utils.reject_partials("pos_ids", pos_ty.layout)
-    tables = (cos_ty, sin_ty, pos_ty)
-    return types.TupleType(
-        fields=tuple(typeinfer.combine_operand_attrs(ty, tables, ctx) for ty in (q_ty, k_ty))
-    )
+    return types.TupleType(fields=(q_ty, k_ty))
 
 
 @access.register_relation(RoPE)

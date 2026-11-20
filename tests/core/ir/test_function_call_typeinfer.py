@@ -189,7 +189,7 @@ def test_broadcast_formal_accepts_reshaped_slice():
     callee = core.Function.from_parts(name="consume", params=(w,), body=w, return_type=formal)
     call, context = call_in_module(callee, (reshaped,), formal)
 
-    assert typeinfer.TypeInferVisitor().visit(call, context) == formal
+    assert typeinfer.TypeInferVisitor().visit(call, context) == utils.canonical(formal)
 
 
 def test_symbolic_signature_matches_argument():

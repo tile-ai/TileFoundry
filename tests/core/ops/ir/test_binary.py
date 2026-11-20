@@ -41,9 +41,6 @@ def test_broadcast_fallback_keeps_shard_mismatch():
     rhs = types.TensorType.from_shape(wide, _F, layout=types.Layout(wide))
     assert infer_call(_MUL, lhs, rhs).layout == types.Layout(wide)
     assert infer_call(_MUL, lhs, types.TensorType.from_shape(wide, _F)).layout == types.Layout(wide)
-    replicated = utils.make_shard_tensor_type(narrow, mesh=_M, attrs=(types.Broadcast(),))
-    replicated_out = infer_call(_MUL, replicated, rhs)
-    assert replicated_out.layout.layout.shape == wide
     split_0 = utils.make_shard_tensor_type((16, 8), mesh=_M, attrs=(types.Split(0),))
     split_1 = utils.make_shard_tensor_type((16, 8), mesh=_M, attrs=(types.Split(1),))
     with pytest.raises(expr.VerifyError, match="incompatible"):

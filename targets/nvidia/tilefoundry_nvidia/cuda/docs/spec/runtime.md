@@ -558,7 +558,7 @@ __device__ inline void sync(Mesh<TMesh, Topos...> const &mesh,
 <!-- generated: ops-copy-async-bulk -->
 ```cpp
 // targets/nvidia/tilefoundry_nvidia/cuda/codegen/include/tilefoundry/runtime/cuda/ops/copy_async_bulk.cuh
-template <class Src, class Dst>
+template <class ExecutionMesh, class Src, class Dst>
 __device__ inline void copy_async_bulk(Src const &src, Dst &dst,
                                        uint64_t *bar);
 ```

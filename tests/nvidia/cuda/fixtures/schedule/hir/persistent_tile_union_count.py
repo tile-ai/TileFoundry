@@ -46,7 +46,7 @@ class PersistentTileUnionCount:
                     m = (tile % GROUP) * BM
                     n = (tile // GROUP) * BN
                     with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
-                        acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ _compute.group, 4 @ _compute.warp, 2, 8 @ _compute.lane8, 32, 4 @ _compute.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)), "rmem"])
+                        acc = tf.zeros(Tensor[(BM, BN), "f32", ((2 @ _compute.group, 4 @ _compute.warp, 2, 8 @ _compute.lane8, 32, 4 @ _compute.lane4, 2,), (16384, 16, 8, 1, 512, 128, 64)) @ {_cta.block @ V()}, "rmem"])
 
                     for kk in range(PIECE_TILES):
                         k = (piece * PIECE_TILES + kk) * BK
@@ -54,7 +54,7 @@ class PersistentTileUnionCount:
                             lhs_ring = tf.empty(
                                 Tensor[
                                     (128, 64), "bf16",
-                                    Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3),
+                                    (Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))) | Swizzle(3, 4, 3)) @ {_cta.block @ V()},
                                     "smem",
                                 ],
                                 buffers=STAGES,
@@ -66,7 +66,7 @@ class PersistentTileUnionCount:
                             rhs_ring = tf.empty(
                                 Tensor[
                                     (64, 256), "bf16",
-                                    Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3),
+                                    (Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))) | Swizzle(3, 4, 3)) @ {_cta.block @ V()},
                                     "smem",
                                 ],
                                 buffers=STAGES,
@@ -88,7 +88,7 @@ class PersistentTileUnionCount:
                         staged_dst = tf.empty(
                             Tensor[
                                 (128, 256), "bf16",
-                                Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3),
+                                (Layout((128, (4, 64)), (64, (8192, 1))) | Swizzle(3, 4, 3)) @ {_cta.block @ V()},
                                 "smem",
                             ],
                         )

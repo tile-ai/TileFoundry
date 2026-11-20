@@ -212,6 +212,10 @@ test_op_case = op_case_test(CASES)
 
 
 def test_local_reshape_preserves_factored_physical_modes():
+    """The values keep the factored modes; an all-Broadcast source is plain, with default strides.
+
+    The view's addresses come from its access relation, not from the plain type.
+    """
     mesh = types.Mesh((types.Topology("gpu", 1),), types.Layout((1,)), ("g",))
     source_type = utils.make_shard_tensor_type((256, 8, 4, 128), mesh=mesh, attrs=(types.Broadcast(),))
     variable = expr.Var(name="x", type=source_type)
@@ -228,5 +232,5 @@ def test_local_reshape_preserves_factored_physical_modes():
     placement = types.Placement({"gpu": 0})
     result = evaluator.evaluate(function, core.ShardTensor(source_type, ((placement, source),)))
     assert output.shape == (1, 256, 16, 128)
-    assert core.local_type(output).shape == (1, 256, (8, 2), 128)
+    assert core.local_type(output).shape == (1, 256, 16, 128)
     torch.testing.assert_close(result.to_local(placement), source[:, :, 0:2, :].reshape(1, 256, 16, 128), rtol=0, atol=0)

@@ -24,7 +24,7 @@ def axes_shape(axes_type) -> tuple | None:
 
 @register(dim.MeshCoord)
 def infer_mesh_coord(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
-    """Coordinates are numbers about this unit, so they carry no shard layout."""
+    """Coordinates are numbers about this unit: Varying on each mesh axis they read."""
     if not isinstance(call.target.mesh, types.Mesh):
         ctx.error(call, "MeshCoord.mesh must be a Mesh")
     try:
@@ -50,11 +50,15 @@ def infer_mesh_coord(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
         and all(isinstance(extent, int) and not isinstance(extent, bool) for extent in extents)
         else None
     )
-    held = (
-        types.TensorType.from_scalar(expr.DType.i64, storage=expr.StorageKind.RMEM)
-        if not held_shape
-        else types.TensorType(
-            shape=held_shape, dtype=expr.DType.i64, layout=types.Layout(held_shape), storage=expr.StorageKind.RMEM
-        )
+    read = range(len(shape)) if mesh_axes is None else mesh_axes
+    attrs = tuple(
+        types.Varying() if mesh_axis in read else types.Broadcast()
+        for mesh_axis in range(len(shape))
+    )
+    held = types.TensorType(
+        shape=held_shape,
+        dtype=expr.DType.i64,
+        layout=types.ShardLayout(types.Layout(held_shape), attrs, call.target.mesh),
+        storage=expr.StorageKind.RMEM,
     )
     return TypeInferResults(held, value_range=bounds)

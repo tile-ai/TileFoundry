@@ -27,7 +27,7 @@ class RowWindows:
                     half = tf.schedule(
                         (
                             staged[h * 4 : h * 4 + 4, r : r + 1],
-                            tf.empty(Tensor[(4, 1), "f32", (4, 1), "rmem"]),
+                            tf.empty(Tensor[(4, 1), "f32", (4, 1) @ {_cta.block @ V(), threads.row @ V()}, "rmem"]),
                         ),
                         op=T.copy(),
                     )

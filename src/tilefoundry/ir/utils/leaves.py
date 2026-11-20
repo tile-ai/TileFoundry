@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import operator
+from dataclasses import replace
+
 from tilefoundry.ir import types
 
-__all__ = ["leaf_rank", "leaf_span", "leaves_of", "result_fields", "tensor_types"]
+__all__ = ["leaf_rank", "leaf_span", "leaves_of", "map_tensor_types", "result_fields", "tensor_types"]
 
 
 def leaves_of(type_: "types.Type") -> tuple:
@@ -55,3 +58,13 @@ def tensor_types(type: types.Type) -> tuple[types.TensorType, ...]:
     if isinstance(type, types.TupleType):
         return tuple(leaf for field in type.fields for leaf in tensor_types(field))
     return ()
+
+
+def map_tensor_types(type_: types.Type, fn) -> types.Type:
+    """*type_* with *fn* applied to each tensor leaf, tuple nesting kept."""
+    if isinstance(type_, types.TensorType):
+        return fn(type_)
+    if isinstance(type_, types.TupleType):
+        fields = tuple(map_tensor_types(field, fn) for field in type_.fields)
+        return type_ if all(map(operator.is_, fields, type_.fields)) else replace(type_, fields=fields)
+    return type_

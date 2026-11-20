@@ -74,17 +74,23 @@ CASES = (
     ),
     *(
         OpCase(
-            f"cuda_varying_{name}_makes_the_product_plain",
+            f"cuda_varying_{name}_makes_the_product_varying",
             _MM,
             operands,
-            type=_plain((4, 6)),
+            type=_held((4, 6), types.Varying()),
             target=_TWO_GPUS,
         )
         for name, operands in (
-            ("rhs", (_held((4, 8), types.Broadcast()), _held((8, 6), types.Varying()))),
-            ("plain_rhs", (_held((4, 8), types.Broadcast()), _plain((8, 6)))),
-            ("lhs", (_held((4, 8), types.Varying()), _held((8, 6), types.Broadcast()))),
+            ("rhs", (_plain((4, 8)), _held((8, 6), types.Varying()))),
+            ("lhs", (_held((4, 8), types.Varying()), _plain((8, 6)))),
         )
+    ),
+    OpCase(
+        "cuda_plain_operands_make_the_product_plain",
+        _MM,
+        (_plain((4, 8)), _plain((8, 6))),
+        type=_plain((4, 6)),
+        target=_TWO_GPUS,
     ),
 )
 test_op_case = op_case_test(CASES)

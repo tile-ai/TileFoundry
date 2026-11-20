@@ -13,4 +13,4 @@ class ScalarCeildivGate:
         with Mesh(("cta",), layout=(4,), names=("b",)) as cta:
             with Mesh(("thread",), layout=(1,), names=("t",)) as _thread:
                 gate = ceildiv(cta.b, NB)
-                return tf.schedule((x[gate:gate + 8], tf.empty(Tensor[(8,), "f32", (8,), "rmem"])), op=T.copy())
+                return tf.schedule((x[gate:gate + 8], tf.empty(Tensor[(8,), "f32", (8,) @ {cta.b @ V()}, "rmem"])), op=T.copy())
