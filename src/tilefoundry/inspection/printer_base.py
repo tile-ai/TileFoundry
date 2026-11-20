@@ -459,6 +459,9 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], types.TypeFunctor[str])
                 ), current)).mesh
                 if current == value.mesh:
                     return operand + " @ {B()}"
+        unit = None if ctx is None or operand is None else ctx.mesh_alias(value.mesh) or ctx.mesh_slice(value.mesh)
+        if unit is not None and all(isinstance(attr, types.Broadcast) for attr in value.attrs):
+            return f"{operand} @ {unit}"
         names = value.mesh.names
         if (
             (not isinstance(layout, types.Layout) and operand is None)
@@ -471,7 +474,10 @@ class PythonPrinter(core.PrinterBase, expr.Functor[str], types.TypeFunctor[str])
             isinstance(entry, tuple) for entry in (*layout.shape, *(layout.strides or ()))
         ):
             return None
-        refs = tuple(ctx.mesh_axis_alias(value.mesh, index) for index in range(len(names)))
+        refs = tuple(
+            ctx.mesh_axis_alias(value.mesh, index) or (None if unit is None else f"{unit}.{names[index]}")
+            for index in range(len(names))
+        )
         if any(ref is None for ref in refs):
             return None
 

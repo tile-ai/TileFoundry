@@ -380,17 +380,43 @@ class MeshAxisNameRule:
             ) from error
 
 
+def static_mesh_key(node: ast.AST):
+    """The integers and step-1 slices of a mesh subscript, read from its literals."""
+    if isinstance(node, ast.Tuple):
+        return tuple(static_mesh_key(item) for item in node.elts)
+    if isinstance(node, ast.Slice):
+        parts = (node.lower, node.upper, node.step)
+        return slice(*(None if part is None else ast.literal_eval(part) for part in parts))
+    return ast.literal_eval(node)
+
+
+def mesh_reference(node: ast.AST, context) -> tuple[object, str]:
+    """The mesh a lexical binding, or its constant slice, names; and the binding's name."""
+    name = node.value if isinstance(node, ast.Subscript) else node
+    mesh = context.lexical_scope.lookup_mesh(name.id)
+    if isinstance(node, ast.Subscript) and isinstance(mesh, runtime.Mesh):
+        try:
+            mesh = mesh[static_mesh_key(node.slice)]
+        except (ValueError, SyntaxError) as error:
+            raise ParseError.from_node(node, context, str(error)) from error
+    return mesh, name.id
+
+
+def mesh_reference_syntax() -> AstPattern[Any]:
+    return ChoicePattern(
+        AstNodePattern(ast.Name),
+        AstNodePattern(ast.Subscript, FieldPattern("value", AstNodePattern(ast.Name))),
+    )
+
+
 class MeshAxisPattern(ElementPattern):
     element_name = "mesh_axis"
     syntax = LazyPattern(
         lambda: BranchPattern(
             "mesh_axis",
             ChoicePattern(
-                AstNodePattern(ast.Name),
-                AstNodePattern(
-                    ast.Attribute,
-                    FieldPattern("value", AstNodePattern(ast.Name)),
-                ),
+                mesh_reference_syntax(),
+                AstNodePattern(ast.Attribute, FieldPattern("value", mesh_reference_syntax())),
             ),
             pattern_id="tensor.layout.mesh_axis",
         )
@@ -398,13 +424,38 @@ class MeshAxisPattern(ElementPattern):
 
     def construct(self, match, children, context):
         node = match.node
-        binding = node.id if isinstance(node, ast.Name) else node.value.id
-        axis_name = None if isinstance(node, ast.Name) else node.attr
-        return context.lexical_scope.lookup_mesh(binding), binding, axis_name
+        axis_name = node.attr if isinstance(node, ast.Attribute) else None
+        mesh, binding = mesh_reference(node.value if isinstance(node, ast.Attribute) else node, context)
+        return mesh, binding, axis_name
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         MeshAxisBindingRule(), BareMeshAxisRule(), MeshAxisNameRule(),
     )
+
+
+@dataclass(frozen=True)
+class UnitSetBindingRule:
+    STATEMENT: ClassVar[str] = "A layout's unit set is a lexical Mesh binding or its constant slice."
+
+    def apply(self, value, *, match, context):
+        mesh, binding = value
+        if not isinstance(mesh, runtime.Mesh):
+            raise ParseError.from_node(match.node, context, f"{binding!r} is not a lexical Mesh binding")
+        return mesh
+
+
+class UnitSetPattern(ElementPattern):
+    """``layout @ s`` or ``layout @ s[box]``: Broadcast on the units of that mesh."""
+
+    element_name = "unit_set"
+    syntax = LazyPattern(
+        lambda: BranchPattern("unit_set", mesh_reference_syntax(), pattern_id="tensor.layout.unit_set")
+    )
+
+    def construct(self, match, children, context):
+        return mesh_reference(match.node, context)
+
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = (UnitSetBindingRule(),)
 
 
 def meshes_outermost_first(meshes, context):
@@ -593,15 +644,20 @@ class ShardLayoutCandidate:
     mesh: types.Mesh | None = None
     attrs: tuple[object, ...] = ()
     composed: types.ComposedLayout | None = None
+    unit_set: types.Mesh | None = None
 
 
 def shard_layout_meshes(value: ShardLayoutCandidate, context: MatchContext, match):
-    referenced_ids = {id(entry[0]) for entry in (*value.splits, *value.states)}
+    """The meshes a layout names; a slice is new each time it is written, so equal ones are one."""
+    referenced = tuple(entry[0] for entry in (*value.splits, *value.states)) + (
+        () if value.unit_set is None else (value.unit_set,)
+    )
+    referenced_ids = {mesh if mesh.parent is not None else id(mesh) for mesh in referenced}
     if not referenced_ids:
         return ()
     if context.function is None:
         raise ParseError.from_node(match.node, context, "placed layout requires function context")
-    meshes = tuple(dict.fromkeys(entry[0] for entry in (*value.splits, *value.states)))
+    meshes = tuple(dict.fromkeys(referenced))
     if len(meshes) != len(referenced_ids):
         raise ParseError.from_node(
             match.node, context, "shard layout references a non-lexical Mesh binding"
@@ -628,6 +684,51 @@ class ShardLayoutMeshResolutionRule:
     def apply(self, value, *, match, context):
         shard_layout_meshes(value, context, match)
         return value
+
+
+def unit_set_text(mesh: types.Mesh) -> str:
+    """The units *mesh* selects on each of its topologies, for a diagnostic."""
+    return ", ".join(
+        f"{name} {sorted(utils.unit_ids(utils.selected_units(mesh, t)) or ())}"
+        for t, name in enumerate(utils.topology_names(mesh))
+    )
+
+
+def units_within(mesh: types.Mesh, scope: types.Mesh) -> bool:
+    """Whether every unit *mesh* selects is one *scope* selects, contiguous or not."""
+    held = {name: t for t, name in enumerate(utils.topology_names(scope))}
+    for t, name in enumerate(utils.topology_names(mesh)):
+        if name not in held:
+            return False
+        inner = utils.unit_ids(utils.selected_units(mesh, t))
+        outer = utils.unit_ids(utils.selected_units(scope, held[name]))
+        if inner is None or outer is None:
+            return utils.within_mesh_scope(mesh, scope)
+        if not inner <= outer:
+            return False
+    return True
+
+
+@dataclass(frozen=True)
+class UnitSetRule:
+    STATEMENT: ClassVar[str] = (
+        "A layout names one unit set: a mesh slice or the mesh after '@' is the only mesh its "
+        "axes come from."
+    )
+
+    def apply(self, value, *, match, context):
+        meshes = shard_layout_meshes(value, context, match)
+        unit = value.unit_set or next((mesh for mesh in meshes if mesh.parent is not None), None)
+        if unit is None:
+            return value
+        other = next((mesh for mesh in meshes if mesh != unit), None)
+        if other is not None:
+            raise ParseError.from_node(
+                match.node,
+                context,
+                f"a layout names two unit sets: {unit_set_text(unit)} and {unit_set_text(other)}",
+            )
+        return dataclasses.replace(value, unit_set=unit)
 
 
 @dataclass(frozen=True)
@@ -672,7 +773,9 @@ class ShardLayoutScopeRule:
     STATEMENT: ClassVar[str] = (
         "A shard layout requires and covers the current mesh scope, or the function "
         "mesh in a signature. Each referenced mesh axis must "
-        "map uniquely to a mesh axis of that scope. Unstated mesh axes are Broadcast. "
+        "map uniquely to a mesh axis of that scope. A layout naming a unit set (a slice, or "
+        "the mesh after '@') takes that mesh instead, inside the current scope. Unstated mesh "
+        "axes are Broadcast. "
         "In a Varying layout without Split or Partial, a topology that holds only "
         "Broadcast and does not own the storage is dropped."
     )
@@ -681,6 +784,14 @@ class ShardLayoutScopeRule:
         if not value.splits and not value.states and not value.states_written:
             return value
         mesh = shard_layout_scope(context)
+        if value.unit_set is not None:
+            if mesh is not None and not units_within(value.unit_set, mesh):
+                raise ParseError.from_node(
+                    match.node,
+                    context,
+                    f"the layout's units ({unit_set_text(value.unit_set)}) are outside the current mesh scope",
+                )
+            mesh = value.unit_set
         if mesh is None:
             raise ParseError.from_node(
                 match.node, context, "shard layout requires a current mesh scope"
@@ -765,7 +876,7 @@ class ShardLayoutConstructionRule:
             )
         except (TypeError, ValueError) as error:
             raise ParseError.from_node(match.node, context, str(error)) from error
-        return PlacedLayout(value.shape, layout)
+        return PlacedLayout(value.shape, layout if value.unit_set is None else utils.canonical_layout(layout))
 
 
 @dataclass(frozen=True)
@@ -911,6 +1022,7 @@ class PlacedLayoutPattern(ElementPattern):
         LayoutStrideRankRule(),
         MeshAxisBoundOnceRule(),
         ShardLayoutMeshResolutionRule(),
+        UnitSetRule(),
         ShardLayoutTopologyRule(),
         ShardLayoutScopeRule(),
         ShardLayoutConstructionRule(),
@@ -942,9 +1054,9 @@ class StatedLayoutOperandRule:
     )
 
     def apply(self, value, *, match, context):
-        operand, states = value
+        operand, states, unit_set = value
         if isinstance(operand, ShardLayoutCandidate):
-            return dataclasses.replace(operand, states=states, states_written=True)
+            return dataclasses.replace(operand, states=states, states_written=True, unit_set=unit_set)
         if isinstance(operand, types.ComposedLayout):
             return ShardLayoutCandidate(
                 operand.shape,
@@ -953,6 +1065,7 @@ class StatedLayoutOperandRule:
                 states,
                 True,
                 composed=operand,
+                unit_set=unit_set,
             )
         if not isinstance(operand, types.Layout):
             raise ParseError.from_node(
@@ -964,13 +1077,16 @@ class StatedLayoutOperandRule:
             (),
             states,
             True,
+            unit_set=unit_set,
         )
 
 
 def bind_stated_layout(node, context, matched):
     children = list(matched.children)
     states = []
-    for index, item in enumerate(node.right.elts):
+    if isinstance(node.right, (ast.Name, ast.Subscript)):
+        children.append(AstChild("unit_set", UnitSetPattern(), node.right, "mesh_axis", "mesh_axis"))
+    for index, item in enumerate(getattr(node.right, "elts", ())):
         state = value_state_parts(item)
         if state is None:
             continue
@@ -1008,7 +1124,7 @@ class StatedLayoutPattern(ElementPattern):
                         "layout",
                     ),
                 ),
-                FieldPattern("right", ValueStatesPattern()),
+                FieldPattern("right", ChoicePattern(mesh_reference_syntax(), ValueStatesPattern())),
             ),
             bind_stated_layout,
         )
@@ -1018,7 +1134,7 @@ class StatedLayoutPattern(ElementPattern):
         states = tuple(
             (*children[name], kind, reduction) for name, kind, reduction in match.captures["states"]
         )
-        return children["operand"], states
+        return children["operand"], states, children.get("unit_set")
 
     RULES = (StatedLayoutOperandRule(), *PlacedLayoutPattern.RULES)
 
@@ -4612,8 +4728,9 @@ def rebind_through_region(context, mesh, names, frame, node, params=(), args=())
 def enter_with(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
     assert isinstance(node, ast.With)
     item = node.items[0]
-    assert isinstance(item.optional_vars, ast.Name)
-    binding = item.optional_vars.id
+    binding = (
+        f"_with_{node.lineno}_{node.col_offset}" if item.optional_vars is None else item.optional_vars.id
+    )
     params, args = region_captures(node, context)
     return dataclasses.replace(
         matched,
@@ -4664,7 +4781,10 @@ class WithPattern(ElementPattern):
                     SequencePattern(
                         AstNodePattern(
                             ast.withitem,
-                            FieldPattern("optional_vars", AstNodePattern(ast.Name)),
+                            FieldPattern(
+                                "optional_vars",
+                                ChoicePattern(AstNodePattern(ast.Name), LiteralPattern(None)),
+                            ),
                             FieldPattern(
                                 "context_expr",
                                 ChildPattern(

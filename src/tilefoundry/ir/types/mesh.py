@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from tilefoundry import services
 
@@ -42,6 +42,7 @@ class Mesh:
     topologies: tuple[Topology | str, ...]
     layout: "Layout | ComposedLayout"
     names: tuple[str, ...] = ()
+    parent: "Mesh | None" = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         """Group the layout one mode per topology and refuse an unnamed extent."""
@@ -72,7 +73,8 @@ class Mesh:
         Missing mesh axes are full slices; integers select extent one. The box is
         ``make_layout`` of the selected extents with the mesh's strides, moved to
         its first coord by CuTe ``domain_offset``; the index that leaves becomes the
-        ``ComposedLayout`` offset. Topologies and names are kept.
+        ``ComposedLayout`` offset. Topologies and names are kept; ``parent`` is
+        this mesh, outside equality, hash and ``repr``.
 
         See [shard §5](docs/spec/shard.md#5-mesh).
         """
@@ -116,7 +118,7 @@ class Mesh:
             selected.append(stop - start)
         box = make_layout(unflatten(tuple(selected), profile), unflatten(strides, profile))
         box, index = domain_offset(unflatten(tuple(starts), profile), box)
-        return Mesh(self.topologies, make_composed_layout(None, index, box), self.names)
+        return Mesh(self.topologies, make_composed_layout(None, index, box), self.names, self)
 
 
 def nested_layout(layout_value, topologies: tuple) -> "Layout | ComposedLayout":

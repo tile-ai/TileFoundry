@@ -469,6 +469,9 @@ value is consumed by a region.
     in order. The box is `make_layout` of the selected extents with the mesh's
     strides. CuTe `domain_offset` moves it to its first coord, and the index it
     returns is the slice offset.
+  - A slice keeps the mesh it was taken from as `parent` (`m[0].parent is m`).
+    `parent` takes no part in equality, hash or `repr`; a mesh a `with Mesh(...)`
+    builds, a selection included, has no parent. A slice of a slice is refused.
   - Nested one-topology Mesh scopes compose to exactly that shape. The mesh axes join
     outermost first. Each outer stride is scaled by the units below it.
     A value distributed at two topologies at once may therefore be written either
@@ -744,11 +747,18 @@ for the whole Reshard.
 | `((8, 16) + 4 \| Swizzle(2, 4, 3)) @ {B()}` | All-Broadcast `ShardLayout` based on a `ComposedLayout` |
 | `(8 @ t.w, 16) @ {t.l @ V()}` | Split shard attr with Varying values on `t.l` |
 | `(8 @ t.w, 16) @ {t.l @ P("sum")}` | Split shard attr with Partial values on `t.l` |
+| `(4, 8) @ m[0]` | All-Broadcast `ShardLayout` on the slice `m[0]` |
+| `(4, 8) @ s` | All-Broadcast `ShardLayout` on the mesh bound to `s`; plain when `s` covers every unit |
+| `(4, 8) @ {m[0].pp @ V()}` | Varying on mesh axis `pp` of the slice `m[0]` |
+| `(8 @ m[1].cp, 16)` | Split over mesh axis `cp` of the slice `m[1]` |
 | `((8 @ t.w, 16), (16, 1)) @ {t.l @ P("sum")}` | Shard layout with explicit strides and Partial values |
 | `where(layout=(_, _, dim) @ {cta @ B()})` | Broadcast constraint on the named topology `cta` |
 
 A shard layout covers the current composed mesh scope, or the function mesh in a
-signature. Unstated mesh axes are Broadcast. An annotation with `layout=None`
+signature. A layout that names a slice, or a mesh after `@`, takes that mesh
+instead; it names one unit set (two are refused: `a layout names two unit sets`),
+and in a body its units are units of the current scope. Unstated mesh axes are
+Broadcast. A `with` scope may omit `as name`. An annotation with `layout=None`
 imposes no layout constraint. A plain `Layout` and an all-Broadcast `ShardLayout`
 over every unit state the same fact; type inference keeps the plain one
 ([shard §6.1](./shard.md#61-shard-attr-semantics)). Written shape and stride

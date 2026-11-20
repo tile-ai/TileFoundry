@@ -148,7 +148,12 @@ class PrintContext:
         return None
 
     def mesh_slice(self, mesh: types.Mesh) -> str | None:
-        """Recover ``binding[start:stop]`` for a sliced active mesh."""
+        """Recover ``binding[start:stop]`` for a sliced active mesh, through its parent if any."""
+        if mesh.parent is not None:
+            for bound, alias in reversed(self.mesh_bindings):
+                box = ir_utils.sub_box(bound, mesh) if bound == mesh.parent else None
+                if box is not None:
+                    return box_text(bound, box, alias)
         if not isinstance(mesh.layout, types.ComposedLayout):
             return None
         for parent, alias in reversed(self.mesh_bindings):
