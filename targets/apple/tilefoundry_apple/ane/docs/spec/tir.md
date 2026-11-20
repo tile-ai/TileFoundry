@@ -12,7 +12,8 @@ The ANE TIR Ops are the tasks that one Apple Neural Engine runs. Each Op is one 
 - An Op is admitted when `Architecture.capabilities` lists its capability name ([target §1](./target.md#1-anearchitecture)).
   The names are `ne.conv`, `ne.bypass`, `pe.pool`, `pe.unary`, `pe.binary` and `pe.reduce`.
 - A feature map is `[1, C, H, W]` in `gmem` or `smem`, with `C <= 65536`, `H <= 16384` and `W <= 16384`.
-  The strides of a feature map are not constrained.
+  Its W stride MUST be 1 when `W` is above 1. The engine addresses a feature map by row, channel, depth and group
+  strides and has no element stride. The other strides are not constrained.
 - `weight` and `bias` are in `gmem`. The kernel height and width of a `weight` are at most 32.
 - The nonlinear modes are `NONE` and `RELU` ([Nonlinear](#nonlinear)).
   A lookup-table nonlinear, such as sigmoid or tanh, is not an instruction mode. Pairing gives it no `T.ane` candidate.
@@ -364,6 +365,7 @@ class Reduce(Op):
 | `dilation` is not `(1, 1)` | `conv` | `dilation` |
 | `groups` is below 1, does not divide the channels, or is not 1 in the matrix form | `conv` | `groups` |
 | The input channels of `weight` differ from `C / groups` | `conv` | `groups` |
+| A feature map with `W` above 1 has a W stride other than 1 | all | `strides` |
 | A matrix operand has strides that [§1.2](#12-matrix-forms) excludes | `conv`, `bypass` | `layout` |
 | `perm` is not a permutation of `(0, 1, 2)`, or is not `(2, 1, 0)` in the matrix form | `bypass` | `perm` |
 | `axes` is not one of the four admitted tuples | `reduce` | `axes` |

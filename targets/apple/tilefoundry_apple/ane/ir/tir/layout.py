@@ -1,9 +1,10 @@
 """How ANE instructions see their operands.
 
 A feature map is [1, C, H, W] in unified memory (GMEM) or in the on-chip L2
-buffer (SMEM); W is contiguous. Weights stay in unified memory. A matrix is
-[rows, columns] with rows contiguous (column major) or columns contiguous (row
-major). A mesh layout holds one mode per topology.
+buffer (SMEM). Its W stride is 1: the engine addresses a feature map by row,
+channel, depth and group strides and has no element stride. Weights stay in
+unified memory. A matrix is [rows, columns] with rows contiguous (column major)
+or columns contiguous (row major). A mesh layout holds one mode per topology.
 """
 
 from tilefoundry.ir import expr, pattern, types
@@ -13,6 +14,7 @@ FLOATS = (expr.DType.f16,)
 FEATURE_STORAGE = pattern.Or(expr.StorageKind.GMEM, expr.StorageKind.SMEM)
 GMEM_ONLY = pattern.Or(expr.StorageKind.GMEM)
 STRIDES = ((1, 1), (1, 2), (2, 1), (2, 2))
+_ = pattern.Wildcard()
 
 MAX_CHANNELS = 65536
 MAX_HEIGHT = 16384
@@ -27,13 +29,19 @@ def extent(name: str, limit: int) -> pattern.Wildcard:
     return pattern.Wildcard(name, predicates=(pattern.Range(hi=limit),))
 
 
+def rows(operand: str) -> dict:
+    """The strides of feature map *operand*: a W stride of 1 unless W has extent 1."""
+    width, step = pattern.Wildcard(f"{operand}.shape[3]"), pattern.Wildcard(f"{operand}.strides[3]")
+    return {"strides": (_, _, _, step), "predicates": ((width == 1) | (step == 1),)}
+
+
 def stored(operand: str, choices=FEATURE_STORAGE) -> pattern.Wildcard:
     """The storage of *operand*, captured as its name and limited to *choices*."""
     return pattern.Wildcard(f"{operand}.storage", predicates=(choices,))
 
 
 def feature(operand: str) -> pattern.Tensor:
-    """[1, C, H, W] in GMEM or SMEM, within the architecture limits.
+    """[1, C, H, W] in GMEM or SMEM with a W stride of 1, within the architecture limits.
 
     Extents and storage are captured under *operand*; every operand shares one dtype.
     """
@@ -46,22 +54,27 @@ def feature(operand: str) -> pattern.Tensor:
         ),
         dtype=one_of("dtype", FLOATS),
         storage=stored(operand),
+        layout=pattern.Layout(**rows(operand)),
     )
 
 
-def bounded(operand: str, leading: tuple, *limits: int) -> pattern.Layout:
-    """The layout of a tensor shaped *leading*, then extents of at most *limits*, with any strides.
+def bounded(operand: str, leading: tuple, *limits: int, strides: tuple | None = None,
+            predicates: tuple = ()) -> pattern.Layout:
+    """The layout of a tensor shaped *leading*, then extents of at most *limits*.
+
+    *strides* and *predicates* add a rule on the strides; without them any strides match.
 
     Each extent after *leading* is captured as ``<operand>.shape[axis]``.
     """
     names = tuple(pattern.Wildcard(f"{operand}.shape[{len(leading) + axis}]") for axis in range(len(limits)))
     return pattern.Layout(
-        (*leading, *names), predicates=tuple(name <= limit for name, limit in zip(names, limits)))
+        (*leading, *names), strides,
+        predicates=(*(name <= limit for name, limit in zip(names, limits)), *predicates))
 
 
 def feature_layout(operand: str) -> pattern.Layout:
-    """The layout of a [1, C, H, W] feature map within the architecture limits."""
-    return bounded(operand, (1,), MAX_CHANNELS, MAX_HEIGHT, MAX_WIDTH)
+    """The layout of a [1, C, H, W] feature map within the limits; its W stride is 1."""
+    return bounded(operand, (1,), MAX_CHANNELS, MAX_HEIGHT, MAX_WIDTH, **rows(operand))
 
 
 def kernel_layout(operand: str) -> pattern.Layout:
@@ -109,5 +122,5 @@ def one_of(name: str, values) -> pattern.Wildcard:
 __all__ = [
     "ACTIVATION_LIMITS", "ENGINE", "FEATURE_STORAGE", "FLOATS", "GMEM_ONLY", "MAX_CHANNELS", "MAX_HEIGHT",
     "MAX_KERNEL", "MAX_WIDTH", "STRIDES", "WEIGHT_LIMITS", "bounded", "extent", "feature", "feature_layout", "forms",
-    "kernel_layout", "matrix_layout", "one_of", "require_strides", "stored", "strided",
+    "kernel_layout", "matrix_layout", "one_of", "require_strides", "rows", "stored", "strided",
 ]

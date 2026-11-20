@@ -61,7 +61,7 @@ class Reduce(expr.Op):
     post = expr.ParamDef(kind="attribute", annotation=Post, default=Post.NONE)
     dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=pattern.Switch("keepdim", {
         True: RESULT,
-        False: RESULT.replace(shape=(1, layout.extent("dst.shape[1]", layout.MAX_CHANNELS))),
+        False: RESULT.replace(shape=(1, layout.extent("dst.shape[1]", layout.MAX_CHANNELS)), layout=None),
     }))
     src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("src"))
 
