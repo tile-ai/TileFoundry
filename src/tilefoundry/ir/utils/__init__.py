@@ -12,7 +12,13 @@ from .bounds import (
     shape_upper_bound,
     upper_bound,
 )
-from .compatible import canonical, canonical_layout, is_unsharded_layout, types_compatible
+from .compatible import (
+    address_layout,
+    canonical,
+    canonical_layout,
+    is_unsharded_layout,
+    types_compatible,
+)
 from .leaves import leaf_rank, leaf_span, leaves_of, map_tensor_types, result_fields, tensor_types
 from .local import (
     divided_axes,

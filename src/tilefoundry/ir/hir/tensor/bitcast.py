@@ -131,14 +131,6 @@ def address_mapping(
     return tuple(source_at[address] for address in result_at)
 
 
-def address_layout(layout):
-    """*layout* without its ShardLayout: the address layout one unit's copy uses."""
-    shard = types.shard_layout_of(layout)
-    if shard is None:
-        return layout
-    return shard.layout if layout is shard else replace(layout, outer=shard.layout)
-
-
 def restates_attrs(source: types.TensorType, layout) -> bool:
     """Whether *layout* keeps the source's addresses and only states Varying copies equal or summed.
 
@@ -153,7 +145,7 @@ def restates_attrs(source: types.TensorType, layout) -> bool:
         if held is None:
             return layout == source.layout
         return (
-            layout == (held.layout if source.layout is held else replace(source.layout, outer=held.layout))
+            layout == ir_utils.address_layout(source.layout)
             and all(isinstance(attr, (types.Broadcast, types.Varying)) for attr in held.attrs)
         )
     if held is None and (layout is not stated or source.layout != stated.layout):
@@ -193,8 +185,8 @@ def _(call: expr.Call, ctx) -> types.TensorType:
         and not any(isinstance(attr, (types.Split, types.Partial)) for attr in held.attrs)
         and (stated.mesh, stated.attrs) == (held.mesh, held.attrs)
     ):
-        source = replace(source, layout=address_layout(source.layout))
-        stated_layout = address_layout(stated_layout)
+        source = replace(source, layout=ir_utils.address_layout(source.layout))
+        stated_layout = ir_utils.address_layout(stated_layout)
     else:
         held = None
     sharded = isinstance(source.layout, types.ShardLayout) or isinstance(stated_layout, types.ShardLayout)

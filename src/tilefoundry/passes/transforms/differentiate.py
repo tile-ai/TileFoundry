@@ -142,9 +142,7 @@ def is_float(type_: types.Type) -> bool:
 
 def gradient_type(type_: types.Type) -> types.Type:
     """The type of the gradient of a value of *type_*: its layout without ``Partial``."""
-    if isinstance(type_, types.TupleType):
-        return types.TupleType(tuple(gradient_type(item) for item in type_.fields))
-    return replace(type_, layout=autodiff.gradient_layout(type_.layout))
+    return ir_utils.map_tensor_types(type_, lambda leaf: replace(leaf, layout=autodiff.gradient_layout(leaf.layout)))
 
 
 def fields_of(type_: types.Type) -> tuple[types.Type, ...]:

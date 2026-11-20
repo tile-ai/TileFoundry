@@ -10,7 +10,7 @@ from .leaves import map_tensor_types
 from .local import filter_topologies
 from .mesh_scope import covers_every_unit, topology_names
 
-__all__ = ["canonical", "canonical_layout", "is_unsharded_layout", "types_compatible"]
+__all__ = ["address_layout", "canonical", "canonical_layout", "is_unsharded_layout", "types_compatible"]
 
 
 def is_unsharded_layout(layout: object) -> bool:
@@ -29,18 +29,23 @@ def canonical_layout(layout):
     shard = types.shard_layout_of(layout)
     if shard is None or any(attr != types.Broadcast() for attr in shard.attrs) or not covers_every_unit(shard.mesh):
         return layout
+    return address_layout(layout)
+
+
+def address_layout(layout):
+    """*layout* without its ShardLayout: the address layout one unit's copy uses."""
+    shard = types.shard_layout_of(layout)
+    if shard is None:
+        return layout
     return shard.layout if layout is shard else replace(layout, outer=shard.layout)
 
 
-def canonical_leaf(leaf: types.TensorType) -> types.TensorType:
-    """``canonical_layout`` on one tensor; the same object when nothing changes."""
-    layout = canonical_layout(leaf.layout)
-    return leaf if layout is leaf.layout else replace(leaf, layout=layout)
-
-
 def canonical(type_: types.Type) -> types.Type:
-    """``canonical_layout`` on each tensor leaf of *type_*."""
-    return map_tensor_types(type_, canonical_leaf)
+    """``canonical_layout`` on each tensor leaf of *type_*; the same object when nothing changes."""
+    return map_tensor_types(
+        type_,
+        lambda leaf: leaf if (layout := canonical_layout(leaf.layout)) is leaf.layout else replace(leaf, layout=layout),
+    )
 
 
 def field_compatible(declared_field, actual_field) -> bool:

@@ -340,10 +340,10 @@ class PlainLayoutPattern(ElementPattern):
 
 @dataclass(frozen=True)
 class MeshAxisBindingRule:
-    STATEMENT: ClassVar[str] = "A mesh axis of a shard layout resolves to a lexical Mesh binding."
+    STATEMENT: ClassVar[str] = "A mesh axis or unit set of a shard layout resolves to a lexical Mesh binding."
 
     def apply(self, value, *, match, context):
-        mesh, binding, _ = value
+        mesh, binding = value[:2]
         if not isinstance(mesh, runtime.Mesh):
             raise ParseError.from_node(
                 match.node, context, f"{binding!r} is not a lexical Mesh binding; declare the Mesh in the @module class body"
@@ -424,19 +424,8 @@ class MeshAxisPattern(ElementPattern):
     )
 
 
-@dataclass(frozen=True)
-class UnitSetBindingRule:
-    STATEMENT: ClassVar[str] = "A layout's unit set is a lexical Mesh binding or its constant slice."
-
-    def apply(self, value, *, match, context):
-        mesh, binding = value
-        if not isinstance(mesh, runtime.Mesh):
-            raise ParseError.from_node(match.node, context, f"{binding!r} is not a lexical Mesh binding; declare the Mesh in the @module class body")
-        return mesh
-
-
 class UnitSetPattern(ElementPattern):
-    """``layout @ s`` or ``layout @ s[box]``: Broadcast on the units of that mesh."""
+    """``layout @ s`` or ``layout @ s[box]``: Broadcast on that mesh's units; and its binding."""
 
     element_name = "unit_set"
     syntax = LazyPattern(
@@ -446,7 +435,7 @@ class UnitSetPattern(ElementPattern):
     def construct(self, match, children, context):
         return mesh_reference(match.node, context)
 
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = (UnitSetBindingRule(),)
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = (MeshAxisBindingRule(),)
 
 
 def meshes_outermost_first(meshes, context):
@@ -530,32 +519,30 @@ def state_call(name: str, *args) -> AstPattern[Any]:
 
 def value_states() -> AstPattern[Any]:
     """Axis-bound Partial/Varying calls; Broadcast is the default and is not written."""
-    return ChoicePattern(
-        AstNodePattern(
-            ast.Set,
-            FieldPattern(
-                "elts",
-                RepeatPattern(
-                    AstNodePattern(
-                        ast.BinOp,
-                        FieldPattern("op", AstNodePattern(ast.MatMult)),
-                        FieldPattern("left", MeshAxisPattern()),
-                        FieldPattern(
-                            "right",
-                            ChoicePattern(
-                                state_call(
-                                    "P",
-                                    AstNodePattern(
-                                        ast.Constant,
-                                        FieldPattern("value", LiteralPattern(value_type=str)),
-                                    ),
+    return AstNodePattern(
+        ast.Set,
+        FieldPattern(
+            "elts",
+            RepeatPattern(
+                AstNodePattern(
+                    ast.BinOp,
+                    FieldPattern("op", AstNodePattern(ast.MatMult)),
+                    FieldPattern("left", MeshAxisPattern()),
+                    FieldPattern(
+                        "right",
+                        ChoicePattern(
+                            state_call(
+                                "P",
+                                AstNodePattern(
+                                    ast.Constant,
+                                    FieldPattern("value", LiteralPattern(value_type=str)),
                                 ),
-                                state_call("V"),
                             ),
+                            state_call("V"),
                         ),
                     ),
-                    minimum=1,
                 ),
+                minimum=1,
             ),
         ),
     )
@@ -1143,7 +1130,7 @@ class StatedLayoutPattern(ElementPattern):
         states = tuple(
             (*children[name], kind, reduction) for name, kind, reduction in match.captures["states"]
         )
-        return children["operand"], states, children.get("unit_set")
+        return children["operand"], states, (children.get("unit_set") or (None,))[0]
 
     RULES = (StatedLayoutOperandRule(), *PlacedLayoutPattern.RULES)
 

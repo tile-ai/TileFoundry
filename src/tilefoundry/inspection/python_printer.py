@@ -982,13 +982,7 @@ def render_hir_function(
             decorator = module_decorator_line(module, module.entry, ctx)
         except TypeError:
             decorator = "@module()" if module.entry is None else f'@module(entry="{module.entry}")'
-        prefix = [decorator, f"class {module.name}:"]
-        for mesh in meshes:
-            name = ctx.mesh_name(mesh)
-            text = HirPrinter().mesh_text(mesh, ctx, layout_position=len(mesh.topologies) == 1)
-            prefix.append(f"{indent}{name} = {text}")
-            ctx.class_bindings.append((mesh, name))
-        prefix.append("")
+        prefix = [decorator, f"class {module.name}:", *(indent + line for line in declare_meshes(meshes, ctx)), ""]
     lines = emit_decorated_defs(
         fn,
         ctx,
@@ -1105,15 +1099,7 @@ def emit_module_class(
     blocks: list[list[str]] = [bindings] if bindings else []
     meshes = class_meshes(ordered)
     if meshes:
-        printer = HirPrinter()
-        declared = []
-        for mesh in meshes:
-            name = ctx.mesh_name(mesh)
-            text = printer.mesh_text(mesh, ctx, layout_position=len(mesh.topologies) == 1)
-            declared.append(f"{name} = {text}")
-            ctx.class_bindings.append((mesh, name))
-            ctx.used_mesh_names.add(name)
-        blocks.append(declared)
+        blocks.append(declare_meshes(meshes, ctx))
     for fn in ordered:
         if isinstance(fn, core.Function):
             blocks.append(emit_decorated_defs(fn, ctx, indent, options))
@@ -1129,6 +1115,16 @@ def emit_module_class(
         lines.extend(f"{indent}{ln}" if ln else ln for ln in block)
     ctx.class_bindings.clear()
     ctx.leave_module(previous)
+    return lines
+
+
+def declare_meshes(meshes, ctx) -> list[str]:
+    """One ``name = Mesh(...)`` line per class mesh, each bound in *ctx* for the class body."""
+    lines = []
+    for mesh in meshes:
+        name = ctx.mesh_name(mesh)
+        lines.append(f"{name} = {HirPrinter().mesh_text(mesh, ctx, layout_position=len(mesh.topologies) == 1)}")
+        ctx.class_bindings.append((mesh, name))
     return lines
 
 

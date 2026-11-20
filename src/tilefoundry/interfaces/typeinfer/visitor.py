@@ -276,12 +276,7 @@ class TypeInferVisitor(valuation.Visitor[types.Type]):
                 for entry, yielded in zip(
                     utils.tensor_types(entry_type), utils.tensor_types(yield_type)
                 ):
-                    shards = tuple(types.shard_layout_of(t.layout) for t in (entry, yielded))
-                    shard_mesh = next((shard.mesh for shard in shards if shard is not None), None)
-                    states = tuple(
-                        utils.attrs_by_axis(t, None if shard is not None else shard_mesh)
-                        for t, shard in zip((entry, yielded), shards)
-                    )
+                    states = tuple(utils.attrs_by_axis(t) for t in (entry, yielded))
                     for key in states[0].keys() | states[1].keys():
                         before, after = (state.get(key, types.Broadcast()) for state in states)
                         if before != after:

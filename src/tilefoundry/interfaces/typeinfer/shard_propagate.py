@@ -195,13 +195,7 @@ def derive_output_shard_layout(
         for type_, state in zip(input_types, states, strict=True)
         for layout in (types.shard_layout_of(type_.layout),)
     )
-    topologies = {topology for state in states for topology, _ in state}
-    required = {
-        topology
-        for state in states
-        for topology in topologies
-        if any(attr != types.Broadcast() for (at, _), attr in state.items() if at == topology)
-    }
+    required = {at for state in states for (at, _), attr in state.items() if attr != types.Broadcast()}
     parts, active = {}, set()
     for layout, state in zip(layouts, states, strict=True):
         if layout is None:
@@ -362,11 +356,6 @@ def induction_type(bounds, declared: types.TensorType, mesh, type_of) -> types.T
     return replace(plain, layout=types.ShardLayout(plain.layout, attrs, mesh))
 
 
-def topology_meshes(mesh: types.Mesh) -> dict[str, types.Mesh]:
-    """Each topology of *mesh* as a mesh of that topology alone, by name."""
-    return {name: utils.topology_mesh(mesh, name) for name in utils.topology_names(mesh)}
-
-
 def unite_varying(call: expr.Call, result: types.Type, ctx) -> types.Type:
     """Read the Varying axes of every tensor operand of *call* into each tensor leaf of *result*.
 
@@ -403,10 +392,10 @@ def unite_varying(call: expr.Call, result: types.Type, ctx) -> types.Type:
         ):
             return leaf
         base = types.shard_layout_of(operands[0].layout).mesh if shard is None else shard.mesh
-        pieces = topology_meshes(base)
-        for operand in operands:
-            for name, piece in topology_meshes(types.shard_layout_of(operand.layout).mesh).items():
-                pieces.setdefault(name, piece)
+        pieces = {}
+        for mesh in (base, *(types.shard_layout_of(operand.layout).mesh for operand in operands)):
+            for name in utils.topology_names(mesh):
+                pieces.setdefault(name, utils.topology_mesh(mesh, name))
         names = sorted(pieces, key=lambda name: owners.order.index(name) if name in owners.order else -1)
         mesh = base if len(names) == len(utils.topology_names(base)) else utils.from_meshes(*map(pieces.get, names))
         stated = utils.attrs_by_axis(leaf, mesh)

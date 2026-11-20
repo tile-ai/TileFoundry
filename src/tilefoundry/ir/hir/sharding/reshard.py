@@ -64,11 +64,7 @@ def buffer_alias(call: expr.Call, owners: "StorageOwners") -> int | None:
     if added_units(call, owners):
         return None
     layouts = tuple(types.shard_layout_of(held.layout) for held in (source, result))
-    shard_mesh = next((layout.mesh for layout in layouts if layout is not None), None)
-    states = tuple(
-        utils.attrs_by_axis(held, None if layout is not None else shard_mesh)
-        for held, layout in zip((source, result), layouts)
-    )
+    states = tuple(utils.attrs_by_axis(held) for held in (source, result))
     for key in states[0].keys() | states[1].keys():
         before, after = (state.get(key, types.Broadcast()) for state in states)
         if isinstance(before, types.Partial) or isinstance(after, types.Partial):
@@ -217,11 +213,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     result = types.TensorType(
         shape=x_ty.shape, dtype=x_ty.dtype, layout=new_layout, storage=new_storage
     )
-    shard_mesh = next((layout.mesh for layout in layouts if layout is not None), None)
-    states = tuple(
-        utils.attrs_by_axis(held, None if layout is not None else shard_mesh, owners)
-        for held, layout in zip((x_ty, result), layouts)
-    )
+    states = tuple(utils.attrs_by_axis(held, owners=owners) for held in (x_ty, result))
     units = axis_units(next((layout.mesh for layout in layouts if layout is not None), None))
     for key in states[0].keys() | states[1].keys():
         src, dst = (state.get(key, types.Broadcast()) for state in states)
