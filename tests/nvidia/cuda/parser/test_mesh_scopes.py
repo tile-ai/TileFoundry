@@ -79,6 +79,44 @@ class RootMeshWithoutWith(MeshScopeCase):
         assert not isinstance(state.entry_function().body, core.MeshRegion)
 
 
+@case
+class ScopeNameLayout(MeshScopeCase):
+    """'@ warp' in cta x a thread slice keeps cta and takes warp's threads: B on that scope."""
+
+    path: Path = PARSER / "scope_name_layout.py"
+
+    def guard(self, state, problems):
+        regions = [region.mesh for region in core.collect_exprs(state.entry_function().body) if isinstance(region, core.MeshRegion)]
+        scope = utils.from_meshes(*reversed(regions))
+        tiles = smem_types(state)
+        plain = types.ShardLayout(types.Layout((16, 16)), (types.Broadcast(),) * len(utils.axis_keys(scope)), scope)
+        assert tiles and all(tile.layout == plain for tile in tiles)
+        printed = inspection.as_script(state)
+        assert '(16, 16) @ thread_2, "smem"' in printed
+        assert smem_types(reload(printed, state.name)) == tiles
+
+
+@case
+class ClassMeshPrimFunc(MeshScopeCase):
+    """prim_func signatures see the meshes the class body declares, as @func signatures do."""
+
+    path: Path = PARSER / "class_mesh_prim_func.py"
+
+    def guard(self, state, problems):
+        (function,) = state.functions
+        lanes = types.Mesh((types.Topology("thread", 8),), types.Layout((8,), (1,)), ("lane",))
+        assert function.params[0].type.layout == types.ShardLayout(types.Layout((8, 16), (0, 1)), (types.Split(0),), lanes)
+
+
+def smem_types(module) -> list:
+    body = module.entry_function().body
+    return [
+        node.type
+        for node in core.collect_exprs(body)
+        if isinstance(node, expr.Call) and node.type.storage is expr.StorageKind.SMEM
+    ]
+
+
 CASES = special(MeshScopeCase)
 
 
@@ -118,37 +156,3 @@ def test_placement_rejects_external_mesh() -> None:
         parser.ParseError, match="'_EXTERNAL_PLACEMENT_MESH' is not a lexical Mesh binding"
     ):
         cli.load_authored_ir(str(DIAGNOSTICS / "parser_placement_external_mesh.py"))
-
-
-def smem_types(module) -> list:
-    body = module.entry_function().body
-    return [
-        node.type
-        for node in core.collect_exprs(body)
-        if isinstance(node, expr.Call) and node.type.storage is expr.StorageKind.SMEM
-    ]
-
-
-def test_a_scope_name_in_a_body_is_broadcast_on_the_composed_scope() -> None:
-    """'@ warp' in cta x a thread slice keeps cta and takes warp's threads: B on that scope."""
-    loaded = cli.load_authored_ir(str(PARSER / "scope_name_layout.py"))
-    body = loaded.entry_function().body
-    regions = [region.mesh for region in core.collect_exprs(body) if isinstance(region, core.MeshRegion)]
-    scope = utils.from_meshes(*reversed(regions))
-    tiles = smem_types(loaded)
-    assert tiles and all(
-        tile.layout
-        == types.ShardLayout(types.Layout((16, 16)), (types.Broadcast(),) * len(utils.axis_keys(scope)), scope)
-        for tile in tiles
-    )
-    printed = inspection.as_script(loaded)
-    assert '(16, 16) @ thread_2, "smem"' in printed
-    assert smem_types(reload(printed, loaded.name)) == tiles
-
-
-def test_a_tir_signature_names_a_class_body_mesh() -> None:
-    """prim_func signatures see the meshes the class body declares, as @func signatures do."""
-    loaded = cli.load_authored_ir(str(PARSER / "class_mesh_prim_func.py"))
-    (function,) = loaded.functions
-    lanes = types.Mesh((types.Topology("thread", 8),), types.Layout((8,), (1,)), ("lane",))
-    assert function.params[0].type.layout == types.ShardLayout(types.Layout((8, 16), (0, 1)), (types.Split(0),), lanes)
