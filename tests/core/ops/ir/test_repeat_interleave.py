@@ -21,6 +21,7 @@ from tilefoundry.ir.hir import tensor
 
 _F = expr.DType.f32
 _M = types.Mesh((types.Topology("gpu", 4),), types.Layout((4,), (1,)), ("g",))
+_M2 = types.Mesh((types.Topology("gpu", 4),), types.Layout((2, 2), (1, 2)), ("a", "b"))
 _CYCLIC = types.TensorType(
     (8,), _F, types.ShardLayout(types.Layout((2, 4), (4, 1)), (types.Split(1),), _M), "gmem"
 )
@@ -53,6 +54,18 @@ CASES = (
         "cyclic_split_on_the_repeated_axis_fails_closed",
         tensor.RepeatInterleave(repeats=2, axis=0),
         (_CYCLIC,),
+        error=ExpectedError(match="axis 0 is split, but not in contiguous blocks"),
+    ),
+    OpCase(
+        "splits_keep_their_tensor_axes_on_a_two_axis_mesh",
+        tensor.RepeatInterleave(repeats=2, axis=1),
+        (utils.make_shard_tensor_type((4, 6, 8), mesh=_M2, attrs=(types.Split(0), types.Split(2))),),
+        type=utils.make_shard_tensor_type((4, 12, 8), mesh=_M2, attrs=(types.Split(0), types.Split(2))),
+    ),
+    OpCase(
+        "cyclic_split_on_another_axis_fails_closed",
+        tensor.RepeatInterleave(repeats=2, axis=1),
+        (types.TensorType((8, 3), _F, types.ShardLayout(types.Layout((2, 4, 3), (12, 3, 1)), (types.Split(1),), _M), "gmem"),),
         error=ExpectedError(match="axis 0 is split, but not in contiguous blocks"),
     ),
     OpCase(

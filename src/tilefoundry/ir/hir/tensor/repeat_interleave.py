@@ -44,25 +44,18 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     new_layout = types.Layout(tuple(shape))
     target = getattr(ctx, "target", None)
     owners = target.storage_owners if target else tilefoundry_target.StorageOwners()
-    targets = types.split_target_axes(shard, tuple(x_ty.shape)) if shard is not None else ()
-    if ax in targets:
-        attrs = tuple(
-            attr if axis is None else types.Split(axis)
-            for attr, axis in zip(shard.attrs, targets, strict=True)
-        )
-        blocks = types.ShardLayout.from_logical(
-            tuple(x_ty.shape), shard.mesh, attrs, storage=x_ty.storage, owners=owners
-        )
-        if shard.layout != blocks.layout:
+    if shard is not None:
+        targets = types.split_target_axes(shard, tuple(x_ty.shape))
+        attrs = tuple(attr if axis is None else types.Split(axis) for attr, axis in zip(shard.attrs, targets, strict=True))
+        blocks = types.ShardLayout.from_logical(tuple(x_ty.shape), shard.mesh, attrs, storage=x_ty.storage, owners=owners)
+        split = ", ".join(str(axis) for axis in sorted({axis for axis in targets if axis is not None}))
+        if split and shard.layout != blocks.layout:
             ctx.error(
                 call,
-                f"axis {ax} is split, but not in contiguous blocks, so each unit cannot repeat "
+                f"axis {split} is split, but not in contiguous blocks, so each unit cannot repeat "
                 "its own elements; reshard it to contiguous blocks first",
             )
-    if shard is not None:
-        new_layout = types.ShardLayout.from_logical(
-            tuple(shape), shard.mesh, shard.attrs, storage=x_ty.storage, owners=owners
-        )
+        new_layout = types.ShardLayout.from_logical(tuple(shape), shard.mesh, attrs, storage=x_ty.storage, owners=owners)
     return types.TensorType(
         shape=tuple(shape),
         dtype=x_ty.dtype,
