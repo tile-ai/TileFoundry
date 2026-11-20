@@ -1,25 +1,35 @@
 """How ANE instructions see their operands.
 
 A feature map is [1, C, H, W] in unified memory (GMEM) or in the on-chip L2
-buffer (SMEM); W is contiguous. Weights stay in unified memory. A mesh layout
-holds one mode per topology.
+buffer (SMEM); W is contiguous. Weights stay in unified memory. A matrix is
+[rows, columns] with rows contiguous (column major) or columns contiguous (row
+major). A mesh layout holds one mode per topology.
 """
 
-from tilefoundry.ir import expr, pattern
+from tilefoundry.ir import expr, pattern, types
 
 ENGINE = pattern.Mesh(("engine",), pattern.Layout(((1,),), ((1,),)))
 FLOATS = (expr.DType.f16,)
 FEATURE_STORAGE = pattern.Or(expr.StorageKind.GMEM, expr.StorageKind.SMEM)
+GMEM_ONLY = pattern.Or(expr.StorageKind.GMEM)
+STRIDES = ((1, 1), (1, 2), (2, 1), (2, 2))
 
 MAX_CHANNELS = 65536
 MAX_HEIGHT = 16384
 MAX_WIDTH = 16384
 MAX_KERNEL = 32
+ACTIVATION_LIMITS = (MAX_WIDTH, MAX_CHANNELS)
+WEIGHT_LIMITS = (MAX_CHANNELS, MAX_CHANNELS)
 
 
 def extent(name: str, limit: int) -> pattern.Wildcard:
     """An extent of at most *limit*, captured as *name*."""
     return pattern.Wildcard(name, predicates=(pattern.Range(hi=limit),))
+
+
+def stored(operand: str, choices=FEATURE_STORAGE) -> pattern.Wildcard:
+    """The storage of *operand*, captured as its name and limited to *choices*."""
+    return pattern.Wildcard(f"{operand}.storage", predicates=(choices,))
 
 
 def feature(operand: str) -> pattern.Tensor:
@@ -35,8 +45,60 @@ def feature(operand: str) -> pattern.Tensor:
             extent(f"{operand}.shape[3]", MAX_WIDTH),
         ),
         dtype=one_of("dtype", FLOATS),
-        storage=pattern.Wildcard(f"{operand}.storage", predicates=(FEATURE_STORAGE,)),
+        storage=stored(operand),
     )
+
+
+def bounded(operand: str, leading: tuple, *limits: int) -> pattern.Layout:
+    """The layout of a tensor shaped *leading*, then extents of at most *limits*, with any strides.
+
+    Each extent after *leading* is captured as ``<operand>.shape[axis]``.
+    """
+    names = tuple(pattern.Wildcard(f"{operand}.shape[{len(leading) + axis}]") for axis in range(len(limits)))
+    return pattern.Layout(
+        (*leading, *names), predicates=tuple(name <= limit for name, limit in zip(names, limits)))
+
+
+def feature_layout(operand: str) -> pattern.Layout:
+    """The layout of a [1, C, H, W] feature map within the architecture limits."""
+    return bounded(operand, (1,), MAX_CHANNELS, MAX_HEIGHT, MAX_WIDTH)
+
+
+def kernel_layout(operand: str) -> pattern.Layout:
+    """The layout of [O, I, KH, KW] weights, KH and KW at most MAX_KERNEL."""
+    return bounded(operand, (), MAX_CHANNELS, MAX_CHANNELS, MAX_KERNEL, MAX_KERNEL)
+
+
+def matrix_layout(operand: str, limits: tuple[int, int]) -> pattern.Layout:
+    """The layout of an [R, C] matrix whose extents stay within *limits*."""
+    return bounded(operand, (), *limits)
+
+
+def strided(type_: types.TensorType, *candidates: tuple) -> bool:
+    """Whether the strides of *type_* equal one of *candidates*, ignoring modes of extent 1."""
+    plain = types.plain_layout(type_.layout)
+    return any(
+        all(size == 1 or actual == step for size, actual, step in zip(plain.shape, plain.strides, wanted))
+        for wanted in candidates
+    )
+
+
+def require_strides(call, ctx, name: str, type_: types.TensorType, *candidates: tuple) -> None:
+    """Refuse *call* unless the strides of operand *name* equal one of *candidates*."""
+    if not strided(type_, *candidates):
+        ctx.error(call, f"{name} layout strides {tuple(types.plain_layout(type_.layout).strides)} "
+                        f"must be {' or '.join(map(str, candidates))}")
+
+
+def forms(operand: str, layouts: tuple, storage=FEATURE_STORAGE) -> pattern.Tensor:
+    """An operand with the shared dtype whose layout is one of *layouts*.
+
+    Each layout states its own shape, so the rank selects the form. Pairing checks
+    only dtype and storage; a shape or layout mismatch is reported against the
+    instruction.
+    """
+    return pattern.Tensor(
+        dtype=one_of("dtype", FLOATS), storage=stored(operand, storage), layout=pattern.Or(*layouts))
 
 
 def one_of(name: str, values) -> pattern.Wildcard:
@@ -45,6 +107,7 @@ def one_of(name: str, values) -> pattern.Wildcard:
 
 
 __all__ = [
-    "ENGINE", "FEATURE_STORAGE", "FLOATS", "MAX_CHANNELS", "MAX_HEIGHT", "MAX_KERNEL", "MAX_WIDTH", "extent",
-    "feature", "one_of",
+    "ACTIVATION_LIMITS", "ENGINE", "FEATURE_STORAGE", "FLOATS", "GMEM_ONLY", "MAX_CHANNELS", "MAX_HEIGHT",
+    "MAX_KERNEL", "MAX_WIDTH", "STRIDES", "WEIGHT_LIMITS", "bounded", "extent", "feature", "feature_layout", "forms",
+    "kernel_layout", "matrix_layout", "one_of", "require_strides", "stored", "strided",
 ]
