@@ -698,6 +698,7 @@ REFUSED = (
     ("module_list_shifted.py:Stack", ("x",), ("Stack.layers.1:h",), "slot 'layers' is indexed by a value that is not the loop index"),
     ("module_list_step.py:Stack", ("x",), ("Stack.layers.1:h",), "loop over 'layers' has step 2"),
     ("module_list_overrun.py:Stack", ("x",), ("Stack.layers.1:h",), "loop over 'layers' runs [0, 4); the slot has 3 elements"),
+    ("module_list_empty.py:Stack", ("x",), ("Stack.layers.1:h",), "loop over 'layers' runs [2, 2); the slot has 3 elements"),
     ("module_list_dynamic.py:Stack", ("x",), ("Stack.layers.1:h",), "loop over 'layers': trip count is not static"),
     ("module_list_const.py:Stack", ("x",), ("Stack.layers.1:h",), "'Layer' holds a ConstTensor"),
     ("module_list_name_taken.py:Stack", ("x",), ("Stack.layers.1:h",), "'layers_0' is already a name in 'Stack'"),
