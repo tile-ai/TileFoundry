@@ -295,17 +295,6 @@ def is_dim_entry(entry: object) -> bool:
     return isinstance(entry, (expr.DimVar, expr.Var, expr.Constant, expr.Call))
 
 
-def tensor_import_names(fn: core.Function) -> str:
-    """``"Tensor"`` or ``"ConstTensor, Tensor"``.
-
-    ``"Tensor"`` or ``"ConstTensor, Tensor"`` — whichever the printed
-    signature (base plus every variant) actually references.
-    """
-    if any(p.is_const for f in (fn, *fn.variants) for p in f.params):
-        return "ConstTensor, Tensor"
-    return "Tensor"
-
-
 def sanitize_name(name: str) -> str:
     """Make a Python-safe identifier from a loc string."""
     safe = re.sub(r"[^a-zA-Z0-9_]", "_", name)

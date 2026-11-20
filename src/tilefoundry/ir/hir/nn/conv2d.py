@@ -27,12 +27,6 @@ def i64(value: int) -> expr.Constant:
     return dim.i64_const(value)
 
 
-def as_expr(v):
-    if isinstance(v, expr.Expr):
-        return v
-    return i64(int(v))
-
-
 def out_spatial(in_dim: expr.Expr, k: int, s: int, p: int, d: int) -> expr.Expr:
     """Compute (in + 2*p - d*(k-1) - 1) // s + 1, keeping symbolic dims alive.
 

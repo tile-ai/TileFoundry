@@ -1321,16 +1321,6 @@ class MatchContext:
             live_out=self.live_out if live_out is None else live_out,
         )
 
-    def resolve_lexical(self, name: str) -> object:
-        value = self.lexical_scope.lookup(name)
-        if value is None:
-            raise ParseError.from_node(
-                ast.Name(id=name, ctx=ast.Load()),
-                self,
-                f"undefined lexical name {name!r}",
-            )
-        return value
-
     def resolve_static(self, node: ast.AST, expected: type[T] | tuple[type[Any], ...]) -> T:
         if not isinstance(node, (ast.Name, ast.Attribute)):
             raise ParseError.from_node(node, self, "static references use Name or Attribute")
@@ -1496,14 +1486,6 @@ def expected_name(expected: type | tuple[type, ...]) -> str:
     if isinstance(expected, tuple):
         return " | ".join(item.__name__ for item in expected)
     return expected.__name__
-
-
-def decorator_name(node: ast.AST) -> str | None:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return None
 
 
 def refuse_later_declaration(node: ast.Name, context: MatchContext) -> None:
