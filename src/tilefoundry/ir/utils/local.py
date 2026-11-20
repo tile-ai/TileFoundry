@@ -7,6 +7,7 @@ from typing import Optional
 from tilefoundry.ir import expr, types
 from tilefoundry.ir.types import int_tuple
 
+from .leaves import map_tensor_types
 from .mesh_scope import (
     attrs_by_topology,
     axis_keys,
@@ -214,12 +215,7 @@ def local_type_of(
 
     selected = topology_level(topology, topologies)
     if isinstance(type, types.TupleType):
-        return types.TupleType(
-            fields=tuple(
-                local_type_of(field, topology=topology, topologies=topologies)
-                for field in type.fields
-            )
-        )
+        return map_tensor_types(type, lambda leaf: local_type_of(leaf, topology=topology, topologies=topologies))
     if not isinstance(type, types.TensorType):
         return type
     layout = type.layout

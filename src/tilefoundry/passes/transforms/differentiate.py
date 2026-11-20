@@ -423,7 +423,6 @@ class FunctionDifferentiator(expr.Functor[None]):
         self.wrt = wrt
         self.placeholders: dict[int, tuple] = {}
         self.regions: dict[int, RegionBackward] = {}
-        self.loops: dict[int, RegionBackward] = {}
         values = core.function_values(function)
         self.callees: dict[int, Derived] = {
             id(value): differ.callee(module, value.target, value)
@@ -747,7 +746,7 @@ class FunctionDifferentiator(expr.Functor[None]):
             yield_values=tuple(updates), extent=trip, step=1, start=0, type=result_type,
         )
         scope.ctx.remember(node, result_type)
-        self.loops[id(node)] = RegionBackward(inner, node)
+        self.regions[id(node)] = RegionBackward(inner, node)
 
         def result(position):
             if len(updates) == 1:
@@ -1063,9 +1062,9 @@ class Rebuilder(core.ExprCloner):
         if id(node) in owner.placeholders:
             return owner.materialize(owner.placeholders[id(node)], scope)
         if id(node) in owner.regions:
-            return owner.rebuild_region(owner.regions[id(node)], scope)
-        if id(node) in owner.loops:
-            return owner.rebuild_loop(owner.loops[id(node)], scope)
+            backward = owner.regions[id(node)]
+            rebuild = owner.rebuild_loop if isinstance(node, core.LoopRegion) else owner.rebuild_region
+            return rebuild(backward, scope)
         return super().default_visit(node, ctx)
 
     def keep(self, node: expr.Expr, value: expr.Expr) -> None:
@@ -1117,7 +1116,7 @@ class ForwardCloner(core.BindingSubstitutionCloner):
         self.regions: dict[int, tuple[core.MeshRegion, int]] = {}
         self.scopes = {
             id(backward.scope.region): backward.scope
-            for backward in (*owner.regions.values(), *owner.loops.values())
+            for backward in owner.regions.values()
         }
         self.loops: dict[int, tuple[core.LoopRegion, int, tuple[int, ...]]] = {}
 

@@ -551,6 +551,7 @@ __all__ = [
     "emit_paired",
     "render_attr",
     "render_layout_value",
+    "render_mesh_type",
     "render_shard_layout_value",
     "shard_engine_layout",
     "tensor_reference",
