@@ -310,8 +310,10 @@ def common_placements(*tensors: ShardTensor) -> tuple[Placement, ...]: ...
 - `Reshard` ([hir §1.3](./hir.md#13-op)) only retypes a global view. `to_global`
   assembles a local view by the meaning of its type. `Split` pieces go side by
   side. The result for `Broadcast` is any one piece. `Partial` pieces combine by
-  their reduction. When neither type has a `ShardLayout`, each placement keeps
-  its own value instead.
+  their reduction. When neither type has a `ShardLayout`, or both have the same
+  attrs on the same mesh and none is a `Split`, each placement keeps its own
+  value instead: only the address layout changes. A `Bitcast` form (ii) keeps
+  every placement's value and changes only the type.
 - `Local` ([hir §1.3](./hir.md#13-op)) answers a local view over
   `Placement.from_mesh` of its mesh, and keeps an input every placement holds whole
   in its global view. On a global `Partial` input it MUST be refused.

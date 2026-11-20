@@ -596,12 +596,25 @@ class FunctionDifferentiator(expr.Functor[None]):
         return self.laid_out(gradient, type_, ctx)
 
     def laid_out(self, gradient, type_: types.Type, ctx: autodiff.Context):
-        """*gradient* of a *type_* value, resharded to ``gradient_layout``; None stays None."""
+        """*gradient* of a *type_* value, resharded to ``gradient_layout``; None stays None.
+
+        Where the value is Broadcast and its gradient Varying, every unit used the
+        same value, so the units' gradients sum: a Bitcast states the sum first.
+        """
         if gradient is None:
             return None
         if isinstance(type_, types.TupleType):
             return tuple(self.laid_out(part, item, ctx) for part, item in zip(gradient, type_.fields))
         wanted = gradient_type(type_)
+        held = types.shard_layout_of(ctx.type_of(gradient).layout)
+        if held is not None:
+            states = ir_utils.attrs_by_axis(wanted, held.mesh)
+            attrs = tuple(
+                types.Partial() if attr == types.Varying() and states[key] == types.Broadcast() else attr
+                for key, attr in zip(ir_utils.attrs_by_axis(ctx.type_of(gradient)), held.attrs, strict=True)
+            )
+            if attrs != held.attrs:
+                gradient = ctx.call("bitcast", gradient, layout=replace(held, attrs=attrs))
         if ctx.type_of(gradient).layout != wanted.layout:
             gradient = ctx.call(
                 "reshard", gradient, layout=types.normalize_layout(wanted.layout), storage=wanted.storage

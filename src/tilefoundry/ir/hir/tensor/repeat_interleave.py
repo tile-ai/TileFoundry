@@ -16,7 +16,9 @@ class RepeatInterleave(expr.Op):
 
     Repeat each element of ``x`` along ``axis`` ``repeats`` times,
     interleaved (GQA head expansion). The named axis grows by ``repeats``;
-    all other dims are unchanged.
+    all other dims are unchanged. Each unit repeats its own elements, so the
+    result keeps the input's attrs: Split, Partial, Varying and Broadcast alike.
+    A Split on ``axis`` must hold contiguous blocks.
     """
 
     x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
@@ -39,15 +41,24 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
     shape[ax] = shape[ax] * op.repeats
 
     shard = types.shard_layout_of(x_ty.layout)
-    if shard is not None and any(isinstance(a, (types.Split, types.Partial)) for a in shard.attrs):
-        ctx.error(
-            call,
-            "RepeatInterleave cannot express a sharded layout; reshard to a "
-            "replicated layout first",
-        )
     new_layout = types.Layout(tuple(shape))
     target = getattr(ctx, "target", None)
     owners = target.storage_owners if target else tilefoundry_target.StorageOwners()
+    targets = types.split_target_axes(shard, tuple(x_ty.shape)) if shard is not None else ()
+    if ax in targets:
+        attrs = tuple(
+            attr if axis is None else types.Split(axis)
+            for attr, axis in zip(shard.attrs, targets, strict=True)
+        )
+        blocks = types.ShardLayout.from_logical(
+            tuple(x_ty.shape), shard.mesh, attrs, storage=x_ty.storage, owners=owners
+        )
+        if shard.layout != blocks.layout:
+            ctx.error(
+                call,
+                f"axis {ax} is split, but not in contiguous blocks, so each unit cannot repeat "
+                "its own elements; reshard it to contiguous blocks first",
+            )
     if shard is not None:
         new_layout = types.ShardLayout.from_logical(
             tuple(shape), shard.mesh, shard.attrs, storage=x_ty.storage, owners=owners

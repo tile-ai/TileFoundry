@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry import core
-from tilefoundry.interfaces import access, cost, evaluator, typeinfer
+from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types, utils
 
 from .index_select import norm_dim
@@ -120,6 +120,13 @@ def eval_index_add(ctx):
         else tuple((p, index_add(*(x.to_local(p) for x in xs))) for p in placements)
     )
     return evaluator.TensorValue(core.ShardTensor(ctx.result_type, held))
+
+
+@autodiff.register(IndexAdd)
+def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
+    """The cotangent for dst, and its rows at the index for src; no index gradient."""
+    _, index, _ = call.args
+    return cotangent, None, ctx.call("index_select", cotangent, index, dim=call.target.dim)
 
 
 __all__ = ["IndexAdd", "infer_index_write"]

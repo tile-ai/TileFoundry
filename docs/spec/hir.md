@@ -904,8 +904,13 @@ class RepeatInterleave(Op):
   - `axis` MUST resolve within the rank. The result extent at that axis MUST be
     the input extent multiplied by `repeats`. All other extents and storage are
     preserved.
-  - A `Split` or `Partial` input MUST be refused. Any other input keeps its
-    layout kind and attrs on the new shape ([shard §6.1](./shard.md#61-shard-attr-semantics)).
+  - Each unit repeats its own elements, so the result keeps the input's attrs
+    (`Split`, `Partial`, `Varying` and `Broadcast`) on the new shape
+    ([shard §6.1](./shard.md#61-shard-attr-semantics)). A `Partial` input stays
+    the same `Partial`: repetition commutes with every reduction.
+  - A `Split` on `axis` MUST hold contiguous blocks; local repetition of a
+    cyclic or strided distribution is not the global repetition, so such an
+    input MUST be refused with a reshard to contiguous blocks as the remedy.
 
 ##### Split
 
@@ -1140,6 +1145,8 @@ operation and is not an HIR op.
     logical HIR types.
   - `IndexAdd` and `IndexCopy` have type inference, cost, and evaluator
     semantics only. No HIR-to-TIR lowering is registered.
+  - The gradient of `IndexAdd` is the cotangent for `dst`, and
+    `index_select(cotangent, index, dim)` for `src`; `index` has none.
   - `IndexAdd` charges one add and reads `src`, `index`, and the addressed `dst`
     slices before writing those slices. `IndexCopy` charges no arithmetic and
     does not read the overwritten `dst` slices. Neither cost scales with the
@@ -1685,6 +1692,10 @@ class Local(Op):
   - The result shape contracts each `Split` axis by the extent of that mesh axis.
   - The result keeps `dtype` and `storage`.
   - The result uses the corresponding local `Layout`. Its domain matches the contracted result shape.
+  - The result is `Varying` on each mesh axis where the input is not `Broadcast`,
+    on the input's mesh: each unit's view is its own
+    ([shard §6.1](./shard.md#61-shard-attr-semantics)). An all-`Broadcast` input
+    gives the plain local `Layout`.
   - The `Local` call MUST reject a noncanonical input and report its source location.
   - A static split size divides by the mesh extent. A symbolic size passes through.
   - `Local` only names the existing view of the current unit. It materializes no value. It moves no bytes.

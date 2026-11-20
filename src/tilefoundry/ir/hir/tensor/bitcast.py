@@ -382,7 +382,7 @@ def eval_bitcast(ctx):
     """
     x = ctx.args[0].tensor
     if restates_attrs(x.type, ctx.result_type.layout):
-        return evaluator.TensorValue(x.reshard(ctx.result_type))
+        return evaluator.TensorValue(core.ShardTensor(ctx.result_type, x.tensor))
     if x.is_global:
         held = bitcast(x.tensor, x.type, ctx.result_type)
     else:

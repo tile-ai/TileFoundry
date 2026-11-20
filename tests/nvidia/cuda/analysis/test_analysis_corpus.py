@@ -240,7 +240,8 @@ class GeneratedHalves(AnalysisCase):
     """The Forward and Backward that ``tilefoundry autodiff`` writes for *wrt*.
 
     The halves are loaded from the written file, which they print back to, so
-    the checked program went through the parser. They match autograd and have
+    the checked program went through the parser; without *reprints* the text
+    may differ. They match autograd and have
     the gmem peaks in *halves*. With *graph*, each call row names the one
     function row it calls, so the rows join into one graph.
     """
@@ -249,6 +250,7 @@ class GeneratedHalves(AnalysisCase):
     wrt: tuple[str, ...] = ()
     halves: tuple[int, int] = (0, 0)
     graph: bool = False
+    reprints: bool = True
 
     def guard(self, state, problems):
         module = state.result.module
@@ -257,7 +259,7 @@ class GeneratedHalves(AnalysisCase):
             assert cli.main(["autodiff", str(self.path), "--wrt", ",".join(self.wrt), str(written)]) == 0
             namespace, _ = cli.load_namespace(str(written))
             generated = tuple(namespace[f"{module.name}{half}"] for half in ("Forward", "Backward"))
-            assert inspection.as_script(generated) == written.read_text()
+            assert not self.reprints or inspection.as_script(generated) == written.read_text()
         check_gradients(module, *generated, self.wrt, rtol=1e-4, atol=1e-5)
         peaks = []
         for half in generated:
@@ -287,6 +289,24 @@ class FsdpModel(GeneratedHalves):
     wrt: tuple[str, ...] = ("we", "q1", "k1", "v1", "o1", "u1", "d1", "q2", "k2", "v2", "o2", "u2", "d2", "wh")
     halves: tuple[int, int] = (164_096, 188_304)
     graph: bool = True
+
+
+@case
+class ExpertLocalIndex(GeneratedHalves):
+    """Each GPU picks rows of the shared x by its own index and adds them back.
+
+    The forward moves nothing between GPUs. The GPUs' gradients of x differ, and
+    x is the same on both, so the backward sums them. The reloaded mesh region
+    yields idx, back and v5 in their written order, not v5 first, so `rows`
+    prints after `idx`: the text differs and the program is the same.
+    """
+
+    path: Path = PLACED / "expert_local_index.py"
+    name: str | None = "ExpertLocalIndex"
+    memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 928})
+    wrt: tuple[str, ...] = ("x",)
+    halves: tuple[int, int] = (928, 1_296)
+    reprints: bool = False
 
 
 @case

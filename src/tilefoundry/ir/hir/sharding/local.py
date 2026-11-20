@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from tilefoundry import core
 from tilefoundry.interfaces import access, cost, evaluator, typeinfer
 from tilefoundry.ir import expr, pattern, types
@@ -9,7 +11,10 @@ from tilefoundry.ir import expr, pattern, types
 
 @expr.register_op(dialect='tf', category='sharding')
 class Local(expr.Op):
-    """The current device's local view of a ``ShardLayout`` tensor."""
+    """The current device's local view of a ``ShardLayout`` tensor.
+
+    The view is Varying on each mesh axis that does not Broadcast the input.
+    """
 
     x = expr.ParamDef(kind="input", pattern=pattern.is_ranked_tensor())
 
@@ -20,9 +25,15 @@ def _(call: "Call", ctx: "TypeInferContext") -> types.TensorType:
     if not isinstance(x_ty.layout, types.ShardLayout):
         ctx.error(call, "Local() input must have ShardLayout")
     try:
-        return core.local_type(x_ty)
+        local = core.local_type(x_ty)
     except ValueError as error:
         ctx.error(call, str(error))
+    attrs = tuple(
+        attr if isinstance(attr, types.Broadcast) else types.Varying() for attr in x_ty.layout.attrs
+    )
+    if all(isinstance(attr, types.Broadcast) for attr in attrs):
+        return local
+    return replace(local, layout=types.ShardLayout(local.layout, attrs, x_ty.layout.mesh))
 
 
 @evaluator.register(Local)

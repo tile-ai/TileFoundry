@@ -67,6 +67,13 @@ def fields(type_: types.Type) -> tuple[types.Type, ...]:
     return type_.fields if isinstance(type_, types.TupleType) else (type_,)
 
 
+def pieces(value) -> tuple:
+    """Each unit's own piece of a local view, which the loss sums; a tensor is one piece."""
+    if isinstance(value, torch.Tensor) or value.is_global:
+        return (value,)
+    return tuple(data for _, data in value.tensor)
+
+
 def check_gradients(
     module: core.Module, forward: core.Module, backward: core.Module, wrt, rtol: float = 1e-5, atol: float = 1e-6,
     dims: Mapping[str, int] = MappingProxyType({}),
@@ -85,7 +92,10 @@ def check_gradients(
     results = evaluator.evaluate(loaded(module), *inputs)
     results = results if isinstance(function.return_type, types.TupleType) else (results,)
     total = sum(
-        value.sum() for value, type_ in zip(results, fields(function.return_type)) if is_float(type_)
+        piece.sum()
+        for value, type_ in zip(results, fields(function.return_type))
+        if is_float(type_)
+        for piece in pieces(value)
     )
     reference = torch.autograd.grad(total, trained, allow_unused=True)
     saved = detached(evaluator.evaluate(loaded(forward), *detached(tuple(inputs)))[-1])
@@ -284,6 +294,12 @@ class ExpertParallel(Differentiated):
     path: Path = FIXTURES / "expert_parallel.py"
     wrt: tuple[str, ...] = ("tokens", "w")
     dims: Mapping[str, int] = MappingProxyType({"n": 4})
+
+
+@case
+class IndexAdd(Differentiated):
+    path: Path = FIXTURES / "index_add.py"
+    wrt: tuple[str, ...] = ("dst", "src")
 
 
 @case
