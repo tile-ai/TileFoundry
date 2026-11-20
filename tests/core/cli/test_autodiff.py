@@ -12,25 +12,29 @@ from tilefoundry.passes.transforms import differentiate
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "autodiff"
 
 ROUND_TRIP = (
-    ("elementwise.py", "Elementwise", "x,w,b"),
-    ("sharded.py", "Layer", "x,w"),
-    ("child_call.py:ChildCall", "ChildCall", "x,w1,w2"),
-    ("inactive_call.py:InactiveCall", "InactiveCall", "x"),
-    ("loop_range.py", "LoopRange", "x,w,h0"),
-    ("loop_call.py", "LoopCall", "keys,decay"),
-    ("loop_nested.py", "LoopNested", "x,w"),
-    ("mesh_data_parallel.py", "MeshDataParallel", "x,w"),
-    ("mesh_two_regions.py", "MeshTwoRegions", "x,w"),
-    ("megatron_block.py", "TensorParallel", "x,wn1,wq,wk,wv,wo,wn2,wg,wu,wd"),
-    ("layers_loop.py", "Layers", "x,wn0,norms,up,down"),
+    ("elementwise.py", "Elementwise", "x,w,b", ()),
+    ("sharded.py", "Layer", "x,w", ()),
+    ("child_call.py:ChildCall", "ChildCall", "x,w1,w2", ()),
+    ("child_call.py:ChildCall", "ChildCall", "x,w1,w2", ("ChildCall.rest.1:h",)),
+    ("inactive_call.py:InactiveCall", "InactiveCall", "x", ()),
+    ("loop_range.py", "LoopRange", "x,w,h0", ()),
+    ("loop_call.py", "LoopCall", "keys,decay", ()),
+    ("loop_nested.py", "LoopNested", "x,w", ()),
+    ("mesh_data_parallel.py", "MeshDataParallel", "x,w", ()),
+    ("mesh_two_regions.py", "MeshTwoRegions", "x,w", ()),
+    ("megatron_block.py", "TensorParallel", "x,wn1,wq,wk,wv,wo,wn2,wg,wu,wd", ()),
+    ("layers_loop.py", "Layers", "x,wn0,norms,up,down", ()),
 )
 
 
-@pytest.mark.parametrize(("fixture", "name", "wrt"), ROUND_TRIP, ids=lambda value: str(value))
-def test_written_file_loads_both_modules_and_reprints_the_same(tmp_path, capsys, fixture, name, wrt) -> None:
+@pytest.mark.parametrize(("fixture", "name", "wrt", "recompute"), ROUND_TRIP, ids=lambda value: str(value))
+def test_written_file_loads_both_modules_and_reprints_the_same(
+    tmp_path, capsys, fixture, name, wrt, recompute
+) -> None:
     """D44: one file, one header, each class once; both Modules load and print back to the file."""
     written = tmp_path / "trained.py"
-    assert cli.main(["autodiff", str(FIXTURES / fixture), "--wrt", wrt, str(written)]) == 0
+    selected = [word for selector in recompute for word in ("--recompute", selector)]
+    assert cli.main(["autodiff", str(FIXTURES / fixture), "--wrt", wrt, *selected, str(written)]) == 0
     assert capsys.readouterr().out == ""
     text = written.read_text()
     assert text.count("from __future__ import annotations") == 1

@@ -129,10 +129,16 @@ class Differentiated(Case):
     wrt: tuple[str, ...] = ()
     recompute: tuple[str, ...] = ()
     saved: frozenset[str] | None = None
+    saved_tensors: Mapping[str, int] | None = None
+    slots: Mapping[str, tuple[str, ...]] | None = None
     reshards: tuple[tuple[tuple, tuple], ...] = ()
     rtol: float = 1e-5
     atol: float = 1e-6
     dims: Mapping[str, int] = MappingProxyType({})
+
+    @property
+    def id(self) -> str:
+        return f"{super().id}[{','.join(self.recompute)}]" if self.recompute else super().id
 
     def guard(self, module, problems):
         before = inspection.as_script(module)
@@ -142,6 +148,16 @@ class Differentiated(Case):
         check_gradients(module, forward, backward, self.wrt, self.rtol, self.atol, self.dims)
         if self.saved is not None:
             assert {value.name for value in differentiate.saved_values(forward)} == self.saved
+        if self.saved_tensors is not None:
+            counted = {value.name: len(tuple(leaves(flat(value.type)))) for value in differentiate.saved_values(forward)}
+            assert counted == dict(self.saved_tensors)
+        if self.slots is not None:
+            elements = {key: tuple(each.name for each in core.instances(slot)) for key, slot in forward.children.items()}
+            assert elements == dict(self.slots)
+        for generated in (forward, backward):
+            named: dict[str, core.Module] = {}
+            for each in core.module_definition_order(generated):
+                assert named.setdefault(each.name, each) is each, f"two Modules are named {each.name!r}"
         params = {param.name: param for param in module.entry_function().params}
         returned = fields(backward.entry_function().return_type) if len(self.wrt) > 1 else (
             backward.entry_function().return_type,
@@ -196,6 +212,46 @@ class ChildCall(Differentiated):
     path: Path = FIXTURES / "child_call.py"
     name: str | None = "ChildCall"
     wrt: tuple[str, ...] = ("x", "w1", "w2")
+
+
+@case
+class ChildCallOneElement(ChildCall):
+    recompute: tuple[str, ...] = ("ChildCall.rest.1:h",)
+    saved_tensors: Mapping[str, int] | None = MappingProxyType({"first.saved": 4, "rest.0.saved": 4, "rest.1.saved": 3})
+    slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
+        {"first": ("LayerForward",), "rest": ("LayerForward", "Layer_1Forward")}
+    )
+
+
+@case
+class ChildCallOneElementSaved(ChildCall):
+    """The element's own ``:None`` replaces the whole-layer choice of its definition."""
+
+    recompute: tuple[str, ...] = ("Layer", "ChildCall.rest.0:None")
+    saved_tensors: Mapping[str, int] | None = MappingProxyType({"first.saved": 2, "rest.0.saved": 4, "rest.1.saved": 2})
+    slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
+        {"first": ("LayerForward",), "rest": ("Layer_1Forward", "LayerForward")}
+    )
+
+
+@case
+class ChildCallWholeSlot(ChildCall):
+    recompute: tuple[str, ...] = ("ChildCall.first",)
+    saved_tensors: Mapping[str, int] | None = MappingProxyType({"first.saved": 2, "rest.0.saved": 4, "rest.1.saved": 4})
+    slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
+        {"first": ("Layer_1Forward",), "rest": ("LayerForward", "LayerForward")}
+    )
+
+
+@case
+class ChildCallSharedCopy(ChildCall):
+    """Two elements, in two slots, with one choice share one copy."""
+
+    recompute: tuple[str, ...] = ("ChildCall.first:h", "ChildCall.rest.1:h")
+    saved_tensors: Mapping[str, int] | None = MappingProxyType({"first.saved": 3, "rest.0.saved": 4, "rest.1.saved": 3})
+    slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
+        {"first": ("Layer_1Forward",), "rest": ("LayerForward", "Layer_1Forward")}
+    )
 
 
 @case
@@ -516,14 +572,25 @@ REFUSED = (
     ("topk_inner_axis.py", ("x",), (), "TopK on an axis that is not the last has no autodiff rule"),
     ("backward_name.py", ("x",), (), "declares a function named 'backward'"),
     ("sharded.py", ("w",), ("Nope.forward:full",), "no Module named 'Nope'"),
-    ("sharded.py", ("w",), ("Layer.nope:full",), "'nope' must resolve to exactly one function"),
+    ("sharded.py", ("w",), ("Layer.nope:full",), "'Layer' has no function or child slot named 'nope'"),
     ("sharded.py", ("w",), ("Layer.forward:nope",), "binds no value named 'nope'"),
     ("sharded.py", ("w",), ("Layer.forward:w",), "'w' is a parameter"),
-    ("sharded.py", ("w",), ("Layer.forward.inner:full",), "not by a path through child slots"),
-    ("sharded.py", ("w",), ("full",), "expected Module[.function]:variable"),
+    ("sharded.py", ("w",), ("full",), "no Module named 'full'"),
     ("rebound.py", ("x",), ("Rebound.forward:h",), "2 values are named 'h'"),
     ("same_name.py:SameName", ("x",), ("Block:h",), "2 different Modules are named 'Block'"),
     ("sibling_call.py", ("x",), ("SiblingCall.forward:a",), "result of calling 'layer'"),
+    ("child_call.py:ChildCall", ("x",), ("ChildCall.nope.0",), "'ChildCall' has no function or child slot named 'nope'"),
+    ("child_call.py:ChildCall", ("x",), ("ChildCall.rest.5",), "slot 'rest' has 2 elements"),
+    ("child_call.py:ChildCall", ("x",), ("ChildCall.rest",), "slot 'rest' is a ModuleList; name one element"),
+    ("child_call.py:ChildCall", ("x",), ("ChildCall.first.0",), "slot 'first' is not a ModuleList"),
+    ("child_call.py:ChildCall", ("x",), ("ChildCall.rest.0.inner.1:h",), "an instance path has one child slot"),
+    ("child_call.py:ChildCall", ("x",), ("Layer.forward.inner:full",), "an instance path starts at the root Module 'ChildCall'"),
+    ("child_call.py:ChildCall", ("x",), ("Layer:None",), "':None' names one element"),
+    ("child_call.py:ChildCall", ("x",), ("ChildCall.rest.0:None", "ChildCall.rest.0:h"), "':None' and another selector"),
+    ("child_call.py:ChildCall", ("x",), ("Nope",), "no Module named 'Nope'"),
+    ("child_call.py:ChildCall", ("x",), (":h",), "expected Module[.function][:variable]"),
+    ("child_call.py:ChildCall", ("x",), ("",), "expected Module[.function][:variable]"),
+    ("child_call.py:ChildCall", ("x",), ("Layer.forward",), "name a variable after the function"),
 )
 
 

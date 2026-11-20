@@ -285,8 +285,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="comma-separated entry parameters whose gradients the backward returns",
     )
     autodiff.add_argument(
-        "--recompute", action="append", default=[], metavar="Module[.function]:variable",
-        help="a value the backward computes again instead of saving it; repeat for more",
+        "--recompute", action="append", default=[], metavar="SELECTOR",
+        help="what the backward computes again instead of saving it: Module[.function][:variable] "
+        "for each element of a definition, Root.slot[.index][.function][:variable] for one element, "
+        "Root.slot[.index]:None to save all of one element; repeat for more",
     )
     autodiff.add_argument(
         "--saved", action="store_true",

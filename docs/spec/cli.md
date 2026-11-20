@@ -425,8 +425,11 @@ tilefoundry autodiff SOURCE --wrt NAMES [--recompute SELECTOR ...] [--saved] [PA
 
 `autodiff` differentiates the selected Module with
 [passes §7.4](./passes.md#74-differentiate). `--wrt` is required and names the
-entry parameters, comma-separated. Each `--recompute` is a
-`Module[.function]:variable` selector, passed to `differentiate` as written.
+entry parameters, comma-separated. Each `--recompute` is a selector of
+[passes §7.4](./passes.md#74-differentiate), passed to `differentiate` as
+written: `Module[.function][:variable]` for each element of a definition,
+`Root.slot[.index][.function][:variable]` for one element of a child slot of
+the root, `Root.slot[.index]:None` for an element that saves what it computes.
 
 - Without `--saved`, the command writes `<Name>Forward` and `<Name>Backward` as
   one DSL file: one header, and each Module class, child slot classes included,

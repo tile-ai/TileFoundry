@@ -576,10 +576,32 @@ through `saved`.
   `Partial("sum")` before the `Reshard`.
 - Each Op that can be differentiated registers one rule
   ([visitor-registry §12](./visitor-registry.md#12-instance-5--autodiff)).
-- `recompute` items are `Module[.function]:variable`. The part before `:` is a
-  selector as in [cli Commands](./cli.md#commands), resolved by `Module.name`
-  among the Modules reachable from *module*; without `.function` it names the
-  entry. The variable is the name the author bound.
+- `recompute` items are selectors. `Root` is the name of *module*; a function
+  left out is the entry; the variable is the name the author bound:
+
+  | selector | recomputes |
+  |---|---|
+  | `Name` | in each element of the Module named `Name`, and in its subtree, each value a selector may name |
+  | `Name[.function]:variable` | that value, in each element of `Name` |
+  | `Root.slot[.index]` | in that one element of a child slot of the root, and in its subtree, each value a selector may name |
+  | `Root.slot[.index][.function]:variable` | that value, in that one element |
+  | `Root.slot[.index]:None` | nothing in that one element: it saves what it computes |
+
+  `Name` is resolved by `Module.name` among the Modules reachable from
+  *module*, as the selector in [cli Commands](./cli.md#commands). `.index`
+  is written for a ModuleList slot and only for it. When the second segment
+  after `Root` is a function of the root, the selector names a definition;
+  when it is a child slot, an element. A value a selector may name is a call
+  of an Op outside every loop body. An element's own selectors **replace**
+  what the selectors of definitions choose in its subtree; they do not add to
+  them. Each selector is checked against *module* even when another replaces
+  it.
+- An element with its own selectors is differentiated from a copy of its
+  subtree. Each Module of a copy is named `<Name>_<k>`, `k` the smallest
+  number from 1 whose name no other Module of the tree has, so the generated
+  `<Name>_<k>Forward` and `<Name>_<k>Backward` appear in the written file.
+  Elements of one definition with the same selectors share one copy; the root
+  keeps its name and its slot keys.
 - `saved_values` lists the items of a generated forward's `saved` with the name
   the author bound (`v<index>` when there is none), the type, and the origin:
   `parameter`, `carry`, the Op and its source line, or the call whose `saved`
@@ -594,11 +616,16 @@ through `saved`.
     off the last axis); a loop that a gradient reaches whose trip count is not
     static, that has no carry, or that carries a tuple; a loop value the
     backward reads that is `Partial`; a call that reaches past one child slot;
-    a callee named `backward`; a `recompute` selector without `:`, with a child
-    slot path, naming no reachable Module, a Module name two reachable Modules
-    share, no function, no value, two values of one name, a parameter, a value
-    computed by a call rather than an Op, or a value inside a loop body (the
-    first version saves every value of a loop body); and a backward that
+    a callee named `backward`; a `recompute` selector that is empty or ends in
+    `:`, naming no reachable Module, a Module name two reachable Modules share,
+    no function, a function without a variable, no value, two values of one
+    name, a parameter, a value computed by a call rather than an Op, or a value
+    inside a loop body (the first version saves every value of a loop body); an
+    element path that does not start at the root, that names neither a function
+    nor a child slot of the root, that leaves out the index of a ModuleList slot,
+    gives an index past its end or to a slot that is not a ModuleList, or that
+    goes through a second child slot; a `:None` that does not follow an element,
+    or that another selector of the same element joins; and a backward that
     `differentiate` generated, since a second derivative is not supported.
 
 ## 8. Directory layout

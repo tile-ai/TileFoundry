@@ -18,6 +18,9 @@ from tilefoundry.ir import core, expr, types
 from tilefoundry.ir import utils as ir_utils
 from tilefoundry.ir.hir import sharding, tensor
 
+from . import recompute_selection
+from .recompute_selection import is_projection, select_value, where
+
 __all__ = ["Saved", "differentiate", "saved_values", "select_value"]
 
 GENERATED = "autodiff"
@@ -38,9 +41,10 @@ def differentiate(
     """Return ``(<Name>Forward, <Name>Backward)`` for the entry of *module*.
 
     *wrt* names the entry parameters whose gradients the backward returns, in
-    that order. Each item of *recompute* is a ``Module[.function]:variable``
-    selector of a value the backward computes again instead of reading it from
-    ``saved``.
+    that order. Each item of *recompute* selects what the backward computes
+    again instead of reading it from ``saved``: ``Module[.function][:variable]``
+    for each element of a definition, ``Root.slot[.index][.function][:variable]``
+    for one element of a child slot of the root, ``:None`` for none of it.
     """
     if module.metadata.get(GENERATED) == "backward":
         raise ValueError(
@@ -50,8 +54,10 @@ def differentiate(
     wrt = tuple(wrt)
     if not wrt:
         raise ValueError(f"differentiate: {module.name!r}: wrt names no parameter")
-    selected = {id(value): value for value in (select_value(module, item) for item in recompute)}
-    return Differentiator(selected, module.target).module(module, wrt)
+    selection = recompute_selection.parse_selectors(module, tuple(recompute))
+    tree = recompute_selection.expand(module, selection)
+    selected = {id(value): value for value in recompute_selection.resolve(tree, selection)}
+    return Differentiator(selected, module.target).module(tree, wrt)
 
 
 def saved_values(forward: core.Module) -> tuple[Saved, ...]:
@@ -61,77 +67,9 @@ def saved_values(forward: core.Module) -> tuple[Saved, ...]:
     return forward.metadata["saved"]
 
 
-def select_value(module: core.Module, selector: str) -> expr.Expr:
-    """Resolve ``Module[.function]:variable`` among the Modules reachable from *module*.
-
-    The part before ``:`` is the selector of ``tilefoundry`` commands: a Module
-    named by ``Module.name`` and, optionally, one of its functions; the entry
-    when the function is left out. The variable is the name the author bound.
-    """
-    owner, colon, variable = selector.rpartition(":")
-    if not colon or not owner or not variable:
-        raise ValueError(f"recompute {selector!r}: expected Module[.function]:variable")
-    name, _, function_name = owner.partition(".")
-    if "." in function_name:
-        raise ValueError(
-            f"recompute {selector!r}: name a Module by its name, not by a path through child slots"
-        )
-    found = {id(each): each for each in core.module_definition_order(module) if each.name == name}
-    if not found:
-        raise ValueError(f"recompute {selector!r}: no Module named {name!r} is reachable from {module.name!r}")
-    if len(found) > 1:
-        raise ValueError(f"recompute {selector!r}: {len(found)} different Modules are named {name!r}")
-    (owner_module,) = found.values()
-    function = owner_module.lookup(function_name) if function_name else owner_module.entry_function()
-    if any(param.name == variable for param in function.params):
-        raise ValueError(
-            f"recompute {selector!r}: {variable!r} is a parameter; the backward reads a parameter, "
-            "it never computes one"
-        )
-    matches = {
-        id(value): value for value in core.collect_exprs(function.body) if expr.binding_name(value) == variable
-    }
-    if not matches:
-        raise ValueError(f"recompute {selector!r}: {function.name!r} binds no value named {variable!r}")
-    if len(matches) > 1:
-        places = ", ".join(where(value) or "?" for value in matches.values())
-        raise ValueError(f"recompute {selector!r}: {len(matches)} values are named {variable!r}: {places}")
-    (value,) = matches.values()
-    for loop in core.collect_exprs(function.body):
-        inside = () if not isinstance(loop, core.LoopRegion) else (loop.body, *loop.yield_values)
-        if any(value is inner for root in inside for inner in core.collect_exprs(root)):
-            raise ValueError(
-                f"recompute {selector!r}: {variable!r} is computed inside a loop; "
-                "the first version saves every value of a loop body and recomputes none"
-            )
-    produced = value.args[0] if is_projection(value) else value
-    if isinstance(produced, expr.Call) and isinstance(produced.target, core.FunctionRef):
-        raise ValueError(
-            f"recompute {selector!r}: {variable!r} is the result of calling "
-            f"{produced.target.qualified_name!r}; only a value an Op computes is recomputed"
-        )
-    if not isinstance(value, expr.Call):
-        raise ValueError(
-            f"recompute {selector!r}: {variable!r} is a {type(value).__name__}; "
-            "only a value an Op computes is recomputed"
-        )
-    return value
-
-
-def where(node: expr.Expr) -> str:
-    """Where the author wrote *node*, and the name they bound it to."""
-    span = expr.span_text(node, column=False)
-    name = expr.binding_name(node)
-    return " ".join(part for part in (span, f"({name})" if name else None) if part)
-
-
 def located(node: expr.Expr) -> str:
     text = where(node)
     return f"\n  at {text}" if text else ""
-
-
-def is_projection(node: expr.Expr) -> bool:
-    return isinstance(node, expr.Call) and isinstance(node.target, tensor.TupleGetItem)
 
 
 def is_float(type_: types.Type) -> bool:
