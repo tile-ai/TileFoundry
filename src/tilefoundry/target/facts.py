@@ -208,18 +208,6 @@ class MemoryHierarchyFacts:
             current = nearer
         return current
 
-    def capacity_sharers(self, name: str) -> tuple[tuple[str, int | None], ...]:
-        """Every level *name* divides a physical block with, and that block's size."""
-        return tuple(
-            (
-                relation.far if relation.near == name else relation.near,
-                relation.shared_capacity_bytes,
-            )
-            for relation in self.relations
-            if relation.kind is MemoryRelationKind.SHARES_CAPACITY_WITH
-            and name in (relation.near, relation.far)
-        )
-
 
 @dataclasses.dataclass(frozen=True)
 class PerformanceServiceFacts:

@@ -53,22 +53,6 @@ def row_count(node) -> object:
     return node
 
 
-def row_limit(offsets: tuple, extents: tuple, limit: int | None) -> tuple:
-    """The most the row window may extend, at the mode holding the rows.
-
-    A window is stated per logical axis and projected onto modes, so the
-    ceiling has to land on the one mode that varies over the rows -- the same
-    one the extent did.
-    """
-    if limit is None:
-        return ()
-    placed = [None] * len(extents)
-    for mode, extent in enumerate(extents):
-        if extent is not offsets[mode] and not isinstance(extent, int):
-            placed[mode] = limit
-    return tuple(placed)
-
-
 @access.register_relation(CacheUpdate)
 def cache_update_access(call: "expr.Call", ctx) -> tuple[access.Relation, ...]:
     """The result is the cache with ``s`` rows replaced at ``cur_pos``.
@@ -233,14 +217,6 @@ def eval_cache_update(ctx):
 
 
 __all__ = ["CacheUpdate"]
-
-
-def by_logical_axis(local, logical) -> list:
-    """One extent per logical axis of a value, folding the modes it factored."""
-    extents = [1] * len(logical.shape)
-    for mode, owner in enumerate(access.logical_axes_of(local, logical)):
-        extents[owner] *= local.shape[mode]
-    return extents
 
 
 @cost.register(CacheUpdate)

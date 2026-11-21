@@ -41,14 +41,96 @@ CUTE_HOST_DEVICE float total(Partials const &acc) {
            ((acc.p[4] + acc.p[5]) + (acc.p[6] + acc.p[7]));
 }
 
+/// The modes of the static layout ``L``, flat, from the smallest stride to
+/// the largest; ties keep their order.
+template <class L> struct AscendingStrides {
+    using strides_t = decltype(cute::stride(cute::flatten(L{})));
+    static constexpr int rank = int(cute::tuple_size<strides_t>::value);
+    static constexpr cute::array<int, rank> order =
+        []<int... Is>(cute::seq<Is...>) {
+            cute::array<int, rank> stride = {
+                int(decltype(cute::get<Is>(strides_t{}))::value)...};
+            cute::array<int, rank> sorted = {Is...};
+            for (int i = 1; i < rank; ++i)
+                for (int j = i;
+                     j > 0 && stride[sorted[j]] < stride[sorted[j - 1]]; --j) {
+                    int moved = sorted[j];
+                    sorted[j] = sorted[j - 1];
+                    sorted[j - 1] = moved;
+                }
+            return sorted;
+        }(cute::make_seq<rank>{});
+};
+
+/// ``layout`` with its modes in register order, coalesced so a mode of one
+/// element leaves no stride to recast; a swizzle keeps its place in front of
+/// the affine layout it permutes.
+template <class L>
+CUTE_HOST_DEVICE constexpr auto in_register_order(L const &layout) {
+    if constexpr (cute::is_composed_layout<L>::value) {
+        return cute::make_composed_layout(layout.layout_a(), layout.offset(),
+                                          in_register_order(layout.layout_b()));
+    } else {
+        using ascending = AscendingStrides<L>;
+        return [&]<int... Is>(cute::seq<Is...>) {
+            return cute::coalesce(
+                cute::select<ascending::order[Is]...>(cute::flatten(layout)));
+        }(cute::make_seq<ascending::rank>{});
+    }
+}
+
+/// ``t`` indexed in register order, the order Dot pairs its operands in.
+///
+/// TIR numbers a unit's registers from the smallest physical stride up
+/// (``register_strides``), while CuTe counts the first mode fastest. A view
+/// with one mode is returned as it is.
+template <class View> __device__ decltype(auto) register_order(View const &t) {
+    using flat_t = decltype(cute::flatten(
+        detail::plain_layout(typename View::layout_type{})));
+    if constexpr (decltype(cute::rank(flat_t{}))::value <= 1) {
+        return t;
+    } else {
+        static_assert(cute::is_static<decltype(cute::stride(flat_t{}))>::value,
+                      "ops::dot: an operand of several modes needs static "
+                      "strides to be read in register order");
+        return cute::make_tensor(t.data(), in_register_order(t.layout()));
+    }
+}
+
+/// Whether ``t`` starts on a boundary of ``V`` of its elements. A layout
+/// cannot say where a shard's offset lands, so the pointer is asked.
+template <int V, class View> __device__ bool starts_aligned(View const &t) {
+    using value = typename cute::remove_cvref_t<View>::value_type;
+    return reinterpret_cast<uintptr_t>(cute::raw_pointer_cast(t.data())) %
+               (V * sizeof(value)) ==
+           0;
+}
+
+/// This lane's share of the product, one element at a time.
+template <class AView, class BView>
+__device__ float contract_elements(AView const &a, BView const &b, int n) {
+    Partials acc{};
+    for (int i = 0; i < n; ++i)
+        acc.p[i % Partials::kWays] +=
+            static_cast<float>(a(i)) * static_cast<float>(b(i));
+    return total(acc);
+}
+
 /// This lane's share of the product, folded.
 template <class AView, class BView>
-__device__ float contract(AView const &a, BView const &b, int n) {
+__device__ float contract(AView const &a_view, BView const &b_view, int n) {
+    auto const &a = register_order(a_view);
+    auto const &b = register_order(b_view);
     using a_val = typename AView::value_type;
     using b_val = typename BView::value_type;
-    constexpr int V = fold_width<AView, BView>();
-    Partials acc{};
-    if constexpr (V > 1) {
+    constexpr int V = fold_width<cute::remove_cvref_t<decltype(a)>,
+                                 cute::remove_cvref_t<decltype(b)>>();
+    if constexpr (V == 1) {
+        return contract_elements(a, b, n);
+    } else {
+        if (!starts_aligned<V>(a) || !starts_aligned<V>(b))
+            return contract_elements(a, b, n);
+        Partials acc{};
         auto av = cute::recast<cute::uint_bit_t<V *int(sizeof(a_val)) * 8>>(a);
         auto bv = cute::recast<cute::uint_bit_t<V *int(sizeof(b_val)) * 8>>(b);
         const int nv = int(cute::size(av));
@@ -62,12 +144,8 @@ __device__ float contract(AView const &a, BView const &b, int n) {
                 acc.p[k % Partials::kWays] +=
                     static_cast<float>(ap[k]) * static_cast<float>(bp[k]);
         }
-    } else {
-        for (int i = 0; i < n; ++i)
-            acc.p[i % Partials::kWays] +=
-                static_cast<float>(a(i)) * static_cast<float>(b(i));
+        return total(acc);
     }
-    return total(acc);
 }
 
 /// Extent of the thread mesh's fastest mesh axis, as the mesh states it.

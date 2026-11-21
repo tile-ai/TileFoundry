@@ -490,6 +490,20 @@ persistence. Allocation MUST NOT recompute leaf intervals from a second use
 index. Reports MUST omit `value` and retain the existing binding, memory_level,
 bytes, defined_at, last_used_at and persistent fields.
 
+```python
+# tilefoundry.analysis
+def owner_units(
+    lifetime: ValueLifetime, owners: target.StorageOwners
+) -> dict[str, frozenset[int] | None]: ...
+```
+
+`owner_units` gives the units that hold a value, for each topology that owns
+the storage of its `memory_level` per unit, in `owners.order`: the unit ids its
+mesh selects on that topology. `None` means every unit of the topology, which
+holds in three cases: the value has no mesh, its mesh does not name that
+topology, or the selection is symbolic. A per-rank peak counts each value on
+the units it names.
+
 One ordinary expression event uses its operands and defines its result. A region adds separate binding and exit events. A mesh argument is used before its parameter is defined. A loop initial value is used before its induction and carried parameters are defined. Liveness records one representative loop-body iteration without expanding the trip count. A carried parameter spans entry to exit. A yielded value remains live through the backedge event. Positions
 are monotonic across the whole Function, including nested and sibling regions.
 

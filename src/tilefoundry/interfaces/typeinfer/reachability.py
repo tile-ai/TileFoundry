@@ -44,13 +44,8 @@ def check_input_reachability(op, operand_types, mesh, ctx=None):
             continue
         kept = tuple(
             name
-            for name in utils.topology_names(layout.mesh)
-            if any(
-                isinstance(attr, (types.Split, types.Partial))
-                for attr, (held, _) in zip(layout.attrs, utils.axis_keys(layout.mesh))
-                if held == name
-            )
-            or name in scope
+            for name, attrs in utils.attrs_by_topology(layout.mesh, layout.attrs).items()
+            if any(isinstance(attr, (types.Split, types.Partial)) for attr in attrs) or name in scope
         )
         if not kept:
             continue

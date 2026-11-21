@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import isl
 
 from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
@@ -114,7 +116,37 @@ def _(call: expr.Call, cotangent: expr.Expr, ctx: autodiff.Context) -> tuple:
     return tuple(cotangent if field == index.value else None for field in range(fields)), None
 
 
-__all__ = ["TupleGetItem"]
+def get_item(value: expr.Expr, index: int, type_: types.Type, name: str | None = None) -> expr.Call:
+    """``value[index]``, bound to *name* when one is given; the final inference types it."""
+    constant = expr.Constant(
+        type=types.TensorType.from_scalar(expr.DType.i64, storage=expr.StorageKind.UMAT), value=index
+    )
+    metadata = () if name is None else (expr.BindingMetadata(name=name),)
+    return expr.Call(TupleGetItem(), (value, constant), type=type_, metadata=metadata)
+
+
+def is_get_item(node: expr.Expr) -> bool:
+    return isinstance(node, expr.Call) and isinstance(node.target, TupleGetItem)
+
+
+def pack(items: tuple[expr.Expr, ...]) -> expr.Tuple:
+    return expr.Tuple(elements=tuple(items), type=types.TupleType(tuple(item.type for item in items)))
+
+
+def unpack(value: expr.Expr, fields: tuple[types.Type, ...]) -> tuple[expr.Expr, ...]:
+    """The item of *value* at each field."""
+    return tuple(get_item(value, index, item) for index, item in enumerate(fields))
+
+
+def repack(value: expr.Expr, type_: types.Type, name: str | None = None) -> expr.Expr:
+    """*value* read as *type_*: its one result, or a tuple of each field's item, bound to *name*."""
+    if not isinstance(type_, types.TupleType):
+        return get_item(value, 0, type_, name)
+    packed = pack(unpack(value, type_.fields))
+    return packed if name is None else replace(packed, metadata=(expr.BindingMetadata(name=name),))
+
+
+__all__ = ["TupleGetItem", "get_item", "is_get_item", "pack", "repack", "unpack"]
 
 
 @cost.register(TupleGetItem)

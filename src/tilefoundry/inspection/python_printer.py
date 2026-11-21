@@ -95,12 +95,18 @@ class HirPrinter(PythonPrinter):
         )
         return f"({inner}{',' if len(elements) == 1 else ''})"
 
+    def visit_Var(self, value: expr.Var, ctx=None) -> str:
+        """The one name of a Var, wherever it is printed: a capture by what it captures."""
+        if id(value) in self.param_alias:
+            return self.reference(self.param_alias[id(value)], ctx)
+        return self.names.get(id(value)) or expr.binding_name(value) or value.name
+
     def reference(self, node: expr.Expr, ctx=None) -> str:
         """Return the binding that denotes one value in the current definition."""
+        if isinstance(node, expr.Var):
+            return self.visit_Var(node, ctx)
         if isinstance(node, expr.Tuple):
             return self.tuple_reference(node.elements, ctx)
-        if id(node) in self.param_alias:
-            return self.reference(self.param_alias[id(node)], ctx)
         projection = region_projection(node)
         if isinstance(projection, core.LoopRegion):
             return self.reference(projection.params[projection_index(node)], ctx)
@@ -287,17 +293,6 @@ def attr_tuple_str(value: tuple, printer: PythonPrinter, ctx) -> str:
 def is_dim_entry(entry: object) -> bool:
     """Whether *entry* is a dimension rather than a plain attribute value."""
     return isinstance(entry, (expr.DimVar, expr.Var, expr.Constant, expr.Call))
-
-
-def tensor_import_names(fn: core.Function) -> str:
-    """``"Tensor"`` or ``"ConstTensor, Tensor"``.
-
-    ``"Tensor"`` or ``"ConstTensor, Tensor"`` — whichever the printed
-    signature (base plus every variant) actually references.
-    """
-    if any(p.is_const for f in (fn, *fn.variants) for p in f.params):
-        return "ConstTensor, Tensor"
-    return "Tensor"
 
 
 def sanitize_name(name: str) -> str:
@@ -768,7 +763,7 @@ def emit_def(
             region.args[: len(region.yield_values)],
             strict=True,
         ):
-            if isinstance(init, expr.Var) and names[id(carry)] != printer.reference(init):
+            if names[id(carry)] != printer.reference(init):
                 lines.append(f"{prefix}{names[id(carry)]} = {printer.reference(init)}")
             printed.add(id(carry))
         extent = printer.visit(region.extent, ctx)

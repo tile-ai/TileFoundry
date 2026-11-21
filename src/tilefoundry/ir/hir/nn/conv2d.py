@@ -27,12 +27,6 @@ def i64(value: int) -> expr.Constant:
     return dim.i64_const(value)
 
 
-def as_expr(v):
-    if isinstance(v, expr.Expr):
-        return v
-    return i64(int(v))
-
-
 def out_spatial(in_dim: expr.Expr, k: int, s: int, p: int, d: int) -> expr.Expr:
     """Compute (in + 2*p - d*(k-1) - 1) // s + 1, keeping symbolic dims alive.
 
@@ -258,7 +252,7 @@ def _(call: "expr.Call", ctx: "TypeInferContext") -> types.TensorType:
         if static is not None and static <= 0:
             ctx.error(call, f"output {name} extent must be positive, got {static}")
 
-    read = tuple(map(ctx.type_of, call.args))
+    read = (x, w, bias)
     require_exact_partial_state(call, ctx, *read)
     require_group_aligned_output_split(call, ctx, w, bias, group_count)
     relation = access.relations_of(call, ctx)

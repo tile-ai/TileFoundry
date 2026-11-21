@@ -38,6 +38,7 @@ __all__ = [
     "ExprWalker",
     "ExprCollector",
     "collect_exprs",
+    "innermost_loops",
     "ExprCloner",
     "BindingSubstitutionCloner",
     "expr_children",
@@ -272,6 +273,21 @@ def collect_exprs(root: expr.Expr | None) -> tuple[expr.Expr, ...]:
     found: list[expr.Expr] = []
     ExprCollector().visit(root, found)
     return tuple(found)
+
+
+def innermost_loops(values: tuple[expr.Expr, ...]) -> dict[int, LoopRegion]:
+    """The innermost loop among *values* around each value its body or yield holds, by id.
+
+    ``collect_exprs`` lists what a loop holds before the loop, so the innermost
+    loop around a value is the first to claim it.
+    """
+    owner: dict[int, LoopRegion] = {}
+    for loop in values:
+        if isinstance(loop, LoopRegion):
+            for root in (loop.body, *loop.yield_values):
+                for inner in collect_exprs(root):
+                    owner.setdefault(id(inner), loop)
+    return owner
 
 
 def generic_expr_rewrite(node: expr.Expr, visit_fn: Callable[[expr.Expr], expr.Expr]) -> expr.Expr:

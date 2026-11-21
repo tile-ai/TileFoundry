@@ -25,7 +25,7 @@ from .split import Split
 from .stack import Stack
 from .topk import TopK
 from .transpose import Transpose
-from .tuple_get_item import TupleGetItem
+from .tuple_get_item import TupleGetItem, get_item, is_get_item, pack, repack, unpack
 from .view_layout import derive_view_layout
 from .where import Where
 from .zeros import Zeros

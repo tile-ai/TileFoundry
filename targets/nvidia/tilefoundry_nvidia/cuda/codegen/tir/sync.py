@@ -17,21 +17,9 @@ from tilefoundry.ir import tir
 from tilefoundry_nvidia.cuda import target
 from tilefoundry_nvidia.cuda.codegen import context
 
-from .stmts import mesh_type
+from .memory import tensor_view
 
 SYNC = "tilefoundry::ops::sync"
-
-
-def mesh_value(mesh, ctx: context.Context) -> str:
-    """*mesh* as a C++ value, through the enclosing scope's alias where it fits."""
-    entry = ctx.mesh_aliases.get(id(mesh))
-    if entry is not None:
-        return f"{entry[0]}{{}}"
-    inline = mesh_type(mesh)
-    for alias_name, type_str in ctx.mesh_aliases.values():
-        if type_str == inline:
-            return f"{alias_name}{{}}"
-    return f"{inline}{{}}"
 
 
 @codegen.register(target.Target, codegen.Role.EMIT, tir.sync.Sync)
@@ -39,7 +27,7 @@ def emit(call, ctx: context.Context) -> None:
     """Emit the barrier as the mesh it covers, plus whatever that tier needs."""
     mesh = call.target.mesh
     barrier = tir.sync.classify(mesh)
-    value = mesh_value(mesh, ctx)
+    value = f"{tensor_view.render_mesh_type(mesh, ctx)}{{}}"
     if barrier is tir.sync.SyncBarrier.GRID:
         ctx.require_grid_barrier_state()
         ctx.emit(f"{SYNC}({value}, tilefoundry_grid_bar_state);")

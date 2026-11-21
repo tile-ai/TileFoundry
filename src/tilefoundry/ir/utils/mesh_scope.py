@@ -59,6 +59,14 @@ def axis_keys(mesh: types.Mesh) -> tuple[tuple[str, str | None], ...]:
     return tuple(keys)
 
 
+def attrs_by_topology(mesh: types.Mesh, attrs: tuple) -> dict[str, list]:
+    """The attrs of each topology of *mesh*, in topology order; one attr per mesh axis."""
+    grouped: dict[str, list] = {name: [] for name in topology_names(mesh)}
+    for attr, (name, _) in zip(attrs, axis_keys(mesh)):
+        grouped[name].append(attr)
+    return grouped
+
+
 def first_unit_ids(mesh: types.Mesh) -> tuple:
     """Each topology's unit id at the first unit of *mesh*: ``idx2crd(L(0), sizes)``."""
     return types.idx2crd(mesh.layout(0), types.topology_sizes(mesh.topologies))
@@ -388,6 +396,7 @@ def units_within(mesh: types.Mesh, scope: types.Mesh) -> bool:
 
 
 __all__ = [
+    "attrs_by_topology",
     "axis_keys",
     "covers_every_unit",
     "equals_mesh_scope",

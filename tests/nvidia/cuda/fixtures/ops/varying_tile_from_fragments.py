@@ -21,7 +21,7 @@ class TileFromFragments:
     def gemm(q: Tensor[(128, 192), "bf16"], k: Tensor[(96, 192), "bf16"]) -> Tensor[(128, 96), "f32"]:
         with Mesh(("cta",), layout=(2,), names=("row",)) as cta:
             with Mesh(("thread",), layout=(3, 128), names=("warpgroup", "participant")) as threads:
-                out = tf.zeros(Tensor[(128, 96), "f32"])
+                out = tf.empty(Tensor[(128, 96), "f32"])
                 with threads[0, :32] as _loader:
                     q_s = tf.schedule((q[cta.row * 64:cta.row * 64 + 64, :], tf.empty(Tensor[(64, 192), "bf16", Q_SMEM @ {cta.row @ V()}, "smem"])), op=T.copy_async_tensor())
                     k_s = tf.schedule((k, tf.empty(Tensor[(96, 192), "bf16", K_SMEM, "smem"])), op=T.copy_async_tensor())
