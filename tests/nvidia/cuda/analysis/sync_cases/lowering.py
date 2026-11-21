@@ -69,6 +69,26 @@ class RowWindows(SyncCase):
 
 
 @case
+class SyncCurrentSlice(SyncCase):
+    """The scope a sliced ``with`` binds is a legal sync mesh: a bar.sync on its 256 threads."""
+
+    path: Path = FIXTURES / "ops/sync_current_slice.py"
+    name: str | None = "SyncCurrentSlice"
+
+    def guard(self, state, problems):
+        sliced = [
+            op.mesh
+            for op in _lowered(state).operations
+            if isinstance(op, tir.sync.Sync) and op.mesh.names[0] == "group"
+        ]
+        assert sliced
+        for mesh in sliced:
+            scope = tir.sync.sync_scope(mesh)
+            assert tir.sync.classify(mesh) is tir.sync.SyncBarrier.BAR_SYNC
+            assert (scope.base, scope.count) == (128, 256)
+
+
+@case
 class LaneRows(SyncCase):
     """Each lane writes and reads back only its own row, so its loop gets no barrier."""
 

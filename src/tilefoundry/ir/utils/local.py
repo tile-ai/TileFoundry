@@ -7,7 +7,15 @@ from typing import Optional
 from tilefoundry.ir import expr, types
 from tilefoundry.ir.types import int_tuple
 
-from .mesh_scope import axis_keys, first_unit_ids, from_meshes, topology_mesh, topology_names
+from .leaves import map_tensor_types
+from .mesh_scope import (
+    attrs_by_topology,
+    axis_keys,
+    first_unit_ids,
+    from_meshes,
+    topology_mesh,
+    topology_names,
+)
 
 __all__ = [
     "divided_axes",
@@ -41,23 +49,20 @@ def filter_topologies(
     )
     if len(names) == 1 and (required_names is None or names[0] in required_names):
         return layout
-    keys = axis_keys(layout.mesh)
-    if len(keys) != len(layout.attrs):
+    if len(axis_keys(layout.mesh)) != len(layout.attrs):
         raise ValueError("shard attributes must have the rank of their mesh")
-    attrs_by_topology = {name: [] for name in names}
-    for attr, (name, _) in zip(layout.attrs, keys):
-        attrs_by_topology[name].append(attr)
+    by_topology = attrs_by_topology(layout.mesh, layout.attrs)
     if required_names is None:
         required_names = {
             name
-            for name, attrs in attrs_by_topology.items()
+            for name, attrs in by_topology.items()
             if any(not isinstance(attr, types.Broadcast) for attr in attrs)
         }
     if not required_names:
         required_names = {names[-1]}
     selected = []
     selected_attrs = []
-    for name, attrs in attrs_by_topology.items():
+    for name, attrs in by_topology.items():
         if name in required_names:
             selected.append(topology_mesh(layout.mesh, name))
             selected_attrs.extend(attrs)
@@ -74,12 +79,9 @@ def physical_layout(layout: types.ShardLayout) -> types.LayoutBase:
     """Omit value-only topologies, then read remaining variation as Broadcast."""
     if not any(isinstance(attr, types.Varying) for attr in layout.attrs):
         return layout
-    by_topology = {topology: [] for topology, _ in axis_keys(layout.mesh)}
-    for attr, (topology, _) in zip(layout.attrs, axis_keys(layout.mesh)):
-        by_topology[topology].append(attr)
     kept = tuple(
         topology
-        for topology, attrs in by_topology.items()
+        for topology, attrs in attrs_by_topology(layout.mesh, layout.attrs).items()
         if not (
             any(isinstance(attr, types.Varying) for attr in attrs)
             and not any(isinstance(attr, (types.Split, types.Partial)) for attr in attrs)
@@ -213,12 +215,7 @@ def local_type_of(
 
     selected = topology_level(topology, topologies)
     if isinstance(type, types.TupleType):
-        return types.TupleType(
-            fields=tuple(
-                local_type_of(field, topology=topology, topologies=topologies)
-                for field in type.fields
-            )
-        )
+        return map_tensor_types(type, lambda leaf: local_type_of(leaf, topology=topology, topologies=topologies))
     if not isinstance(type, types.TensorType):
         return type
     layout = type.layout

@@ -80,10 +80,9 @@ def rope_access_relation(call: "expr.Call", ctx: "TypeInferContext") -> tuple[ac
     is an element of `pos_ids`, which nothing here holds, read whole by both.
     """
     q_ty, k_ty = ctx.type_of(call.args[0]), ctx.type_of(call.args[1])
-    logical_q = ctx.type_of(call.args[0])
     rank = len(q_ty.shape)
-    head_dim = len(logical_q.shape) - 1
-    carried = access.logical_coordinates(q_ty, logical_q)
+    head_dim = len(q_ty.shape) - 1
+    carried = access.logical_coordinates(q_ty, q_ty)
     walked = ", ".join((*(f"d{index}" for index in range(rank)), f"d{rank}"))
     own = ", ".join(f"d{index}" for index in range(rank))
     value = isl.map(f"{{ [{walked}] -> [{own}] : d{rank} = 0 }}")
@@ -95,13 +94,12 @@ def rope_access_relation(call: "expr.Call", ctx: "TypeInferContext") -> tuple[ac
     tables = []
     for operand in (2, 3):
         table = ctx.type_of(call.args[operand])
-        logical_table = ctx.type_of(call.args[operand])
-        rows = len(logical_table.shape) - 1
+        rows = len(table.shape) - 1
         tables.append(
             access.reached_at(
                 rank + 1,
                 table,
-                logical_table,
+                table,
                 {rows: carried.get(head_dim, "0")},
                 free=tuple(range(rows)),
             )

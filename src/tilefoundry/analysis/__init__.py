@@ -14,6 +14,7 @@ from .allocation import (
     AllocationValue,
     aligned,
     covers_result,
+    owner_units,
     storage_bytes,
 )
 from .api import Result, analyze, build_context

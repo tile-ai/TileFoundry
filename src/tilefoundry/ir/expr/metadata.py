@@ -89,6 +89,18 @@ def diagnostic_location(expr: "Expr") -> str | None:
     return span_text(expr) or binding_name(expr)
 
 
+def authored_at(expr: "Expr") -> str:
+    """Where the author wrote *expr*, and the name they bound it to."""
+    name = binding_name(expr)
+    return " ".join(part for part in (span_text(expr, column=False), f"({name})" if name else None) if part)
+
+
+def diagnostic_suffix(expr: "Expr") -> str:
+    """``authored_at`` as the last line of a refusal; empty when nothing is known."""
+    text = authored_at(expr)
+    return f"\n  at {text}" if text else ""
+
+
 def value_label(expr: "Expr") -> str | None:
     """The name a report calls one value, stable across runs.
 
@@ -161,8 +173,10 @@ __all__ = [
     "RangeMetadata",
     "SourceSpanMetadata",
     "binding_name",
+    "authored_at",
     "describe_value",
     "diagnostic_location",
+    "diagnostic_suffix",
     "value_label",
     "value_labels",
     "unique_labels",

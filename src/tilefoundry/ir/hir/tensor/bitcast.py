@@ -170,13 +170,14 @@ def restates_attrs(source: types.TensorType, layout) -> bool:
 def _(call: expr.Call, ctx) -> types.TensorType:
     source = ctx.type_of(call.args[0])
     stated_layout = call.target.layout
+    stated_type = types.TensorType(source.shape, source.dtype, stated_layout, source.storage)
     if restates_attrs(source, stated_layout):
-        return types.TensorType(source.shape, source.dtype, stated_layout, source.storage)
+        return stated_type
     if not expr.is_literal_shape(source.shape):
         ctx.error(call, "source tensor shape must be literal")
     held = types.shard_layout_of(source.layout)
     stated = types.shard_layout_of(stated_layout)
-    varying = ir_utils.varying_axis(types.TensorType(source.shape, source.dtype, stated_layout, source.storage), source)
+    varying = ir_utils.varying_axis(stated_type, source)
     if stated is None and varying is not None:
         ctx.error(call, f"the source is Varying on {varying[0]}; end the layout with {varying[1]}")
     if (
@@ -197,18 +198,17 @@ def _(call: expr.Call, ctx) -> types.TensorType:
         stated_layout if held is None else types.ShardLayout(stated_layout, held.attrs, held.mesh),
         source.storage,
     )
-    layout = stated_layout
     if sharded:
         if source.storage is not expr.StorageKind.RMEM:
             ctx.error(call, "sharded bitcast requires rmem storage")
-        if not isinstance(source.layout, types.ShardLayout) or not isinstance(layout, types.ShardLayout):
+        if not isinstance(source.layout, types.ShardLayout) or not isinstance(stated_layout, types.ShardLayout):
             ctx.error(call, "sharded bitcast requires ShardLayout at both ends")
         source_layout = ir_utils.filter_topologies(source.layout)
-        result_layout = ir_utils.filter_topologies(layout)
+        result_layout = ir_utils.filter_topologies(stated_layout)
         if source_layout.mesh != result_layout.mesh:
             ctx.error(call, "source and result ShardLayout must use the same mesh")
     else:
-        source_layout, result_layout = source.layout, layout
+        source_layout, result_layout = source.layout, stated_layout
     for end, held in (("source", source_layout), ("result", result_layout)):
         if sharded:
             inner = held.layout
@@ -244,13 +244,13 @@ def _(call: expr.Call, ctx) -> types.TensorType:
         if not expr.is_literal_shape(types.flatten_to_tuple(held.shape)):
             ctx.error(call, f"{end} layout shape must be literal")
     count = prod(source.shape)
-    layout_count = prod(types.flatten_to_tuple(layout.shape))
+    layout_count = prod(types.flatten_to_tuple(stated_layout.shape))
     if layout_count != count:
         ctx.error(call, f"element count differs: source {count}, result layout {layout_count}")
     if prod(shape) != count:
         ctx.error(call, f"element count differs: source {count}, result {prod(shape)}")
     try:
-        address_mapping(source.layout, layout, count, source.shape, shape)
+        address_mapping(source.layout, stated_layout, count, source.shape, shape)
     except ValueError as error:
         ctx.error(call, str(error))
     return result
