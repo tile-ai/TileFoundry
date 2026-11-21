@@ -1,4 +1,4 @@
-"""Global memory that two CTAs may both reach while one of them goes through the async proxy.
+"""Global memory that two CTAs may both reach while one of them writes.
 
 No step orders two CTAs of one launch, so the ``sync`` family refuses an entry in
 which two such accesses may reach one element, unless both are the same
@@ -459,8 +459,8 @@ def overlap(
 def refuse_cta_overlaps(planner) -> None:
     """Refuse the planner's Function when two CTAs may reach one global element unordered.
 
-    It pairs the global reaches of which one goes through the async proxy and one
-    writes; a reach pairs with itself too. A launch of one CTA has no pairs.
+    It pairs the global reaches of which one writes; a reach pairs with itself
+    too. A launch of one CTA has no pairs.
     """
     sizes = [t.size for t in planner.context.topologies or () if t.name == "cta"]
     launch = prod(sizes) if all(isinstance(size, int) for size in sizes) else None
@@ -477,7 +477,7 @@ def refuse_cta_overlaps(planner) -> None:
 
     for index, first in enumerate(found):
         for second in found[index:]:
-            if not (first.async_proxy or second.async_proxy) or not (first.write or second.write):
+            if not (first.write or second.write):
                 continue
             if None not in (first.root, second.root) and first.root != second.root:
                 continue

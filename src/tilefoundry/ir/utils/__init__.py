@@ -31,6 +31,7 @@ from .local import (
 )
 from .mesh_scope import (
     UnitChange,
+    attrs_by_topology,
     axis_keys,
     covers_every_unit,
     equals_mesh_scope,

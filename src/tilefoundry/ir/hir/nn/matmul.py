@@ -106,7 +106,7 @@ def matmul_result_shape_and_layout(call: "expr.Call", ctx: "TypeInferContext") -
             "MatMul contraction dim K must be split on the same mesh axes for both operands",
         )
 
-    read = tuple(map(ctx.type_of, call.args))
+    read = (lhs, rhs)
     ir_utils.check_multilinear_partials(tuple(zip(("lhs", "rhs"), read)), ctx.target.storage_owners if ctx.target else tilefoundry_target.StorageOwners(), kind=expr.BinaryKind.MUL)
 
     relation = access.relations_of(call, ctx)

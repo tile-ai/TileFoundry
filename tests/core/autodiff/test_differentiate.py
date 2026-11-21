@@ -10,7 +10,7 @@ from types import MappingProxyType
 import pytest
 import torch
 
-from tests.core._corpus import Case, case, check_case, special
+from tests.core._corpus import Case, case, check_case, reload, special
 from tilefoundry import cli, inspection, runtime
 from tilefoundry.interfaces import autodiff, evaluator
 from tilefoundry.ir import core, dim, expr, types, utils
@@ -129,10 +129,19 @@ class Differentiated(Case):
     wrt: tuple[str, ...] = ()
     recompute: tuple[str, ...] = ()
     saved: frozenset[str] | None = None
+    saved_tensors: Mapping[str, int] | None = None
+    slots: Mapping[str, tuple[str, ...]] | None = None
+    loops: int | None = None
+    index_inline: bool = False
+    """True: a ModuleList index the backward computes with a tensor Op prints inline, and reloads bound."""
     reshards: tuple[tuple[tuple, tuple], ...] = ()
     rtol: float = 1e-5
     atol: float = 1e-6
     dims: Mapping[str, int] = MappingProxyType({})
+
+    @property
+    def id(self) -> str:
+        return f"{super().id}[{','.join(self.recompute)}]" if self.recompute else super().id
 
     def guard(self, module, problems):
         before = inspection.as_script(module)
@@ -142,6 +151,16 @@ class Differentiated(Case):
         check_gradients(module, forward, backward, self.wrt, self.rtol, self.atol, self.dims)
         if self.saved is not None:
             assert {value.name for value in differentiate.saved_values(forward)} == self.saved
+        if self.saved_tensors is not None:
+            counted = {value.name: len(tuple(leaves(flat(value.type)))) for value in differentiate.saved_values(forward)}
+            assert counted == dict(self.saved_tensors)
+        if self.slots is not None:
+            elements = {key: tuple(each.name for each in core.instances(slot)) for key, slot in forward.children.items()}
+            assert elements == dict(self.slots)
+        if self.loops is not None:
+            body = forward.entry_function().body
+            assert sum(isinstance(each, core.LoopRegion) for each in core.collect_exprs(body)) == self.loops
+        check_written(forward, backward, same_text=not self.index_inline)
         params = {param.name: param for param in module.entry_function().params}
         returned = fields(backward.entry_function().return_type) if len(self.wrt) > 1 else (
             backward.entry_function().return_type,
@@ -156,6 +175,20 @@ class Differentiated(Case):
         found = reshards(backward)
         for expected in self.reshards:
             assert expected in found, (expected, found)
+
+
+def check_written(forward: core.Module, backward: core.Module, *, same_text: bool) -> None:
+    """The pair writes as one loadable file: one header, each Module name once, reloaded alike."""
+    for generated in (forward, backward):
+        named: dict[str, core.Module] = {}
+        for each in core.module_definition_order(generated):
+            assert named.setdefault(each.name, each) is each, f"two Modules are named {each.name!r}"
+    text = inspection.as_script((forward, backward))
+    assert text.count("from __future__ import annotations") == 1
+    classes = [line for line in text.splitlines() if line.startswith("class ")]
+    assert len(classes) == len(set(classes)), "a class is written twice"
+    reloaded = tuple(reload(text, generated.name) for generated in (forward, backward))
+    assert not same_text or inspection.as_script(reloaded) == text, "the reloaded Modules print other text"
 
 
 S0, P, B = types.Split(0), types.Partial("sum"), types.Broadcast()
@@ -196,6 +229,151 @@ class ChildCall(Differentiated):
     path: Path = FIXTURES / "child_call.py"
     name: str | None = "ChildCall"
     wrt: tuple[str, ...] = ("x", "w1", "w2")
+
+
+@case
+class ChildCallOneElement(ChildCall):
+    recompute: tuple[str, ...] = ("ChildCall.rest.1:h",)
+    saved_tensors: Mapping[str, int] | None = MappingProxyType({"first.saved": 4, "rest.0.saved": 4, "rest.1.saved": 3})
+    slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
+        {"first": ("LayerForward",), "rest": ("LayerForward", "Layer_1Forward")}
+    )
+
+
+@case
+class ChildCallOneElementSaved(ChildCall):
+    """The element's own ``:None`` replaces the whole-layer choice of its definition."""
+
+    recompute: tuple[str, ...] = ("Layer", "ChildCall.rest.0:None")
+    saved_tensors: Mapping[str, int] | None = MappingProxyType({"first.saved": 2, "rest.0.saved": 4, "rest.1.saved": 2})
+    slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
+        {"first": ("LayerForward",), "rest": ("Layer_1Forward", "LayerForward")}
+    )
+
+
+@case
+class ChildCallWholeSlot(ChildCall):
+    recompute: tuple[str, ...] = ("ChildCall.first",)
+    saved_tensors: Mapping[str, int] | None = MappingProxyType({"first.saved": 2, "rest.0.saved": 4, "rest.1.saved": 4})
+    slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
+        {"first": ("Layer_1Forward",), "rest": ("LayerForward", "LayerForward")}
+    )
+
+
+@case
+class ChildCallSharedCopy(ChildCall):
+    """Two elements, in two slots, with one choice share one copy."""
+
+    recompute: tuple[str, ...] = ("ChildCall.first:h", "ChildCall.rest.1:h")
+    saved_tensors: Mapping[str, int] | None = MappingProxyType({"first.saved": 3, "rest.0.saved": 4, "rest.1.saved": 3})
+    slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
+        {"first": ("Layer_1Forward",), "rest": ("LayerForward", "Layer_1Forward")}
+    )
+
+
+def stacked(slot: str, *indices: int) -> frozenset[str]:
+    return frozenset(f"{slot}.*.saved[{index}]" for index in indices)
+
+
+THREE_LAYERS = MappingProxyType({"layers": ("LayerForward",) * 3})
+CUT_AROUND_LAYER_1 = MappingProxyType(
+    {"layers_0": ("LayerForward",), "layers_1": ("Layer_1Forward",), "layers_2": ("LayerForward",)}
+)
+
+
+@case
+class ModuleListLoop(Differentiated):
+    path: Path = FIXTURES / "module_list_loop.py"
+    name: str | None = "Stack"
+    wrt: tuple[str, ...] = ("x", "ws")
+    saved: frozenset[str] | None = stacked("layers", 0, 1, 3) | {"ws", "v4"}
+    slots: Mapping[str, tuple[str, ...]] | None = THREE_LAYERS
+    loops: int | None = 1
+    index_inline: bool = True
+    """The backward picks each layer by ``t - start`` over its own counter, a tensor ``add``."""
+
+
+@case
+class ModuleListOneLayer(ModuleListLoop):
+    recompute: tuple[str, ...] = ("Stack.layers.1:h",)
+    saved: frozenset[str] | None = (
+        stacked("layers_0", 0, 1, 3) | stacked("layers_1", 0, 1) | stacked("layers_2", 0, 1, 3) | {"ws", "v9"}
+    )
+    slots: Mapping[str, tuple[str, ...]] | None = CUT_AROUND_LAYER_1
+    loops: int | None = 3
+
+
+@case
+class ModuleListWholeLayer(ModuleListLoop):
+    recompute: tuple[str, ...] = ("Stack.layers.1",)
+    saved: frozenset[str] | None = (
+        stacked("layers_0", 0, 1, 3) | stacked("layers_1", 0) | stacked("layers_2", 0, 1, 3) | {"ws", "v8"}
+    )
+    slots: Mapping[str, tuple[str, ...]] | None = CUT_AROUND_LAYER_1
+    loops: int | None = 3
+
+
+@case
+class ModuleListSavedEnds(ModuleListLoop):
+    """Two elements apart keep what they compute; the one between recomputes all of it.
+
+    A ``:None`` written twice is one choice.
+    """
+
+    recompute: tuple[str, ...] = ("Layer", "Stack.layers.0:None", "Stack.layers.2:None", "Stack.layers.2:None")
+    saved: frozenset[str] | None = (
+        stacked("layers_0", 0, 1, 3) | stacked("layers_1", 0) | stacked("layers_2", 0, 1, 3) | {"ws", "v8"}
+    )
+    slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
+        {"layers_0": ("Layer_1Forward",), "layers_1": ("LayerForward",), "layers_2": ("Layer_1Forward",)}
+    )
+    loops: int | None = 3
+
+
+@case
+class ModuleListNeighbours(ModuleListLoop):
+    """Neighbouring elements with one choice are one run and one loop."""
+
+    recompute: tuple[str, ...] = ("Stack.layers.1:h", "Stack.layers.2:h")
+    saved: frozenset[str] | None = stacked("layers_0", 0, 1, 3) | stacked("layers_1", 0, 1) | {"ws", "v6"}
+    slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
+        {"layers_0": ("LayerForward",), "layers_1": ("Layer_1Forward",) * 2}
+    )
+    loops: int | None = 2
+
+
+@case
+class ModuleListEveryLayer(ModuleListLoop):
+    """Every element with one choice keeps the slot and the loop whole."""
+
+    recompute: tuple[str, ...] = ("Stack.layers.0", "Stack.layers.1", "Stack.layers.2")
+    saved: frozenset[str] | None = stacked("layers", 0) | {"ws", "v2"}
+    slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType({"layers": ("Layer_1Forward",) * 3})
+
+
+@case
+class ModuleListConstantCall(Differentiated):
+    """Layer 0 is called by its index, then a loop from 1 runs the rest; both follow the cut."""
+
+    path: Path = FIXTURES / "module_list_constant_call.py"
+    name: str | None = "Stack"
+    wrt: tuple[str, ...] = ("x", "w")
+    recompute: tuple[str, ...] = ("Stack.layers.1:h",)
+    slots: Mapping[str, tuple[str, ...]] | None = CUT_AROUND_LAYER_1
+
+
+@case
+class ModuleListNested(Differentiated):
+    """The loop over the microbatches stays one loop; the loop over the layers inside it is cut."""
+
+    path: Path = FIXTURES / "module_list_nested.py"
+    name: str | None = "Stack"
+    wrt: tuple[str, ...] = ("x", "ws")
+    recompute: tuple[str, ...] = ("Stack.layers.1:h",)
+    slots: Mapping[str, tuple[str, ...]] | None = CUT_AROUND_LAYER_1
+    loops: int | None = 4
+    index_inline: bool = True
+    """As in ``ModuleListLoop``: the backward's layer index is a tensor ``add``."""
 
 
 @case
@@ -324,6 +502,24 @@ class Topk(Differentiated):
 class LoopRange(Differentiated):
     path: Path = FIXTURES / "loop_range.py"
     wrt: tuple[str, ...] = ('x', 'w', 'h0')
+
+
+@case
+class FusedViews(Differentiated):
+    path: Path = FIXTURES / "fused_views.py"
+    wrt: tuple[str, ...] = ("x", "w")
+
+
+@case
+class ParamView(Differentiated):
+    path: Path = FIXTURES / "param_view.py"
+    wrt: tuple[str, ...] = ("x", "w")
+
+
+@case
+class TwoLoops(Differentiated):
+    path: Path = FIXTURES / "two_loops.py"
+    wrt: tuple[str, ...] = ("x", "w")
 
 
 @case
@@ -459,20 +655,13 @@ def test_gradients_match_autograd(case: Differentiated) -> None:
     check_case(case)
 
 
-def test_recompute_reads_the_parameter_instead_of_the_gathered_weight() -> None:
-    module = cli.load_authored_ir(str(FIXTURES / "sharded.py"))
-    forward, backward = differentiate.differentiate(module, wrt=("x", "w"), recompute=("Layer.forward:full",))
-    assert {value.name for value in differentiate.saved_values(forward)} == {"x", "h", "w"}
-    assert ((S0,), (B,)) in reshards(backward)
-    check_gradients(module, forward, backward, ("x", "w"))
-
-
 def test_saved_values_report_name_type_and_origin() -> None:
     module = cli.load_authored_ir(str(FIXTURES / "sharded.py"))
     forward, _ = differentiate.differentiate(module, wrt=("x", "w"))
     rows = {value.name: value for value in differentiate.saved_values(forward)}
     assert rows["x"].origin == "parameter"
     assert rows["full"].origin == "reshard  sharded.py:18"
+    assert rows["full"].buffer is None
     assert rows["full"].type.shape == (6, 4)
     assert types.shard_layout_of(rows["full"].type.layout) is None
 
@@ -516,14 +705,26 @@ REFUSED = (
     ("topk_inner_axis.py", ("x",), (), "TopK on an axis that is not the last has no autodiff rule"),
     ("backward_name.py", ("x",), (), "declares a function named 'backward'"),
     ("sharded.py", ("w",), ("Nope.forward:full",), "no Module named 'Nope'"),
-    ("sharded.py", ("w",), ("Layer.nope:full",), "'nope' must resolve to exactly one function"),
+    ("sharded.py", ("w",), ("Layer.nope:full",), "symbol 'nope' must resolve to exactly one function"),
     ("sharded.py", ("w",), ("Layer.forward:nope",), "binds no value named 'nope'"),
     ("sharded.py", ("w",), ("Layer.forward:w",), "'w' is a parameter"),
-    ("sharded.py", ("w",), ("Layer.forward.inner:full",), "not by a path through child slots"),
-    ("sharded.py", ("w",), ("full",), "expected Module[.function]:variable"),
     ("rebound.py", ("x",), ("Rebound.forward:h",), "2 values are named 'h'"),
     ("same_name.py:SameName", ("x",), ("Block:h",), "2 different Modules are named 'Block'"),
     ("sibling_call.py", ("x",), ("SiblingCall.forward:a",), "result of calling 'layer'"),
+    ("child_call.py:ChildCall", ("x",), ("ChildCall.nope.0",), "child slot 'nope' does not exist"),
+    ("child_call.py:ChildCall", ("x",), ("ChildCall.rest.5",), "index 5 out of range for N=2"),
+    ("child_call.py:ChildCall", ("x",), ("ChildCall.rest",), "ModuleList slot 'rest' must be indexed before calling"),
+    ("child_call.py:ChildCall", ("x",), ("ChildCall.first.0",), "single slot 'first' cannot be indexed"),
+    ("nested_child.py:Stack", ("x",), ("Stack.blocks.0.inner:h",), "an element path has one child slot"),
+    ("nested_child.py:Stack", ("x",), ("Block.inner:h",), "an element path starts at the root Module 'Stack'"),
+    ("child_call.py:ChildCall", ("x",), ("Layer:None",), "':None' names one element"),
+    ("child_call.py:ChildCall", ("x",), ("ChildCall.rest.0:None", "ChildCall.rest.0:h"), "':None' and another selector"),
+    ("child_call.py:ChildCall", ("x",), (":h",), "an empty segment names nothing"),
+    ("child_call.py:ChildCall", ("x",), ("Layer.forward",), "name a variable after the function"),
+    ("module_list_shifted.py:Stack", ("x",), ("Stack.layers.1:h",), "slot 'layers' is indexed by a value that is not the loop index"),
+    ("module_list_range.py:Stack", ("x",), ("Stack.layers.1:h",), "loop over 'layers' must be range(a, b) with step 1"),
+    ("module_list_const.py:Stack", ("x",), ("Stack.layers.1:h",), "'Layer' holds a ConstTensor"),
+    ("module_list_name_taken.py:Stack", ("x",), ("Stack.layers.1:h",), "'layers_0' is already a name in 'Stack'"),
 )
 
 

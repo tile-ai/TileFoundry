@@ -63,6 +63,7 @@ class ScheduleCase(Case):
     candidates_refusal: str | None = None
     smem_peak: int = 0
     mbarriers: int = 0
+    syncs: int | None = None
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType({})
     sites: SiteCounts | None = None
     child_regions: bool = False
@@ -373,6 +374,8 @@ def _hir(case, problems):
         lowered = problems.run("finalize", _finalize, case, synced)
     if case.sync_refusal is None and case.finalize_refusal is None:
         printed = problems.run("print TIR", inspection.as_script, lowered)
+        if case.syncs is not None:
+            problems.expect("syncs", lambda text: text.count("T.sync(") == case.syncs, printed)
         lowered = problems.run("reload TIR", lambda text: reload(text, lowered.name), printed)
         problems.run("TIR operands", _tir_checks, lowered, case.path)
         problems.run("host launch", _host_launch, case, lowered, result.function)
@@ -1127,7 +1130,7 @@ class ZeroTripInsertSlice(ScheduleCase):
 
 EXPECTED = {
     "hir/bulk_reduce_store": dict(
-        sync_refusal="Fill tensor and CopyReduceAsyncTensor dst reach one global element",
+        sync_refusal="Fill tensor and Fill tensor reach one global element",
         smem_peak=16_384,
         candidates_refusal="source has no unscheduled candidate site",
     ),
@@ -1150,6 +1153,7 @@ EXPECTED = {
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/finalize_footprint_mesh_offset": dict(
+        sync_refusal="Copy dst and Copy src reach one global element",
         rmem_peaks={
             "thread@0:32#0": RmemPeak(136, "32 f32 row elements and one i64 mesh offset"),
             "cta@0:4#0": RmemPeak(8, "one i64 mesh offset"),
@@ -1191,7 +1195,10 @@ EXPECTED = {
         },
         candidates_refusal="source has no unscheduled candidate site",
     ),
-    "hir/mesh_capture_outside": dict(candidates_refusal="source has no unscheduled candidate site"),
+    "hir/mesh_capture_outside": dict(
+        sync_refusal="Copy dst and Copy dst reach one global element",
+        candidates_refusal="source has no unscheduled candidate site",
+    ),
     "hir/mesh_views": dict(
         rmem_peaks={
             "thread@0:32#0": RmemPeak(256, "independent live Buffers: 2 * 128B"),
@@ -1333,7 +1340,7 @@ EXPECTED = {
         smem_peak=32, candidates_refusal="source has no unscheduled candidate site"
     ),
     "hir/tma_load_from_input_copies": dict(
-        sync_refusal="InsertSlice base and CopyAsyncTensor src reach one global element",
+        sync_refusal="InsertSlice base and InsertSlice update reach one global element",
         smem_peak=16_384,
         rmem_peaks={
             "thread@0:32#0": RmemPeak(8, "the row index"),
@@ -1361,11 +1368,13 @@ EXPECTED = {
     "hir/tma_store_cta_slice": dict(
         smem_peak=16_384,
         mbarriers=1,
+        syncs=2,
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/tma_store_cta_windows": dict(
         smem_peak=16_384,
         mbarriers=1,
+        syncs=2,
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/tma_store_in_callee": dict(
@@ -1473,6 +1482,7 @@ EXPECTED = {
             "thread@128:256#1": RmemPeak(8_192, "f32 phi/mma alias chain"),
             "thread@128:256#2": RmemPeak(8_192, "f32 loop result/bf16 cast alias"),
             "thread@0:384#0": RmemPeak(8_192, "parent envelope of one alias chain"),
+            "cta@0:68#0": RmemPeak(16, "two i64 tile offsets"),
         },
     ),
     "hir/wgmma_explicit_windows": dict(

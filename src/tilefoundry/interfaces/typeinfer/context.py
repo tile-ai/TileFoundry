@@ -60,7 +60,7 @@ class TypeInferContext(valuation.Context):
         else:
             loc = getattr(node, "loc", None)
             where = f"\n  at {loc}" if loc else ""
-        raise expr.VerifyError(f"{name}: {msg}{where}")
+        raise expr.VerifyError(f"{name}: {msg}{where}", span=span)
 
 
 __all__ = ["TypeInferContext", "TypeInferResults"]

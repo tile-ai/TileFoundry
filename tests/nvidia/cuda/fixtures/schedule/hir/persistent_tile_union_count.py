@@ -39,7 +39,7 @@ class PersistentTileUnionCount:
                 wgmma = T.cuda.sm90.Wgmma(
                     n=256, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K)
 
-                out = tf.zeros(Tensor[(PIECES * M, N), "bf16"])
+                out = tf.empty(Tensor[(PIECES * M, N), "bf16"])
                 for work in range(_cta.block, (M // BM) * (N // BN) * PIECES, CTAS):
                     tile = work // PIECES
                     piece = work % PIECES

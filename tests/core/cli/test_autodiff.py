@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
+from typing import NamedTuple
 
 import pytest
 
@@ -11,34 +15,16 @@ from tilefoundry.passes.transforms import differentiate
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "autodiff"
 
-ROUND_TRIP = (
-    ("elementwise.py", "Elementwise", "x,w,b"),
-    ("sharded.py", "Layer", "x,w"),
-    ("child_call.py:ChildCall", "ChildCall", "x,w1,w2"),
-    ("inactive_call.py:InactiveCall", "InactiveCall", "x"),
-    ("loop_range.py", "LoopRange", "x,w,h0"),
-    ("loop_call.py", "LoopCall", "keys,decay"),
-    ("loop_nested.py", "LoopNested", "x,w"),
-    ("mesh_data_parallel.py", "MeshDataParallel", "x,w"),
-    ("mesh_two_regions.py", "MeshTwoRegions", "x,w"),
-    ("megatron_block.py", "TensorParallel", "x,wn1,wq,wk,wv,wo,wn2,wg,wu,wd"),
-    ("layers_loop.py", "Layers", "x,wn0,norms,up,down"),
-)
 
-
-@pytest.mark.parametrize(("fixture", "name", "wrt"), ROUND_TRIP, ids=lambda value: str(value))
-def test_written_file_loads_both_modules_and_reprints_the_same(tmp_path, capsys, fixture, name, wrt) -> None:
-    """D44: one file, one header, each class once; both Modules load and print back to the file."""
+def test_written_file_is_the_printed_pair(tmp_path, capsys) -> None:
+    """D44: PATH holds the two Modules as one script; each fixture's case reloads it."""
     written = tmp_path / "trained.py"
-    assert cli.main(["autodiff", str(FIXTURES / fixture), "--wrt", wrt, str(written)]) == 0
+    command = ["autodiff", str(FIXTURES / "child_call.py:ChildCall"), "--wrt", "x,w1,w2"]
+    assert cli.main([*command, "--recompute", "ChildCall.rest.1:h", str(written)]) == 0
     assert capsys.readouterr().out == ""
-    text = written.read_text()
-    assert text.count("from __future__ import annotations") == 1
-    classes = [line for line in text.splitlines() if line.startswith("class ")]
-    assert len(classes) == len(set(classes))
-    forward = cli.load_authored_ir(f"{written}:{name}Forward")
-    backward = cli.load_authored_ir(f"{written}:{name}Backward")
-    assert inspection.as_script((forward, backward)) == text
+    module = cli.load_authored_ir(str(FIXTURES / "child_call.py:ChildCall"))
+    generated = differentiate.differentiate(module, wrt=("x", "w1", "w2"), recompute=("ChildCall.rest.1:h",))
+    assert written.read_text() == inspection.as_script(generated)
 
 
 def test_without_path_prints_both_modules(capsys) -> None:
@@ -48,26 +34,72 @@ def test_without_path_prints_both_modules(capsys) -> None:
     assert "class ElementwiseBackward:" in printed
 
 
-def saved_rows(capsys, *extra: str) -> dict[str, list[str]]:
-    assert cli.main(["autodiff", str(FIXTURES / "sharded.py"), "--wrt", "x,w", "--saved", *extra]) == 0
-    header, *rows = capsys.readouterr().out.splitlines()
-    assert header.split() == ["saved", "shape", "bytes", "layout", "from"]
-    return {row.split()[0]: row.split()[1:] for row in rows}
+def saved_rows(capsys, fixture: str, wrt: str, *extra: str) -> tuple[dict[str, dict[str, str]], dict[str, int]]:
+    """Each row of the saved table by name, its cells by column, and the two totals."""
+    assert cli.main(["autodiff", str(FIXTURES / fixture), "--wrt", wrt, "--saved", *extra]) == 0
+    header, *rows, held, parameters = capsys.readouterr().out.splitlines()
+    columns = header.split()
+    assert columns == ["saved", "shape", "bytes", "layout", "buffer", "from"]
+    totals = {line.split()[0]: int(line.split()[1]) for line in (held, parameters)}
+    assert list(totals) == ["held", "parameters"]
+    cells = [dict(zip(columns, re.split(" {2,}", row))) for row in rows]
+    return {row["saved"]: row for row in cells}, totals
 
 
 def test_saved_table_counts_bytes_per_device(capsys) -> None:
     """Two GPUs, f32: h (8, 6) Split(0) holds 4 x 6 x 4 bytes on each device; full is whole."""
-    rows = saved_rows(capsys)
+    rows, totals = saved_rows(capsys, "sharded.py", "x,w")
     assert set(rows) == {"x", "h", "full"}
-    assert rows["h"][:4] == ["(8,", "6)", "96", "Split(0)"]
-    assert rows["full"][:4] == ["(6,", "4)", "96", "-"]
-    assert rows["x"][4:] == ["parameter"]
+    assert [rows["h"][column] for column in ("shape", "bytes", "layout")] == ["(8, 6)", "96", "Split(0)"]
+    assert [rows["full"][column] for column in ("shape", "bytes", "layout")] == ["(6, 4)", "96", "-"]
+    assert rows["x"]["from"] == "parameter"
+    assert totals == {"held": 192, "parameters": 64}
 
 
 def test_recompute_changes_the_saved_table(capsys) -> None:
-    rows = saved_rows(capsys, "--recompute", "Layer.forward:full")
+    rows, _ = saved_rows(capsys, "sharded.py", "x,w", "--recompute", "Layer.forward:full")
     assert set(rows) == {"x", "h", "w"}
-    assert rows["w"][2:4] == ["48", "Split(0)"]
+    assert [rows["w"]["bytes"], rows["w"]["layout"]] == ["48", "Split(0)"]
+
+
+class Buffers(NamedTuple):
+    fixture: str
+    wrt: str
+    totals: tuple[int, int]
+    """``held`` and ``parameters``."""
+    recompute: tuple[str, ...] = ()
+    shared: Mapping[str, str] = MappingProxyType({})
+    """The rows whose buffer is another value; every other row is its own buffer."""
+    saved: frozenset[str] | None = None
+    """The rows, the parameters left out, when the case says which."""
+
+
+QKV = MappingProxyType({"q": "qkv", "k": "qkv", "v": "qkv"})
+BUFFERS = (
+    Buffers("fused_views.py", "w", (2048, 512), shared=QKV, saved=frozenset({"qk", "v", "q", "k"})),
+    Buffers("fused_views.py", "w", (2048, 512), ("Fused:k",), MappingProxyType({"q": "qkv", "v": "qkv"}),
+            frozenset({"qk", "v", "q", "qkv"})),
+    Buffers("fused_views.py", "w", (2048, 512), ("Fused:q", "Fused:k", "Fused:v"), saved=frozenset({"qk", "qkv"})),
+    Buffers("fused_views.py", "w", (1536, 512), ("Fused:qk",), QKV, frozenset({"v", "q", "k"})),
+    Buffers("param_view.py", "x", (512, 3072), shared=MappingProxyType({"head": "w"})),
+    Buffers("rebound.py", "x", (96, 48)),
+    Buffers("layers_loop.py", "x,wn0,norms,up,down", (2688, 3328)),
+)
+
+
+@pytest.mark.parametrize("case", BUFFERS, ids=lambda case: f"{case.fixture}{list(case.recompute)}")
+def test_a_buffer_is_held_once_whole(capsys, case: Buffers) -> None:
+    """A saved view holds its whole buffer, once.
+
+    Dropping one slice of qkv frees nothing while another keeps it. A
+    parameter's buffer is held anyway; a stack, a callee's item and each binding
+    of a name are buffers of their own.
+    """
+    selected = [word for selector in case.recompute for word in ("--recompute", selector)]
+    rows, totals = saved_rows(capsys, case.fixture, case.wrt, *selected)
+    assert {name: row["buffer"] for name, row in rows.items()} == {name: case.shared.get(name, name) for name in rows}
+    assert (totals["held"], totals["parameters"]) == case.totals
+    assert case.saved is None or {name for name, row in rows.items() if row["from"] != "parameter"} == case.saved
 
 
 def test_missing_wrt_is_a_usage_error(capsys) -> None:

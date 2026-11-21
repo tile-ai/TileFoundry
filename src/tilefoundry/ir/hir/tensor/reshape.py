@@ -36,22 +36,6 @@ def buffer_alias(call: expr.Call, owners: "StorageOwners") -> int:
     return 0
 
 
-def is_induction_var_singleton_reshape(node) -> bool:
-    """Whether ``expr`` has the singleton view form for a loop index.
-
-    HIR induction variables use ``UMAT`` storage; the exact induction-variable
-    identity is checked by affine extraction, while this predicate keeps the
-    preflight and partition gates aligned with that representation.
-    """
-    return (
-        isinstance(node, expr.Call)
-        and isinstance(node.target, Reshape)
-        and node.args[0].type.shape == ()
-        and node.args[0].type.storage is expr.StorageKind.UMAT
-        and node.type.shape == (1,)
-    )
-
-
 def carry_sharded_reshape(layout: types.ShardLayout, new_shape: tuple):
     """Carry static sharding across an aligned view reshape.
 

@@ -3,9 +3,8 @@
 ``TripCount``: each GPU runs the loop a different number of times, so its result is
 Varying. ``OutsideBound``: the bound is Varying on the CTA topology, which the loop's
 thread scope does not name; the result is still Varying there. ``TupleField``: the
-Broadcast field of a tuple with a Varying field is Broadcast. ``LaneTile``: a register
-tile Varying only on the lanes, written in place, reaches every thread; ``OtherSlice``
-reads one in a thread slice that holds none of its copies.
+Broadcast field of a tuple with a Varying field is Broadcast. ``OtherSlice`` reads a
+register tile Varying only on the lanes in a thread slice that holds none of its copies.
 """
 
 from __future__ import annotations
@@ -60,16 +59,6 @@ class TupleField:
         with mesh:
             v, b = pair(x)
             return b
-
-
-@module(entry="forward", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 32)))
-class LaneTile:
-    @func
-    def forward(x: Tensor[(1, 8), "bf16", "rmem"]):
-        with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
-            with Mesh(("thread",), layout=(32,), names=("lane",)) as threads:
-                acc = tf.zeros(Tensor[(1, 8), "bf16", (1, 8) @ {threads.lane @ V()}, "rmem"])
-                return tf.insert_slice(acc, x, (0, 0))
 
 
 @module(entry="forward", target=cuda.Target("nvidia.h200_sxm"), topologies=(Topology("cta", 1), Topology("thread", 64)))

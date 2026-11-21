@@ -21,65 +21,43 @@ OWNERS = cpu.Target().storage_owners
 OPS = (tensor.IndexAdd(dim=0), tensor.IndexCopy(dim=0))
 
 
-INDEX = utils.make_shard_tensor_type((3,), DType.i64, mesh=MESH, attrs=(Broadcast(),), owners=OWNERS)
+def placed(shape, attr, dtype=DType.f32):
+    return utils.make_shard_tensor_type(shape, dtype, mesh=MESH, attrs=(attr,), owners=OWNERS)
+
+
+INDEX = placed((3,), Broadcast(), DType.i64)
 
 
 @pytest.mark.parametrize("op", OPS, ids=lambda op: type(op).__name__)
 def test_split_off_dim_keeps_the_destination_layout(op) -> None:
-    table = utils.make_shard_tensor_type((5, 6), mesh=MESH, attrs=(Split(1),), owners=OWNERS)
-    assert (
-        infer_call(
-            op,
-            table,
-            INDEX,
-            utils.make_shard_tensor_type((3, 6), mesh=MESH, attrs=(Split(1),), owners=OWNERS),
-        )
-        == table
-    )
+    table = placed((5, 6), Split(1))
+    assert infer_call(op, table, INDEX, placed((3, 6), Split(1))) == table
 
 
 @pytest.mark.parametrize("op", OPS, ids=lambda op: type(op).__name__)
 def test_a_plain_table_takes_broadcast_rows(op) -> None:
     table = TensorType.from_shape((5, 6), DType.f32)
-    assert (
-        infer_call(
-            op,
-            table,
-            INDEX,
-            utils.make_shard_tensor_type((3, 6), mesh=MESH, attrs=(Broadcast(),), owners=OWNERS),
-        )
-        == table
-    )
+    assert infer_call(op, table, INDEX, placed((3, 6), Broadcast())) == table
 
 
 @pytest.mark.parametrize("op", OPS, ids=lambda op: type(op).__name__)
 @pytest.mark.parametrize(
     ("table", "index", "rows", "message"),
     (
+        (placed((6, 6), Split(0)), INDEX, placed((3, 6), Broadcast()), "dst is Split on dim 0"),
         (
-            utils.make_shard_tensor_type((6, 6), mesh=MESH, attrs=(Split(0),), owners=OWNERS),
-            INDEX,
-            utils.make_shard_tensor_type((3, 6), mesh=MESH, attrs=(Broadcast(),), owners=OWNERS),
-            "dst is Split on dim 0",
-        ),
-        (
-            utils.make_shard_tensor_type((5, 6), mesh=MESH, attrs=(Broadcast(),), owners=OWNERS),
-            utils.make_shard_tensor_type((4,), DType.i64, mesh=MESH, attrs=(Broadcast(),), owners=OWNERS),
-            utils.make_shard_tensor_type((4, 6), mesh=MESH, attrs=(Split(0),), owners=OWNERS),
+            placed((5, 6), Broadcast()),
+            placed((4,), Broadcast(), DType.i64),
+            placed((4, 6), Split(0)),
             "src is Split on dim 0",
         ),
         (
-            utils.make_shard_tensor_type((5, 6), mesh=MESH, attrs=(Broadcast(),), owners=OWNERS),
-            utils.make_shard_tensor_type((4,), DType.i64, mesh=MESH, attrs=(Split(0),), owners=OWNERS),
-            utils.make_shard_tensor_type((4, 6), mesh=MESH, attrs=(Broadcast(),), owners=OWNERS),
+            placed((5, 6), Broadcast()),
+            placed((4,), Split(0), DType.i64),
+            placed((4, 6), Broadcast()),
             "index is Split on dim 0",
         ),
-        (
-            utils.make_shard_tensor_type((5, 6), mesh=MESH, attrs=(Split(1),), owners=OWNERS),
-            INDEX,
-            utils.make_shard_tensor_type((3, 6), mesh=MESH, attrs=(Broadcast(),), owners=OWNERS),
-            "src must be split on the axes dst is",
-        ),
+        (placed((5, 6), Split(1)), INDEX, placed((3, 6), Broadcast()), "src must be split on the axes dst is"),
     ),
     ids=("dst on dim", "src on dim", "index", "src unlike dst"),
 )

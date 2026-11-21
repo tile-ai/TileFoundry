@@ -2,7 +2,8 @@
 
 The odd, strided grid distinguishes CTA axes from thread axes. Every CTA keeps
 the single-CTA fixture's tile, atom, stage count, operand layouts, shared
-memory, register fragments, and issuing warpgroups; only the launch changes.
+memory, register fragments, and issuing warpgroups. Each CTA stores its tile at
+its own place in the grid, so no two CTAs write one element.
 """
 
 from tilefoundry.dsl import *
@@ -27,8 +28,8 @@ class WGMMA_CTA_GRID_4X17:
     def gemm(
         a: Tensor[(M, K), "bf16"],
         b: Tensor[(K, N), "bf16"],
-    ) -> Tensor[(M, N), "bf16", "umat"]:
-        with Mesh(("cta",), layout=(GRID_M, GRID_N), names=("bm", "bn")) as _blocks:
+    ) -> Tensor[(GRID_M * M, GRID_N * N), "bf16", "umat"]:
+        with Mesh(("cta",), layout=(GRID_M, GRID_N), names=("bm", "bn")) as blocks:
             with Mesh(
                 ("thread",), layout=(3, 128),
                 names=("warpgroup", "participant"),
@@ -72,8 +73,8 @@ class WGMMA_CTA_GRID_4X17:
                             op=T.tiled_mma(atom=wgmma),
                         )
 
-                output = tf.zeros(Tensor[(M, N), "bf16"])
+                output = tf.empty(Tensor[(GRID_M * M, GRID_N * N), "bf16"])
                 with Mesh(threads[1:3, :], layout=(2, 4, 8, 4), names=("group", "warp", "lane8", "lane4")) as _compute:
                     result = tf.cast(acc, dtype="bf16")
-                    result = tf.insert_slice(output, result, (0, 0))
+                    result = tf.insert_slice(output, result, (blocks.bm * M, blocks.bn * N))
                 return result

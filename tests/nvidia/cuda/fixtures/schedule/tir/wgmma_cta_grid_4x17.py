@@ -12,7 +12,7 @@ from tilefoundry_nvidia import cuda
 class WgmmaCtaGrid4x17:
     @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def gemm(
-        a: Tensor[(128, 64), "bf16"], b: Tensor[(64, 16), "bf16"], out: Tensor[(128, 16), "bf16"]
+        a: Tensor[(128, 64), "bf16"], b: Tensor[(64, 16), "bf16"], out: Tensor[(512, 272), "bf16"]
     ):
         with Mesh((Topology("cta", 68),), layout=(4, 17), names=("d0", "d1")) as cta:
             with Mesh((Topology("thread", 384),), layout=(3, 128), names=("d0", "d1")) as scope:
@@ -131,7 +131,6 @@ class WgmmaCtaGrid4x17:
                                         rhs_view,
                                         atom=T.cuda.sm90.Wgmma(n=16, dtype="bf16", form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, b_major=T.cuda.sm90.Major.MN),
                                     )
-                T.fill(out, 0.0)
                 with Mesh(
                     scope[1:], layout=(2, 4, 8, 4), names=("d0", "d1", "d2", "d3")
                 ) as scope_4:
@@ -149,8 +148,9 @@ class WgmmaCtaGrid4x17:
                         shape=(128, 16),
                     )
                     T.cast(value_7, result, dtype="bf16")
-                    value_8 = T.tensor_view(T.ptr_of(out), layout=(128, 16), shape=(128, 16))
                     window = T.tensor_view(
-                        T.ptr_of(value_8[0:0 + 128, 0:0 + 16]), layout=(128, 16), shape=(128, 16)
+                        T.ptr_of(out[cta.d0 * 128:cta.d0 * 128 + 128, cta.d1 * 16:cta.d1 * 16 + 16]),
+                        layout=((128, 16), (272, 1)),
+                        shape=(128, 16),
                     )
                     T.copy(result, window)
