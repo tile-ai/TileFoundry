@@ -109,8 +109,8 @@ def cut_loops(function, label: str, key: str, cut: tuple[Run, ...]):
 def slot_loops(function: core.Function, calls, label: str, key: str, size: int) -> dict[int, core.LoopRegion]:
     """The loops whose own body calls slot *key* by a run-time index, each checked against *size*.
 
-    A loop is indexed by its induction value, steps by 1, and runs a range that
-    is not empty and inside the slot.
+    A loop is indexed by its induction value and is ``range(a, b)`` with
+    constant ``0 <= a < b <= size``.
     """
     owner = core.innermost_loops(core.collect_exprs(function.body))
     loops: dict[int, core.LoopRegion] = {}
@@ -120,13 +120,10 @@ def slot_loops(function: core.Function, calls, label: str, key: str, size: int) 
         loop = owner.get(id(call))
         if loop is None or call.args[0] is not loop.induction_var:
             refuse(label, f"slot {key!r} is indexed by a value that is not the loop index{expr.diagnostic_suffix(call)}")
-        at = expr.diagnostic_suffix(loop)
-        if not all(isinstance(bound, int) for bound in (loop.start, loop.extent, loop.step)):
-            refuse(label, f"loop over {key!r}: trip count is not static{at}")
-        if loop.step != 1:
-            refuse(label, f"loop over {key!r} has step {loop.step}{at}")
-        if not 0 <= loop.start < loop.extent <= size:
-            refuse(label, f"loop over {key!r} runs [{loop.start}, {loop.extent}); the slot has {size} elements{at}")
+        static = all(isinstance(bound, int) for bound in (loop.start, loop.extent, loop.step))
+        if not (static and loop.step == 1 and 0 <= loop.start < loop.extent <= size):
+            rule = f"must be range(a, b) with step 1 and 0 <= a < b <= {size}"
+            refuse(label, f"loop over {key!r} {rule}{expr.diagnostic_suffix(loop)}")
         loops[id(loop)] = loop
     return loops
 

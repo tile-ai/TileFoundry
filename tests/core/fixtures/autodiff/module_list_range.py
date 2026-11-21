@@ -1,9 +1,7 @@
-"""A loop over the elements of a ModuleList whose trip count is a dimension."""
+"""A loop over every second element of a ModuleList that also runs past its end."""
 
 from tilefoundry.dsl import *
 from tilefoundry.target import cpu
-
-N = DimVar("N", 1, 3)
 
 
 @module(entry="forward")
@@ -19,8 +17,8 @@ class Stack:
     layers = ModuleList(Layer, 3)
 
     @func
-    def forward(x: Tensor[(4, 3), "f32"], w: Tensor[(3, 3), "f32"], n: Tensor[(N,), "f32"]):
+    def forward(x: Tensor[(4, 3), "f32"], w: Tensor[(3, 3), "f32"]):
         h = x
-        for t in range(N):
+        for t in range(0, 4, 2):
             h = layers[t](h, w)
         return h

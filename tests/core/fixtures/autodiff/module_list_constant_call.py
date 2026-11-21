@@ -1,4 +1,4 @@
-"""A loop calls elements 0 and 1 of a ModuleList; another function calls element 2."""
+"""Layer 0 of a ModuleList is called by its index; a loop from 1 calls the rest."""
 
 from tilefoundry.dsl import *
 from tilefoundry.target import cpu
@@ -17,12 +17,8 @@ class Stack:
     layers = ModuleList(Layer, 3)
 
     @func
-    def head(x: Tensor[(4, 3), "f32"], w: Tensor[(3, 3), "f32"]):
-        return layers[2](x, w)
-
-    @func
     def forward(x: Tensor[(4, 3), "f32"], w: Tensor[(3, 3), "f32"]):
-        h = x
-        for t in range(2):
+        h = layers[0](x, w)
+        for t in range(1, 3):
             h = layers[t](h, w)
-        return head(h, w)
+        return h

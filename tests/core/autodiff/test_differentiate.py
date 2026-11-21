@@ -332,7 +332,7 @@ class ModuleListSavedEnds(ModuleListLoop):
 
 @case
 class ModuleListNeighbours(ModuleListLoop):
-    """Neighbouring elements with one choice are one segment and one loop."""
+    """Neighbouring elements with one choice are one run and one loop."""
 
     recompute: tuple[str, ...] = ("Stack.layers.1:h", "Stack.layers.2:h")
     saved: frozenset[str] | None = stacked("layers_0", 0, 1, 3) | stacked("layers_1", 0, 1) | {"ws", "v6"}
@@ -353,7 +353,7 @@ class ModuleListEveryLayer(ModuleListLoop):
 
 @case
 class ModuleListConstantCall(Differentiated):
-    """A call by a constant index of a cut slot calls the element in its segment."""
+    """Layer 0 is called by its index, then a loop from 1 runs the rest; both follow the cut."""
 
     path: Path = FIXTURES / "module_list_constant_call.py"
     name: str | None = "Stack"
@@ -722,10 +722,7 @@ REFUSED = (
     ("child_call.py:ChildCall", ("x",), (":h",), "an empty segment names nothing"),
     ("child_call.py:ChildCall", ("x",), ("Layer.forward",), "name a variable after the function"),
     ("module_list_shifted.py:Stack", ("x",), ("Stack.layers.1:h",), "slot 'layers' is indexed by a value that is not the loop index"),
-    ("module_list_step.py:Stack", ("x",), ("Stack.layers.1:h",), "loop over 'layers' has step 2"),
-    ("module_list_overrun.py:Stack", ("x",), ("Stack.layers.1:h",), "loop over 'layers' runs [0, 4); the slot has 3 elements"),
-    ("module_list_empty.py:Stack", ("x",), ("Stack.layers.1:h",), "loop over 'layers' runs [2, 2); the slot has 3 elements"),
-    ("module_list_dynamic.py:Stack", ("x",), ("Stack.layers.1:h",), "loop over 'layers': trip count is not static"),
+    ("module_list_range.py:Stack", ("x",), ("Stack.layers.1:h",), "loop over 'layers' must be range(a, b) with step 1"),
     ("module_list_const.py:Stack", ("x",), ("Stack.layers.1:h",), "'Layer' holds a ConstTensor"),
     ("module_list_name_taken.py:Stack", ("x",), ("Stack.layers.1:h",), "'layers_0' is already a name in 'Stack'"),
 )
