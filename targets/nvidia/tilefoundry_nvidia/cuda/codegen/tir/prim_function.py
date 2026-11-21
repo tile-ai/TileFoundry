@@ -28,7 +28,7 @@ def wrap_buffer(signature: codegen.TensorSignature, ctx: context.Context) -> Non
     total = utils.shape_numel_upper_bound(signature.type.shape)
     layout = f"cute::make_layout(cute::Shape<cute::Int<{total}>>{{}})"
     pointer = f"cute::make_tensor(cute::make_gmem_ptr({name}), {layout})"
-    shard = signature.type.layout
+    shard = context.materialised_layout(signature.type.layout)
     if not isinstance(shard, types.ShardLayout):
         ctx.emit(f"auto {name}_tensor = {pointer};")
         return

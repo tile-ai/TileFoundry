@@ -149,3 +149,71 @@ def test_parameter_copies_by_coordinate(name: str, by_columns: bool, target: cud
     rm(a, out)
     torch.cuda.synchronize()
     assert torch.equal(out, a)
+
+
+@pytest.mark.parametrize("target", CUDA_TARGETS)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_window_varying_per_cta_reaches_each_thread(target: cuda.Target) -> None:
+    """Each thread receives its own row of a window that varies per CTA.
+
+    The window is whole on every thread of its CTA. Kept as a shard tensor over
+    the CTA mesh, it was paired with the registers by coordinate, and every
+    thread read the window's first row.
+    """
+    module = cli.load_authored_ir(f"{OPS / 'varying_window_to_threads.py'}:WindowToThreads")
+    rm = tilefoundry.compile(retarget(module, target), target=target)
+    x = torch.arange(128, dtype=torch.float32, device="cuda")
+    out = torch.zeros(128, dtype=torch.float32, device="cuda")
+    rm(x, out)
+    torch.cuda.synchronize()
+    assert torch.equal(out, x)
+
+
+@pytest.mark.parametrize("target", CUDA_TARGETS)
+@pytest.mark.parametrize(
+    ("name", "rows"),
+    [
+        ("DynamicPlainWindowToColumns", [0, 1, 2, 3, 4]),
+        ("DynamicWindowToColumns", [0, 1, 2, 3, 4]),
+        ("DynamicSwizzledWindowToColumns", [0, 1, 3, 2, 4]),
+    ],
+)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_dynamic_strided_window_copies_its_length(
+    name: str, rows: list[int], target: cuda.Target
+) -> None:
+    """A column ``rows`` long, four elements apart, copies ``rows`` elements.
+
+    A copy of plain operands with a dynamic shape read both as one contiguous
+    run. A window that varies per CTA is written as a plain view and takes the
+    same copy, swizzle included: ``Swizzle(1, 2, 1)`` swaps rows 2 and 3. Rows
+    of ``out`` past the fifth keep their value.
+    """
+    module = cli.load_authored_ir(f"{OPS / 'varying_window_to_threads.py'}:{name}")
+    rm = tilefoundry.compile(retarget(module, target), target=target)
+    x = torch.arange(5 * 4, dtype=torch.float32, device="cuda").view(5, 4)
+    out = torch.full((32, 4), -1.0, dtype=torch.float32, device="cuda")
+    rm(x, out)
+    torch.cuda.synchronize()
+    want = torch.full((32, 4), -1.0, dtype=torch.float32, device="cuda")
+    want[:5] = x[rows]
+    assert torch.equal(out, want)
+
+
+@pytest.mark.parametrize("target", CUDA_TARGETS)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_dynamic_row_major_parameter_copies_by_its_strides(target: cuda.Target) -> None:
+    """A row-major parameter whose stride is a product of extents copies by that stride.
+
+    The stride ``4 * rows`` is dimension arithmetic, which the dynamic copy
+    writes out at run time instead of refusing.
+    """
+    module = cli.load_authored_ir(f"{OPS / 'varying_window_to_threads.py'}:DynamicRowMajorBlock")
+    rm = tilefoundry.compile(retarget(module, target), target=target)
+    x = torch.arange(2 * 5 * 4, dtype=torch.float32, device="cuda").view(2, 5, 4)
+    out = torch.full((2, 32, 4), -1.0, dtype=torch.float32, device="cuda")
+    rm(x, out)
+    torch.cuda.synchronize()
+    want = torch.full((2, 32, 4), -1.0, dtype=torch.float32, device="cuda")
+    want[:, :5] = x
+    assert torch.equal(out, want)
