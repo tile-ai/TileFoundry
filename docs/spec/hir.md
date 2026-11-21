@@ -197,7 +197,11 @@ function records its origin and chosen dimensions as the
 A wholly omitted tensor layout remains `None` in a parameter or return
 annotation and imposes no layout constraint. A stated layout or shard attr is
 concrete when constructed. It MUST match exactly. Unwritten strides use the
-default constructor with the enclosing storage and target.
+default constructor with the enclosing storage and target. A child Module that
+declares no target takes its caller's: a call reads the child's parameter and
+return annotations with the caller's target, so their unwritten strides are the
+caller's owner strides. Strides written out are kept. The child's own types do
+not change.
 
 **SSA shape.** Sharing of intermediate results is expressed by Python object
 identity:
