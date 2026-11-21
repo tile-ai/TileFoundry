@@ -146,21 +146,26 @@ def unsourced_calls(value: expr.Call) -> tuple[expr.Call, ...]:
     return tuple(found)
 
 
-def attach_authored_metadata(value: object, node: ast.AST, context: "MatchContext") -> object:
-    """Attach *node*'s source identity to each unmarked Call it constructs."""
-    if not isinstance(value, expr.Call):
-        return value
+def authored_span(node: ast.AST, context: "MatchContext") -> expr.SourceSpanMetadata | None:
+    """The span of *node*, with a one-based column."""
     source_range = authored_source_range(node, context)
     if source_range is None:
-        return value
+        return None
     source_filename, line, column, end_line, end_column = source_range
-    span = expr.SourceSpanMetadata(
-        source_filename,
-        line,
-        column + 1,
-        end_line,
-        end_column,
-    )
+    return expr.SourceSpanMetadata(source_filename, line, column + 1, end_line, end_column)
+
+
+def attach_authored_metadata(value: object, node: ast.AST, context: "MatchContext") -> object:
+    """Attach *node*'s source identity to each unmarked Call it constructs; a loop gets its span."""
+    if not isinstance(value, (expr.Call, core.LoopRegion)):
+        return value
+    span = authored_span(node, context)
+    if span is None:
+        return value
+    if isinstance(value, core.LoopRegion):
+        if expr.get_metadata(value, expr.SourceSpanMetadata) is None:
+            value.attach_metadata(span)
+        return value
     for call in unsourced_calls(value):
         call.attach_metadata(span)
         if context.binding_name:
@@ -1381,16 +1386,12 @@ class ParseError(expr.VerifyError):
         context: MatchContext,
         detail: str | None = None,
     ):
-        location = ""
-        source_range = authored_source_range(node, context)
-        if source_range is not None:
-            source_filename, line, column, _, _ = source_range
-            location = f" at {source_filename}:{line}"
-            location += f":{column + 1}"
+        span = authored_span(node, context)
+        location = "" if span is None else f" at {span.file}:{span.line}:{span.column}"
         message = detail or f"no AST pattern matched situation {context.situation!r}"
         if context.role:
             message += f" (role {context.role!r})"
-        super().__init__(message + location)
+        super().__init__(message + location, span=span)
         self.node = node
         self.context = context
         self.detail = detail

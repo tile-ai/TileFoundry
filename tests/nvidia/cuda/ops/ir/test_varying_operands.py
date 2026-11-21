@@ -304,19 +304,23 @@ def test_broadcast_index_binds_a_plain_parameter() -> None:
 
 
 @pytest.mark.parametrize(
-    ("fixture", "module"),
+    ("fixture", "module", "line"),
     (
-        ("diagnostics/varying_into_broadcast.py", "CoordArgument"),
-        ("diagnostics/varying_into_broadcast.py", "LoopCarry"),
-        ("diagnostics/varying_into_broadcast.py", "ScheduleTarget"),
-        ("ops/varying_loops_and_fields.py", "OtherSlice"),
-        ("diagnostics/varying_bitcast_plain_end.py", "BitcastPlainEnd"),
+        ("diagnostics/varying_into_broadcast.py", "CoordArgument", 28),
+        ("diagnostics/varying_into_broadcast.py", "LoopCarry", 39),
+        ("diagnostics/varying_into_broadcast.py", "ScheduleTarget", 52),
+        ("ops/varying_loops_and_fields.py", "OtherSlice", 73),
+        ("diagnostics/varying_bitcast_plain_end.py", "BitcastPlainEnd", 14),
     ),
 )
-def test_a_varying_value_where_the_type_says_broadcast_is_refused(fixture, module) -> None:
-    """A Varying argument, carry, schedule or bitcast source into Broadcast; an unreached slice."""
-    with pytest.raises(expr.VerifyError):
+def test_a_varying_value_where_the_type_says_broadcast_is_refused(fixture, module, line) -> None:
+    """A Varying argument, carry, schedule or bitcast source into Broadcast; an unreached slice.
+
+    The refusal carries the line of the refused value; a carry's is its loop's ``for``.
+    """
+    with pytest.raises(expr.VerifyError) as refused:
         cli.load_authored_ir(f"{_FIXTURES / fixture}:{module}")
+    assert refused.value.span.line == line
 
 
 @pytest.mark.parametrize(("outside", "refused"), ((_B, False), (types.Split(0), True)), ids=("broadcast", "split"))
