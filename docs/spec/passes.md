@@ -510,9 +510,10 @@ class Saved:
     name: str
     type: types.Type
     origin: str
+    buffer: Saved | None = None
+    parameter: bool = False
 
 def saved_values(forward: core.Module) -> tuple[Saved, ...]: ...
-def select_value(module: core.Module, selector: str) -> expr.Expr: ...
 ```
 
 `differentiate` is not a `Pass`: the author calls it with arguments, and it
@@ -536,7 +537,7 @@ through `saved`.
   respect to each of its floating point parameters that is not a `ConstTensor`.
   Each Module keeps one forward and one backward version of it under its own
   name. A child slot's Module is differentiated the same way and takes the same
-  slot in both generated Modules. A callee's `saved` is one item of its
+  slot in both generated Modules, except a slot that `recompute` cuts, below. A callee's `saved` is one item of its
   caller's `saved`; in a loop body its items are taken one at a time, as the
   loop rule below says.
 - A `MeshRegion` stays a region in both Modules. A value inside a forward
@@ -576,14 +577,56 @@ through `saved`.
   `Partial("sum")` before the `Reshard`.
 - Each Op that can be differentiated registers one rule
   ([visitor-registry §12](./visitor-registry.md#12-instance-5--autodiff)).
-- `recompute` items are `Module[.function]:variable`. The part before `:` is a
-  selector as in [cli Commands](./cli.md#commands), resolved by `Module.name`
-  among the Modules reachable from *module*; without `.function` it names the
-  entry. The variable is the name the author bound.
+- `recompute` items are selectors. `Root` is the name of *module*; a function
+  left out is the entry; the variable is the name the author bound:
+
+  | selector | recomputes |
+  |---|---|
+  | `Name` | in each use of the Module named `Name`, and in its subtree, each value a selector may name |
+  | `Name[.function]:variable` | that value, in each use of `Name` |
+  | `Root.slot[.index]` | in that one element of a child slot of the root, and in its subtree, each value a selector may name |
+  | `Root.slot[.index][.function]:variable` | that value, in that one element |
+  | `Root.slot[.index]:None` | nothing in that one element: it saves what it computes |
+
+  `Name` is resolved by `Module.name` among the Modules reachable from
+  *module*, as the selector in [cli Commands](./cli.md#commands). `.index`
+  is written for a ModuleList slot and only for it. When the segment after
+  `Root` is a child slot of the root, the selector names an element; otherwise
+  it names a definition. A value a selector may name is a call of an Op outside
+  every loop body that is not a projection of a call's result. An element's own
+  selectors **replace** what the selectors of definitions choose in its subtree;
+  they do not add to them. Each selector is checked against *module* even when
+  another replaces it.
+- An element with its own selectors is differentiated from a copy of its
+  subtree. Each Module of a copy is named `<Name>_<k>`, `k` the smallest
+  number from 1 whose name no other Module of the tree has, so the generated
+  `<Name>_<k>Forward` and `<Name>_<k>Backward` appear in the written file.
+  Elements of one definition with the same selectors share one copy; the root
+  keeps its name and, except a cut slot, its slot keys.
+- A ModuleList slot of the root that a loop calls by a run-time index, and
+  whose elements are no longer one definition, is cut: each maximal run of
+  consecutive elements of one definition, `[start, stop)`, becomes the slot
+  `<slot>_<n>`, `n` counting the runs from 0, and the original key is gone.
+  Each loop that calls the slot is cut into one loop per run that meets its
+  range, over `[max(start, loop start), min(stop, loop extent))`; each loop
+  carries what the one before it returns, and the last one stands for the
+  original loop. In a cut loop the call is `<slot>_<n>[t - start]`, and a call
+  by a constant index `i` is `<slot>_<n>[i - start]`. An enclosing loop is not
+  cut. A slot whose elements are all one definition is not cut.
 - `saved_values` lists the items of a generated forward's `saved` with the name
   the author bound (`v<index>` when there is none), the type, and the origin:
   `parameter`, `carry`, the Op and its source line, or the call whose `saved`
-  it is; a stack names the trip count first (`stack of 5: ...`).
+  it is; a stack names the trip count first (`stack of 5: ...`). A saved view
+  keeps the bytes of what it views alive: its `buffer` is the value reached
+  by following, from the saved value, the operand each view Op re-addresses
+  under the target's storage owners, while there is one; that value is
+  reported like a saved one, a value without a name as `v<index>`: its own
+  index when it is saved too, else the next index after `saved`, one per
+  buffer. `buffer` is `None` for a value that is its own buffer, and for a
+  parameter, a carry, a callee's item and a stack. A callee's item that is
+  the callee's parameter is its own buffer: the caller's value it stands for
+  is not followed. `parameter` is true for a parameter of the function, which
+  is held whatever the forward saves.
 - constraints:
   - `differentiate` MUST NOT change *module*.
   - Each refusal is a `ValueError` that names what it refuses, and the source
@@ -594,12 +637,23 @@ through `saved`.
     off the last axis); a loop that a gradient reaches whose trip count is not
     static, that has no carry, or that carries a tuple; a loop value the
     backward reads that is `Partial`; a call that reaches past one child slot;
-    a callee named `backward`; a `recompute` selector without `:`, with a child
-    slot path, naming no reachable Module, a Module name two reachable Modules
-    share, no function, no value, two values of one name, a parameter, a value
-    computed by a call rather than an Op, or a value inside a loop body (the
-    first version saves every value of a loop body); and a backward that
-    `differentiate` generated, since a second derivative is not supported.
+    a callee named `backward`; a `recompute` selector that is empty or ends in
+    `:`, naming no reachable Module, a Module name two reachable Modules share,
+    no function, a function without a variable, no value, two values of one
+    name, a parameter, a value computed by a call rather than an Op, or a value
+    inside a loop body (the first version saves every value of a loop body); an
+    element path that does not start at the root, that names neither a function
+    nor a child slot of the root, that leaves out the index of a ModuleList slot,
+    gives an index past its end or to a slot that is not a ModuleList, or that
+    goes through a second child slot; a `:None` that does not follow an element,
+    or that a different selector of the same element joins; a slot to cut that
+    is called by a run-time index that is not the induction value of the loop
+    around the call, or from a loop that is not `range(a, b)` with step 1 and
+    constant `0 <= a < b <= N`, N the slot's size; whose subtree has
+    a `ConstTensor` parameter (the resource path of the weight would move); or
+    whose run's slot name `<slot>_<n>` is already a function, child slot or
+    method of the root; and a backward that `differentiate` generated, since a
+    second derivative is not supported.
 
 ## 8. Directory layout
 

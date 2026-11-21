@@ -63,6 +63,7 @@ class ScheduleCase(Case):
     candidates_refusal: str | None = None
     smem_peak: int = 0
     mbarriers: int = 0
+    syncs: int | None = None
     rmem_peaks: Mapping[str, RmemPeak] = MappingProxyType({})
     sites: SiteCounts | None = None
     child_regions: bool = False
@@ -373,6 +374,8 @@ def _hir(case, problems):
         lowered = problems.run("finalize", _finalize, case, synced)
     if case.sync_refusal is None and case.finalize_refusal is None:
         printed = problems.run("print TIR", inspection.as_script, lowered)
+        if case.syncs is not None:
+            problems.expect("syncs", lambda text: text.count("T.sync(") == case.syncs, printed)
         lowered = problems.run("reload TIR", lambda text: reload(text, lowered.name), printed)
         problems.run("TIR operands", _tir_checks, lowered, case.path)
         problems.run("host launch", _host_launch, case, lowered, result.function)
@@ -1365,11 +1368,13 @@ EXPECTED = {
     "hir/tma_store_cta_slice": dict(
         smem_peak=16_384,
         mbarriers=1,
+        syncs=2,
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/tma_store_cta_windows": dict(
         smem_peak=16_384,
         mbarriers=1,
+        syncs=2,
         candidates_refusal="source has no unscheduled candidate site",
     ),
     "hir/tma_store_in_callee": dict(

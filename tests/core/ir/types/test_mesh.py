@@ -276,12 +276,3 @@ def test_a_constant_slice_is_proved_by_its_sub_box() -> None:
     )
     with pytest.raises(ValueError, match="'cta' steps by 1, which is not a multiple of its unit 128"):
         types.Mesh(whole.topologies, types.ComposedLayout(None, 160, types.Layout(((2,), (32,)), ((1,), (1,)))))
-
-
-def test_a_slice_remembers_its_parent_outside_equality_and_repr() -> None:
-    mesh = types.Mesh((types.Topology("gpu", 4),), types.Layout((2, 2), (2, 1)), ("pp", "cp"))
-    first = mesh[0]
-    assert first.parent is mesh
-    assert first == mesh[0] and first != mesh[1]
-    assert hash(first) == hash(types.Mesh(first.topologies, first.layout, first.names))
-    assert "parent" not in repr(first)

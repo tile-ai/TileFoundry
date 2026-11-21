@@ -22,8 +22,16 @@ summary restated in this project's source.
 
 ## Commands
 
-`SOURCE` is a Python file followed optionally by
-`:Module[.function]`. Without a selector, the source must define exactly one
+A selector is `root[.segment]*[:variable]`. The segments after the root spell
+a function reference: a child slot's key enters it, a number picks one element
+of a ModuleList, and a last segment that is not a child slot names a function.
+The variable is a name the author bound. An empty segment, and an empty
+variable after `:`, MUST be refused. What the root names is the command's to
+say.
+
+`SOURCE` is a Python file followed optionally by a selector
+`:Module[.function]`, its root a top-level binding of the file and without a
+variable. Without a selector, the source must define exactly one
 top-level HIR Module or Function. A selector chooses the named Module and its
 default entry, or one of that Module's own Functions. Child Module path segments
 MUST be refused; a child used independently is named by its own top-level binding.
@@ -425,8 +433,9 @@ tilefoundry autodiff SOURCE --wrt NAMES [--recompute SELECTOR ...] [--saved] [PA
 
 `autodiff` differentiates the selected Module with
 [passes §7.4](./passes.md#74-differentiate). `--wrt` is required and names the
-entry parameters, comma-separated. Each `--recompute` is a
-`Module[.function]:variable` selector, passed to `differentiate` as written.
+entry parameters, comma-separated. Each `--recompute` is a selector, its root
+a `Module.name`, passed to `differentiate` as written; what each form
+recomputes is in [passes §7.4](./passes.md#74-differentiate).
 
 - Without `--saved`, the command writes `<Name>Forward` and `<Name>Backward` as
   one DSL file: one header, and each Module class, child slot classes included,
@@ -437,9 +446,14 @@ entry parameters, comma-separated. Each `--recompute` is a
   parser refuses.
 - With `--saved`, the command writes one row per tensor the forward keeps for
   the backward: its name, global shape, bytes on one device (the local shape,
-  since memory is counted per device), the layout of each mesh axis, and its
-  origin. A tuple the forward keeps for a callee has one row per tensor, its
-  name indexed.
+  since memory is counted per device), the layout of each mesh axis, the
+  buffer it keeps alive (`Saved.buffer` of
+  [passes §7.4](./passes.md#74-differentiate), its own name when it is its
+  own), and its origin. A tuple the forward keeps for a callee has one row per
+  tensor, its name indexed. Two lines follow: `held`, the bytes on one device
+  of each buffer that is not a parameter, counted once and whole even when
+  only a view of it is saved; and `parameters`, the same for each parameter
+  buffer. Both are 0 when nothing is saved.
 - Without `PATH` the output goes to stdout.
 - constraints:
   - A missing `--wrt` is a usage error (exit 2). A refusal of `differentiate`

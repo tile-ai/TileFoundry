@@ -65,26 +65,27 @@ def unique_values(namespace: dict[str, object], kind: type) -> tuple[object, ...
     return tuple(values)
 
 
+def parsed_selector(selector: str) -> core.Selector:
+    """*selector* parsed, a refusal naming it."""
+    try:
+        return core.parse_selector(selector)
+    except ValueError as error:
+        raise ValueError(f"selector {selector!r}: {error}") from None
+
+
 def select_ir(namespace: dict[str, object], selector: str | None) -> core.Module:
     if selector is not None:
-
-
-        segments = selector.split(".")
-        if any(not segment for segment in segments):
-            raise ValueError(
-                f"selector {selector!r}: an empty segment names nothing. A path is "
-                f"its segments, so a leading, trailing or doubled dot would make "
-                f"two different selectors name one node"
-            )
-        root_name, *path = segments
-        selected = namespace.get(root_name)
+        parsed = parsed_selector(selector)
+        if parsed.variable is not None:
+            raise ValueError(f"selector {selector!r}: a source selector names a Module or a function, not a variable")
+        selected = namespace.get(parsed.root)
         if selected is None:
-            raise ValueError(f"selector {root_name!r} is not defined by the source")
-        if not path:
+            raise ValueError(f"selector {parsed.root!r} is not defined by the source")
+        if not parsed.segments:
             if isinstance(selected, core.Module):
                 return selected
             raise TypeError(
-                f"selector {root_name!r} resolves to "
+                f"selector {parsed.root!r} resolves to "
                 f"{type(selected).__name__}, expected a Module. A Function "
                 "carries neither the Target its numbers are measured against "
                 "nor the topology hierarchy they divide over; select the Module "
@@ -92,14 +93,15 @@ def select_ir(namespace: dict[str, object], selector: str | None) -> core.Module
             )
         if not isinstance(selected, core.Module):
             raise TypeError(
-                f"selector root {root_name!r} is {type(selected).__name__}, expected Module"
+                f"selector root {parsed.root!r} is {type(selected).__name__}, expected Module"
             )
-
-
-        if len(path) != 1:
+        try:
+            ref, _, function = core.select(selected, parsed.segments)
+        except ValueError as error:
+            raise ValueError(f"selector {selector!r}: {error}") from None
+        if ref.path:
             raise ValueError(f"selector {selector!r}: use Module.function; child module paths are unsupported")
-        selected.lookup(path[0])
-        return replace(selected, entry=path[0])
+        return replace(selected, entry=function.name)
 
     modules = unique_values(namespace, core.Module)
     if len(modules) == 1:
@@ -332,7 +334,7 @@ def load_namespace(source: str) -> tuple[dict[str, object], str | None]:
                 if selector is None:
                     spec.loader.exec_module(module)
                 else:
-                    run_for_selection(path, module, selector.split(".")[0])
+                    run_for_selection(path, module, parsed_selector(selector).root)
             except ModuleNotFoundError as error:
                 raise ValueError(
                     f"{path.name} imports {error.name!r}, which is not importable.\n"

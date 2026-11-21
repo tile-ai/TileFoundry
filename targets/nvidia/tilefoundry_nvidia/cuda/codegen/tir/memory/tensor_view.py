@@ -136,14 +136,6 @@ def render_attr(a) -> str:
     return f"/* unknown attr {type(a).__name__} */"
 
 
-def render_shard_layout_type(sl: types.ShardLayout, ctx=None) -> str:
-    """Render a full ShardLayout C++ type string."""
-    layout_str = render_layout_type(sl.layout)
-    attrs_str = ", ".join(render_attr(a) for a in sl.attrs)
-    mesh_str = render_mesh_type(sl.mesh, ctx)
-    return f"tilefoundry::ShardLayout<{layout_str}, cute::tuple<{attrs_str}>, {mesh_str}>"
-
-
 def composed_mesh_layout(layout: str, base: int) -> str:
     """A mesh layout value expression, its slice origin folded in.
 
@@ -559,6 +551,7 @@ __all__ = [
     "emit_paired",
     "render_attr",
     "render_layout_value",
+    "render_mesh_type",
     "render_shard_layout_value",
     "shard_engine_layout",
     "tensor_reference",
