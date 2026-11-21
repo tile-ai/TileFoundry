@@ -1295,8 +1295,9 @@ class ForwardCloner(core.BindingSubstitutionCloner):
         copied = super().visit_Call(node, ctx)
         if not isinstance(node.target, core.FunctionRef):
             return copied
+        copied = expr.remove_metadata(copied, expr.BindingMetadata)
         self.calls[id(node)] = copied
-        return tensor.repack(copied, node.type)
+        return tensor.repack(copied, node.type, expr.binding_name(node))
 
     def visit_MeshRegion(self, node: core.MeshRegion, ctx) -> expr.Expr:
         copied = super().visit_MeshRegion(node, ctx)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import isl
 
 from tilefoundry.interfaces import access, autodiff, cost, evaluator, typeinfer
@@ -136,11 +138,12 @@ def unpack(value: expr.Expr, fields: tuple[types.Type, ...]) -> tuple[expr.Expr,
     return tuple(get_item(value, index, item) for index, item in enumerate(fields))
 
 
-def repack(value: expr.Expr, type_: types.Type) -> expr.Expr:
-    """*value* read as *type_*: its one result, or a tuple of each field's item."""
+def repack(value: expr.Expr, type_: types.Type, name: str | None = None) -> expr.Expr:
+    """*value* read as *type_*: its one result, or a tuple of each field's item, bound to *name*."""
     if not isinstance(type_, types.TupleType):
-        return get_item(value, 0, type_)
-    return pack(unpack(value, type_.fields))
+        return get_item(value, 0, type_, name)
+    packed = pack(unpack(value, type_.fields))
+    return packed if name is None else replace(packed, metadata=(expr.BindingMetadata(name=name),))
 
 
 __all__ = ["TupleGetItem", "get_item", "is_get_item", "pack", "repack", "unpack"]
