@@ -13,7 +13,7 @@ class CtaSubmeshThreadScope:
     @prim_func(target=cuda.Target("nvidia.h200_sxm"))
     def gemm(x: Tensor[(4, 32), "f32"], out: Tensor[(4, 32), "f32"]):
         with Mesh((Topology("cta", 4),), layout=(2, 2), names=("d0", "d1")) as cta:
-            with cta[:, :1] as scope:
+            with cta[:1, :1] as scope:
                 with Mesh(
                     (Topology("thread", 128),), layout=(4, 32), names=("d0", "d1")
                 ) as scope_1:

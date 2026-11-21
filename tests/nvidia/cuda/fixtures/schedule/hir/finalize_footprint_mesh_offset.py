@@ -1,4 +1,4 @@
-"""Print a loop footprint reading a previous launch at mesh-coordinate offsets."""
+"""Print a loop footprint reading rows other CTAs wrote, at mesh-coordinate offsets."""
 
 from tilefoundry.dsl import *
 from tilefoundry_nvidia import cuda
