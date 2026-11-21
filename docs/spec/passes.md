@@ -537,9 +537,13 @@ through `saved`.
   respect to each of its floating point parameters that is not a `ConstTensor`.
   Each Module keeps one forward and one backward version of it under its own
   name. A child slot's Module is differentiated the same way and takes the same
-  slot in both generated Modules, except a slot that `recompute` cuts, below. A callee's `saved` is one item of its
-  caller's `saved`; in a loop body its items are taken one at a time, as the
-  loop rule below says.
+  slot in both generated Modules, except a slot that `recompute` cuts, below. An item of a callee's `saved` that
+  is a parameter of the callee is the value its caller passed, which the caller
+  holds as it holds its own values: saved once, a parameter by reference, or
+  computed again when `recompute` names it. A callee with such an item, or
+  called in a loop body, has its `saved` taken one item at a time, each other
+  item one item of its caller's `saved`; any other callee's `saved` is one item
+  of its caller's `saved`.
 - A `MeshRegion` stays a region in both Modules. A value inside a forward
   region that the backward reads leaves the region as an extra result; the
   backward region of the same mesh takes it, and the gradients, as arguments.
@@ -556,7 +560,7 @@ through `saved`.
   is not stacked. A body value that an Op computes from the induction value,
   values the body reads from outside and constants only is computed again in
   the backward body, not stacked. An item of a body callee's `saved` that is a
-  parameter of the callee, passed such a value, is that value again; the other
+  parameter of the callee is the value passed, held by these rules; the other
   items are stacked one by one. A loop that runs no iteration passes the
   gradient of each carry to its initial value.
 - A value that only parameters outside `wrt`, constants and `ConstTensor`

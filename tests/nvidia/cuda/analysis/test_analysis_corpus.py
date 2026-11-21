@@ -287,7 +287,7 @@ class FsdpModel(GeneratedHalves):
     name: str | None = "FsdpModel"
     memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 40_704, "rmem": 0})
     wrt: tuple[str, ...] = ("we", "q1", "k1", "v1", "o1", "u1", "d1", "q2", "k2", "v2", "o2", "u2", "d2", "wh")
-    halves: tuple[int, int] = (164_096, 188_304)
+    halves: tuple[int, int] = (164_096, 187_792)
     graph: bool = True
 
 
@@ -317,7 +317,7 @@ class CallChain(GeneratedHalves):
     name: str | None = "CallChain"
     memory_peaks: Mapping[str, int] = MappingProxyType({"gmem": 2_048})
     wrt: tuple[str, ...] = ("x", "w")
-    halves: tuple[int, int] = (2_820, 6_928)
+    halves: tuple[int, int] = (2_820, 5_648)
 
 
 @case

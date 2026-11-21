@@ -973,6 +973,10 @@ class FunctionDifferentiator(expr.Functor[None]):
             result = replace(value, elements=tuple(self.materialize(("node", item), scope) for item in value.elements))
         elif key[0] == "node" and (id(value) in self.differ.recompute or self.recomputed(value, scope)):
             result = replace(value, args=tuple(self.materialize(("node", arg), scope) for arg in value.args))
+        elif key[0] == "callee" and len(key) == 2 and (
+            isinstance(scope.region, core.LoopRegion) or any(index is not None for index in self.callees[id(value)].saved_params)
+        ):
+            result = self.callee_saved(value, scope)
         elif scope.parent is None:
             result = tensor.get_item(self.saved, len(self.saved_keys), self.key_type(key), self.read_name(key))
             self.saved_keys.append(key)
@@ -1041,8 +1045,6 @@ class FunctionDifferentiator(expr.Functor[None]):
             if loop.start != 0:
                 coordinate = ctx.call("add", coordinate, ctx.constant(loop.start, scope.index.type.dtype))
             return coordinate
-        if key[0] == "callee" and len(key) == 2:
-            return self.callee_saved_in_loop(value, scope)
         carried = len(loop.yield_values)
         if key[0] == "node" and any(value is param for param in loop.params[carried:]):
             position = next(i for i, param in enumerate(loop.params) if param is value)
@@ -1073,11 +1075,13 @@ class FunctionDifferentiator(expr.Functor[None]):
             id(value) in scope.invariant
         )
 
-    def callee_saved_in_loop(self, call: expr.Call, scope: Scope) -> expr.Expr:
-        """A loop body callee's ``saved``, one item at a time.
+    def callee_saved(self, call: expr.Call, scope: Scope) -> expr.Expr:
+        """A callee's ``saved``, one item at a time.
 
-        An item that is a parameter of the callee, passed a loop invariant value,
-        is that value again; every other item is stacked on its own.
+        An item that is a parameter of the callee is the value the caller passed,
+        which the caller holds as it holds its own values: saved, computed again
+        when a selector chose it, or a parameter of the caller. Every other item
+        is the callee's own, stacked on its own in a loop body.
         """
         derived = self.callees[id(call)]
         ref = call.target
@@ -1089,10 +1093,8 @@ class FunctionDifferentiator(expr.Functor[None]):
         items = []
         for position, index in enumerate(derived.saved_params):
             arg = supplied.get(index)
-            if arg is not None and id(arg) in scope.invariant:
-                items.append(self.materialize(("node", arg), scope))
-            else:
-                items.append(self.materialize(("callee", call, position), scope))
+            key = ("callee", call, position) if arg is None else ("node", arg)
+            items.append(self.materialize(key, scope))
         return scope.ctx.remember(tensor.pack(tuple(items)), derived.saved)
 
     def row(self, stacks: expr.Expr, type_: types.Type, row: expr.Expr, ctx: autodiff.Context) -> expr.Expr:
