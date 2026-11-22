@@ -1,8 +1,9 @@
 """ANE HIR offered to the candidate report; hand-scheduled ANE IR evaluated and lowered.
 
 A fixture under ``hir/`` is checked through the candidate report. A fixture under
-``scheduled/`` is loaded, type-checked, evaluated by core's HIR evaluator, lowered,
-printed as TIR and reloaded; lowered TIR is not evaluated.
+``scheduled/``, and each module of a fixture under ``ops/``, is loaded, type-checked,
+evaluated by core's HIR evaluator, lowered, printed as TIR and reloaded; lowered TIR
+is not evaluated.
 """
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.core._corpus import Case, Problems, case, cases, reload
+from tests.core._corpus import Case, Problems, case, cases, reload, special
 from tilefoundry import analysis, inspection, utils
 from tilefoundry.interfaces import evaluator, schedule
 from tilefoundry.ir import core, expr
@@ -30,8 +31,12 @@ def small(shape, seed, low=-1, high=1):
 
 @dataclass(frozen=True)
 class AneCase(Case):
-    """One ANE fixture; ``finalize_refusal`` names the LoweringError that lowering must raise."""
+    """One ANE fixture; a field names the error its stage must raise.
 
+    ``refusal`` is the load-time VerifyError and ``finalize_refusal`` the LoweringError.
+    """
+
+    refusal: str | None = None
     finalize_refusal: str | None = None
 
     def inputs(self) -> tuple | None:
@@ -147,6 +152,11 @@ def _hir(case, problems):
         problems.run("guard", case.guard, CandidateState(*checked, report), problems)
 
 
+def _refused(case):
+    with pytest.raises(expr.VerifyError, match=case.refusal):
+        case.load()
+
+
 def _evaluate(case, module):
     return evaluator.evaluate(module, *(value.clone() for value in case.inputs()))
 
@@ -162,6 +172,9 @@ def _finalize(case, checked):
 
 
 def _scheduled(case, problems):
+    if case.refusal is not None:
+        problems.run("load refusal", _refused, case)
+        return
     module = problems.run("load", case.load)
     checked = problems.run("check", lambda m: analysis.check_program(m, m.entry_function()), module)
     result = None
@@ -397,8 +410,167 @@ class Core(AneCase):
     finalize_refusal: str = "has no lowering for Copy"
 
 
-CASES = cases(ROOT / "hir", ROOT / "scheduled", case_type=AneCase)
-STAGES = {"hir": _hir, "scheduled": _scheduled}
+def grid(shape, modulus, offset):
+    """An f16 tensor of *shape* whose entries cycle through *modulus* integers from *offset*."""
+    count = utils.torch.tensor(shape).prod().item()
+    return (utils.torch.arange(count) % modulus + offset).reshape(shape).to(utils.torch.float16)
+
+
+class OpCase(AneCase):
+    """One module of a fixture under ``ops/``; ``expected`` is the torch value of its result."""
+
+    def expected(self):
+        """The value the entry must return, or None for a case that a load refuses."""
+        return None
+
+    def guard(self, state, problems):
+        assert utils.torch.equal(state.result, self.expected().to(utils.torch.float16))
+
+
+VALUES = ROOT / "ops" / "values.py"
+REFUSED = ROOT / "ops" / "refused.py"
+
+
+@case
+class UnaryOrder(OpCase):
+    """The last input makes ``1 - x`` an fp16 tie, which rounds away from zero before the square."""
+
+    path: Path = VALUES
+    name: str | None = "UnaryOrder"
+
+    def inputs(self):
+        return (utils.torch.tensor([-4, -3, -2, -1, 0, 1, 2, -(2**-11)]).reshape(1, 1, 1, 8).to(utils.torch.float16),)
+
+    def expected(self):
+        return utils.torch.tensor([10, 10, 9, 4, 1, 0, 1, 1 + 2**-9]).reshape(1, 1, 1, 8)
+
+
+@case
+class MaxPoolCeil(OpCase):
+    path: Path = VALUES
+    name: str | None = "MaxPoolCeil"
+
+    def inputs(self):
+        return (grid((1, 2, 5, 6), 11, -5),)
+
+    def expected(self):
+        (x,) = self.inputs()
+        return utils.F.max_pool2d(x.float(), 3, 2, ceil_mode=True)
+
+
+@case
+class AveragePoolInside(OpCase):
+    """Each window sum is multiplied by the fp16 reciprocal of the cells it has inside the map."""
+
+    path: Path = VALUES
+    name: str | None = "AveragePoolInside"
+
+    def inputs(self):
+        return (grid((1, 2, 5, 6), 11, -5),)
+
+    def expected(self):
+        (x,) = self.inputs()
+        sums = utils.F.avg_pool2d(x.float(), 3, 2, 1, divisor_override=1)
+        inside = utils.F.avg_pool2d(utils.torch.ones(1, 1, 5, 6), 3, 2, 1, divisor_override=1)
+        return tir.evaluation.f16(sums * tir.evaluation.f16(1 / inside))
+
+
+@case
+class ReduceDropped(OpCase):
+    path: Path = VALUES
+    name: str | None = "ReduceDropped"
+
+    def inputs(self):
+        return (grid((1, 2, 3, 4), 5, 1),)
+
+    def expected(self):
+        (x,) = self.inputs()
+        return x.sum((2, 3))
+
+
+@case
+class ReduceNorm(OpCase):
+    path: Path = VALUES
+    name: str | None = "ReduceNorm"
+
+    def inputs(self):
+        return (grid((1, 2, 3, 4), 5, 1),)
+
+    def expected(self):
+        (x,) = self.inputs()
+        return tir.evaluation.f16((x.float() ** 2).sum((1, 3), keepdim=True).rsqrt())
+
+
+@case
+class ConvStridedGrouped(OpCase):
+    path: Path = VALUES
+    name: str | None = "ConvStridedGrouped"
+
+    def inputs(self):
+        return grid((1, 4, 6, 6), 7, -3), grid((6, 2, 3, 3), 5, -2), grid((6,), 4, -1)
+
+    def expected(self):
+        x, w, b = (value.float() for value in self.inputs())
+        return utils.F.conv2d(x, w, b, stride=2, padding=1, groups=2)
+
+
+@case
+class MatrixBias(OpCase):
+    path: Path = VALUES
+    name: str | None = "MatrixBias"
+
+    def inputs(self):
+        return grid((8, 16), 9, -4), grid((16, 5), 7, -3), grid((5,), 4, -1)
+
+    def expected(self):
+        a, w, b = (value.float() for value in self.inputs())
+        return a @ w + b
+
+
+@case
+class Gapped(OpCase):
+    path: Path = REFUSED
+    name: str | None = "Gapped"
+    refusal: str = "src: could not satisfy"
+
+
+@case
+class ClampReversed(OpCase):
+    path: Path = REFUSED
+    name: str | None = "ClampReversed"
+    refusal: str = "clamp_low <= clamp_high"
+
+
+@case
+class KeepdimWidth(OpCase):
+    path: Path = REFUSED
+    name: str | None = "KeepdimWidth"
+    refusal: str = "keepdim: could not satisfy"
+
+
+@case
+class WeightOnChip(OpCase):
+    path: Path = REFUSED
+    name: str | None = "WeightOnChip"
+    refusal: str = "weight: smem does not match gmem"
+
+
+@case
+class WrongResultShape(OpCase):
+    path: Path = REFUSED
+    name: str | None = "WrongResultShape"
+    refusal: str = "differs from the pooled shape"
+
+
+@case
+class GroupsUneven(OpCase):
+    path: Path = REFUSED
+    name: str | None = "GroupsUneven"
+    refusal: str = "groups 3 must divide the input channels 4"
+
+
+CASES = (*cases(ROOT / "hir", ROOT / "scheduled", case_type=AneCase), *special(OpCase))
+STAGES = {"hir": _hir, "scheduled": _scheduled, "ops": _scheduled}
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
