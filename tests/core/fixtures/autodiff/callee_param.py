@@ -2,6 +2,8 @@
 
 The child's backward reads the weight it was given. The layer made that weight,
 so the layer decides whether the forward keeps it or the backward gathers again.
+The child returns the weight's gradient as the sum of the units' parts; the
+layer's Reshard reduces it to the shards.
 A child that reshapes the weight first saves the reshape, which a selector names
 on its own.
 """

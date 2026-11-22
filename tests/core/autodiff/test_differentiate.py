@@ -113,13 +113,15 @@ def where(value: expr.Expr) -> str:
 
 
 def reshards(backward: core.Module) -> list[tuple[tuple, tuple]]:
-    """``(source attrs, result attrs)`` of each Reshard in the backward's entry; plain is B."""
+    """``(source attrs, result attrs)`` of each Reshard in any Module of the backward."""
     found = []
-    for value in core.collect_exprs(backward.entry_function().body):
-        if isinstance(value, expr.Call) and isinstance(value.target, sharding.Reshard):
-            source = types.shard_layout_of(value.args[0].type.layout)
-            if source is not None:
-                found.append((source.attrs, tuple(utils.attrs_by_axis(value.type, source.mesh).values())))
+    for each in core.module_definition_order(backward):
+        for function in each.functions:
+            for value in core.collect_exprs(function.body) if function.body is not None else ():
+                if isinstance(value, expr.Call) and isinstance(value.target, sharding.Reshard):
+                    source = types.shard_layout_of(value.args[0].type.layout)
+                    if source is not None:
+                        found.append((source.attrs, tuple(utils.attrs_by_axis(value.type, source.mesh).values())))
     return found
 
 
@@ -134,6 +136,8 @@ class Differentiated(Case):
     index_inline: bool = False
     """True: a ModuleList index the backward computes with a tensor Op prints inline, and reloads bound."""
     reshards: tuple[tuple[tuple, tuple], ...] = ()
+    every_reshard: bool = False
+    """True: ``reshards`` are all the Reshards of the backward, in any order."""
     rtol: float = 1e-5
     atol: float = 1e-6
     dims: Mapping[str, int] = MappingProxyType({})
@@ -171,6 +175,8 @@ class Differentiated(Case):
         found = reshards(backward)
         for expected in self.reshards:
             assert expected in found, (expected, found)
+        if self.every_reshard:
+            assert sorted(map(repr, found)) == sorted(map(repr, self.reshards)), found
 
 
 def check_written(forward: core.Module, backward: core.Module, *, same_text: bool) -> None:
@@ -594,11 +600,16 @@ class HsdpBlock(Differentiated):
 
 @case
 class MegatronBlock(Differentiated):
-    """The Partial gradient of a Broadcast value is reduced before a rule reads it."""
+    """The Partial gradient of a Broadcast value is reduced only where a rule cannot take it.
+
+    Each RMSNorm's rule subtracts two sums, which the type rules refuse: the
+    gradient is all-reduced there and nowhere else.
+    """
 
     path: Path = FIXTURES / "megatron_block.py"
     wrt: tuple[str, ...] = ("x", "wn1", "wq", "wk", "wv", "wo", "wn2", "wg", "wu", "wd")
-    reshards: tuple = (((P,), (B,)),)
+    reshards: tuple = (((P,), (B,)), ((P,), (B,)))
+    every_reshard: bool = True
     rtol: float = 1e-4
     atol: float = 1e-5
 
@@ -638,12 +649,18 @@ class FsdpLoop(Differentiated):
 
 @case
 class CalleeParam(Differentiated):
-    """The child's saved weight is the value the layer passed: the layer keeps it."""
+    """The child's saved weight is the value the layer passed: the layer keeps it.
+
+    The child returns the weight's gradient unreduced; the layer's Reshard
+    reduce-scatters it, and nothing all-reduces it.
+    """
 
     path: Path = FIXTURES / "callee_param.py"
     name: str | None = "GatheredLayer"
     wrt: tuple[str, ...] = ("x", "w")
     saved: frozenset[str] | None = frozenset({"x", "kernel.saved[1]", "w_full"})
+    reshards: tuple = (((P,), (S0,)),)
+    every_reshard: bool = True
 
 
 @case
@@ -652,15 +669,20 @@ class CalleeParamGatheredAgain(CalleeParam):
 
     recompute: tuple[str, ...] = ("GatheredLayer:w_full",)
     saved: frozenset[str] | None = frozenset({"x", "kernel.saved[1]", "w"})
+    reshards: tuple = (((S0,), (B,)), ((P,), (S0,)))
 
 
 @case
 class CalleeParamReshaped(CalleeParam):
-    """The child reads a reshape of the weight: selecting both keeps neither."""
+    """The child reads a reshape of the weight: selecting both keeps neither.
+
+    The reshape's rule takes the unreduced gradient as it is.
+    """
 
     name: str | None = "ReshapedLayer"
     recompute: tuple[str, ...] = ("ReshapedLayer:w_full", "ReshapingKernel:w_view")
     saved: frozenset[str] | None = frozenset({"x", "kernel.saved[1]", "w"})
+    reshards: tuple = (((S0,), (B,)), ((P,), (S0,)))
 
 
 @case

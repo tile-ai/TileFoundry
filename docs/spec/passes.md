@@ -567,18 +567,25 @@ through `saved`.
   parameters reach has no gradient and gets none; a `wrt` parameter that no
   gradient reaches gets zeros.
 - Gradient layout: the gradient of a value of layout `L` has layout
-  `gradient_layout(L)`, which is `L` with each `Partial` read as `Broadcast`.
-  A gradient that reaches an Op's rule with another layout, such as the
-  `Partial` gradient a column-split `MatMul` gives its `Broadcast` input, is
-  resharded to it first. The backward of a `Reshard` reshards the gradient,
-  whatever its layout, back to `gradient_layout` of its input's layout, in one
-  `Reshard`, and in none when the two layouts are the same. Each gradient parameter of the
-  backward has `gradient_layout` of its result's layout. A `wrt` gradient whose
-  layout differs from `gradient_layout` of its parameter's layout gets a final
-  `Reshard` to it, so a broadcast weight's partial gradient is all-reduced.
-  Where the value is `Broadcast` and its gradient `Varying`, every unit used the
-  same value and the units' gradients sum: a `Bitcast` restates that axis as
-  `Partial("sum")` before the `Reshard`.
+  `gradient_layout(L)`, which is `L` with each `Partial` read as `Broadcast`,
+  or is `Partial` where `L` is `Broadcast`: the sum of the units' gradients,
+  not reduced yet. Where the value is `Broadcast` and its gradient `Varying`,
+  every unit used the same value and the units' gradients sum: a `Bitcast`
+  restates that axis as `Partial("sum")`. The backward is linear in the
+  gradient, so a sum passes through each rule, and a callee's backward returns
+  it to its caller as it is. The author's `Reshard`s choose where it is
+  reduced: the backward of a `Reshard` reshards the gradient, whatever its
+  layout, back to `gradient_layout` of its input's layout, in one `Reshard`,
+  and in none when the two layouts are the same, so a gathered weight's partial
+  gradient is reduce-scattered to its shards. The backward of *module*'s entry
+  gives each `wrt` gradient `gradient_layout` of its parameter's layout, with a
+  final `Reshard` where it differs, so a broadcast parameter's partial gradient
+  is all-reduced. A gradient is also laid out as `gradient_layout` where the
+  derivation cannot go on with the sum: before an Op's rule whose Ops refuse
+  it, such as `RMSNorm`'s, which subtracts two sums; before two gradients of
+  one value in different layouts are added; and where a type is fixed first,
+  a loop's carry and each gradient parameter of a backward, which has
+  `gradient_layout` of its result's layout.
 - Each Op that can be differentiated registers one rule
   ([visitor-registry §12](./visitor-registry.md#12-instance-5--autodiff)).
 - `recompute` items are selectors. `Root` is the name of *module*; a function

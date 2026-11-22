@@ -513,14 +513,19 @@ class Differentiator:
         return forward, backward
 
     def function(self, module: core.Module, function: core.Function, wrt: tuple[int, ...] | None) -> Derived:
-        """Differentiate *function* of *module*; *wrt* ``None`` takes each trainable parameter."""
+        """Differentiate *function* of *module*; *wrt* ``None`` takes each trainable parameter.
+
+        Only the entry ``differentiate`` was given names its *wrt*: it is the one
+        backward whose gradients leave in ``gradient_layout``.
+        """
+        entry = wrt is not None
         if wrt is None:
             if id(function) in self.functions:
                 return self.functions[id(function)]
             wrt = tuple(
                 index for index, param in enumerate(function.params) if not param.is_const and is_float(param.type)
             )
-        derived = FunctionDifferentiator(self, module, function, wrt).run()
+        derived = FunctionDifferentiator(self, module, function, wrt, entry).run()
         self.functions[id(function)] = derived
         self.owned[id(module)].append((function, derived))
         return derived
@@ -577,8 +582,9 @@ class FunctionDifferentiator(expr.Functor[None]):
     ``ScopeOrder``, which a memoized visitor that recurses into operands cannot give.
     """
 
-    def __init__(self, differ: Differentiator, module: core.Module, function: core.Function, wrt) -> None:
+    def __init__(self, differ: Differentiator, module: core.Module, function: core.Function, wrt, entry: bool) -> None:
         super().__init__()
+        self.entry = entry
         self.differ = differ
         self.module = module
         self.function = function
@@ -637,10 +643,15 @@ class FunctionDifferentiator(expr.Functor[None]):
         seed = tuple(seeds) if isinstance(function.return_type, types.TupleType) else seeds[0]
         self.reverse(self.top, ((function.body, seed),))
         outputs = tuple(
-            self.finish(self.top.gradients.get(id(function.params[index])), function.params[index].type, self.top.ctx)
+            self.finish(
+                self.top.gradients.get(id(function.params[index])),
+                function.params[index].type,
+                self.top.ctx,
+                reduce=self.entry,
+            )
             for index in self.wrt
         )
-        gradients = types.TupleType(tuple(gradient_type(function.params[index].type) for index in self.wrt))
+        gradients = types.TupleType(tuple(self.top.ctx.type_of(output) for output in outputs))
         returned = outputs[0] if len(outputs) == 1 else tensor.pack(outputs)
         body = self.top.rebuilt(self, returned)
         meshes = {
@@ -684,21 +695,23 @@ class FunctionDifferentiator(expr.Functor[None]):
             for index in range(len(type_.fields))
         )
 
-    def finish(self, gradient, type_: types.Type, ctx: autodiff.Context) -> expr.Expr:
-        """*gradient* of a *type_* value, completed with zeros and laid out as ``gradient_type``."""
+    def finish(self, gradient, type_: types.Type, ctx: autodiff.Context, reduce: bool = True) -> expr.Expr:
+        """*gradient* of a *type_* value, completed with zeros and laid out by ``laid_out``."""
         if isinstance(type_, types.TupleType):
             parts = gradient if isinstance(gradient, tuple) else empty_like(type_)
-            packed = tensor.pack(tuple(self.finish(part, item, ctx) for part, item in zip(parts, type_.fields)))
-            return ctx.remember(packed, gradient_type(type_))
+            items = tuple(self.finish(part, item, ctx, reduce) for part, item in zip(parts, type_.fields))
+            return ctx.remember(tensor.pack(items), types.TupleType(tuple(ctx.type_of(item) for item in items)))
         if gradient is None:
             return ctx.call("zeros", type=gradient_type(type_))
-        return self.laid_out(gradient, type_, ctx)
+        return self.laid_out(gradient, type_, ctx, reduce)
 
-    def laid_out(self, gradient, type_: types.Type, ctx: autodiff.Context):
+    def laid_out(self, gradient, type_: types.Type, ctx: autodiff.Context, reduce: bool = True):
         """*gradient* of a *type_* value, resharded to ``gradient_layout``; None stays None.
 
         Where the value is Broadcast and its gradient Varying, every unit used the
         same value, so the units' gradients sum: a Bitcast states the sum first.
+        Without *reduce*, a gradient that differs from ``gradient_layout`` only by
+        being Partial where the value is Broadcast stays the unreduced sum.
         """
         if gradient is None:
             return None
@@ -714,6 +727,16 @@ class FunctionDifferentiator(expr.Functor[None]):
             )
             if attrs != held.attrs:
                 gradient = ctx.call("bitcast", gradient, layout=replace(held, attrs=attrs))
+            current = ctx.type_of(gradient)
+            if not reduce and current.storage == wanted.storage and all(
+                state == attr or (isinstance(state, types.Partial) and attr == types.Broadcast())
+                for state, attr in zip(
+                    ir_utils.attrs_by_axis(current, held.mesh).values(),
+                    ir_utils.attrs_by_axis(wanted, held.mesh).values(),
+                    strict=True,
+                )
+            ):
+                return gradient
         if ctx.type_of(gradient).layout != wanted.layout:
             gradient = ctx.call(
                 "reshard", gradient, layout=types.normalize_layout(wanted.layout), storage=wanted.storage
@@ -760,10 +783,12 @@ class FunctionDifferentiator(expr.Functor[None]):
             self.reverse_op(scope, node, gradient)
 
     def reverse_op(self, scope: Scope, call: expr.Call, gradient) -> None:
-        """Apply the rule of *call*'s Op to *gradient*, laid out as ``gradient_layout`` first.
+        """Apply the rule of *call*'s Op to *gradient*, reduced only if the rule cannot take it.
 
-        A Reshard's rule lays out its own result, so a Partial gradient reaches the
-        source's layout in one Reshard.
+        The backward is linear in the gradient, so an unreduced sum passes through a
+        rule. A Reshard's rule lays out its own result, so a Partial gradient reaches
+        the source's layout in one Reshard. A rule whose Ops refuse the sum gets it
+        laid out as ``gradient_layout`` of the result.
         """
         op = type(call.target)
         try:
@@ -771,11 +796,17 @@ class FunctionDifferentiator(expr.Functor[None]):
         except dispatch.MissingHandlerError as error:
             raise ValueError(f"differentiate: {op.__name__} has no autodiff rule{expr.diagnostic_suffix(call)}") from error
         if op is not sharding.Reshard:
-            gradient = self.laid_out(gradient, call.type, scope.ctx)
+            gradient = self.laid_out(gradient, call.type, scope.ctx, reduce=False)
         try:
             gradients = rule(call, gradient, scope.ctx)
         except (ValueError, expr.VerifyError) as error:
-            raise ValueError(f"differentiate: {error}{expr.diagnostic_suffix(call)}") from error
+            reduced = gradient if op is sharding.Reshard else self.laid_out(gradient, call.type, scope.ctx)
+            if reduced is gradient:
+                raise ValueError(f"differentiate: {error}{expr.diagnostic_suffix(call)}") from error
+            try:
+                gradients = rule(call, reduced, scope.ctx)
+            except (ValueError, expr.VerifyError) as again:
+                raise ValueError(f"differentiate: {again}{expr.diagnostic_suffix(call)}") from again
         for arg, part in zip(call.args, gradients):
             self.accumulate(scope, arg, part)
 
