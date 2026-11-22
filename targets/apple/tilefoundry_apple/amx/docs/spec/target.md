@@ -96,36 +96,36 @@ class AppleM2Pro(target.Device):
 
 ```python
 class Target(target.Target):
-    """Compose one AMX target from one architecture and one device."""
+    """The AMX target of one device document. Its architecture is the one that document names."""
 
     name: ClassVar[str] = "amx"
-    architecture: Architecture
-    device: Device
-    architecture_id: str | None
-    device_id: str | None
-    architecture_digest: str | None
-    device_digest: str | None
-    arch: str
+    device_id: str | Path = "apple.m2_pro"
 
-    def __init__(
-        self,
-        device: Device | str | Path | None = None,
-        architecture: Architecture | str | Path | None = None,
-    ) -> None: ...
-
+    @property
+    def architecture(self) -> Architecture: ...
+    @property
+    def device(self) -> Device: ...
+    @classmethod
+    def from_installed(cls) -> tuple[Target, ...]: ...
+    @property
+    def identity(self) -> str: ...
+    def capabilities(self) -> frozenset[str]: ...
+    def documents(self) -> tuple[Document, ...]: ...
     def validate_program_topology(self, topology: Topology) -> None: ...
     def get_analyzer(self, selector: str) -> Analyzer: ...
     def get_facts(self, facts_type: type[FactsT], query=None) -> FactsT: ...
 ```
 
 - constraints:
-  - `device` and `architecture` MUST accept an installed document ID, a
-    document path, or a concrete value. The terms are the same as
-    [target §4](../../../../../nvidia/tilefoundry_nvidia/cuda/docs/spec/target.md#4-cudatarget). An omitted architecture MUST be read from the device
-    document's sole compatibility declaration.
-  - `amx.Target()` MUST select the installed `apple.amx` and `apple.m2_pro`
-    documents, and `arch` MUST equal
-    `architecture.name`.
+  - `device_id` MUST be an installed device document ID or the path of a complete
+    device document. The constructor has no `architecture` parameter, and it does
+    not take a `Device` or `Architecture` value. The architecture MUST be read from
+    the device document's sole compatibility declaration.
+  - `amx.Target()` MUST select the installed `apple.m2_pro` document, whose
+    architecture is `apple.amx`. `identity` MUST be the ID the device document
+    declares. Two values are equal when their `device_id` values are equal.
+  - `capabilities()` MUST return the capability names of `architecture`.
+    `documents()` MUST return the architecture document, then the device document.
   - `amx.Target.from_installed()` MUST contain one value per device document whose
     sole compatible architecture document is available. Its `identity` MUST be
     that device document's ID.

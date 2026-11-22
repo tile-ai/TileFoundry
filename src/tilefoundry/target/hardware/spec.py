@@ -8,24 +8,18 @@ from .envelope import (
 )
 
 
-def documents(target: object) -> tuple[Document, Document]:
-    """The architecture and device documents *target* was composed from.
+def documents(target) -> tuple[Document, Document]:
+    """The architecture and device documents *target* was built from.
 
-    A target holding a resource that was supplied directly rather than
-    selected from the installed namespace has no document to report, and says
-    so rather than guessing which installed resource it resembles.
+    A target that holds no document has none to report, and says so rather
+    than guessing which installed resource it resembles.
     """
-    architecture_document = getattr(target, "architecture_document", None)
-    device_document = getattr(target, "device_document", None)
-    if architecture_document is None or device_document is None:
-        architecture = getattr(getattr(target, "architecture", None), "name", "unknown")
-        device = getattr(getattr(target, "device", None), "name", "unknown")
+    held = target.documents()
+    if not held:
         raise UnknownDocumentError(
-            "no installed hardware documents for "
-            f"device={device!r}, architecture={architecture!r}: this target was "
-            "composed from directly supplied values"
+            f"target {target.identity!r} holds no installed hardware documents"
         )
-    return architecture_document, device_document
+    return held
 
 
 def format_capabilities(

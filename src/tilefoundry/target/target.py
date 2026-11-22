@@ -20,6 +20,8 @@ from .facts import (
     TopologyFacts,
     facts_result,
 )
+from .hardware import Document
+from .spec import HardwareSpec
 from .storage import SHARED_OWNER, StorageOwners
 
 T = TypeVar("T")
@@ -127,6 +129,7 @@ class Target:
     """
 
     name: ClassVar[str]
+    hardware: ClassVar[HardwareSpec | None] = None
 
     def torch_device_type(self) -> str:
         """The torch device type holding this program's tensor arguments."""
@@ -162,6 +165,14 @@ class Target:
     def to_python(self) -> utils.PythonExpr:
         """Render this Target as a Python expression."""
         return value_to_python(self)
+
+    def capabilities(self) -> frozenset[str]:
+        """The instruction capabilities this Target admits; the base admits none."""
+        return frozenset()
+
+    def documents(self) -> tuple[Document, ...]:
+        """The hardware documents this Target was built from, architecture first; none here."""
+        return ()
 
     def get_analyzer(self, selector: str) -> Analyzer:
         """Return the analysis service selected by this concrete Target."""

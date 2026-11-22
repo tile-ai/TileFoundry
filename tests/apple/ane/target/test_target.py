@@ -18,7 +18,8 @@ def test_target_constructs_and_reads_back():
     """A Target renders as Python that evaluates back to itself; unknown ids are refused."""
     tgt = ane.Target("apple.m2_pro.ane")
     assert ane.Target() == tgt
-    assert (tgt.architecture_id, tgt.device_id) == ("apple.h14", "apple.m2_pro.ane")
+    assert tgt.identity == "apple.m2_pro.ane"
+    assert tuple(document.id for document in tgt.documents()) == ("apple.h14", "apple.m2_pro.ane")
     rendered = tgt.to_python()
     assert rendered.text == 'ane.Target("apple.m2_pro.ane")'
     namespace: dict[str, object] = {}

@@ -19,7 +19,8 @@ from .facts import (
     facts_result,
 )
 from .registry import Catalog, LoadError, catalog, load, register, registered, unregister
-from .spec import HardwareSpec, architecture_of, available_device_ids, check_compatible, select
+from .selection import architecture_of, available_device_ids, check_compatible, select
+from .spec import HardwareSpec
 from .storage import SHARED_OWNER, StorageOwners
 from .target import (
     Architecture,

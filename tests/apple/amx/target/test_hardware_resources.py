@@ -22,8 +22,7 @@ from tilefoundry_apple.amx.target import spec
         target.Target,
         "amx",
         (
-            "amx.Target.architecture must be an installed ID string, a document path, or "
-            "an Architecture; got _BareArchitecture",
+            "Target.__init__() got an unexpected keyword argument 'architecture'",
             "amx.Target.device must be an installed ID string, a document path, or an "
             "AppleM2Pro; got _BareDevice",
         ),

@@ -55,7 +55,6 @@ from .op import (
     parameters_of,
     signature_of,
     supported_op_capabilities,
-    target_capabilities,
 )
 from .op_registry import iter_schemas, schema_of
 from .op_schema import OpSchema
