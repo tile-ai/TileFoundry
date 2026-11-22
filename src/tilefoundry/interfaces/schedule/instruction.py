@@ -422,10 +422,10 @@ def selects(op, capability) -> bool:
 
 
 def admit_capabilities(op, target) -> None:
-    """Refuse *op* if the target's architecture does not list a capability the op uses."""
+    """Refuse *op* if the target does not list a capability the op uses."""
     if target is None:
         return
-    listed = expr.target_capabilities(target)
+    listed = target.capabilities()
     for capability in expr.capabilities_of(type(op)):
         if capability.name is None or capability.name in listed:
             continue

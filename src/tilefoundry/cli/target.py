@@ -181,9 +181,12 @@ def hardware_owner(schema: str) -> type[target.Target]:
     owners = tuple(
         target_type
         for target_type in target.registered().values()
-        if "hardware" in vars(target_type)
-        and isinstance(target_type.hardware, target.HardwareSpec)
+        if target_type.hardware is not None
         and target_type.hardware.supports_schema(schema)
+        and not any(
+            issubclass(base, target.Target) and base.hardware is target_type.hardware
+            for base in target_type.__bases__
+        )
     )
     if not owners:
         raise hardware.UnknownSchemaError(f"no Target owns hardware schema {schema!r}")

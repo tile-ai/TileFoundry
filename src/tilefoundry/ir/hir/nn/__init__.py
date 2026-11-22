@@ -6,6 +6,7 @@ from .conv2d import Conv2D
 from .gelu import Gelu
 from .layer_norm import LayerNorm
 from .matmul import MatMul, matmul_result_dtype, matmul_result_shape_and_layout
+from .pool2d import Pool2D
 from .relu import ReLU
 from .rms_norm import RMSNorm
 from .rope import RoPE

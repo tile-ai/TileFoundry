@@ -67,6 +67,7 @@ targets/<vendor>/tilefoundry_<vendor>/<target>/
                       core categories it fills.
   nvidia: cuda/{analysis, codegen, docs, ir, models, passes, schedule, target}
   apple:  amx/{docs, evaluator, include, ir, runtime, target}
+          ane/{docs, ir, passes, target}
           metal/{docs, ir, passes, target}
 ```
 

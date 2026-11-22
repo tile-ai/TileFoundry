@@ -17,7 +17,8 @@ def test_target_constructs_and_reads_back():
     """A Target renders as Python that evaluates back to itself; unknown ids are refused."""
     tgt = metal.Target("apple.m2_pro.gpu")
     assert metal.Target() == tgt
-    assert (tgt.architecture_id, tgt.device_id) == ("apple.gpu8", "apple.m2_pro.gpu")
+    assert tgt.identity == "apple.m2_pro.gpu"
+    assert tuple(document.id for document in tgt.documents()) == ("apple.gpu8", "apple.m2_pro.gpu")
     rendered = tgt.to_python()
     assert rendered.text == 'metal.Target("apple.m2_pro.gpu")'
     namespace: dict[str, object] = {}

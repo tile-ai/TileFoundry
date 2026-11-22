@@ -56,38 +56,28 @@ class Device(target.Device):
 
 ```python
 class Target(target.Target):
-    """Metal target composed from one GPU architecture and one device.
+    """The Metal GPU of one device document. Its architecture is the one that document names.
 
     Attributes:
         name: Registered target name.
+        device_id: Installed device document ID.
         architecture: The GPU family.
         device: The GPU product.
-        architecture_id: Installed architecture document ID, or None.
-        device_id: Installed device document ID, or None.
-        architecture_digest: Content digest of the architecture document, or None.
-        device_digest: Content digest of the device document, or None.
-        arch: The architecture name.
     """
 
     name: ClassVar[str] = "metal"
-    architecture: Architecture
-    device: Device
-    architecture_id: str | None
-    device_id: str | None
-    architecture_digest: str | None
-    device_digest: str | None
-    arch: str
+    device_id: str | Path = "apple.m2_pro.gpu"
 
-    def __init__(
-        self,
-        device: Device | str | Path | None = None,
-        architecture: Architecture | str | Path | None = None,
-    ) -> None: ...
-
+    @property
+    def architecture(self) -> Architecture: ...
+    @property
+    def device(self) -> Device: ...
     @classmethod
     def from_installed(cls) -> tuple[Target, ...]: ...
     @property
     def identity(self) -> str: ...
+    def capabilities(self) -> frozenset[str]: ...
+    def documents(self) -> tuple[Document, ...]: ...
     def get_facts(self, facts_type: type[FactsT], query=None) -> FactsT: ...
 ```
 
@@ -99,11 +89,15 @@ tgt = metal.Target("apple.m2_pro.gpu")
 ```
 
 - constraints:
-  - `device` and `architecture` MUST accept an installed document ID, a document path, or a concrete value ([target §10.2](../../../../../../docs/spec/target.md#102-registry-and-resolution)).
-  - An omitted `device` MUST select `apple.m2_pro.gpu`.
-  - An omitted `architecture` MUST be read from the sole compatibility declaration of the device document.
-  - A pair selected by ID MUST be checked for declared compatibility.
-  - `arch` MUST equal `architecture.name`. `identity` MUST equal `device_id` when one is set.
+  - `device_id` MUST be an installed device document ID or the path of a complete device document ([target §10.2](../../../../../../docs/spec/target.md#102-registry-and-resolution)).
+    The constructor has no `architecture` parameter, and it does not take a `Device` or `Architecture` value.
+  - An omitted `device_id` MUST select `apple.m2_pro.gpu`.
+  - The architecture MUST be read from the sole compatibility declaration of the device document.
+  - The construction MUST check the declared compatibility of the pair.
+  - An unknown device ID MUST raise an error that lists the installed IDs.
+  - `identity` MUST be the ID the device document declares. Two values are equal when their `device_id` values are equal.
+  - `capabilities()` MUST return the capability names of `architecture`.
+    `documents()` MUST return the architecture document, then the device document.
   - `from_installed()` MUST contain one value for each installed device document.
 
 ## 4. Topology

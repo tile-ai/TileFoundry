@@ -831,6 +831,13 @@ class ReduceKind(enum.Enum):
     ABS_MAX = "abs_max"
     MAX = "max"
     MIN = "min"
+
+
+class PoolKind(enum.Enum):
+    """Enumerate window pooling kinds shared by HIR and TIR."""
+
+    MAX = "max"
+    AVG = "avg"
 ```
 
 - constraints:
