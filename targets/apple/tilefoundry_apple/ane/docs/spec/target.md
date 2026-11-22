@@ -37,24 +37,28 @@ class Architecture(target.Architecture):
 
 ```python
 class Device(target.Device):
-    """One ANE: its core count and the unified memory it shares with the CPU.
+    """One ANE: its cores, the unified memory it shares with the CPU and its measured fp16 rate.
 
     Attributes:
         name: Device identity.
         core_count: Number of cores the vendor publishes.
         unified_memory_capacity_bytes: Capacity of the memory that the ANE shares with the CPU.
+        f16_throughput: Measured rate of an fp16 convolution, in FLOPs per second.
     """
 
     name: str
     core_count: int
     unified_memory_capacity_bytes: int
+    f16_throughput: int
 ```
 
 - constraints:
   - Every value MUST come from the installed device document. No field has a default.
   - The document records the unified memory bandwidth as a vendor value. No Facts projection reads it.
-  - The document declares two entries `unavailable`: `memory.l2.capacity` and `compute.throughput`.
-    A projection MUST NOT estimate them.
+  - The document declares `memory.l2.capacity` `unavailable`. A projection MUST NOT estimate it.
+  - `f16_throughput` is the wall-clock rate of one 3x3 fp16 convolution on the host, with 2 FLOPs for each
+    multiply-accumulate. For `apple.m2_pro.ane` it is 16.71 TFLOP/s. The document states the shape and the method.
+    No Facts projection reads it; `get_facts(ThroughputFacts)` stays unsupported.
   - The mapping of the cores to the tasks of one program is unknown. The target MUST NOT derive a topology from `core_count`.
 
 ## 3. `ane.Target`

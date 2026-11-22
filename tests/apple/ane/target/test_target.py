@@ -48,6 +48,7 @@ def test_topology_facts():
         "smem": None,
     }
     assert tgt.storage_owners.order == ("engine",)
+    assert tgt.device.f16_throughput == 16_710_000_000_000
 
     tgt.validate_program_topology(types.Topology("engine", 1))
     with pytest.raises(ValueError, match="extent 2 must satisfy 1 <= extent <= 1"):

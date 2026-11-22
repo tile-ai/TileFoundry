@@ -38,6 +38,9 @@ conditions = "Published decimal 200 GB/s package bandwidth shared with the CPU a
 status = "unavailable"
 conditions = "No sourced capacity."
 
-[facts.compute.throughput]
-status = "unavailable"
-conditions = "Apple publishes 15.8 trillion operations per second without a data type."
+[facts.throughput.f16]
+value = 16710000000000
+unit = "flop/s"
+origin = "measured"
+source = "ANE fp16 convolution benchmark on the host"
+conditions = "16.71 TFLOP/s for one 3x3 fp16 convolution of 256 input and 256 output channels on a 384x384 map, padding 1; 2 FLOPs per multiply-accumulate; wall-clock time of one evaluation, which includes the submit overhead, averaged over 200 evaluations after 20 warm-up evaluations, median of three runs (10.41 ms). The rate falls when the map or the channel count grows further: 7.66 TFLOP/s at 512x512 with 256 channels. Apple publishes 15.8 trillion operations per second without a data type."

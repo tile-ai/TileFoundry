@@ -13,11 +13,12 @@ from tilefoundry import target
 
 @dataclass(frozen=True)
 class Device(target.Device):
-    """One ANE: its core count and the unified memory it shares with the CPU."""
+    """One ANE: its cores, the unified memory it shares with the CPU and its measured fp16 rate."""
 
     name: str
     core_count: int
     unified_memory_capacity_bytes: int
+    f16_throughput: int
 
 
 __all__ = ["Device"]

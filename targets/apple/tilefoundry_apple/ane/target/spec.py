@@ -35,10 +35,10 @@ def build_device(document: hardware.Document) -> Device:
         name=reader.text("identity.name"),
         core_count=reader.integer("compute.cores", unit="count"),
         unified_memory_capacity_bytes=reader.integer("memory.unified.capacity", unit="byte"),
+        f16_throughput=reader.integer("throughput.f16", unit="flop/s"),
     )
     reader.integer("memory.unified.bandwidth", unit="byte/s")
     reader.declared_unavailable("memory.l2.capacity")
-    reader.declared_unavailable("compute.throughput")
     reader.close()
     return device
 
