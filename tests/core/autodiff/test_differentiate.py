@@ -655,6 +655,15 @@ class CalleeParamGatheredAgain(CalleeParam):
 
 
 @case
+class CalleeParamReshaped(CalleeParam):
+    """The child reads a reshape of the weight: selecting both keeps neither."""
+
+    name: str | None = "ReshapedLayer"
+    recompute: tuple[str, ...] = ("ReshapedLayer:w_full", "ReshapingKernel:w_view")
+    saved: frozenset[str] | None = frozenset({"x", "kernel.saved[1]", "w"})
+
+
+@case
 class QwenBlock(Differentiated):
     path: Path = FIXTURES / "qwen_block.py"
     wrt: tuple[str, ...] = ("x", "wn1", "wq", "wk", "wv", "wo", "wn2", "wg", "wu", "wd")
