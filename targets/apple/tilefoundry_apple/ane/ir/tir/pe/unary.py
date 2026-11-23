@@ -3,7 +3,7 @@
 from types import MappingProxyType
 
 from tilefoundry import utils
-from tilefoundry.interfaces import access, evaluator, schedule, typeinfer
+from tilefoundry.interfaces import access, evaluator, schedule, typeinfer, verify
 from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir.hir import math
 from tilefoundry_apple.ane.ir.tir import evaluation, layout
@@ -50,6 +50,15 @@ def _(call, ctx) -> types.TupleType:
 
 
 access.register_relation(Unary)(access.identity_relations)
+
+
+@verify.register(Unary)
+def _(call, ctx) -> None:
+    for name, operand in zip(("dst", "src"), call.args, strict=True):
+        try:
+            layout.feature_dma_strides(ctx.type_of(operand))
+        except ValueError as error:
+            ctx.error(call, f"{name}: {error}")
 
 
 @evaluator.register(Unary)

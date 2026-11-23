@@ -30,6 +30,7 @@ include = ["tilefoundry_apple", "tilefoundry_apple.*"]
 ]
 "tilefoundry_apple.ane" = [
     "docs/spec/*.md",
+    "codegen/include/tilefoundry/runtime/ane/*.h",
 ]
 "tilefoundry_apple.metal" = [
     "docs/spec/*.md",

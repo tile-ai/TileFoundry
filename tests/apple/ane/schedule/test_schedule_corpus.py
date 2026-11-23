@@ -7,13 +7,14 @@ is not evaluated.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from tests.core._corpus import Case, Problems, case, cases, reload, special
-from tilefoundry import analysis, inspection, utils
+from tilefoundry import analysis, codegen, inspection, utils
 from tilefoundry.interfaces import evaluator, schedule
 from tilefoundry.ir import core, expr
 from tilefoundry.passes import transforms
@@ -369,6 +370,16 @@ class Unary(AneCase):
     def guard(self, state, problems):
         (x,) = self.inputs()
         assert utils.torch.equal(state.result, (2 * x.float() + 3).clamp(0, 6).to(utils.torch.float16))
+        fn = state.lowered.entry_function()
+        symbol = codegen.mangle(state.lowered, fn)
+        signature = codegen.signature.called_as(fn, symbol, target=fn.target)
+        ctx = codegen.EmitContext(codegen.registry, symbols={id(fn): signature}, target=fn.target)
+        unit = fn.target.resolve(codegen.LinkableModule, state.lowered, (fn,), ctx)
+        source = unit.source
+        assert '#include "tilefoundry/runtime/ane/launcher.h"' in source
+        assert f'extern "C" int {symbol}(DLTensor** inputs, DLTensor** outputs)' in source
+        assert f"return ane_launch({symbol}_image, sizeof({symbol}_image)," in source
+        assert re.search(rf"const uint8_t {symbol}_image\[\] = \{{[^}}]*\}};", source) is not None
         assert issued(state.lowered) == ["T.ane.unary(out, x, pre_scale=2.0, bias=3.0, clamp=(0.0, 6.0))"]
 
 

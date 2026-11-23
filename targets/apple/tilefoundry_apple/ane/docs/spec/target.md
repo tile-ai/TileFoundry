@@ -1,7 +1,7 @@
 # TileFoundry ANE Spec — Target
 
 The ANE target describes the Apple Neural Engine of an Apple silicon chip.
-It has no code generation and no runtime.
+The [codegen](./codegen.md) emits descriptor images and C++ entry points.
 
 ## 1. `ane.Architecture`
 

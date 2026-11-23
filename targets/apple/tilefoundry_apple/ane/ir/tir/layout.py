@@ -103,6 +103,26 @@ def require_strides(call, ctx, name: str, type_: types.TensorType, *candidates: 
                         f"must be {' or '.join(map(str, candidates))}")
 
 
+def feature_dma_strides(type_: types.TensorType) -> tuple[int, int]:
+    """Read static feature map row and channel strides in bytes."""
+    plain = type_.layout
+    if not isinstance(plain, types.Layout) or len(plain.strides) != 4:
+        raise ValueError("feature map requires a flat layout")
+    if type_.storage not in (expr.StorageKind.GMEM, expr.StorageKind.SMEM):
+        raise ValueError("feature map requires gmem or smem storage")
+    alignment = 64 if type_.storage is expr.StorageKind.GMEM else 16
+    values: list[int] = []
+    for axis, label in ((2, "row"), (1, "channel")):
+        step = expr.static_dim_value(plain.strides[axis])
+        if step is None or step < 0 or (step == 0 and type_.shape[axis] != 1):
+            raise ValueError(f"{label} stride must be static and positive for a non-singleton axis")
+        step_bytes = step * (type_.dtype.bit_width // 8)
+        if step_bytes % alignment:
+            raise ValueError(f"{label} stride {step_bytes} bytes must be a multiple of {alignment}")
+        values.append(step_bytes)
+    return values[0], values[1]
+
+
 def forms(operand: str, layouts: tuple, storage=FEATURE_STORAGE) -> pattern.Tensor:
     """An operand with the shared dtype whose layout is one of *layouts*.
 
@@ -122,5 +142,5 @@ def one_of(name: str, values) -> pattern.Wildcard:
 __all__ = [
     "ACTIVATION_LIMITS", "ENGINE", "FEATURE_STORAGE", "FLOATS", "GMEM_ONLY", "MAX_CHANNELS", "MAX_HEIGHT",
     "MAX_KERNEL", "MAX_WIDTH", "STRIDES", "WEIGHT_LIMITS", "bounded", "extent", "feature", "feature_layout", "forms",
-    "kernel_layout", "matrix_layout", "one_of", "require_strides", "rows", "stored", "strided",
+    "feature_dma_strides", "kernel_layout", "matrix_layout", "one_of", "require_strides", "rows", "stored", "strided",
 ]
