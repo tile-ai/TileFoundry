@@ -228,8 +228,7 @@ class IODesc:
     def byte_strides(self) -> tuple[int, int, int]:
         """The batch, plane and row strides in bytes."""
         element = self.element_bytes
-        return (self.strides[0] * element, self.strides[1] * element,
-                self.strides[2] * element)
+        return (self.strides[0] * element, self.strides[1] * element, self.strides[2] * element)
 
     @property
     def declared_geometry(self) -> tuple[int, int, int, int]:
@@ -434,7 +433,7 @@ def address_slots(program: isa.Program) -> dict[int, tuple[int, ...]]:
             for index, ((addr, _), (following, _)) in enumerate(
                 zip(packet.writes, packet.writes[1:])
             ):
-                if not packet.flags and addr in slots and following == addr + 4:
+                if addr in slots and following == addr + 4:
                     slots[addr].append(first + 1 + index)
             first += 1 + len(packet.writes)
         start = align(start + descriptor.size_words(), 2)
@@ -552,9 +551,9 @@ def binding_record(surface: Surface, procedure: str, declared: bool = False) -> 
     struct.pack_into("<I", out, 0x07C, short_offset)
     struct.pack_into("<Q", out, 0x080, total)
     procedure_bytes = procedure.encode("ascii") + b"\0"
-    out[BINDING_RECORD_PROCEDURE_OFFSET : BINDING_RECORD_PROCEDURE_OFFSET + len(procedure_bytes)] = (
-        procedure_bytes
-    )
+    out[
+        BINDING_RECORD_PROCEDURE_OFFSET : BINDING_RECORD_PROCEDURE_OFFSET + len(procedure_bytes)
+    ] = procedure_bytes
     out[symbol_offset:short_offset] = symbol
     out[short_offset : short_offset + len(short)] = short
     return bytes(out)
@@ -667,8 +666,12 @@ class Image:
                 reloc.symbol: by_word.get(reloc.word_offset, BINDING_ROLE_INPUT)
                 for reloc in self.relocs
             }
-            outputs = tuple(item for item in self.io if declared.get(item.name) == BINDING_ROLE_OUTPUT)
-            inputs = tuple(item for item in self.io if declared.get(item.name) != BINDING_ROLE_OUTPUT)
+            outputs = tuple(
+                item for item in self.io if declared.get(item.name) == BINDING_ROLE_OUTPUT
+            )
+            inputs = tuple(
+                item for item in self.io if declared.get(item.name) != BINDING_ROLE_OUTPUT
+            )
         else:
             count = self.output_count
             if type(count) is not int or not 0 <= count <= len(self.io):
@@ -733,8 +736,8 @@ class Image:
             item.validate(self.layout)
 
         surfaces = self.surfaces(program)
-        text_address = VM_BASE + align_up(self.scratch_bytes, PAGE) + sum(
-            surface.size for surface in surfaces
+        text_address = (
+            VM_BASE + align_up(self.scratch_bytes, PAGE) + sum(surface.size for surface in surfaces)
         )
         text_const_address = align_up(text_address + len(self.text), TEXT_CONST_ALIGN)
         if text_const_address + TEXT_CONST_SIZE > text_address + TEXT_VM_SIZE:
@@ -967,9 +970,7 @@ class Image:
         names = bytearray(b"\0")
         symbols = bytearray()
         for index, surface in enumerate(surfaces):
-            symbols.extend(
-                SYMBOL.pack(len(names), N_SECT | N_EXT, index + 1, 0, surface.address)
-            )
+            symbols.extend(SYMBOL.pack(len(names), N_SECT | N_EXT, index + 1, 0, surface.address))
             names.extend(surface.symbol_name.encode("ascii") + b"\0")
         return bytes(symbols), bytes(names)
 

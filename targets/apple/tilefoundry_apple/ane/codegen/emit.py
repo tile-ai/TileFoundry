@@ -75,6 +75,26 @@ PATCH_EDGE = 4
 PATCH_SWEEP = 5
 
 
+def tile_rows(op, surface) -> int:
+    """Return how many rows one descriptor stages for this call.
+
+    The tile height is a scheduling decision supplied by the caller; when it is
+    absent the descriptor stages the whole surface.
+    """
+    rows = getattr(op, "tile_height", None)
+    return surface.height if rows is None else rows
+
+
+def raster_patch(rows: int, surface) -> tuple[int, int]:
+    """Return the rasterization patch for a staged tile.
+
+    A tile that stages a whole plane is rasterized in square patches; a single
+    staged row cannot be patched vertically, so the vertical field stays clear
+    and the horizontal field widens by one.
+    """
+    return (4, 4) if rows == surface.height else (5, 0)
+
+
 def patch_for(kernel: tuple[int, int], stride: tuple[int, int]) -> tuple[int, int]:
     """The patch pair a pooling pass declares."""
     width = PATCH_EDGE + (1 if kernel[1] > 1 else 0)
@@ -83,6 +103,13 @@ def patch_for(kernel: tuple[int, int], stride: tuple[int, int]) -> tuple[int, in
 
 
 #: The planar engine op and second-source select of each binary kind.
+#: Staged-image slots the result buffer starts after, per operation family.
+#: The canonical layouts all place the result one staged image along; the tiled
+#: streams observed so far place pool at two and reduce at thirty-two, so the
+#: slot count is a property of the staging plan rather than of the operation.
+POOL_RESULT_SLOTS = 1
+REDUCE_RESULT_SLOTS = 1
+
 BINARY = {
     expr.BinaryKind.ADD: (isa.PEOp.ADD, 2),
     expr.BinaryKind.SUB: (isa.PEOp.ADD, 3),
@@ -140,9 +167,12 @@ def pool(call: expr.Call) -> list[Mapping[int, int]]:
             declared_out=dst,
             window=(kernel[1], kernel[0], stride[1], stride[0]),
             padding=padding,
+            tile_height=tile_rows(op, dst),
             patch=patch_for(kernel, stride),
         ),
-        intrinsic.store(dst, staging=src, declare=False),
+        intrinsic.store(
+            dst, staging=src, rows=tile_rows(op, src), staged=POOL_RESULT_SLOTS, declare=False
+        ),
     ]
 
 
@@ -178,15 +208,19 @@ def reduce(call: expr.Call) -> list[Mapping[int, int]]:
             dst,
             declared_in=src,
             declared_out=src,
-            tile_height=src.height,
+            tile_height=tile_rows(op, src),
             pool_mode=pool_mode,
             compare=compare,
             patch=(4, 4),
         ),
-        intrinsic.store(dst, staging=src, declare=False),
+        intrinsic.store(
+            dst,
+            staging=src,
+            rows=tile_rows(op, src),
+            staged=REDUCE_RESULT_SLOTS,
+            declare=False,
+        ),
     ]
-    if compare is None:
-        parts.append(intrinsic.end_marker())
     return parts
 
 
@@ -208,17 +242,17 @@ def binary(call: expr.Call) -> list[Mapping[int, int]]:
         raise ValueError(f"T.ane.binary: {op.kind} has no planar engine encoding") from None
     return [
         intrinsic.load(left),
-        intrinsic.load_second(right),
+        intrinsic.load_second(right, rows=tile_rows(op, dst)),
         intrinsic.compute_pe(
             isa.TaskType.PE_EW_BINARY,
             dst,
             op=engine_op,
             second_source=second_source,
             source_routing=3,
-            patch=(4, 4),
+            tile_height=tile_rows(op, dst),
+            patch=raster_patch(tile_rows(op, dst), dst),
         ),
-        intrinsic.end_marker(),
-        intrinsic.store(dst, staged=2),
+        intrinsic.store(dst, staged=2, rows=tile_rows(op, dst)),
     ]
 
 
@@ -241,7 +275,7 @@ def bypass(call: expr.Call) -> list[Mapping[int, int]]:
             nonlinear=NONLINEAR[op.nonlinear],
             kernel_mode=1,
         ),
-        intrinsic.store(dst, isa.Engine.NEURAL),
+        intrinsic.store(dst, isa.Engine.NEURAL, rows=tile_rows(op, dst)),
     ]
 
 
@@ -265,9 +299,10 @@ def unary(call: expr.Call) -> list[Mapping[int, int]]:
             absolute=op.abs,
             square=op.square,
             clamp=op.clamp,
-            patch=(4, 4),
+            tile_height=tile_rows(op, dst),
+            patch=raster_patch(tile_rows(op, dst), dst),
         ),
-        intrinsic.store(dst),
+        intrinsic.store(dst, rows=tile_rows(op, dst)),
     ]
 
 
@@ -275,14 +310,19 @@ class Builder(core.StmtVisitor[None]):
     """Visit statements, keeping each Evaluate's operands and intrinsic sequence."""
 
     def __init__(self) -> None:
-        self.parts: list[Mapping[int, int]] = []
+        self.passes: list[list[Mapping[int, int]]] = []
         self.operands: list[tuple[expr.Expr, ...]] = []
+        self.bound: set[expr.Expr] = set()
 
     def generic_visit(self, stmt, ctx) -> None:
         raise ValueError(f"{ctx}: cannot emit {type(stmt).__name__} as an ANE task descriptor")
 
     def visit_Sequential(self, stmt: core.Sequential, ctx: str) -> None:
         super().generic_visit(stmt, ctx)
+
+    def visit_LetStmt(self, stmt, ctx) -> None:
+        """A binding only names a slice; a descriptor reads its type, not its value."""
+        self.bound.add(stmt.var)
 
     def visit_MeshScope(self, stmt: core.MeshScope, ctx: str) -> None:
         if tuple((item.name, item.size) for item in stmt.mesh.topologies) != (("engine", 1),):
@@ -298,7 +338,7 @@ class Builder(core.StmtVisitor[None]):
             except ValueError:
                 name = type(op).__name__
             raise dispatch.MissingHandlerError(f"{ctx}: no intrinsic emitter for {name}")
-        self.parts.extend(emit(expr.Call(op, stmt.args, type=types.TupleType.Void)))
+        self.passes.append(emit(expr.Call(op, stmt.args, type=types.TupleType.Void)))
         self.operands.append(stmt.args)
 
 
@@ -311,14 +351,17 @@ def build_program(fn: core.PrimFunction) -> isa.Program:
         raise ValueError(f"{label}: descriptor emission does not support specialization")
     builder = Builder()
     builder.visit(fn.body, label)
-    (args,) = builder.operands
     if fn.output_count != 1 or len(fn.params) < 2:
         raise ValueError(f"{label}: expected one output and at least one input parameter")
-    if args[0] is not fn.params[-1]:
-        raise ValueError(f"{label}: the schedule must write the output parameter first")
-    if any(arg not in fn.params[:-1] for arg in args[1:]):
-        raise ValueError(f"{label}: the schedule must read the function's input parameters")
-    return serialize.to_program(builder.parts)
+    sources = set(fn.params[:-1]) | builder.bound
+    for args in builder.operands:
+        if len(args) < 2:
+            raise ValueError(f"{label}: every pass must name an output and a source")
+        if args[0] not in (fn.params[-1], *builder.bound):
+            raise ValueError(f"{label}: the schedule must write the output parameter first")
+        if any(arg not in sources for arg in args[1:]):
+            raise ValueError(f"{label}: the schedule must read the function's inputs")
+    return serialize.to_program(builder.passes)
 
 
 __all__ = [

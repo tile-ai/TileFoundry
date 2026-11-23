@@ -15,7 +15,8 @@ def ane_matmul(call, ctx) -> types.TensorType:
     else:
         storage = typeinfer.resolve_anchor_storage(ctx, call, lhs.storage, rhs.storage)
     return types.TensorType(
-        shape=shape, dtype=nn.matmul_result_dtype(call.target, lhs), layout=layout, storage=storage)
+        shape=shape, dtype=nn.matmul_result_dtype(call.target, lhs), layout=layout, storage=storage
+    )
 
 
 __all__: list[str] = []

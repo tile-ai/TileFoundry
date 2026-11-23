@@ -16,6 +16,7 @@ class BitField:
     def get(self, word: int) -> int: ...
     def put(self, word: int, val: int) -> int: ...
 
+
 class Block:
     """A contiguous range of configuration words with named fields."""
 
@@ -57,6 +58,7 @@ class Surface:
     width: int
     row: int
     channel: int
+
 
 def surface(channels: int, height: int, width: int) -> Surface: ...
 def load(source: Surface) -> dict[int, int]: ...

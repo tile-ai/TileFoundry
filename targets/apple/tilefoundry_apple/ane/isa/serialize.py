@@ -11,6 +11,18 @@ ADDR_MASK = (1 << 15) - 1
 RUN_MAX = 64
 MASK_WIDTH = 16
 MASK_TAG = 1 << 31
+TASK_ALIGN_GRANULE = 16
+DESCRIPTOR_ALIGN = 64
+RELOCATION_SLOTS = {0x1110: 0x114, 0x1128: 0x118, 0x1508: 0x110}
+"""Base-address word pairs that are patched after emission, keyed by their low word.
+
+Each relocated base address is a 64-bit value in two adjacent words.  The pair
+travels as one flagged run packet of its own, after the ordinary words and after
+the padding sentinels, so the patcher can rewrite both halves without disturbing
+a neighbouring packet.  The flag names the relocation slot the pair belongs to.
+"""
+MARKER_ADDR = 0x1524
+PAD_SENTINEL = 0xDEAD
 
 
 @dataclass(frozen=True)
@@ -92,8 +104,16 @@ def serialize(image: Mapping[int, int]) -> list[Packet]:
         check_word(value)
 
     packets: list[Packet] = []
+    slotted = {addr: flag for addr, flag in RELOCATION_SLOTS.items() if addr in image}
+    paired = set(slotted) | {addr + WORD_BYTES for addr in slotted}
+    pairs = [
+        Packet("run", ((addr, image[addr]), (addr + WORD_BYTES, image[addr + WORD_BYTES])), flag)
+        for addr, flag in sorted(slotted.items())
+    ]
     for block in CONFIG_BLOCKS:
-        pending = sorted(addr for addr in image if block.base <= addr < block.end)
+        pending = sorted(
+            addr for addr in image if block.base <= addr < block.end and addr not in paired
+        )
         while pending:
             start = pending[0]
             run = 1
@@ -105,7 +125,34 @@ def serialize(image: Mapping[int, int]) -> list[Packet]:
             kind, count = ("run", run) if run >= window else ("mask", window)
             packets.append(Packet(kind, tuple((addr, image[addr]) for addr in pending[:count])))
             pending = pending[count:]
+    packets.extend(pairs)
     return packets
 
 
-__all__ = ["WORD_BYTES", "Packet", "serialize"]
+def sentinel_words(end: int) -> int:
+    """Count the padding sentinels a descriptor appends when it ends at ``end``.
+
+    The encoder aligns the end of a descriptor up to ``TASK_ALIGN_GRANULE``; only
+    a descriptor that lands on a ``DESCRIPTOR_ALIGN`` boundary is padded at all,
+    and the padding is one or two 8-byte steps.  Each step contributes exactly
+    one sentinel word.
+    """
+    aligned = (end + TASK_ALIGN_GRANULE - 1) & ~(TASK_ALIGN_GRANULE - 1)
+    if aligned % DESCRIPTOR_ALIGN:
+        return 0
+    pad = aligned - end
+    applied = 8 if pad < 8 else (16 if pad < 16 else 0)
+    return applied // 8
+
+
+__all__ = [
+    "DESCRIPTOR_ALIGN",
+    "PAD_SENTINEL",
+    "MARKER_ADDR",
+    "RELOCATION_SLOTS",
+    "TASK_ALIGN_GRANULE",
+    "WORD_BYTES",
+    "Packet",
+    "sentinel_words",
+    "serialize",
+]

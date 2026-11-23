@@ -6,7 +6,14 @@ from dataclasses import dataclass
 from types import MappingProxyType
 
 from .fields import BitField, block_at, check_word
-from .serialize import WORD_BYTES, Packet, serialize
+from .serialize import (
+    MARKER_ADDR,
+    PAD_SENTINEL,
+    WORD_BYTES,
+    Packet,
+    sentinel_words,
+    serialize,
+)
 
 TID = BitField(0, 15, 0)
 TASK_SIZE = BitField(0, 26, 16)
@@ -24,6 +31,11 @@ PREAMBLE = bytes.fromhex("01000000000000000000000000000000")
 def aligned_end(off: int) -> int:
     """Round a stream offset up to the next descriptor boundary."""
     return (off + ALIGNMENT - 1) & -ALIGNMENT
+
+
+def _sentinel_addr(packets: list[Packet]) -> int:
+    """Return the word address the padding sentinel occupies."""
+    return MARKER_ADDR
 
 
 class TD:
@@ -93,12 +105,29 @@ class TD:
         """Count all encoded words, excluding stream alignment padding."""
         return self.header_size_words() + sum(1 + len(packet.writes) for packet in self.packets)
 
-    def to_bytes(self) -> bytes:
-        """Encode the descriptor as little-endian words."""
+    def padding_words(self, off: int) -> int:
+        """Count the sentinel words this descriptor appends when it starts at ``off``."""
+        return sentinel_words(off + self.size_words() * WORD_BYTES)
+
+    def to_bytes(self, off: int = 0) -> bytes:
+        """Encode the descriptor as little-endian words, padded to its aligned end."""
+        count = self.padding_words(off)
+        packets = list(self.packets)
+        if count:
+            marker = _sentinel_addr(packets)
+            close = tuple(Packet("run", ((marker, PAD_SENTINEL),)) for _ in range(count))
+            at = next((i for i, p in enumerate(packets) if p.flags), len(packets))
+            packets[at:at] = close
+        sentinels = sum(
+            1 + len(packet.writes)
+            for packet in packets
+            if PAD_SENTINEL in dict(packet.writes).values()
+        )
         has_dependency = DEPENDENCY_ENABLE.get(self.header.get(DEPENDENCY_ENABLE.addr, 0))
         if has_dependency != (DEPENDENCY_ID.addr in self.header):
             raise ValueError("dependency flag and dependency word disagree")
-        first = TID.put(FLAGS.put(TASK_SIZE.put(0, self.size_words()), self.flags), self.tid)
+        size = self.size_words() + sentinels
+        first = TID.put(FLAGS.put(TASK_SIZE.put(0, size), self.flags), self.tid)
         header = [
             self.header.get(off, 0)
             for off in range(WORD_BYTES, WORD_BYTES * self.header_size_words(), WORD_BYTES)
@@ -106,7 +135,7 @@ class TD:
         for value in header:
             check_word(value)
         words = [first, *header]
-        for packet in self.packets:
+        for packet in packets:
             words.extend(packet.words())
         return struct.pack(f"<{len(words)}I", *words)
 
@@ -151,7 +180,7 @@ class Program:
         """Frame the descriptors as a stream, with zero-filled alignment gaps."""
         stream = bytearray(PREAMBLE)
         for td in self.tds:
-            stream.extend(td.to_bytes())
+            stream.extend(td.to_bytes(len(stream)))
             stream.extend(bytes(aligned_end(len(stream)) - len(stream)))
         return bytes(stream)
 

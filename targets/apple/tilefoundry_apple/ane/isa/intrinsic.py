@@ -33,6 +33,7 @@ FP16_BYTES = 2
 SURFACE_ROW_ALIGN = 64
 L2_ROW_ALIGN = 16
 L2_UNIT = 16
+STAGING_ROW_GUARD = 32
 DATA_SET_ID = 14
 PLANAR_MIN_ROW_BYTES = 32
 NEURAL_MIN_ROW_BYTES = 16
@@ -53,6 +54,7 @@ INTERLEAVE = 1
 FIFO_MODE = 1
 KERNEL_ARMED = 1
 COMMON_FORMAT_F16 = 2
+
 
 class Engine(IntEnum):
     """The engine a staged buffer is prepared for."""
@@ -133,8 +135,8 @@ class Surface:
     def staging_row(self, engine: Engine = Engine.PLANAR) -> int:
         """Bytes between adjacent staged rows for one engine.
 
-        The planar engine stages one extra channel of slack.  The neural engine
-        stages `channels` channels plus a small guard band.
+        The planar engine stages one channel slab of ``channels * l2_channel``
+        bytes followed by a constant ``STAGING_ROW_GUARD`` band.
 
         The neural guard band below is **known incomplete**: it reproduces the
         thirteen shapes it was read from, and is refuted outside them (for
@@ -145,16 +147,20 @@ class Surface:
         """
         depth = self.channels * self.l2_channel
         if engine is Engine.PLANAR:
-            return (self.channels + 1) * self.l2_channel
+            return depth + STAGING_ROW_GUARD
         if engine is not Engine.NEURAL:
             raise ValueError(f"unknown engine {engine!r}")
         slack = self.l2_channel if self.channels % NE_CHANNEL_GROUP == 0 else 0
         guard = NE_ROW_GUARD if depth % NE_GUARD_PERIOD == 0 else 0
         return depth + slack + guard
 
-    def staging_extent(self, engine: Engine = Engine.PLANAR) -> int:
-        """Bytes the staged buffer spans."""
-        return self.staging_row(engine) * self.height
+    def staging_extent(self, engine: Engine = Engine.PLANAR, rows: int | None = None) -> int:
+        """Bytes the staged buffer spans.
+
+        ``rows`` is the number of rows one descriptor stages, which is the tile
+        height rather than the whole surface.
+        """
+        return self.staging_row(engine) * (self.height if rows is None else rows)
 
     @property
     def l2_row(self) -> int:
@@ -206,8 +212,9 @@ def _l2_units(byte_stride: int) -> int:
 
 def load(source: Surface, engine: Engine = Engine.PLANAR) -> dict[int, int]:
     """Program reading one feature map: the L2 source buffer and the source DMA."""
-    require_row_width(source, NEURAL_MIN_ROW_BYTES if engine is Engine.NEURAL
-                      else PLANAR_MIN_ROW_BYTES)
+    require_row_width(
+        source, NEURAL_MIN_ROW_BYTES if engine is Engine.NEURAL else PLANAR_MIN_ROW_BYTES
+    )
     return splice(
         COMMON.pack(
             win=source.width,
@@ -246,10 +253,32 @@ def load(source: Surface, engine: Engine = Engine.PLANAR) -> dict[int, int]:
     )
 
 
-def load_second(source: Surface, engine: Engine = Engine.PLANAR) -> dict[int, int]:
-    """Program a second staged source, placed one staged image after the first."""
+def slot_offset(
+    surface: Surface,
+    slots: int,
+    engine: Engine = Engine.PLANAR,
+    rows: int | None = None,
+    *,
+    separated: bool = False,
+) -> int:
+    """Return the byte offset a staged slot starts at.
+
+    Slots are one staged image apart.  A tile that stages fewer rows than the
+    surface spans carries an extra guard band between slots, which the compiler
+    emits so that adjacent staged images stay on separate row boundaries.
+    """
+    extent = surface.staging_extent(engine, rows)
+    partial = rows is not None and rows < surface.height
+    separator = STAGING_ROW_GUARD if separated and partial else 0
+    return slots * extent + separator
+
+
+def load_second(
+    source: Surface, engine: Engine = Engine.PLANAR, *, rows: int | None = None
+) -> dict[int, int]:
+    """Program a second staged source, placed one staged slot after the first."""
     require_row_width(source, PLANAR_MIN_ROW_BYTES)
-    offset = _l2_units(source.staging_extent(engine))
+    offset = _l2_units(slot_offset(source, 1, engine, rows, separated=True))
     return splice(
         L2.pack(
             l2_src_second_stream=1,
@@ -275,17 +304,14 @@ def load_second(source: Surface, engine: Engine = Engine.PLANAR) -> dict[int, in
     )
 
 
-def end_marker() -> dict[int, int]:
-    """Close a descriptor that stages two sources."""
-    return DST_DMA.pack(tile_dma_dst_marker=DESCRIPTOR_MARKER)
-
-
 def store(
     destination: Surface,
     engine: Engine = Engine.PLANAR,
     *,
     staged: int = 1,
     staging: Surface | None = None,
+    rows: int | None = None,
+    guard: bool = False,
     declare: bool = True,
 ) -> dict[int, int]:
     """Program writing one feature map: the L2 result buffer and the result DMA.
@@ -316,7 +342,11 @@ def store(
             l2_result_alias_planar_rslt=1,
             l2_result_dma_fmt=fields.TensorFormatMode.COMPRESSED,
             l2_result_interleave=INTERLEAVE,
-            l2_result_base_addr=staged * _l2_units((staging or destination).staging_extent(engine)),
+            l2_result_base_addr=_l2_units(
+                slot_offset(
+                    staging or destination, staged, engine, rows, separated=staged >= 2
+                )
+            ),
         ),
         DST_DMA.pack(
             tile_dma_dst_enable=1,
@@ -337,8 +367,12 @@ def store(
     )
 
 
-def kernel_dma() -> dict[int, int]:
-    """Arm the kernel DMA path for a descriptor without a coefficient stream."""
+def end_of_network() -> dict[int, int]:
+    """Mark the descriptor that finishes the stream.
+
+    Only the last descriptor of a stream carries this word; earlier descriptors
+    leave it at reset, so a multi-descriptor stream does not repeat it.
+    """
     return KERNEL_DMA.pack(kernel_dma_armed=KERNEL_ARMED)
 
 
@@ -368,16 +402,20 @@ def compute_pe(
     """Program one planar engine pass over an already loaded feature map."""
     geometry_in = output if declared_in is None else declared_in
     geometry_out = output if declared_out is None else declared_out
-    shape = {} if window is None else {
-        "kw": window[0],
-        "kh": window[1],
-        "sx": window[2],
-        "sy": window[3],
-        "pad_left": padding[0],
-        "pad_top": padding[1],
-        "out_offset_x": 1 if window is not None else 0,
-        "out_offset_y": 1 if window is not None else 0,
-    }
+    shape = (
+        {}
+        if window is None
+        else {
+            "kw": window[0],
+            "kh": window[1],
+            "sx": window[2],
+            "sy": window[3],
+            "pad_left": padding[0],
+            "pad_top": padding[1],
+            "out_offset_x": 1 if window is not None else 0,
+            "out_offset_y": 1 if window is not None else 0,
+        }
+    )
     size = {} if patch is None else {"patch_width": patch[0], "patch_height": patch[1]}
     low, high = (0.0, float("inf")) if clamp is None else clamp
     if not low <= high:
@@ -406,7 +444,6 @@ def compute_pe(
             pe_src1_re_lu=int(source_relu),
             **({} if compare is None else {"l2_reduce_compare": compare}),
         ),
-        kernel_dma(),
         PE.pack(
             **({} if second_source is None else {"second_source": second_source}),
             pool_mode=pool_mode,
@@ -471,7 +508,6 @@ def compute_ne(
             post_scale=fp16(post_scale, "post_scale"),
             **({} if kernel_format is None else {"kernel_format": kernel_format}),
         ),
-        kernel_dma(),
     )
 
 
@@ -480,7 +516,6 @@ __all__ = [
     "Surface",
     "align_up",
     "compute_ne",
-    "end_marker",
     "compute_pe",
     "require_row_width",
     "fp16",

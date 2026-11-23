@@ -28,6 +28,7 @@ from .intrinsic import (
     Surface,
     compute_ne,
     compute_pe,
+    end_of_network,
     load,
     splice,
     store,

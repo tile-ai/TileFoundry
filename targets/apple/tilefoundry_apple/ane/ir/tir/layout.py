@@ -58,18 +58,23 @@ def feature(operand: str) -> pattern.Tensor:
     )
 
 
-def bounded(operand: str, leading: tuple, *limits: int, strides: tuple | None = None,
-            predicates: tuple = ()) -> pattern.Layout:
+def bounded(
+    operand: str, leading: tuple, *limits: int, strides: tuple | None = None, predicates: tuple = ()
+) -> pattern.Layout:
     """The layout of a tensor shaped *leading*, then extents of at most *limits*.
 
     *strides* and *predicates* add a rule on the strides; without them any strides match.
 
     Each extent after *leading* is captured as ``<operand>.shape[axis]``.
     """
-    names = tuple(pattern.Wildcard(f"{operand}.shape[{len(leading) + axis}]") for axis in range(len(limits)))
+    names = tuple(
+        pattern.Wildcard(f"{operand}.shape[{len(leading) + axis}]") for axis in range(len(limits))
+    )
     return pattern.Layout(
-        (*leading, *names), strides,
-        predicates=(*(name <= limit for name, limit in zip(names, limits)), *predicates))
+        (*leading, *names),
+        strides,
+        predicates=(*(name <= limit for name, limit in zip(names, limits)), *predicates),
+    )
 
 
 def feature_layout(operand: str) -> pattern.Layout:
@@ -91,7 +96,10 @@ def strided(type_: types.TensorType, *candidates: tuple) -> bool:
     """Whether the strides of *type_* equal one of *candidates*, ignoring modes of extent 1."""
     plain = types.plain_layout(type_.layout)
     return any(
-        all(size == 1 or actual == step for size, actual, step in zip(plain.shape, plain.strides, wanted))
+        all(
+            size == 1 or actual == step
+            for size, actual, step in zip(plain.shape, plain.strides, wanted)
+        )
         for wanted in candidates
     )
 
@@ -99,8 +107,11 @@ def strided(type_: types.TensorType, *candidates: tuple) -> bool:
 def require_strides(call, ctx, name: str, type_: types.TensorType, *candidates: tuple) -> None:
     """Refuse *call* unless the strides of operand *name* equal one of *candidates*."""
     if not strided(type_, *candidates):
-        ctx.error(call, f"{name} layout strides {tuple(types.plain_layout(type_.layout).strides)} "
-                        f"must be {' or '.join(map(str, candidates))}")
+        ctx.error(
+            call,
+            f"{name} layout strides {tuple(types.plain_layout(type_.layout).strides)} "
+            f"must be {' or '.join(map(str, candidates))}",
+        )
 
 
 def feature_dma_strides(type_: types.TensorType) -> tuple[int, int]:
@@ -131,7 +142,8 @@ def forms(operand: str, layouts: tuple, storage=FEATURE_STORAGE) -> pattern.Tens
     instruction.
     """
     return pattern.Tensor(
-        dtype=one_of("dtype", FLOATS), storage=stored(operand, storage), layout=pattern.Or(*layouts))
+        dtype=one_of("dtype", FLOATS), storage=stored(operand, storage), layout=pattern.Or(*layouts)
+    )
 
 
 def one_of(name: str, values) -> pattern.Wildcard:
@@ -140,7 +152,28 @@ def one_of(name: str, values) -> pattern.Wildcard:
 
 
 __all__ = [
-    "ACTIVATION_LIMITS", "ENGINE", "FEATURE_STORAGE", "FLOATS", "GMEM_ONLY", "MAX_CHANNELS", "MAX_HEIGHT",
-    "MAX_KERNEL", "MAX_WIDTH", "STRIDES", "WEIGHT_LIMITS", "bounded", "extent", "feature", "feature_layout", "forms",
-    "feature_dma_strides", "kernel_layout", "matrix_layout", "one_of", "require_strides", "rows", "stored", "strided",
+    "ACTIVATION_LIMITS",
+    "ENGINE",
+    "FEATURE_STORAGE",
+    "FLOATS",
+    "GMEM_ONLY",
+    "MAX_CHANNELS",
+    "MAX_HEIGHT",
+    "MAX_KERNEL",
+    "MAX_WIDTH",
+    "STRIDES",
+    "WEIGHT_LIMITS",
+    "bounded",
+    "extent",
+    "feature",
+    "feature_layout",
+    "forms",
+    "feature_dma_strides",
+    "kernel_layout",
+    "matrix_layout",
+    "one_of",
+    "require_strides",
+    "rows",
+    "stored",
+    "strided",
 ]

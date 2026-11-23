@@ -24,10 +24,15 @@ SAME_AVERAGE = (
     | pattern.In(pattern.Wildcard("ceil_mode"), (False,))
     | pattern.In(pattern.Wildcard("count_include_pad"), (False,))
 )
-BOUND = MappingProxyType({
-    **{name: pattern.Wildcard(name) for name in ("kernel_size", "stride", "padding", "ceil_mode", "kind")},
-    "count_include_pad": pattern.Wildcard("count_include_pad", predicates=(SAME_AVERAGE,)),
-})
+BOUND = MappingProxyType(
+    {
+        **{
+            name: pattern.Wildcard(name)
+            for name in ("kernel_size", "stride", "padding", "ceil_mode", "kind")
+        },
+        "count_include_pad": pattern.Wildcard("count_include_pad", predicates=(SAME_AVERAGE,)),
+    }
+)
 
 
 @expr.register_op(dialect="T", category="pe", namespace="ane", name="pool")
@@ -47,12 +52,20 @@ class Pool(expr.Op):
     )
 
     kernel_size = expr.ParamDef(kind="attribute", annotation=tuple, pattern=KERNEL)
-    stride = expr.ParamDef(kind="attribute", annotation=tuple, pattern=layout.one_of("stride", layout.STRIDES))
+    stride = expr.ParamDef(
+        kind="attribute", annotation=tuple, pattern=layout.one_of("stride", layout.STRIDES)
+    )
     padding = expr.ParamDef(kind="attribute", annotation=tuple, pattern=PADDING, default=(0, 0))
-    ceil_mode = expr.ParamDef(kind="attribute", annotation=bool, pattern=pattern.Or(False, True), default=False)
+    ceil_mode = expr.ParamDef(
+        kind="attribute", annotation=bool, pattern=pattern.Or(False, True), default=False
+    )
     count_include_pad = expr.ParamDef(
-        kind="attribute", annotation=bool, pattern=pattern.Or(False, True), default=True)
-    kind = expr.ParamDef(kind="attribute", annotation=expr.PoolKind, pattern=layout.one_of("kind", KINDS))
+        kind="attribute", annotation=bool, pattern=pattern.Or(False, True), default=True
+    )
+    kind = expr.ParamDef(
+        kind="attribute", annotation=expr.PoolKind, pattern=layout.one_of("kind", KINDS)
+    )
+    tile_height = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.feature("dst"))
     src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("src"))
 
@@ -71,9 +84,17 @@ def _(call, ctx) -> types.TupleType:
 @access.register_relation(Pool)
 def _(call, ctx):
     op = call.target
-    hir = nn.Pool2D(kernel_size=op.kernel_size, stride=op.stride, padding=op.padding, ceil_mode=op.ceil_mode,
-                    count_include_pad=op.count_include_pad, kind=op.kind)
-    reached, written = access.relations_of(expr.Call(hir, call.args[1:], type=types.TupleType.Void), ctx)
+    hir = nn.Pool2D(
+        kernel_size=op.kernel_size,
+        stride=op.stride,
+        padding=op.padding,
+        ceil_mode=op.ceil_mode,
+        count_include_pad=op.count_include_pad,
+        kind=op.kind,
+    )
+    reached, written = access.relations_of(
+        expr.Call(hir, call.args[1:], type=types.TupleType.Void), ctx
+    )
     return written, reached, written
 
 
@@ -81,10 +102,15 @@ def _(call, ctx):
 def _(call, ctx) -> None:
     op = call.target
     dst, src = (ctx.type_of(arg) for arg in call.args)
-    expected = (*src.shape[:2], *(
-        windows(size, kernel, stride, padding, op.ceil_mode)
-        for size, kernel, stride, padding in zip(src.shape[2:], op.kernel_size, op.stride, op.padding)
-    ))
+    expected = (
+        *src.shape[:2],
+        *(
+            windows(size, kernel, stride, padding, op.ceil_mode)
+            for size, kernel, stride, padding in zip(
+                src.shape[2:], op.kernel_size, op.stride, op.padding
+            )
+        ),
+    )
     if tuple(dst.shape) != expected:
         ctx.error(call, f"dst shape {tuple(dst.shape)} differs from the pooled shape {expected}")
 
@@ -96,7 +122,9 @@ def _(ctx):
     window = (op.kernel_size, op.stride, op.padding)
     if op.kind is expr.PoolKind.MAX:
         return evaluation.write(ctx, utils.F.max_pool2d(src, *window, ceil_mode=op.ceil_mode))
-    sums = evaluation.f16(utils.F.avg_pool2d(src, *window, ceil_mode=op.ceil_mode, divisor_override=1))
+    sums = evaluation.f16(
+        utils.F.avg_pool2d(src, *window, ceil_mode=op.ceil_mode, divisor_override=1)
+    )
     count = utils.torch.tensor(float(prod(op.kernel_size)))
     if not op.count_include_pad:
         ones = utils.torch.ones_like(src[:1, :1])

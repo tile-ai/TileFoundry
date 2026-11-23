@@ -21,16 +21,7 @@ from tilefoundry_apple.ane.isa import defaults
 #: Words that carry an operand value and must be restated whenever a descriptor
 #: reprograms them, even if the raw value is unchanged.
 STICKY = frozenset(
-    field.addr
-    for field in (isa.PE.scale, isa.PE.pre_scale, isa.PE.final_scale, isa.PE.clamp_low)
-)
-
-#: Words that a descriptor restates whenever its image differs at all.
-VOLATILE = frozenset(
-    addr
-    for block in isa.CONFIG_BLOCKS
-    for addr in range(block.base, block.end, 4)
-    if addr not in STICKY
+    field.addr for field in (isa.PE.scale, isa.PE.pre_scale, isa.PE.final_scale, isa.PE.clamp_low)
 )
 
 
@@ -38,27 +29,37 @@ class State:
     """The configuration image the next descriptor starts from."""
 
     def __init__(self, defaults_image: Mapping[int, int] | None = None) -> None:
-        self.image: dict[int, int] = {}
         self.defaults = dict(defaults.DEFAULT_IMAGE if defaults_image is None else defaults_image)
         self.tds: list[isa.TD] = []
 
     def emit(self, image: Mapping[int, int]) -> isa.TD:
-        """Append one descriptor, eliding words that already hold their value."""
+        """Append one descriptor, eliding words that hold their reset value.
+
+        Each descriptor is encoded from the reset image alone: a later descriptor
+        repeats whatever its own handlers set, even when the previous descriptor
+        already carried the same value.  Carrying values forward would emit fewer
+        words than the compiler does, so no state is inherited across descriptors.
+        """
         base = dict(self.defaults)
-        base.update({addr: word for addr, word in self.image.items() if addr not in VOLATILE})
         td = isa.TD.build(dict(image), base=base)
         if td.size_words() > isa.MAX_TASK_WORDS:
             raise ValueError(f"ANE task_size {td.size_words()} exceeds {isa.MAX_TASK_WORDS} words")
-        self.image.update(td.writes())
         self.tds.append(td)
         return td
 
 
-def to_program(parts: Iterable[Mapping[int, int]]) -> isa.Program:
-    """Bundle one engine pass into a single-descriptor program."""
+def to_program(passes: Iterable[Iterable[Mapping[int, int]]]) -> isa.Program:
+    """Bundle one descriptor per pass, in schedule order."""
     state = State()
-    state.emit(isa.splice(*parts))
+    todo = [isa.splice(*parts) for parts in passes]
+    if not todo:
+        raise ValueError("the schedule emits no passes")
+    todo[-1] = isa.splice(todo[-1], isa.end_of_network())
+    for image in todo:
+        state.emit(image)
+    if not state.tds:
+        raise ValueError("the schedule emits no passes")
     return isa.Program(tuple(state.tds))
 
 
-__all__ = ["STICKY", "VOLATILE", "State", "to_program"]
+__all__ = ["STICKY", "State", "to_program"]

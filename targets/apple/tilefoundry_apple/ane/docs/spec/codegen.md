@@ -29,6 +29,7 @@ class State:
 
     def emit(self, image: Mapping[int, int]) -> isa.TD: ...
 
+
 def to_program(parts: Iterable[Mapping[int, int]]) -> isa.Program: ...
 ```
 
@@ -62,11 +63,13 @@ class IODesc:
     shape: tuple[int, ...]
     strides: tuple[int, ...]
 
+
 class Reloc:
     """A 64-bit placeholder at a word offset from the start of the TD stream."""
 
     word_offset: int
     symbol: str
+
 
 class Image:
     """An H14 image with descriptor text, coefficients, I/O, and relocations."""
