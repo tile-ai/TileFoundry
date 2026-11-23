@@ -7,8 +7,6 @@ or ``tilefoundry::make_shard_tensor`` (shard) depending on ``layout`` type.
 from __future__ import annotations
 
 from dataclasses import replace
-from functools import reduce
-from operator import mul
 
 from tilefoundry import codegen
 from tilefoundry.ir import core, dim, expr, tir, types, utils
@@ -303,7 +301,7 @@ class CoordinateVisitor(core.ExprVisitor[str]):
         if isinstance(node.target, dim.MeshCoord):
             return mesh_coord_value(node, ctx)
         raise NotImplementedError(
-            f"local_tile coordinate: Call target {type(node.target).__name__!r} is not supported"
+            f"pointer slice coordinate: Call target {type(node.target).__name__!r} is not supported"
         )
 
     def leaf(self, node, ctx: context.Context) -> str:
@@ -314,7 +312,7 @@ class CoordinateVisitor(core.ExprVisitor[str]):
         if dims == (1,):
             return context.scalar_read(node, ctx)
         raise NotImplementedError(
-            f"local_tile coordinate from a rank-{len(dims)} offset {dims} is not supported"
+            f"pointer slice coordinate from a rank-{len(dims)} offset {dims} is not supported"
         )
 
     def default_visit(self, node, ctx: context.Context) -> str:
@@ -374,8 +372,8 @@ def emit_paired(op: str, operands, ctx: context.Context, rest: tuple[str, ...] =
     ctx.emit("}")
 
 
-def pointer_reference(pointer, ctx: context.Context) -> tuple[str, object | None]:
-    """Render a TensorView pointer and return its syntactic source tensor, if any."""
+def pointer_reference(pointer, ctx: context.Context) -> str:
+    """Render a TensorView pointer."""
     if isinstance(pointer, expr.Call) and isinstance(pointer.target, memory.PtrOf):
         source = pointer.args[0]
         if isinstance(source, expr.Call) and isinstance(source.target, tensor.Slice):
@@ -387,21 +385,18 @@ def pointer_reference(pointer, ctx: context.Context) -> tuple[str, object | None
             starts = origin.elements if isinstance(origin, expr.Tuple) else (origin,)
             coords = ", ".join(coord_ref(start, ctx) for start in starts)
             offset = f"{plain_layout_value(layout)}(cute::make_coord({coords}))"
-            pointer, root = pointer_reference(expr.Call(memory.PtrOf(), (base,), type=pointer.type), ctx)
-            return f"({pointer} + {offset})", root
+            pointer = pointer_reference(expr.Call(memory.PtrOf(), (base,), type=pointer.type), ctx)
+            return f"({pointer} + {offset})"
         if isinstance(source, expr.Call) and isinstance(source.target, memory.TensorView):
             return pointer_reference(source.args[0], ctx)
         if isinstance(source, expr.Constant):
             return pointer_reference(source, ctx)
-        return f"{tensor_reference(source, ctx)}.data()", source
+        return f"{tensor_reference(source, ctx)}.data()"
     if isinstance(pointer, expr.Constant):
         cpp_type = ctx.dtype_to_cpp(pointer.type.dtype.name)
         base = ctx.smem_base()
-        return (
-            f"cute::make_smem_ptr(reinterpret_cast<{cpp_type} *>({base} + {pointer.value}))",
-            None,
-        )
-    return ctx.name_for(pointer), None
+        return f"cute::make_smem_ptr(reinterpret_cast<{cpp_type} *>({base} + {pointer.value}))"
+    return ctx.name_for(pointer)
 
 
 def envelope_dim(value) -> str:
@@ -422,102 +417,9 @@ def plain_layout_value(layout: types.LayoutBase) -> str:
 def emit(let: core.LetStmt, ctx: context.Context) -> None:
     call = let.value
     pointer = call.args[0]
-    pointer_ref, memory_var = pointer_reference(pointer, ctx)
+    pointer_ref = pointer_reference(pointer, ctx)
     var_name = ctx.name_for(let.var)
     layout = context.materialised_layout(call.target.layout)
-
-    if len(call.args) > 1:
-        if memory_var is None:
-            raise NotImplementedError(
-                "tensor_view coordinates require a syntactic T.ptr_of(tensor) source"
-            )
-        mem_name = ctx.name_for(memory_var)
-
-        if len(call.args) > 2:
-            logical_coords = call.args[1:]
-            dst_layout = context.materialised_layout(getattr(memory_var.type, "layout", None))
-            if isinstance(dst_layout, types.ShardLayout):
-                tensor_ref = f"tilefoundry::local({mem_name})"
-                dst_local = types.shard_layout_local_shape(dst_layout)
-                split_axes = {a.axis for a in dst_layout.attrs if isinstance(a, types.Split)}
-                non_split = [a for a in range(len(dst_local)) if a not in split_axes]
-                if len(logical_coords) == len(dst_local):
-                    coordinate_axes = range(len(dst_local))
-                elif len(logical_coords) == len(non_split):
-                    coordinate_axes = non_split
-                else:
-                    raise ValueError(
-                        f"tensor_view: {len(logical_coords)} offsets for "
-                        f"{len(non_split)} or {len(dst_local)} local axes"
-                    )
-                entries = tuple(zip(coordinate_axes, logical_coords, let.var.type.shape))
-                kept = tuple(
-                    entry for entry in entries if int(utils.upper_bound(dst_local[entry[0]])) != 1
-                )
-                shape = tuple(window_dim for _, _, window_dim in kept)
-                coords = tuple(coord for _, coord, _ in kept)
-            else:
-                tensor_ref = f"{mem_name}_tensor" if ctx.is_kernel_param(memory_var) else mem_name
-                source_shape = tuple(memory_var.type.shape)
-                source_strides = types.Layout(
-                    tuple(int(utils.upper_bound(dim_value)) for dim_value in source_shape)
-                ).strides
-                source_name = f"{var_name}__source"
-                ctx.emit(
-                    f"auto {source_name} = cute::make_tensor("
-                    f"{tensor_ref}.data(), "
-                    f"{cute_layout.render_layout_value(source_shape, source_strides, envelope_dim, static_value)});"
-                )
-                tensor_ref = source_name
-                shape = tuple(let.var.type.shape)
-                if len(logical_coords) != len(shape):
-                    raise ValueError(
-                        f"tensor_view: {len(logical_coords)} offsets for rank-{len(shape)} view"
-                    )
-                coords = tuple(logical_coords)
-            shape_args = ", ".join(f"cute::Int<{int(utils.upper_bound(dim_value))}>{{}}" for dim_value in shape)
-            coord_args = ", ".join(coord_ref(coord, ctx) for coord in coords)
-            zero_args = ", ".join("0" for _ in coords)
-            offset_name = f"{var_name}__offset"
-            ctx.emit(
-                f"auto {offset_name} = cute::domain_offset("
-                f"cute::make_coord({coord_args}), {tensor_ref});"
-            )
-            ctx.emit(
-                f"auto {var_name} = cute::local_tile("
-                f"{offset_name}, "
-                f"cute::make_shape({shape_args}), "
-                f"cute::make_coord({zero_args}));"
-            )
-            return
-        index_var = call.args[1]
-        memory_layout = context.materialised_layout(getattr(memory_var.type, "layout", None))
-        if isinstance(memory_layout, types.ShardLayout):
-            tensor_ref = f"tilefoundry::local({mem_name})"
-            win_layout = context.materialised_layout(getattr(let.var.type, "layout", None))
-            if isinstance(win_layout, types.ShardLayout):
-                local_shape = types.shard_layout_local_shape(win_layout)
-            else:
-                local_shape = tuple(let.var.type.shape)
-            extent_k = reduce(mul, (int(utils.upper_bound(s)) for s in local_shape), 1)
-        else:
-            if ctx.is_kernel_param(memory_var):
-                tensor_ref = f"{mem_name}_tensor"
-            else:
-                tensor_ref = mem_name
-
-            extent_k = reduce(mul, (int(utils.upper_bound(s)) for s in let.var.type.shape), 1)
-        offset_name = f"{var_name}__offset"
-        ctx.emit(
-            f"auto {offset_name} = cute::domain_offset({coord_ref(index_var, ctx)}, {tensor_ref});"
-        )
-        ctx.emit(
-            f"auto {var_name} = cute::local_tile("
-            f"{offset_name}, "
-            f"cute::make_shape(cute::Int<{extent_k}>{{}}), "
-            f"cute::make_coord(0));"
-        )
-        return
 
     if isinstance(layout, types.ShardLayout):
         target_total = utils.shape_numel_upper_bound(let.var.type.shape)

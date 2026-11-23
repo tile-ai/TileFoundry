@@ -429,13 +429,16 @@ An asynchronous copy needs that, since the thread that executes the copy is
 not the thread that waits for it.
 
 **Each lowers to its instruction, not to a runtime entry.** The runtime
-publishes no `ops::` entry for any of them. An mbarrier is a shared-memory
-word, so nothing here reads a `ShardLayout`, and none of it is an op
-([runtime §2.6](./runtime.md#26-cudaops)). Each entry below names the
-`mbarrier.*` instruction that its emitter writes at the call site. The entry also
-names the generic-to-shared conversion that the instruction takes. The entries
-name `.shared::cta` explicitly, so the assembler does not redo that window
-conversion on every use.
+publishes no `ops::` entry for any of them, and none of it is an op
+([runtime §2.6](./runtime.md#26-cudaops)). An mbarrier is one shared-memory
+word that every unit of the mesh shares. A `ShardLayout` on it may only mark
+it Broadcast, which names one word for every unit it covers. Codegen refuses a
+layout that splits it or marks it Partial: `CopyAsyncBulk` arrives once per
+CTA, so a word that differed between units would leave the others waiting.
+Each entry below names the `mbarrier.*` instruction that its emitter writes at
+the call site. The entry also names the generic-to-shared conversion that the
+instruction takes. The entries name `.shared::cta` explicitly, so the assembler
+does not redo that window conversion on every use.
 
 The group is what a `CopyAsyncBulk` ring needs and no more: arm the word, arrive on it
 declaring bytes, wait on its phase, release it. A bare `mbarrier.arrive` is
