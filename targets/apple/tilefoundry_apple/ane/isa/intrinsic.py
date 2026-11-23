@@ -24,7 +24,7 @@ slack, which is what the staged buffer needs for the engine's read-ahead.
 
 import struct
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import IntEnum
 
 from . import fields
@@ -34,6 +34,7 @@ SURFACE_ROW_ALIGN = 64
 L2_ROW_ALIGN = 16
 L2_UNIT = 16
 STAGING_ROW_GUARD = 32
+STREAM_TAG = 1
 DATA_SET_ID = 14
 PLANAR_MIN_ROW_BYTES = 32
 NEURAL_MIN_ROW_BYTES = 16
@@ -106,6 +107,7 @@ class Surface:
     width: int
     row: int
     channel: int
+    tile_pitch: int | None = None
 
     @property
     def extent(self) -> int:
@@ -129,10 +131,32 @@ class Surface:
 
     @property
     def l2_channel(self) -> int:
-        """Bytes between adjacent staged channels."""
+        """Bytes between adjacent staged channels.
+
+        A tile narrower than the feature map stages its columns into the L2
+        image, so ``tile_pitch`` overrides the dense row while the declared
+        window and the DRAM strides keep the logical width.
+        """
+        if self.tile_pitch is not None:
+            return self.tile_pitch
         return align_up(self.width * FP16_BYTES, L2_ROW_ALIGN)
 
-    def staging_row(self, engine: Engine = Engine.PLANAR) -> int:
+    def staged(self, width: int | None = None, rows: int | None = None) -> "Surface":
+        """Return the same feature map staged as a tile of ``width`` and ``rows``.
+
+        A descriptor that stages a tile narrower than the logical feature map
+        keeps the declared geometry for its window and uses the tile for the L2
+        layout, so the staged image is a separate surface.
+        """
+        if width is None or width == self.width:
+            return self
+        if width < 1:
+            raise ValueError(f"staged width {width} is empty")
+        if width > self.width:
+            return self
+        return replace(self, tile_pitch=align_up(width * FP16_BYTES, L2_ROW_ALIGN))
+
+    def staging_row(self, engine: Engine = Engine.PLANAR, rows: int | None = None) -> int:
         """Bytes between adjacent staged rows for one engine.
 
         The planar engine stages one channel slab of ``channels * l2_channel``
@@ -145,11 +169,14 @@ class Surface:
         the L2 tile allocator, which sits upstream of the descriptor, so a closed
         form has to come from that allocator rather than from more samples.
         """
+        partial = rows is not None and rows < self.height
         depth = self.channels * self.l2_channel
         if engine is Engine.PLANAR:
             return depth + STAGING_ROW_GUARD
         if engine is not Engine.NEURAL:
             raise ValueError(f"unknown engine {engine!r}")
+        if partial:
+            return depth
         slack = self.l2_channel if self.channels % NE_CHANNEL_GROUP == 0 else 0
         guard = NE_ROW_GUARD if depth % NE_GUARD_PERIOD == 0 else 0
         return depth + slack + guard
@@ -160,7 +187,7 @@ class Surface:
         ``rows`` is the number of rows one descriptor stages, which is the tile
         height rather than the whole surface.
         """
-        return self.staging_row(engine) * (self.height if rows is None else rows)
+        return self.staging_row(engine, rows) * (self.height if rows is None else rows)
 
     @property
     def l2_row(self) -> int:
@@ -210,11 +237,58 @@ def _l2_units(byte_stride: int) -> int:
     return byte_stride // L2_UNIT
 
 
-def load(source: Surface, engine: Engine = Engine.PLANAR) -> dict[int, int]:
+def _split_address(address: int) -> tuple[int, int]:
+    """Split a byte address into the low and high words the DMA programs."""
+    if not 0 <= address < (1 << 64):
+        raise ValueError(f"address {address:#x} does not fit 64 bits")
+    return address & 0xFFFFFFFF, address >> 32
+
+
+def _staged_flags(fresh: bool, planar_result: bool = False) -> dict[str, int]:
+    """Return the buffer-reuse bits a descriptor programs for its staged slots.
+
+    A descriptor that stages into fresh L2 buffers marks each slot as first use;
+    a descriptor that continues a stream reuses the buffers its predecessor left
+    behind, so it clears those bits and tags its DMA words with the stream index.
+    """
+    alias = 1 if fresh else 0
+    share = 1 if planar_result else alias
+    return {
+        "l2_src_alias_conv_src": alias,
+        "l2_src_alias_conv_rslt": alias,
+        "l2_src_alias_planar_src": alias,
+        "l2_src_alias_planar_rslt": share,
+        "l2_result_alias_src": alias,
+        "l2_result_alias_rslt": alias,
+        "l2_result_alias_planar_src": alias,
+        "l2_result_alias_planar_rslt": alias,
+    }
+
+
+def _src_tags(fresh: bool) -> dict[str, int]:
+    """Return the stream tag a descriptor stamps on its first source transfer."""
+    return {"tile_dma_src_user_tag": 0 if fresh else STREAM_TAG}
+
+
+def _dst_tags(fresh: bool) -> dict[str, int]:
+    """Return the stream tag a descriptor stamps on its result transfer."""
+    return {"tile_dma_dst_user_tag": 0 if fresh else STREAM_TAG}
+
+
+def load(
+    source: Surface,
+    engine: Engine = Engine.PLANAR,
+    *,
+    address: int = 0,
+    fresh: bool = True,
+    rows: int | None = None,
+    planar_result: bool = False,
+) -> dict[int, int]:
     """Program reading one feature map: the L2 source buffer and the source DMA."""
     require_row_width(
         source, NEURAL_MIN_ROW_BYTES if engine is Engine.NEURAL else PLANAR_MIN_ROW_BYTES
     )
+    low, high = _split_address(address)
     return splice(
         COMMON.pack(
             win=source.width,
@@ -226,21 +300,19 @@ def load(source: Surface, engine: Engine = Engine.PLANAR) -> dict[int, int]:
         ),
         L2.pack(
             l2_src_type=fields.L2Access.DMA_READ,
-            l2_src_alias_conv_src=1,
-            l2_src_alias_conv_rslt=1,
-            l2_src_alias_planar_src=1,
-            l2_src_alias_planar_rslt=1,
+            **_staged_flags(fresh, planar_result),
             l2_src_dma_format=fields.TensorFormatMode.COMPRESSED,
             l2_src_interleave=INTERLEAVE,
             l2_src_channel_stride=_l2_units(source.l2_channel),
-            l2_src_row_stride=_l2_units(source.staging_row(engine)),
+            l2_src_row_stride=_l2_units(source.staging_row(engine, rows)),
             l2_src_depth_stride=_l2_units(source.channels * source.l2_channel),
             l2_src_group_stride=_l2_units(source.channels * source.l2_channel),
         ),
         SRC_DMA.pack(
+            **_src_tags(fresh),
             tile_dma_src_hint=SOURCE_HINT,
-            tile_dma_src_base_addr_lo=0,
-            tile_dma_src_base_addr_hi=0,
+            tile_dma_src_base_addr_lo=low,
+            tile_dma_src_base_addr_hi=high,
             tile_dma_src_data_set_id=DATA_SET_ID,
             tile_dma_src_cache_hint=SOURCE_CACHE_HINT,
             **row_stride("tile_dma_src_row_stride", source.dram_row_stride),
@@ -274,26 +346,34 @@ def slot_offset(
 
 
 def load_second(
-    source: Surface, engine: Engine = Engine.PLANAR, *, rows: int | None = None
+    source: Surface,
+    engine: Engine = Engine.PLANAR,
+    *,
+    rows: int | None = None,
+    address: int = 0,
+    fresh: bool = True,
 ) -> dict[int, int]:
     """Program a second staged source, placed one staged slot after the first."""
     require_row_width(source, PLANAR_MIN_ROW_BYTES)
+    low, high = _split_address(address)
     offset = _l2_units(slot_offset(source, 1, engine, rows, separated=True))
     return splice(
         L2.pack(
             l2_src_second_stream=1,
             l2_src2_base_address=offset,
             l2_src2_channel_stride=_l2_units(source.l2_channel),
-            l2_src2_row_stride=_l2_units(source.staging_row(engine)),
+            l2_src2_row_stride=_l2_units(source.staging_row(engine, rows)),
             l2_src2_depth_stride=_l2_units(source.channels * source.l2_channel),
             l2_src2_group_stride=_l2_units(source.channels * source.l2_channel),
         ),
         SRC_DMA.pack(
+            **_src_tags(fresh),
+            tile_dma_src2_user_tag=0 if fresh else STREAM_TAG,
             tile_dma_src2_hint=SECOND_SOURCE_HINT,
             tile_dma_src2_data_set_id=DATA_SET_ID,
             tile_dma_src2_cache_hint=SOURCE_CACHE_HINT,
-            tile_dma_src2_base_addr_lo=0,
-            tile_dma_src2_base_addr_hi=0,
+            tile_dma_src2_base_addr_lo=low,
+            tile_dma_src2_base_addr_hi=high,
             **row_stride("tile_dma_src2_row_stride", source.dram_row_stride),
             tile_dma_src2_channel_stride=_dram_units(source.channel),
             tile_dma_src2_format_mode=fields.TensorFormatMode.COMPRESSED,
@@ -312,6 +392,9 @@ def store(
     staging: Surface | None = None,
     rows: int | None = None,
     guard: bool = False,
+    address: int = 0,
+    fresh: bool = True,
+    separated: bool | None = None,
     declare: bool = True,
 ) -> dict[int, int]:
     """Program writing one feature map: the L2 result buffer and the result DMA.
@@ -319,6 +402,7 @@ def store(
     The result buffer starts after the staged images, so ``staging`` names the
     surface whose staged extent locates it; it defaults to the destination.
     """
+    low, high = _split_address(address)
     return splice(
         COMMON.pack(
             **(
@@ -336,22 +420,24 @@ def store(
         L2.pack(
             l2_result_type=fields.L2Access.DMA_READ,
             l2_result_buffer_mode=1,
-            l2_result_alias_src=1,
-            l2_result_alias_rslt=1,
-            l2_result_alias_planar_src=1,
-            l2_result_alias_planar_rslt=1,
+            **_staged_flags(fresh),
             l2_result_dma_fmt=fields.TensorFormatMode.COMPRESSED,
             l2_result_interleave=INTERLEAVE,
             l2_result_base_addr=_l2_units(
                 slot_offset(
-                    staging or destination, staged, engine, rows, separated=staged >= 2
+                    staging or destination,
+                    staged,
+                    engine,
+                    rows,
+                    separated=staged >= 2 if separated is None else separated,
                 )
             ),
         ),
         DST_DMA.pack(
+            **_dst_tags(fresh),
             tile_dma_dst_enable=1,
-            tile_dma_dst_base_addr_lo=0,
-            tile_dma_dst_base_addr_hi=0,
+            tile_dma_dst_base_addr_lo=low,
+            tile_dma_dst_base_addr_hi=high,
             tile_dma_dst_hint=DEST_HINT,
             tile_dma_dst_data_set_id=DATA_SET_ID,
             tile_dma_dst_fifo_mode=FIFO_MODE,
@@ -468,6 +554,9 @@ def compute_ne(
     post_scale: float = 1.0,
     kernel_format: fields.KernelFormat | None = None,
     source_relu: bool = False,
+    tile_height: int | None = None,
+    width_code: int | None = None,
+    address: int = 0,
 ) -> dict[int, int]:
     """Program one neural engine pass over an already staged feature map.
 
@@ -491,10 +580,10 @@ def compute_ne(
             num_groups=1,
             unicast_en=1,
             unicast_cin=1,
-            tile_height=output.height,
+            tile_height=output.height if tile_height is None else tile_height,
             source_routing=1,
             task_type=fields.TaskType.NE,
-            ne_width_code=ratio.bit_length() - 1,
+            ne_width_code=(ratio.bit_length() - 1 if width_code is None else width_code),
             ne_full_group=1,
             node_id=1,
         ),

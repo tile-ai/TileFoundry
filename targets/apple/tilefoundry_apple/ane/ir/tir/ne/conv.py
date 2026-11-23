@@ -64,6 +64,9 @@ class Conv(expr.Op):
         default=Nonlinear.NONE,
     )
     tile_height = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    tile_width = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
+    width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     dst = expr.ParamDef(
         kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.forms("dst", DST)
     )

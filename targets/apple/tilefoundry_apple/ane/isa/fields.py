@@ -322,6 +322,7 @@ class TileDMASrc(Block, base=0x1100, end=0x11D4):
     tile_dma_src_group_stride = BitField(0x1124, 31, 6)
     tile_dma_src2_hint = BitField(0x1104, 7, 0)
     tile_dma_src2_data_set_id = BitField(0x1104, 15, 8)
+    tile_dma_src2_user_tag = BitField(0x1104, 23, 16)
     tile_dma_src2_cache_hint = BitField(0x110C, 7, 0)
     tile_dma_src2_base_addr_lo = BitField(0x1128, 31, 0)
     tile_dma_src2_base_addr_hi = BitField(0x112C, 31, 0)

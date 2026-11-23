@@ -85,6 +85,22 @@ def tile_rows(op, surface) -> int:
     return surface.height if rows is None else rows
 
 
+def pool_slots(rows: int, surface) -> int:
+    """Return how many staged slots a pooled result starts after.
+
+    A pooled descriptor that stages a whole plane writes its result into the
+    slot right behind the source; a single-staged-row tile keeps the source and
+    the result in separate staged images.
+    """
+    return POOL_RESULT_SLOTS if rows == surface.height else 2
+
+
+def op_patch(op, rows: int, surface) -> tuple[int, int]:
+    """Return the rasterization patch: the caller's choice, else the local rule."""
+    declared = getattr(op, "patch", None)
+    return raster_patch(rows, surface) if declared is None else tuple(declared)
+
+
 def raster_patch(rows: int, surface) -> tuple[int, int]:
     """Return the rasterization patch for a staged tile.
 
@@ -135,12 +151,14 @@ POOL = {
 
 
 @emitter(tir.Pool)
-def pool(call: expr.Call) -> list[Mapping[int, int]]:
+def pool(
+    call: expr.Call, address: Mapping[expr.Expr, int] | None = None, fresh: bool = True
+) -> list[Mapping[int, int]]:
     """Stage the operand, run one planar engine pooling pass, write the result."""
     op = call.target
     destination, source = call.args
-    src = feature_map(source.type, "src")
-    dst = feature_map(destination.type, "dst")
+    src = feature_map(source.type, "src").staged(getattr(op, "tile_width", None))
+    dst = feature_map(destination.type, "dst").staged(getattr(op, "tile_width", None))
     if op.ceil_mode:
         raise ValueError("T.ane.pool: ceil_mode is not emitted yet")
     kernel, stride = tuple(op.kernel_size), tuple(op.stride)
@@ -157,7 +175,7 @@ def pool(call: expr.Call) -> list[Mapping[int, int]]:
     except KeyError:
         raise ValueError(f"T.ane.pool: {op.kind} has no planar engine encoding") from None
     return [
-        intrinsic.load(src),
+        intrinsic.load(src, address=_address(address, source), fresh=fresh),
         intrinsic.compute_pe(
             isa.TaskType.PE_POOL_UNARY,
             dst,
@@ -168,16 +186,27 @@ def pool(call: expr.Call) -> list[Mapping[int, int]]:
             window=(kernel[1], kernel[0], stride[1], stride[0]),
             padding=padding,
             tile_height=tile_rows(op, dst),
-            patch=patch_for(kernel, stride),
+            patch=(
+                patch_for(kernel, stride) if getattr(op, "patch", None) is None else tuple(op.patch)
+            ),
         ),
         intrinsic.store(
-            dst, staging=src, rows=tile_rows(op, src), staged=POOL_RESULT_SLOTS, declare=False
+            dst,
+            staging=src,
+            rows=tile_rows(op, src),
+            staged=pool_slots(tile_rows(op, dst), dst),
+            address=_address(address, destination),
+            separated=False,
+            fresh=fresh,
+            declare=False,
         ),
     ]
 
 
 @emitter(tir.Reduce)
-def reduce(call: expr.Call) -> list[Mapping[int, int]]:
+def reduce(
+    call: expr.Call, address: Mapping[expr.Expr, int] | None = None, fresh: bool = True
+) -> list[Mapping[int, int]]:
     """Stage the operand, run one planar engine reduction, write the result.
 
     A reduction keeps the staged geometry as its declared window and places the
@@ -185,7 +214,8 @@ def reduce(call: expr.Call) -> list[Mapping[int, int]]:
     """
     op = call.target
     destination, source = call.args
-    src = feature_map(source.type, "src")
+    declared = feature_map(source.type, "src")
+    src = declared.staged(getattr(op, "tile_width", None))
     dst = feature_map(destination.type, "dst")
     if tuple(op.axes) != (2, 3) or not op.keepdim:
         raise ValueError(f"T.ane.reduce: axes {tuple(op.axes)} are not emitted yet")
@@ -202,7 +232,13 @@ def reduce(call: expr.Call) -> list[Mapping[int, int]]:
     except KeyError:
         raise ValueError(f"T.ane.reduce: {op.kind} has no planar engine encoding") from None
     parts = [
-        intrinsic.load(src),
+        intrinsic.load(
+            src,
+            address=_address(address, source),
+            fresh=fresh,
+            rows=tile_rows(op, src),
+            planar_result=True,
+        ),
         intrinsic.compute_pe(
             isa.TaskType.PE_EW_REDUCE_UNARY,
             dst,
@@ -211,13 +247,15 @@ def reduce(call: expr.Call) -> list[Mapping[int, int]]:
             tile_height=tile_rows(op, src),
             pool_mode=pool_mode,
             compare=compare,
-            patch=(4, 4),
+            patch=op_patch(op, tile_rows(op, dst), dst),
         ),
         intrinsic.store(
             dst,
             staging=src,
             rows=tile_rows(op, src),
             staged=REDUCE_RESULT_SLOTS,
+            address=_address(address, destination),
+            fresh=fresh,
             declare=False,
         ),
     ]
@@ -225,7 +263,9 @@ def reduce(call: expr.Call) -> list[Mapping[int, int]]:
 
 
 @emitter(tir.Binary)
-def binary(call: expr.Call) -> list[Mapping[int, int]]:
+def binary(
+    call: expr.Call, address: Mapping[expr.Expr, int] | None = None, fresh: bool = True
+) -> list[Mapping[int, int]]:
     """Stage both operands, run one planar engine binary pass, write the result."""
     op = call.target
     destination, lhs, rhs = call.args
@@ -241,8 +281,10 @@ def binary(call: expr.Call) -> list[Mapping[int, int]]:
     except KeyError:
         raise ValueError(f"T.ane.binary: {op.kind} has no planar engine encoding") from None
     return [
-        intrinsic.load(left),
-        intrinsic.load_second(right, rows=tile_rows(op, dst)),
+        intrinsic.load(left, address=_address(address, lhs), fresh=fresh),
+        intrinsic.load_second(
+            right, rows=tile_rows(op, dst), address=_address(address, rhs), fresh=fresh
+        ),
         intrinsic.compute_pe(
             isa.TaskType.PE_EW_BINARY,
             dst,
@@ -250,14 +292,23 @@ def binary(call: expr.Call) -> list[Mapping[int, int]]:
             second_source=second_source,
             source_routing=3,
             tile_height=tile_rows(op, dst),
-            patch=raster_patch(tile_rows(op, dst), dst),
+            patch=op_patch(op, tile_rows(op, dst), dst),
         ),
-        intrinsic.store(dst, staged=2, rows=tile_rows(op, dst)),
+        intrinsic.store(
+            dst,
+            staged=2,
+            rows=tile_rows(op, dst),
+            address=_address(address, destination),
+            fresh=fresh,
+            separated=True,
+        ),
     ]
 
 
 @emitter(tir.Bypass)
-def bypass(call: expr.Call) -> list[Mapping[int, int]]:
+def bypass(
+    call: expr.Call, address: Mapping[expr.Expr, int] | None = None, fresh: bool = True
+) -> list[Mapping[int, int]]:
     """Stage the operand, run one neural engine pass-through, write the result."""
     op = call.target
     destination, source = call.args
@@ -268,28 +319,45 @@ def bypass(call: expr.Call) -> list[Mapping[int, int]]:
     if tuple(op.perm) != (0, 1, 2):
         raise ValueError(f"T.ane.bypass: perm {tuple(op.perm)} is not emitted yet")
     return [
-        intrinsic.load(src, isa.Engine.NEURAL),
+        intrinsic.load(
+            src,
+            isa.Engine.NEURAL,
+            address=_address(address, source),
+            fresh=fresh,
+            rows=tile_rows(op, dst),
+        ),
         intrinsic.compute_ne(
             isa.NEOp.BYPASS,
             dst,
             nonlinear=NONLINEAR[op.nonlinear],
             kernel_mode=1,
+            tile_height=tile_rows(op, dst),
+            width_code=getattr(op, "width_code", None),
+            address=_address(address, destination),
         ),
-        intrinsic.store(dst, isa.Engine.NEURAL, rows=tile_rows(op, dst)),
+        intrinsic.store(
+            dst,
+            isa.Engine.NEURAL,
+            rows=tile_rows(op, dst),
+            address=_address(address, destination),
+            fresh=fresh,
+        ),
     ]
 
 
 @emitter(tir.Unary)
-def unary(call: expr.Call) -> list[Mapping[int, int]]:
+def unary(
+    call: expr.Call, address: Mapping[expr.Expr, int] | None = None, fresh: bool = True
+) -> list[Mapping[int, int]]:
     """Read the operand, run the planar engine pass, write the result."""
     op = call.target
     destination, source = call.args
-    src = feature_map(source.type, "src")
-    dst = feature_map(destination.type, "dst")
+    src = feature_map(source.type, "src").staged(getattr(op, "tile_width", None))
+    dst = feature_map(destination.type, "dst").staged(getattr(op, "tile_width", None))
     if (src.channels, src.height, src.width) != (dst.channels, dst.height, dst.width):
         raise ValueError("T.ane.unary: dst shape must equal src shape")
     return [
-        intrinsic.load(src),
+        intrinsic.load(src, address=_address(address, source), fresh=fresh),
         intrinsic.compute_pe(
             isa.TaskType.PE_EW_UNARY,
             dst,
@@ -300,10 +368,49 @@ def unary(call: expr.Call) -> list[Mapping[int, int]]:
             square=op.square,
             clamp=op.clamp,
             tile_height=tile_rows(op, dst),
-            patch=raster_patch(tile_rows(op, dst), dst),
+            patch=op_patch(op, tile_rows(op, dst), dst),
         ),
-        intrinsic.store(dst, rows=tile_rows(op, dst)),
+        intrinsic.store(
+            dst, rows=tile_rows(op, dst), address=_address(address, destination), fresh=fresh
+        ),
     ]
+
+
+def _address(addresses: Mapping[expr.Expr, int] | None, operand: expr.Expr) -> int:
+    """Return the byte address of one operand, defaulting to the tensor base."""
+    return 0 if addresses is None else addresses.get(operand, 0)
+
+
+def view_address(value: expr.Expr) -> int:
+    """Return the byte address a bound view starts at, relative to its tensor.
+
+    A view over a slice of a tensor names that slice's first element, so the DMA
+    programs the window's byte displacement rather than the tensor base.
+    """
+    if not isinstance(value, expr.Call):
+        return 0
+    pointer = value.args[0] if value.args else None
+    if not isinstance(pointer, expr.Call) or len(pointer.args) != 1:
+        return 0
+    window = pointer.args[0]
+    if not isinstance(window, expr.Call) or len(window.args) != 2:
+        return 0
+    tensor, starts = window.args
+    parent = tensor.type if hasattr(tensor, "type") else None
+    layout = getattr(parent, "layout", None)
+    if layout is None:
+        return 0
+    try:
+        stride = tuple(layout.strides)
+    except AttributeError:
+        return 0
+    total = 0
+    for begin, step in zip(getattr(starts, "elements", ()), stride, strict=False):
+        index = begin.value if isinstance(begin, expr.Constant) else 0
+        if not isinstance(index, int):
+            return 0
+        total += index * step
+    return total * 2
 
 
 class Builder(core.StmtVisitor[None]):
@@ -313,6 +420,7 @@ class Builder(core.StmtVisitor[None]):
         self.passes: list[list[Mapping[int, int]]] = []
         self.operands: list[tuple[expr.Expr, ...]] = []
         self.bound: set[expr.Expr] = set()
+        self.address: dict[expr.Expr, int] = {}
 
     def generic_visit(self, stmt, ctx) -> None:
         raise ValueError(f"{ctx}: cannot emit {type(stmt).__name__} as an ANE task descriptor")
@@ -321,8 +429,9 @@ class Builder(core.StmtVisitor[None]):
         super().generic_visit(stmt, ctx)
 
     def visit_LetStmt(self, stmt, ctx) -> None:
-        """A binding only names a slice; a descriptor reads its type, not its value."""
+        """A binding names a slice; record where that slice starts."""
         self.bound.add(stmt.var)
+        self.address[stmt.var] = view_address(stmt.value)
 
     def visit_MeshScope(self, stmt: core.MeshScope, ctx: str) -> None:
         if tuple((item.name, item.size) for item in stmt.mesh.topologies) != (("engine", 1),):
@@ -338,7 +447,8 @@ class Builder(core.StmtVisitor[None]):
             except ValueError:
                 name = type(op).__name__
             raise dispatch.MissingHandlerError(f"{ctx}: no intrinsic emitter for {name}")
-        self.passes.append(emit(expr.Call(op, stmt.args, type=types.TupleType.Void)))
+        call = expr.Call(op, stmt.args, type=types.TupleType.Void)
+        self.passes.append(emit(call, self.address, fresh=not self.passes))
         self.operands.append(stmt.args)
 
 
