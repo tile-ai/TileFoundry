@@ -26,12 +26,15 @@ from .fields import (
 from .intrinsic import (
     Engine,
     Surface,
+    coefficient_dma,
     compute_ne,
     compute_pe,
+    convolution,
     end_of_network,
     load,
     load_chained,
     splice,
+    staged_copy,
     store,
     surface,
 )

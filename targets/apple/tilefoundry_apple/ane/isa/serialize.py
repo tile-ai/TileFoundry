@@ -13,7 +13,7 @@ MASK_WIDTH = 16
 MASK_TAG = 1 << 31
 TASK_ALIGN_GRANULE = 16
 DESCRIPTOR_ALIGN = 64
-RELOCATION_SLOTS = {0x1110: 0x114, 0x1128: 0x118, 0x1508: 0x110}
+RELOCATION_SLOTS = {0x1110: 0x114, 0x1128: 0x118, 0x1508: 0x110, 0x1908: 0x118}
 """Base-address word pairs that are patched after emission, keyed by their low word.
 
 Each relocated base address is a 64-bit value in two adjacent words.  The pair

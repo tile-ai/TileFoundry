@@ -223,6 +223,7 @@ class Common(Block, base=0x0000, end=0x004C):
     task_type = BitField(0x0038, 6, 4, TaskType)
     ne_width_code = BitField(0x0038, 18, 16)
     ne_full_group = BitField(0x0038, 21, 21)
+    source_transposed = BitField(0x0038, 2, 2)
     output_transpose = BitField(0x0038, 28, 28)
     input_transpose = BitField(0x0038, 29, 29)
     node_id = BitField(0x003C, 27, 20)
@@ -376,8 +377,12 @@ class KernelDMA(Block, base=0x1900, end=0x1A18):
 
     kernel_dma_src_enable = BitField(0x1900, 6, 6)
     kernel_dma_armed = BitField(0x1900, 7, 7)
+    kernel_dma_coeff_present = BitField(0x1900, 9, 9)
+    kernel_dma_coeff_tag = BitField(0x1900, 23, 16)
     kernel_stride_registers = (BitField(0x1910, 31, 6), BitField(0x1914, 31, 6))
     kernel_dma_src_coeff_dma_en = tuple(BitField(addr, 0, 0) for addr in range(0x1918, 0x1958, 4))
+    kernel_dma_src_coeff_loaded = tuple(BitField(addr, 5, 5) for addr in range(0x1918, 0x1958, 4))
+    kernel_dma_src_coeff_tag = tuple(BitField(addr, 23, 16) for addr in range(0x1918, 0x1958, 4))
     kernel_dma_src_coeff_base_offset = tuple(
         BitField(addr, 31, 6) for addr in range(0x1958, 0x1998, 4)
     )

@@ -35,6 +35,7 @@ L2_ROW_ALIGN = 16
 L2_UNIT = 16
 STAGING_ROW_GUARD = 32
 STREAM_TAG = 1
+DEST_TAG = 1
 DATA_SET_ID = 14
 PLANAR_MIN_ROW_BYTES = 32
 NEURAL_MIN_ROW_BYTES = 16
@@ -475,6 +476,191 @@ def store(
             tile_dma_dst_fifo_mode=FIFO_MODE,
             **row_stride("tile_dma_dst_row_stride", destination.dram_row_stride),
             tile_dma_dst_channel_stride=_dram_units(destination.channel),
+            tile_dma_dst_format_mode=fields.TensorFormatMode.COMPRESSED,
+            tile_dma_dst_trunc=F16_TRUNC,
+            tile_dma_dst_memory_format=fields.TensorMemoryFormat.TILED,
+            tile_dma_dst_zero_pad_first=1,
+            tile_dma_dst_zero_pad_last=1,
+            tile_dma_dst_interleave=INTERLEAVE,
+        ),
+    )
+
+
+KERNEL_DMA_COEFF_SLOTS = 16
+KERNEL_DMA_MIN_BLOCK = 64
+
+
+def coefficient_dma(
+    outputs: int,
+    inputs: int,
+    *,
+    index: int = 0,
+    address: int = 0,
+) -> dict[int, int]:
+    """Program the coefficient stream of one convolution.
+
+    Every input column owns a coefficient block of ``outputs`` fp16 values, so the
+    column offsets step by that block and the per-column length is the same value.
+    The tables repeat over the sixteen slots the block exposes.
+    """
+    if not 1 <= inputs:
+        raise ValueError(f"coefficient columns {inputs} must be positive")
+    columns = max(1, -(-inputs // KERNEL_DMA_COEFF_SLOTS))
+    block = max(
+        KERNEL_DMA_MIN_BLOCK,
+        -(-columns * outputs * FP16_BYTES // KERNEL_DMA_MIN_BLOCK) * KERNEL_DMA_MIN_BLOCK,
+    )
+    image = KERNEL_DMA.pack(
+        kernel_dma_src_enable=1,
+        kernel_dma_armed=1,
+        kernel_dma_coeff_present=1,
+        kernel_dma_coeff_tag=index + 1,
+    )
+    for slot in range(KERNEL_DMA_COEFF_SLOTS):
+        active = slot < inputs
+        for group, value in (
+            (KERNEL_DMA.kernel_dma_src_coeff_dma_en, int(active)),
+            (KERNEL_DMA.kernel_dma_src_coeff_loaded, int(active)),
+            (KERNEL_DMA.kernel_dma_src_coeff_tag, index if active else 0),
+            (KERNEL_DMA.kernel_dma_src_coeff_base_offset, _dram_units(slot * block)),
+            (KERNEL_DMA.kernel_dma_src_coeff_mem_buffer_size, _dram_units(block)),
+        ):
+            field = group[slot]
+            if value == 0 and field.lo != 16:
+                continue
+            if (
+                group is KERNEL_DMA.kernel_dma_src_coeff_mem_buffer_size
+                and block == KERNEL_DMA_MIN_BLOCK
+            ):
+                continue
+            image[field.addr] = field.put(image.get(field.addr, 0), value)
+    return image
+
+
+def staged_copy(source: Surface, *, address: int = 0) -> dict[int, int]:
+    """Copy a feature map into the L2 buffer, transposed and without a result DMA.
+
+    The reference copy descriptor of a matmul chain declares the channels on the
+    fast axis, so the source and result strides are both ``channels * 2`` bytes
+    and the result stride stays at one sixteen-byte unit.  The pass ends in L2:
+    the chain's next descriptor reads it and the last one writes DRAM.
+    """
+    channels = source.channels
+    low, high = _split_address(address)
+    return splice(
+        COMMON.pack(
+            win=source.width,
+            hin=source.height,
+            din=1,
+            cin=channels,
+            cout=channels,
+            wout=source.width,
+            hout=source.height,
+            dout=1,
+            tile_height=1,
+            patch_width=7,
+            patch_height=0,
+            pe_src1_transpose=1,
+            source_routing=1,
+            task_type=fields.TaskType.PE_EW_UNARY,
+            node_id=0,
+        ),
+        L2.pack(
+            l2_src_type=fields.L2Access.DMA_READ2,
+            l2_src_alias_conv_src=1,
+            l2_src_alias_conv_rslt=1,
+            l2_src_dma_format=fields.TensorFormatMode.COMPRESSED,
+            l2_src_interleave=INTERLEAVE,
+            l2_src_alias_planar_src=1,
+            l2_src_alias_planar_rslt=1,
+            l2_src_base_address=_l2_units(channels * 16),
+            l2_src_channel_stride=_l2_units(channels * FP16_BYTES),
+            l2_src_row_stride=_l2_units(channels * FP16_BYTES),
+            l2_src_depth_stride=_l2_units(channels * FP16_BYTES),
+            l2_src_group_stride=_l2_units(channels * FP16_BYTES),
+            l2_result_type=fields.L2Access.L2_READ,
+            l2_result_alias_src=1,
+            l2_result_alias_rslt=1,
+            l2_result_interleave=INTERLEAVE,
+            l2_result_alias_planar_src=1,
+            l2_result_alias_planar_rslt=1,
+            l2_result_channel_stride=_l2_units(STAGING_ROW_GUARD // 2),
+        ),
+        SRC_DMA.pack(
+            tile_dma_src_hint=SOURCE_HINT,
+            tile_dma_src_base_addr_lo=low,
+            tile_dma_src_base_addr_hi=high,
+            tile_dma_src_data_set_id=DATA_SET_ID,
+            tile_dma_src_cache_hint=SOURCE_CACHE_HINT,
+            tile_dma_src_format_mode=fields.TensorFormatMode.COMPRESSED,
+            tile_dma_src_trunc=F16_TRUNC,
+            tile_dma_src_memory_format=fields.TensorMemoryFormat.TILED,
+            tile_dma_src_interleave=INTERLEAVE,
+        ),
+    )
+
+
+def convolution(
+    source: Surface,
+    destination: Surface,
+    *,
+    index: int,
+    ocg_size: int,
+    address: int = 0,
+) -> dict[int, int]:
+    """Program one convolution pass over a staged source with a coefficient stream.
+
+    The pass reads the source the previous descriptor staged, so no source DMA
+    and no source relocation are programmed.  Its result lands one channel slab
+    after the staged source.
+    """
+    low, high = _split_address(address)
+    return splice(
+        {0x1908: low & 0, 0x190C: high},
+        COMMON.pack(
+            win=source.width,
+            hin=source.height,
+            din=1,
+            cin=source.channels,
+            cout=destination.channels,
+            wout=destination.width,
+            hout=destination.height,
+            dout=1,
+            **({} if destination.channels > NE_CHANNEL_GROUP * 4 else {"ne_ocg_size": ocg_size}),
+            tile_height=1,
+            source_routing=1,
+            source_transposed=1,
+            task_type=fields.TaskType.NE,
+            ne_full_group=1,
+            output_transpose=1,
+            node_id=1,
+        ),
+        L2.pack(
+            l2_src_type=fields.L2Access.L2_READ,
+            l2_src_dependent=2,
+            l2_src_interleave=INTERLEAVE,
+            l2_src_channel_stride=_l2_units(FP16_BYTES * 8),
+            l2_result_type=fields.L2Access.DMA_READ,
+            l2_result_buffer_mode=1,
+            l2_result_dma_fmt=fields.TensorFormatMode.COMPRESSED,
+            l2_result_interleave=INTERLEAVE,
+            l2_result_base_addr=_l2_units(source.channels * 18),
+        ),
+        NE.pack(
+            op=fields.NEOp.CONV,
+            ne_pipeline_code=NE_PIPELINE_CODE,
+            arg_output_select=NE_OUTPUT_SELECT,
+            post_scale=fp16(1.0, "post_scale"),
+        ),
+        coefficient_dma(destination.channels, source.channels, index=index),
+        DST_DMA.pack(
+            tile_dma_dst_enable=1,
+            tile_dma_dst_base_addr_lo=low,
+            tile_dma_dst_base_addr_hi=high,
+            tile_dma_dst_hint=DEST_HINT,
+            tile_dma_dst_data_set_id=DATA_SET_ID,
+            tile_dma_dst_user_tag=DEST_TAG,
+            tile_dma_dst_fifo_mode=1,
             tile_dma_dst_format_mode=fields.TensorFormatMode.COMPRESSED,
             tile_dma_dst_trunc=F16_TRUNC,
             tile_dma_dst_memory_format=fields.TensorMemoryFormat.TILED,

@@ -490,6 +490,24 @@ class Builder(core.StmtVisitor[None]):
         self.operands.append(stmt.args)
 
 
+def matmul_stream(cin: int, cout: int, *, ocg_size: int) -> isa.Program:
+    """Build the two-descriptor stream of a matmul lowered to one convolution.
+
+    The first descriptor copies the operand into the L2 buffer with the channels
+    on the fast axis; the second runs the convolution with the coefficient stream
+    and writes the result to DRAM.  ``ocg_size`` is the output channel group
+    count the scheduler chooses.
+    """
+    source = isa.surface(cin, 1, 1)
+    destination = isa.surface(cout, 1, 1)
+    return serialize.to_program(
+        [
+            [isa.staged_copy(source)],
+            [isa.convolution(source, destination, index=1, ocg_size=ocg_size)],
+        ]
+    )
+
+
 def build_program(fn: core.PrimFunction) -> isa.Program:
     """Build one task descriptor stream from a lowered H14 PrimFunction."""
     label = f"{target.summary(fn.target)} {fn.name}"
