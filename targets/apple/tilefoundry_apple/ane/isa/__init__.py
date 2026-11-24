@@ -34,6 +34,7 @@ from .intrinsic import (
     end_of_network,
     load,
     load_chained,
+    multiply,
     splice,
     staged_copy,
     store,

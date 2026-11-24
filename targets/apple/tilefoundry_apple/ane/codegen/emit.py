@@ -540,3 +540,137 @@ __all__ = [
     "reduce",
     "unary",
 ]
+
+
+def glu_stream(cin: int, inter: int, slots: Mapping[str, int]) -> isa.Program:
+    """Build the fused gate/up/multiply stream of one GLU block.
+
+    Every L2 slot, the rasterization patch and the DRAM ownership come from the
+    memory allocator, so ``slots`` names them; only the register encoding is
+    derived here.
+    """
+    operand = isa.surface(cin, 1, 1)
+    hidden = isa.surface(inter, 1, 1)
+    return serialize.to_program(
+        [
+            [
+                isa.staged_copy(
+                    operand,
+                    source_base=slots["staged_source"],
+                    result_base=slots["staged_result"],
+                )
+            ],
+            [
+                isa.convolution(
+                    operand,
+                    hidden,
+                    index=1,
+                    ocg_size=slots["gate_ocg"],
+                    activate=True,
+                    armed=False,
+                    staged_source=True,
+                    to_dram=False,
+                    source_base=slots["hidden_input"],
+                )
+            ],
+            [
+                isa.convolution(
+                    operand,
+                    hidden,
+                    index=2,
+                    ocg_size=slots["up_ocg"],
+                    armed=False,
+                    staged_source=True,
+                    to_dram=False,
+                    source_base=slots["hidden_input"],
+                    result_base=slots["gate_result"],
+                    read_config=False,
+                )
+            ],
+            [
+                isa.multiply(
+                    *slots["multiply_shape"],
+                    second_base=slots["gate_result"],
+                    result_base=slots["block_result"],
+                    patch=slots["multiply_patch"],
+                    transpose=slots["multiply_transpose"],
+                    to_dram=True,
+                    result_config=1,
+                    lut_armed=True,
+                    index=3,
+                )
+            ],
+        ]
+    )
+
+
+def ffn_stream(cin: int, inter: int, slots: Mapping[str, int]) -> isa.Program:
+    """Build the fused gate/up/multiply/down stream of one SwiGLU FFN block.
+
+    The GLU passes come from the same emitter as a standalone block; the down
+    projection adds the pass that writes the block result to DRAM.
+    """
+    operand = isa.surface(cin, 1, 1)
+    hidden = isa.surface(inter, 1, 1)
+    passes = [
+        [
+            isa.staged_copy(
+                operand,
+                source_base=slots["staged_source"],
+                result_base=slots["staged_result"],
+            )
+        ],
+        [
+            isa.convolution(
+                operand,
+                hidden,
+                index=1,
+                ocg_size=slots["gate_ocg"],
+                activate=True,
+                armed=False,
+                staged_source=True,
+                to_dram=False,
+                source_base=slots["hidden_input"],
+            )
+        ],
+        [
+            isa.convolution(
+                operand,
+                hidden,
+                index=2,
+                ocg_size=slots["up_ocg"],
+                armed=False,
+                staged_source=True,
+                to_dram=False,
+                source_base=slots["hidden_input"],
+                result_base=slots["gate_result"],
+                read_config=False,
+            )
+        ],
+        [
+            isa.multiply(
+                *slots["multiply_shape"],
+                second_base=slots["gate_result"],
+                result_base=slots["block_result"],
+                patch=slots["multiply_patch"],
+                transpose=slots["multiply_transpose"],
+                to_dram=False,
+                result_config=0,
+                result_stride=slots["multiply_stride"],
+            )
+        ],
+        [
+            isa.convolution(
+                hidden,
+                operand,
+                index=4,
+                ocg_size=slots["down_ocg"],
+                armed=True,
+                staged_source=True,
+                to_dram=True,
+                source_base=slots["hidden_input"],
+                result_base=slots["ffn_result"],
+            )
+        ],
+    ]
+    return serialize.to_program(passes)

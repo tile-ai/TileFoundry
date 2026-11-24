@@ -542,7 +542,13 @@ def coefficient_dma(
     return image
 
 
-def staged_copy(source: Surface, *, address: int = 0) -> dict[int, int]:
+def staged_copy(
+    source: Surface,
+    *,
+    source_base: int | None = None,
+    result_base: int | None = None,
+    address: int = 0,
+) -> dict[int, int]:
     """Copy a feature map into the L2 buffer, transposed and without a result DMA.
 
     The reference copy descriptor of a matmul chain declares the channels on the
@@ -578,7 +584,7 @@ def staged_copy(source: Surface, *, address: int = 0) -> dict[int, int]:
             l2_src_interleave=INTERLEAVE,
             l2_src_alias_planar_src=1,
             l2_src_alias_planar_rslt=1,
-            l2_src_base_address=_l2_units(channels * 16),
+            l2_src_base_address=_l2_units(channels * 16 if source_base is None else source_base),
             l2_src_channel_stride=_l2_units(channels * FP16_BYTES),
             l2_src_row_stride=_l2_units(channels * FP16_BYTES),
             l2_src_depth_stride=_l2_units(channels * FP16_BYTES),
@@ -589,6 +595,7 @@ def staged_copy(source: Surface, *, address: int = 0) -> dict[int, int]:
             l2_result_interleave=INTERLEAVE,
             l2_result_alias_planar_src=1,
             l2_result_alias_planar_rslt=1,
+            **({} if result_base is None else {"l2_result_base_addr": _l2_units(result_base)}),
             l2_result_channel_stride=_l2_units(STAGING_ROW_GUARD // 2),
         ),
         SRC_DMA.pack(
@@ -616,6 +623,8 @@ def convolution(
     staged_source: bool = False,
     to_dram: bool = True,
     source_base: int = 0,
+    result_base: int | None = None,
+    read_config: bool = True,
     address: int = 0,
 ) -> dict[int, int]:
     """Program one convolution pass over a staged source with a coefficient stream.
@@ -646,9 +655,15 @@ def convolution(
             node_id=1,
         ),
         L2.pack(
-            l2_src_type=fields.L2Access.L2_READ,
-            l2_src_dependent=2,
-            l2_src_interleave=INTERLEAVE,
+            **(
+                {}
+                if not read_config
+                else {
+                    "l2_src_type": fields.L2Access.L2_READ,
+                    "l2_src_dependent": 2,
+                    "l2_src_interleave": INTERLEAVE,
+                }
+            ),
             **({} if not staged_source else {"l2_src_base_address": _l2_units(source_base)}),
             l2_src_channel_stride=_l2_units(FP16_BYTES * 8),
             l2_result_type=(fields.L2Access.DMA_READ if to_dram else fields.L2Access.L2_READ),
@@ -656,9 +671,13 @@ def convolution(
             l2_result_dma_fmt=fields.TensorFormatMode.COMPRESSED,
             l2_result_interleave=INTERLEAVE,
             **(
-                {"l2_result_base_addr": _l2_units(source_base + source.channels * 18)}
-                if to_dram
-                else {}
+                {}
+                if result_base is None and not to_dram
+                else {
+                    "l2_result_base_addr": _l2_units(
+                        source_base + source.channels * 18 if result_base is None else result_base
+                    )
+                }
             ),
         ),
         NE.pack(
@@ -801,6 +820,101 @@ def activation(
             nonlinear_lut_size=_dram_units(lut_bytes),
         ),
         {0x19F4: 0, 0x1A00: 0, 0x1A04: 0},
+    )
+
+
+def multiply(
+    channels: int,
+    height: int,
+    width: int,
+    *,
+    second_base: int,
+    result_base: int,
+    patch: tuple[int, int],
+    transpose: bool,
+    result_config: int = 0,
+    result_stride: int | None = None,
+    read_config: int = 0,
+    to_dram: bool = False,
+    lut_armed: bool = False,
+    index: int = 0,
+    width_stride: int | None = None,
+    address: int = 0,
+    second_address: int = 0,
+) -> dict[int, int]:
+    """Multiply two staged sources and write the product where the plan says.
+
+    The operand layout, the rasterization patch, the transposition flags and the
+    result slot all come from the memory allocator, so the caller passes them;
+    only the register encoding is derived here.  ``result_config`` carries the
+    allocator's L2 result configuration word when it is not the plain read form.
+    """
+    low, high = _split_address(address)
+    dest_low, dest_high = _split_address(second_address)
+    return splice(
+        COMMON.pack(
+            win=width,
+            hin=height,
+            din=1,
+            cin=channels,
+            cout=channels,
+            wout=width,
+            hout=height,
+            dout=1,
+            tile_height=1,
+            patch_width=patch[0],
+            patch_height=patch[1],
+            **({} if not transpose else {"pe_src1_transpose": 1, "pe_src2_transpose": 1}),
+            source_routing=1,
+            task_type=fields.TaskType.PE_EW_BINARY,
+            node_id=0,
+        ),
+        L2.pack(
+            l2_src_type=fields.L2Access.L2_READ,
+            l2_src_alias_conv_rslt=1,
+            l2_src_interleave=INTERLEAVE,
+            l2_src2_base_address=_l2_units(second_base),
+            **({} if not read_config else {"l2_src_channel_stride": read_config}),
+            **(
+                {}
+                if not result_config
+                else {
+                    "l2_result_type": (
+                        fields.L2Access.DMA_READ if to_dram else fields.L2Access.L2_READ
+                    ),
+                    **({} if not to_dram else {"l2_result_buffer_mode": 1}),
+                    "l2_result_dma_fmt": fields.TensorFormatMode.COMPRESSED,
+                    "l2_result_interleave": INTERLEAVE,
+                }
+            ),
+            l2_result_base_addr=_l2_units(result_base),
+            **(
+                {}
+                if result_stride is None
+                else {"l2_result_channel_stride": _l2_units(result_stride)}
+            ),
+        ),
+        PE.pack(op=fields.PEOp.MUL, second_source=2),
+        {} if not lut_armed else KERNEL_DMA.pack(kernel_dma_armed=1),
+        (
+            {}
+            if not to_dram
+            else DST_DMA.pack(
+                tile_dma_dst_enable=1,
+                tile_dma_dst_base_addr_lo=dest_low,
+                tile_dma_dst_base_addr_hi=dest_high,
+                tile_dma_dst_hint=DEST_HINT,
+                tile_dma_dst_data_set_id=DATA_SET_ID,
+                tile_dma_dst_user_tag=index,
+                tile_dma_dst_fifo_mode=1,
+                tile_dma_dst_format_mode=fields.TensorFormatMode.COMPRESSED,
+                tile_dma_dst_trunc=F16_TRUNC,
+                tile_dma_dst_memory_format=fields.TensorMemoryFormat.TILED,
+                tile_dma_dst_zero_pad_first=1,
+                tile_dma_dst_zero_pad_last=1,
+                tile_dma_dst_interleave=INTERLEAVE,
+            )
+        ),
     )
 
 
