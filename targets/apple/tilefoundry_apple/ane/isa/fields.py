@@ -224,6 +224,7 @@ class Common(Block, base=0x0000, end=0x004C):
     ne_width_code = BitField(0x0038, 18, 16)
     ne_full_group = BitField(0x0038, 21, 21)
     output_transpose = BitField(0x0038, 28, 28)
+    input_transpose = BitField(0x0038, 29, 29)
     node_id = BitField(0x003C, 27, 20)
 
 

@@ -345,6 +345,36 @@ def slot_offset(
     return slots * extent + separator
 
 
+def load_chained(
+    source: Surface, engine: Engine = Engine.PLANAR, *, rows: int | None = None
+) -> dict[int, int]:
+    """Read a source the previous descriptor left staged instead of reloading it.
+
+    A chained pass names the L2 buffer its predecessor filled, so it programs no
+    source DMA at all: the L2 source type alone selects the chain path.  The
+    encoding is read from the interface enum; the shape of the staged image is
+    the one the predecessor wrote, so the strides come from the same surface.
+    """
+    require_row_width(source, PLANAR_MIN_ROW_BYTES)
+    return splice(
+        COMMON.pack(
+            win=source.width,
+            hin=source.height,
+            din=1,
+            cin=source.channels,
+            common_in_fmt=COMMON_FORMAT_F16,
+            common_src2_in_fmt=COMMON_FORMAT_F16,
+        ),
+        L2.pack(
+            l2_src_type=fields.L2Access.L2_CHAIN_READ,
+            l2_src_channel_stride=_l2_units(source.l2_channel),
+            l2_src_row_stride=_l2_units(source.staging_row(engine, rows)),
+            l2_src_depth_stride=_l2_units(source.channels * source.l2_channel),
+            l2_src_group_stride=_l2_units(source.channels * source.l2_channel),
+        ),
+    )
+
+
 def load_second(
     source: Surface,
     engine: Engine = Engine.PLANAR,
@@ -396,6 +426,7 @@ def store(
     fresh: bool = True,
     separated: bool | None = None,
     declare: bool = True,
+    declared: Surface | None = None,
 ) -> dict[int, int]:
     """Program writing one feature map: the L2 result buffer and the result DMA.
 
@@ -409,10 +440,10 @@ def store(
                 {}
                 if not declare
                 else {
-                    "wout": destination.width,
-                    "hout": destination.height,
+                    "wout": (destination if declared is None else declared).width,
+                    "hout": (destination if declared is None else declared).height,
                     "dout": 1,
-                    "cout": destination.channels,
+                    "cout": (destination if declared is None else declared).channels,
                 }
             ),
             common_out_fmt=COMMON_FORMAT_F16,
@@ -556,6 +587,10 @@ def compute_ne(
     source_relu: bool = False,
     tile_height: int | None = None,
     width_code: int | None = None,
+    declared: Surface | None = None,
+    transpose: bool = False,
+    unicast_channels: int = 1,
+    ocg_size: int | None = 0,
     address: int = 0,
 ) -> dict[int, int]:
     """Program one neural engine pass over an already staged feature map.
@@ -568,23 +603,33 @@ def compute_ne(
             f"neural engine pass over {output.channels} channels is below one "
             f"{NE_CHANNEL_GROUP}-channel group; that configuration is not decoded"
         )
-    ratio = NE_WIDTH_UNIT // (output.width * FP16_BYTES)
-    if ratio < 1 or ratio & (ratio - 1):
-        raise ValueError(
-            f"feature map row {output.width * FP16_BYTES} bytes is not a power-of-two "
-            f"divisor of {NE_WIDTH_UNIT}; the neural width code is not decoded"
-        )
+    if width_code is None:
+        ratio = NE_WIDTH_UNIT // (output.width * FP16_BYTES)
+        if ratio < 1 or ratio & (ratio - 1):
+            raise ValueError(
+                f"feature map row {output.width * FP16_BYTES} bytes is not a power-of-two "
+                f"divisor of {NE_WIDTH_UNIT}; the neural width code is not decoded"
+            )
+        width_code = ratio.bit_length() - 1
+    shown = output if declared is None else declared
     return splice(
         COMMON.pack(
-            ne_ocg_size=0,
+            win=shown.width,
+            hin=shown.height,
+            wout=shown.width,
+            hout=shown.height,
+            cout=shown.channels,
+            **({} if ocg_size is None else {"ne_ocg_size": ocg_size}),
             num_groups=1,
             unicast_en=1,
-            unicast_cin=1,
+            unicast_cin=unicast_channels,
             tile_height=output.height if tile_height is None else tile_height,
             source_routing=1,
             task_type=fields.TaskType.NE,
-            ne_width_code=(ratio.bit_length() - 1 if width_code is None else width_code),
+            ne_width_code=width_code,
             ne_full_group=1,
+            output_transpose=1 if transpose else 0,
+            input_transpose=1 if transpose else 0,
             node_id=1,
         ),
         L2.pack(pe_src1_re_lu=int(source_relu)),
@@ -609,6 +654,7 @@ __all__ = [
     "require_row_width",
     "fp16",
     "load",
+    "load_chained",
     "load_second",
     "splice",
     "store",

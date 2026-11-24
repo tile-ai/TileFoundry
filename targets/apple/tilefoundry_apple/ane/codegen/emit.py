@@ -31,7 +31,7 @@ EMITTERS = registry.entries
 emitter = registry.register_for
 
 
-def feature_map(type_: types.TensorType, name: str) -> intrinsic.Surface:
+def feature_map(type_: types.TensorType, name: str, *, strided: bool = False) -> intrinsic.Surface:
     """Read one supported static fp16 feature map in global memory."""
     if not isinstance(type_, types.TensorType) or type_.dtype is not expr.DType.f16:
         raise ValueError(f"{name} must be an fp16 tensor")
@@ -56,6 +56,8 @@ def feature_map(type_: types.TensorType, name: str) -> intrinsic.Surface:
     except ValueError as error:
         raise ValueError(f"{name}: {error}") from error
     declared = (row or surface.row, channel or surface.channel)
+    if strided:
+        return intrinsic.Surface(channels, height, width, declared[0], declared[1])
     if declared != (surface.row, surface.channel):
         raise ValueError(
             f"{name} declares a {declared} byte row/channel stride, but a "
@@ -309,15 +311,23 @@ def binary(
 def bypass(
     call: expr.Call, address: Mapping[expr.Expr, int] | None = None, fresh: bool = True
 ) -> list[Mapping[int, int]]:
-    """Stage the operand, run one neural engine pass-through, write the result."""
+    """Stage the operand, run one neural engine pass-through, write the result.
+
+    A pass-through that permutes the feature map writes a destination whose DMA
+    strides follow the transposed binding, so the declared strides are used
+    verbatim instead of the canonical surface.
+    """
     op = call.target
     destination, source = call.args
+    permuted = tuple(op.perm) != (0, 1, 2)
     src = feature_map(source.type, "src")
-    dst = feature_map(destination.type, "dst")
-    if (src.channels, src.height, src.width) != (dst.channels, dst.height, dst.width):
+    dst = feature_map(destination.type, "dst", strided=permuted)
+    if not permuted and (src.channels, src.height, src.width) != (
+        dst.channels,
+        dst.height,
+        dst.width,
+    ):
         raise ValueError("T.ane.bypass: dst shape must equal src shape")
-    if tuple(op.perm) != (0, 1, 2):
-        raise ValueError(f"T.ane.bypass: perm {tuple(op.perm)} is not emitted yet")
     return [
         intrinsic.load(
             src,
@@ -333,6 +343,12 @@ def bypass(
             kernel_mode=1,
             tile_height=tile_rows(op, dst),
             width_code=getattr(op, "width_code", None),
+            declared=src if permuted else None,
+            transpose=permuted,
+            unicast_channels=(getattr(op, "unicast_channels", None) or (2 if permuted else 1)),
+            ocg_size=(
+                None if getattr(op, "omit_ocg", False) else (getattr(op, "ocg_size", None) or 0)
+            ),
             address=_address(address, destination),
         ),
         intrinsic.store(
@@ -341,6 +357,7 @@ def bypass(
             rows=tile_rows(op, dst),
             address=_address(address, destination),
             fresh=fresh,
+            declared=src if permuted else None,
         ),
     ]
 

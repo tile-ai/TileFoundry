@@ -114,6 +114,26 @@ def require_strides(call, ctx, name: str, type_: types.TensorType, *candidates: 
         )
 
 
+def require_strides_or_dense(
+    call, ctx, name: str, type_: types.TensorType, *candidates: tuple
+) -> None:
+    """Refuse *call* unless *name* matches a candidate or has a dense innermost axis."""
+    if strided(type_, *candidates):
+        return
+    require_innermost_contiguous(call, ctx, name, type_)
+
+
+def require_innermost_contiguous(call, ctx, name: str, type_: types.TensorType) -> None:
+    """Refuse *call* unless the innermost stride of *name* is one.
+
+    A weight view of a larger matrix keeps the parent's outer strides; only the
+    innermost axis has to be dense for the coefficient DMA to read it.
+    """
+    plain = types.plain_layout(type_.layout)
+    if plain.shape[-1] != 1 and plain.strides[-1] != 1:
+        ctx.error(call, f"{name} innermost stride {plain.strides[-1]} must be 1")
+
+
 def feature_dma_strides(type_: types.TensorType) -> tuple[int, int]:
     """Read static feature map row and channel strides in bytes."""
     plain = type_.layout

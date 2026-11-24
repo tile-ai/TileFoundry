@@ -30,6 +30,7 @@ from .intrinsic import (
     compute_pe,
     end_of_network,
     load,
+    load_chained,
     splice,
     store,
     surface,

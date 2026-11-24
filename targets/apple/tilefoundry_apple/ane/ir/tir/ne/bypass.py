@@ -57,6 +57,9 @@ class Bypass(expr.Op):
     tile_width = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
     width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    unicast_channels = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
     dst = expr.ParamDef(
         kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.forms("dst", DST)
     )

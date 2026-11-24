@@ -67,6 +67,8 @@ class Conv(expr.Op):
     tile_width = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
     width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
     dst = expr.ParamDef(
         kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.forms("dst", DST)
     )
@@ -165,8 +167,8 @@ def check_matrix(call, ctx, dst, src, weight, bias) -> None:
             ctx.error(call, f"{name} {value} must be {plain} for a matrix product")
     (rows, depth), (inner, columns) = src.shape, weight.shape
     layout.require_strides(call, ctx, "src", src, (1, rows))
-    layout.require_strides(call, ctx, "weight", weight, (columns, 1))
-    layout.require_strides(call, ctx, "dst", dst, (1, rows), (columns, 1))
+    layout.require_innermost_contiguous(call, ctx, "weight", weight)
+    layout.require_strides_or_dense(call, ctx, "dst", dst, (1, rows), (columns, 1))
     if depth != inner:
         ctx.error(
             call, f"src shape {tuple(src.shape)} and weight shape {tuple(weight.shape)} differ in K"
