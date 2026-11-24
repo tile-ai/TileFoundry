@@ -177,7 +177,11 @@ def pool(
     except KeyError:
         raise ValueError(f"T.ane.pool: {op.kind} has no planar engine encoding") from None
     return [
-        intrinsic.load(src, address=_address(address, source), fresh=fresh),
+        (
+            intrinsic.load_chained(src, rows=tile_rows(op, src))
+            if chain_source(op)
+            else intrinsic.load(src, address=_address(address, source), fresh=fresh)
+        ),
         intrinsic.compute_pe(
             isa.TaskType.PE_POOL_UNARY,
             dst,
@@ -283,7 +287,11 @@ def binary(
     except KeyError:
         raise ValueError(f"T.ane.binary: {op.kind} has no planar engine encoding") from None
     return [
-        intrinsic.load(left, address=_address(address, lhs), fresh=fresh),
+        (
+            intrinsic.load_chained(left, rows=tile_rows(op, dst))
+            if chain_source(op)
+            else intrinsic.load(left, address=_address(address, lhs), fresh=fresh)
+        ),
         intrinsic.load_second(
             right, rows=tile_rows(op, dst), address=_address(address, rhs), fresh=fresh
         ),
@@ -329,12 +337,16 @@ def bypass(
     ):
         raise ValueError("T.ane.bypass: dst shape must equal src shape")
     return [
-        intrinsic.load(
-            src,
-            isa.Engine.NEURAL,
-            address=_address(address, source),
-            fresh=fresh,
-            rows=tile_rows(op, dst),
+        (
+            intrinsic.load_chained(src, isa.Engine.NEURAL, rows=tile_rows(op, dst))
+            if chain_source(op)
+            else intrinsic.load(
+                src,
+                isa.Engine.NEURAL,
+                address=_address(address, source),
+                fresh=fresh,
+                rows=tile_rows(op, dst),
+            )
         ),
         intrinsic.compute_ne(
             isa.NEOp.BYPASS,
@@ -374,7 +386,11 @@ def unary(
     if (src.channels, src.height, src.width) != (dst.channels, dst.height, dst.width):
         raise ValueError("T.ane.unary: dst shape must equal src shape")
     return [
-        intrinsic.load(src, address=_address(address, source), fresh=fresh),
+        (
+            intrinsic.load_chained(src, rows=tile_rows(op, src))
+            if chain_source(op)
+            else intrinsic.load(src, address=_address(address, source), fresh=fresh)
+        ),
         intrinsic.compute_pe(
             isa.TaskType.PE_EW_UNARY,
             dst,
@@ -391,6 +407,11 @@ def unary(
             dst, rows=tile_rows(op, dst), address=_address(address, destination), fresh=fresh
         ),
     ]
+
+
+def chain_source(op) -> bool:
+    """Whether this pass reads the source its predecessor left staged."""
+    return bool(getattr(op, "chained_source", False))
 
 
 def _address(addresses: Mapping[expr.Expr, int] | None, operand: expr.Expr) -> int:

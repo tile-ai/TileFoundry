@@ -350,10 +350,10 @@ def load_chained(
 ) -> dict[int, int]:
     """Read a source the previous descriptor left staged instead of reloading it.
 
-    A chained pass names the L2 buffer its predecessor filled, so it programs no
-    source DMA at all: the L2 source type alone selects the chain path.  The
-    encoding is read from the interface enum; the shape of the staged image is
-    the one the predecessor wrote, so the strides come from the same surface.
+    A chained pass reads the L2 buffer its predecessor filled, so it programs no
+    source DMA at all and leaves the access type at L2 read.  The reference
+    streams for an add-then-pool and an abs-then-add chain both show a chained
+    descriptor carrying no source DMA block, which is what this encodes.
     """
     require_row_width(source, PLANAR_MIN_ROW_BYTES)
     return splice(
@@ -366,11 +366,11 @@ def load_chained(
             common_src2_in_fmt=COMMON_FORMAT_F16,
         ),
         L2.pack(
-            l2_src_type=fields.L2Access.L2_CHAIN_READ,
+            l2_src_type=fields.L2Access.L2_READ,
+            **_staged_flags(False, planar_result=True),
+            l2_src_interleave=INTERLEAVE,
             l2_src_channel_stride=_l2_units(source.l2_channel),
             l2_src_row_stride=_l2_units(source.staging_row(engine, rows)),
-            l2_src_depth_stride=_l2_units(source.channels * source.l2_channel),
-            l2_src_group_stride=_l2_units(source.channels * source.l2_channel),
         ),
     )
 
@@ -427,6 +427,7 @@ def store(
     separated: bool | None = None,
     declare: bool = True,
     declared: Surface | None = None,
+    planar_result: bool = False,
 ) -> dict[int, int]:
     """Program writing one feature map: the L2 result buffer and the result DMA.
 
