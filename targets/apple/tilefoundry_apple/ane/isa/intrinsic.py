@@ -495,24 +495,29 @@ def coefficient_dma(
     inputs: int,
     *,
     index: int = 0,
+    lut_bytes: int = 0,
+    armed: bool = True,
     address: int = 0,
 ) -> dict[int, int]:
     """Program the coefficient stream of one convolution.
 
     Every input column owns a coefficient block of ``outputs`` fp16 values, so the
     column offsets step by that block and the per-column length is the same value.
-    The tables repeat over the sixteen slots the block exposes.
+    A pass that also applies a lookup-table activation reserves the table behind
+    its weights, which grows the block by the table size.  The tables repeat over
+    the sixteen slots the block exposes.
     """
     if not 1 <= inputs:
         raise ValueError(f"coefficient columns {inputs} must be positive")
     columns = max(1, -(-inputs // KERNEL_DMA_COEFF_SLOTS))
+    payload = columns * outputs * FP16_BYTES + lut_bytes
     block = max(
         KERNEL_DMA_MIN_BLOCK,
-        -(-columns * outputs * FP16_BYTES // KERNEL_DMA_MIN_BLOCK) * KERNEL_DMA_MIN_BLOCK,
+        -(-payload // KERNEL_DMA_MIN_BLOCK) * KERNEL_DMA_MIN_BLOCK,
     )
     image = KERNEL_DMA.pack(
         kernel_dma_src_enable=1,
-        kernel_dma_armed=1,
+        kernel_dma_armed=int(armed),
         kernel_dma_coeff_present=1,
         kernel_dma_coeff_tag=index + 1,
     )
@@ -607,6 +612,10 @@ def convolution(
     index: int,
     ocg_size: int,
     activate: bool = False,
+    armed: bool | None = None,
+    staged_source: bool = False,
+    to_dram: bool = True,
+    source_base: int = 0,
     address: int = 0,
 ) -> dict[int, int]:
     """Program one convolution pass over a staged source with a coefficient stream.
@@ -640,12 +649,17 @@ def convolution(
             l2_src_type=fields.L2Access.L2_READ,
             l2_src_dependent=2,
             l2_src_interleave=INTERLEAVE,
+            **({} if not staged_source else {"l2_src_base_address": _l2_units(source_base)}),
             l2_src_channel_stride=_l2_units(FP16_BYTES * 8),
-            l2_result_type=fields.L2Access.DMA_READ,
-            l2_result_buffer_mode=1,
+            l2_result_type=(fields.L2Access.DMA_READ if to_dram else fields.L2Access.L2_READ),
+            **({} if not to_dram else {"l2_result_buffer_mode": 1}),
             l2_result_dma_fmt=fields.TensorFormatMode.COMPRESSED,
             l2_result_interleave=INTERLEAVE,
-            l2_result_base_addr=_l2_units(source.channels * 18),
+            **(
+                {"l2_result_base_addr": _l2_units(source_base + source.channels * 18)}
+                if to_dram
+                else {}
+            ),
         ),
         NE.pack(
             op=fields.NEOp.CONV,
@@ -654,14 +668,22 @@ def convolution(
             post_scale=fp16(1.0, "post_scale"),
             **({} if not activate else {"nonlinear_mode": fields.NENonlinear.LUT}),
         ),
-        coefficient_dma(destination.channels, source.channels, index=index),
-        DST_DMA.pack(
+        coefficient_dma(
+            destination.channels,
+            source.channels,
+            index=index,
+            lut_bytes=NE_LUT_BYTES if activate else 0,
+            armed=armed if armed is not None else to_dram,
+        ),
+        {}
+        if not to_dram
+        else DST_DMA.pack(
             tile_dma_dst_enable=1,
             tile_dma_dst_base_addr_lo=low,
             tile_dma_dst_base_addr_hi=high,
             tile_dma_dst_hint=DEST_HINT,
             tile_dma_dst_data_set_id=DATA_SET_ID,
-            tile_dma_dst_user_tag=DEST_TAG,
+            tile_dma_dst_user_tag=index,
             tile_dma_dst_fifo_mode=1,
             tile_dma_dst_format_mode=fields.TensorFormatMode.COMPRESSED,
             tile_dma_dst_trunc=F16_TRUNC,
