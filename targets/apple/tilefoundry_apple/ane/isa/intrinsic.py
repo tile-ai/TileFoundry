@@ -606,6 +606,7 @@ def convolution(
     *,
     index: int,
     ocg_size: int,
+    activate: bool = False,
     address: int = 0,
 ) -> dict[int, int]:
     """Program one convolution pass over a staged source with a coefficient stream.
@@ -651,6 +652,7 @@ def convolution(
             ne_pipeline_code=NE_PIPELINE_CODE,
             arg_output_select=NE_OUTPUT_SELECT,
             post_scale=fp16(1.0, "post_scale"),
+            **({} if not activate else {"nonlinear_mode": fields.NENonlinear.LUT}),
         ),
         coefficient_dma(destination.channels, source.channels, index=index),
         DST_DMA.pack(
@@ -668,6 +670,115 @@ def convolution(
             tile_dma_dst_zero_pad_last=1,
             tile_dma_dst_interleave=INTERLEAVE,
         ),
+    )
+
+
+NE_LUT_BYTES = 128
+
+
+def activation(
+    source: Surface,
+    *,
+    lut_bytes: int = NE_LUT_BYTES,
+    address: int = 0,
+    dest_address: int = 0,
+) -> dict[int, int]:
+    """Program a neural engine activation that reads a lookup table.
+
+    The reference streams for silu and sigmoid are register-identical: the
+    activation lives in the table the descriptor points at, so the words carry
+    only its size and enable.  Every stride here is the dense row of the staged
+    row, and the result lands one row along.
+    """
+    low, high = _split_address(address)
+    dest_low, dest_high = _split_address(dest_address)
+    row = source.width * FP16_BYTES
+    column = _l2_units(row)
+    return splice(
+        COMMON.pack(
+            win=source.width,
+            hin=source.height,
+            din=1,
+            cin=source.channels,
+            cout=source.channels,
+            wout=source.width,
+            hout=source.height,
+            dout=1,
+            ne_ocg_size=0,
+            num_groups=1,
+            unicast_en=1,
+            unicast_cin=1,
+            tile_height=1,
+            node_id=1,
+        ),
+        L2.pack(
+            l2_src_type=fields.L2Access.DMA_READ,
+            l2_src_alias_conv_src=1,
+            l2_src_alias_conv_rslt=1,
+            l2_src_dma_format=fields.TensorFormatMode.COMPRESSED,
+            l2_src_interleave=INTERLEAVE,
+            l2_src_alias_planar_src=1,
+            l2_src_alias_planar_rslt=1,
+            l2_src_channel_stride=column,
+            l2_src_row_stride=column,
+            l2_src_depth_stride=column,
+            l2_src_group_stride=column,
+            l2_result_type=fields.L2Access.DMA_READ,
+            l2_result_buffer_mode=1,
+            l2_result_alias_src=1,
+            l2_result_alias_rslt=1,
+            l2_result_dma_fmt=fields.TensorFormatMode.COMPRESSED,
+            l2_result_interleave=INTERLEAVE,
+            l2_result_alias_planar_src=1,
+            l2_result_alias_planar_rslt=1,
+            l2_result_base_addr=column,
+        ),
+        NE.pack(
+            kernel_format=fields.KernelFormat.FP16,
+            ne_lut_select=1,
+            ne_lut_mode=1,
+            op=fields.NEOp.BYPASS,
+            kernel_mode=1,
+            ne_pipeline_code=NE_PIPELINE_CODE,
+            nonlinear_mode=fields.NENonlinear.LUT,
+            arg_output_select=NE_OUTPUT_SELECT,
+            post_scale=fp16(1.0, "post_scale"),
+        ),
+        SRC_DMA.pack(
+            tile_dma_src_hint=SOURCE_HINT,
+            tile_dma_src_base_addr_lo=low,
+            tile_dma_src_base_addr_hi=high,
+            tile_dma_src_data_set_id=DATA_SET_ID,
+            tile_dma_src_cache_hint=SOURCE_CACHE_HINT,
+            tile_dma_src_format_mode=fields.TensorFormatMode.COMPRESSED,
+            tile_dma_src_trunc=F16_TRUNC,
+            tile_dma_src_memory_format=fields.TensorMemoryFormat.TILED,
+            tile_dma_src_interleave=INTERLEAVE,
+        ),
+        DST_DMA.pack(
+            tile_dma_dst_enable=1,
+            tile_dma_dst_base_addr_lo=dest_low,
+            tile_dma_dst_base_addr_hi=dest_high,
+            tile_dma_dst_hint=DEST_HINT,
+            tile_dma_dst_data_set_id=DATA_SET_ID,
+            tile_dma_dst_fifo_mode=1,
+            tile_dma_dst_format_mode=fields.TensorFormatMode.COMPRESSED,
+            tile_dma_dst_trunc=F16_TRUNC,
+            tile_dma_dst_memory_format=fields.TensorMemoryFormat.TILED,
+            tile_dma_dst_zero_pad_first=1,
+            tile_dma_dst_zero_pad_last=1,
+            tile_dma_dst_interleave=INTERLEAVE,
+        ),
+        KERNEL_DMA.pack(
+            kernel_dma_src_enable=1,
+            kernel_dma_armed=1,
+            kernel_dma_coeff_present=1,
+            kernel_dma_coeff_tag=1,
+            nonlinear_lut_enable=1,
+            nonlinear_lut_loaded=1,
+            nonlinear_lut_size=_dram_units(lut_bytes),
+        ),
+        {0x19F4: 0, 0x1A00: 0, 0x1A04: 0},
     )
 
 

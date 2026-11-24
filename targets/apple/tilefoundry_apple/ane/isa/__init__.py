@@ -26,6 +26,7 @@ from .fields import (
 from .intrinsic import (
     Engine,
     Surface,
+    activation,
     coefficient_dma,
     compute_ne,
     compute_pe,

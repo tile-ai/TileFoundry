@@ -296,7 +296,9 @@ class NE(Block, base=0x0D00, end=0x0D14):
     """Neural engine operation, kernel format and activation fields."""
 
     kernel_format = BitField(0x0D00, 1, 0, KernelFormat)
+    ne_lut_select = BitField(0x0D00, 7, 7)
     kernel_sparse_fmt = BitField(0x0D00, 8, 8)
+    ne_lut_mode = BitField(0x0D00, 16, 16)
     op = BitField(0x0D04, 2, 0, NEOp)
     kernel_mode = BitField(0x0D04, 3, 3)
     ne_bias = BitField(0x0D04, 4, 4)
@@ -390,6 +392,7 @@ class KernelDMA(Block, base=0x1900, end=0x1A18):
         BitField(addr, 31, 6) for addr in range(0x1998, 0x19D8, 4)
     )
     nonlinear_lut_enable = BitField(0x19E4, 0, 0)
+    nonlinear_lut_loaded = BitField(0x19E4, 5, 5)
     nonlinear_lut_size = BitField(0x1A14, 31, 6)
 
 

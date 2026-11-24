@@ -13,7 +13,14 @@ MASK_WIDTH = 16
 MASK_TAG = 1 << 31
 TASK_ALIGN_GRANULE = 16
 DESCRIPTOR_ALIGN = 64
-RELOCATION_SLOTS = {0x1110: 0x114, 0x1128: 0x118, 0x1508: 0x110, 0x1908: 0x118}
+RELOCATION_SLOTS = {
+    0x1110: 0x114,
+    0x1128: 0x118,
+    0x1508: 0x110,
+    0x1908: 0x118,
+    0x1A00: 0x118,
+}
+RELOCATION_SINGLES = {0x19F4: 0x118}
 """Base-address word pairs that are patched after emission, keyed by their low word.
 
 Each relocated base address is a 64-bit value in two adjacent words.  The pair
@@ -105,7 +112,8 @@ def serialize(image: Mapping[int, int]) -> list[Packet]:
 
     packets: list[Packet] = []
     slotted = {addr: flag for addr, flag in RELOCATION_SLOTS.items() if addr in image}
-    paired = set(slotted) | {addr + WORD_BYTES for addr in slotted}
+    singles = {addr: flag for addr, flag in RELOCATION_SINGLES.items() if addr in image}
+    paired = set(slotted) | {addr + WORD_BYTES for addr in slotted} | set(singles)
     pairs = [
         Packet("run", ((addr, image[addr]), (addr + WORD_BYTES, image[addr + WORD_BYTES])), flag)
         for addr, flag in sorted(slotted.items())
@@ -126,6 +134,9 @@ def serialize(image: Mapping[int, int]) -> list[Packet]:
             packets.append(Packet(kind, tuple((addr, image[addr]) for addr in pending[:count])))
             pending = pending[count:]
     packets.extend(pairs)
+    packets.extend(
+        Packet("run", ((addr, image[addr]),), flag) for addr, flag in sorted(singles.items())
+    )
     return packets
 
 
