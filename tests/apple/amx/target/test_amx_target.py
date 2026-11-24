@@ -52,7 +52,8 @@ def test_amx_values_stand_on_the_installed_documents_and_say_how_they_were_got()
     tgt = amx.Target()
     architecture, device = tgt.architecture, tgt.device
 
-    assert (tgt.architecture_id, tgt.device_id) == ("apple.amx", "apple.m2_pro")
+    assert tgt.identity == "apple.m2_pro"
+    assert tuple(document.id for document in tgt.documents()) == ("apple.amx", "apple.m2_pro")
 
     assert architecture.staging_bytes == 512
     assert architecture.accumulator_bytes == 4096

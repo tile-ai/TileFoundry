@@ -66,4 +66,11 @@ class ReduceKind(enum.Enum):
     MIN = "min"
 
 
-__all__ = ["BinaryKind", "UnaryKind", "ReduceKind"]
+class PoolKind(enum.Enum):
+    """Window pooling kind, shared across IRs."""
+
+    MAX = "max"
+    AVG = "avg"
+
+
+__all__ = ["BinaryKind", "UnaryKind", "ReduceKind", "PoolKind"]

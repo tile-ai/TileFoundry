@@ -1387,7 +1387,7 @@ class TopK(Op):
 Neural-network value Ops following torch semantics
 ([torch.nn.functional](https://pytorch.org/docs/stable/nn.functional.html)).
 
-##### MatMul / Conv2D / ReLU / Sigmoid / Tanh / SoftMax / LayerNorm
+##### MatMul / Conv2D / Pool2D / ReLU / Sigmoid / Tanh / SoftMax / LayerNorm
 Consensus torch.nn.functional ops.
 - constraints:
   - A `ShardLayout` operand carrying `Partial(reduction)` propagates to the
@@ -1446,6 +1446,27 @@ Consensus torch.nn.functional ops.
     I/KH/KW axes from any factorized local layout. Traffic has exactly four
     slots: complete reads of input, weight, and bias followed by one complete
     result write.
+  - `Pool2D` requires a rank-4 NCHW input with static height and width.
+    `kernel_size` and `stride` are positive length-2 tuples. `padding` is a
+    non-negative length-2 tuple. Each `padding` value MUST NOT exceed half of the
+    matching `kernel_size` value, rounded down. `kind` is `PoolKind.MAX` or
+    `PoolKind.AVG`. The DSL names `max_pool2d` and `avg_pool2d` fix `kind` to
+    `MAX` and `AVG`. The result keeps the dtype and storage of the input. Typeinfer rejects every
+    `Partial` input. A `Split` of the batch or channel axis survives. A `Split`
+    of height or width is a halo access, so typeinfer rejects it and requires an
+    explicit `Reshard`.
+  - The `Pool2D` result shape is `(N, C, H', W')`. With `ceil_mode=False`, each
+    spatial extent is `(in + 2 * padding - kernel_size) // stride + 1`. With
+    `ceil_mode=True`, the division rounds up. Then the result drops the last
+    window when `(out - 1) * stride >= in + padding`. A non-positive output
+    extent is an error that names the extent. `Pool2D` costs
+    `numel(output) * kh * kw` flops. Traffic is one complete read of the input
+    and one complete result write.
+  - `PoolKind.AVG` divides each window sum by a divisor. With
+    `count_include_pad=True`, the divisor is the window size clipped to the
+    padded input. With `count_include_pad=False`, the divisor is the number of
+    window elements that are not padding. `PoolKind.MAX` ignores
+    `count_include_pad` and treats padding as negative infinity.
   - `SoftMax` normalizes across an axis, so no `reduction` provably commutes.
     Typeinfer rejects every `Partial` input.
   - `LayerNorm(axis=a)` normalizes over the complete trailing shape

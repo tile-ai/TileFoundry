@@ -1,0 +1,46 @@
+[spec]
+schema = "tilefoundry.ane.device/v1"
+kind = "device"
+id = "apple.m2_pro.ane"
+
+[compatibility]
+architectures = ["apple.h14"]
+
+[facts.identity.name]
+value = "apple_m2_pro_ane"
+unit = "name"
+origin = "reference"
+source = "Apple M2 Pro product specification"
+conditions = "The Neural Engine of the Apple M2 Pro."
+
+[facts.compute.cores]
+value = 16
+unit = "count"
+origin = "vendor"
+source = "Apple M2 Pro product specification"
+conditions = "Published core count. How the cores map to the tasks of one program is unknown."
+
+[facts.memory.unified.capacity]
+value = 34359738368
+unit = "byte"
+origin = "measured"
+source = "sysctl(8)"
+conditions = "32 GiB from sysctl hw.memsize; one DRAM pool shared with the CPU, not an ANE allocation budget."
+
+[facts.memory.unified.bandwidth]
+value = 200000000000
+unit = "byte/s"
+origin = "vendor"
+source = "Apple M2 Pro product specification"
+conditions = "Published decimal 200 GB/s package bandwidth shared with the CPU and GPU; not measured ANE bandwidth."
+
+[facts.memory.l2.capacity]
+status = "unavailable"
+conditions = "No sourced capacity."
+
+[facts.throughput.f16]
+value = 16710000000000
+unit = "flop/s"
+origin = "measured"
+source = "ANE fp16 convolution benchmark on the host"
+conditions = "16.71 TFLOP/s for one 3x3 fp16 convolution of 256 input and 256 output channels on a 384x384 map, padding 1; 2 FLOPs per multiply-accumulate; wall-clock time of one evaluation, which includes the submit overhead, averaged over 200 evaluations after 20 warm-up evaluations, median of three runs (10.41 ms). The rate falls when the map or the channel count grows further: 7.66 TFLOP/s at 512x512 with 256 channels. Apple publishes 15.8 trillion operations per second without a data type."

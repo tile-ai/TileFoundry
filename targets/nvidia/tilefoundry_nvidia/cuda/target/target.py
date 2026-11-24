@@ -108,6 +108,14 @@ class Target(target.Target):
         object.__setattr__(self, "architecture_document", architecture.document)
         object.__setattr__(self, "device_document", device.document)
 
+    def capabilities(self) -> frozenset[str]:
+        return frozenset(self.architecture.capabilities)
+
+    def documents(self) -> tuple[hardware.Document, ...]:
+        if self.architecture_document is None or self.device_document is None:
+            return ()
+        return self.architecture_document, self.device_document
+
     def topology_facts(self) -> target.TopologyFacts:
         """The three CUDA topologies, coarsest first.
 

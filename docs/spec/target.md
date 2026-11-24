@@ -18,6 +18,7 @@ class Target:
     """Identify a compilation backend."""
 
     name: ClassVar[str]
+    hardware: ClassVar[HardwareSpec | None] = None
 
     @property
     def identity(self) -> str: ...
@@ -25,6 +26,8 @@ class Target:
     @classmethod
     def from_installed(cls) -> tuple[Target, ...]: ...
 
+    def capabilities(self) -> frozenset[str]: ...
+    def documents(self) -> tuple[Document, ...]: ...
     def get_analyzer(self, selector: str) -> Analyzer: ...
     def resolve(self, base: type[T], *args) -> T: ...
     def torch_device_type(self) -> str: ...
@@ -85,6 +88,16 @@ def bind(target: type[Target], base: type) -> Callable[[type[T]], type[T]]: ...
   - `identity` MUST name one concrete Target value. It MUST be the device
     document ID for a document-backed Target. It MUST be the registered class `name`
     for a Target with no device document.
+  - `hardware` MUST be the `HardwareSpec` of a class that owns hardware documents.
+    It MUST be `None` for a class that owns none. A subclass inherits it and is not
+    a second owner of its schemas.
+  - `capabilities()` MUST return the names of the instruction capabilities the
+    Target admits. The base returns the empty set. Instruction admission MUST read
+    this method.
+  - `documents()` MUST return the hardware documents the value was built from,
+    architecture first. The base returns the empty tuple.
+  - Core code MUST read a Target through the members this section declares. It
+    MUST NOT read an attribute of a concrete Target class by name.
   - `from_installed()` MUST return every value of that registered class which can be
     constructed in the current environment. A class with no hardware documents
     MUST return its one parameterless value by default.
