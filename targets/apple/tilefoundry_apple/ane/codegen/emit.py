@@ -83,10 +83,19 @@ def tile_rows(op, surface) -> int:
     """Return how many rows one descriptor stages for this call.
 
     The tile height is a scheduling decision supplied by the caller; when it is
-    absent the descriptor stages the whole surface.
+    absent the descriptor stages the whole surface.  A supplied height must be a
+    positive row count that fits within the surface it stages.
     """
     rows = getattr(op, "tile_height", None)
-    return surface.height if rows is None else rows
+    if rows is None:
+        return surface.height
+    if rows < 1:
+        raise ValueError(f"tile_height must be a positive row count, got {rows}")
+    if rows > surface.height:
+        raise ValueError(
+            f"tile_height {rows} exceeds the {surface.height}-row surface it stages"
+        )
+    return rows
 
 
 def pool_slots(rows: int, surface) -> int:

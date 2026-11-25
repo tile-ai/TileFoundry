@@ -152,9 +152,11 @@ class Surface:
         if width is None or width == self.width:
             return self
         if width < 1:
-            raise ValueError(f"staged width {width} is empty")
+            raise ValueError(f"tile_width must be a positive column count, got {width}")
         if width > self.width:
-            return self
+            raise ValueError(
+                f"tile_width {width} exceeds the {self.width}-column surface it stages"
+            )
         return replace(self, tile_pitch=align_up(width * FP16_BYTES, L2_ROW_ALIGN))
 
     def staging_row(self, engine: Engine = Engine.PLANAR, rows: int | None = None) -> int:
