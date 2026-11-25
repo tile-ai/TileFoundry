@@ -15,9 +15,10 @@ import dataclasses
 from pathlib import Path
 
 import pytest
+import torch
 
 from tests.core._corpus import Case, case, check_case, reload, special
-from tilefoundry import cli, inspection
+from tilefoundry import analysis, cli, inspection, runtime
 from tilefoundry.dsl import *
 from tilefoundry.interfaces import valuation
 from tilefoundry.ir import core, expr
@@ -122,6 +123,32 @@ def test_held_child_takes_owner_target():
 
     assert storages(_Refused) == [StorageKind.UMAT] * 3
     assert all(node.type is stored for node, stored in parsed)
+
+
+def test_held_child_reads_split_parameter_under_owner_target():
+    """A child with no Target reads its Split annotation under the root's owners.
+
+    The call types, measures and evaluates as the same child stating the root's Target
+    does; the child's own annotation keeps the strides it parsed with.
+    """
+    namespace = cli.load_namespace(str(DSL / "child_split_parameter.py"))[0]
+
+    def measured(root):
+        result = analysis.analyze(*analysis.check_program(root, root.entry_function()), analysis="memory")
+        (call,) = (node for node in core.collect_exprs(result.function.body) if isinstance(node, expr.Call))
+        return (
+            call.type,
+            expr.get_metadata(call, analysis.MemoryMetadata).traffic,
+            expr.get_metadata(result.function, analysis.RegionMemoryMetadata).peaks,
+        )
+
+    assert measured(namespace["Root"]) == measured(namespace["RootWithTarget"])
+    x = torch.arange(8, dtype=torch.float32)
+    run = {name: namespace[name].load(runtime.DictResource({}))(x) for name in ("Root", "RootWithTarget")}
+    assert torch.equal(run["Root"], run["RootWithTarget"])
+    (param,) = namespace["Child"].entry_function().params
+    (stated,) = namespace["ChildWithTarget"].entry_function().params
+    assert param.annotation.layout != stated.annotation.layout
 
 
 class ModuleDecoratorCase(Case):

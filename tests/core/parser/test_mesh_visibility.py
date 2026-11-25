@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tilefoundry import cli, parser
+from tilefoundry import cli, inspection, parser
 from tilefoundry.ir import expr
 
 _DIAGNOSTICS = Path(__file__).parents[1] / "fixtures" / "diagnostics"
@@ -42,6 +42,13 @@ def test_runtime_expressions_require_mesh_scope(program) -> None:
 def test_return_after_mesh_requires_scope() -> None:
     with pytest.raises(parser.ParseError, match="runs outside every mesh scope"):
         cli.load_authored_ir(str(_DIAGNOSTICS / "parser_unscoped_return.py"))
+
+
+@pytest.mark.parametrize("program", ("Rebound", "Looped"))
+def test_return_in_nested_scope_is_kept(program) -> None:
+    function = cli.load_authored_ir(f"{_PARSER}/nested_scope_return.py:{program}").entry_function()
+
+    assert "3.0" in inspection.as_script(function)
 
 
 def test_logical_tir_calls_stay_unscoped() -> None:

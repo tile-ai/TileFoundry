@@ -224,11 +224,22 @@ def call_function(
         for param in callee.params
     ]
     target = select_variant(callee, args) if callee.variants else callee
+    reading = ctx.loaded_module
+    inherited = (
+        reading.target
+        if reading is not None and ctx.module is not None and ctx.module.target is None
+        else None
+    )
     for param, value in zip(target.params, args):
-        if not ir_utils.types_compatible(param.annotation, value.type):
+        declared = (
+            param.annotation
+            if inherited is None
+            else ir_utils.owner_annotation(param.annotation, inherited.storage_owners)
+        )
+        if not ir_utils.types_compatible(declared, value.type):
             raise EvalError(
                 f"evaluator: call to {target.name!r}: argument for "
-                f"{param.name!r} expects {param.annotation!r}, got {value.type!r}"
+                f"{param.name!r} expects {declared!r}, got {value.type!r}"
             )
     function_context = EvaluateContext(
         module=ctx.module,

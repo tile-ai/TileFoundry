@@ -10,7 +10,14 @@ from .leaves import map_tensor_types
 from .local import filter_topologies
 from .mesh_scope import covers_every_unit, topology_names, units_within
 
-__all__ = ["address_layout", "canonical", "canonical_layout", "is_unsharded_layout", "types_compatible"]
+__all__ = [
+    "address_layout",
+    "canonical",
+    "canonical_layout",
+    "is_unsharded_layout",
+    "owner_annotation",
+    "types_compatible",
+]
 
 
 def is_unsharded_layout(layout: object) -> bool:
@@ -46,6 +53,33 @@ def canonical(type_: types.Type) -> types.Type:
         type_,
         lambda leaf: leaf if (layout := canonical_layout(leaf.layout)) is leaf.layout else replace(leaf, layout=layout),
     )
+
+
+def owner_annotation(declared: types.Type, owners) -> types.Type:
+    """*declared* read under *owners*: each layout with the no-owner strides is rebuilt.
+
+    A child Module that states no target takes its caller's, so an annotation it parsed
+    with no storage owners means the caller's owner strides. A layout whose strides
+    differ from the no-owner default was written out and is kept.
+    See [hir §1.1](docs/spec/hir.md#11-function).
+    """
+
+    def leaf(tensor):
+        shard = tensor.layout
+        if not isinstance(shard, types.ShardLayout):
+            return tensor
+
+        def built(given):
+            return types.ShardLayout.from_modes(
+                shard.layout.shape, shard.mesh, shard.attrs, storage=tensor.storage, owners=given
+            )
+
+        if built(None) != shard:
+            return tensor
+        owned = built(owners)
+        return tensor if owned == shard else replace(tensor, layout=owned)
+
+    return map_tensor_types(declared, leaf)
 
 
 def field_compatible(declared_field, actual_field) -> bool:

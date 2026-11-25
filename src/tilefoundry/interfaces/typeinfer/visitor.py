@@ -59,6 +59,8 @@ def call_function(
             f"callee declares {len(supplied)} {kind}, call passed {len(arg_types)}",
         )
 
+    caller_target = ctx.resolve_target()
+    inherits = caller_target is not None and (callee_ctx.module is None or callee_ctx.module.target is None)
     given = iter(enumerate(arg_types))
     memo = {}
     for param in callee.params:
@@ -66,7 +68,9 @@ def call_function(
             memo[id(param)] = (param, param.type)
             continue
         index, arg_type = next(given)
-        declared = param.annotation
+        declared = (
+            utils.owner_annotation(param.annotation, caller_target.storage_owners) if inherits else param.annotation
+        )
         if not utils.types_compatible(declared, arg_type):
             varying = utils.varying_axis(declared, arg_type)
             ctx.error(
@@ -80,7 +84,11 @@ def call_function(
         memo[id(param)] = (param, arg_type)
 
     if callee.body is None or callee.variants:
-        return callee.return_type
+        return (
+            utils.owner_annotation(callee.return_type, caller_target.storage_owners)
+            if inherits
+            else callee.return_type
+        )
 
     inner = replace(callee_ctx, function=callee, owner=callee, parent=None, call_site=None, memo={})
     context = (

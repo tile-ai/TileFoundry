@@ -113,13 +113,15 @@ def where(value: expr.Expr) -> str:
 
 
 def reshards(backward: core.Module) -> list[tuple[tuple, tuple]]:
-    """``(source attrs, result attrs)`` of each Reshard in the backward's entry; plain is B."""
+    """``(source attrs, result attrs)`` of each Reshard in any Module of the backward."""
     found = []
-    for value in core.collect_exprs(backward.entry_function().body):
-        if isinstance(value, expr.Call) and isinstance(value.target, sharding.Reshard):
-            source = types.shard_layout_of(value.args[0].type.layout)
-            if source is not None:
-                found.append((source.attrs, tuple(utils.attrs_by_axis(value.type, source.mesh).values())))
+    for each in core.module_definition_order(backward):
+        for function in each.functions:
+            for value in core.collect_exprs(function.body) if function.body is not None else ():
+                if isinstance(value, expr.Call) and isinstance(value.target, sharding.Reshard):
+                    source = types.shard_layout_of(value.args[0].type.layout)
+                    if source is not None:
+                        found.append((source.attrs, tuple(utils.attrs_by_axis(value.type, source.mesh).values())))
     return found
 
 
@@ -129,12 +131,13 @@ class Differentiated(Case):
     wrt: tuple[str, ...] = ()
     recompute: tuple[str, ...] = ()
     saved: frozenset[str] | None = None
-    saved_tensors: Mapping[str, int] | None = None
     slots: Mapping[str, tuple[str, ...]] | None = None
     loops: int | None = None
     index_inline: bool = False
     """True: a ModuleList index the backward computes with a tensor Op prints inline, and reloads bound."""
     reshards: tuple[tuple[tuple, tuple], ...] = ()
+    every_reshard: bool = False
+    """True: ``reshards`` are all the Reshards of the backward, in any order."""
     rtol: float = 1e-5
     atol: float = 1e-6
     dims: Mapping[str, int] = MappingProxyType({})
@@ -151,9 +154,6 @@ class Differentiated(Case):
         check_gradients(module, forward, backward, self.wrt, self.rtol, self.atol, self.dims)
         if self.saved is not None:
             assert {value.name for value in differentiate.saved_values(forward)} == self.saved
-        if self.saved_tensors is not None:
-            counted = {value.name: len(tuple(leaves(flat(value.type)))) for value in differentiate.saved_values(forward)}
-            assert counted == dict(self.saved_tensors)
         if self.slots is not None:
             elements = {key: tuple(each.name for each in core.instances(slot)) for key, slot in forward.children.items()}
             assert elements == dict(self.slots)
@@ -175,6 +175,8 @@ class Differentiated(Case):
         found = reshards(backward)
         for expected in self.reshards:
             assert expected in found, (expected, found)
+        if self.every_reshard:
+            assert sorted(map(repr, found)) == sorted(map(repr, self.reshards)), found
 
 
 def check_written(forward: core.Module, backward: core.Module, *, same_text: bool) -> None:
@@ -224,6 +226,14 @@ class SiblingCall(Differentiated):
     wrt: tuple[str, ...] = ("x", "w1", "w2")
 
 
+def called(slot: str, *indices: int) -> frozenset[str]:
+    return frozenset(f"{slot}.saved[{index}]" for index in indices)
+
+
+CALLER = frozenset({"x", "w1", "w2", "y", "z"})
+"""What each layer of ChildCall is passed: a layer's saved input is its caller's value, kept once."""
+
+
 @case
 class ChildCall(Differentiated):
     path: Path = FIXTURES / "child_call.py"
@@ -234,7 +244,7 @@ class ChildCall(Differentiated):
 @case
 class ChildCallOneElement(ChildCall):
     recompute: tuple[str, ...] = ("ChildCall.rest.1:h",)
-    saved_tensors: Mapping[str, int] | None = MappingProxyType({"first.saved": 4, "rest.0.saved": 4, "rest.1.saved": 3})
+    saved: frozenset[str] | None = CALLER | called("first", 0, 1) | called("rest.0", 0, 1) | called("rest.1", 0)
     slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
         {"first": ("LayerForward",), "rest": ("LayerForward", "Layer_1Forward")}
     )
@@ -245,7 +255,7 @@ class ChildCallOneElementSaved(ChildCall):
     """The element's own ``:None`` replaces the whole-layer choice of its definition."""
 
     recompute: tuple[str, ...] = ("Layer", "ChildCall.rest.0:None")
-    saved_tensors: Mapping[str, int] | None = MappingProxyType({"first.saved": 2, "rest.0.saved": 4, "rest.1.saved": 2})
+    saved: frozenset[str] | None = CALLER | called("rest.0", 0, 1)
     slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
         {"first": ("LayerForward",), "rest": ("Layer_1Forward", "LayerForward")}
     )
@@ -254,7 +264,7 @@ class ChildCallOneElementSaved(ChildCall):
 @case
 class ChildCallWholeSlot(ChildCall):
     recompute: tuple[str, ...] = ("ChildCall.first",)
-    saved_tensors: Mapping[str, int] | None = MappingProxyType({"first.saved": 2, "rest.0.saved": 4, "rest.1.saved": 4})
+    saved: frozenset[str] | None = CALLER | called("rest.0", 0, 1) | called("rest.1", 0, 1)
     slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
         {"first": ("Layer_1Forward",), "rest": ("LayerForward", "LayerForward")}
     )
@@ -265,7 +275,7 @@ class ChildCallSharedCopy(ChildCall):
     """Two elements, in two slots, with one choice share one copy."""
 
     recompute: tuple[str, ...] = ("ChildCall.first:h", "ChildCall.rest.1:h")
-    saved_tensors: Mapping[str, int] | None = MappingProxyType({"first.saved": 3, "rest.0.saved": 4, "rest.1.saved": 3})
+    saved: frozenset[str] | None = CALLER | called("first", 0) | called("rest.0", 0, 1) | called("rest.1", 0)
     slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
         {"first": ("Layer_1Forward",), "rest": ("LayerForward", "Layer_1Forward")}
     )
@@ -286,7 +296,7 @@ class ModuleListLoop(Differentiated):
     path: Path = FIXTURES / "module_list_loop.py"
     name: str | None = "Stack"
     wrt: tuple[str, ...] = ("x", "ws")
-    saved: frozenset[str] | None = stacked("layers", 0, 1, 3) | {"ws", "v4"}
+    saved: frozenset[str] | None = stacked("layers", 0, 1) | {"h", "ws", "v4"}
     slots: Mapping[str, tuple[str, ...]] | None = THREE_LAYERS
     loops: int | None = 1
     index_inline: bool = True
@@ -297,7 +307,7 @@ class ModuleListLoop(Differentiated):
 class ModuleListOneLayer(ModuleListLoop):
     recompute: tuple[str, ...] = ("Stack.layers.1:h",)
     saved: frozenset[str] | None = (
-        stacked("layers_0", 0, 1, 3) | stacked("layers_1", 0, 1) | stacked("layers_2", 0, 1, 3) | {"ws", "v9"}
+        stacked("layers_0", 0, 1) | stacked("layers_1", 0) | stacked("layers_2", 0, 1) | {"h", "ws", "v9"}
     )
     slots: Mapping[str, tuple[str, ...]] | None = CUT_AROUND_LAYER_1
     loops: int | None = 3
@@ -307,7 +317,7 @@ class ModuleListOneLayer(ModuleListLoop):
 class ModuleListWholeLayer(ModuleListLoop):
     recompute: tuple[str, ...] = ("Stack.layers.1",)
     saved: frozenset[str] | None = (
-        stacked("layers_0", 0, 1, 3) | stacked("layers_1", 0) | stacked("layers_2", 0, 1, 3) | {"ws", "v8"}
+        stacked("layers_0", 0, 1) | stacked("layers_2", 0, 1) | {"h", "ws", "v8"}
     )
     slots: Mapping[str, tuple[str, ...]] | None = CUT_AROUND_LAYER_1
     loops: int | None = 3
@@ -322,7 +332,7 @@ class ModuleListSavedEnds(ModuleListLoop):
 
     recompute: tuple[str, ...] = ("Layer", "Stack.layers.0:None", "Stack.layers.2:None", "Stack.layers.2:None")
     saved: frozenset[str] | None = (
-        stacked("layers_0", 0, 1, 3) | stacked("layers_1", 0) | stacked("layers_2", 0, 1, 3) | {"ws", "v8"}
+        stacked("layers_0", 0, 1) | stacked("layers_2", 0, 1) | {"h", "ws", "v8"}
     )
     slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
         {"layers_0": ("Layer_1Forward",), "layers_1": ("LayerForward",), "layers_2": ("Layer_1Forward",)}
@@ -335,7 +345,7 @@ class ModuleListNeighbours(ModuleListLoop):
     """Neighbouring elements with one choice are one run and one loop."""
 
     recompute: tuple[str, ...] = ("Stack.layers.1:h", "Stack.layers.2:h")
-    saved: frozenset[str] | None = stacked("layers_0", 0, 1, 3) | stacked("layers_1", 0, 1) | {"ws", "v6"}
+    saved: frozenset[str] | None = stacked("layers_0", 0, 1) | stacked("layers_1", 0) | {"h", "ws", "v6"}
     slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType(
         {"layers_0": ("LayerForward",), "layers_1": ("Layer_1Forward",) * 2}
     )
@@ -347,7 +357,7 @@ class ModuleListEveryLayer(ModuleListLoop):
     """Every element with one choice keeps the slot and the loop whole."""
 
     recompute: tuple[str, ...] = ("Stack.layers.0", "Stack.layers.1", "Stack.layers.2")
-    saved: frozenset[str] | None = stacked("layers", 0) | {"ws", "v2"}
+    saved: frozenset[str] | None = frozenset({"h", "ws", "v2"})
     slots: Mapping[str, tuple[str, ...]] | None = MappingProxyType({"layers": ("Layer_1Forward",) * 3})
 
 
@@ -590,11 +600,16 @@ class HsdpBlock(Differentiated):
 
 @case
 class MegatronBlock(Differentiated):
-    """The Partial gradient of a Broadcast value is reduced before a rule reads it."""
+    """The Partial gradient of a Broadcast value is reduced only where a rule cannot take it.
+
+    Each RMSNorm's rule subtracts two sums, which the type rules refuse: the
+    gradient is all-reduced there and nowhere else.
+    """
 
     path: Path = FIXTURES / "megatron_block.py"
     wrt: tuple[str, ...] = ("x", "wn1", "wq", "wk", "wv", "wo", "wn2", "wg", "wu", "wd")
-    reshards: tuple = (((P,), (B,)),)
+    reshards: tuple = (((P,), (B,)), ((P,), (B,)))
+    every_reshard: bool = True
     rtol: float = 1e-4
     atol: float = 1e-5
 
@@ -613,7 +628,7 @@ class LayersLoop(Differentiated):
     wrt: tuple[str, ...] = ("x", "wn0", "norms", "up", "down")
     saved: frozenset[str] | None = frozenset({
         "x", "wn0", "x0", "v8", "v9", "norms", "up", "down",
-        "layer.saved[0]", "layer.saved[2]", "layer.saved[5]", "layer.saved[6]",
+        "h", "layer.saved[2]", "layer.saved[5]", "layer.saved[6]",
     })
     rtol: float = 1e-4
     atol: float = 1e-5
@@ -625,11 +640,49 @@ class FsdpLoop(Differentiated):
 
     path: Path = FIXTURES / "fsdp_loop.py"
     saved: frozenset[str] | None = frozenset(
-        {"up", "down", "v5", "layer.saved[1]", "layer.saved[3]", "layer.saved[4]"}
+        {"up", "down", "v5", "h", "layer.saved[1]", "layer.saved[4]"}
     )
     wrt: tuple[str, ...] = ("x", "up", "down")
     rtol: float = 1e-4
     atol: float = 1e-5
+
+
+@case
+class CalleeParam(Differentiated):
+    """The child's saved weight is the value the layer passed: the layer keeps it.
+
+    The child returns the weight's gradient unreduced; the layer's Reshard
+    reduce-scatters it, and nothing all-reduces it.
+    """
+
+    path: Path = FIXTURES / "callee_param.py"
+    name: str | None = "GatheredLayer"
+    wrt: tuple[str, ...] = ("x", "w")
+    saved: frozenset[str] | None = frozenset({"x", "kernel.saved[1]", "w_full"})
+    reshards: tuple = (((P,), (S0,)),)
+    every_reshard: bool = True
+
+
+@case
+class CalleeParamGatheredAgain(CalleeParam):
+    """Selecting the layer's gather reaches the child's saved: the backward gathers again."""
+
+    recompute: tuple[str, ...] = ("GatheredLayer:w_full",)
+    saved: frozenset[str] | None = frozenset({"x", "kernel.saved[1]", "w"})
+    reshards: tuple = (((S0,), (B,)), ((P,), (S0,)))
+
+
+@case
+class CalleeParamReshaped(CalleeParam):
+    """The child reads a reshape of the weight: selecting both keeps neither.
+
+    The reshape's rule takes the unreduced gradient as it is.
+    """
+
+    name: str | None = "ReshapedLayer"
+    recompute: tuple[str, ...] = ("ReshapedLayer:w_full", "ReshapingKernel:w_view")
+    saved: frozenset[str] | None = frozenset({"x", "kernel.saved[1]", "w"})
+    reshards: tuple = (((S0,), (B,)), ((P,), (S0,)))
 
 
 @case
