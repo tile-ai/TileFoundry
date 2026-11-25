@@ -290,15 +290,13 @@ def load(
         source, NEURAL_MIN_ROW_BYTES if engine is Engine.NEURAL else PLANAR_MIN_ROW_BYTES
     )
     low, high = _split_address(address)
+    # The planar engine states the window and the input formats; the neural
+    # engine leaves them at their reset value and carries the window in the DMA.
+    window = dict(win=source.width, hin=source.height, din=1)
+    if engine is Engine.PLANAR:
+        window.update(common_in_fmt=COMMON_FORMAT_F16, common_src2_in_fmt=COMMON_FORMAT_F16)
     return splice(
-        COMMON.pack(
-            win=source.width,
-            hin=source.height,
-            din=1,
-            cin=source.channels,
-            common_in_fmt=COMMON_FORMAT_F16,
-            common_src2_in_fmt=COMMON_FORMAT_F16,
-        ),
+        COMMON.pack(cin=source.channels, **window),
         L2.pack(
             l2_src_type=fields.L2Access.DMA_READ,
             **_staged_flags(fresh, planar_result),
@@ -357,15 +355,13 @@ def load_chained(
     descriptor carrying no source DMA block, which is what this encodes.
     """
     require_row_width(source, PLANAR_MIN_ROW_BYTES)
+    # The planar engine states the window and the input formats; the neural
+    # engine leaves them at their reset value and carries the window in the DMA.
+    window = dict(win=source.width, hin=source.height, din=1)
+    if engine is Engine.PLANAR:
+        window.update(common_in_fmt=COMMON_FORMAT_F16, common_src2_in_fmt=COMMON_FORMAT_F16)
     return splice(
-        COMMON.pack(
-            win=source.width,
-            hin=source.height,
-            din=1,
-            cin=source.channels,
-            common_in_fmt=COMMON_FORMAT_F16,
-            common_src2_in_fmt=COMMON_FORMAT_F16,
-        ),
+        COMMON.pack(cin=source.channels, **window),
         L2.pack(
             l2_src_type=fields.L2Access.L2_READ,
             **_staged_flags(False, planar_result=True),
@@ -498,6 +494,7 @@ def coefficient_dma(
     lut_bytes: int = 0,
     armed: bool = True,
     address: int = 0,
+    stride: int | None = None,
 ) -> dict[int, int]:
     """Program the coefficient stream of one convolution.
 
@@ -515,6 +512,9 @@ def coefficient_dma(
         KERNEL_DMA_MIN_BLOCK,
         -(-payload // KERNEL_DMA_MIN_BLOCK) * KERNEL_DMA_MIN_BLOCK,
     )
+    if stride is not None:
+        # A caller that knows the packed coefficient lanes states their stride.
+        block = stride
     image = KERNEL_DMA.pack(
         kernel_dma_src_enable=1,
         kernel_dma_armed=int(armed),
@@ -618,6 +618,12 @@ def convolution(
     *,
     index: int,
     ocg_size: int,
+    coeff_stride: int | None = None,
+    tile_height: int | None = None,
+    kernel_width: int = 1,
+    active_nodes: int = 4,
+    multi_tile: bool = False,
+    coeff_base: int = 0,
     activate: bool = False,
     armed: bool | None = None,
     staged_source: bool = False,
@@ -635,37 +641,50 @@ def convolution(
     """
     low, high = _split_address(address)
     return splice(
-        {0x1908: low & 0, 0x190C: high},
+        {0x1908: coeff_base & 0xFFFFFFFF, 0x190C: coeff_base >> 32},
+        # The neural engine carries the window in its DMA, so the pass states the
+        # channel counts and the engine configuration only.
         COMMON.pack(
-            win=source.width,
-            hin=source.height,
-            din=1,
             cin=source.channels,
             cout=destination.channels,
-            wout=destination.width,
-            hout=destination.height,
-            dout=1,
+            **(
+                {"win": 1, "hin": 1, "din": 1, "wout": 1, "hout": 1, "dout": 1, "tile_height": 1}
+                if staged_source
+                else {
+                    "wout": destination.width,
+                    "hout": destination.height,
+                    "dout": 1,
+                    "tile_height": destination.height if tile_height is None else tile_height,
+                    **(
+                        {"shift_preferred": 3, "shift_minimum": 3, "shift_maximum": 3}
+                        if multi_tile
+                        else {"shift_maximum": 3}
+                    ),
+                }
+            ),
             **({} if destination.channels > NE_CHANNEL_GROUP * 4 else {"ne_ocg_size": ocg_size}),
-            tile_height=1,
             source_routing=1,
-            source_transposed=1,
             task_type=fields.TaskType.NE,
-            ne_full_group=1,
-            output_transpose=1,
+            active_nodes=active_nodes,
             node_id=1,
+            **({"output_transpose": 1, "small_source_mode": 1} if staged_source else {}),
         ),
+        {} if staged_source else {0x0020: NE_RASTER_WORD},
         L2.pack(
             **(
                 {}
                 if not read_config
                 else {
                     "l2_src_type": fields.L2Access.L2_READ,
-                    "l2_src_dependent": 2,
-                    "l2_src_interleave": INTERLEAVE,
+                    **(
+                        {"l2_src_dependent": 2, "l2_src_interleave": INTERLEAVE}
+                        if staged_source
+                        else {}
+                    ),
                 }
             ),
             **({} if not staged_source else {"l2_src_base_address": _l2_units(source_base)}),
-            l2_src_channel_stride=_l2_units(FP16_BYTES * 8),
+            l2_src_channel_stride=_l2_units(source.l2_channel),
             l2_result_type=(fields.L2Access.DMA_READ if to_dram else fields.L2Access.L2_READ),
             **({} if not to_dram else {"l2_result_buffer_mode": 1}),
             l2_result_dma_fmt=fields.TensorFormatMode.COMPRESSED,
@@ -693,6 +712,7 @@ def convolution(
             index=index,
             lut_bytes=NE_LUT_BYTES if activate else 0,
             armed=armed if armed is not None else to_dram,
+            stride=coeff_stride,
         ),
         {}
         if not to_dram
@@ -710,10 +730,20 @@ def convolution(
             tile_dma_dst_zero_pad_first=1,
             tile_dma_dst_zero_pad_last=1,
             tile_dma_dst_interleave=INTERLEAVE,
+            **(
+                {}
+                if staged_source
+                else {
+                    **row_stride("tile_dma_dst_row_stride", destination.dram_row_stride),
+                    "tile_dma_dst_channel_stride": _dram_units(destination.channel),
+                }
+            ),
         ),
     )
 
 
+#: Raster configuration word the convolution passes state (constant per task kind).
+NE_RASTER_WORD = 0x5042A0C3
 NE_LUT_BYTES = 128
 
 
@@ -1021,6 +1051,7 @@ def compute_ne(
     source_relu: bool = False,
     tile_height: int | None = None,
     width_code: int | None = None,
+    active_nodes: int = 4,
     declared: Surface | None = None,
     transpose: bool = False,
     unicast_channels: int = 1,
@@ -1060,10 +1091,12 @@ def compute_ne(
             tile_height=output.height if tile_height is None else tile_height,
             source_routing=1,
             task_type=fields.TaskType.NE,
-            ne_width_code=width_code,
-            ne_full_group=1,
+            shift_maximum=width_code,
+            shift_minimum=width_code,
+            shift_preferred=width_code,
+            active_nodes=active_nodes,
             output_transpose=1 if transpose else 0,
-            input_transpose=1 if transpose else 0,
+            fill_lower_nodes_first=1 if transpose else 0,
             node_id=1,
         ),
         L2.pack(pe_src1_re_lu=int(source_relu)),

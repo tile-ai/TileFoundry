@@ -18,6 +18,8 @@ from collections.abc import Iterable, Mapping
 from tilefoundry_apple.ane import isa
 from tilefoundry_apple.ane.isa import defaults
 
+from . import header
+
 #: Words that carry an operand value and must be restated whenever a descriptor
 #: reprograms them, even if the raw value is unchanged.
 STICKY = frozenset(
@@ -59,7 +61,9 @@ def to_program(passes: Iterable[Iterable[Mapping[int, int]]]) -> isa.Program:
         state.emit(image)
     if not state.tds:
         raise ValueError("the schedule emits no passes")
-    return isa.Program(tuple(state.tds))
+    for index, td in enumerate(state.tds):
+        td.tid = index
+    return header.apply(isa.Program(tuple(state.tds)))
 
 
 __all__ = ["STICKY", "State", "to_program"]

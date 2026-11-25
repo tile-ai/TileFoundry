@@ -11,7 +11,7 @@ from .serialize import (
     PAD_SENTINEL,
     WORD_BYTES,
     Packet,
-    sentinel_words,
+    sentinel_packets,
     serialize,
 )
 
@@ -23,7 +23,9 @@ DEPENDENCY_ENABLE = BitField(0x1C, 1, 1)
 DEPENDENCY_ID = BitField(0x20, 15, 0)
 
 HEADER_WORDS = 8
-HEADER_DEFAULTS = MappingProxyType({0x10: 0x00FFF800, 0x18: 0x8FFFFFFF, 0x1C: 0x00050001})
+#: Only the task-status bit is on by default; the event masks and the
+#: engine-enable field are supplied per descriptor by the codegen policy.
+HEADER_DEFAULTS = MappingProxyType({0x1C: 0x00000001})
 ALIGNMENT = 16
 PREAMBLE = bytes.fromhex("01000000000000000000000000000000")
 
@@ -31,11 +33,6 @@ PREAMBLE = bytes.fromhex("01000000000000000000000000000000")
 def aligned_end(off: int) -> int:
     """Round a stream offset up to the next descriptor boundary."""
     return (off + ALIGNMENT - 1) & -ALIGNMENT
-
-
-def _sentinel_addr(packets: list[Packet]) -> int:
-    """Return the word address the padding sentinel occupies."""
-    return MARKER_ADDR
 
 
 class TD:
@@ -102,31 +99,49 @@ class TD:
         return HEADER_WORDS + (DEPENDENCY_ID.addr in self.header)
 
     def size_words(self) -> int:
-        """Count all encoded words, excluding stream alignment padding."""
+        """Count the words this descriptor states, marker packets included."""
         return self.header_size_words() + sum(1 + len(packet.writes) for packet in self.packets)
 
-    def padding_words(self, off: int) -> int:
-        """Count the sentinel words this descriptor appends when it starts at ``off``."""
-        return sentinel_words(off + self.size_words() * WORD_BYTES)
+    def marker_packets(self) -> int:
+        """Count the marker packets already present in the packet list."""
+        return sum(1 for packet in self.packets if dict(packet.writes).get(MARKER_ADDR) == PAD_SENTINEL)
+
+    def base_words(self) -> int:
+        """Count the words this descriptor states, marker packets excluded."""
+        return self.header_size_words() + sum(
+            1 + len(packet.writes)
+            for packet in self.packets
+            if dict(packet.writes).get(MARKER_ADDR) != PAD_SENTINEL
+        )
+
+    def padding_packets(self, off: int) -> int:
+        """Count the marker packets this descriptor carries when it starts at ``off``."""
+        present = self.marker_packets()
+        if present:
+            return present
+        return sentinel_packets(off, self.base_words() * WORD_BYTES)
+
+    def encoded_words(self, off: int = 0) -> int:
+        """Count the words this descriptor occupies in a stream that starts it at ``off``."""
+        return self.base_words() + 2 * self.padding_packets(off)
 
     def to_bytes(self, off: int = 0) -> bytes:
         """Encode the descriptor as little-endian words, padded to its aligned end."""
-        count = self.padding_words(off)
-        packets = list(self.packets)
+        count = self.padding_packets(off)
+        packets = [
+            packet
+            for packet in self.packets
+            if dict(packet.writes).get(MARKER_ADDR) != PAD_SENTINEL
+        ]
         if count:
-            marker = _sentinel_addr(packets)
+            marker = MARKER_ADDR
             close = tuple(Packet("run", ((marker, PAD_SENTINEL),)) for _ in range(count))
-            at = next((i for i, p in enumerate(packets) if p.flags), len(packets))
+            at = next((i for i, packet in enumerate(packets) if packet.flags), len(packets))
             packets[at:at] = close
-        sentinels = sum(
-            1 + len(packet.writes)
-            for packet in packets
-            if PAD_SENTINEL in dict(packet.writes).values()
-        )
         has_dependency = DEPENDENCY_ENABLE.get(self.header.get(DEPENDENCY_ENABLE.addr, 0))
         if has_dependency != (DEPENDENCY_ID.addr in self.header):
             raise ValueError("dependency flag and dependency word disagree")
-        size = self.size_words() + sentinels
+        size = self.base_words() + 2 * count
         first = TID.put(FLAGS.put(TASK_SIZE.put(0, size), self.flags), self.tid)
         header = [
             self.header.get(off, 0)
@@ -177,11 +192,16 @@ class Program:
     tds: tuple[TD, ...]
 
     def to_bytes(self) -> bytes:
-        """Frame the descriptors as a stream, with zero-filled alignment gaps."""
+        """Frame the descriptors as a stream, with zero-filled alignment gaps.
+
+        The section ends at the last descriptor word: a trailing gap is only
+        present between descriptors, never after the final one.
+        """
         stream = bytearray(PREAMBLE)
-        for td in self.tds:
+        for index, td in enumerate(self.tds):
             stream.extend(td.to_bytes(len(stream)))
-            stream.extend(bytes(aligned_end(len(stream)) - len(stream)))
+            if index + 1 < len(self.tds):
+                stream.extend(bytes(aligned_end(len(stream)) - len(stream)))
         return bytes(stream)
 
     @classmethod
@@ -193,9 +213,15 @@ class Program:
         off = len(PREAMBLE)
         while off < len(buf):
             td, end = TD.decode(buf, off)
+            raw_end = off + td.size_words() * WORD_BYTES
+            if raw_end == len(buf):
+                # A stream ends at its last descriptor word: only the gaps
+                # between descriptors carry alignment padding.
+                tds.append(td)
+                break
             if end > len(buf):
                 raise ValueError(f"truncated TD padding at {off:#x}")
-            if any(buf[off + td.size_words() * WORD_BYTES : end]):
+            if any(buf[raw_end:end]):
                 raise ValueError(f"nonzero TD padding at {off:#x}")
             tds.append(td)
             off = end

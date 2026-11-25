@@ -3,6 +3,7 @@
 import hashlib
 import json
 import shutil
+from collections.abc import Mapping
 from importlib.resources import files
 
 from tilefoundry import codegen, target
@@ -11,7 +12,7 @@ from tilefoundry_apple.ane import isa
 from tilefoundry_apple.ane import target as ane_target
 
 from . import emit
-from .image import Image, IODesc, Reloc, address_slots
+from .image import Image, IODesc, Reloc, address_slots, coeff_slots
 
 PREAMBLE = '#include "tilefoundry/runtime/ane/launcher.h"'
 
@@ -40,25 +41,55 @@ def describe(param: expr.Var) -> IODesc:
     return IODesc(param.name, type_.dtype.name, shape, strides)
 
 
-def function_image(fn: core.PrimFunction) -> Image:
-    """Assemble the TD stream and bind its two placeholders to I/O symbols."""
+def function_image(fn: core.PrimFunction, constants: Mapping[str, bytes] | None = None) -> Image:
+    """Assemble the TD stream and bind its base-address placeholders to I/O symbols.
+
+    The first DMA source slot takes the first input, the second source slot the
+    second input when the entry has one, and the destination slot the output.
+    """
     program = emit.build_program(fn)
-    io = tuple(describe(param) for param in fn.params)
+    constants = dict(constants or {})
+    coefficient = [param for param in fn.params if getattr(param, "is_const", False)]
+    if coefficient:
+        if len(coefficient) != 1:
+            raise ValueError(f"{fn.name}: expected at most one constant coefficient tensor")
+        weight = coefficient[0]
+        if weight.name not in constants:
+            raise ValueError(f"{fn.name}: no bytes supplied for constant {weight.name}")
+        io = tuple(describe(param) for param in fn.params if param is not weight)
+    else:
+        weight = None
+        io = tuple(describe(param) for param in fn.params)
+    output_count = fn.output_count if fn.output_count else 1
+    if not 0 < output_count <= len(io):
+        raise ValueError(f"{fn.name}: output count {output_count} does not fit {len(io)} parameters")
+    inputs, outputs = io[:-output_count], io[-output_count:]
     slots = address_slots(program)
+    bindings = [
+        (isa.TileDMASrc.tile_dma_src_base_addr_lo.addr, inputs[0]),
+        (isa.TileDMADst.tile_dma_dst_base_addr_lo.addr, outputs[0]),
+    ]
+    if len(inputs) > 1:
+        bindings.insert(1, (isa.TileDMASrc.tile_dma_src2_base_addr_lo.addr, inputs[1]))
+    if len(inputs) > 2 or len(outputs) > 1:
+        raise ValueError(f"{fn.name}: more than two inputs or one output is not bindable yet")
     relocs = []
-    for addr, desc in zip(
-        (
-            isa.TileDMASrc.tile_dma_src_base_addr_lo.addr,
-            isa.TileDMADst.tile_dma_dst_base_addr_lo.addr,
-        ),
-        io,
-        strict=True,
-    ):
+    for addr, desc in bindings:
         places = slots[addr]
         if len(places) != 1:
             raise ValueError(f"{fn.name}: expected one address slot for {desc.name}")
         relocs.append(Reloc(places[0], desc.name))
-    return Image(program.to_bytes(), b"", io, tuple(relocs))
+    if weight is None:
+        return Image(program.to_bytes(), b"", io, tuple(relocs))
+    shape = tuple(expr.static_dim_value(n) for n in weight.type.shape)
+    return Image(
+        program.to_bytes(),
+        constants[weight.name],
+        io,
+        tuple(relocs),
+        kernel_shape=shape,
+        kernel_reloc=tuple(sorted(coeff_slots(program))),
+    )
 
 
 def byte_rows(image: bytes) -> str:

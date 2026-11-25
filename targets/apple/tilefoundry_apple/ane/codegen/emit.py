@@ -12,6 +12,8 @@ from tilefoundry import dispatch, target
 from tilefoundry.ir import core, expr, types
 from tilefoundry_apple.ane import isa
 from tilefoundry_apple.ane import target as ane_target
+from tilefoundry_apple.ane.codegen import image
+from tilefoundry_apple.ane.codegen import image as image_mod
 from tilefoundry_apple.ane.ir import tir
 from tilefoundry_apple.ane.ir.tir.ne import nonlinear as tir_nonlinear
 from tilefoundry_apple.ane.isa import intrinsic
@@ -409,6 +411,61 @@ def unary(
     ]
 
 
+@emitter(tir.Conv)
+def conv(
+    call: expr.Call, address: Mapping[expr.Expr, int] | None = None, fresh: bool = True
+) -> list[Mapping[int, int]]:
+    """Read the operand, run one convolution pass over it, write the result.
+
+    A standalone convolution reads its feature map from global memory in the same
+    descriptor as the convolution itself; the coefficient stream is a separate
+    base address the loader binds.
+    """
+    op = call.target
+    destination, source = call.args[0], call.args[1]
+    src = feature_map(source.type, "src").staged(getattr(op, "tile_width", None))
+    dst = feature_map(destination.type, "dst").staged(getattr(op, "tile_width", None))
+    if tuple(getattr(op, "dilation", (1, 1))) != (1, 1) or getattr(op, "groups", 1) != 1:
+        raise ValueError("T.ane.conv: dilated and grouped convolutions are not emitted yet")
+    ocg = getattr(op, "ocg_size", None)
+    if ocg is None:
+        ocg = channel_groups(dst.channels)
+    rows = tile_rows(op, dst)
+    weight_type = call.args[2].type
+    weight_shape = tuple(expr.static_dim_value(n) for n in weight_type.shape)
+    _lanes, _per_lane, coeff_stride = image.coefficient_layout(weight_shape)
+    kernel_width = weight_shape[3]
+    return [
+        intrinsic.load(
+            src, isa.Engine.NEURAL, address=_address(address, source), fresh=fresh, rows=rows
+        ),
+        intrinsic.convolution(
+            src,
+            dst,
+            index=0,
+            ocg_size=ocg,
+            coeff_stride=coeff_stride,
+            kernel_width=kernel_width,
+            result_base=getattr(op, "l2_result_base", None),
+            activate=op.nonlinear is not tir_nonlinear.Nonlinear.NONE,
+            staged_source=False,
+            to_dram=True,
+            address=_address(address, destination),
+        ),
+    ]
+
+
+def channel_groups(channels: int) -> int:
+    """Encode how many 16-channel engine groups a pass covers, as a log2.
+
+    A pass states the field only while the output fits four groups; wider outputs
+    leave it at its reset value.
+    """
+    group = intrinsic.NE_CHANNEL_GROUP
+    groups = -(-channels // group)
+    return 0 if groups <= 1 else (groups - 1).bit_length()
+
+
 def chain_source(op) -> bool:
     """Whether this pass reads the source its predecessor left staged."""
     return bool(getattr(op, "chained_source", False))
@@ -508,6 +565,75 @@ def matmul_stream(cin: int, cout: int, *, ocg_size: int) -> isa.Program:
     )
 
 
+def coefficient_relocs(program: isa.Program) -> tuple[int, ...]:
+    """Return the text word offsets of the flagged coefficient packets.
+
+    Each descriptor that fetches coefficients states their base as a flagged
+    two-word packet; those words are what the relocation records patch.
+    """
+    offsets: list[int] = []
+    start = len(isa.PREAMBLE) // 4
+    for descriptor in program.tds:
+        cursor = start + descriptor.header_size_words()
+        for packet in descriptor.packets:
+            if len(packet.writes) == 2 and all(addr == 0x1908 + 4 * i for i, (addr, _) in enumerate(packet.writes)):
+                offsets.append(cursor + 1)
+            cursor += 1 + len(packet.writes)
+        start += descriptor.size_words()
+    return tuple(offsets)
+
+
+def coefficient_span(cin: int, inter: int, *, full: bool) -> dict[str, tuple[int, int]]:
+    """Return each coefficient tensor's (section offset, packed length).
+
+    The gate tensor carries the activation lookup table behind its weights, so
+    its packed length is the one that also holds the table.
+    """
+    tensors = {"gate": (inter, cin, 1, 1, intrinsic.NE_LUT_BYTES),
+               "up": (inter, cin, 1, 1, 0)}
+    if full:
+        tensors["down"] = (cin, inter, 1, 1, 0)
+    out: dict[str, tuple[int, int]] = {}
+    base = 0
+    for name, (out_channels, in_channels, kh, kw, lut) in tensors.items():
+        lanes, per_lane, _stride = image_mod.coefficient_layout(
+            (out_channels, in_channels, kh, kw), lut_bytes=lut
+        )
+        length = lanes * _stride
+        out[name] = (base, length)
+        base += length
+    return out
+
+
+def fused_image(
+    weights: Mapping[str, tuple[tuple[int, int, int, int], bytes]],
+    *,
+    slots: Mapping[str, int],
+    full: bool,
+) -> image.Image:
+    """Assemble one fused block: descriptor stream plus its coefficient section.
+
+    ``weights`` names the block's coefficient tensors (``gate``/``up`` and, in the
+    full feed-forward block, ``down``); each carries its shape and bytes.  Each
+    tensor's section offset is the operand of the pass that consumes it.
+    """
+    cin, inter = slots["cin"], slots["inter"]
+    program = ffn_stream(cin, inter, slots) if full else glu_stream(cin, inter, slots)
+    order = ("gate", "up", "down") if full else ("gate", "up")
+    coefficients = tuple(
+        (weights[name][0], weights[name][1], intrinsic.NE_LUT_BYTES if name == "gate" else 0)
+        for name in order
+    )
+    return image.Image(
+        program.to_bytes(),
+        b"",
+        (),
+        (),
+        coefficients=coefficients,
+        kernel_reloc=coefficient_relocs(program),
+    )
+
+
 def build_program(fn: core.PrimFunction) -> isa.Program:
     """Build one task descriptor stream from a lowered H14 PrimFunction."""
     label = f"{target.summary(fn.target)} {fn.name}"
@@ -535,6 +661,7 @@ __all__ = [
     "build_program",
     "binary",
     "bypass",
+    "conv",
     "emitter",
     "feature_map",
     "reduce",
@@ -566,6 +693,7 @@ def glu_stream(cin: int, inter: int, slots: Mapping[str, int]) -> isa.Program:
                     hidden,
                     index=1,
                     ocg_size=slots["gate_ocg"],
+                    coeff_base=coefficient_span(cin, inter, full=True)["gate"][0],
                     activate=True,
                     armed=False,
                     staged_source=True,
@@ -579,6 +707,7 @@ def glu_stream(cin: int, inter: int, slots: Mapping[str, int]) -> isa.Program:
                     hidden,
                     index=2,
                     ocg_size=slots["up_ocg"],
+                    coeff_base=coefficient_span(cin, inter, full=True)["up"][0],
                     armed=False,
                     staged_source=True,
                     to_dram=False,
@@ -626,6 +755,7 @@ def ffn_stream(cin: int, inter: int, slots: Mapping[str, int]) -> isa.Program:
                 hidden,
                 index=1,
                 ocg_size=slots["gate_ocg"],
+                coeff_base=coefficient_span(cin, inter, full=True)["gate"][0],
                 activate=True,
                 armed=False,
                 staged_source=True,
@@ -639,6 +769,7 @@ def ffn_stream(cin: int, inter: int, slots: Mapping[str, int]) -> isa.Program:
                 hidden,
                 index=2,
                 ocg_size=slots["up_ocg"],
+                coeff_base=coefficient_span(cin, inter, full=True)["up"][0],
                 armed=False,
                 staged_source=True,
                 to_dram=False,
@@ -665,6 +796,7 @@ def ffn_stream(cin: int, inter: int, slots: Mapping[str, int]) -> isa.Program:
                 operand,
                 index=4,
                 ocg_size=slots["down_ocg"],
+                coeff_base=coefficient_span(cin, inter, full=True)["down"][0],
                 armed=True,
                 staged_source=True,
                 to_dram=True,

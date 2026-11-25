@@ -100,7 +100,7 @@ SECT_ALIGN_TEXT = 14
 SECT_ALIGN_TEXT_CONST = 6
 SECT_ALIGN_KERNEL = 6
 
-SOURCE_MODEL_TAG = b"src model info\0\0\0"
+SOURCE_MODEL_TAG = b"src model info\0\0"
 N_SECT = 0x0E
 N_EXT = 0x01
 
@@ -418,6 +418,147 @@ class Surface:
         return self.desc.name
 
 
+#: Registers that hold a 64-bit coefficient base address and the width of the
+#: relocation record that patches them (8 bytes for the paired low/high words,
+#: 4 bytes for the single-word forms).
+COEFF_SLOT_ADDRS = frozenset({0x1908, 0x19F8, 0x1A00})
+COEFF_SINGLE_ADDRS = frozenset({0x19E8, 0x19EC, 0x19F4})
+RELOCATION_WIDTH = {addr: 8 for addr in COEFF_SLOT_ADDRS}
+RELOCATION_WIDTH.update({addr: 4 for addr in COEFF_SINGLE_ADDRS})
+
+
+def coeff_slots(program: isa.Program) -> dict[int, int]:
+    """Map each coefficient base-address slot's text word offset to its register."""
+    slots: dict[int, int] = {}
+    start = len(isa.PREAMBLE) // 4
+    for descriptor in program.tds:
+        first = start + descriptor.header_size_words()
+        for packet in descriptor.packets:
+            for index, (addr, _) in enumerate(packet.writes):
+                if addr in RELOCATION_WIDTH:
+                    slots[first + 1 + index] = addr
+            first += 1 + len(packet.writes)
+        start = align(start + descriptor.encoded_words(start * 4), 2)
+    return slots
+
+
+#: Coefficient lanes: at most one per engine node.
+MAX_COEFF_LANES = 16
+#: Every lane starts on a 64-byte boundary.
+COEFF_LANE_ALIGN = 64
+
+
+def coefficient_lanes(shape: tuple[int, int, int, int]) -> int:
+    """Count the coefficient lanes a weight of ``shape`` needs."""
+    out_channels = shape[0]
+    return max(1, min(MAX_COEFF_LANES, out_channels))
+
+
+def coefficient_layout(
+    shape: tuple[int, int, int, int], *, lut_bytes: int = 0
+) -> tuple[int, int, int]:
+    """Return ``(lanes, per_lane, stride)`` for one coefficient tensor.
+
+    ``per_lane`` output channels go to each lane; a lane's stream walks the input
+    channels, then the kernel taps, then the lane's output channels, and the next
+    lane starts on a 64-byte boundary.
+    """
+    out_channels, in_channels, kh, kw = shape
+    lanes = coefficient_lanes(shape)
+    per_lane = out_channels // lanes
+    if per_lane * lanes != out_channels:
+        raise ValueError(f"output channels {out_channels} do not split into {lanes} lanes")
+    lane_bytes = per_lane * in_channels * kh * kw * 2 + lut_bytes
+    stride = align_up(lane_bytes, COEFF_LANE_ALIGN)
+    return lanes, per_lane, stride
+
+
+def coefficient_section(image) -> tuple[bytes, int, tuple[int, ...]]:
+    """Pack every coefficient tensor of an image into one section.
+
+    Each tensor is lane-tiled on its own (a tensor whose pass also applies a
+    lookup table carries the table behind its weights), and the tensors follow
+    each other, so the section offset of each tensor is the extended-packet
+    operand of the pass that consumes it.
+    """
+    coefficients = image.coefficients
+    if coefficients is None:
+        if image.kernel_shape is None:
+            return image.kern, 0, (0,)
+        blob, stride = coefficient_blob(image.kernel_shape, image.kern)
+        return blob, stride, (0,)
+    out = bytearray()
+    bases: list[int] = []
+    stride = 0
+    for shape, values, lut_bytes in coefficients:
+        bases.append(len(out))
+        packed, stride = coefficient_blob(shape, values, lut_bytes=lut_bytes)
+        out += packed
+    return bytes(out), stride, tuple(bases)
+
+
+#: One activated lane: a fixed header, the activation table, then the weights.
+#: Offsets are bytes inside the 256-byte lane block.
+LUT_SLOTS = (0x00, 0x02, 0x06) + tuple(range(0x08, 0x4E, 2)) + (0x4E, 0x52, 0x54)
+LUT_HEADER = {0x00: 0xC91A, 0x02: 0x7C00, 0x04: 0x0000, 0x06: 0x7C00}
+LUT_TRAILER = {0x4E: 0x3C00, 0x50: 0x9C00, 0x52: 0x0001, 0x54: 0x0001}
+WEIGHT_SLOTS = tuple(range(0x80, 0x100, 2))
+
+
+def coefficient_blob(
+    shape: tuple[int, int, int, int], values: bytes, *, lut_bytes: int = 0,
+    lut: bytes | None = None,
+) -> tuple[bytes, int]:
+    """Pack one coefficient tensor into its per-lane stream, returning it and the stride.
+
+    ``values`` holds the tensor in output-channel major order as little-endian
+    16-bit elements.
+    """
+    out_channels, in_channels, kh, kw = shape
+    if len(values) != out_channels * in_channels * kh * kw * 2:
+        raise ValueError("coefficient bytes do not match the declared shape")
+    lanes, per_lane, stride = coefficient_layout(shape, lut_bytes=lut_bytes)
+    word = 2
+    if lut is not None and lut_bytes:
+        if len(lut) != len(LUT_SLOTS) * 2:
+            raise ValueError(f"a lookup table must fill {len(LUT_SLOTS)} slots")
+        # The first half of every lane is identical, so it is built once.
+        head = bytearray(0x80)
+        for offset, value in LUT_HEADER.items():
+            struct.pack_into("<H", head, offset, value)
+        for offset, value in LUT_TRAILER.items():
+            struct.pack_into("<H", head, offset, value)
+        for slot, offset in enumerate(LUT_SLOTS):
+            head[offset : offset + word] = lut[slot * word : slot * word + word]
+        out = bytearray()
+        for lane in range(lanes):
+            block = bytearray(head)
+            block.extend(bytes(stride - len(head)))
+            weights = bytearray()
+            for ci in range(in_channels):
+                for kh_i in range(kh):
+                    for kw_i in range(kw):
+                        for j in range(per_lane):
+                            index = (((lane * per_lane + j) * in_channels + ci) * kh + kh_i) * kw + kw_i
+                            weights += values[index * word : index * word + word]
+            for slot, offset in enumerate(WEIGHT_SLOTS):
+                if slot * word < len(weights):
+                    block[offset : offset + word] = weights[slot * word : slot * word + word]
+            out += block
+        return bytes(out), stride
+    out = bytearray()
+    for lane in range(lanes):
+        lane_bytes = bytearray()
+        for ci in range(in_channels):
+            for kh_i in range(kh):
+                for kw_i in range(kw):
+                    for j in range(per_lane):
+                        index = (((lane * per_lane + j) * in_channels + ci) * kh + kh_i) * kw + kw_i
+                        lane_bytes += values[index * word : index * word + word]
+        out += lane_bytes.ljust(stride, b"\0")
+    return bytes(out), stride
+
+
 def address_slots(program: isa.Program) -> dict[int, tuple[int, ...]]:
     """Locate DRAM base pairs in descriptor payloads by register address."""
     addresses = (
@@ -436,7 +577,7 @@ def address_slots(program: isa.Program) -> dict[int, tuple[int, ...]]:
                 if addr in slots and following == addr + 4:
                     slots[addr].append(first + 1 + index)
             first += 1 + len(packet.writes)
-        start = align(start + descriptor.size_words(), 2)
+        start = align(start + descriptor.encoded_words(start * 4), 2)
     return {addr: tuple(places) for addr, places in slots.items()}
 
 
@@ -447,30 +588,6 @@ def slot_roles() -> dict[int, int]:
         isa.TileDMASrc.tile_dma_src_base_addr_lo.addr: BINDING_ROLE_INPUT,
         isa.TileDMASrc.tile_dma_src2_base_addr_lo.addr: BINDING_ROLE_INPUT,
     }
-
-
-def relocation_records(
-    text: bytes, io: tuple[IODesc, ...], relocs: tuple[Reloc, ...], slots: frozenset[int]
-) -> bytes:
-    """Encode extern relocations against the table of I/O symbols."""
-    indices = {item.name: i for i, item in enumerate(io)}
-    used: set[int] = set()
-    records = bytearray()
-    for reloc in relocs:
-        if reloc.symbol not in indices:
-            raise ValueError(f"unresolved relocation symbol {reloc.symbol!r}")
-        word = reloc.word_offset
-        if type(word) is not int or word not in slots:
-            raise ValueError(f"word offset {word!r} is not a 64-bit address slot")
-        if used.intersection((word, word + 1)):
-            raise ValueError(f"overlapping relocation at word offset {word}")
-        off = word * 4
-        if any(text[off : off + 8]):
-            raise ValueError(f"relocation at word offset {word} needs a zero placeholder")
-        used.update((word, word + 1))
-        flags = (3 << 25) | (1 << 27)
-        records.extend(RELOCATION.pack(off, flags | indices[reloc.symbol]))
-    return bytes(records)
 
 
 def buffer_reference(surface: Surface) -> bytes:
@@ -628,6 +745,65 @@ def source_model_info(tool: str, version: str, procedure: str, task_count: int) 
     return text_record(CMD_SOURCE_MODEL_INFO, bytes(payload))
 
 
+#: Element-type catalog every compiled image carries, in symbol-table order.
+ELEMENT_CATALOG = (
+    "void:t1=1",
+    "int8:t2=r2;0;127",
+    "uint8:t3=r1;0;255",
+    "int16:t4=r1;-32768;32767",
+    "float16:t5=r1;2;0",
+    "float:t6=r1;4;0",
+    "raw10:t7=r1;-512;511",
+    "lut:t8=",
+    "uint4:t9=r1;0;15",
+    "uint6:t10=r1;0;63",
+    "uint1:t11=r1;0,1",
+    "uint2:t12=r1;0;3",
+    "packed10:t13=r1;-512;511",
+    "y10:t14=r1;-512;511",
+    "uint16:t15=r1;0;65535",
+    "e4m3:t16=r1;1;0",
+    "int32:t17=r1;-2147483648;2147483647",
+    "uint32:t18=r1;0;4294967295",
+    "int64:t19=r1;-9223372036854775808;9223372036854775807",
+    "uint64:t20=r1;0;18446744073709551615",
+    "raw12:t21=r1;-512;511",
+    "y12:t22=r1;-512;511",
+    "int4:t23=r1;-8;7",
+)
+
+#: Type ids past the catalog: five per surface (four axis strides and the shape).
+FIRST_SURFACE_TYPE = 1 + len(ELEMENT_CATALOG)
+AXES = "nchw"
+#: Private symbol types the compiler uses for the catalog and the shape records.
+CATALOG_TYPE = 0x80
+SHAPE_TYPE = 0x20
+
+
+def shape_stab(desc: "IODesc", base: int) -> str:
+    """Encode one surface's element type and its per-axis byte strides.
+
+    The record is ``name:t<base>=`` followed by one ``ar1;0;<extent>;<id>=s<stride><axis>``
+    group per axis (batch, channel, height, width) and the element code last.
+    """
+    row, plane, batch, _total = desc.canonical_geometry
+    shape = desc.shape
+    strides = (batch, plane, row, desc.element_bytes)
+    groups = []
+    for axis, extent, stride in zip(AXES, shape, strides):
+        groups.append(f"ar1;0;{extent};{base + 1 + len(groups)}=s{stride}{axis}")
+    return f"{desc.name}:t{base}=" + ":".join(groups) + f":{desc.element_code}"
+
+
+def runtime_version() -> bytes:
+    """Encode the runtime-version command: a four-byte 1.1 payload."""
+    payload = bytearray(SOURCE_MODEL_TAG[:0] + b"rt.version".ljust(16, b"\0"))
+    text = struct.pack("<4B", 1, 0, 1, 0)
+    payload += struct.pack("<QQ", 0x28, len(text))
+    payload += text
+    return text_record(CMD_SOURCE_MODEL_INFO, bytes(payload))
+
+
 @dataclass(frozen=True)
 class Image:
     """A complete H14 image: descriptor text, kernel blob, I/O, relocations."""
@@ -641,7 +817,11 @@ class Image:
     kernel_reloc: tuple[int, ...] = ()
     scratch_bytes: int = 0
     record_count: int = DEFAULT_RECORD_COUNT
-    format_code: int = DEFAULT_FORMAT_CODE
+    format_code: int | None = None
+    kernel_symbol: str = "coeff"
+    kernel_digest: str | None = None
+    kernel_shape: tuple[int, int, int, int] | None = None
+    coefficients: tuple[tuple[tuple[int, int, int, int], bytes, int], ...] | None = None
     tool: str = TOOL_NAME
     version: str = "1.0"
     layout: str = "canonical"
@@ -691,45 +871,64 @@ class Image:
     def relocation_table(
         self, text: bytes, program: isa.Program, kernel_section: int | None
     ) -> bytes:
-        """Encode the __text relocation records: I/O symbols and the kernel base.
+        """Encode the __text relocation records for the coefficient blob only.
 
-        An I/O surface is resolved by an external reference to its symbol.  A
-        coefficient blob is resolved by a section-relative reference into
-        __kern_0, which is how the compiler binds the coefficients base address.
+        An I/O surface address is *not* relocated here: the descriptor states the
+        surface base as a flagged two-word packet whose operands stay zero, and
+        the loader binds them.  A coefficient blob is different: it is resolved
+        by a section-relative reference into __kern_0, which is the only kind of
+        Mach-O relocation a compiled image carries.
         """
-        slots = frozenset(word for places in address_slots(program).values() for word in places)
-        records = bytearray(relocation_records(text, self.io, self.relocs, slots))
+        records = bytearray()
         if self.kernel_reloc and kernel_section is None:
             raise ValueError("kernel relocations need a kernel section")
+        slots = coeff_slots(program)
+        # A multi-tensor image derives its records from the parsed stream, whose
+        # word offsets already include the alignment gaps between descriptors.
+        words = sorted(slots) if self.coefficients is not None else self.kernel_reloc
         used = {record * 4 for record in (reloc.word_offset for reloc in self.relocs)}
-        for word in self.kernel_reloc:
+        for word in words:
             if type(word) is not int or word < 0:
                 raise ValueError(f"kernel relocation word {word!r} is not a word offset")
             off = word * 4
-            if off + 8 > len(text):
+            width = RELOCATION_WIDTH.get(slots.get(word))
+            if width is None:
+                raise ValueError(f"kernel relocation word {word} does not address a coefficient slot")
+            if off + width > len(text):
                 raise ValueError(f"kernel relocation at word {word} leaves the descriptor")
-            if any(text[off : off + 8]) or off in used:
-                raise ValueError(f"kernel relocation at word {word} needs a zero placeholder")
+            if off in used:
+                raise ValueError(f"overlapping kernel relocation at word {word}")
+            # A section-relative relocation keeps its addend in place, so the
+            # operand may name an offset inside the coefficient section.
             used.add(off)
-            flags = (1 << 24) | (3 << 25) | kernel_section
+            flags = (1 << 24) | ((width.bit_length() - 1) << 25) | kernel_section
             records.extend(RELOCATION.pack(off, flags))
         return bytes(records)
 
     def to_bytes(self) -> bytes:
         """Write the little-endian container without binding buffer addresses."""
-        if len(self.text) % 16:
-            raise ValueError("image text must be 16-byte aligned")
+        if len(self.text) % 4:
+            raise ValueError("image text must be a whole number of words")
         if not self.procedure or not self.procedure.isascii() or not self.procedure.isprintable():
             raise ValueError(f"invalid procedure name {self.procedure!r}")
         if type(self.record_count) is not int or not 0 <= self.record_count < 2**32:
             raise ValueError(f"record count {self.record_count!r} is not a u32")
-        if type(self.format_code) is not int or not 0 <= self.format_code < 2**32:
+        if self.format_code is not None and (
+            type(self.format_code) is not int or not 0 <= self.format_code < 2**32
+        ):
             raise ValueError(f"format code {self.format_code!r} is not a u32")
         if type(self.scratch_bytes) is not int or not 0 <= self.scratch_bytes < 2**32:
             raise ValueError(f"scratch size {self.scratch_bytes!r} is not a u32")
+        has_kern = bool(self.kern) or self.coefficients is not None
         program = isa.Program.from_bytes(self.text)
         if not program.tds:
             raise ValueError("image text must contain a descriptor")
+        # The record states the largest per-descriptor cycle estimate.
+        format_code = self.format_code
+        if format_code is None:
+            format_code = max(
+                (descriptor.header.get(0x04, 0) for descriptor in program.tds), default=0
+            )
         if len({item.name for item in self.io}) != len(self.io):
             raise ValueError("duplicate image I/O symbol")
         for item in self.io:
@@ -743,21 +942,26 @@ class Image:
         if text_const_address + TEXT_CONST_SIZE > text_address + TEXT_VM_SIZE:
             raise ValueError("__TEXT cannot hold its const section")
         kernel_address = text_address + TEXT_VM_SIZE
-        kernel_size = align_up(len(self.kern), PAGE)
-        resources = tuple(surface.address for surface in surfaces)
-        if self.kern:
-            resources += (kernel_address,)
+        blob, lane_stride, tensor_bases = coefficient_section(self)
+        # A coefficient section keeps at least two pages so a small blob cannot
+        # be addressed past the end of the segment.
+        kernel_size = max(2 * PAGE, align_up(len(blob), PAGE))
+        # The resource table lists the surfaces in section order, then the
+        # coefficient blob; the blob is dropped when the table is full.
+        resources = [surface.address for surface in surfaces]
+        if has_kern and len(resources) < RESOURCE_SLOTS:
+            resources.append(kernel_address)
 
         command_payloads = tuple(buffer_reference(surface) for surface in surfaces)
         segment_payload = segment_record(
             text_address,
             text_const_address,
-            resources,
+            tuple(resources),
             len(self.text) // 4,
             len(program.tds),
             self.procedure,
             self.record_count,
-            self.format_code,
+            format_code,
             VM_BASE if self.scratch_bytes else 0,
             self.scratch_bytes,
         )
@@ -770,11 +974,12 @@ class Image:
         )
         surface_bytes = sum(surface.size for surface in surfaces)
         metadata_payload = compiler_metadata(
-            self.tool, self.version, len(self.kern), surface_bytes, len(program.tds)
+            self.tool, self.version, len(blob), surface_bytes, len(program.tds)
         )
         source_payload = source_model_info(
             self.tool, self.version, self.procedure, len(program.tds)
         )
+        runtime_payload = runtime_version()
 
         symtab_size = SYMTAB.size
         command_size = (
@@ -782,28 +987,30 @@ class Image:
             + len(surfaces) * (SEGMENT.size + SECTION.size)
             + SEGMENT.size
             + 2 * SECTION.size
-            + (SEGMENT.size + SECTION.size if self.kern else 0)
+            + (SEGMENT.size + SECTION.size if has_kern else 0)
             + sum(len(payload) for payload in command_payloads)
             + len(segment_payload)
             + sum(len(payload) for payload in binding_payloads)
             + len(metadata_payload)
             + len(source_payload)
+            + len(runtime_payload)
             + symtab_size
         )
         command_count = (
             1
             + len(surfaces)
             + 1
-            + (1 if self.kern else 0)
+            + (1 if has_kern else 0)
             + len(command_payloads)
             + 1
             + len(binding_payloads)
             + 1
             + 1
             + 1
+            + 1
         )
-        symbols, strings = self.symbol_table(surfaces)
-        kernel_section = len(surfaces) + 3 if self.kern else None
+        kernel_section = len(surfaces) + 3 if has_kern else None
+        symbols, strings = self.symbol_table(surfaces, kernel_section)
         reloc_data = self.relocation_table(self.text, program, kernel_section)
         reloc_count = len(reloc_data) // RELOCATION.size
 
@@ -813,9 +1020,9 @@ class Image:
         )
         if text_file_offset is None:
             raise ValueError("image metadata does not fit below the __TEXT segment")
-        symbol_offset = align_up(HEADER.size + command_size, 3)
+        symbol_offset = HEADER.size + command_size
         string_offset = symbol_offset + len(symbols)
-        reloc_offset = align_up(string_offset + len(strings), 3) if reloc_data else 0
+        reloc_offset = string_offset + len(strings) if reloc_data else 0
         if reloc_offset + len(reloc_data) > text_file_offset:
             raise ValueError("image symbols and relocations cross the __TEXT segment")
         text_const_file_offset = text_file_offset + align_up(len(self.text), TEXT_CONST_ALIGN)
@@ -859,7 +1066,7 @@ class Image:
                 TEXT_VM_SIZE,
                 5,
                 5,
-                SEG_TEXT_FLAGS_KERNEL if self.kern else SEG_TEXT_FLAGS_PLAIN,
+                SEG_TEXT_FLAGS_KERNEL if has_kern else SEG_TEXT_FLAGS_PLAIN,
                 (
                     Section(
                         b"__text",
@@ -884,7 +1091,7 @@ class Image:
                 ),
             )
         )
-        if self.kern:
+        if has_kern:
             segments.append(
                 Segment(
                     b"__KERN_0",
@@ -900,7 +1107,7 @@ class Image:
                             b"__kern_0",
                             b"__KERN_0",
                             kernel_address,
-                            len(self.kern),
+                            len(blob),
                             kernel_file_offset,
                             SECT_ALIGN_KERNEL,
                             SECT_KERNEL_FLAGS,
@@ -919,11 +1126,12 @@ class Image:
             commands += payload
         commands += metadata_payload
         commands += source_payload
+        commands += runtime_payload
         commands += SYMTAB.pack(
             LC_SYMTAB,
             SYMTAB.size,
             symbol_offset,
-            len(self.io),
+            len(symbols) // SYMBOL.size,
             string_offset,
             len(strings),
         )
@@ -934,15 +1142,15 @@ class Image:
         out[: HEADER.size] = HEADER.pack(
             MAGIC, CPU, H14, FILE_TYPE, command_count, command_size, 0x00200000, 0
         )
-        if command_count != len(segments) + len(command_payloads) + len(binding_payloads) + 4:
+        if command_count != len(segments) + len(command_payloads) + len(binding_payloads) + 5:
             raise ValueError("command count disagrees with its plan")
         out[HEADER.size : HEADER.size + command_size] = commands
         out[symbol_offset : symbol_offset + len(symbols)] = symbols
         out[string_offset : string_offset + len(strings)] = strings
         out[reloc_offset : reloc_offset + len(reloc_data)] = reloc_data
         out[text_file_offset : text_file_offset + len(self.text)] = self.text
-        if self.kern:
-            out[kernel_file_offset : kernel_file_offset + len(self.kern)] = self.kern
+        if has_kern:
+            out[kernel_file_offset : kernel_file_offset + len(blob)] = blob
         return bytes(out)
 
     @staticmethod
@@ -965,13 +1173,55 @@ class Image:
                 return candidate
         return None
 
-    def symbol_table(self, surfaces: tuple[Surface, ...]) -> tuple[bytes, bytes]:
-        """Encode one external symbol per surface, in section order."""
+    def symbol_table(
+        self, surfaces: tuple[Surface, ...], kernel_section: int | None = None
+    ) -> tuple[bytes, bytes]:
+        """Encode the surface symbols, the element catalog and the shape records.
+
+        Three groups follow each other: one external symbol per surface in section
+        order, the element-type catalog shared by every image, and one shape record
+        per surface whose type ids continue past the catalog.
+        """
         names = bytearray(b"\0")
         symbols = bytearray()
         for index, surface in enumerate(surfaces):
             symbols.extend(SYMBOL.pack(len(names), N_SECT | N_EXT, index + 1, 0, surface.address))
             names.extend(surface.symbol_name.encode("ascii") + b"\0")
+        if self.kern or self.coefficients:
+            if kernel_section is None:
+                raise ValueError("a coefficient blob needs its section ordinal")
+            address = VM_BASE + align_up(self.scratch_bytes, PAGE) + sum(
+                surface.size for surface in surfaces
+            ) + TEXT_VM_SIZE
+            if self.coefficients is None:
+                groups = ((self.kernel_shape, 0, 0),)
+            else:
+                _blob, _stride, bases = coefficient_section(self)
+                groups = tuple(
+                    (shape, bases[index], lut) for index, (shape, _bytes, lut) in enumerate(self.coefficients)
+                )
+            token = self.kernel_digest or self.kernel_symbol
+            for index, (shape, base, lut) in enumerate(groups):
+                lanes, _per_lane, stride = coefficient_layout(shape, lut_bytes=lut)
+                prefix = f"{token}_{index}" if len(groups) > 1 else token
+                for lane in range(lanes):
+                    symbols.extend(
+                        SYMBOL.pack(
+                            len(names),
+                            N_SECT | N_EXT,
+                            kernel_section,
+                            0x0002 if lane == 0 else 0,
+                            address + base + lane * stride,
+                        )
+                    )
+                    names.extend(f"{prefix}_ne_{lane}".encode("ascii") + b"\0")
+        for entry in ELEMENT_CATALOG:
+            symbols.extend(SYMBOL.pack(len(names), CATALOG_TYPE, 0, 0, 0))
+            names.extend(entry.encode("ascii") + b"\0")
+        for index, surface in enumerate(surfaces):
+            base = FIRST_SURFACE_TYPE + 5 * index
+            symbols.extend(SYMBOL.pack(len(names), SHAPE_TYPE, 0, base & 0x1F, 0))
+            names.extend(shape_stab(surface.desc, base).encode("ascii") + b"\0")
         return bytes(symbols), bytes(names)
 
 

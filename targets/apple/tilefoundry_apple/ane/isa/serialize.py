@@ -4,7 +4,17 @@ import struct
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from .fields import CONFIG_BLOCKS, block_at, check_word
+from .fields import (
+    L2,
+    NE,
+    PE,
+    Common,
+    KernelDMA,
+    TileDMADst,
+    TileDMASrc,
+    block_at,
+    check_word,
+)
 
 WORD_BYTES = struct.calcsize("<I")
 ADDR_MASK = (1 << 15) - 1
@@ -103,6 +113,11 @@ class Packet:
         ), end
 
 
+#: The flagged address packets follow the pipeline too: coefficients first, then
+#: the source surfaces, then the destination.
+EXTENDED_ORDER = (0x1908, 0x19F8, 0x1A00, 0x1110, 0x1128, 0x1508)
+
+
 def serialize(image: Mapping[int, int]) -> list[Packet]:
     """Group words by block, choosing RUN on a tie with the MASK window."""
     for addr, value in image.items():
@@ -116,23 +131,14 @@ def serialize(image: Mapping[int, int]) -> list[Packet]:
     paired = set(slotted) | {addr + WORD_BYTES for addr in slotted} | set(singles)
     pairs = [
         Packet("run", ((addr, image[addr]), (addr + WORD_BYTES, image[addr + WORD_BYTES])), flag)
-        for addr, flag in sorted(slotted.items())
+        for addr, flag in sorted(slotted.items(), key=lambda item: EXTENDED_ORDER.index(item[0])
+                                 if item[0] in EXTENDED_ORDER else len(EXTENDED_ORDER))
     ]
-    for block in CONFIG_BLOCKS:
+    for block in STAGE_ORDER:
         pending = sorted(
             addr for addr in image if block.base <= addr < block.end and addr not in paired
         )
-        while pending:
-            start = pending[0]
-            run = 1
-            while run < min(len(pending), RUN_MAX) and pending[run] == start + run * WORD_BYTES:
-                run += 1
-            window = 1
-            while window < len(pending) and pending[window] <= start + MASK_WIDTH * WORD_BYTES:
-                window += 1
-            kind, count = ("run", run) if run >= window else ("mask", window)
-            packets.append(Packet(kind, tuple((addr, image[addr]) for addr in pending[:count])))
-            pending = pending[count:]
+        packets.extend(_block_packets(pending, image))
     packets.extend(pairs)
     packets.extend(
         Packet("run", ((addr, image[addr]),), flag) for addr, flag in sorted(singles.items())
@@ -140,15 +146,53 @@ def serialize(image: Mapping[int, int]) -> list[Packet]:
     return packets
 
 
-def sentinel_words(end: int) -> int:
-    """Count the padding sentinels a descriptor appends when it ends at ``end``.
+#: The blocks are emitted in pipeline order, not address order: coefficients
+#: first, then the shared configuration, the source DMA and its trigger, the
+#: L2 read setup, the compute engine (PE or NE), and the destination DMA.
+STAGE_ORDER = (KernelDMA, Common, TileDMASrc, L2, PE, NE, TileDMADst)
 
-    The encoder aligns the end of a descriptor up to ``TASK_ALIGN_GRANULE``; only
-    a descriptor that lands on a ``DESCRIPTOR_ALIGN`` boundary is padded at all,
-    and the padding is one or two 8-byte steps.  Each step contributes exactly
-    one sentinel word.
+
+def _block_packets(pending: list[int], image: Mapping[int, int]) -> list[Packet]:
+    """Pack one block's words into RUN and MASK packets.
+
+    A window that holds every pending word becomes a single MASK unless the whole
+    block is contiguous, in which case it becomes one RUN.  When the words span
+    more than one window, a leading run of two or more words is emitted as a RUN
+    so the remainder fits one MASK; a window holding a single word is emitted as
+    a RUN too, because a MASK with no offsets carries no information.
     """
-    aligned = (end + TASK_ALIGN_GRANULE - 1) & ~(TASK_ALIGN_GRANULE - 1)
+    out: list[Packet] = []
+    while pending:
+        start = pending[0]
+        run = 1
+        while (
+            run < min(len(pending), RUN_MAX)
+            and pending[run] == start + run * WORD_BYTES
+        ):
+            run += 1
+        window = 1
+        while window < len(pending) and pending[window] <= start + MASK_WIDTH * WORD_BYTES:
+            window += 1
+        if window == len(pending):
+            kind, count = ("run", run) if run == len(pending) else ("mask", window)
+        else:
+            kind, count = ("run", run) if (run > 1 or window == 1) else ("mask", window)
+        out.append(Packet(kind, tuple((addr, image[addr]) for addr in pending[:count])))
+        pending = pending[count:]
+    return out
+
+
+def sentinel_packets(cursor: int, task_bytes: int, *, alignment: int = TASK_ALIGN_GRANULE) -> int:
+    """Count the marker packets a descriptor appends when it starts at ``cursor``.
+
+    A descriptor that ends exactly on a ``DESCRIPTOR_ALIGN`` boundary after being
+    aligned to ``alignment`` is padded instead of left alone: an 8-byte pad (one
+    marker packet of two words) when it was less than 8 bytes short of that
+    boundary, 16 bytes (two packets) when it was less than 16 short, and nothing
+    at all once it is 16 or more bytes short.
+    """
+    end = cursor + task_bytes
+    aligned = (end + alignment - 1) & ~(alignment - 1)
     if aligned % DESCRIPTOR_ALIGN:
         return 0
     pad = aligned - end
@@ -164,6 +208,7 @@ __all__ = [
     "TASK_ALIGN_GRANULE",
     "WORD_BYTES",
     "Packet",
-    "sentinel_words",
+    "STAGE_ORDER",
+    "sentinel_packets",
     "serialize",
 ]
