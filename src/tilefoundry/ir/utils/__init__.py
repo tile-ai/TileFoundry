@@ -17,6 +17,7 @@ from .compatible import (
     canonical,
     canonical_layout,
     is_unsharded_layout,
+    owner_annotation,
     types_compatible,
 )
 from .leaves import leaf_rank, leaf_span, leaves_of, map_tensor_types, result_fields, tensor_types

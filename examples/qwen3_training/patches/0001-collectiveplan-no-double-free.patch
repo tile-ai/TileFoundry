@@ -1,0 +1,15 @@
+diff --git a/astra-sim/system/CollectivePlan.cc b/astra-sim/system/CollectivePlan.cc
+index 6a13f87..1169da3 100644
+--- a/astra-sim/system/CollectivePlan.cc
++++ b/astra-sim/system/CollectivePlan.cc
+@@ -20,8 +20,7 @@ CollectivePlan::CollectivePlan(
+ CollectivePlan::~CollectivePlan() {
+     if (should_be_removed) {
+         delete topology;
+-        for (auto& ci : implementation_per_dimension) {
+-            delete ci;
+-        }
++        // local patch: CollectiveImpl objects come from CollectiveImplLookup and
++        // are shared by all plans; deleting them here double-frees at exit.
+     }
+ }

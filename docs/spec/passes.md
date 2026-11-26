@@ -537,9 +537,13 @@ through `saved`.
   respect to each of its floating point parameters that is not a `ConstTensor`.
   Each Module keeps one forward and one backward version of it under its own
   name. A child slot's Module is differentiated the same way and takes the same
-  slot in both generated Modules, except a slot that `recompute` cuts, below. A callee's `saved` is one item of its
-  caller's `saved`; in a loop body its items are taken one at a time, as the
-  loop rule below says.
+  slot in both generated Modules, except a slot that `recompute` cuts, below. An item of a callee's `saved` that
+  is a parameter of the callee is the value its caller passed, which the caller
+  holds as it holds its own values: saved once, a parameter by reference, or
+  computed again when `recompute` names it. A callee with such an item, or
+  called in a loop body, has its `saved` taken one item at a time, each other
+  item one item of its caller's `saved`; any other callee's `saved` is one item
+  of its caller's `saved`.
 - A `MeshRegion` stays a region in both Modules. A value inside a forward
   region that the backward reads leaves the region as an extra result; the
   backward region of the same mesh takes it, and the gradients, as arguments.
@@ -556,25 +560,32 @@ through `saved`.
   is not stacked. A body value that an Op computes from the induction value,
   values the body reads from outside and constants only is computed again in
   the backward body, not stacked. An item of a body callee's `saved` that is a
-  parameter of the callee, passed such a value, is that value again; the other
+  parameter of the callee is the value passed, held by these rules; the other
   items are stacked one by one. A loop that runs no iteration passes the
   gradient of each carry to its initial value.
 - A value that only parameters outside `wrt`, constants and `ConstTensor`
   parameters reach has no gradient and gets none; a `wrt` parameter that no
   gradient reaches gets zeros.
 - Gradient layout: the gradient of a value of layout `L` has layout
-  `gradient_layout(L)`, which is `L` with each `Partial` read as `Broadcast`.
-  A gradient that reaches an Op's rule with another layout, such as the
-  `Partial` gradient a column-split `MatMul` gives its `Broadcast` input, is
-  resharded to it first. The backward of a `Reshard` reshards the gradient,
-  whatever its layout, back to `gradient_layout` of its input's layout, in one
-  `Reshard`, and in none when the two layouts are the same. Each gradient parameter of the
-  backward has `gradient_layout` of its result's layout. A `wrt` gradient whose
-  layout differs from `gradient_layout` of its parameter's layout gets a final
-  `Reshard` to it, so a broadcast weight's partial gradient is all-reduced.
-  Where the value is `Broadcast` and its gradient `Varying`, every unit used the
-  same value and the units' gradients sum: a `Bitcast` restates that axis as
-  `Partial("sum")` before the `Reshard`.
+  `gradient_layout(L)`, which is `L` with each `Partial` read as `Broadcast`,
+  or is `Partial` where `L` is `Broadcast`: the sum of the units' gradients,
+  not reduced yet. Where the value is `Broadcast` and its gradient `Varying`,
+  every unit used the same value and the units' gradients sum: a `Bitcast`
+  restates that axis as `Partial("sum")`. The backward is linear in the
+  gradient, so a sum passes through each rule, and a callee's backward returns
+  it to its caller as it is. The author's `Reshard`s choose where it is
+  reduced: the backward of a `Reshard` reshards the gradient, whatever its
+  layout, back to `gradient_layout` of its input's layout, in one `Reshard`,
+  and in none when the two layouts are the same, so a gathered weight's partial
+  gradient is reduce-scattered to its shards. The backward of *module*'s entry
+  gives each `wrt` gradient `gradient_layout` of its parameter's layout, with a
+  final `Reshard` where it differs, so a broadcast parameter's partial gradient
+  is all-reduced. A gradient is also laid out as `gradient_layout` where the
+  derivation cannot go on with the sum: before an Op's rule whose Ops refuse
+  it, such as `RMSNorm`'s, which subtracts two sums; before two gradients of
+  one value in different layouts are added; and where a type is fixed first,
+  a loop's carry and each gradient parameter of a backward, which has
+  `gradient_layout` of its result's layout.
 - Each Op that can be differentiated registers one rule
   ([visitor-registry §12](./visitor-registry.md#12-instance-5--autodiff)).
 - `recompute` items are selectors. `Root` is the name of *module*; a function

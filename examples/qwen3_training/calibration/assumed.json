@@ -1,0 +1,742 @@
+{
+ "transport": "assumed",
+ "model": "seconds = 10 us + moved / 360e9 B/s; moved = (n-1)*bytes for all_gather and reduce_scatter, 2(n-1)/n*bytes for all_reduce, (n-1)/n*bytes for exchange (all_to_all), bytes for p2p. Not measured: an NVLink-class bus bandwidth chosen for the example until a measured file exists (D6, D22).",
+ "bytes": "local input except reduce_scatter uses local output bytes (PR #327 calibrate.py)",
+ "records": [
+  {
+   "kind": "all_gather",
+   "size": 2,
+   "bytes": 4096,
+   "seconds": 1.001137777777778e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 2,
+   "bytes": 1048576,
+   "seconds": 1.2912711111111111e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 2,
+   "bytes": 16777216,
+   "seconds": 5.6603377777777776e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 2,
+   "bytes": 67108864,
+   "seconds": 0.0001964135111111111,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 2,
+   "bytes": 268435456,
+   "seconds": 0.0007556540444444445,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 2,
+   "bytes": 1073741824,
+   "seconds": 0.0029926161777777778,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 2,
+   "bytes": 4294967296,
+   "seconds": 0.01194046471111111,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 4,
+   "bytes": 4096,
+   "seconds": 1.0034133333333334e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 4,
+   "bytes": 1048576,
+   "seconds": 1.8738133333333336e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 4,
+   "bytes": 16777216,
+   "seconds": 0.00014981013333333334,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 4,
+   "bytes": 67108864,
+   "seconds": 0.0005692405333333334,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 4,
+   "bytes": 268435456,
+   "seconds": 0.0022469621333333334,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 4,
+   "bytes": 1073741824,
+   "seconds": 0.008957848533333333,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 4,
+   "bytes": 4294967296,
+   "seconds": 0.03580139413333334,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 8,
+   "bytes": 4096,
+   "seconds": 1.0079644444444445e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 8,
+   "bytes": 1048576,
+   "seconds": 3.038897777777778e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 8,
+   "bytes": 16777216,
+   "seconds": 0.00033622364444444445,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 8,
+   "bytes": 67108864,
+   "seconds": 0.0013148945777777777,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 8,
+   "bytes": 268435456,
+   "seconds": 0.00522957831111111,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 8,
+   "bytes": 1073741824,
+   "seconds": 0.020888313244444442,
+   "assumed": true
+  },
+  {
+   "kind": "all_gather",
+   "size": 8,
+   "bytes": 4294967296,
+   "seconds": 0.08352325297777777,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 2,
+   "bytes": 4096,
+   "seconds": 1.001137777777778e-05,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 2,
+   "bytes": 1048576,
+   "seconds": 1.2912711111111111e-05,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 2,
+   "bytes": 16777216,
+   "seconds": 5.6603377777777776e-05,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 2,
+   "bytes": 67108864,
+   "seconds": 0.0001964135111111111,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 2,
+   "bytes": 268435456,
+   "seconds": 0.0007556540444444445,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 2,
+   "bytes": 1073741824,
+   "seconds": 0.0029926161777777778,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 2,
+   "bytes": 4294967296,
+   "seconds": 0.01194046471111111,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 4,
+   "bytes": 4096,
+   "seconds": 1.0034133333333334e-05,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 4,
+   "bytes": 1048576,
+   "seconds": 1.8738133333333336e-05,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 4,
+   "bytes": 16777216,
+   "seconds": 0.00014981013333333334,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 4,
+   "bytes": 67108864,
+   "seconds": 0.0005692405333333334,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 4,
+   "bytes": 268435456,
+   "seconds": 0.0022469621333333334,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 4,
+   "bytes": 1073741824,
+   "seconds": 0.008957848533333333,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 4,
+   "bytes": 4294967296,
+   "seconds": 0.03580139413333334,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 8,
+   "bytes": 4096,
+   "seconds": 1.0079644444444445e-05,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 8,
+   "bytes": 1048576,
+   "seconds": 3.038897777777778e-05,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 8,
+   "bytes": 16777216,
+   "seconds": 0.00033622364444444445,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 8,
+   "bytes": 67108864,
+   "seconds": 0.0013148945777777777,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 8,
+   "bytes": 268435456,
+   "seconds": 0.00522957831111111,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 8,
+   "bytes": 1073741824,
+   "seconds": 0.020888313244444442,
+   "assumed": true
+  },
+  {
+   "kind": "reduce_scatter",
+   "size": 8,
+   "bytes": 4294967296,
+   "seconds": 0.08352325297777777,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 2,
+   "bytes": 4096,
+   "seconds": 1.001137777777778e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 2,
+   "bytes": 1048576,
+   "seconds": 1.2912711111111111e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 2,
+   "bytes": 16777216,
+   "seconds": 5.6603377777777776e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 2,
+   "bytes": 67108864,
+   "seconds": 0.0001964135111111111,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 2,
+   "bytes": 268435456,
+   "seconds": 0.0007556540444444445,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 2,
+   "bytes": 1073741824,
+   "seconds": 0.0029926161777777778,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 2,
+   "bytes": 4294967296,
+   "seconds": 0.01194046471111111,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 4,
+   "bytes": 4096,
+   "seconds": 1.0017066666666668e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 4,
+   "bytes": 1048576,
+   "seconds": 1.4369066666666668e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 4,
+   "bytes": 16777216,
+   "seconds": 7.990506666666667e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 4,
+   "bytes": 67108864,
+   "seconds": 0.0002896202666666667,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 4,
+   "bytes": 268435456,
+   "seconds": 0.0011284810666666667,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 4,
+   "bytes": 1073741824,
+   "seconds": 0.004483924266666666,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 4,
+   "bytes": 4294967296,
+   "seconds": 0.017905697066666667,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 8,
+   "bytes": 4096,
+   "seconds": 1.0019911111111113e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 8,
+   "bytes": 1048576,
+   "seconds": 1.5097244444444444e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 8,
+   "bytes": 16777216,
+   "seconds": 9.15559111111111e-05,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 8,
+   "bytes": 67108864,
+   "seconds": 0.00033622364444444445,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 8,
+   "bytes": 268435456,
+   "seconds": 0.0013148945777777777,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 8,
+   "bytes": 1073741824,
+   "seconds": 0.00522957831111111,
+   "assumed": true
+  },
+  {
+   "kind": "all_reduce",
+   "size": 8,
+   "bytes": 4294967296,
+   "seconds": 0.020888313244444442,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 2,
+   "bytes": 4096,
+   "seconds": 1.000568888888889e-05,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 2,
+   "bytes": 1048576,
+   "seconds": 1.1456355555555557e-05,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 2,
+   "bytes": 16777216,
+   "seconds": 3.330168888888889e-05,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 2,
+   "bytes": 67108864,
+   "seconds": 0.00010320675555555555,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 2,
+   "bytes": 268435456,
+   "seconds": 0.00038282702222222224,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 2,
+   "bytes": 1073741824,
+   "seconds": 0.001501308088888889,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 2,
+   "bytes": 4294967296,
+   "seconds": 0.005975232355555555,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 4,
+   "bytes": 4096,
+   "seconds": 1.0008533333333334e-05,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 4,
+   "bytes": 1048576,
+   "seconds": 1.2184533333333335e-05,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 4,
+   "bytes": 16777216,
+   "seconds": 4.4952533333333334e-05,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 4,
+   "bytes": 67108864,
+   "seconds": 0.00014981013333333334,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 4,
+   "bytes": 268435456,
+   "seconds": 0.0005692405333333334,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 4,
+   "bytes": 1073741824,
+   "seconds": 0.0022469621333333334,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 4,
+   "bytes": 4294967296,
+   "seconds": 0.008957848533333333,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 8,
+   "bytes": 4096,
+   "seconds": 1.0009955555555557e-05,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 8,
+   "bytes": 1048576,
+   "seconds": 1.2548622222222223e-05,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 8,
+   "bytes": 16777216,
+   "seconds": 5.077795555555555e-05,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 8,
+   "bytes": 67108864,
+   "seconds": 0.0001731118222222222,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 8,
+   "bytes": 268435456,
+   "seconds": 0.0006624472888888889,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 8,
+   "bytes": 1073741824,
+   "seconds": 0.0026197891555555554,
+   "assumed": true
+  },
+  {
+   "kind": "exchange",
+   "size": 8,
+   "bytes": 4294967296,
+   "seconds": 0.010449156622222221,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 2,
+   "bytes": 4096,
+   "seconds": 1.001137777777778e-05,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 2,
+   "bytes": 1048576,
+   "seconds": 1.2912711111111111e-05,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 2,
+   "bytes": 16777216,
+   "seconds": 5.6603377777777776e-05,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 2,
+   "bytes": 67108864,
+   "seconds": 0.0001964135111111111,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 2,
+   "bytes": 268435456,
+   "seconds": 0.0007556540444444445,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 2,
+   "bytes": 1073741824,
+   "seconds": 0.0029926161777777778,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 2,
+   "bytes": 4294967296,
+   "seconds": 0.01194046471111111,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 4,
+   "bytes": 4096,
+   "seconds": 1.001137777777778e-05,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 4,
+   "bytes": 1048576,
+   "seconds": 1.2912711111111111e-05,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 4,
+   "bytes": 16777216,
+   "seconds": 5.6603377777777776e-05,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 4,
+   "bytes": 67108864,
+   "seconds": 0.0001964135111111111,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 4,
+   "bytes": 268435456,
+   "seconds": 0.0007556540444444445,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 4,
+   "bytes": 1073741824,
+   "seconds": 0.0029926161777777778,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 4,
+   "bytes": 4294967296,
+   "seconds": 0.01194046471111111,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 8,
+   "bytes": 4096,
+   "seconds": 1.001137777777778e-05,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 8,
+   "bytes": 1048576,
+   "seconds": 1.2912711111111111e-05,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 8,
+   "bytes": 16777216,
+   "seconds": 5.6603377777777776e-05,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 8,
+   "bytes": 67108864,
+   "seconds": 0.0001964135111111111,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 8,
+   "bytes": 268435456,
+   "seconds": 0.0007556540444444445,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 8,
+   "bytes": 1073741824,
+   "seconds": 0.0029926161777777778,
+   "assumed": true
+  },
+  {
+   "kind": "p2p",
+   "size": 8,
+   "bytes": 4294967296,
+   "seconds": 0.01194046471111111,
+   "assumed": true
+  }
+ ]
+}

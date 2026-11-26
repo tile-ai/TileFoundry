@@ -225,6 +225,52 @@ class FusedReference(ReferenceProgram):
     name: str | None = "Fused"
 
 
+def _gmem(result):
+    """The entry's gmem traffic, peak and persistent bytes."""
+    region = expr.get_metadata(result.function, analysis.RegionMemoryMetadata)
+    moved = region.traffic.storage.of("gmem").total
+    peak = region.peak_for("gmem")
+    return moved.read, moved.write, peak.peak_bytes, peak.persistent_bytes
+
+
+@case
+class TupleElementTwoCalls(CrossModuleCase):
+    """Accesses carried up two calls keep the view of the argument they land on.
+
+    The numbers are those of the same program with ``t[0]`` written as ``x``.
+    """
+
+    path: Path = ANALYSIS / "tuple_element_two_calls.py"
+    name: str | None = "TupleElementTwoCalls"
+
+    def guard(self, state, problems):
+        result = analysis.analyze(*analysis.check_program(state, state.entry_function()), analysis="memory")
+        assert _gmem(result) == (48, 48, 96, 48)
+
+
+@case
+class StepLayers(CrossModuleCase):
+    """A step calling a generated forward and backward whose loops call a layer function."""
+
+    path: Path = ANALYSIS / "step_layers.py"
+    name: str | None = "StepLayers"
+
+    def guard(self, state, problems):
+        result = analysis.analyze(
+            *analysis.check_program(state, state.entry_function()), analysis=("compute-cost", "memory")
+        )
+        flops = {}
+        for node in core.collect_exprs(result.function.body):
+            if isinstance(node, expr.Call):
+                name = node.target.path[0] if isinstance(node.target, core.FunctionRef) else "step"
+                cost = expr.get_metadata(node, analysis.ComputeCostMetadata)
+                spread = None if cost is None else cost.flops.of("f32")
+                flops[name] = flops.get(name, 0) + (0 if spread is None else spread.total)
+        total = expr.get_metadata(result.function, analysis.ComputeCostMetadata).flops.of("f32").total
+        assert flops["f"] > 0 and flops["b"] > 0 and flops["step"] > 0
+        assert total == flops["f"] + flops["b"] + flops["step"]
+
+
 def _placed_primitives(fn) -> list[tuple[str, object]]:
     """Each costed primitive result in *fn* that a sliced Mesh reached."""
     found: list[tuple[str, object]] = []

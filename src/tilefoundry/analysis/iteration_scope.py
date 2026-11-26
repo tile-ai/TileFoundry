@@ -288,7 +288,7 @@ class ScopeAccess:
                             },
                         )
                     relation = scope.access.project(item.relation, view=view)
-                    if id(item.target.expr) in callee_scope.provenance.arguments:
+                    if source.root != item.target:
                         upstream = getattr(source, view)
                         if upstream is None:
                             self.refuse(view, {id(primitive): primitive})

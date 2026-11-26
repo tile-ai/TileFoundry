@@ -1,0 +1,5 @@
+# one 8-GPU node: one switch dimension
+topology: [ Switch ]
+npus_count: [ 8 ]
+bandwidth: [ 100.0 ]  # GB/s, GB = 2^30 B (NetworkFunction.cpp)
+latency: [ 1000.0 ]   # ns per hop

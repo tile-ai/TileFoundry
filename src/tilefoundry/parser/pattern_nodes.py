@@ -4699,6 +4699,14 @@ def rebind_through_region(context, mesh, names, frame, node, params=(), args=())
     return values[0][0]
 
 
+def ends_in_return(statements):
+    """Whether a block returns last, directly or from the `with` it ends in."""
+    last = statements[-1]
+    return isinstance(last, ast.Return) or (
+        isinstance(last, ast.With) and ends_in_return(last.body)
+    )
+
+
 def enter_with(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
     assert isinstance(node, ast.With)
     item = node.items[0]
@@ -4810,9 +4818,7 @@ class WithPattern(ElementPattern):
                 rebound = rebind_through_region(
                     context, mesh, escaping, frame, match.node, params, args
                 )
-            if body is not None and (
-                rebound is None or isinstance(match.node.body[-1], ast.Return)
-            ):
+            if body is not None and (rebound is None or ends_in_return(match.node.body)):
                 return scoped_region(mesh, body, params, args)
             return None if rebound is None else context.lexical_scope.lookup(rebound)
         binding = runtime.Var(
