@@ -5,7 +5,17 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from .fields import BitField, block_at, check_word
+from . import rules
+from .fields import (
+    DEPENDENCY_ENABLE,
+    DEPENDENCY_ID,
+    FLAGS,
+    TASK_SIZE,
+    TID,
+    BitField,
+    block_at,
+    check_word,
+)
 from .serialize import (
     MARKER_ADDR,
     PAD_SENTINEL,
@@ -15,12 +25,8 @@ from .serialize import (
     serialize,
 )
 
-TID = BitField(0, 15, 0)
-TASK_SIZE = BitField(0, 26, 16)
+#: The largest task size the header's task-size field can state.
 MAX_TASK_WORDS = TASK_SIZE.get(TASK_SIZE.mask)
-FLAGS = BitField(0, 31, 27)
-DEPENDENCY_ENABLE = BitField(0x1C, 1, 1)
-DEPENDENCY_ID = BitField(0x20, 15, 0)
 
 HEADER_WORDS = 8
 #: Only the task-status bit is on by default; the event masks and the
@@ -90,9 +96,20 @@ class TD:
             if isinstance(key, BitField):
                 word = image.get(key.addr, initial.get(key.addr, 0))
                 image[key.addr] = key.put(word, value)
-        return cls(
+        td = cls(
             serialize({addr: word for addr, word in image.items() if initial.get(addr) != word})
         )
+        td.validate()
+        return td
+
+    def validate(self) -> None:
+        """Check the cross-field rules on this descriptor's register map.
+
+        Runs at construction so a descriptor that breaks a rule is rejected here,
+        not on the device.  The checks read only the descriptor's own words; see
+        :mod:`tilefoundry_apple.ane.isa.rules`.
+        """
+        rules.check(self.writes())
 
     def header_size_words(self) -> int:
         """Count the fixed header and the optional dependency word."""

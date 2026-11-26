@@ -5,11 +5,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .fields import (
-    L2,
-    NE,
-    PE,
-    Common,
-    KernelDMA,
+    CONFIG_BLOCKS,
+    BitField,
     TileDMADst,
     TileDMASrc,
     block_at,
@@ -17,12 +14,20 @@ from .fields import (
 )
 
 WORD_BYTES = struct.calcsize("<I")
-ADDR_MASK = (1 << 15) - 1
-RUN_MAX = 64
-MASK_WIDTH = 16
-MASK_TAG = 1 << 31
 TASK_ALIGN_GRANULE = 16
 DESCRIPTOR_ALIGN = 64
+
+# A packet header is one 32-bit word that these fields fully describe.  A RUN
+# carries a base word address, a 6-bit (count - 1) and 10 relocation-flag bits;
+# a MASK sets the tag bit and replaces the count and flags with a 16-bit window.
+PKT_BASE = BitField(0, 14, 0)     # base word address
+PKT_COUNT = BitField(0, 20, 15)   # RUN: words - 1
+PKT_FLAGS = BitField(0, 30, 21)   # RUN: relocation flags
+PKT_WINDOW = BitField(0, 30, 15)  # MASK: 16-bit offset window
+PKT_TAG = BitField(0, 31, 31)     # 1 = MASK, 0 = RUN
+ADDR_MASK = PKT_BASE.mask                        # 0x7FFF
+RUN_MAX = (PKT_COUNT.mask >> PKT_COUNT.lo) + 1   # 64 consecutive words
+MASK_WIDTH = PKT_WINDOW.hi - PKT_WINDOW.lo + 1   # 16 window offsets
 RELOCATION_SLOTS = {
     0x1110: 0x114,
     0x1128: 0x118,
@@ -38,6 +43,17 @@ travels as one flagged run packet of its own, after the ordinary words and after
 the padding sentinels, so the patcher can rewrite both halves without disturbing
 a neighbouring packet.  The flag names the relocation slot the pair belongs to.
 """
+#: The relocated base-address pairs travel in pipeline order too: the kernel
+#: coefficient stream and its tables first, then the two sources, then the
+#: destination.  Each entry is the low word of a 64-bit base the patcher rewrites.
+EXTENDED_ORDER = (
+    0x1908,  # kernel coefficient-stream base (low)
+    0x19F8,  # kernel DMA relocation slot (low)
+    0x1A00,  # kernel DMA relocation slot (low)
+    TileDMASrc.tile_dma_src_base_addr_lo.addr,   # 0x1110  source
+    TileDMASrc.tile_dma_src2_base_addr_lo.addr,  # 0x1128  second source
+    TileDMADst.tile_dma_dst_base_addr_lo.addr,   # 0x1508  destination
+)
 MARKER_ADDR = 0x1524
 PAD_SENTINEL = 0xDEAD
 
@@ -63,26 +79,24 @@ class Packet:
         ):
             raise ValueError("packet address outside the word address space")
         start = addrs[0]
-        base = start // WORD_BYTES
+        base = PKT_BASE.put(0, start // WORD_BYTES)
         if self.kind == "run":
             count = len(addrs)
             if count > RUN_MAX or addrs != list(
                 range(start, start + WORD_BYTES * count, WORD_BYTES)
             ):
-                raise ValueError("RUN requires 1..64 consecutive words")
-            if not isinstance(self.flags, int) or not 0 <= self.flags < (1 << 10):
-                raise ValueError("RUN flags do not fit 10 bits")
-            head = (self.flags << 21) | ((count - 1) << 15) | base
+                raise ValueError(f"RUN requires 1..{RUN_MAX} consecutive words")
+            head = PKT_FLAGS.put(PKT_COUNT.put(base, count - 1), self.flags)
         elif self.kind == "mask":
-            offsets = [addr // WORD_BYTES - base for addr in addrs[1:]]
+            offsets = [addr // WORD_BYTES - start // WORD_BYTES for addr in addrs[1:]]
             if (
                 self.flags
                 or offsets != sorted(set(offsets))
                 or any(not 1 <= offset <= MASK_WIDTH for offset in offsets)
             ):
                 raise ValueError("MASK requires ascending writes in its window and has no flags")
-            mask = sum(1 << (offset - 1) for offset in offsets)
-            head = MASK_TAG | (mask << 15) | base
+            window = sum(1 << (offset - 1) for offset in offsets)
+            head = PKT_TAG.put(PKT_WINDOW.put(base, window), 1)
         else:
             raise ValueError(f"unknown packet kind {self.kind!r}")
         for _, value in self.writes:
@@ -95,14 +109,15 @@ class Packet:
         if not 0 <= off < len(words):
             raise ValueError(f"missing packet header at word {off}")
         head = words[off]
-        base = head & ADDR_MASK
-        if head & MASK_TAG:
-            addrs = [base, *(base + 1 + bit for bit in range(MASK_WIDTH) if head >> (15 + bit) & 1)]
+        base = PKT_BASE.get(head)
+        if PKT_TAG.get(head):
+            window = PKT_WINDOW.get(head)
+            addrs = [base, *(base + 1 + bit for bit in range(MASK_WIDTH) if window >> bit & 1)]
             kind, flags = "mask", 0
         else:
-            count = ((head >> 15) & (RUN_MAX - 1)) + 1
+            count = PKT_COUNT.get(head) + 1
             addrs = range(base, base + count)
-            kind, flags = "run", head >> 21
+            kind, flags = "run", PKT_FLAGS.get(head)
         end = off + 1 + len(addrs)
         if end > len(words) or addrs[-1] > ADDR_MASK:
             raise ValueError(f"invalid packet at word {off}: payload or address range overrun")
@@ -111,12 +126,6 @@ class Packet:
             tuple((WORD_BYTES * addr, value) for addr, value in zip(addrs, words[off + 1 : end])),
             flags,
         ), end
-
-
-#: The flagged address packets follow the pipeline too: coefficients first, then
-#: the source surfaces, then the destination.
-EXTENDED_ORDER = (0x1908, 0x19F8, 0x1A00, 0x1110, 0x1128, 0x1508)
-
 
 def serialize(image: Mapping[int, int]) -> list[Packet]:
     """Group words by block, choosing RUN on a tie with the MASK window."""
@@ -148,8 +157,9 @@ def serialize(image: Mapping[int, int]) -> list[Packet]:
 
 #: The blocks are emitted in pipeline order, not address order: coefficients
 #: first, then the shared configuration, the source DMA and its trigger, the
-#: L2 read setup, the compute engine (PE or NE), and the destination DMA.
-STAGE_ORDER = (KernelDMA, Common, TileDMASrc, L2, PE, NE, TileDMADst)
+#: L2 read setup, the compute engine (PE or NE), and the destination DMA.  That
+#: order lives once, as each block's ``pipeline_rank``; this is just them sorted.
+STAGE_ORDER = tuple(sorted(CONFIG_BLOCKS, key=lambda block: block.pipeline_rank))
 
 
 def _block_packets(pending: list[int], image: Mapping[int, int]) -> list[Packet]:

@@ -28,6 +28,7 @@ from dataclasses import dataclass, replace
 from enum import IntEnum
 
 from . import fields
+from ._arith import align_up
 
 FP16_BYTES = 2
 SURFACE_ROW_ALIGN = 64
@@ -76,12 +77,6 @@ SRC_DMA = fields.TileDMASrc()
 DST_DMA = fields.TileDMADst()
 KERNEL_DMA = fields.KernelDMA()
 
-
-def align_up(value: int, alignment: int) -> int:
-    """Round a byte size up to its required alignment."""
-    return (value + alignment - 1) // alignment * alignment
-
-
 def fp16(value: float, name: str) -> int:
     """Encode one immediate as an fp16 bit pattern."""
     try:
@@ -100,8 +95,14 @@ def splice(*parts: Mapping[int, int]) -> dict[int, int]:
 
 
 @dataclass(frozen=True)
-class Surface:
-    """One feature map as the DMA and the L2 buffer address it."""
+class TensorDesc:
+    """A feature map's memory layout: the strides and extents the DMA and L2 address it by.
+
+    A primitive takes a surface as its ``source`` or ``destination`` because what
+    it programs is this layout -- the row and channel strides and the staged
+    extent -- not the tensor's values.  :func:`tensor_desc` derives the canonical
+    fp16 layout; the fields below are the byte strides each engine reads.
+    """
 
     channels: int
     height: int
@@ -142,7 +143,7 @@ class Surface:
             return self.tile_pitch
         return align_up(self.width * FP16_BYTES, L2_ROW_ALIGN)
 
-    def staged(self, width: int | None = None, rows: int | None = None) -> "Surface":
+    def staged(self, width: int | None = None, rows: int | None = None) -> "TensorDesc":
         """Return the same feature map staged as a tile of ``width`` and ``rows``.
 
         A descriptor that stages a tile narrower than the logical feature map
@@ -203,15 +204,15 @@ class Surface:
         return self.staging_extent(Engine.PLANAR)
 
 
-def surface(channels: int, height: int, width: int) -> Surface:
+def tensor_desc(channels: int, height: int, width: int) -> TensorDesc:
     """Derive the canonical fp16 surface of one feature map."""
     if min(channels, height, width) < 1:
         raise ValueError(f"feature map {channels}x{height}x{width} has an empty extent")
     row = align_up(width * FP16_BYTES, SURFACE_ROW_ALIGN)
-    return Surface(channels, height, width, row, height * row)
+    return TensorDesc(channels, height, width, row, height * row)
 
 
-def require_row_width(surface: Surface, minimum: int) -> None:
+def require_row_width(surface: TensorDesc, minimum: int) -> None:
     """Reject a feature map whose dense row selects an undecoded format entry."""
     dense = surface.width * FP16_BYTES
     if dense < minimum:
@@ -279,7 +280,7 @@ def _dst_tags(fresh: bool) -> dict[str, int]:
 
 
 def load(
-    source: Surface,
+    source: TensorDesc,
     engine: Engine = Engine.PLANAR,
     *,
     address: int = 0,
@@ -327,7 +328,7 @@ def load(
 
 
 def slot_offset(
-    surface: Surface,
+    surface: TensorDesc,
     slots: int,
     engine: Engine = Engine.PLANAR,
     rows: int | None = None,
@@ -347,7 +348,7 @@ def slot_offset(
 
 
 def load_chained(
-    source: Surface, engine: Engine = Engine.PLANAR, *, rows: int | None = None
+    source: TensorDesc, engine: Engine = Engine.PLANAR, *, rows: int | None = None
 ) -> dict[int, int]:
     """Read a source the previous descriptor left staged instead of reloading it.
 
@@ -375,7 +376,7 @@ def load_chained(
 
 
 def load_second(
-    source: Surface,
+    source: TensorDesc,
     engine: Engine = Engine.PLANAR,
     *,
     rows: int | None = None,
@@ -414,18 +415,18 @@ def load_second(
 
 
 def store(
-    destination: Surface,
+    destination: TensorDesc,
     engine: Engine = Engine.PLANAR,
     *,
     staged: int = 1,
-    staging: Surface | None = None,
+    staging: TensorDesc | None = None,
     rows: int | None = None,
     guard: bool = False,
     address: int = 0,
     fresh: bool = True,
     separated: bool | None = None,
     declare: bool = True,
-    declared: Surface | None = None,
+    declared: TensorDesc | None = None,
     planar_result: bool = False,
 ) -> dict[int, int]:
     """Program writing one feature map: the L2 result buffer and the result DMA.
@@ -472,6 +473,9 @@ def store(
             tile_dma_dst_hint=DEST_HINT,
             tile_dma_dst_data_set_id=DATA_SET_ID,
             tile_dma_dst_fifo_mode=FIFO_MODE,
+            # DRAM strides in 64-byte units: the row stride is dropped for a
+            # one-extent surface (TensorDesc.dram_row_stride), the channel stride is
+            # the bytes between channels of the destination feature map.
             **row_stride("tile_dma_dst_row_stride", destination.dram_row_stride),
             tile_dma_dst_channel_stride=_dram_units(destination.channel),
             tile_dma_dst_format_mode=fields.TensorFormatMode.COMPRESSED,
@@ -545,7 +549,7 @@ def coefficient_dma(
 
 
 def staged_copy(
-    source: Surface,
+    source: TensorDesc,
     *,
     source_base: int | None = None,
     result_base: int | None = None,
@@ -615,8 +619,8 @@ def staged_copy(
 
 
 def convolution(
-    source: Surface,
-    destination: Surface,
+    source: TensorDesc,
+    destination: TensorDesc,
     *,
     index: int,
     ocg_size: int,
@@ -750,7 +754,7 @@ NE_LUT_BYTES = 128
 
 
 def activation(
-    source: Surface,
+    source: TensorDesc,
     *,
     lut_bytes: int = NE_LUT_BYTES,
     address: int = 0,
@@ -851,7 +855,11 @@ def activation(
             nonlinear_lut_loaded=1,
             nonlinear_lut_size=_dram_units(lut_bytes),
         ),
-        {0x19F4: 0, 0x1A00: 0, 0x1A04: 0},
+        KERNEL_DMA.pack(
+            kernel_dma_lut_base=0,
+            kernel_dma_aux_base_lo=0,
+            kernel_dma_aux_base_hi=0,
+        ),
     )
 
 
@@ -961,13 +969,13 @@ def end_of_network() -> dict[int, int]:
 
 def compute_pe(
     kind: fields.TaskType,
-    output: Surface,
+    output: TensorDesc,
     *,
     op: fields.PEOp | None = None,
     second_source: int | None = None,
     source_routing: int = 1,
-    declared_in: Surface | None = None,
-    declared_out: Surface | None = None,
+    declared_in: TensorDesc | None = None,
+    declared_out: TensorDesc | None = None,
     tile_height: int | None = None,
     pool_mode: fields.PoolMode = fields.PoolMode.NONE_OR_SUM,
     compare: int | None = None,
@@ -1041,10 +1049,9 @@ def compute_pe(
         ),
     )
 
-
 def compute_ne(
     op: fields.NEOp,
-    output: Surface,
+    output: TensorDesc,
     *,
     nonlinear: fields.NENonlinear = fields.NENonlinear.NONE,
     kernel_mode: int = 0,
@@ -1054,7 +1061,7 @@ def compute_ne(
     tile_height: int | None = None,
     width_code: int | None = None,
     active_nodes: int = 4,
-    declared: Surface | None = None,
+    declared: TensorDesc | None = None,
     transpose: bool = False,
     unicast_channels: int = 1,
     ocg_size: int | None = 0,
@@ -1116,7 +1123,7 @@ def compute_ne(
 
 __all__ = [
     "Engine",
-    "Surface",
+    "TensorDesc",
     "align_up",
     "compute_ne",
     "compute_pe",
@@ -1127,5 +1134,5 @@ __all__ = [
     "load_second",
     "splice",
     "store",
-    "surface",
+    "tensor_desc",
 ]

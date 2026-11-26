@@ -1,6 +1,6 @@
 """H14 ANE task descriptors and their configuration fields."""
 
-from . import defaults, intrinsic
+from . import intrinsic
 from .fields import (
     CONFIG_BLOCKS,
     L2,
@@ -25,7 +25,7 @@ from .fields import (
 )
 from .intrinsic import (
     Engine,
-    Surface,
+    TensorDesc,
     activation,
     coefficient_dma,
     compute_ne,
@@ -38,7 +38,7 @@ from .intrinsic import (
     splice,
     staged_copy,
     store,
-    surface,
+    tensor_desc,
 )
 from .serialize import Packet, serialize
 from .td import MAX_TASK_WORDS, PREAMBLE, TD, Program

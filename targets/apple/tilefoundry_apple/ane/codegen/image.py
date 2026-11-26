@@ -53,6 +53,7 @@ import struct
 from dataclasses import dataclass
 
 from tilefoundry_apple.ane import isa
+from tilefoundry_apple.ane.isa._arith import align_pow2, align_up
 
 HEADER = struct.Struct("<8I")
 SEGMENT = struct.Struct("<II16sQQQQiiII")
@@ -183,17 +184,6 @@ TARGET_PROFILE = (
     ("--enable-matmul-kernel-pad-insertion", "false"),
     ("--Wl-undefined", "fvmlib"),
 )
-
-
-def align(value: int, exponent: int) -> int:
-    """Advance a value to a power-of-two boundary given as a log2."""
-    mask = (1 << exponent) - 1
-    return (value + mask) & ~mask
-
-
-def align_up(value: int, alignment: int) -> int:
-    """Advance a value to a byte-alignment boundary."""
-    return (value + alignment - 1) // alignment * alignment
 
 
 def name16(name: bytes, limit: int = 16) -> bytes:
@@ -438,7 +428,7 @@ def coeff_slots(program: isa.Program) -> dict[int, int]:
                 if addr in RELOCATION_WIDTH:
                     slots[first + 1 + index] = addr
             first += 1 + len(packet.writes)
-        start = align(start + descriptor.encoded_words(start * 4), 2)
+        start = align_pow2(start + descriptor.encoded_words(start * 4), 2)
     return slots
 
 
@@ -577,7 +567,7 @@ def address_slots(program: isa.Program) -> dict[int, tuple[int, ...]]:
                 if addr in slots and following == addr + 4:
                     slots[addr].append(first + 1 + index)
             first += 1 + len(packet.writes)
-        start = align(start + descriptor.encoded_words(start * 4), 2)
+        start = align_pow2(start + descriptor.encoded_words(start * 4), 2)
     return {addr: tuple(places) for addr, places in slots.items()}
 
 
@@ -1233,6 +1223,4 @@ __all__ = [
     "Segment",
     "Surface",
     "address_slots",
-    "align",
-    "align_up",
 ]

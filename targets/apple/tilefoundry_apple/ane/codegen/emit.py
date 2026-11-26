@@ -33,7 +33,7 @@ EMITTERS = registry.entries
 emitter = registry.register_for
 
 
-def feature_map(type_: types.TensorType, name: str, *, strided: bool = False) -> intrinsic.Surface:
+def feature_map(type_: types.TensorType, name: str, *, strided: bool = False) -> intrinsic.TensorDesc:
     """Read one supported static fp16 feature map in global memory."""
     if not isinstance(type_, types.TensorType) or type_.dtype is not expr.DType.f16:
         raise ValueError(f"{name} must be an fp16 tensor")
@@ -52,14 +52,14 @@ def feature_map(type_: types.TensorType, name: str, *, strided: bool = False) ->
         raise ValueError(f"{name} must be in gmem for a single descriptor")
     if width > 1 and expr.static_dim_value(type_.layout.strides[3]) != 1:
         raise ValueError(f"{name} W stride must be one")
-    surface = intrinsic.surface(channels, height, width)
+    surface = intrinsic.tensor_desc(channels, height, width)
     try:
         row, channel = tir.layout.feature_dma_strides(type_)
     except ValueError as error:
         raise ValueError(f"{name}: {error}") from error
     declared = (row or surface.row, channel or surface.channel)
     if strided:
-        return intrinsic.Surface(channels, height, width, declared[0], declared[1])
+        return intrinsic.TensorDesc(channels, height, width, declared[0], declared[1])
     if declared != (surface.row, surface.channel):
         raise ValueError(
             f"{name} declares a {declared} byte row/channel stride, but a "
@@ -564,8 +564,8 @@ def matmul_stream(cin: int, cout: int, *, ocg_size: int) -> isa.Program:
     and writes the result to DRAM.  ``ocg_size`` is the output channel group
     count the scheduler chooses.
     """
-    source = isa.surface(cin, 1, 1)
-    destination = isa.surface(cout, 1, 1)
+    source = isa.tensor_desc(cin, 1, 1)
+    destination = isa.tensor_desc(cout, 1, 1)
     return serialize.to_program(
         [
             [isa.staged_copy(source)],
@@ -685,8 +685,8 @@ def glu_stream(cin: int, inter: int, slots: Mapping[str, int]) -> isa.Program:
     memory allocator, so ``slots`` names them; only the register encoding is
     derived here.
     """
-    operand = isa.surface(cin, 1, 1)
-    hidden = isa.surface(inter, 1, 1)
+    operand = isa.tensor_desc(cin, 1, 1)
+    hidden = isa.tensor_desc(inter, 1, 1)
     return serialize.to_program(
         [
             [
@@ -748,8 +748,8 @@ def ffn_stream(cin: int, inter: int, slots: Mapping[str, int]) -> isa.Program:
     The GLU passes come from the same emitter as a standalone block; the down
     projection adds the pass that writes the block result to DRAM.
     """
-    operand = isa.surface(cin, 1, 1)
-    hidden = isa.surface(inter, 1, 1)
+    operand = isa.tensor_desc(cin, 1, 1)
+    hidden = isa.tensor_desc(inter, 1, 1)
     passes = [
         [
             isa.staged_copy(

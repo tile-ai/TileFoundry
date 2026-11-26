@@ -51,13 +51,16 @@ class Block:
 
     base: ClassVar[int]
     end: ClassVar[int]
+    #: Rank in the descriptor's emission pipeline (coefficients first, destination
+    #: last); :data:`serialize.STAGE_ORDER` is the blocks sorted by it.
+    pipeline_rank: ClassVar[int]
     fields: ClassVar[dict[str, BitField]]
 
-    def __init_subclass__(cls, *, base: int, end: int) -> None:
+    def __init_subclass__(cls, *, base: int, end: int, pipeline_rank: int) -> None:
         super().__init_subclass__()
         if not 0 <= base < end or base % 4 or end % 4:
             raise ValueError(f"{cls.__name__}: invalid block bounds {base:#x}..{end:#x}")
-        cls.base, cls.end = base, end
+        cls.base, cls.end, cls.pipeline_rank = base, end, pipeline_rank
         fields: dict[str, BitField] = {}
         masks: dict[int, int] = {}
         for name, declaration in vars(cls).items():
@@ -187,7 +190,7 @@ KERNEL_EXTENTS = range(1, 33)
 CONV_STRIDES = range(1, 3)
 
 
-class Common(Block, base=0x0000, end=0x004C):
+class Common(Block, base=0x0000, end=0x004C, pipeline_rank=1):
     """Tensor geometry, convolution window and task selection."""
 
     win = BitField(0x0000, 14, 0, SPATIAL_EXTENTS)
@@ -233,7 +236,7 @@ class Common(Block, base=0x0000, end=0x004C):
     node_id = BitField(0x003C, 27, 20)
 
 
-class L2(Block, base=0x0500, end=0x0564):
+class L2(Block, base=0x0500, end=0x0564, pipeline_rank=3):
     """On-chip buffer addresses, strides and formats."""
 
     pe_src1_re_lu = BitField(0x0500, 0, 0)
@@ -277,7 +280,7 @@ class L2(Block, base=0x0500, end=0x0564):
     l2_result_group_stride = BitField(0x0544, 20, 4)
 
 
-class PE(Block, base=0x0900, end=0x0914):
+class PE(Block, base=0x0900, end=0x0914, pipeline_rank=4):
     """Planar engine element-wise, pooling and reduction fields."""
 
     pool_mode = BitField(0x0900, 1, 0, PoolMode)
@@ -296,7 +299,7 @@ class PE(Block, base=0x0900, end=0x0914):
     clamp_high = BitField(0x0910, 31, 16)
 
 
-class NE(Block, base=0x0D00, end=0x0D14):
+class NE(Block, base=0x0D00, end=0x0D14, pipeline_rank=5):
     """Neural engine operation, kernel format and activation fields."""
 
     kernel_format = BitField(0x0D00, 1, 0, KernelFormat)
@@ -315,7 +318,7 @@ class NE(Block, base=0x0D00, end=0x0D14):
     min_pool_flag = BitField(0x0D04, 19, 19)
 
 
-class TileDMASrc(Block, base=0x1100, end=0x11D4):
+class TileDMASrc(Block, base=0x1100, end=0x11D4, pipeline_rank=2):
     """Tile DMA reads from unified memory."""
 
     tile_dma_src_hint = BitField(0x1100, 7, 0)
@@ -352,7 +355,7 @@ class TileDMASrc(Block, base=0x1100, end=0x11D4):
     tile_dma_src_cmp_vec = BitField(0x1150, 31, 28)
 
 
-class TileDMADst(Block, base=0x1500, end=0x1528):
+class TileDMADst(Block, base=0x1500, end=0x1528, pipeline_rank=6):
     """Tile DMA writes to unified memory."""
 
     tile_dma_dst_enable = BitField(0x1500, 0, 0)
@@ -378,7 +381,7 @@ class TileDMADst(Block, base=0x1500, end=0x1528):
     tile_dma_dst_marker = BitField(0x1524, 15, 0)
 
 
-class KernelDMA(Block, base=0x1900, end=0x1A18):
+class KernelDMA(Block, base=0x1900, end=0x1A18, pipeline_rank=0):
     """Kernel DMA coefficient streams and auxiliary tables."""
 
     kernel_dma_src_enable = BitField(0x1900, 6, 6)
@@ -398,6 +401,11 @@ class KernelDMA(Block, base=0x1900, end=0x1A18):
     nonlinear_lut_enable = BitField(0x19E4, 0, 0)
     nonlinear_lut_loaded = BitField(0x19E4, 5, 5)
     nonlinear_lut_size = BitField(0x1A14, 31, 6)
+    # Relocated base-address words the patcher fills in; an activation pass
+    # states them as zero so the relocation slots exist for the patcher.
+    kernel_dma_lut_base = BitField(0x19F4, 31, 0)
+    kernel_dma_aux_base_lo = BitField(0x1A00, 31, 0)
+    kernel_dma_aux_base_hi = BitField(0x1A04, 31, 0)
 
 
 CONFIG_BLOCKS = (Common, L2, PE, NE, TileDMASrc, TileDMADst, KernelDMA)
@@ -410,8 +418,26 @@ def block_at(addr: int) -> type[Block] | None:
     return next((block for block in CONFIG_BLOCKS if block.base <= addr < block.end), None)
 
 
+# --- task descriptor header -------------------------------------------------
+# The 8-word task header is a second address space, separate from the
+# configuration register map above: these offsets index the header words (task
+# id, size, flags, dependency), not a configuration block, so they are plain
+# BitFields rather than members of a Block.  Both are numbered from zero, so a
+# header offset like 0x1C and the register word at 0x1C are unrelated.
+TID = BitField(0, 15, 0)
+TASK_SIZE = BitField(0, 26, 16)
+FLAGS = BitField(0, 31, 27)
+DEPENDENCY_ENABLE = BitField(0x1C, 1, 1)
+DEPENDENCY_ID = BitField(0x20, 15, 0)
+
+
 __all__ = [
     "CONFIG_BLOCKS",
+    "DEPENDENCY_ENABLE",
+    "DEPENDENCY_ID",
+    "FLAGS",
+    "TASK_SIZE",
+    "TID",
     "BitField",
     "Block",
     "Common",
