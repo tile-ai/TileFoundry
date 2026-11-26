@@ -10,13 +10,23 @@ from tilefoundry_nvidia.cuda.ir.tir import sync
 
 
 def barrier_word(var, ctx: context.Context) -> str:
-    """The address of the barrier word itself, as a generic pointer."""
+    """The address of the barrier word, as a generic pointer.
+
+    Every unit of the mesh shares the word, so a shard layout must leave the
+    barrier whole on every unit. ``CopyAsyncBulk`` arrives once per CTA, and a
+    word that differed between units would leave the others waiting.
+    """
     base = ctx.name_for(var)
     if ctx.is_kernel_param(var):
         base = f"{base}_tensor"
-    layout = getattr(getattr(var, "type", None), "layout", None)
-    if isinstance(context.materialised_layout(layout), types.ShardLayout):
-        base = f"tilefoundry::local({base})"
+    layout = context.materialised_layout(getattr(getattr(var, "type", None), "layout", None))
+    if isinstance(layout, types.ShardLayout):
+        if not all(isinstance(attr, types.Broadcast) for attr in layout.attrs):
+            raise NotImplementedError(
+                "an mbarrier is one word every unit of the mesh shares; "
+                "its layout may only broadcast it over the mesh"
+            )
+        base = f"tilefoundry::local_tensor({base})"
     return f"&{base}(0)"
 
 

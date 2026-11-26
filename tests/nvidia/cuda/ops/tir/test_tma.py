@@ -110,6 +110,28 @@ def test_parameter_bulk_stages_by_coordinate() -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_barrier_broadcast_over_a_slice_stages_the_tile() -> None:
+    """Both warps of a slice wait on the one word of a barrier marked Broadcast over it.
+
+    Codegen used to project it through a function the runtime does not define.
+    """
+    module = cli.load_authored_ir(f"{OPS / 'barrier_layouts.py'}:SlicedBarrierStage")
+    rm = tilefoundry.compile(module, target=cuda.Target("nvidia.h200_sxm"))
+    a = torch.arange(8, dtype=torch.float32, device="cuda")
+    out = torch.zeros_like(a)
+    rm(a, out)
+    torch.cuda.synchronize()
+    assert torch.equal(out, a)
+
+
+def test_split_barrier_is_refused() -> None:
+    """The copy arrives once per CTA, so a barrier split over the warps is refused."""
+    module = cli.load_authored_ir(f"{OPS / 'barrier_layouts.py'}:SplitBarrierStage")
+    with pytest.raises(NotImplementedError, match="one word every unit of the mesh shares"):
+        tilefoundry.compile(module, target=cuda.Target("nvidia.h200_sxm"))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_tma_tiers_stage_input_unchanged() -> None:
     """One compile behind two assertions, each naming the tier that failed."""
     TmaTiers = cli.load_authored_ir(f"{OPS / 'tma_tiers.py'}:TmaTiers")
