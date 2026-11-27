@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-import tilefoundry
 from tests.apple.ane import device
 from tests.core._corpus import Case, Problems, case, cases, reload, special
 from tilefoundry import analysis, inspection, utils
@@ -193,7 +192,7 @@ def _scheduled(case, problems):
         reprinted = problems.run("reprint TIR", inspection.as_script, lowered)
         problems.expect("reprinted TIR", lambda text: text == printed, reprinted)
     if case.runs:
-        compiled = problems.run("compile", tilefoundry.compile, lowered)
+        compiled = problems.run("compile", device.compile, lowered)
         if compiled is not None and device.available():
             ran = problems.run("run", device.run, compiled, lowered, case.inputs())
             problems.expect("device result", utils.torch.equal, ran, result)

@@ -14,7 +14,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from tilefoundry import runtime
+import tilefoundry
+from tilefoundry import codegen, runtime
 from tilefoundry.ir import core
 from tilefoundry_apple.ane import runtime as ane_runtime
 
@@ -25,6 +26,21 @@ def available() -> bool:
     if sys.platform != "darwin" or os.environ.get("TILEFOUNDRY_ANE_OFFLINE") == "1":
         return False
     return subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode == 0
+
+
+def compile(lowered: core.Module):
+    """Build the lowered entry into a module; a host that cannot link the launcher only emits it.
+
+    The launcher links macOS frameworks, so another host stops after code
+    generation, which still produces and validates the image, and returns None.
+    """
+    if sys.platform == "darwin":
+        return tilefoundry.compile(lowered)
+    fn = lowered.entry_function()
+    signature = codegen.signature.called_as(fn, codegen.mangle(lowered, fn), target=fn.target)
+    ctx = codegen.EmitContext(codegen.registry, symbols={id(fn): signature}, target=fn.target)
+    assert fn.target.resolve(codegen.LinkableModule, lowered, (fn,), ctx).source
+    return None
 
 
 def run(module, lowered: core.Module, inputs: tuple):
