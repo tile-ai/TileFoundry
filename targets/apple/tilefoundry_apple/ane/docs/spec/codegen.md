@@ -85,7 +85,8 @@ Conv source and result bases MUST come from the Context allocation plan, with
 
 Conv with a bias operand MUST be rejected as not decoded yet. Bypass MUST emit only
 identity or `perm=(2, 1, 0)` and MUST check the resulting shape. Other valid
-permutations are not decoded yet. Conv load and compute MUST use the same full-height
+permutations are not decoded yet. Bypass with a lookup-table nonlinear is not
+decoded yet and MUST be rejected. Conv load and compute MUST use the same full-height
 tile plan; partial or unequal-height plans are not decoded yet. The source load owns
 its access-type field; convolution does not overwrite that field when using the load.
 
@@ -205,15 +206,13 @@ derived by the same layout used by emitters, symbols and relocation checks.
 `Coefficient` binds values to that layout; `Image.coefficients` is the sole image
 coefficient representation. The loop axes, source/destination strides and weight offset have one definition.
 
-A LUT lane has a fixed 128-byte header followed by at most 128 weight bytes.
-All table slots must be supplied. Shapes exceeding that weight range are rejected
-before packing. The header, table slots and weight offset share the same layout
-rules; weights cannot be silently truncated.
-
-This layout defines storage, not activation sample points or lookup arithmetic.
-The supplied table slots overwrite their header and trailer defaults.
-Those defaults alone do not define a SiLU table.
-The public nonlinear modes remain those in [tir §1](./tir.md#1-common-constraints).
+A convolution with a lookup-table nonlinear leads every lane with the complete
+128-byte table of [tir Nonlinear](./tir.md#nonlinear); its weights start at the
+weight offset 128 and the lane stride is `align_up(128 + lane bytes, 64)`. The
+descriptor selects the listed nonlinear mode and reads the table through the
+coefficient stream; it enables no separate lookup-table DMA. A lane over 128 weight
+bytes with a table is not decoded yet and is rejected before packing. One constant
+consumed under different tables is not decoded yet.
 
 Coefficient slot addresses and relocation widths come from
 `isa.fields.COEFFICIENT_RELOCATIONS`. Packet flags select only the forms emitted
@@ -251,7 +250,8 @@ reference truncation. `validation.validate` checks both constraints before assem
 Every coefficient slot has an explicit `CoefficientReloc` naming its block.
 `require_relocated` rejects missing blocks or slots, duplicate bindings,
 nonconsecutive blocks, wrong first-use order, mismatched bases and lane reads
-crossing the assigned block. Enabled coefficient readers must carry a bound
+crossing the assigned block. The listed nonlinear mode MUST agree with whether the
+read block's lanes lead with a table. Enabled coefficient readers must carry a bound
 base. LUT reads require actual table bytes and a nonempty in-range read extent;
 register forms without an established read range are rejected. All executable
 containers pass through the original `Image.to_bytes()` and its validation.
@@ -299,7 +299,7 @@ entry embeds its complete HWX skeleton and invokes the internal `ane_launch` ABI
 zero-valued weight tensors. It retains an internal `AneEntry` containing the skeleton bytes,
 coefficient segment file offset, I/O descriptors and `{name, writer}` table.
 The coefficient offset is read from the validated container's segment command.
-Fixed LUT headers remain in the skeleton. Each consuming Op owns generation of its
+Lookup tables remain in the skeleton. Each consuming Op owns generation of its
 weight writer; convolution generates a contiguous CPU fp16 OIHW writer using
 `CoefficientLayout.weight_axes` and `weight_offset` from `hwx/coefficients.py`.
 

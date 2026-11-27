@@ -15,9 +15,8 @@ The ANE TIR Ops are the tasks that one Apple Neural Engine runs. Each Op is one 
   Its W stride MUST be 1 when `W` is above 1. The engine addresses a feature map by row, channel, depth and group
   strides and has no element stride. An Op may further constrain the layout.
 - `weight` and `bias` are in `gmem`. The kernel height and width of a `weight` are at most 32.
-- The public nonlinear modes are `NONE` and `RELU` ([Nonlinear](#nonlinear)).
+- The public nonlinear modes are `NONE`, `RELU`, `SIGMOID` and `SILU` ([Nonlinear](#nonlinear)).
   Pairing gives SiLU, sigmoid and tanh no `T.ane` candidate.
-  SiLU LUT content and lookup arithmetic are not decoded yet, including for `[1, 32, 16, 16]`.
 - Single-operator runs on `apple.m2_pro.ane` checked the value ranges of this page. Its architecture is `apple.h14`.
   No other ANE generation is checked.
 
@@ -85,12 +84,20 @@ class Nonlinear(Enum):
 
     NONE = "none"
     RELU = "relu"
+    SIGMOID = "sigmoid"
+    SILU = "silu"
 ```
 
 - constraints:
   - The DSL name is `T.ane.Nonlinear`.
-  - NONE keeps the value. RELU gives `max(x, 0)`.
-  - The nonlinear step does not round.
+  - NONE keeps the value. RELU gives `max(x, 0)`. Neither rounds.
+  - SIGMOID and SILU look `x` up in the 128-byte table the engine holds for each (`TABLES` in `ir/tir/ne/nonlinear.py`).
+    The table has 33 fp16 samples at `x * 2 + 16 == i` for `i` in 0..32. Between two samples the value is
+    interpolated linearly and rounded once to fp16. Below and above the samples a line gives
+    `f16(f16(slope * x) + offset)`. At or below `x_lo`, and at or above `x_hi`, the table's fixed outputs apply.
+  - A table approximates its function: SILU is within `2**-6` of `x * sigmoid(x)` and gives `-0.0017` at 0;
+    SIGMOID is within `2**-8` of `sigmoid(x)`.
+  - The last bit of a value interpolated between two samples is not decoded. Samples, lines and fixed outputs are.
 
 #### Conv
 
@@ -123,7 +130,7 @@ class Conv(Op):
 
 - constraints:
   - The feature form is `dst = nonlinear(f16(conv2d(src, weight) + bias))`. The matrix form is `dst = nonlinear(f16(src @ weight + bias))`.
-  - The Op rounds once, after it adds `bias`. `nonlinear` applies to the rounded value.
+  - The Op rounds once, after it adds `bias`. `nonlinear` applies to the rounded value; a table rounds again.
   - `bias` is optional and part of the instruction. Its shape MUST be `(O,)` in the feature form and `(N,)` in the matrix form.
   - In the feature form, `src` is `[1, C, H, W]`, `weight` is `[O, C / groups, KH, KW]` and `dst` is `[1, O, H', W']`.
   - `H'` is `(H + 2 * padding[0] - KH) // stride[0] + 1`. `W'` is the same rule with the width values.

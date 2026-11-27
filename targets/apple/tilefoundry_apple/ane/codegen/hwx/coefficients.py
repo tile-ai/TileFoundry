@@ -1,18 +1,12 @@
 """H14 coefficient layouts and lane packing shared by every container consumer."""
 
-import struct
 from dataclasses import dataclass
 from itertools import product
-from types import MappingProxyType
 
-from tilefoundry_apple.ane.isa import arith
+from tilefoundry_apple.ane.isa import arith, intrinsic
 
 MAX_COEFF_LANES = 16
 COEFF_LANE_ALIGN = 64
-LUT_SLOTS = (0x00, 0x02, 0x06) + tuple(range(0x08, 0x4E, 2)) + (0x4E, 0x52, 0x54)
-LUT_HEADER = MappingProxyType({0x00: 0xC91A, 0x02: 0x7C00, 0x04: 0x0000, 0x06: 0x7C00})
-LUT_TRAILER = MappingProxyType({0x4E: 0x3C00, 0x50: 0x9C00, 0x52: 0x0001, 0x54: 0x0001})
-LUT_HEADER_BYTES = 0x80
 LUT_WEIGHT_BYTES = 0x80
 
 
@@ -42,9 +36,11 @@ class CoefficientLayout:
             raise ValueError(
                 f"output channels {self.shape[0]} do not split into {self.lanes} lanes"
             )
-        if self.lut and (len(self.lut) != len(LUT_SLOTS) * 2 or self.lane_bytes > LUT_WEIGHT_BYTES):
+        if self.lut and len(self.lut) != intrinsic.NE_LUT_BYTES:
+            raise ValueError(f"lookup table must hold {intrinsic.NE_LUT_BYTES} bytes")
+        if self.lut and self.lane_bytes > LUT_WEIGHT_BYTES:
             raise ValueError(
-                "lookup table needs complete slots and at most 128 weight bytes per lane"
+                f"lookup-table lane over {LUT_WEIGHT_BYTES} weight bytes is not decoded yet"
             )
 
     @property
@@ -61,11 +57,7 @@ class CoefficientLayout:
     @property
     def stride(self) -> int:
         """The aligned byte stride between consecutive lanes."""
-        return (
-            LUT_HEADER_BYTES + LUT_WEIGHT_BYTES
-            if self.lut
-            else arith.align_up(self.lane_bytes, COEFF_LANE_ALIGN)
-        )
+        return arith.align_up(self.weight_offset + self.lane_bytes, COEFF_LANE_ALIGN)
 
     @property
     def size(self) -> int:
@@ -74,8 +66,8 @@ class CoefficientLayout:
 
     @property
     def weight_offset(self) -> int:
-        """The first weight byte within each lane."""
-        return LUT_HEADER_BYTES if self.lut else 0
+        """The first weight byte within each lane, after its lookup table."""
+        return len(self.lut)
 
     @property
     def weight_axes(self) -> tuple[PackingAxis, ...]:
@@ -122,19 +114,12 @@ class Coefficient:
             raise ValueError("coefficient bytes do not match the declared shape")
 
     def pack(self) -> bytes:
-        """Reorder little-endian OIHW fp16 values into aligned lane streams."""
+        """Reorder little-endian OIHW fp16 values into aligned lane streams led by the table."""
         self.validate()
         layout = self.layout
         out = bytearray(layout.size)
-        if layout.lut:
-            for lane in range(layout.lanes):
-                cursor = lane * layout.stride
-                for offset, value in (*LUT_HEADER.items(), *LUT_TRAILER.items()):
-                    struct.pack_into("<H", out, cursor + offset, value)
-                for index, offset in enumerate(LUT_SLOTS):
-                    out[cursor + offset : cursor + offset + 2] = layout.lut[
-                        index * 2 : index * 2 + 2
-                    ]
+        for lane in range(layout.lanes):
+            out[lane * layout.stride : lane * layout.stride + layout.weight_offset] = layout.lut
         axes = layout.weight_axes
         for indices in product(*(range(axis.extent) for axis in axes)):
             source = sum(
@@ -153,5 +138,5 @@ def coefficient_section(coefficients: tuple[Coefficient, ...]) -> bytes:
 
 
 __all__ = [
-    "COEFF_LANE_ALIGN", "LUT_SLOTS", "Coefficient", "CoefficientLayout", "coefficient_section",
+    "COEFF_LANE_ALIGN", "Coefficient", "CoefficientLayout", "coefficient_section",
 ]

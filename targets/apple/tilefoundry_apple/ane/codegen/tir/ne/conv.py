@@ -1,5 +1,7 @@
 """Codegen for ``T.ane.conv``: one neural engine convolution over a coefficient stream."""
 
+from types import MappingProxyType
+
 from tilefoundry import codegen
 from tilefoundry.ir import expr
 from tilefoundry_apple.ane import isa, target
@@ -8,6 +10,14 @@ from tilefoundry_apple.ane.ir import tir
 from tilefoundry_apple.ane.isa import intrinsic
 
 PLAIN = ((1, 1), 1)
+NONLINEAR = MappingProxyType(
+    {
+        tir.Nonlinear.NONE: isa.NENonlinear.NONE,
+        tir.Nonlinear.RELU: isa.NENonlinear.RELU,
+        tir.Nonlinear.SIGMOID: isa.NENonlinear.LUT,
+        tir.Nonlinear.SILU: isa.NENonlinear.LUT,
+    }
+)
 
 
 @codegen.register(target.Target, codegen.Role.EMIT, tir.Conv)
@@ -41,7 +51,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             )
         if dst.channels > 64:
             raise ValueError("T.ane.conv: explicit ocg_size above 64 channels is not decoded yet")
-    layout = ctx.coefficient_use(weight)
+    layout = ctx.coefficient_use(weight, tir.ne.nonlinear.TABLES.get(op.nonlinear, b""))
     isa.dma.check_coefficient_lanes(
         layout.lanes, min(src.channels, len(isa.KernelDMA.kernel_dma_src_coeff_dma_en))
     )
@@ -74,7 +84,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             stride=op.stride,
             padding=op.padding,
             result_base=result_base,
-            activate=op.nonlinear is not tir.Nonlinear.NONE,
+            nonlinear=NONLINEAR[op.nonlinear],
             staged_source=False,
             to_dram=True,
             address=ctx.address_of(destination),

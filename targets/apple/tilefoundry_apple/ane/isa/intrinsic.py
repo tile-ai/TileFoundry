@@ -362,7 +362,6 @@ def coefficient_dma(
     inputs: int,
     *,
     index: int = 0,
-    lut_bytes: int = 0,
     armed: bool = True,
     address: int = 0,
     stride: int | None = None,
@@ -371,14 +370,13 @@ def coefficient_dma(
 
     Every input column owns a coefficient block of ``outputs`` fp16 values, so the
     column offsets step by that block and the per-column length is the same value.
-    A pass that also applies a lookup-table activation reserves the table behind
-    its weights, which grows the block by the table size.  The tables repeat over
-    the sixteen slots the block exposes.
+    A lookup-table activation leads every lane with its table, so its ``stride``
+    covers the table and the weights.
     """
     if not 1 <= inputs:
         raise ValueError(f"coefficient columns {inputs} must be positive")
     columns = max(1, -(-inputs // KERNEL_DMA_COEFF_SLOTS))
-    payload = columns * outputs * FP16_BYTES + lut_bytes
+    payload = columns * outputs * FP16_BYTES
     block = max(
         KERNEL_DMA_MIN_BLOCK,
         -(-payload // KERNEL_DMA_MIN_BLOCK) * KERNEL_DMA_MIN_BLOCK,
@@ -494,7 +492,7 @@ def convolution(
     active_nodes: int = 4,
     multi_tile: bool = False,
     coeff_base: int = 0,
-    activate: bool = False,
+    nonlinear: fields.NENonlinear = fields.NENonlinear.NONE,
     armed: bool | None = None,
     staged_source: bool = False,
     to_dram: bool = True,
@@ -590,13 +588,12 @@ def convolution(
             ne_pipeline_code=NE_PIPELINE_CODE,
             arg_output_select=NE_OUTPUT_SELECT,
             post_scale=fp16(1.0, "post_scale"),
-            **({} if not activate else {"nonlinear_mode": fields.NENonlinear.RELU}),
+            nonlinear_mode=nonlinear,
         ),
         coefficient_dma(
             destination.channels,
             source.channels,
             index=index,
-            lut_bytes=0,
             armed=armed if armed is not None else to_dram,
             stride=coeff_stride,
         ),

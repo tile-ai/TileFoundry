@@ -156,6 +156,8 @@ def require_coefficient_bindings(image: "Image", slots: Mapping[int, tuple[int, 
             isa.dma.check_coefficient_lanes(layout.lanes, sum(
                 field_value(values, field) for field in kernel.kernel_dma_src_coeff_dma_en
             ))
+            if (field_value(values, isa.NE.nonlinear_mode) == isa.NENonlinear.LUT) != bool(layout.lut):
+                raise ValueError("lookup-table mode disagrees with its coefficient lanes")
             for enabled, offset, size in zip(
                 kernel.kernel_dma_src_coeff_dma_en,
                 kernel.kernel_dma_src_coeff_base_offset,

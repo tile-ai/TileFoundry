@@ -99,7 +99,7 @@ T.ane.bypass
   execution mesh     Mesh(('engine',), Layout(((1,),), ((1,),)))
   parameters
     perm              any value where one of {(0, 1, 2); (0, 2, 1); (1, 0, 2); (1, 2, 0); (2, 0, 1); (2, 1, 0)} (type tuple) (default (0, 1, 2))
-    nonlinear         any value in {T.ane.Nonlinear.NONE, T.ane.Nonlinear.RELU} (default T.ane.Nonlinear.NONE)
+    nonlinear         any value in {T.ane.Nonlinear.NONE, T.ane.Nonlinear.RELU, T.ane.Nonlinear.SIGMOID, T.ane.Nonlinear.SILU} (default T.ane.Nonlinear.NONE)
     tile_height       any value (type int) or None (default None)
     tile_width        any value (type int) or None (default None)
     patch             any value (type tuple) or None (default None)
@@ -120,7 +120,7 @@ T.ane.conv
     padding      (padding_h, padding_w) where 0 <= padding (type tuple) (default (0, 0))
     dilation     (1, 1) (type tuple) (default (1, 1))
     groups       any value where 1 <= groups (type int) (default 1)
-    nonlinear    any value in {T.ane.Nonlinear.NONE, T.ane.Nonlinear.RELU} (default T.ane.Nonlinear.NONE)
+    nonlinear    any value in {T.ane.Nonlinear.NONE, T.ane.Nonlinear.RELU, T.ane.Nonlinear.SIGMOID, T.ane.Nonlinear.SILU} (default T.ane.Nonlinear.NONE)
     tile_height  any value (type int) or None (default None)
     tile_width   any value (type int) or None (default None)
     patch        any value (type tuple) or None (default None)

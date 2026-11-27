@@ -228,7 +228,11 @@ rejected as not decoded yet; contradictory explicit codes are errors.
 A convolution reading from DRAM programs its kernel height and width, horizontal
 and vertical stride, and left/top padding through the declared kernel-window
 fields. Its output offsets are both one. ReLU selects the native nonlinear mode
-and reserves no lookup-table bytes in the coefficient stream.
+and reserves no lookup-table bytes in the coefficient stream. A lookup-table
+nonlinear selects the listed mode `0x0D04[17:16] = 2`, leaves `0x0D00`, the LUT
+enable `0x19E4` and its size and bases at reset, and reads the 128-byte table at
+the start of every coefficient lane, so the lane offsets and buffer sizes cover
+the table and the weights.
 
 ## 9. Verified transfer validation
 

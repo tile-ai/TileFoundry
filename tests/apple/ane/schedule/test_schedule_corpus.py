@@ -318,6 +318,18 @@ class Conv1x1Relu(Conv1x1):
 
 
 @case
+class Conv1x1Silu(Conv1x1):
+    """The engine's SiLU table stays within 2**-6 of SiLU."""
+
+    path: Path = ROOT / "scheduled" / "conv_1x1_silu.py"
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        silu = utils.F.silu(utils.F.conv2d(x, w).float())
+        assert (state.result.float() - silu).abs().max() <= 2**-6
+
+
+@case
 class ConvRelu(AneCase):
     path: Path = ROOT / "scheduled" / "conv_relu.py"
 

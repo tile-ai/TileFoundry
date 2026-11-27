@@ -25,6 +25,8 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         raise ValueError(f"T.ane.bypass: tile_width={op.tile_width!r} is not decoded yet")
     if op.patch is not None:
         raise ValueError(f"T.ane.bypass: patch={op.patch!r} is not decoded yet")
+    if op.nonlinear not in NONLINEAR:
+        raise ValueError(f"T.ane.bypass: nonlinear={op.nonlinear.name} is not decoded yet")
     destination, source = call.args
     if any(arg.type.storage is expr.StorageKind.SMEM for arg in call.args):
         raise ValueError("L2 operands for this operation is not decoded yet")
