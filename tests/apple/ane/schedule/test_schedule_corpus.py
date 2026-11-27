@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+import tilefoundry
 from tests.apple.ane import device
 from tests.core._corpus import Case, Problems, case, cases, reload, special
 from tilefoundry import analysis, inspection, utils
@@ -35,9 +36,9 @@ class AneCase(Case):
     """One ANE fixture; a field names the error its stage must raise.
 
     ``refusal`` is the load-time VerifyError and ``finalize_refusal`` the LoweringError.
-    ``runs`` marks a scheduled fixture that goes through compile and run: it is compiled
-    into a module on every host and, when this machine has a neural engine, run and
-    required to equal the evaluator's result.
+    ``runs`` marks a scheduled fixture that goes through the whole flow: every host
+    generates its code, and a machine with a neural engine also compiles it, runs it
+    and requires the result to equal the evaluator's.
     """
 
     refusal: str | None = None
@@ -192,8 +193,9 @@ def _scheduled(case, problems):
         reprinted = problems.run("reprint TIR", inspection.as_script, lowered)
         problems.expect("reprinted TIR", lambda text: text == printed, reprinted)
     if case.runs:
-        compiled = problems.run("compile", device.compile, lowered)
-        if compiled is not None and device.available():
+        problems.run("emit", device.emit, lowered)
+        if device.available():
+            compiled = problems.run("compile", tilefoundry.compile, lowered)
             ran = problems.run("run", device.run, compiled, lowered, case.inputs())
             problems.expect("device result", utils.torch.equal, ran, result)
     problems.run("guard", case.guard, ScheduledState(module, result, lowered), problems)
