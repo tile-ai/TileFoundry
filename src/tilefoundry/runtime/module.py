@@ -87,19 +87,27 @@ def validate_names(names, implementation, path: str) -> None:
             raise ValueError(f"{path}.{name}: name is reserved by {implementation.__name__}")
 
 
-def exported_function(library, path, symbol):
+def exported_function(library, path, symbol, expected=None):
     """Resolve a local function and require its typed metadata."""
     try:
         function = library.get_function(symbol, query_imports=False)
     except AttributeError as error:
         raise RuntimeError(f"library {path}: missing symbol {symbol!r}; recompile the library") from error
+    metadata = None
     try:
         metadata = library.get_function_metadata(symbol, query_imports=False)
         if metadata is None or "type_schema" not in metadata:
-            raise RuntimeError(f"library {path}: missing metadata for symbol {symbol!r}")
+            raise RuntimeError(f"library {path}: missing metadata for symbol {symbol!r}; actual={metadata!r}")
         schema = json.loads(metadata["type_schema"])
     except (TypeError, ValueError) as error:
-        raise RuntimeError(f"library {path}: invalid metadata for symbol {symbol!r}") from error
+        raise RuntimeError(f"library {path}: invalid metadata for symbol {symbol!r}; actual={metadata!r}") from error
+    actual = schema
+    if isinstance(schema, dict) and set(schema) == {"type", "named_args"} and schema["type"] == "ffi.Function":
+        named = schema["named_args"]
+        if isinstance(named, dict) and set(named) == {"params", "return"} and isinstance(named["params"], list) and isinstance(named["return"], list) and len(named["return"]) == 1:
+            schema = {"type": "ffi.Function", "args": [*named["return"], *named["params"]]}
+    if expected is not None and schema != {"type": "ffi.Function", "args": [{"type": name} for name in expected]}:
+        raise RuntimeError(f"library {path}: symbol {symbol!r} metadata does not match signature; actual={actual!r}, expected return/params={expected!r}")
     return function, schema
 
 
@@ -111,6 +119,7 @@ class CompiledModule(Module):
     type: codegen.CallableSignature | None
     fn: Callable | None
     weights: dict[str, types.TensorType]
+    sharded_weights: set[str]
     operations: dict[str, str]
     resource: Resource | None
     placement: types.Placement | None
@@ -123,6 +132,7 @@ class CompiledModule(Module):
         self.library = library
         self.library_path = Path(library_path).resolve()
         self.weights = {name: codegen.artifact.decode_tensor(tensor) for name, tensor in root["weights"].items()}
+        self.sharded_weights = {name for name, tensor in root["weights"].items() if tensor.get("sharded")}
         self.operations = root["operations"]
         self.resource = None
         self.placement = None
@@ -133,10 +143,7 @@ class CompiledModule(Module):
         if root["functions"]:
             function, = root["functions"]
             self.type = codegen.artifact.decode_signature(function)
-            self.fn, schema = exported_function(library, self.library_path, function["symbol"])
-            expected = {"type": "ffi.Function", "args": [{"type": name} for name in self.entry_schema()]}
-            if schema != expected:
-                raise RuntimeError(f"library {self.library_path}: symbol {function['symbol']!r} metadata does not match signature")
+            self.fn, _ = exported_function(library, self.library_path, function["symbol"], self.entry_schema())
             self.__dict__[self.entry] = CompiledFunction(self, self.entry, self.type)
         for symbol in self.operations.values():
             exported_function(library, self.library_path, symbol)
@@ -145,7 +152,7 @@ class CompiledModule(Module):
     def from_library(cls, path) -> CompiledModule:
         """Restore one independent root using only its compiled library."""
         path = Path(path).resolve()
-        library = tvm_ffi.load_module(str(path), keep_module_alive=False)
+        library = tvm_ffi.load_module(str(path), keep_module_alive=True)
         manifest, _ = exported_function(library, path, "tilefoundry_manifest")
         try:
             description = codegen.artifact.validate_description(manifest())
@@ -194,12 +201,12 @@ class CompiledModule(Module):
         self.fn = None
         self.closed = True
 
-    def operation(self, name: str):
-        """Resolve one implemented lifecycle operation from this library."""
+    def operation(self, name: str, *, expected: tuple[str, ...] | None = None):
+        """Resolve one local lifecycle operation and optionally check its typed ABI."""
         symbol = self.operations.get(name)
         if symbol is None:
             raise RuntimeError(f"library {self.library_path}: {self.name}.{name} is not decoded yet")
-        return exported_function(self.library, self.library_path, symbol)[0]
+        return exported_function(self.library, self.library_path, symbol, expected)[0]
 
     def unit_ids(self) -> tuple:
         """Read the leading topology ids from this root's placement."""
@@ -217,6 +224,8 @@ class CompiledModule(Module):
         if self.resource is None:
             raise KeyError(f"{self.name}: weight {name!r} is not bound; call load(resource) first")
         declared = self.weights[name]
+        if name in self.sharded_weights:
+            raise RuntimeError(f"{self.name}: sharded weight {name!r} is not decoded yet")
         if any(not isinstance(dimension, int) for dimension in declared.shape):
             raise RuntimeError(f"{self.name}: weight {name!r} with dynamic shape is not decoded yet")
         try:

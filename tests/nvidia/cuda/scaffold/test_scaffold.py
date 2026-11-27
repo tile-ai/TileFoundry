@@ -38,7 +38,13 @@ def test_scaffold_skeleton_builds_and_runs(fixture, tmp_path):
         timeout=300,
     )
     Runtime = cli.load_namespace(str(FIXTURES / f"{fixture}.py"))[0]["Runtime"]
-    runtime = Runtime(fresh / "libRoot.so")
+    libraries = [fresh / "libRoot.so"]
+    child = {"hir_moe": "RouterRoot", "hir_layers": "LeafRoot"}.get(fixture)
+    if child:
+        child_project = tmp_path / "child"
+        assert cli.main(["scaffold", f"{FIXTURES / (fixture + '.py')}:{child}", str(child_project)]) == 0
+        libraries.append(next((child_project / "build").glob("lib*.so")))
+    runtime = Runtime(*libraries)
     for extent in (2, 8, 14):
         runtime(torch.randn(extent, 8, dtype=torch.float32, device="cuda"))
         torch.cuda.synchronize()
@@ -59,7 +65,7 @@ def test_codegen_reports_unsupported_scaffold_targets(target, tmp_path, capsys):
     source = FIXTURES.parent / "diagnostics" / variant
     project = tmp_path / "project"
     assert cli.main(["scaffold", f"{source}:Root", str(project)]) == 1
-    message = "expected one device Target, found 0" if target == "cpu.Target()" else "only single-device CUDA"
+    message = "entry 'run' body must contain statements" if target == "cpu.Target()" else "only single-device CUDA"
     assert message in capsys.readouterr().err
     assert not project.exists()
 

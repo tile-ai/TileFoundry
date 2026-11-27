@@ -88,6 +88,7 @@ class CompiledModule(Module):
     type: codegen.CallableSignature | None
     fn: Callable | None
     weights: dict[str, types.TensorType]
+    sharded_weights: set[str]
     operations: dict[str, str]
     resource: Resource | None
     placement: types.Placement | None
@@ -107,7 +108,7 @@ class CompiledModule(Module):
 
     def close(self) -> None: ...
 
-    def operation(self, name: str): ...
+    def operation(self, name: str, *, expected: tuple[str, ...] | None = None): ...
 
     def unit_ids(self) -> tuple: ...
 
@@ -401,7 +402,10 @@ Users call the result through `runtime.Module.__call__`.
     A non-CPU entry MUST use the root Target. The target factory MUST accept or refuse its entry convention.
   - The selected node MUST check entry metadata against its own `entry_schema`.
     The default schema MUST contain unit ids followed by tensors. A target-owned token MUST NOT become a unit id.
-  - The loader MUST call `tvm_ffi.load_module(path, keep_module_alive=False)`.
+  - The loader MUST call `tvm_ffi.load_module(path, keep_module_alive=True)`.
+    TVM FFI MUST retain loaded libraries until process shutdown, including failed loads.
+    Returned FFI objects and objects retained by exception tracebacks MAY use deleters in those libraries.
+    Manifest conversion MUST copy string subclasses into ordinary Python strings.
   - Manifest and entry lookup MUST use `get_function(symbol, query_imports=False)` on the loaded library.
     Lookup MUST NOT fall back to process-global functions.
   - `runtime.Module.name` MUST use `root.name`. `runtime.Module.entry` MUST use `root.entry`, or `None` when omitted.
@@ -411,6 +415,10 @@ Users call the result through `runtime.Module.__call__`.
     A missing manifest MUST require recompilation.
   - Malformed descriptions and mismatched ABI metadata MUST fail before a compiled object is returned.
     Errors MUST identify the library and invalid field or symbol.
+    ABI validation MUST accept both TVM FFI schema encodings: `args` with the return type first,
+    and `named_args` with separate `return` and `params` arrays.
+    Return type, parameter count and parameter types MUST agree exactly with the node's entry schema.
+    A mismatch MUST include the actual schema and expected return and parameter types.
   - Callable arguments MUST be DLPack-compatible tensors.
     `torch.Tensor` is one supported caller-side provider.
 

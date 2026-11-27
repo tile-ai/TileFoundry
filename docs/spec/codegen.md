@@ -553,8 +553,11 @@ def render_description(description) -> str: ...
     It MUST NOT require the original IR or reconstruct device layouts.
   - A root without an entry MUST use `functions=[]` and omit `entry`.
     Generation MUST skip codegen contexts for its unexported functions.
-  - Tensor encoding MUST accept plain HOST or GMEM tensors with compact layouts or no layout.
-    Unsupported layouts, storage and dimension expressions MUST report their field path and `is not decoded yet`.
+  - Tensor encoding MUST preserve host-visible shape and dtype independently of storage and device layout.
+    Native code MUST retain responsibility for layout indexing and storage checks.
+    A sharded layout MUST set `sharded=1`; this marker MUST prevent unsupported default root weight binding.
+    Dimension arithmetic MUST use a whitelist of `DimAdd`, `DimSub`, `DimMul`, `DimFloorDiv`, `DimMod`, `DimMin` and `DimMax`.
+    Other dimension expressions MUST report their field path, actual value and `is not decoded yet`.
   - Validation MUST reject unknown fields, versions, dtypes, duplicate names, duplicate symbols and invalid output order before entry binding.
   - All referenced symbols MUST be C identifiers. Each symbol MUST identify one local typed export with metadata.
   - Entry calls MUST retain flattened typed tensor parameters and the target's implemented scalar prefix.
@@ -572,6 +575,7 @@ def render_description(description) -> str: ...
 | `signature.output_count` | Integer from zero through the parameter count. |
 | `signature.unit_ids` | Ordered array of unique topology names. |
 | `tensor.dtype` | A name from `DType`. |
-| `tensor.shape` | Array of nonnegative integer extents or records with `name`, `lo`, and `hi`; bounds satisfy `0 <= lo <= hi`. |
+| `tensor.shape` | Array of nonnegative integer extents, records with `name`, `lo`, and `hi` (`0 <= lo <= hi`), or binary arithmetic records with whitelisted `op` and two `args`. |
+| `tensor.sharded` | Optional integer `1`, indicating a device shard layout without reconstructing that layout. |
 | `root.weights` | Map from weight names to tensor records; matching parameter declarations agree. |
 | `root.operations` | Map from implemented operation names to distinct typed symbols; CPU/CUDA use an empty map. |

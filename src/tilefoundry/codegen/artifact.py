@@ -8,29 +8,35 @@ from importlib.resources import files
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
+from tilefoundry import services
 from tilefoundry.ir import core, expr, types
 
 from .registry import Role, registry
 from .signature import CallableSignature, TensorSignature, UnitIdSignature, called_as
 
+DIM_OPS = frozenset(op.__name__ for op in expr.DIM_OP_TYPES)
+
+
+def describe_dimension(dimension, path: str):
+    """Encode dimension arithmetic using only whitelisted operators."""
+    value = expr.static_dim_value(dimension)
+    if value is not None:
+        return value
+    if isinstance(dimension, expr.DimVar):
+        return {"name": dimension.name, "lo": dimension.lo, "hi": dimension.hi}
+    if isinstance(dimension, expr.Call) and type(dimension.target) in expr.DIM_OP_TYPES:
+        return {"op": type(dimension.target).__name__, "args": [describe_dimension(arg, path) for arg in dimension.args]}
+    raise ValueError(f"{path}: dimension {dimension!r} is not decoded yet")
+
 
 def describe_tensor(tensor, path: str) -> dict:
-    """Encode a plain tensor with static or bounded named dimensions."""
+    """Encode host-visible tensor shape and dtype independently of device layout."""
     if not isinstance(tensor, types.TensorType):
         raise ValueError(f"{path}: tensor type is not decoded yet")
-    if tensor.storage not in (expr.StorageKind.HOST, expr.StorageKind.GMEM):
-        raise ValueError(f"{path}: tensor storage {tensor.storage} is not decoded yet")
-    if tensor.layout is not None and tensor.layout != types.Layout(tensor.shape):
-        raise ValueError(f"{path}: tensor layout is not decoded yet")
-    shape = []
-    for axis, dimension in enumerate(tensor.shape):
-        if type(dimension) is int:
-            shape.append(dimension)
-        elif isinstance(dimension, expr.DimVar):
-            shape.append({"name": dimension.name, "lo": dimension.lo, "hi": dimension.hi})
-        else:
-            raise ValueError(f"{path}.shape[{axis}]: dimension is not decoded yet")
-    return {"dtype": tensor.dtype.name, "shape": shape}
+    return {
+        "dtype": tensor.dtype.name, "shape": [describe_dimension(dim, f"{path}.shape[{axis}]") for axis, dim in enumerate(tensor.shape)],
+        **({"sharded": 1} if types.shard_layout_of(tensor.layout) is not None else {}),
+    }
 
 
 def describe_root(module, *, target=None) -> dict:
@@ -95,10 +101,19 @@ def bind_root(declaration, signature, symbol: str, operations) -> dict:
     return {**declaration, "functions": [{"name": declaration["entry"], "symbol": symbol, "signature": native}], "operations": operations}
 
 
+def decode_dimension(value):
+    """Reconstruct a validated host dimension without resolving authored code."""
+    if isinstance(value, int):
+        return value
+    if "op" in value:
+        return services.simplify_dim(value["op"][3:].lower(), tuple(map(decode_dimension, value["args"])))
+    return expr.DimVar(**value)
+
+
 def decode_tensor(tensor) -> types.TensorType:
     """Reconstruct only the host tensor type expressed by a validated record."""
     return types.TensorType.from_shape(
-        tuple(dimension if isinstance(dimension, int) else expr.DimVar(**dimension) for dimension in tensor["shape"]),
+        tuple(map(decode_dimension, tensor["shape"])),
         dtype=expr.DType.from_name(tensor["dtype"]), storage=expr.StorageKind.HOST,
     )
 
@@ -124,7 +139,9 @@ def standard_value(value, path: str):
         return [standard_value(item, f"{path}[{index}]") for index, item in enumerate(value)]
     if type(value) is int and not -(1 << 63) <= value < (1 << 63):
         raise ValueError(f"{path}: integer is outside int64 range")
-    if type(value) is int or isinstance(value, str):
+    if isinstance(value, str):
+        return str(value)
+    if type(value) is int:
         return value
     raise ValueError(f"{path}: expected a map, array, integer or string")
 
@@ -147,17 +164,25 @@ def array_value(value, path: str) -> None:
         raise ValueError(f"{path}: expected an array")
 
 
-def validate_tensor(tensor, path: str, dimensions: dict) -> None:
+def validate_tensor(tensor, path: str, dimensions: dict, *, expression: bool = False) -> None:
     """Check the tensor whitelist and consistent bounds for named dimensions."""
-    fields(tensor, {"dtype", "shape"}, path)
+    fields(tensor, {"dtype", "shape"}, path, frozenset({"sharded"}))
+    if "sharded" in tensor and (type(tensor["sharded"]) is not int or tensor["sharded"] != 1):
+        raise ValueError(f"{path}.sharded: expected 1")
     if not isinstance(tensor["dtype"], str) or tensor["dtype"] not in expr.dtype_members():
         raise ValueError(f"{path}.dtype: unknown dtype {tensor['dtype']!r}")
     array_value(tensor["shape"], f"{path}.shape")
     for axis, dimension in enumerate(tensor["shape"]):
         location = f"{path}.shape[{axis}]"
         if type(dimension) is int:
-            if dimension < 0:
+            if dimension < 0 and not expression:
                 raise ValueError(f"{location}: extent must be nonnegative")
+            continue
+        if isinstance(dimension, dict) and "op" in dimension:
+            fields(dimension, {"op", "args"}, location)
+            if not isinstance(dimension["op"], str) or dimension["op"] not in DIM_OPS or not isinstance(dimension["args"], list) or len(dimension["args"]) != 2:
+                raise ValueError(f"{location}: expected a known binary dimension operator")
+            validate_tensor({"dtype": tensor["dtype"], "shape": dimension["args"]}, location, dimensions, expression=True)
             continue
         fields(dimension, {"name", "lo", "hi"}, location)
         text_value(dimension["name"], f"{location}.name")

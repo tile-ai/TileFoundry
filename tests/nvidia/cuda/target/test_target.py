@@ -202,7 +202,7 @@ def test_build_rejects_mixed_device_targets() -> None:
     with pytest.raises(ValueError) as error:
         build(mixed)
 
-    assert str(error.value) == "codegen: expected one device Target, found 2"
+    assert str(error.value) == "codegen: mixed: multiple device Targets is not decoded yet (2)"
     assert emitted == []
 
 

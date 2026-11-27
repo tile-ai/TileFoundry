@@ -1,7 +1,8 @@
 """Two child levels, equal explicit hierarchy and same-owner weight forwarding."""
 
+from dataclasses import replace
+
 import torch
-import tvm_ffi
 
 from tilefoundry import runtime
 from tilefoundry.dsl import *
@@ -47,17 +48,23 @@ class Root:
         return self.layers.leaf.run(x)
 
 
+LeafRoot = replace(Leaf, target=Root.target)
+
+
 class Runtime(runtime.Module):
-    def __init__(self, library_path):
+    def __init__(self, library_path, child_library_path):
         super().__init__("Root", entry="forward")
-        self.library = tvm_ffi.load_module(str(library_path))
+        self.library = runtime.CompiledModule.from_library(library_path)
         self.weight = torch.randn(8, device="cuda")
         self.leaf_weight = torch.randn(8, device="cuda")
-        self.run_fn = tvm_ffi.get_global_func("Root.model")
-        self.leaf_fn = tvm_ffi.get_global_func("Root.layers.leaf.run")
+        self.run_fn = self.library.model
+        self.library.load(runtime.DictResource({"w": self.weight}))
+        self.leaf = runtime.CompiledModule.from_library(child_library_path)
+        self.leaf.load(runtime.DictResource({"w": self.leaf_weight}))
+        self.leaf_fn = self.leaf.run
 
     def forward(self, x):
         run_out, leaf_out = (torch.empty_like(x) for _ in range(2))
-        self.run_fn(x, self.weight, run_out)
-        self.leaf_fn(run_out, self.leaf_weight, leaf_out)
+        self.run_fn(x, run_out)
+        self.leaf_fn(run_out, leaf_out)
         return leaf_out

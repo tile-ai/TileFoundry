@@ -1,6 +1,5 @@
 """Load weights through TVM FFI and bind an owned ANE model to a compiled entry."""
 
-import json
 from enum import IntEnum
 from functools import partial
 from pathlib import Path
@@ -70,7 +69,6 @@ class AneCompiledModule(runtime.CompiledModule):
 
     def operation(self, name: str):
         """Bind a library-local lifecycle function and verify its exact typed ABI."""
-        function = super().operation(name)
         schemas = {
             "create": ("int",), "set_weight": ("None", "int", "ffi.String", "DLTensor*"),
             "load": ("int", "int"), "cache_path": ("ffi.String", "int"),
@@ -79,11 +77,7 @@ class AneCompiledModule(runtime.CompiledModule):
         kinds = schemas.get(name)
         if kinds is None:
             raise RuntimeError(f"library {self.library_path}: {self.name}.{name} is not decoded yet")
-        expected = {"type": "ffi.Function", "args": [{"type": kind} for kind in kinds]}
-        metadata = self.library.get_function_metadata(self.operations[name], query_imports=False)
-        if json.loads(metadata["type_schema"]) != expected:
-            raise RuntimeError(f"library {self.library_path}: {self.name}.{name}: metadata does not match signature")
-        return function
+        return super().operation(name, expected=kinds)
 
     def load(
         self, resource: runtime.Resource, *, placement: "types.Placement | None" = None

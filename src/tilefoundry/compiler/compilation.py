@@ -74,15 +74,15 @@ def resolve_options(
     return options
 
 
-def preflight(mod: core.Module) -> None:
+def preflight(mod: core.Module, *, root: bool = True) -> None:
     """Check the authored namespace before lowering or native compilation."""
     implementation = tilefoundry_target.bindings.get((type(mod.target), runtime.CompiledModule), runtime.CompiledModule)
     runtime.validate_names((*[function.name for function in mod.functions], *mod.children), implementation, mod.name)
-    if mod.entry is None and mod.children:
+    if root and mod.entry is None and mod.children:
         raise ValueError(f"{mod.name}: compiled module tree is not decoded yet")
     for child in mod.children.values():
         for node in child if isinstance(child, tuple) else (child,):
-            preflight(node)
+            preflight(node, root=False)
 
 
 def build_module(mod: core.Module, *, options: Options, declaration: dict) -> runtime.CompiledModule:

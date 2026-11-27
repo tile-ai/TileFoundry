@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 import gc
 import json
+import subprocess
+import sys
 
 import pytest
 import torch
@@ -56,9 +58,12 @@ def test_cpu_libraries_keep_local_exports_and_callable_ownership(cpu_libraries):
         }}
         symbol = description["root"]["functions"][0]["symbol"]
         metadata = library.get_function_metadata(symbol, query_imports=False)
-        assert json.loads(metadata["type_schema"]) == {"type": "ffi.Function", "args": [
-            {"type": "None"}, {"type": "ffi.Tensor"}, {"type": "ffi.Tensor"},
-        ]}
+        schema = json.loads(metadata["type_schema"])
+        expected = {"type": "ffi.Function", "args": [{"type": name} for name in ("None", "ffi.Tensor", "ffi.Tensor")]}
+        if "named_args" in schema:
+            expected = {"type": "ffi.Function", "named_args": {"params": expected["args"][1:], "return": expected["args"][:1]}}
+        assert schema == expected
+        assert type(description["root"]["functions"][0]["symbol"]) is str
         assert library.get_function_doc(symbol) is None
         with pytest.raises(AttributeError):
             library.get_function("tilefoundry_7CpuRoot6helper", query_imports=False)
@@ -142,6 +147,8 @@ TVM_FFI_DLL_EXPORT_TYPED_FUNC(no_metadata, no_metadata);
     (("root", "functions", 0, "signature", "params", 0, "tensor", "dtype"), "unknown", "dtype"),
     (("root", "functions", 0, "signature", "params", 0, "tensor", "shape"), [-1], "shape"),
     (("root", "functions", 0, "signature", "params", 0, "tensor", "shape"), [{"name": "N", "lo": 8, "hi": 1}], "lo <= hi"),
+    (("root", "functions", 0, "signature", "params", 0, "tensor", "shape"), [{"op": "Unknown", "args": [1, 2]}], "dimension operator"),
+    (("root", "functions", 0, "signature", "params", 0, "tensor", "sharded"), 2, "sharded"),
     (("root", "functions", 0, "signature", "unit_ids"), ["gpu", "gpu"], "duplicate topology"),
     (("root", "functions", 0, "symbol"), "wrong_arity", "metadata does not match"),
     (("root", "functions", 0, "symbol"), "wrong_type", "metadata does not match"),
@@ -190,12 +197,81 @@ def test_library_without_manifest_requires_recompile(tmp_path):
 @pytest.mark.parametrize("tensor", [
     types.TensorType.from_shape((8,), storage=expr.StorageKind.SMEM),
     types.TensorType((8,), expr.DType.f32, types.Layout((8,), (2,)), expr.StorageKind.HOST),
+    types.TensorType.from_shape((8,), layout=types.ShardLayout(types.Layout((8,)), (types.Split(0),), types.Mesh((types.Topology("thread", 2),), types.Layout((2,))))),
     types.TensorType.from_shape((expr.DimVar("N", 1, 8) * 2,), storage=expr.StorageKind.HOST),
+    types.TensorType.from_shape((expr.DimVar("M", 2, 16) + -1,), storage=expr.StorageKind.HOST),
 ])
-def test_unsupported_tensor_codec_names_parameter(tensor):
-    signature = codegen.CallableSignature(name="CpuRoot.run", params=(codegen.TensorSignature("x", tensor),))
-    with pytest.raises(ValueError, match=r"CpuRoot.run.params\[0\].*is not decoded yet"):
-        codegen.artifact.describe_signature(signature, ())
+def test_tensor_codec_preserves_host_shape_and_dtype(tensor, tmp_path, monkeypatch):
+    monkeypatch.setitem(codegen.registry.entries, (cpu.Target, codegen.Role.EMIT, core.FunctionRef), _emit_scale)
+    module = _program(4, tensor.shape)
+    module.entry_function().params[0].type = tensor
+    linked = codegen.link_program(module, workdir=tmp_path)
+    compiled = runtime.load_linked_module(linked)
+    restored = runtime.CompiledModule.from_library(linked.library_path)
+    for node in (compiled, restored):
+        x, out = torch.arange(8, dtype=torch.float32), torch.empty(8)
+        assert torch.equal(node(x, out), x * 4)
+        assert node.type.params[0].type.shape == tensor.shape
+        assert node.type.params[0].type.dtype == tensor.dtype
+
+
+@pytest.mark.parametrize("format", ("args", "named_args"))
+@pytest.mark.parametrize("kinds", [
+    ("None", "ffi.Tensor", "ffi.Tensor"),
+    ("None", "ffi.Tensor"),
+    ("None", "int", "ffi.Tensor"),
+    ("int", "ffi.Tensor", "ffi.Tensor"),
+])
+def test_metadata_formats_check_return_arity_and_types(mutable_library, monkeypatch, format, kinds):
+    linked, library, description = mutable_library
+    library.get_function("set_description")(tvm_ffi.convert(description))
+    original = tvm_ffi.Module.get_function_metadata
+    args = [{"type": name} for name in kinds]
+    schema = {"type": "ffi.Function", **({"args": args} if format == "args" else {"named_args": {"return": args[:1], "params": args[1:]}})}
+
+    def metadata(self, name, query_imports=False):
+        if name == "run":
+            return {"type_schema": json.dumps(schema)}
+        return original(self, name, query_imports=query_imports)
+
+    monkeypatch.setattr(tvm_ffi.Module, "get_function_metadata", metadata)
+    if kinds == ("None", "ffi.Tensor", "ffi.Tensor"):
+        assert runtime.load_linked_module(linked).entry == "run"
+    else:
+        with pytest.raises(RuntimeError, match="metadata does not match.*actual=.*expected return/params=") as caught:
+            runtime.load_linked_module(linked)
+        assert str(linked.library_path) in str(caught.value)
+        assert "'run'" in str(caught.value)
+
+
+def test_native_results_survive_failed_load_and_collection(cpu_libraries):
+    result = subprocess.run([sys.executable, "-X", "faulthandler", "-c", '''
+import gc
+import sys
+import tvm_ffi
+from tilefoundry import runtime, target
+path = sys.argv[1]
+node = runtime.CompiledModule.from_library(path)
+description = node.library.get_function("tilefoundry_manifest")()
+del node
+gc.collect()
+provider = target.registered()["cpu"]
+target.unregister(provider)
+errors = []
+for _ in range(10):
+    try:
+        runtime.CompiledModule.from_library(path)
+    except RuntimeError as error:
+        assert "target provider" in str(error)
+        errors.append(error)
+    else:
+        raise AssertionError("unknown provider loaded")
+gc.collect()
+assert description["root"]["name"] == "CpuRoot"
+del description, errors
+gc.collect()
+''', str(cpu_libraries[0].library_path)], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_weight_scratch_and_unit_id_abi(tmp_path):
