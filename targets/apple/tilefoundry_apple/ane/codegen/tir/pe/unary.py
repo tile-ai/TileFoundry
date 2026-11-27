@@ -11,8 +11,14 @@ from tilefoundry_apple.ane.isa import intrinsic
 @codegen.register(target.Target, codegen.Role.EMIT, tir.Unary)
 def emit(call: expr.Call, ctx: context.Context) -> None:
     op = call.target
-    if op.scale != 1.0 and (op.abs or op.square or op.clamp is not None):
-        raise ValueError("T.ane.unary: scale with abs, square or clamp is not decoded yet")
+    if op.abs and op.square:
+        raise ValueError("T.ane.unary: abs with square is not decoded yet")
+    if op.square and op.scale != 1.0:
+        raise ValueError("T.ane.unary: square requires scale=1; hardware square mode ignores scale")
+    if op.abs and op.clamp is not None and (
+        op.pre_scale != 1.0 or (op.bias != 0.0 and op.scale != 1.0)
+    ):
+        raise ValueError("T.ane.unary: this affine combination with abs and clamp is not decoded yet")
     if op.width_code is not None:
         raise ValueError(f"T.ane.unary: width_code={op.width_code!r} is not decoded yet")
     if op.ocg_size is not None:

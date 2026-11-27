@@ -216,12 +216,12 @@ class Pool(Op):
 
 ```python
 class Unary(Op):
-    """Effect form; dst = clamp(square(abs((src * pre_scale + bias) * scale))).
+    """Effect form; pre_scale and bias precede either square or scale, then abs and clamp.
 
     Attributes:
         pre_scale: attribute; the first factor.
-        scale: attribute; the factor after the bias.
-        bias: attribute; the addend before scale.
+        scale: attribute; the factor after the bias; must be 1 when square is true.
+        bias: attribute; the addend after pre_scale.
         abs: attribute; apply the absolute value.
         square: attribute; apply the square.
         clamp: attribute; (low, high) bounds, or None.
@@ -245,18 +245,37 @@ class Unary(Op):
     ```text
     v = f16(src * pre_scale)
     v = f16(v + bias)
-    v = f16(v * scale)
-    v = abs(v)                      when abs
-    v = f16(v * v)                  when square
+    if square:
+        v = f16(v * v)
+    else:
+        v = f16(v * scale)
+        v = abs(v)                 when abs
     v = f16(clamp(v, low, high))    when clamp = (low, high)
     dst = v
     ```
 
-  - The three affine steps always apply. Their defaults leave the value unchanged.
-  - `abs`, `square` and `clamp` are optional. Each applies only when set. `abs` does not round.
-  - Codegen MUST reject `scale != 1` combined with `abs`, `square` or `clamp`
-    as not decoded yet: the hardware order of these combinations is unconfirmed.
-    The evaluator retains the reference order above.
+  - `pre_scale` and `bias` always apply. `square` replaces the scale step.
+    Codegen and the evaluator MUST reject `square=True` with `scale != 1`:
+    hardware square mode ignores scale and cannot implement a non-default factor.
+  - `f16` retains the evaluator's existing per-step round-to-nearest with ties away from zero.
+    `abs` does not round. Some probes distinguish only operation order: their away/even and
+    per-step/final candidates coincide. Those results do not establish hardware rounding
+    for every admitted option combination.
+  - `abs` with `square` MUST be rejected as not decoded yet, including by the evaluator.
+  - Codegen and the evaluator MUST reject option combinations outside the following table
+    as not decoded yet.
+    An affine attribute not listed in a row MUST have its default value. Within a listed
+    set, each attribute may independently have a non-default value.
+
+    | Enabled options | Admitted non-default affine attributes |
+    |---|---|
+    | none | `pre_scale`, `bias`, `scale` |
+    | `clamp` | `pre_scale`, `bias`, `scale` |
+    | `abs` | `pre_scale`, `bias`, `scale` |
+    | `abs`, `clamp` | either `{bias}` or `{scale}` |
+    | `square` | `pre_scale`, `bias` |
+    | `square`, `clamp` | `pre_scale`, `bias` |
+
   - `clamp` MUST satisfy `low <= high`.
   - `dst` MUST have the shape of `src`.
   - Each operand MUST have a flat layout and static row and channel strides.

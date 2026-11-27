@@ -561,7 +561,7 @@ REFUSED = ROOT / "ops" / "refused.py"
 
 @case
 class UnaryOrder(OpCase):
-    """The last input makes ``x + 1`` an fp16 tie, rounded before the scale and square."""
+    """The last input makes ``x + 1`` an fp16 tie, rounded before the square."""
 
     path: Path = VALUES
     name: str | None = "UnaryOrder"

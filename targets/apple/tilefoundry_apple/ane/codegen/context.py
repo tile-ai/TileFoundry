@@ -57,7 +57,8 @@ class Context:
         return layout
 
     def bind(self, var: expr.Expr, source: expr.Expr, address: int) -> None:
-        """Record the source tensor and byte address of a bound view."""
+        """Record the root tensor and accumulate the parent view's byte displacement."""
+        address += self.address_of(source)
         if var.type.storage is expr.StorageKind.SMEM and address:
             raise ValueError("offset SMEM view continuation is not decoded yet")
         if var.type.storage is expr.StorageKind.SMEM and isinstance(source, expr.Call):

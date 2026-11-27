@@ -62,17 +62,41 @@ def test_a06_convolution_bias_is_refused():
         image_bytes(tir.Conv(), bias=True)
 
 
-@pytest.mark.parametrize("scale", (2.0, -1.0, 0.5))
-@pytest.mark.parametrize("options", ({"abs": True}, {"square": True}, {"clamp": (0.0, 6.0)}))
-def test_unary_scale_with_unconfirmed_options_is_refused(scale, options):
-    with pytest.raises(ValueError, match="scale with abs, square or clamp is not decoded yet"):
-        image_bytes(tir.Unary(scale=scale, **options))
+@pytest.mark.parametrize("options", (
+    {"abs": True, "square": True},
+    {"pre_scale": -1.5, "abs": True, "clamp": (0.25, 3.0)},
+    {"pre_scale": -1.5, "bias": 0.75, "abs": True, "clamp": (0.25, 3.0)},
+    {"pre_scale": -1.5, "scale": -0.5, "abs": True, "clamp": (0.25, 3.0)},
+    {"pre_scale": -1.5, "bias": 0.75, "scale": -0.5, "abs": True, "clamp": (-3.0, -1.0)},
+    {"bias": 0.75, "scale": -0.5, "abs": True, "clamp": (0.25, 3.0)},
+))
+def test_unary_unconfirmed_option_combinations_are_refused(options):
+    with pytest.raises(ValueError, match="is not decoded yet"):
+        image_bytes(tir.Unary(**options))
+
+
+@pytest.mark.parametrize("clamp", (None, (-1.0, 3.0)))
+def test_unary_square_cannot_silently_ignore_scale(clamp):
+    with pytest.raises(ValueError, match="square requires scale=1; hardware square mode ignores scale"):
+        image_bytes(tir.Unary(square=True, scale=-2.0, clamp=clamp))
 
 
 @pytest.mark.parametrize("attributes", (
     {"abs": True}, {"pre_scale": 2.0, "bias": 3.0, "clamp": (0.0, 6.0)},
     {"scale": 2.0, "bias": 1.0}, {"scale": 3.0, "bias": 1.0},
     {"scale": 0.5, "bias": 4.0}, {"scale": -1.0},
+    {"scale": -2.0, "abs": True}, {"scale": -2.0, "clamp": (-1.0, 3.0)},
+    {"scale": 0.5, "clamp": (-1.0, 3.0)},
+    {"bias": -1.5, "abs": True}, {"bias": 1.5, "square": True},
+    {"pre_scale": -1.5, "abs": True}, {"abs": True, "clamp": (-1.0, 2.0)},
+    {"square": True, "clamp": (-1.0, 2.0)},
+    {"pre_scale": -1.5, "bias": 0.75, "abs": True},
+    {"bias": -1.5, "abs": True, "clamp": (-0.5, 2.5)},
+    {"scale": -2.0, "abs": True, "clamp": (-0.5, 2.5)},
+    {"pre_scale": -1.5, "bias": 0.75, "scale": -0.5, "clamp": (-3.0, -1.0)},
+    {"pre_scale": -1.5, "bias": 0.75, "scale": -0.5, "abs": True},
+    {"pre_scale": -1.5, "bias": 0.75, "square": True},
+    {"pre_scale": -1.5, "bias": 0.75, "square": True, "clamp": (-1.0, 3.0)},
 ))
 def test_unary_decoded_forms_still_produce_valid_images(attributes):
     assert image_bytes(tir.Unary(**attributes))
