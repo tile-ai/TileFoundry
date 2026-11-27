@@ -12,11 +12,10 @@ import os
 import subprocess
 import sys
 import tempfile
-from dataclasses import replace
 from pathlib import Path
 
-from tilefoundry import codegen, runtime, utils
-from tilefoundry.interfaces import valuation
+import tilefoundry
+from tilefoundry import runtime, utils
 from tilefoundry.ir import core
 from tilefoundry_apple.ane import runtime as ane_runtime
 from tilefoundry_apple.ane.codegen import module as ane_module
@@ -51,19 +50,30 @@ def launch(lowered: core.Module, inputs: tuple):
         }
     )
     with tempfile.TemporaryDirectory() as workdir:
-        linked = build(lowered, workdir)
-        module = compiled_module(lowered, linked)
+        module = tilefoundry.compile(lowered)
+        exported = Path(workdir) / "entry.so"
+        module.export_library(exported)
+        module.close()
+        module = runtime.CompiledModule.from_library(exported)
+        constants = {
+            param.name: value.numpy().tobytes()
+            for param, value in zip(fn.params, inputs, strict=False)
+            if getattr(param, "is_const", False)
+        }
+        expected_image = image_of(lowered, constants)
+        native_load = module.functions["load"]
+
+        def load_validated(token):
+            assert bytes(module.functions["image"](token)) == expected_image
+            return native_load(token)
+
+        module.functions["load"] = load_validated
         cached = None
         try:
             try:
                 module.load(resource)
             except ane_runtime.ProvisionRequiredError as request:
-                constants = {
-                    param.name: value.numpy().tobytes()
-                    for param, value in zip(fn.params, inputs, strict=False)
-                    if getattr(param, "is_const", False)
-                }
-                assert request.image == image_of(lowered, constants)
+                assert request.image == expected_image
                 cached = request.path
                 staged = Path(workdir) / "model.hwx"
                 staged.write_bytes(request.image)
@@ -79,35 +89,3 @@ def launch(lowered: core.Module, inputs: tuple):
             module.close()
             if cached is not None:
                 subprocess.run(["sudo", "-n", "rm", "-rf", str(cached.parent)], check=True)
-
-
-def build(lowered: core.Module, workdir):
-    """Link one lowered entry and the generic launcher for CPU or device tests."""
-    fn = lowered.entry_function()
-    symbol = codegen.mangle(lowered, fn)
-    signature = codegen.signature.called_as(fn, symbol, target=fn.target)
-    ctx = codegen.EmitContext(codegen.registry, symbols={id(fn): signature}, target=fn.target)
-    unit = fn.target.resolve(codegen.LinkableModule, lowered, (fn,), ctx)
-    return codegen.link_modules(
-        (unit,),
-        workdir=workdir,
-        lib_name="ane_case",
-        functions=(),
-        host=fn.target,
-        host_cxx="clang++",
-    )
-
-
-def compiled_module(lowered: core.Module, linked) -> ane_runtime.AneCompiledModule:
-    """Bind the linked entry's FFI registration and activation/output signature."""
-    fn = lowered.entry_function()
-    signature = codegen.signature.called_as(fn, codegen.mangle(lowered, fn), target=fn.target)
-    ref = next(
-        ref for ref, reading in valuation.collect_functions(lowered).items()
-        if reading.function is fn
-    )
-    return ane_runtime.AneCompiledModule(
-        linked.library_path,
-        replace(signature, name=f"{lowered.name}.{ref.qualified_name}"),
-        tuple(param.name for param in fn.params if getattr(param, "is_const", False)),
-    )

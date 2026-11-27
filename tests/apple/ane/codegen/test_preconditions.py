@@ -42,7 +42,9 @@ def image_bytes(op, shape=(1, 32, 16, 16), *, bias=False, ctx=None):
             args = (*args, expr.Var("b", type=types.TensorType(
                 (32,), expr.DType.f16, types.Layout((32,), (1,)), expr.StorageKind.GMEM,
             )))
-    ctx.emit_call(expr.Call(op, args, type=types.TupleType.Void), "precondition")
+    call = expr.Call(op, args, type=types.TupleType.Void)
+    ctx.plan([call])
+    ctx.emit_call(call, "precondition")
     stream = program.to_program(ctx.passes)
     names = {0x1110: "x", 0x1128: "z", 0x1508: "y"}
     relocs = tuple(hwx.Reloc(word, names[addr]) for word, (_, addr, _) in hwx.base_slots(stream).items()
@@ -60,6 +62,22 @@ def test_a06_convolution_bias_is_refused():
         image_bytes(tir.Conv(), bias=True)
 
 
+@pytest.mark.parametrize("scale", (2.0, -1.0, 0.5))
+@pytest.mark.parametrize("options", ({"abs": True}, {"square": True}, {"clamp": (0.0, 6.0)}))
+def test_unary_scale_with_unconfirmed_options_is_refused(scale, options):
+    with pytest.raises(ValueError, match="scale with abs, square or clamp is not decoded yet"):
+        image_bytes(tir.Unary(scale=scale, **options))
+
+
+@pytest.mark.parametrize("attributes", (
+    {"abs": True}, {"pre_scale": 2.0, "bias": 3.0, "clamp": (0.0, 6.0)},
+    {"scale": 2.0, "bias": 1.0}, {"scale": 3.0, "bias": 1.0},
+    {"scale": 0.5, "bias": 4.0}, {"scale": -1.0},
+))
+def test_unary_decoded_forms_still_produce_valid_images(attributes):
+    assert image_bytes(tir.Unary(**attributes))
+
+
 @pytest.mark.parametrize("perm", ((0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1)))
 def test_a07_undecoded_bypass_permutations_are_refused(perm):
     with pytest.raises(ValueError, match="perm .* is not decoded yet"):
@@ -72,30 +90,8 @@ def test_a08_width_code_requires_exact_shape_subdivision(width, code):
         image_bytes(tir.Bypass(width_code=code), (1, 32, 4, width))
 
 
-@pytest.mark.parametrize("name", ("unary", "binary", "pool", "bypass"))
-@pytest.mark.parametrize("producer", ("none", "matching", "mismatched"))
-def test_a09_chaining_requires_a_verified_producer_mapping(name, producer):
-    ctx = context.Context()
-    if producer != "none":
-        shape = (1, 32, 8 if producer == "mismatched" else 16, 16)
-        src, dst = tensor("previous", shape), tensor("x", shape)
-        op = tir.Unary(tile_height=1 if producer == "mismatched" else None)
-        ctx.emit_call(expr.Call(op, (dst, src), type=types.TupleType.Void), "producer")
-        if producer == "mismatched":
-            ctx.bind(dst, dst, 64)
-    ops = {
-        "unary": tir.Unary(chained_source=True),
-        "binary": tir.Binary(kind=expr.BinaryKind.ADD, chained_source=True),
-        "pool": tir.Pool(kernel_size=(1, 1), stride=(1, 1), kind=expr.PoolKind.MAX, chained_source=True),
-        "bypass": tir.Bypass(chained_source=True),
-    }
-    reason = "chained_source requires a preceding pass" if producer == "none" else "continuation mapping is not decoded yet"
-    with pytest.raises(ValueError, match=reason):
-        image_bytes(ops[name], ctx=ctx)
-
-
 def test_a10_convolution_tile_plan_must_cover_the_compute_height():
-    with pytest.raises(ValueError, match="tile plan is not decoded yet"):
+    with pytest.raises(ValueError, match="tile .*is not decoded yet"):
         image_bytes(tir.Conv(tile_height=1))
 
 
@@ -111,12 +107,13 @@ def test_a12_neural_guards_require_sampled_staging_geometry(shape, rows, width):
 
 
 def test_a13_coefficient_lanes_must_match_enabled_dma_slots():
-    with pytest.raises(ValueError, match="coefficient lane count 16 with 8 DMA slots is not decoded yet"):
-        image_bytes(tir.Conv(), (1, 8, 4, 16))
     desc = isa.TensorDesc.from_shape("f16", (1, 32, 4, 16))
     values = intrinsic.splice(
         intrinsic.load(desc, isa.Engine.NEURAL),
-        intrinsic.convolution(desc, desc, index=0, ocg_size=1, read_config=False),
+        intrinsic.convolution(
+            desc, desc, index=0, ocg_size=1, read_config=False,
+            result_base=desc.staging_extent(isa.Engine.NEURAL),
+        ),
     )
     for field in isa.KernelDMA.kernel_dma_src_coeff_dma_en[8:]:
         values[field.addr] = field.put(values[field.addr], 0)
@@ -166,13 +163,11 @@ def test_a15_splicing_rejects_conflicts_including_zero_writes(first, second):
     ("binary", {"tile_width": -9, "width_code": -4, "ocg_size": 99, "omit_ocg": True}),
     *((name, {attr: value}) for name in ("unary", "binary", "pool", "reduce")
       for attr, value in (("width_code", 1), ("ocg_size", 1), ("omit_ocg", True))),
-    ("reduce", {"chained_source": True}),
     *(("conv", {attr: value}) for attr, value in (("patch", (4, 4)), ("width_code", 1), ("omit_ocg", True))),
     *(("bypass", {attr: value}) for attr, value in (("tile_width", 16), ("patch", (4, 4)),
                                                   ("ocg_size", 2), ("unicast_channels", 0), ("omit_ocg", True))),
     *(("unary", {attr: value}) for attr, value in (("tile_height", 0), ("tile_width", -1),
                                                  ("patch", (4, 4, 4)), ("patch", (15, 15)))),
-    ("conv", {"l2_result_base": 1}), ("conv", {"l2_result_base": isa.dma.L2_CAPACITY - 16}),
     ("conv", {"ocg_size": 2}),
 ))
 def test_a18_schedule_attributes_are_validated_or_refused(name, attrs):

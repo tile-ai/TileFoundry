@@ -16,7 +16,7 @@ flowchart TD
 
 `isa.TensorDesc` stores dtype, NCHW shape and element strides. Byte strides, storage
 size and canonical geometry are derived in `isa/tensor_desc.py`.
-`context.tensor_desc_of` is the single conversion from a static fp16 GMEM tensor
+`context.tensor_desc_of` is the single conversion from a static fp16 GMEM or SMEM tensor
 type. An HWX `TensorBinding` binds a name, role and virtual address to a `TensorDesc`; its
 page reservation is derived from the descriptor's storage size. The C launcher
 uses the same `TensorDesc` fields in the same order, followed by the Python-derived
@@ -56,14 +56,19 @@ Each Op emitter MUST validate the schedule attributes it consumes and reject any
 nondefault attribute it does not consume. Refusals for undecoded hardware behavior
 MUST contain `is not decoded yet`; contradictory values MUST name the violated relation.
 
+Unary MUST reject `scale != 1` combined with `abs`, `square` or `clamp` as not
+decoded yet. Plain abs, `pre_scale` with bias/clamp at `scale=1`, and affine
+scale/bias without those options remain supported. The affine order is
+`(src * pre_scale + bias) * scale`, with fp16 rounding after each step.
+
 | Op | Consumed schedule attributes | Attributes requiring defaults |
 |---|---|---|
-| Unary | `tile_height`, `tile_width`, `patch`, `chained_source` | `width_code`, `ocg_size`, `omit_ocg` |
-| Binary | `tile_height`, `patch`, `chained_source` | `tile_width`, `width_code`, `ocg_size`, `omit_ocg` |
-| Pool | `tile_height`, `tile_width`, `patch`, `chained_source` | `width_code`, `ocg_size`, `omit_ocg` |
-| Reduce | `tile_height`, `tile_width`, `patch` | `width_code`, `ocg_size`, `omit_ocg`, `chained_source` |
-| Bypass | `tile_height`, `width_code`, `ocg_size`, `unicast_channels`, `omit_ocg`, `chained_source` | `tile_width`, `patch` |
-| Conv | `tile_height`, `tile_width`, `ocg_size`, `l2_result_base` | `patch`, `width_code`, `omit_ocg` |
+| Unary | `tile_height`, `tile_width`, `patch` | `width_code`, `ocg_size`, `omit_ocg` |
+| Binary | `tile_height`, `patch` | `tile_width`, `width_code`, `ocg_size`, `omit_ocg` |
+| Pool | `tile_height`, `tile_width`, `patch` | `width_code`, `ocg_size`, `omit_ocg` |
+| Reduce | `tile_height`, `tile_width`, `patch` | `width_code`, `ocg_size`, `omit_ocg` |
+| Bypass | `tile_height`, `width_code`, `ocg_size`, `unicast_channels`, `omit_ocg` | `tile_width`, `patch` |
+| Conv | `tile_height`, `tile_width`, `ocg_size` | `patch`, `width_code`, `omit_ocg` |
 
 Explicit tile dimensions MUST be integers within the corresponding logical extent.
 A patch MUST have exactly two integer values in 0–15 and match the derived raster
@@ -74,8 +79,9 @@ an explicit OCG above 64 output channels because that field is omitted in that m
 Bypass unicast MUST be 1 for identity and 2 for C/W transpose; zero is an error.
 Bypass MAY omit OCG only when the inferred value equals its reset value of zero
 and no explicit OCG is given. Other omission combinations are not decoded yet.
-Conv result bases MUST be 16-byte offsets within the L2 window; effective range
-and overlap checks still apply at descriptor validation.
+
+Conv source and result bases MUST come from the Context allocation plan, with
+16-byte alignment. Effective range and overlap checks still apply at descriptor validation.
 
 Conv with a bias operand MUST be rejected as not decoded yet. Bypass MUST emit only
 identity or `perm=(2, 1, 0)` and MUST check the resulting shape. Other valid
@@ -83,10 +89,36 @@ permutations are not decoded yet. Conv load and compute MUST use the same full-h
 tile plan; partial or unequal-height plans are not decoded yet. The source load owns
 its access-type field; convolution does not overwrite that field when using the load.
 
-`chained_source` MUST be boolean and MUST require a preceding pass. Continuation
-mapping of the producer's L2 result position, geometry, dtype and tile is not decoded
-yet, so emitters MUST reject chained continuation even when a preceding pass exists.
-No chained container is emitted until that relationship can be verified.
+### 2.2 L2 buffer placement
+
+`Context.plan` MUST place each SMEM tensor from its producing pass through its last
+consumer, inclusive. Transient DMA staging MUST participate in the same placement.
+Conv MUST allocate both its transient source and result even with only GMEM operands.
+Coefficient tensors MUST NOT reserve feature-map staging slots.
+Reservations MUST use `TensorDesc.staging_extent` for the consuming engine, including the decoded row guard,
+and MUST be disjoint while live and end within `isa.dma.L2_CAPACITY` (2 MiB).
+Expired reservations MAY be reused. Capacity overflow MUST fail before emission.
+Schedules MUST declare SMEM with `tf.empty`; they supply no L2 addresses.
+
+`Context.address_of` MUST return the assigned SMEM byte base. The emitter MUST
+select source DMA for GMEM and `load_chained` for SMEM, and select destination DMA
+only for GMEM. Producer result and consumer source MUST use the same allocated
+base, shape and pitches. SMEM logical layouts MAY use 16-byte aligned rows;
+the physical L2 pitches MUST come from staging geometry. L2-only planar results
+MUST explicitly program the channel and row pitches read by their consumers.
+An SMEM read MUST have
+a preceding producer. Two-pass planar Unary chains with complete tiles are
+supported. Cross-engine continuations with different staging pitches MUST be rejected
+as `cross-engine L2 staging pitch conversion is not decoded yet`.
+For `(C, H, W) = (32, 16, 16)`, the planar row pitch is 1056 bytes and the neural
+row pitch is 1072 bytes; equal logical shapes do not make these layouts interchangeable.
+Conv MUST infer L2 source/result requests from operand storage. Full-height L2
+source small-source/transpose mapping and explicit L2 result pitch mapping are
+not decoded yet and MUST be rejected. The historical staged-source convolution
+uses 1×1 small-source geometry; it does not establish an NCHW continuation contract.
+Other continuation modes are not decoded yet.
+The Context owns placement because it already owns resolved views, ordered passes
+and hardware staging; core lowering retains the storage declaration.
 
 ## 3. Module responsibilities
 
@@ -94,7 +126,7 @@ All paths below are relative to `ane/codegen/`.
 
 | Module | Responsibility |
 |---|---|
-| `context.py` | Pass order, operand addresses, `tensor_desc_of` and tile geometry |
+| `context.py` | Pass order, L2 lifetimes, staging placement, operand addresses and tile geometry |
 | `tir/prim_function.py` | Lowered function walker and descriptor-program construction |
 | `tir/ne/{conv,bypass}.py` | Registered neural-engine emitters |
 | `tir/pe/{binary,pool,reduce,unary}.py` | Registered planar-engine emitters |
@@ -264,12 +296,15 @@ the same logical weights. The compiled artifact contains no user weight values.
 Runtime image ownership, loading and provisioning are specified in
 [runtime §1](./runtime.md#1-load-forward-close).
 
-`called_as` MUST omit constant weight parameters from the activation/output
-`CallableSignature`. The generated callable accepts an opaque instance handle
-before those tensor parameters and invokes `ane_launch`. The handle is bound by
-`load`, so it is absent from the public signature. Each generated translation unit
-uses `TVM_FFI_STATIC_INIT_BLOCK` to register its entry and lifecycle functions with
-`Function::SetGlobal(..., override=true)`. Registration names MUST use the core
-resolved dotted export names, while C++ identifiers retain the core mangled symbols.
-`ane_register` provides the lifecycle wrappers shared by all entries. The target's
-link contribution MUST link the installed TVM FFI shared library on macOS.
+- constraints:
+  - `called_as` MUST omit const weights and describe ordinary host tensors with the same shapes and dtypes.
+    Device padding MUST remain in the internal I/O descriptors.
+  - The generated entry MUST accept an integer token before flattened tensor parameters.
+    Load MUST bind the token; the public tensor signature MUST omit it.
+  - Only the root entry MUST have a typed DLL export.
+    Its six lifecycle symbols MUST appear in the manifest's operations map.
+    C++ identifiers MUST retain the core mangled symbol with target-owned lifecycle suffixes.
+  - The translation unit MUST enable typed metadata before including the FFI headers.
+    Entries and lifecycle functions MUST NOT register process-global functions.
+  - The shared CMake project MUST provide TVM FFI linking.
+    ANE MUST contribute only its launcher source, packaged headers and required Apple frameworks.

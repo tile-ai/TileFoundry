@@ -59,7 +59,6 @@ class Bypass(expr.Op):
     width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     unicast_channels = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
-    chained_source = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
     omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
     dst = expr.ParamDef(
         kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.forms("dst", DST)

@@ -1,13 +1,14 @@
 """Load weights through TVM FFI and bind an owned ANE model to a compiled entry."""
 
+import json
 from enum import IntEnum
 from functools import partial
 from pathlib import Path
+from typing import Callable
 
-from tilefoundry import codegen, runtime, utils
+from tilefoundry import runtime, target, utils
 from tilefoundry.ir import types
-
-tvm_ffi = utils.LazyModule("tvm_ffi")
+from tilefoundry_apple.ane import target as ane_target
 
 
 class Status(IntEnum):
@@ -42,66 +43,93 @@ def check(status: int, operation: str) -> None:
         raise RuntimeError(f"{operation} returned ANE status {status}")
 
 
+@target.bind(ane_target.Target, runtime.CompiledModule)
 class AneCompiledModule(runtime.CompiledModule):
-    """A compiled entry whose FFI callable binds one independent model handle."""
+    """A root whose native entry binds one library-owned integer token."""
 
-    def __init__(
-        self, library: str | Path, type: codegen.CallableSignature, weights: tuple[str, ...] = ()
-    ) -> None:
-        self.library = tvm_ffi.load_module(str(library), keep_module_alive=True)
-        try:
-            self.functions = {
-                suffix: tvm_ffi.get_global_func(type.name + suffix)
-                for suffix in (
-                    "", ".create", ".set_weight", ".load", ".cache_path", ".image", ".destroy"
-                )
-            }
-        except ValueError as error:
-            raise RuntimeError(
-                f"ANE library {library} lacks registrations for entry {type.name!r}"
-            ) from error
-        super().__init__(type, partial(unavailable, "must be loaded before forward"))
-        self.weights = weights
-        self.program = None
-        self.closed = False
+    functions: dict[str, Callable]
+    entry_ffi: Callable | None
+    program: int
+
+    def __init__(self, library, library_path, description) -> None:
+        super().__init__(library, library_path, description)
+        self.functions = {
+            name: self.operation(name)
+            for name in (() if self.type is None else ("create", "set_weight", "load", "cache_path", "image", "destroy"))
+        }
+        self.entry_ffi = self.fn
+        self.program = 0
+        if self.type is not None:
+            self.fn = partial(unavailable, "must be loaded before forward")
+
+    def entry_schema(self) -> tuple[str, ...]:
+        """State the bound token and DLPack tensor ABI of the native entry."""
+        if self.type.leading:
+            raise RuntimeError(f"library {self.library_path}: {self.name}: ANE unit ids is not decoded yet")
+        return ("None", "int", *("DLTensor*" for _ in self.type.params))
+
+    def operation(self, name: str):
+        """Bind a library-local lifecycle function and verify its exact typed ABI."""
+        function = super().operation(name)
+        schemas = {
+            "create": ("int",), "set_weight": ("None", "int", "ffi.String", "DLTensor*"),
+            "load": ("int", "int"), "cache_path": ("ffi.String", "int"),
+            "image": ("ffi.Bytes", "int"), "destroy": ("None", "int"),
+        }
+        kinds = schemas.get(name)
+        if kinds is None:
+            raise RuntimeError(f"library {self.library_path}: {self.name}.{name} is not decoded yet")
+        expected = {"type": "ffi.Function", "args": [{"type": kind} for kind in kinds]}
+        metadata = self.library.get_function_metadata(self.operations[name], query_imports=False)
+        if json.loads(metadata["type_schema"]) != expected:
+            raise RuntimeError(f"library {self.library_path}: {self.name}.{name}: metadata does not match signature")
+        return function
 
     def load(
         self, resource: runtime.Resource, *, placement: "types.Placement | None" = None
     ) -> None:
-        """Create a private image, write its weights and bind the provisioned model."""
+        """Assemble private weights and bind a successfully loaded candidate token."""
         if self.closed:
-            raise RuntimeError("ANE module is closed")
+            raise RuntimeError(f"{self.name}: ANE module is closed")
         if placement is not None:
-            raise ValueError("ANE placement is not decoded yet")
+            raise ValueError(f"{self.name}: ANE placement is not decoded yet")
+        if self.type is None:
+            super().load(resource)
+            return
         self.fn = partial(unavailable, "must be loaded before forward")
-        previous, self.program = self.program, None
-        self.functions[".destroy"](previous)
+        previous, self.program = self.program, 0
+        self.functions["destroy"](previous)
+        candidate = self.functions["create"]()
         try:
-            self.program = self.functions[".create"]()
             for name in self.weights:
-                tensor = resource.load(name)
-                if tensor.device.type != "cpu" or tensor.dtype != utils.torch.float16:
-                    raise ValueError(f"weight {name} must be a CPU fp16 tensor")
-                self.functions[".set_weight"](self.program, name, tensor.contiguous())
-            status = self.functions[".load"](self.program)
+                try:
+                    tensor = resource.load(name)
+                except KeyError as error:
+                    raise KeyError(f"{self.name}: missing weight {name!r}") from error
+                if not isinstance(tensor, utils.torch.Tensor) or tensor.device.type != "cpu" or tensor.dtype != utils.torch.float16:
+                    raise ValueError(f"{self.name}: weight {name} must be a CPU fp16 tensor")
+                self.functions["set_weight"](candidate, name, tensor.contiguous())
+            status = self.functions["load"](candidate)
             if status == Status.NOT_PROVISIONED:
                 raise ProvisionRequiredError(
-                    bytes(self.functions[".image"](self.program)),
-                    Path(self.functions[".cache_path"](self.program)),
+                    bytes(self.functions["image"](candidate)),
+                    Path(self.functions["cache_path"](candidate)),
                 )
             check(status, "ane_load")
-            self.fn = partial(self.functions[""], self.program)
         except BaseException:
-            candidate, self.program = self.program, None
-            self.functions[".destroy"](candidate)
+            self.functions["destroy"](candidate)
             raise
+        self.program = candidate
+        self.fn = partial(self.entry_ffi, candidate)
 
     def close(self) -> None:
-        """Unload and release this module's native instance; repeated calls are safe."""
-        self.fn = partial(unavailable, "is closed")
-        self.closed = True
-        previous, self.program = self.program, None
-        self.functions[".destroy"](previous)
+        """Disable calls and release the token once, even if unloading fails."""
+        if self.closed:
+            return
+        previous, self.program = self.program, 0
+        super().close()
+        if previous:
+            self.functions["destroy"](previous)
 
 
 __all__ = ["AneCompiledModule", "ProvisionRequiredError", "Status"]

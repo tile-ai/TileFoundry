@@ -4,84 +4,74 @@ Scope: a linked ANE entry, instance-owned weight images and persistent model exe
 
 ## 1. Load, forward, close
 
-`AneCompiledModule(runtime.CompiledModule)` is constructed from a linked library
-path, a `codegen.CallableSignature` whose name is the dotted entry export name,
-and the ordered resource weight names. Its signature MUST contain only activation
-and trailing output parameters. Weights are loaded resources, never call arguments.
-The constructor loads the library with `tvm_ffi.load_module(keep_module_alive=True)`
-and captures all entry functions with `tvm_ffi.get_global_func`. Registrations allow
-override; existing modules retain their captured callables and libraries remain
-alive until process exit, following [runtime §1.4](../../../../../../docs/spec/runtime.md#14-runtimeloaderpy).
-`tf.build`, `tf.compile`, export and reload integration are outside this interface.
-
-The subclass overrides only `load` and adds `close`. `forward`, `__call__`, output
-allocation, argument counts and result unwrapping follow
-[runtime §1.1](../../../../../../docs/spec/runtime.md#11-runtimemodulepy).
-Both `module(*activations)` and `module(*activations, *outputs)` MUST work.
-A non-None placement MUST raise `ValueError` containing `is not decoded yet`
-before replacing the current instance.
-
-```text
-load(resource, *, placement=None):
-    unbind entry; destroy previous instance
-    entry.create() -> private skeleton copy
-    resource.load(name) -> CPU fp16 snapshot -> entry.set_weight(handle, name, tensor)
-    entry.load(handle)
-        missing cache -> ProvisionRequiredError(image, path); release instance
-        provisioned  -> fn = partial(entry, handle)
-forward(*args), inherited:
-    allocate outputs or accept trailing outputs -> fn(*args, *outputs)
-close():
-    unbind entry; unload model; release instance; mark closed
+```python
+class AneCompiledModule(runtime.CompiledModule):
+    def __init__(self, library, library_path, description) -> None: ...
+    def load(self, resource: runtime.Resource, *, placement: types.Placement | None = None) -> None: ...
+    def close(self) -> None: ...
 ```
 
-The library MUST NOT provision cache files or invoke privileged commands.
-`ProvisionRequiredError` carries complete image bytes and the absolute target path.
-After external provisioning, the caller invokes `load(resource)` again.
-Every load starts a new instance; a failed load leaves the module unloaded.
-A call before loading or after close MUST fail; inherited argument validation may
-reject a malformed call before reaching the bound entry. Close is idempotent.
-The caller MUST close a successfully loaded module. Instance handles and image
-copies belong to each Python module independently.
+- constraints:
+  - `tf.build` MUST accept a lowered ANE root. `tf.compile` MUST accept an ANE root with the required analysis and scheduling.
+    Both MUST return `AneCompiledModule` through the existing Target binding.
+  - Export and reload MUST use the core library protocol
+    ([runtime §1.1](../../../../../../docs/spec/runtime.md#11-runtimemodulepy)).
+    Reload MUST select `AneCompiledModule` without original IR or a Target instance.
+  - The signature MUST contain only activations and trailing outputs. Weights MUST come from the root Resource.
+    Entry calls MUST retain the inherited positional calling convention.
+  - Each successful load MUST bind its token to the library-local entry.
+    Named entry calls MUST use the node's current binding.
+  - A non-None placement MUST report `is not decoded yet` before replacing the current instance.
+  - Load MUST unbind the entry and destroy the previous token before creating a candidate.
+    It MUST read CPU fp16 weights and pass contiguous OIHW tensors to the generated writers.
+  - `NOT_PROVISIONED` MUST raise `ProvisionRequiredError` with owned image bytes and the absolute cache path.
+    Every failed candidate MUST be destroyed and leave the node unloaded.
+    Other load failures MUST identify the operation and status.
+  - The library MUST NOT provision cache files or invoke privileged commands.
+    The caller MUST provision externally and retry `load`.
+  - Calls before load and call or load after close MUST fail.
+    Close MUST clear the token before destruction and be idempotent.
+    The caller MUST close a successfully loaded node.
 
 ## 2. FFI interface and native implementation
 
-Each compiled entry registers the following TVM FFI functions, using the core
-dotted export name as its prefix:
+The manifest lists the entry separately from its six lifecycle operations.
 
-| Registration | Arguments | Result |
+| Operation | Typed arguments | Result |
 |---|---|---|
-| `<entry>` | handle, flattened activation and output tensors | Evaluate the loaded instance |
-| `<entry>.create` | None | Handle owning a copy of the validated skeleton |
-| `<entry>.set_weight` | handle, resource name, tensor | Write the compiled weight |
-| `<entry>.load` | handle | Numeric `AneStatus`, including `NOT_PROVISIONED` |
-| `<entry>.cache_path` | handle | Absolute daemon cache path |
-| `<entry>.image` | handle | Owned bytes of the complete current image |
-| `<entry>.destroy` | handle or None | Unload and free the instance |
+| entry | `int64 token`, flattened activation and output tensors | Evaluate the loaded instance |
+| `create` | None | Positive `int64` token owning a validated skeleton copy |
+| `set_weight` | `int64 token`, String name, `DLTensor*` tensor | Write the compiled weight |
+| `load` | `int64 token` | Numeric `AneStatus`, including `NOT_PROVISIONED` |
+| `cache_path` | `int64 token` | String containing the daemon cache path |
+| `image` | `int64 token` | Owned Bytes containing the complete image |
+| `destroy` | `int64 token` | Unload and release the instance; zero is a no-op |
 
-Python uses these functions exclusively. Tensor arguments cross FFI as DLPack
-compatible tensors. Invalid weights MUST name the required unloaded instance,
-resource name, CPU fp16 dtype, contiguous OIHW shape and bounded offsets. Invalid
-activations and outputs MUST identify the parameter and its required CPU fp16
-shape, nonnegative strides and bounded offsets. Other native failures MUST name
-the operation and status. An undecoded behavior MUST contain `is not decoded yet`.
+- constraints:
+  - Entry and lifecycle lookup MUST remain library-local. Typed DLL exports MUST include ABI metadata.
+    Each entry's create wrapper MUST reference its own immutable `AneEntry`.
+  - The token table MUST own each `AneProgram` and allocate monotonically increasing positive integers without reuse.
+    Unknown, negative or expired tokens MUST be rejected. Only destroy MUST accept zero.
+  - Token identity MUST be the pair of owning library and integer.
+    Different libraries MAY allocate equal integers. Nodes MUST use their token with operations from the owning library.
+  - Native lookup, use and destruction MUST be synchronized so destruction cannot free an instance in use.
+    A pointer MUST NOT be reinterpreted as a token. No pointer handle or custom C++ object MUST cross FFI.
+  - Invalid weights MUST identify the required unloaded instance, compiled name, CPU fp16 dtype, contiguous OIHW shape and bounded offsets.
+  - Invalid activations and outputs MUST identify the parameter, CPU fp16 shape, nonnegative strides and bounded offsets.
+  - Other native failures MUST identify the operation and status. Undecoded behavior MUST report `is not decoded yet`.
+  - Internal `ane_image` MAY borrow bytes. The FFI operation MUST return an owned copy.
+  - Destruction MUST attempt unloading before releasing a loaded model, including exception exits.
+    C++ exceptions MUST NOT cross the internal C ABI.
 
-The declarations live in `codegen/include/tilefoundry/runtime/ane/launcher.h`.
-`AneEntry` is immutable internal metadata. Internal `ane_create` copies its
-skeleton; `ane_set_weight` dispatches by resource name. Loaded instances reject
-weight mutation. `ane_image` borrows bytes internally; the FFI wrapper copies them.
-`ane_cache_path` hashes the complete instance image with SHA-256 and combines that
-hash with the executable signing identifier, OS build and fixed daemon key suffix.
-Python `Status` declares the numeric `AneStatus` values from the launcher header.
-
+Declarations live in `codegen/include/tilefoundry/runtime/ane/launcher.h`.
+The `ane_token_*` helpers validate tokens before calling the internal C ABI.
+`ane_create` copies the skeleton. `ane_set_weight` dispatches by compiled weight name.
+Loaded instances reject weight mutation.
+`ane_cache_path` hashes the complete image and combines it with the signing identifier, OS build and fixed suffix.
+Python `Status` retains the numeric `AneStatus` values from the launcher header.
 `ane_load` returns `ANE_NOT_PROVISIONED` when the daemon has no matching cache entry.
-A successful load retains its model and client until `ane_destroy`; `ane_launch`
-performs only request allocation, host copies and evaluation. Entry counts, tensor
-pointers, device, dtype, shape and address arithmetic MUST be checked before copying.
-Native ownership uses RAII for images, models, CF objects and IOSurfaces. Destruction
-MUST attempt unloading before releasing a loaded model, including exception exits.
-C++ exceptions MUST NOT cross the internal C ABI; FFI wrappers translate failures.
-Python clears its handle before destruction and releases failed load candidates.
+A successful load retains its model and client until destruction.
+`ane_launch` allocates requests, copies host tensors and evaluates the retained model.
 
 ## 3. Validation boundary
 

@@ -18,9 +18,10 @@ CLAMP = pattern.Sequence(
 
 @expr.register_op(dialect="T", category="pe", namespace="ane", name="unary")
 class Unary(expr.Op):
-    """dst = clamp(square(abs(src * pre_scale * scale + bias))), each step rounded to fp16.
+    """dst = clamp(square(abs((src * pre_scale + bias) * scale))).
 
-    abs, square and clamp apply only when set; clamp is (low, high).
+    Each arithmetic step rounds to fp16. abs, square and clamp apply only when set.
+    clamp is (low, high).
     """
 
     capability = expr.OpCapability("pe.unary")
@@ -63,7 +64,6 @@ class Unary(expr.Op):
     patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
     width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
-    chained_source = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
     omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
     dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.feature("dst"))
     src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("src"))
@@ -91,8 +91,8 @@ def _(call, ctx) -> None:
 def _(ctx):
     op = ctx.op
     value = evaluation.f16(ctx.args[1].data.to(utils.torch.float32) * op.pre_scale)
-    value = evaluation.f16(value * op.scale)
     value = evaluation.f16(value + op.bias)
+    value = evaluation.f16(value * op.scale)
     if op.abs:
         value = value.abs()
     if op.square:

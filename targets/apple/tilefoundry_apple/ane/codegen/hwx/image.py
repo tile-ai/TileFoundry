@@ -139,6 +139,7 @@ class Image:
                 raise ValueError(f"GMEM intermediate {reloc.symbol!r} mapping is not decoded yet")
         for td in self.program.tds:
             td.validate()
+        isa.dma.check_continuations(td.values() for td in self.program.tds)
         self.require_relocated()
 
     def require_relocated(self) -> None:

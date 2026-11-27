@@ -1,3 +1,3 @@
 """Code generation for the Apple Neural Engine."""
 
-from . import context, header, hwx, module, program, tir
+from . import allocation, context, header, hwx, module, program, tir

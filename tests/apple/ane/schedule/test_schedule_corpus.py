@@ -43,6 +43,7 @@ class AneCase(Case):
     refusal: str | None = None
     finalize_refusal: str | None = None
     image: str | None = None
+    image_refusal: str | None = None
     device_run: bool = False
 
     def inputs(self) -> tuple | None:
@@ -177,6 +178,11 @@ def _finalize(case, checked):
     return None
 
 
+def _image_refused(case, lowered):
+    with pytest.raises(ValueError, match=case.image_refusal):
+        device.image_of(lowered)
+
+
 def _scheduled(case, problems):
     if case.refusal is not None:
         problems.run("load refusal", _refused, case)
@@ -192,7 +198,9 @@ def _scheduled(case, problems):
         lowered = problems.run("reload TIR", lambda text: reload(text, lowered.name), printed)
         reprinted = problems.run("reprint TIR", inspection.as_script, lowered)
         problems.expect("reprinted TIR", lambda text: text == printed, reprinted)
-    if case.image is not None or case.device_run:
+    if case.image_refusal is not None:
+        problems.run("image refusal", _image_refused, case, lowered)
+    elif case.image is not None or case.device_run:
         constants = {param.name: value.numpy().tobytes() for param, value in
                      zip(lowered.entry_function().params, case.inputs(), strict=False)
                      if getattr(param, "is_const", False)}
@@ -322,6 +330,44 @@ class Conv1x1Relu(Conv1x1):
 
 
 @case
+class ConvUnary(AneCase):
+    path: Path = ROOT / "scheduled" / "conv_unary.py"
+    image_refusal: str = "cross-engine L2 staging pitch conversion is not decoded yet"
+
+    def inputs(self):
+        return small((1, 32, 16, 16), 10), small((32, 32, 1, 1), 11)
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(x, w).abs())
+        assert issued(state.lowered) == ["T.ane.conv(t0, x, w)", "T.ane.unary(out, t0, abs=True)"]
+
+
+@case
+class UnaryConv(ConvUnary):
+    path: Path = ROOT / "scheduled" / "unary_conv.py"
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(x.abs(), w))
+        assert issued(state.lowered) == ["T.ane.unary(t0, x, abs=True)", "T.ane.conv(out, t0, w)"]
+
+
+@case
+class ConvConv(ConvUnary):
+    path: Path = ROOT / "scheduled" / "conv_conv.py"
+    image_refusal: str = "full-height L2 result pitch mapping is not decoded yet"
+
+    def inputs(self):
+        return (*super().inputs(), small((32, 32, 1, 1), 12))
+
+    def guard(self, state, problems):
+        x, first, second = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(utils.F.conv2d(x, first), second))
+        assert issued(state.lowered) == ["T.ane.conv(t0, x, first)", "T.ane.conv(out, t0, second)"]
+
+
+@case
 class ConvRelu(AneCase):
     path: Path = ROOT / "scheduled" / "conv_relu.py"
 
@@ -427,6 +473,19 @@ class Unary(AneCase):
 
 
 @case
+class UnaryChain(AneCase):
+    path: Path = ROOT / "scheduled" / "unary_chain.py"
+    device_run: bool = True
+
+    def inputs(self):
+        return (small((1, 32, 16, 16), 21, -7, 7),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, (x.abs() + 1) * 2)
+
+
+@case
 class Binary(AneCase):
     path: Path = ROOT / "scheduled" / "binary.py"
     image: str | None = "58771ce2656fac6c969eaea20d270347bbdaed3ca1634c8a78b6a23db4d20950"
@@ -502,16 +561,16 @@ REFUSED = ROOT / "ops" / "refused.py"
 
 @case
 class UnaryOrder(OpCase):
-    """The last input makes ``1 - x`` an fp16 tie, which rounds away from zero before the square."""
+    """The last input makes ``x + 1`` an fp16 tie, rounded before the scale and square."""
 
     path: Path = VALUES
     name: str | None = "UnaryOrder"
 
     def inputs(self):
-        return (utils.torch.tensor([-4, -3, -2, -1, 0, 1, 2, -(2**-11)]).reshape(1, 1, 1, 8).to(utils.torch.float16),)
+        return (utils.torch.tensor([-4, -3, -2, -1, 0, 1, 2, 2**-11]).reshape(1, 1, 1, 8).to(utils.torch.float16),)
 
     def expected(self):
-        return utils.torch.tensor([10, 10, 9, 4, 1, 0, 1, 1 + 2**-9]).reshape(1, 1, 1, 8)
+        return utils.torch.tensor([9, 4, 1, 0, 1, 4, 9, 1 + 2**-9]).reshape(1, 1, 1, 8)
 
 
 @case

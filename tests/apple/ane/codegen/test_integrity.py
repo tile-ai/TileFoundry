@@ -69,9 +69,9 @@ def test_a03_l2_live_ranges_are_bounded_and_disjoint(fault):
                              intrinsic.compute_pe(isa.TaskType.PE_EW_UNARY, desc),
                              intrinsic.store(desc))
     if fault == "overlap":
-        values[isa.L2.l2_result_base_addr.addr] = 0
+        values[isa.L2.l2_result_address.addr] = 0
     elif fault in ("boundary", "tail"):
-        values[isa.L2.l2_result_base_addr.addr] = isa.dma.L2_CAPACITY - desc.staging_extent() + (16 if fault == "tail" else 0)
+        values[isa.L2.l2_result_address.addr] = isa.dma.L2_CAPACITY - desc.staging_extent() + (16 if fault == "tail" else 0)
     stream = isa.Program((isa.TD(isa.serialize(values)),))
     relocs = tuple(hwx.Reloc(word, "y" if addr == 0x1508 else "x")
                    for word, (_, addr, _) in hwx.base_slots(stream).items())

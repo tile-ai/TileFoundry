@@ -36,13 +36,9 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         raise ValueError(f"T.ane.binary: ocg_size={op.ocg_size!r} is not decoded yet")
     if op.omit_ocg is not False:
         raise ValueError(f"T.ane.binary: omit_ocg={op.omit_ocg!r} is not decoded yet")
-    if type(op.chained_source) is not bool:
-        raise ValueError("T.ane.binary: chained_source must be a boolean")
-    if op.chained_source:
-        if ctx.fresh:
-            raise ValueError("T.ane.binary: chained_source requires a preceding pass")
-        raise ValueError("T.ane.binary: chained_source continuation mapping is not decoded yet")
     destination, lhs, rhs = call.args
+    if any(arg.type.storage is expr.StorageKind.SMEM for arg in call.args):
+        raise ValueError("L2 operands for this operation is not decoded yet")
     dst = context.tensor_desc_of(destination.type, "dst")
     left = context.tensor_desc_of(lhs.type, "lhs")
     right = context.tensor_desc_of(rhs.type, "rhs")

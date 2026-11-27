@@ -41,7 +41,6 @@ class Binary(expr.Op):
     patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
     width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
-    chained_source = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
     omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
     dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.feature("dst"))
     lhs = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("lhs"))

@@ -25,13 +25,9 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         raise ValueError(f"T.ane.bypass: tile_width={op.tile_width!r} is not decoded yet")
     if op.patch is not None:
         raise ValueError(f"T.ane.bypass: patch={op.patch!r} is not decoded yet")
-    if type(op.chained_source) is not bool:
-        raise ValueError("T.ane.bypass: chained_source must be a boolean")
-    if op.chained_source:
-        if ctx.fresh:
-            raise ValueError("T.ane.bypass: chained_source requires a preceding pass")
-        raise ValueError("T.ane.bypass: chained_source continuation mapping is not decoded yet")
     destination, source = call.args
+    if any(arg.type.storage is expr.StorageKind.SMEM for arg in call.args):
+        raise ValueError("L2 operands for this operation is not decoded yet")
     perm = tuple(op.perm)
     if sorted(perm) != list(IDENTITY):
         raise ValueError(f"T.ane.bypass: perm {perm} must be a permutation of {IDENTITY}")

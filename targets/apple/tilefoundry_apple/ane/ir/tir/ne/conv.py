@@ -68,7 +68,6 @@ class Conv(expr.Op):
     patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
     width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
-    l2_result_base = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
     dst = expr.ParamDef(
         kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.forms("dst", DST)

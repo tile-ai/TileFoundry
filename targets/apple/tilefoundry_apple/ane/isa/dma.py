@@ -17,7 +17,7 @@ def value(image: Mapping[int, int], field: fields.BitField) -> int:
 
 @dataclass(frozen=True)
 class Transfer:
-    """One enabled tile DMA's effective fp16 geometry and byte strides."""
+    """One fp16 feature map; a nonzero register identifies an active DRAM transfer."""
 
     name: str
     register: int
@@ -33,7 +33,7 @@ class Transfer:
         return (self.channels - 1) * self.channel + (self.height - 1) * self.row + self.width * 2
 
 
-def transfers(image: Mapping[int, int]) -> tuple[Transfer, ...]:
+def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
     """Decode active readers and writers, refusing modes with undetermined footprints."""
     common, l2 = fields.Common, fields.L2
     access = value(image, l2.l2_src_type)
@@ -44,14 +44,22 @@ def transfers(image: Mapping[int, int]) -> tuple[Transfer, ...]:
                                                 l2.l2_result_channel_stride, l2.l2_result_row_stride)):
             raise ValueError("L2-only transfer mapping is not decoded yet")
         return ()
-    if access != fields.L2Access.DMA_READ or not enabled:
+    result_access = value(image, l2.l2_result_type)
+    continuation = access == fields.L2Access.L2_READ or result_access == fields.L2Access.L2_READ
+    if continuation:
+        if (access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
+                or result_access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
+                or enabled != (result_access == fields.L2Access.DMA_READ)
+                or value(image, common.task_type) != fields.TaskType.PE_EW_UNARY):
+            raise ValueError("L2 continuation access mapping is not decoded yet")
+    elif access != fields.L2Access.DMA_READ or not enabled:
         raise ValueError("tile DMA access mapping is not decoded yet")
     for field in (common.pe_src1_transpose, common.pe_src2_transpose,
                   common.pe_output_cto_w, common.small_source_mode, l2.l2_src_dependent):
         if value(image, field):
             raise ValueError(f"tile DMA mode at {field.addr:#x}[{field.hi}:{field.lo}] is not decoded yet")
-    if (value(image, l2.l2_result_type) != fields.L2Access.DMA_READ
-            or not value(image, l2.l2_result_buffer_mode)):
+    if (result_access == fields.L2Access.DMA_READ and not value(image, l2.l2_result_buffer_mode)
+            or result_access == fields.L2Access.L2_READ and value(image, l2.l2_result_buffer_mode)):
         raise ValueError("L2 result DMA mapping is not decoded yet")
     task = value(image, common.task_type)
     if task not in (fields.TaskType.NE, fields.TaskType.PE_POOL_UNARY,
@@ -78,6 +86,8 @@ def transfers(image: Mapping[int, int]) -> tuple[Transfer, ...]:
     tile = value(image, common.tile_height)
     if not 1 <= tile <= result[1]:
         raise ValueError(f"tile_height {tile} must be within [1, {result[1]}]")
+    if continuation and (tile != source[1] or source != result):
+        raise ValueError("partial or unequal L2 continuation geometry is not decoded yet")
     transpose = value(image, common.output_transpose)
     if not transpose and value(image, common.fill_lower_nodes_first):
         raise ValueError("fill_lower_nodes_first DMA mapping is not decoded yet")
@@ -114,10 +124,25 @@ def transfers(image: Mapping[int, int]) -> tuple[Transfer, ...]:
                 raise ValueError("output geometry contradicts the kernel window and strides")
         elif not transpose and source != result:
             raise ValueError("bypass output geometry must equal input")
-    decoded = [decode(image, "src", source), decode(image, "dst", result)]
+    decoded = [
+        decode(image, "src", source) if access == fields.L2Access.DMA_READ else staged("src", source),
+        decode(image, "dst", result) if enabled else staged("dst", result),
+    ]
     if second:
         decoded.insert(1, decode(image, "src2", source))
     return tuple(decoded)
+
+
+def staged(name: str, shape: tuple[int, int, int]) -> Transfer:
+    """Describe an L2-only feature map without declaring any DRAM access."""
+    channels, height, width = shape
+    row = align_up(width * 2, 64)
+    return Transfer(name, 0, channels, height, width, row, height * row)
+
+
+def transfers(image: Mapping[int, int]) -> tuple[Transfer, ...]:
+    """Return only enabled DRAM transfers after validating the complete geometry."""
+    return tuple(transfer for transfer in geometry(image) if transfer.register)
 
 
 def decode(image: Mapping[int, int], name: str, shape: tuple[int, int, int]) -> Transfer:
@@ -151,10 +176,10 @@ def decode(image: Mapping[int, int], name: str, shape: tuple[int, int, int]) -> 
                     channels, height, width, row, channel)
 
 
-def check_l2(image: Mapping[int, int], decoded: tuple[Transfer, ...]) -> None:
-    """Check verified tile pitches, live intervals and the sampled streaming alias."""
+def check_l2(image: Mapping[int, int], decoded: tuple[Transfer, ...]) -> tuple[tuple[str, int, int], ...]:
+    """Check verified tile pitches and disjoint live intervals within L2 capacity."""
     if not decoded:
-        return
+        return ()
     common, l2 = fields.Common, fields.L2
     source, result = decoded[0], decoded[-1]
     task = value(image, common.task_type)
@@ -173,7 +198,7 @@ def check_l2(image: Mapping[int, int], decoded: tuple[Transfer, ...]) -> None:
     for transfer in decoded:
         name = "result" if transfer.name == "dst" else transfer.name
         prefix = f"l2_{name}_"
-        base_field = l2.l2_result_base_addr if name == "result" else l2.fields[prefix + "base_address"]
+        base_field = l2.l2_result_address if name == "result" else l2.fields[prefix + "base_address"]
         base = value(image, base_field) * 16
         channels, width = transfer.channels, transfer.width
         rows = min(tile, transfer.height) if name == "result" else source_rows
@@ -191,11 +216,19 @@ def check_l2(image: Mapping[int, int], decoded: tuple[Transfer, ...]) -> None:
                                  ("group_stride", channels * channel)):
             actual = value(image, l2.fields[prefix + suffix]) * 16
             if name == "result" and not actual:
+                if not transfer.register and suffix in ("channel_stride", "row_stride"):
+                    raise ValueError(f"l2_result_{suffix} must explicitly match the allocated L2 layout")
                 continue
+            if name == "src" and not transfer.register and suffix in (
+                "depth_stride", "group_stride"
+            ):
+                expected = 0
             if actual != expected:
                 raise ValueError(f"{prefix}{suffix} {actual} tile pitch is not decoded yet; expected {expected}")
         for suffix, expected in (("interleave", 1), ("compression", 0),
                                  ("dma_fmt" if name == "result" else "dma_format", 1)):
+            if name == "src" and not transfer.register and suffix == "dma_format":
+                expected = 0
             if name != "src2" and value(image, l2.fields[prefix + suffix]) != expected:
                 raise ValueError(f"{prefix}{suffix} mode is not decoded yet")
         if name == "src":
@@ -204,15 +237,32 @@ def check_l2(image: Mapping[int, int], decoded: tuple[Transfer, ...]) -> None:
         if end > L2_CAPACITY:
             raise ValueError(f"L2 {name} range [{base}, {end}) exceeds capacity {L2_CAPACITY}")
         intervals.append((name, base, end))
-    alias = (neural and value(image, fields.NE.op) == fields.NEOp.CONV
-             and source.channels == result.channels and source.height == result.height
-             and source.width == result.width
-             and value(image, common.kw) == value(image, common.kh) == 1
-             and intervals[-1][1] == intervals[0][1] + source.channels * 18)
     for index, (name, start, end) in enumerate(intervals):
         for other, low, high in intervals[:index]:
-            if start < high and low < end and not (alias and (other, name) == ("src", "result")):
+            if start < high and low < end:
                 raise ValueError(f"L2 {other} and {name} ranges overlap")
+    return tuple(intervals)
+
+
+def check_continuations(images) -> None:
+    """Require each L2 reader to match an unmodified earlier result buffer."""
+    live = []
+    for image in images:
+        decoded = geometry(image)
+        intervals = check_l2(image, decoded)
+        if not intervals:
+            continue
+        source, result = decoded[0], decoded[-1]
+        signature = (source.channels, source.height, source.width)
+        source_range = intervals[0][1:]
+        if value(image, fields.L2.l2_src_type) == fields.L2Access.L2_READ:
+            if (*source_range, signature) not in live:
+                raise ValueError("L2 source requires a matching unmodified preceding result")
+        writes = intervals[1:] if not source.register else intervals
+        for _, low, high in writes:
+            live = [item for item in live if item[1] <= low or high <= item[0]]
+        if value(image, fields.L2.l2_result_type) == fields.L2Access.L2_READ:
+            live.append((*intervals[-1][1:], (result.channels, result.height, result.width)))
 
 
 def check_coefficient_lanes(lanes: int, enabled_slots: int) -> None:
@@ -221,4 +271,4 @@ def check_coefficient_lanes(lanes: int, enabled_slots: int) -> None:
         raise ValueError(f"coefficient lane count {lanes} with {enabled_slots} DMA slots is not decoded yet")
 
 
-__all__ = ["L2_CAPACITY", "Transfer", "check_coefficient_lanes", "check_l2", "transfers"]
+__all__ = ["L2_CAPACITY", "Transfer", "check_coefficient_lanes", "check_continuations", "check_l2", "geometry", "transfers"]

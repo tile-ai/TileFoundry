@@ -90,7 +90,7 @@ def splice(*parts: Mapping[int, int]) -> Writes: ...
   - `compute_ne` MUST program the neural engine op and MUST arm the kernel DMA path.
   - A primitive MUST build its words from declared fields only. It MUST NOT shift a value into
     position by hand.
-  - A primitive MUST leave the memory base addresses at zero; the stream does not bind memory.
+  - DRAM bases MUST remain relocatable addends; L2 bases MUST use allocated byte offsets.
   - `splice` MUST combine disjoint field writes and accept repeated equal assignments.
     Different values on overlapping masks MUST raise `ValueError`, including explicit zero
     assignments. Nested splices MUST preserve masks. A plain mapping assigns complete words.
@@ -235,7 +235,11 @@ and reserves no lookup-table bytes in the coefficient stream.
 `isa/dma.py` decodes enabled tile DMA from access types and routing, independently
 of base-word presence. It accepts DMA_READ source/result, an enabled destination,
 source routing 1 for unary or 3 for binary, and second-stream plus PE second-source
-2 for binary. Other access/routing combinations are rejected as not decoded yet.
+2 for binary. Complete-height unary continuation additionally accepts L2_READ source or result.
+An L2 result MUST disable destination DMA and buffer mode; an L2 source MUST omit
+source DMA. Its channel and row pitches MUST be explicit; depth/group pitches
+and source DMA format MUST stay at reset zero, matching the decoded
+`load_chained` form. Other access/routing combinations are rejected as not decoded yet.
 
 The verified transfer format is fp16, N=1, depth=1, common formats 2 and tile format
 `(format_mode, trunc, shift, memory_format, offset_ch, interleave, cmp_vec)` equal to
@@ -260,7 +264,9 @@ disjoint. L2 byte bases and strides are the fields multiplied by 16. The checked
 envelope reserves complete staged rows including guard bytes. A planar row is
 `channels × align16(width × 2) + 32`. Pool source rows include the kernel halo;
 reduction reserves one result row. Zero result pitches select these verified
-implicit pitches; explicit pitches MUST match them.
+implicit pitches for DMA results; explicit pitches MUST match them. An allocated
+planar L2-only result MUST explicitly program its channel and row pitches to the
+same staging geometry that its consumer uses. Depth and group extents remain one.
 
 Neural full-height staging currently accepts source `(C, W)` of `(32, 16)` or
 `(32, 32)`: row pitch is depth plus one channel pitch and another 16 bytes when
@@ -268,10 +274,13 @@ depth is divisible by 1024. Other neural guards and narrower staged widths are
 rejected as not decoded yet. This includes the known undecoded `31 × 15 × 32`
 and `24 × 11 × 64` guards. The verified C/W transpose additionally admits result
 `(C, W) = (16, 32)` when its source is `(32, 16)`; this is a result-only mode.
-The sampled 1×1 convolution streaming alias is the
-sole overlap exception: equal source/result geometry and a result base exactly
-`source_base + cin × 18`, within the same verified full-height neural mode.
-Every other overlapping live interval is rejected.
+Every overlapping live interval MUST be rejected, including equal-geometry 1×1
+convolution source/result intervals with alias bits set. Alias bits do not establish
+permission to overlap buffers. Their existing encoding is retained.
+The result address field is `L2.l2_result_address` at `0x0534[20:4]` in 16-byte units.
+`Image.validate` MUST also
+require each L2 source to match an earlier result interval and shape that no
+intervening DMA staging or result write has overwritten.
 
 Coefficient lane count MUST equal the number of enabled coefficient DMA slots.
 The emitter checks its planned count and the container checks the effective slot

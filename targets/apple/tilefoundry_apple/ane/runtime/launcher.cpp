@@ -4,6 +4,8 @@
 #include <CommonCrypto/CommonDigest.h>
 #include <limits>
 #include <memory>
+#include <map>
+#include <mutex>
 #include <algorithm>
 #include <IOSurface/IOSurface.h>
 #include <Security/Security.h>
@@ -457,62 +459,89 @@ void ane_check_status(int status, const char *operation) {
             << operation << " returned ANE status " << status;
 }
 
-void ane_register(const char *name, const AneEntry *entry,
-                  tvm::ffi::Function launch) {
-    using tvm::ffi::Function;
-    Function::SetGlobal(name, launch, true);
-    Function::SetGlobal(
-        std::string(name) + ".create", Function::FromTyped([entry]() -> void * {
-            AneProgram *program = nullptr;
-            ane_check_status(ane_create(entry, &program), "ane_create");
-            return program;
-        }),
-        true);
-    Function::SetGlobal(
-        std::string(name) + ".set_weight",
-        Function::FromTyped([](void *handle, std::string name,
-                               DLTensor *tensor) {
-            const int status = ane_set_weight(static_cast<AneProgram *>(handle),
-                                              name.c_str(), tensor);
-            if (status == ANE_BAD_ARGUMENT)
-                TVM_FFI_THROW(ValueError)
-                    << "weight " << name
-                    << " must name a compiled weight of an unloaded instance "
-                       "and be a contiguous CPU fp16 tensor with the compiled "
-                       "OIHW shape and bounded offsets";
-            ane_check_status(status, "ane_set_weight");
-        }),
-        true);
-    Function::SetGlobal(std::string(name) + ".load",
-                        Function::FromTyped([](void *handle) {
-                            return ane_load(static_cast<AneProgram *>(handle));
-                        }),
-                        true);
-    Function::SetGlobal(
-        std::string(name) + ".cache_path",
-        Function::FromTyped([](void *handle) {
-            char path[4096];
-            ane_check_status(ane_cache_path(static_cast<AneProgram *>(handle),
-                                            path, sizeof path),
-                             "ane_cache_path");
-            return tvm::ffi::String(path);
-        }),
-        true);
-    Function::SetGlobal(
-        std::string(name) + ".image", Function::FromTyped([](void *handle) {
-            const uint8_t *bytes = nullptr;
-            size_t length = 0;
-            ane_check_status(
-                ane_image(static_cast<AneProgram *>(handle), &bytes, &length),
-                "ane_image");
-            return tvm::ffi::Bytes(reinterpret_cast<const char *>(bytes),
-                                   length);
-        }),
-        true);
-    Function::SetGlobal(
-        std::string(name) + ".destroy", Function::FromTyped([](void *handle) {
-            auto *program = static_cast<AneProgram *>(handle);
-            ane_check_status(ane_destroy(&program), "ane_destroy");
-        }),
-        true);
+namespace {
+
+struct Programs {
+    std::mutex mutex;
+    std::map<int64_t, std::unique_ptr<AneProgram>> owned;
+    int64_t next = 1;
+
+    /** @brief Find an instance while the caller holds the table lock. */
+    AneProgram *find(int64_t token) {
+        auto found = owned.find(token);
+        if (found == owned.end())
+            TVM_FFI_THROW(ValueError) << "invalid ANE instance token " << token;
+        return found->second.get();
+    }
+};
+
+Programs programs;
+
+}
+
+int64_t ane_token_create(const AneEntry *entry) {
+    std::lock_guard<std::mutex> lock(programs.mutex);
+    if (programs.next == INT64_MAX)
+        TVM_FFI_THROW(RuntimeError) << "ANE instance token range exhausted";
+    AneProgram *candidate = nullptr;
+    ane_check_status(ane_create(entry, &candidate), "ane_create");
+    std::unique_ptr<AneProgram> owned(candidate);
+    const int64_t token = programs.next++;
+    programs.owned.emplace(token, std::move(owned));
+    return token;
+}
+
+void ane_token_set_weight(int64_t token, tvm::ffi::String name,
+                          DLTensor *tensor) {
+    std::lock_guard<std::mutex> lock(programs.mutex);
+    const int status =
+        ane_set_weight(programs.find(token), name.c_str(), tensor);
+    if (status == ANE_BAD_ARGUMENT)
+        TVM_FFI_THROW(ValueError)
+            << "weight " << name
+            << " must name a compiled weight of an unloaded instance "
+               "and be a contiguous CPU fp16 tensor with the compiled "
+               "OIHW shape and bounded offsets";
+    ane_check_status(status, "ane_set_weight");
+}
+
+int ane_token_load(int64_t token) {
+    std::lock_guard<std::mutex> lock(programs.mutex);
+    return ane_load(programs.find(token));
+}
+
+tvm::ffi::Bytes ane_token_image(int64_t token) {
+    std::lock_guard<std::mutex> lock(programs.mutex);
+    const uint8_t *bytes = nullptr;
+    size_t length = 0;
+    ane_check_status(ane_image(programs.find(token), &bytes, &length),
+                     "ane_image");
+    return tvm::ffi::Bytes(reinterpret_cast<const char *>(bytes), length);
+}
+
+tvm::ffi::String ane_token_cache_path(int64_t token) {
+    std::lock_guard<std::mutex> lock(programs.mutex);
+    char path[4096];
+    ane_check_status(ane_cache_path(programs.find(token), path, sizeof path),
+                     "ane_cache_path");
+    return tvm::ffi::String(path);
+}
+
+void ane_token_launch(int64_t token, DLTensor **inputs, int n_inputs,
+                      DLTensor **outputs, int n_outputs) {
+    std::lock_guard<std::mutex> lock(programs.mutex);
+    ane_check_status(
+        ane_launch(programs.find(token), inputs, n_inputs, outputs, n_outputs),
+        "ane_launch");
+}
+
+void ane_token_destroy(int64_t token) {
+    if (token == 0)
+        return;
+    std::lock_guard<std::mutex> lock(programs.mutex);
+    programs.find(token);
+    auto owned = std::move(programs.owned.at(token));
+    programs.owned.erase(token);
+    auto *program = owned.release();
+    ane_check_status(ane_destroy(&program), "ane_destroy");
 }

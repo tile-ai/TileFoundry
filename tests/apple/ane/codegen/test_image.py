@@ -64,6 +64,19 @@ def test_coefficient_image_and_symbols(image):
             assert payload[start : start + layout.lane_bytes] == coefficient.values[:layout.lane_bytes]
 
 
+@pytest.mark.parametrize("base", (0, 32 * 18))
+def test_convolution_rejects_overlapping_l2_ranges_even_with_alias_bits(image, base):
+    td = image.program.tds[0]
+    field = isa.L2.l2_result_address
+    packets = tuple(replace(packet, writes=tuple(
+        (addr, field.put(word, base // 16) if addr == field.addr else word)
+        for addr, word in packet.writes
+    )) for packet in td.packets)
+    invalid = replace(image, program=isa.Program((replace(td, packets=packets),)))
+    with pytest.raises(ValueError, match="L2 src and result ranges overlap"):
+        invalid.to_bytes()
+
+
 @pytest.mark.parametrize("fault", ("missing_dma", "duplicate_dma", "unknown_dma", "missing_block", "missing_coefficient", "duplicate_coefficient", "wrong_owner", "overlap"))
 def test_invalid_image_bindings_are_rejected(image, fault):
     if fault == "missing_dma":

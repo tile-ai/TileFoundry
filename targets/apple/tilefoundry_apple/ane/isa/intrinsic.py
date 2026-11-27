@@ -132,6 +132,7 @@ def load(
     rows: int | None = None,
     width: int | None = None,
     planar_result: bool = False,
+    l2_base: int | None = None,
 ) -> dict[int, int]:
     """Program reading one feature map: the L2 source buffer and the source DMA."""
     require_row_width(
@@ -147,6 +148,7 @@ def load(
         COMMON.pack(cin=source.channels, **window),
         L2.pack(
             l2_src_type=fields.L2Access.DMA_READ,
+            **({} if l2_base is None else {"l2_src_base_address": l2_units(l2_base)}),
             **staged_flags(fresh, planar_result),
             l2_src_dma_format=fields.TensorFormatMode.COMPRESSED,
             l2_src_interleave=INTERLEAVE,
@@ -195,7 +197,7 @@ def slot_offset(
 
 def load_chained(
     source: TensorDesc, engine: Engine = Engine.PLANAR, *,
-    rows: int | None = None, width: int | None = None
+    rows: int | None = None, width: int | None = None, address: int = 0,
 ) -> dict[int, int]:
     """Read a source the previous descriptor left staged instead of reloading it.
 
@@ -214,6 +216,7 @@ def load_chained(
         COMMON.pack(cin=source.channels, **window),
         L2.pack(
             l2_src_type=fields.L2Access.L2_READ,
+            l2_src_base_address=l2_units(address),
             **staged_flags(False, planar_result=True),
             l2_src_interleave=INTERLEAVE,
             l2_src_channel_stride=l2_units(source.staging_channel(width)),
@@ -277,6 +280,8 @@ def store(
     declare: bool = True,
     declared: TensorDesc | None = None,
     planar_result: bool = False,
+    result_base: int | None = None,
+    to_dram: bool = True,
 ) -> dict[int, int]:
     """Program writing one feature map: the L2 result buffer and the result DMA.
 
@@ -304,13 +309,19 @@ def store(
             common_out_fmt=COMMON_FORMAT_F16,
         ),
         L2.pack(
-            l2_result_type=fields.L2Access.DMA_READ,
-            l2_result_buffer_mode=1,
-            **staged_flags(fresh),
+            l2_result_type=fields.L2Access.DMA_READ if to_dram else fields.L2Access.L2_READ,
+            **({"l2_result_buffer_mode": 1} if to_dram else {}),
+            **staged_flags(fresh, planar_result),
             l2_result_dma_fmt=fields.TensorFormatMode.COMPRESSED,
             l2_result_interleave=INTERLEAVE,
-            l2_result_base_addr=l2_units(
-                slot_offset(
+            **(
+                {} if to_dram else {
+                    "l2_result_channel_stride": l2_units(destination.staging_channel(width)),
+                    "l2_result_row_stride": l2_units(destination.staging_row(engine, rows, width)),
+                }
+            ),
+            l2_result_address=l2_units(
+                result_base if result_base is not None else slot_offset(
                     staging or destination,
                     staged,
                     engine,
@@ -320,7 +331,7 @@ def store(
                 )
             ),
         ),
-        DST_DMA.pack(
+        {} if not to_dram else DST_DMA.pack(
             **dst_tags(fresh),
             tile_dma_dst_enable=1,
             tile_dma_dst_base_addr_lo=low,
@@ -450,7 +461,7 @@ def staged_copy(
             l2_result_interleave=INTERLEAVE,
             l2_result_alias_planar_src=1,
             l2_result_alias_planar_rslt=1,
-            **({} if result_base is None else {"l2_result_base_addr": l2_units(result_base)}),
+            **({} if result_base is None else {"l2_result_address": l2_units(result_base)}),
             l2_result_channel_stride=l2_units(STAGING_ROW_GUARD // 2),
         ),
         SRC_DMA.pack(
@@ -501,6 +512,8 @@ def convolution(
     source.validate_feature()
     destination.validate_feature()
     low, high = split_address(address)
+    if to_dram and result_base is None:
+        raise ValueError("convolution result base must be stated; it may not overlap the staged source")
     return splice(
         {fields.KernelDMA.kernel_dma_src_base_lo.addr: coeff_base & 0xFFFFFFFF,
          fields.KernelDMA.kernel_dma_src_base_hi.addr: coeff_base >> 32},
@@ -566,8 +579,8 @@ def convolution(
                 {}
                 if result_base is None and not to_dram
                 else {
-                    "l2_result_base_addr": l2_units(
-                        source_base + source.channels * 18 if result_base is None else result_base
+                    "l2_result_address": l2_units(
+                        result_base
                     )
                 }
             ),
@@ -674,7 +687,7 @@ def activation(
             l2_result_interleave=INTERLEAVE,
             l2_result_alias_planar_src=1,
             l2_result_alias_planar_rslt=1,
-            l2_result_base_addr=column,
+            l2_result_address=column,
         ),
         NE.pack(
             kernel_format=fields.KernelFormat.FP16,
@@ -793,7 +806,7 @@ def multiply(
                     "l2_result_interleave": INTERLEAVE,
                 }
             ),
-            l2_result_base_addr=l2_units(result_base),
+            l2_result_address=l2_units(result_base),
             **(
                 {}
                 if result_stride is None

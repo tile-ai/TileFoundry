@@ -32,9 +32,9 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         raise ValueError(f"T.ane.reduce: ocg_size={op.ocg_size!r} is not decoded yet")
     if op.omit_ocg is not False:
         raise ValueError(f"T.ane.reduce: omit_ocg={op.omit_ocg!r} is not decoded yet")
-    if op.chained_source is not False:
-        raise ValueError(f"T.ane.reduce: chained_source={op.chained_source!r} is not decoded yet")
     destination, source = call.args
+    if any(arg.type.storage is expr.StorageKind.SMEM for arg in call.args):
+        raise ValueError("L2 operands for this operation is not decoded yet")
     src = context.tensor_desc_of(source.type, "src")
     dst = context.tensor_desc_of(destination.type, "dst")
     if tuple(op.axes) != SPATIAL or not op.keepdim:

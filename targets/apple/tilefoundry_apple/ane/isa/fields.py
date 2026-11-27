@@ -296,7 +296,7 @@ class L2(Block, base=0x0500, end=0x0564, pipeline_rank=3):
     l2_result_alias_planar_src = BitField(0x0530, 20, 20)
     l2_result_alias_planar_rslt = BitField(0x0530, 22, 22)
     l2_result_compression = BitField(0x0530, 26, 25)
-    l2_result_base_addr = BitField(0x0534, 20, 4)
+    l2_result_address = BitField(0x0534, 20, 4)
     l2_result_channel_stride = BitField(0x0538, 20, 4)
     l2_result_row_stride = BitField(0x053C, 20, 4)
     l2_result_depth_stride = BitField(0x0540, 20, 4)

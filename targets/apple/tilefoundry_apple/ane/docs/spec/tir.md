@@ -134,6 +134,11 @@ class Conv(Op):
   - In the matrix form, `src` is `[M, K]`, `weight` is `[K, N]` and `dst` is `[M, N]`. The strides follow [§1.2](#12-matrix-forms).
   - The matrix form MUST have `stride=(1, 1)`, `padding=(0, 0)` and `groups=1`.
   - `dst`, `src` and `weight` MUST be all feature maps or all matrices.
+  - Schedules MUST declare intermediate storage through tensor types. L2 addresses
+    MUST come from codegen buffer allocation, with disjoint source and result ranges.
+  - Full-height feature-map L2 source small-source mapping and L2 result pitches
+    are not decoded yet. Codegen MUST reject these requests; the evaluator retains
+    the reference semantics for SMEM operands.
 
 #### Bypass
 
@@ -210,12 +215,12 @@ class Pool(Op):
 
 ```python
 class Unary(Op):
-    """Effect form; dst = clamp(square(abs(src * pre_scale * scale + bias))).
+    """Effect form; dst = clamp(square(abs((src * pre_scale + bias) * scale))).
 
     Attributes:
         pre_scale: attribute; the first factor.
-        scale: attribute; the second factor.
-        bias: attribute; the addend.
+        scale: attribute; the factor after the bias.
+        bias: attribute; the addend before scale.
         abs: attribute; apply the absolute value.
         square: attribute; apply the square.
         clamp: attribute; (low, high) bounds, or None.
@@ -238,8 +243,8 @@ class Unary(Op):
 
     ```text
     v = f16(src * pre_scale)
-    v = f16(v * scale)
     v = f16(v + bias)
+    v = f16(v * scale)
     v = abs(v)                      when abs
     v = f16(v * v)                  when square
     v = f16(clamp(v, low, high))    when clamp = (low, high)
@@ -248,6 +253,9 @@ class Unary(Op):
 
   - The three affine steps always apply. Their defaults leave the value unchanged.
   - `abs`, `square` and `clamp` are optional. Each applies only when set. `abs` does not round.
+  - Codegen MUST reject `scale != 1` combined with `abs`, `square` or `clamp`
+    as not decoded yet: the hardware order of these combinations is unconfirmed.
+    The evaluator retains the reference order above.
   - `clamp` MUST satisfy `low <= high`.
   - `dst` MUST have the shape of `src`.
   - Each operand MUST have a flat layout and static row and channel strides.

@@ -10,10 +10,12 @@ from collections.abc import Mapping
 
 from tilefoundry import codegen, dispatch
 from tilefoundry.ir import expr, types
+from tilefoundry.ir.tir import memory
 from tilefoundry_apple.ane import isa, target
 from tilefoundry_apple.ane.ir import tir
 
 from . import hwx
+from .allocation import Interval, allocate
 
 FULL_PLANE_PATCH = (4, 4)
 SINGLE_ROW_PATCH = (5, 0)
@@ -29,6 +31,7 @@ class Context:
         self.symbols: dict[expr.Expr, expr.Expr] = {}
         self.coefficients: dict[expr.Expr, hwx.CoefficientLayout] = {}
         self.weight_uses: list[tuple[expr.Expr, int, hwx.CoefficientLayout]] = []
+        self.staging: dict[tuple[int, int], int] = {}
 
     @property
     def fresh(self) -> bool:
@@ -55,11 +58,75 @@ class Context:
 
     def bind(self, var: expr.Expr, source: expr.Expr, address: int) -> None:
         """Record the source tensor and byte address of a bound view."""
-        self.addresses[var] = address
-        self.symbols[var] = self.symbols.get(source, source)
+        if var.type.storage is expr.StorageKind.SMEM and address:
+            raise ValueError("offset SMEM view continuation is not decoded yet")
+        if var.type.storage is expr.StorageKind.SMEM and isinstance(source, expr.Call):
+            if (not isinstance(source.target, memory.TensorView) or not source.args
+                    or not isinstance(source.args[0], expr.Constant) or source.args[0].value != 0):
+                raise ValueError("SMEM view allocation mapping is not decoded yet")
+            self.addresses[var] = 0
+            self.symbols[var] = var
+        else:
+            self.addresses[var] = address
+            self.symbols[var] = self.symbols.get(source, source)
+
+    def plan(self, calls: list[expr.Call]) -> None:
+        """Allocate SMEM lifetimes and each pass's transient DMA staging together."""
+        resident = any(arg.type.storage is expr.StorageKind.SMEM for call in calls for arg in call.args)
+        if not resident and not any(isinstance(call.target, tir.Conv) for call in calls):
+            return
+        lifetimes = {}
+        intervals = []
+        for index, call in enumerate(calls):
+            if not isinstance(call.target, (tir.Unary, tir.Conv)):
+                if resident:
+                    raise ValueError("L2 continuation for this operation is not decoded yet")
+                continue
+            engine = isa.Engine.NEURAL if isinstance(call.target, tir.Conv) else isa.Engine.PLANAR
+            for position in (1, 0):
+                operand = call.args[position]
+                desc = tensor_desc_of(operand.type, "L2 operand")
+                rows = tile_rows(call.target, desc)
+                if resident and (rows != desc.height or call.target.tile_width is not None):
+                    raise ValueError("partial L2 continuation is not decoded yet")
+                size = desc.staging_extent(engine, rows, call.target.tile_width)
+                if operand.type.storage is expr.StorageKind.SMEM:
+                    root = self.symbols.get(operand, operand)
+                    if position == 0:
+                        if root in lifetimes:
+                            raise ValueError("L2 tensor must have exactly one producer")
+                        lifetimes[root] = Interval(root, index, index, size)
+                    else:
+                        previous = lifetimes.get(root)
+                        if previous is None or previous.first == index:
+                            raise ValueError("L2 source requires a preceding producer")
+                        if root.type != operand.type:
+                            raise ValueError("L2 source must match producer geometry and layout")
+                        if previous.size != size:
+                            raise ValueError("cross-engine L2 staging pitch conversion is not decoded yet")
+                        lifetimes[root] = Interval(root, previous.first, index, size)
+                else:
+                    intervals.append(Interval((index, position), index, index, size))
+        addresses = allocate((*lifetimes.values(), *intervals))
+        for operand in tuple(self.addresses):
+            root = self.symbols.get(operand, operand)
+            if root in lifetimes:
+                self.addresses[operand] = addresses[root]
+        for root in lifetimes:
+            self.addresses[root] = addresses[root]
+        for index, call in enumerate(calls):
+            for position, operand in enumerate(call.args):
+                if operand.type.storage is expr.StorageKind.SMEM:
+                    self.staging[index, position] = self.address_of(operand)
+                elif (index, position) in addresses:
+                    self.staging[index, position] = addresses[index, position]
+
+    def staging_address(self, position: int) -> int | None:
+        """Return the current pass's allocated slot, or its legacy implicit placement."""
+        return self.staging.get((len(self.passes), position))
 
     def address_of(self, operand: expr.Expr) -> int:
-        """The byte address of *operand* inside its tensor; a parameter starts at zero."""
+        """Return the allocated L2 byte base or a view's DRAM-relative byte offset."""
         return self.addresses.get(operand, 0)
 
     def binding_desc(self, param: expr.Var) -> isa.TensorDesc:
@@ -93,7 +160,7 @@ class Context:
 def tensor_desc_of(
     type_: types.TensorType, name: str, *, strided: bool = False
 ) -> isa.TensorDesc:
-    """Read the memory layout of one static fp16 feature map in global memory.
+    """Read the memory layout of one static fp16 feature map.
 
     *strided* keeps the strides the type declares; otherwise the type must
     declare the canonical feature map of its shape.
@@ -111,8 +178,8 @@ def tensor_desc_of(
     ):
         if not 1 <= extent <= limit:
             raise ValueError(f"{name} {axis} extent {extent} outside [1, {limit}]")
-    if type_.storage is not expr.StorageKind.GMEM:
-        raise ValueError(f"{name} must be in gmem for a single descriptor")
+    if type_.storage not in (expr.StorageKind.GMEM, expr.StorageKind.SMEM):
+        raise ValueError(f"{name} must be in gmem or smem")
     if width > 1 and expr.static_dim_value(type_.layout.strides[3]) != 1:
         raise ValueError(f"{name} W stride must be one")
     if not isinstance(type_.layout, types.Layout):
@@ -121,7 +188,7 @@ def tensor_desc_of(
     desc = isa.TensorDesc(type_.dtype.name, shape, strides)
     try:
         desc.validate_feature()
-        desc.validate("declared" if strided else "canonical")
+        desc.validate("declared" if strided or type_.storage is expr.StorageKind.SMEM else "canonical")
         tir.layout.feature_dma_strides(type_)
     except ValueError as error:
         raise ValueError(f"{name}: {error}") from error

@@ -5,7 +5,7 @@ from tilefoundry_apple import ane
 
 @module(entry="main", target=ane.Target("apple.m2_pro.ane"), topologies=(Topology("engine", 1),))
 class UnaryOrder:
-    """Scale, bias, abs, square and clamp in that order; one input ties at the bias step."""
+    """Bias, scale, abs, square and clamp in reference order; one input ties at the bias."""
 
     @func
     def main(x: Tensor[(1, 1, 1, 8), "f16", ((1, 1, 1, 8), (8, 8, 8, 1)), "gmem"]):

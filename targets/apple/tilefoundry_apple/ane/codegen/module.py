@@ -3,37 +3,37 @@
 import json
 import shutil
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from importlib.resources import files
 
-from tilefoundry import codegen, target, utils
-from tilefoundry.interfaces import valuation
-from tilefoundry.ir import core
+from tilefoundry import codegen, target
+from tilefoundry.ir import core, expr, types
 from tilefoundry_apple.ane import isa, runtime
 from tilefoundry_apple.ane import target as ane_target
 from tilefoundry_apple.ane.codegen.tir.ne import conv
 
 from . import hwx, program, tir
 
-PREAMBLE = '#include "tilefoundry/runtime/ane/launcher.h"'
+PREAMBLE = '#define TVM_FFI_DLL_EXPORT_INCLUDE_METADATA 1\n#include "tilefoundry/runtime/ane/launcher.h"'
 LAUNCHER = "ane_launcher.cpp"
-tvm_ffi = utils.LazyModule("tvm_ffi")
 
 
 @codegen.register(ane_target.Target, codegen.Role.CALLEE, core.PrimFunction)
+@codegen.register(ane_target.Target, codegen.Role.CALLEE, core.Function)
 def called_as(
-    fn: core.PrimFunction, symbol: str, unit_ids: tuple[codegen.UnitIdSignature, ...]
+    fn: core.PrimFunction | core.Function, symbol: str, unit_ids: tuple[codegen.UnitIdSignature, ...], params=None,
 ) -> codegen.CallableSignature:
     """Name the ANE entry and retain the logical input and output lists."""
     if unit_ids:
-        raise ValueError(f"{fn.name}: the ANE entry takes no unit IDs")
+        raise ValueError(f"{fn.name}: ANE unit ids is not decoded yet")
     return codegen.CallableSignature(
         name=symbol,
         params=tuple(
-            codegen.tensor_signature_of(param)
-            for param in fn.params
+            codegen.TensorSignature(param.name, types.TensorType.from_shape(param.type.shape, dtype=param.type.dtype, storage=expr.StorageKind.HOST))
+            for param in (fn.params if params is None else params)
             if not getattr(param, "is_const", False)
         ),
-        output_count=fn.output_count,
+        output_count=getattr(fn, "output_count", 0),
     )
 
 
@@ -102,7 +102,7 @@ def tensor_row(desc: isa.TensorDesc) -> str:
 
 
 def emit_function(
-    fn: core.PrimFunction, sig: codegen.CallableSignature, entry_name: str
+    fn: core.PrimFunction, sig: codegen.CallableSignature, entry_name: str, *, exported: bool
 ) -> codegen.LinkableFunction:
     """Export a validated skeleton, I/O descriptors and per-weight generated writers."""
     image = function_image(fn)
@@ -116,8 +116,8 @@ def emit_function(
         weights.append(f"  {{{json.dumps(weight.name)}, {writer}}},")
     offset = hwx.coefficient_offset(payload) if weights else 0
     params = ", ".join(f"DLTensor *arg_{index}" for index in range(len(sig.params)))
-    declaration = f"void {symbol}(void *handle, {params})"
-    inputs = ", ".join(f"arg_{index}" for index in range(sig.input_count))
+    declaration = f"void {symbol}(int64_t token, {params})"
+    inputs = ", ".join(f"arg_{index}" for index in range(sig.input_count)) or "nullptr"
     outputs = ", ".join(f"arg_{index}" for index in range(sig.input_count, len(sig.params)))
     validation = "\n".join(
         f"  if (!ane_check_tensor(arg_{index}, {symbol}_io[{index}].shape, 16, false))\n"
@@ -140,47 +140,54 @@ def emit_function(
         f"  {symbol}_io, {len(image.io) - image.output_count}, {image.output_count},\n"
         + (f"  {symbol}_weights, {len(weights)}\n" if weights else "  nullptr, 0\n")
         + f"}};\n{declaration} {{\n"
-        f'  if (!handle) TVM_FFI_THROW(RuntimeError) << "{entry_name}: instance must be loaded";\n'
         f"{validation}\n"
         f"  DLTensor *inputs[] = {{{inputs}}};\n"
         f"  DLTensor *outputs[] = {{{outputs}}};\n"
-        f"  ane_check_status(ane_launch(static_cast<AneProgram *>(handle), inputs, "
-        f'{sig.input_count}, outputs, {sig.output_count}), "{entry_name}");\n}}\n'
-        f"TVM_FFI_STATIC_INIT_BLOCK() {{\n"
-        f'  ane_register("{entry_name}", &{symbol}_entry,\n'
-        f'    tvm::ffi::Function::FromTyped({symbol}, "{entry_name}"));\n}}\n'
+        f"  ane_token_launch(token, inputs, {sig.input_count}, outputs, {sig.output_count});\n}}\n"
     )
+    if exported:
+        definition += (
+            f"static int64_t {symbol}_create() {{ return ane_token_create(&{symbol}_entry); }}\n"
+            f"TVM_FFI_DLL_EXPORT_TYPED_FUNC({symbol}, {symbol});\n"
+            f"TVM_FFI_DLL_EXPORT_TYPED_FUNC({symbol}_create, {symbol}_create);\n"
+        )
+        definition += "".join(
+            f"TVM_FFI_DLL_EXPORT_TYPED_FUNC({symbol}_{operation}, ane_token_{operation});\n"
+            for operation in ("set_weight", "load", "cache_path", "image", "destroy")
+        )
     return codegen.LinkableFunction(fn.name, declaration + ";", definition)
 
 
 @target.bind(ane_target.Target, codegen.LinkableModule)
+@dataclass(frozen=True)
 class AneLinkableModule(codegen.LinkableModule):
     """The C++ translation unit for an ANE target group."""
+
+    operations: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def create(cls, tgt, owner, functions, ctx) -> "AneLinkableModule":
         """Emit all function images and launcher entry points in group order."""
-        if ctx.codegen_context is not None and ctx.codegen_context.options.emit != "full":
+        if ctx.codegen_context is None:
+            raise ValueError("ANE codegen requires a codegen.Context")
+        if ctx.codegen_context.options.emit != "full":
             raise ValueError("ANE codegen requires full emission of lowered TIR")
-        entries = []
+        entries, operations = [], {}
         for fn in functions:
             if not isinstance(fn, core.PrimFunction) or fn.target != tgt:
                 raise ValueError(f"{fn.name}: expected a lowered ANE function")
             sig = ctx.signature_of(fn)
             if sig.leading or sig.trailing:
-                raise ValueError(f"{fn.name}: ANE entry does not take launch geometry")
-            if ctx.codegen_context is not None:
-                entry_name = ctx.codegen_context.symbols.by_function[id(fn)].export_name
-            else:
-                ref = next(
-                    ref for ref, reading in valuation.collect_functions(owner).items()
-                    if reading.function is fn
-                )
-                entry_name = f"{owner.name}.{ref.qualified_name}"
-            entries.append(emit_function(fn, sig, entry_name))
+                raise ValueError(f"{fn.name}: ANE launch geometry is not decoded yet")
+            root = ctx.codegen_context.module
+            exported = fn is root.entry_function()
+            entry_name = ctx.codegen_context.symbols.by_function[id(fn)].export_name
+            entries.append(emit_function(fn, sig, entry_name, exported=exported))
+            if exported:
+                operations = {name: f"{sig.name}_{name}" for name in ("create", "set_weight", "load", "cache_path", "image", "destroy")}
         if not entries:
             raise ValueError("ANE codegen requires at least one function")
-        return cls(target="ane", language="cpp", preamble=PREAMBLE, functions=tuple(entries))
+        return cls(target="ane", language="cpp", preamble=PREAMBLE, functions=tuple(entries), operations=operations)
 
     def link(self, project: "CMakeProject") -> None:
         """Add the source, launcher headers, and Darwin link options."""
@@ -194,10 +201,8 @@ class AneLinkableModule(codegen.LinkableModule):
             'if(NOT APPLE OR NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")\n'
             '  message(FATAL_ERROR "ANE linking requires clang++ on macOS")\n'
             "endif()\n"
-            'set_target_properties(${PROJECT_NAME} PROPERTIES SUFFIX ".so")\n'
             'target_link_libraries(${PROJECT_NAME} PRIVATE "-framework CoreFoundation"\n'
             '  "-framework IOSurface" "-framework Security" objc)\n'
-            f"target_link_libraries(${{PROJECT_NAME}} PRIVATE {json.dumps(tvm_ffi.libinfo.find_libtvm_ffi())})\n"
         )
 
 

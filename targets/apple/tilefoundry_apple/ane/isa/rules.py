@@ -85,7 +85,7 @@ def check(image: Mapping[int, int]) -> None:
     if row is not None and depth is not None and row < depth:
         raise CheckError(f"l2_src_row_stride {row} is below l2_src_depth_stride {depth}")
 
-    dma.check_l2(image, dma.transfers(image))
+    dma.check_l2(image, dma.geometry(image))
 
 
 __all__ = [

@@ -44,6 +44,7 @@ class Walker(core.StmtVisitor[None]):
 
     def __init__(self, ctx: context.Context) -> None:
         self.ctx = ctx
+        self.calls: list[expr.Call] = []
 
     def generic_visit(self, stmt, label) -> None:
         raise ValueError(f"{label}: cannot emit {type(stmt).__name__} as an ANE task descriptor")
@@ -61,7 +62,7 @@ class Walker(core.StmtVisitor[None]):
 
     def visit_Evaluate(self, stmt: core.Evaluate, label: str) -> None:
         call = expr.Call(stmt.callable, stmt.args, type=types.TupleType.Void)
-        self.ctx.emit_call(call, label)
+        self.calls.append(call)
 
 
 @codegen.register(target.Target, codegen.Role.EMIT, core.PrimFunction)
@@ -71,7 +72,11 @@ def emit(fn: core.PrimFunction, ctx: context.Context) -> None:
         raise ValueError(f"{label}: expected an H14 ANE target")
     if fn.specializations or fn.variants:
         raise ValueError(f"{label}: descriptor emission does not support specialization")
-    Walker(ctx).visit(fn.body, label)
+    walker = Walker(ctx)
+    walker.visit(fn.body, label)
+    ctx.plan(walker.calls)
+    for call in walker.calls:
+        ctx.emit_call(call, label)
     if fn.output_count != 1 or len(fn.params) < 2:
         raise ValueError(f"{label}: expected one output and at least one input parameter")
     bound = tuple(ctx.addresses)

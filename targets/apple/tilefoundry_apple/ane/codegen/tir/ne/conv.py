@@ -22,6 +22,10 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     if len(call.args) == 4:
         raise ValueError("T.ane.conv: bias operand encoding is not decoded yet")
     destination, source, weight = call.args
+    if source.type.storage is expr.StorageKind.SMEM:
+        raise ValueError("T.ane.conv: full-height L2 source small_source_mode mapping is not decoded yet")
+    if destination.type.storage is expr.StorageKind.SMEM:
+        raise ValueError("T.ane.conv: full-height L2 result pitch mapping is not decoded yet")
     src = context.tensor_desc_of(source.type, "src")
     dst = context.tensor_desc_of(destination.type, "dst")
     if (tuple(op.dilation), op.groups) != PLAIN:
@@ -37,17 +41,14 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             )
         if dst.channels > 64:
             raise ValueError("T.ane.conv: explicit ocg_size above 64 channels is not decoded yet")
-    if op.l2_result_base is not None and (
-        type(op.l2_result_base) is not int
-        or not 0 <= op.l2_result_base < isa.dma.L2_CAPACITY
-        or op.l2_result_base % 16
-    ):
-        raise ValueError("T.ane.conv: l2_result_base must be a 16-byte offset within L2 capacity")
     layout = ctx.coefficient_use(weight)
     isa.dma.check_coefficient_lanes(
         layout.lanes, min(src.channels, len(isa.KernelDMA.kernel_dma_src_coeff_dma_en))
     )
     shape = layout.shape
+    source_base, result_base = ctx.staging_address(1), ctx.staging_address(0)
+    if source_base is None or result_base is None:
+        raise ValueError("T.ane.conv: source and result require an allocated staging plan")
     ctx.emit(
         intrinsic.load(
             src,
@@ -56,6 +57,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             fresh=ctx.fresh,
             rows=rows,
             width=op.tile_width,
+            l2_base=source_base,
         ),
         intrinsic.convolution(
             src,
@@ -71,7 +73,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             kernel_height=shape[2],
             stride=op.stride,
             padding=op.padding,
-            result_base=op.l2_result_base,
+            result_base=result_base,
             activate=op.nonlinear is not tir.Nonlinear.NONE,
             staged_source=False,
             to_dram=True,

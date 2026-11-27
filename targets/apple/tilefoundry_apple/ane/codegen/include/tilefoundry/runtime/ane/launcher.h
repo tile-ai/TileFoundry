@@ -70,6 +70,19 @@ int ane_destroy(AneProgram **program);
 
 /** @brief Raise an FFI runtime error for a failed native operation. */
 void ane_check_status(int status, const char *operation);
-/** @brief Register one entry and its instance lifecycle under a dotted name. */
-void ane_register(const char *name, const AneEntry *entry,
-                  tvm::ffi::Function launch);
+/** @brief Create a library-owned instance and return its non-reused token. */
+int64_t ane_token_create(const AneEntry *entry);
+/** @brief Write one compiled weight into the instance selected by its token. */
+void ane_token_set_weight(int64_t token, tvm::ffi::String name,
+                          DLTensor *tensor);
+/** @brief Load the instance selected by a valid library-local token. */
+int ane_token_load(int64_t token);
+/** @brief Copy the complete image owned by a valid library-local token. */
+tvm::ffi::Bytes ane_token_image(int64_t token);
+/** @brief Return the daemon cache path for a valid library-local token. */
+tvm::ffi::String ane_token_cache_path(int64_t token);
+/** @brief Evaluate one instance while retaining its ownership lock. */
+void ane_token_launch(int64_t token, DLTensor **inputs, int n_inputs,
+                      DLTensor **outputs, int n_outputs);
+/** @brief Release a valid token; zero denotes an empty instance. */
+void ane_token_destroy(int64_t token);
