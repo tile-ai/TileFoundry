@@ -5,7 +5,8 @@ import shutil
 from collections.abc import Mapping
 from importlib.resources import files
 
-from tilefoundry import codegen, target
+from tilefoundry import codegen, target, utils
+from tilefoundry.interfaces import valuation
 from tilefoundry.ir import core
 from tilefoundry_apple.ane import isa, runtime
 from tilefoundry_apple.ane import target as ane_target
@@ -15,6 +16,7 @@ from . import hwx, program, tir
 
 PREAMBLE = '#include "tilefoundry/runtime/ane/launcher.h"'
 LAUNCHER = "ane_launcher.cpp"
+tvm_ffi = utils.LazyModule("tvm_ffi")
 
 
 @codegen.register(ane_target.Target, codegen.Role.CALLEE, core.PrimFunction)
@@ -26,7 +28,11 @@ def called_as(
         raise ValueError(f"{fn.name}: the ANE entry takes no unit IDs")
     return codegen.CallableSignature(
         name=symbol,
-        params=tuple(codegen.tensor_signature_of(param) for param in fn.params),
+        params=tuple(
+            codegen.tensor_signature_of(param)
+            for param in fn.params
+            if not getattr(param, "is_const", False)
+        ),
         output_count=fn.output_count,
     )
 
@@ -96,7 +102,7 @@ def tensor_row(desc: isa.TensorDesc) -> str:
 
 
 def emit_function(
-    fn: core.PrimFunction, sig: codegen.CallableSignature
+    fn: core.PrimFunction, sig: codegen.CallableSignature, entry_name: str
 ) -> codegen.LinkableFunction:
     """Export a validated skeleton, I/O descriptors and per-weight generated writers."""
     image = function_image(fn)
@@ -109,7 +115,16 @@ def emit_function(
         writers.append(conv.weight_writer(writer, layout))
         weights.append(f"  {{{json.dumps(weight.name)}, {writer}}},")
     offset = hwx.coefficient_offset(payload) if weights else 0
-    declaration = f'extern "C" const AneEntry *{symbol}()'
+    params = ", ".join(f"DLTensor *arg_{index}" for index in range(len(sig.params)))
+    declaration = f"void {symbol}(void *handle, {params})"
+    inputs = ", ".join(f"arg_{index}" for index in range(sig.input_count))
+    outputs = ", ".join(f"arg_{index}" for index in range(sig.input_count, len(sig.params)))
+    validation = "\n".join(
+        f"  if (!ane_check_tensor(arg_{index}, {symbol}_io[{index}].shape, 16, false))\n"
+        f'    TVM_FFI_THROW(ValueError) << "{entry_name}: {param.name} must be a CPU fp16 '
+        f'tensor of shape {tuple(param.type.shape)} with nonnegative strides and bounded offsets";'
+        for index, param in enumerate(sig.params)
+    )
     rows = "\n".join(tensor_row(binding.desc) for binding in image.io)
     definition = (
         f"static const uint8_t {symbol}_image[] = {{\n{byte_rows(payload)}\n}};\n"
@@ -124,7 +139,16 @@ def emit_function(
         f"  {symbol}_image, sizeof({symbol}_image), {offset},\n"
         f"  {symbol}_io, {len(image.io) - image.output_count}, {image.output_count},\n"
         + (f"  {symbol}_weights, {len(weights)}\n" if weights else "  nullptr, 0\n")
-        + f"}};\n{declaration} {{ return &{symbol}_entry; }}\n"
+        + f"}};\n{declaration} {{\n"
+        f'  if (!handle) TVM_FFI_THROW(RuntimeError) << "{entry_name}: instance must be loaded";\n'
+        f"{validation}\n"
+        f"  DLTensor *inputs[] = {{{inputs}}};\n"
+        f"  DLTensor *outputs[] = {{{outputs}}};\n"
+        f"  ane_check_status(ane_launch(static_cast<AneProgram *>(handle), inputs, "
+        f'{sig.input_count}, outputs, {sig.output_count}), "{entry_name}");\n}}\n'
+        f"TVM_FFI_STATIC_INIT_BLOCK() {{\n"
+        f'  ane_register("{entry_name}", &{symbol}_entry,\n'
+        f'    tvm::ffi::Function::FromTyped({symbol}, "{entry_name}"));\n}}\n'
     )
     return codegen.LinkableFunction(fn.name, declaration + ";", definition)
 
@@ -145,7 +169,15 @@ class AneLinkableModule(codegen.LinkableModule):
             sig = ctx.signature_of(fn)
             if sig.leading or sig.trailing:
                 raise ValueError(f"{fn.name}: ANE entry does not take launch geometry")
-            entries.append(emit_function(fn, sig))
+            if ctx.codegen_context is not None:
+                entry_name = ctx.codegen_context.symbols.by_function[id(fn)].export_name
+            else:
+                ref = next(
+                    ref for ref, reading in valuation.collect_functions(owner).items()
+                    if reading.function is fn
+                )
+                entry_name = f"{owner.name}.{ref.qualified_name}"
+            entries.append(emit_function(fn, sig, entry_name))
         if not entries:
             raise ValueError("ANE codegen requires at least one function")
         return cls(target="ane", language="cpp", preamble=PREAMBLE, functions=tuple(entries))
@@ -165,6 +197,7 @@ class AneLinkableModule(codegen.LinkableModule):
             'set_target_properties(${PROJECT_NAME} PROPERTIES SUFFIX ".so")\n'
             'target_link_libraries(${PROJECT_NAME} PRIVATE "-framework CoreFoundation"\n'
             '  "-framework IOSurface" "-framework Security" objc)\n'
+            f"target_link_libraries(${{PROJECT_NAME}} PRIVATE {json.dumps(tvm_ffi.libinfo.find_libtvm_ffi())})\n"
         )
 
 

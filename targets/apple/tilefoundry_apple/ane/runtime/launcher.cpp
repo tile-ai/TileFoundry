@@ -450,3 +450,69 @@ int ane_destroy(AneProgram **program) try {
 } catch (...) {
     return ANE_UNLOAD_FAILED;
 }
+
+void ane_check_status(int status, const char *operation) {
+    if (status != ANE_OK)
+        TVM_FFI_THROW(RuntimeError)
+            << operation << " returned ANE status " << status;
+}
+
+void ane_register(const char *name, const AneEntry *entry,
+                  tvm::ffi::Function launch) {
+    using tvm::ffi::Function;
+    Function::SetGlobal(name, launch, true);
+    Function::SetGlobal(
+        std::string(name) + ".create", Function::FromTyped([entry]() -> void * {
+            AneProgram *program = nullptr;
+            ane_check_status(ane_create(entry, &program), "ane_create");
+            return program;
+        }),
+        true);
+    Function::SetGlobal(
+        std::string(name) + ".set_weight",
+        Function::FromTyped([](void *handle, std::string name,
+                               DLTensor *tensor) {
+            const int status = ane_set_weight(static_cast<AneProgram *>(handle),
+                                              name.c_str(), tensor);
+            if (status == ANE_BAD_ARGUMENT)
+                TVM_FFI_THROW(ValueError)
+                    << "weight " << name
+                    << " must name a compiled weight of an unloaded instance "
+                       "and be a contiguous CPU fp16 tensor with the compiled "
+                       "OIHW shape and bounded offsets";
+            ane_check_status(status, "ane_set_weight");
+        }),
+        true);
+    Function::SetGlobal(std::string(name) + ".load",
+                        Function::FromTyped([](void *handle) {
+                            return ane_load(static_cast<AneProgram *>(handle));
+                        }),
+                        true);
+    Function::SetGlobal(
+        std::string(name) + ".cache_path",
+        Function::FromTyped([](void *handle) {
+            char path[4096];
+            ane_check_status(ane_cache_path(static_cast<AneProgram *>(handle),
+                                            path, sizeof path),
+                             "ane_cache_path");
+            return tvm::ffi::String(path);
+        }),
+        true);
+    Function::SetGlobal(
+        std::string(name) + ".image", Function::FromTyped([](void *handle) {
+            const uint8_t *bytes = nullptr;
+            size_t length = 0;
+            ane_check_status(
+                ane_image(static_cast<AneProgram *>(handle), &bytes, &length),
+                "ane_image");
+            return tvm::ffi::Bytes(reinterpret_cast<const char *>(bytes),
+                                   length);
+        }),
+        true);
+    Function::SetGlobal(
+        std::string(name) + ".destroy", Function::FromTyped([](void *handle) {
+            auto *program = static_cast<AneProgram *>(handle);
+            ane_check_status(ane_destroy(&program), "ane_destroy");
+        }),
+        true);
+}

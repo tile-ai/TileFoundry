@@ -12,9 +12,11 @@ import os
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from tilefoundry import codegen, runtime, utils
+from tilefoundry.interfaces import valuation
 from tilefoundry.ir import core
 from tilefoundry_apple.ane import runtime as ane_runtime
 from tilefoundry_apple.ane.codegen import module as ane_module
@@ -36,7 +38,6 @@ def image_of(lowered: core.Module, constants=None) -> bytes:
 def launch(lowered: core.Module, inputs: tuple):
     """Load through the runtime, provision in the test, then evaluate twice and close."""
     fn = lowered.entry_function()
-    symbol = codegen.mangle(lowered, fn)
     activation_inputs = tuple(
         value
         for param, value in zip(fn.params, inputs, strict=False)
@@ -51,7 +52,7 @@ def launch(lowered: core.Module, inputs: tuple):
     )
     with tempfile.TemporaryDirectory() as workdir:
         linked = build(lowered, workdir)
-        module = ane_runtime.AneCompiledModule(linked.library_path, symbol)
+        module = compiled_module(lowered, linked)
         cached = None
         try:
             try:
@@ -70,7 +71,8 @@ def launch(lowered: core.Module, inputs: tuple):
                 subprocess.run(["sudo", "-n", "cp", str(staged), str(cached)], check=True)
                 module.load(resource)
             first = module.forward(*activation_inputs)
-            second = module.forward(*activation_inputs)
+            second = utils.torch.empty_like(first)
+            assert module(*activation_inputs, second) is second
             assert utils.torch.equal(first, second)
             return first
         finally:
@@ -93,4 +95,19 @@ def build(lowered: core.Module, workdir):
         functions=(),
         host=fn.target,
         host_cxx="clang++",
+    )
+
+
+def compiled_module(lowered: core.Module, linked) -> ane_runtime.AneCompiledModule:
+    """Bind the linked entry's FFI registration and activation/output signature."""
+    fn = lowered.entry_function()
+    signature = codegen.signature.called_as(fn, codegen.mangle(lowered, fn), target=fn.target)
+    ref = next(
+        ref for ref, reading in valuation.collect_functions(lowered).items()
+        if reading.function is fn
+    )
+    return ane_runtime.AneCompiledModule(
+        linked.library_path,
+        replace(signature, name=f"{lowered.name}.{ref.qualified_name}"),
+        tuple(param.name for param in fn.params if getattr(param, "is_const", False)),
     )

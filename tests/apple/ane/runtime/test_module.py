@@ -8,7 +8,7 @@ import pytest
 
 from tests.apple.ane import device
 from tests.core import _corpus
-from tilefoundry import analysis, codegen, runtime, utils
+from tilefoundry import analysis, runtime, utils
 from tilefoundry.ir import types
 from tilefoundry.schedule import finalize
 from tilefoundry_apple.ane import runtime as ane_runtime
@@ -23,104 +23,97 @@ def compiled(request, tmp_path):
     checked = analysis.check_program(loaded, loaded.entry_function())
     lowered = finalize(analysis.analyze(*checked, analysis=("memory",)))
     linked = device.build(lowered, tmp_path)
-    symbol = codegen.mangle(lowered, lowered.entry_function())
-    return lowered, linked, symbol
+    return lowered, linked
 
 
 def native_image(module):
-    data, length = ctypes.c_void_p(), ctypes.c_size_t()
-    assert (
-        module.image(module.program, ctypes.byref(data), ctypes.byref(length))
-        == ane_runtime.Status.OK
-    )
-    return ctypes.string_at(data, length.value)
+    return bytes(module.functions[".image"](module.program))
 
 
 def test_native_writers_match_complete_image_and_hash(compiled):
-    lowered, linked, symbol = compiled
+    lowered, linked = compiled
     fn = lowered.entry_function()
-    module = ane_runtime.AneCompiledModule(linked.library_path, symbol)
-    other = ane_runtime.AneCompiledModule(linked.library_path, symbol)
+    module = device.compiled_module(lowered, linked)
+    other = device.compiled_module(lowered, linked)
     generator = utils.torch.Generator().manual_seed(37)
     constants = {}
     try:
         for instance in (module, other):
-            assert (
-                instance.create(ctypes.byref(instance.metadata), ctypes.byref(instance.program))
-                == ane_runtime.Status.OK
-            )
+            instance.program = instance.functions[".create"]()
         skeleton = native_image(other)
         assert skeleton == ane_module.function_image(fn).to_bytes()
-        for param in fn.params:
-            if not getattr(param, "is_const", False):
-                continue
+        for name in module.weights:
+            param = next(param for param in fn.params if param.name == name)
             tensor = utils.torch.randn(tuple(param.type.shape), generator=generator).half()
-            constants[param.name] = tensor.numpy().tobytes()
-            capsule, address = ane_runtime.tensor_pointer(tensor)
-            assert (
-                module.set_weight(module.program, param.name.encode(), address)
-                == ane_runtime.Status.OK
-            )
+            constants[name] = tensor.numpy().tobytes()
+            module.functions[".set_weight"](module.program, name, tensor)
         actual = native_image(module)
         assert actual == ane_module.function_image(fn, constants).to_bytes()
         assert actual != skeleton
         assert native_image(other) == skeleton
-        path = ctypes.create_string_buffer(4096)
-        assert module.cache_path(module.program, path, len(path)) == ane_runtime.Status.OK
-        assert hashlib.sha256(actual).hexdigest().upper() in path.value.decode()
-        assert module.cache_path(module.program, path, 1) == ane_runtime.Status.BAD_ARGUMENT
-        assert (
-            module.set_weight(module.program, b"unknown", None) == ane_runtime.Status.BAD_ARGUMENT
-        )
-        assert (
-            module.set_weight(module.program, module.metadata.weights[0].name, None)
-            == ane_runtime.Status.BAD_ARGUMENT
-        )
-        wrong = utils.torch.zeros((32, 32, 1, 1), dtype=utils.torch.float32)
-        capsule, address = ane_runtime.tensor_pointer(wrong)
-        assert (
-            module.set_weight(module.program, module.metadata.weights[0].name, address)
-            == ane_runtime.Status.BAD_ARGUMENT
-        )
-        assert module.launch(module.program, None, -1, None, -1) == ane_runtime.Status.BAD_ARGUMENT
+        cache_path = module.functions[".cache_path"](module.program)
+        assert hashlib.sha256(actual).hexdigest().upper() in cache_path
+        tensor = utils.torch.zeros((32, 32, 1, 1), dtype=utils.torch.float16)
+        with pytest.raises(ValueError, match="compiled weight"):
+            module.functions[".set_weight"](module.program, "unknown", tensor)
+        with pytest.raises(ValueError, match="CPU fp16"):
+            module.functions[".set_weight"](module.program, module.weights[0], tensor.float())
+        with pytest.raises(ValueError, match="OIHW shape"):
+            module.functions[".set_weight"](module.program, module.weights[0], tensor[:, :1])
+        with pytest.raises(TypeError):
+            module.functions[".set_weight"](module.program, module.weights[0], None)
+        inputs = activations(module)
+        output = module.alloc_outputs(inputs)[0]
+        with pytest.raises(ValueError, match=module.type.input_params[0].name + " must be a CPU fp16"):
+            module.functions[""](module.program, inputs[0].float(), *inputs[1:], output)
+        with pytest.raises(ValueError, match=module.type.output_params[0].name + " must be a CPU fp16"):
+            module.functions[""](module.program, *inputs, output.float())
+        with pytest.raises(RuntimeError, match="instance must be loaded"):
+            module.functions[""](None, *inputs, output)
     finally:
         module.close()
         other.close()
 
 
+def activations(module):
+    return tuple(
+        utils.torch.zeros(tuple(param.type.shape), dtype=utils.torch.float16)
+        for param in module.type.input_params
+    )
+
+
 def test_python_lifetime_and_invalid_resources(compiled):
-    _, linked, symbol = compiled
-    module = ane_runtime.AneCompiledModule(linked.library_path, symbol)
+    lowered, linked = compiled
+    module = device.compiled_module(lowered, linked)
+    inputs = activations(module)
     with pytest.raises(RuntimeError, match="must be loaded"):
-        module.forward()
+        module(*inputs)
     with pytest.raises(ValueError, match="ANE placement is not decoded yet"):
         module.load(runtime.DictResource({}), placement=types.Placement({}))
-    assert not module.program.value
+    assert module.program is None
     with pytest.raises(KeyError):
         module.load(runtime.DictResource({}), placement=None)
-    assert not module.program.value
+    assert module.program is None
     with pytest.raises(ValueError, match="CPU fp16"):
-        module.load(
-            runtime.DictResource({module.metadata.weights[0].name.decode(): utils.torch.zeros(1)})
-        )
-    assert not module.program.value
+        module.load(runtime.DictResource({module.weights[0]: utils.torch.zeros(1)}))
+    assert module.program is None
     module.close()
     module.close()
     with pytest.raises(RuntimeError, match="closed"):
         module.load(runtime.DictResource({}))
     with pytest.raises(RuntimeError, match="closed"):
-        module.forward()
+        module(*inputs)
 
 
 def test_provision_request_releases_candidate_and_allows_retry(compiled):
-    lowered, linked, symbol = compiled
+    lowered, linked = compiled
     weights = {
         param.name: utils.torch.ones(tuple(param.type.shape), dtype=utils.torch.float16)
         for param in lowered.entry_function().params
         if getattr(param, "is_const", False)
     }
-    module = ane_runtime.AneCompiledModule(linked.library_path, symbol)
-    module.load_model = lambda program: ane_runtime.Status.NOT_PROVISIONED
+    module = device.compiled_module(lowered, linked)
+    module.functions[".load"] = lambda program: ane_runtime.Status.NOT_PROVISIONED
     resource = runtime.DictResource(weights)
     try:
         with pytest.raises(ane_runtime.ProvisionRequiredError) as required:
@@ -131,12 +124,32 @@ def test_provision_request_releases_candidate_and_allows_retry(compiled):
         ).to_bytes()
         assert required.value.image == expected
         assert hashlib.sha256(expected).hexdigest().upper() in str(required.value.path)
-        assert not module.program.value
+        assert module.program is None
         with pytest.raises(RuntimeError, match="must be loaded"):
-            module.forward()
-        module.load_model = lambda program: ane_runtime.Status.OK
+            module(*activations(module))
+        module.functions[".load"] = lambda program: ane_runtime.Status.OK
         module.load(resource)
         assert native_image(module) == expected
+        assert isinstance(module, runtime.CompiledModule)
+        assert module.type.input_count == len(activations(module))
+        assert not set(module.weights) & {param.name for param in module.type.params}
+        calls = []
+        module.functions[""] = lambda program, *args: calls.append((program, args))
+        module.load(resource)
+        inputs = activations(module)
+        first = module(*inputs)
+        second = utils.torch.empty_like(first)
+        assert module(*inputs, second) is second
+        assert calls[0] == (module.program, (*inputs, first))
+        assert calls[1] == (module.program, (*inputs, second))
+        with pytest.raises(TypeError, match="inputs.*outputs"):
+            module()
+        module.functions[".load"] = lambda program: ane_runtime.Status.LOAD_FAILED
+        with pytest.raises(RuntimeError, match="ane_load returned ANE status 3"):
+            module.load(resource)
+        assert module.program is None
+        with pytest.raises(RuntimeError, match="must be loaded"):
+            module(*inputs)
     finally:
         module.close()
 
@@ -180,15 +193,14 @@ class DLTensor(ctypes.Structure):
 )
 @pytest.mark.parametrize("compiled", ("conv_1x1",), indirect=True)
 def test_native_tensor_validation_rejects_invalid_host_access(compiled, fault):
-    _, linked, symbol = compiled
-    module = ane_runtime.AneCompiledModule(linked.library_path, symbol)
+    _, linked = compiled
     check_tensor = ctypes.CFUNCTYPE(
         ctypes.c_bool,
         ctypes.POINTER(DLTensor),
         ctypes.POINTER(ctypes.c_int64),
         ctypes.c_int,
         ctypes.c_bool,
-    )(("ane_check_tensor", module.library))
+    )(("ane_check_tensor", ctypes.CDLL(str(linked.library_path))))
     data = (ctypes.c_uint16 * 32)()
     shape = (ctypes.c_int64 * 4)(1, 2, 2, 2)
     strides = (ctypes.c_int64 * 4)(32, 16, 4, 1)

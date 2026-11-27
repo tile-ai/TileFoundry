@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <cstring>
 #include <dlpack/dlpack.h>
+#include <tvm/ffi/container/tensor.h>
+#include <tvm/ffi/function.h>
 
 /** @brief A feature map and its complete padded storage reservation. */
 struct TensorDesc {
@@ -65,3 +67,9 @@ int ane_launch(AneProgram *program, DLTensor **inputs, int n_inputs,
 /** @brief Unload the model, free the instance and clear the caller's handle. */
 int ane_destroy(AneProgram **program);
 }
+
+/** @brief Raise an FFI runtime error for a failed native operation. */
+void ane_check_status(int status, const char *operation);
+/** @brief Register one entry and its instance lifecycle under a dotted name. */
+void ane_register(const char *name, const AneEntry *entry,
+                  tvm::ffi::Function launch);

@@ -1,3 +1,3 @@
 """Persistent ANE execution and caller-managed cache provisioning."""
 
-from .module import AneCompiledModule, ProvisionRequiredError, Status, tensor_pointer
+from .module import AneCompiledModule, ProvisionRequiredError, Status

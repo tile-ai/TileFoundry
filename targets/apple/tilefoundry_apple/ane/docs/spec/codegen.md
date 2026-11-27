@@ -1,7 +1,7 @@
 # ANE Codegen Spec
 
 Scope: lowered ANE TIR → configuration registers → immutable task descriptors →
-HWX container. The calling convention and C entry points live in `codegen/module.py`.
+HWX container. The calling convention and TVM FFI entry registrations live in `codegen/module.py`.
 
 ## 1. Representation
 
@@ -107,7 +107,7 @@ All paths below are relative to `ane/codegen/`.
 | `hwx/relocations.py` | Base-address payload offsets and relocation packet integrity |
 | `hwx/symbols.py` | Symbol table, element catalog and shape stabs |
 | `hwx/image.py` | Metadata validation and ordered assembly of the container |
-| `module.py` | Validated skeleton images, entry tables and shared linker contributions |
+| `module.py` | Validated skeleton images, FFI entries and shared linker contributions |
 
 ## 4. HWX layout
 
@@ -243,14 +243,14 @@ layout even when a GMEM intermediate prevents complete image generation. DMA slo
 are identified per descriptor. Existing structural JSON records remain a thin
 adapter to the shared coefficient layout and image assembler.
 
-`module.function_image(fn, constants)` delegates to the template. The generated C
-entry still embeds its complete HWX and uses the existing `ane_launch` ABI.
+`module.function_image(fn, constants)` delegates to the template. The generated FFI
+entry embeds its complete HWX skeleton and invokes the internal `ane_launch` ABI.
 
 
 ## 6. Compiled entry and load-time weights
 
 `emit_function` MUST serialize a complete skeleton through `Image.to_bytes()` with
-zero-valued weight tensors. It exports an `AneEntry` containing the skeleton bytes,
+zero-valued weight tensors. It retains an internal `AneEntry` containing the skeleton bytes,
 coefficient segment file offset, I/O descriptors and `{name, writer}` table.
 The coefficient offset is read from the validated container's segment command.
 Fixed LUT headers remain in the skeleton. Each consuming Op owns generation of its
@@ -263,3 +263,13 @@ Native writers MUST reproduce that assembler's complete image byte for byte for
 the same logical weights. The compiled artifact contains no user weight values.
 Runtime image ownership, loading and provisioning are specified in
 [runtime §1](./runtime.md#1-load-forward-close).
+
+`called_as` MUST omit constant weight parameters from the activation/output
+`CallableSignature`. The generated callable accepts an opaque instance handle
+before those tensor parameters and invokes `ane_launch`. The handle is bound by
+`load`, so it is absent from the public signature. Each generated translation unit
+uses `TVM_FFI_STATIC_INIT_BLOCK` to register its entry and lifecycle functions with
+`Function::SetGlobal(..., override=true)`. Registration names MUST use the core
+resolved dotted export names, while C++ identifiers retain the core mangled symbols.
+`ane_register` provides the lifecycle wrappers shared by all entries. The target's
+link contribution MUST link the installed TVM FFI shared library on macOS.
