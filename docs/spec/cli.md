@@ -139,13 +139,12 @@ the target-selected source files directly in `OUT_DIR`, compiles the project
 and returns zero on success. The library is
 `OUT_DIR/build/lib<root Module name>.so`. Generated device bodies are editable
 placeholders; signatures, views, variant dispatch,
-launchers and the root typed export remain intact. The project can be rebuilt with
+launchers and host registrations remain intact. The project can be rebuilt with
 `cmake -G Ninja -S OUT_DIR -B BUILD_DIR` followed by `cmake --build BUILD_DIR`. Load the
-library with `runtime.CompiledModule.from_library`, then call its named root entry.
-Const weights MUST be supplied through `load(resource)`.
-The manifest MUST preserve the selected root's authored entry name and weight roles before host-entry normalization.
-Other CPU entries remain internal dependencies. Python orchestration that calls a child or another entry
-MUST build that selected Module entry as a separate library. Authored host orchestration remains in Python.
+library with `tvm_ffi.load_module`, then bind its dotted registrations with
+`tvm_ffi.get_global_func`. The caller manages this library's lifetime. The caller
+MUST retain it while its registrations may be called. This does not involve a
+`runtime.Module`. Authored host orchestration remains in Python.
 
 ## Check
 

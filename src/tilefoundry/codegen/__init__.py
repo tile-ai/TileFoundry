@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from . import artifact, context, cpu, linkable_function, linkable_module, signature
+from . import context, cpu, linkable_function, linkable_module, signature
 from .context import EmitContext
 from .context_builder import Context, build_context, mangle
 from .emitter import CppEmitter
-from .link_module import CMakeProject, link_modules, link_program
+from .link_module import link_modules, link_program
 from .linkable_function import LinkableFunction
 from .linkable_module import LinkableModule
-from .linked_function import LinkedFunction
 from .linked_module import LinkedModule
 from .options import Options
 from .registry import Role, register, registry

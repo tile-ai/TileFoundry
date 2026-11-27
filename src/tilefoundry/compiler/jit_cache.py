@@ -2,34 +2,13 @@
 
 from __future__ import annotations
 
-import copy
 import hashlib
-import json
 
-from tilefoundry import codegen, inspection, runtime
+from tilefoundry import inspection, runtime
 from tilefoundry.ir import core
 
 from .compilation import compile, normalize_to_module, resolve_options
 from .options import Options
-
-
-def compilation_copy(module: core.Module) -> core.Module:
-    """Copy mutable IR while retaining immutable target instances."""
-    memo = {}
-    seen = set()
-    pending = [module]
-    while pending:
-        node = pending.pop()
-        if id(node) in seen:
-            continue
-        seen.add(id(node))
-        memo[id(node.target)] = node.target
-        for function in node.functions:
-            for variant in (function, *function.variants):
-                tgt = getattr(variant, "target", None)
-                memo[id(tgt)] = tgt
-        pending.extend(child for slot in node.children.values() for child in core.instances(slot))
-    return copy.deepcopy(module, memo)
 
 
 def canonical_module_text(mod: core.Module) -> str:
@@ -38,8 +17,6 @@ def canonical_module_text(mod: core.Module) -> str:
     Entry source and declared topologies distinguish independently compiled
     execution domains without attaching parent context to shared definitions.
     """
-    if mod.entry is None:
-        return ""
     fn_text = inspection.as_script(mod.entry_function())
 
     topologies = mod.effective_topologies()
@@ -53,19 +30,19 @@ def canonical_module_text(mod: core.Module) -> str:
 
 def cache_key(mod: core.Module, options: Options) -> str:
     """The key of *mod* compiled with *options*."""
-    declaration = json.dumps(codegen.artifact.describe_root(mod, target=options.target), sort_keys=True)
-    payload = canonical_module_text(mod) + "\0" + declaration + "\0" + repr(options)
+    payload = canonical_module_text(mod) + "\0" + repr(options)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 class Jit:
     """Compile a ``hir.Function`` or ``Module`` once per module text and options.
 
-    The key includes entry text, root export declarations and all stage options.
+    The cache key is the canonical module text and the ``repr`` of the options,
+    which names every stage's option -- no Python object identity participates.
     """
 
     def __init__(self) -> None:
-        self.cache: dict[str, runtime.CompiledModule] = {}
+        self.cache: dict[str, runtime.Module] = {}
 
     def __call__(
         self,
@@ -75,8 +52,8 @@ class Jit:
         target=None,
         options: Options | None = None,
         **kwargs,
-    ) -> "runtime.CompiledModule":
-        """JIT-compile *fn_or_mod* to a ``runtime.CompiledModule``.
+    ) -> "runtime.Module":
+        """JIT-compile *fn_or_mod* to a ``runtime.Module``.
 
         A ``Module`` is the compilation unit; a Function becomes a context-free
         single-function Module, so execution context belongs to its owner Module.
@@ -97,7 +74,7 @@ class Jit:
         options = resolve_options("jit", mod, target, options)
         key = cache_key(mod, options)
         if key not in self.cache:
-            self.cache[key] = compile(compilation_copy(mod), options=options)
+            self.cache[key] = compile(mod, options=options)
         return self.cache[key]
 
     def cache_clear(self) -> None:

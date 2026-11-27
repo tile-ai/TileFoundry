@@ -3,25 +3,24 @@
 import json
 import shutil
 from collections.abc import Mapping
-from dataclasses import dataclass, field
 from importlib.resources import files
 
-from tilefoundry import codegen, target
-from tilefoundry.ir import core, expr, types
+from tilefoundry import codegen, target, utils
+from tilefoundry.ir import core
 from tilefoundry_apple.ane import isa, runtime
 from tilefoundry_apple.ane import target as ane_target
 from tilefoundry_apple.ane.codegen.tir.ne import conv
 
 from . import hwx, program, tir
 
-PREAMBLE = '#define TVM_FFI_DLL_EXPORT_INCLUDE_METADATA 1\n#include "tilefoundry/runtime/ane/launcher.h"'
+PREAMBLE = '#include "tilefoundry/runtime/ane/launcher.h"'
 LAUNCHER = "ane_launcher.cpp"
+tvm_ffi = utils.LazyModule("tvm_ffi")
 
 
 @codegen.register(ane_target.Target, codegen.Role.CALLEE, core.PrimFunction)
-@codegen.register(ane_target.Target, codegen.Role.CALLEE, core.Function)
 def called_as(
-    fn: core.PrimFunction | core.Function, symbol: str, unit_ids: tuple[codegen.UnitIdSignature, ...], params=None,
+    fn: core.PrimFunction, symbol: str, unit_ids: tuple[codegen.UnitIdSignature, ...]
 ) -> codegen.CallableSignature:
     """Name the ANE entry and retain the logical input and output lists."""
     if unit_ids:
@@ -29,11 +28,11 @@ def called_as(
     return codegen.CallableSignature(
         name=symbol,
         params=tuple(
-            codegen.TensorSignature(param.name, types.TensorType.from_shape(param.type.shape, dtype=param.type.dtype, storage=expr.StorageKind.HOST))
-            for param in (fn.params if params is None else params)
+            codegen.tensor_signature_of(param)
+            for param in fn.params
             if not getattr(param, "is_const", False)
         ),
-        output_count=getattr(fn, "output_count", 0),
+        output_count=fn.output_count,
     )
 
 
@@ -102,7 +101,7 @@ def tensor_row(desc: isa.TensorDesc) -> str:
 
 
 def emit_function(
-    fn: core.PrimFunction, sig: codegen.CallableSignature, entry_name: str, *, exported: bool
+    fn: core.PrimFunction, sig: codegen.CallableSignature, entry_name: str
 ) -> codegen.LinkableFunction:
     """Export a validated skeleton, I/O descriptors and per-weight generated writers."""
     image = function_image(fn)
@@ -144,50 +143,37 @@ def emit_function(
         f"  DLTensor *inputs[] = {{{inputs}}};\n"
         f"  DLTensor *outputs[] = {{{outputs}}};\n"
         f"  ane_token_launch(token, inputs, {sig.input_count}, outputs, {sig.output_count});\n}}\n"
+        f"TVM_FFI_STATIC_INIT_BLOCK() {{\n"
+        f'  ane_register("{entry_name}", &{symbol}_entry,\n'
+        f'    tvm::ffi::Function::FromTyped({symbol}, "{entry_name}"));\n}}\n'
     )
-    if exported:
-        definition += (
-            f"static int64_t {symbol}_create() {{ return ane_token_create(&{symbol}_entry); }}\n"
-            f"TVM_FFI_DLL_EXPORT_TYPED_FUNC({symbol}, {symbol});\n"
-            f"TVM_FFI_DLL_EXPORT_TYPED_FUNC({symbol}_create, {symbol}_create);\n"
-        )
-        definition += "".join(
-            f"TVM_FFI_DLL_EXPORT_TYPED_FUNC({symbol}_{operation}, ane_token_{operation});\n"
-            for operation in ("set_weight", "load", "cache_path", "image", "destroy")
-        )
     return codegen.LinkableFunction(fn.name, declaration + ";", definition)
 
 
 @target.bind(ane_target.Target, codegen.LinkableModule)
-@dataclass(frozen=True)
 class AneLinkableModule(codegen.LinkableModule):
     """The C++ translation unit for an ANE target group."""
-
-    operations: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def create(cls, tgt, owner, functions, ctx) -> "AneLinkableModule":
         """Emit all function images and launcher entry points in group order."""
-        if ctx.codegen_context is None:
-            raise ValueError("ANE codegen requires a codegen.Context")
-        if ctx.codegen_context.options.emit != "full":
+        if ctx.codegen_context is not None and ctx.codegen_context.options.emit != "full":
             raise ValueError("ANE codegen requires full emission of lowered TIR")
-        entries, operations = [], {}
+        entries = []
         for fn in functions:
             if not isinstance(fn, core.PrimFunction) or fn.target != tgt:
                 raise ValueError(f"{fn.name}: expected a lowered ANE function")
             sig = ctx.signature_of(fn)
             if sig.leading or sig.trailing:
                 raise ValueError(f"{fn.name}: ANE launch geometry is not decoded yet")
-            root = ctx.codegen_context.module
-            exported = fn is root.entry_function()
-            entry_name = ctx.codegen_context.symbols.by_function[id(fn)].export_name
-            entries.append(emit_function(fn, sig, entry_name, exported=exported))
-            if exported:
-                operations = {name: f"{sig.name}_{name}" for name in ("create", "set_weight", "load", "cache_path", "image", "destroy")}
+            if ctx.codegen_context is not None:
+                entry_name = ctx.codegen_context.symbols.by_function[id(fn)].export_name
+            else:
+                entry_name = runtime.entry_name(owner, fn)
+            entries.append(emit_function(fn, sig, entry_name))
         if not entries:
             raise ValueError("ANE codegen requires at least one function")
-        return cls(target="ane", language="cpp", preamble=PREAMBLE, functions=tuple(entries), operations=operations)
+        return cls(target="ane", language="cpp", preamble=PREAMBLE, functions=tuple(entries))
 
     def link(self, project: "CMakeProject") -> None:
         """Add the source, launcher headers, and Darwin link options."""
@@ -201,8 +187,10 @@ class AneLinkableModule(codegen.LinkableModule):
             'if(NOT APPLE OR NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")\n'
             '  message(FATAL_ERROR "ANE linking requires clang++ on macOS")\n'
             "endif()\n"
+            'set_target_properties(${PROJECT_NAME} PROPERTIES SUFFIX ".so")\n'
             'target_link_libraries(${PROJECT_NAME} PRIVATE "-framework CoreFoundation"\n'
             '  "-framework IOSurface" "-framework Security" objc)\n'
+            f"target_link_libraries(${{PROJECT_NAME}} PRIVATE {json.dumps(tvm_ffi.libinfo.find_libtvm_ffi())})\n"
         )
 
 

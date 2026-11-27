@@ -86,3 +86,6 @@ void ane_token_launch(int64_t token, DLTensor **inputs, int n_inputs,
                       DLTensor **outputs, int n_outputs);
 /** @brief Release a valid token; zero denotes an empty instance. */
 void ane_token_destroy(int64_t token);
+/** @brief Register one entry, its weight names and its instance lifecycle. */
+void ane_register(const char *name, const AneEntry *entry,
+                  tvm::ffi::Function launch);

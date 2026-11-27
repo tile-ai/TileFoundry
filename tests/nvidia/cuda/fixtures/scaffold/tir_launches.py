@@ -1,6 +1,7 @@
 """Two authored launches spanning separate device topology domains."""
 
 import torch
+import tvm_ffi
 
 from tilefoundry import runtime
 from tilefoundry.dsl import *
@@ -13,7 +14,7 @@ CUDA = cuda.Target("nvidia.h200_sxm")
 
 @module(entry="run", topologies=(Topology("thread", 64),))
 class Child:
-    @prim_func(target=CUDA, output_count=0)
+    @prim_func(target=CUDA)
     def run(x: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]):
         pass
 
@@ -30,11 +31,11 @@ class Child:
 class Root:
     child = Child
 
-    @prim_func(target=CUDA, output_count=0)
+    @prim_func(target=CUDA)
     def first(x: Tensor[(S, 8), "f32"], w_root: ConstTensor[(8,), "f32"]):
         pass
 
-    @prim_func(target=cpu.Target(), output_count=0)
+    @prim_func(target=cpu.Target())
     def host(x: Tensor[(S, 8), "f32"], w_root: ConstTensor[(8,), "f32"],
              w_child: ConstTensor[(8,), "f32"]):
         launch(first, x, w_root, grid=(1, 1, 1), block=(32, 1, 1))
@@ -44,12 +45,11 @@ class Root:
 class Runtime(runtime.Module):
     def __init__(self, library_path):
         super().__init__("Root", entry="host")
-        self.library = runtime.CompiledModule.from_library(library_path)
+        self.library = tvm_ffi.load_module(str(library_path))
         self.root_weight = torch.randn(8, device="cuda")
         self.child_weight = torch.randn(8, device="cuda")
-        self.host_fn = self.library.host
-        self.library.load(runtime.DictResource({"w_root": self.root_weight, "w_child": self.child_weight}))
+        self.host_fn = tvm_ffi.get_global_func("Root.host")
 
     def forward(self, x):
-        self.host_fn(x)
+        self.host_fn(x, self.root_weight, self.child_weight)
         return x

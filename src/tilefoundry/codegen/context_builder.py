@@ -49,7 +49,7 @@ def mangle(root: core.Module, fn) -> str:
 
 
 def export_name(root: core.Module, fn) -> str:
-    """The dotted logical name corresponding to a call path."""
+    """The dotted TVM FFI registration name corresponding to a call path."""
     return ".".join(map(str, function_path(root, fn)))
 
 
@@ -279,9 +279,9 @@ def build_context(
             if not isinstance(targets[id(function)], cpu.Target)
         )
     )
-    if len(device_targets) > 1:
-        raise ValueError(f"codegen: {module.name}: multiple device Targets is not decoded yet ({len(device_targets)})")
-    unit_ids = unit_id_params(module, device_targets[0]) if device_targets else ()
+    if len(device_targets) != 1:
+        raise ValueError(f"codegen: expected one device Target, found {len(device_targets)}")
+    unit_ids = unit_id_params(module, device_targets[0])
     by_function: dict[int, FunctionSymbol] = {}
     device_functions = tuple(
         fn for fn in identities.values() if not isinstance(targets[id(fn)], cpu.Target)
@@ -357,6 +357,11 @@ def build_context(
         for function in owned:
             by_target.setdefault(targets[id(function)], []).append(function)
         for tgt, grouped in by_target.items():
+            if not isinstance(tgt, cpu.Target) and not any(
+                edge.callee in grouped for edge in edges
+            ):
+                missing = ", ".join(function.name for function in grouped)
+                raise ValueError(f"codegen: no Launch states geometry for {missing}")
             groups.append(EmissionGroup(ctx.module, tgt, tuple(grouped)))
 
     return Context(

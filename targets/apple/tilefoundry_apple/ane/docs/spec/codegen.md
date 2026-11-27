@@ -306,10 +306,7 @@ Runtime image ownership, loading and provisioning are specified in
     Device padding MUST remain in the internal I/O descriptors.
   - The generated entry MUST accept an integer token before flattened tensor parameters.
     Load MUST bind the token; the public tensor signature MUST omit it.
-  - Only the root entry MUST have a typed DLL export.
-    Its six lifecycle symbols MUST appear in the manifest's operations map.
-    C++ identifiers MUST retain the core mangled symbol with target-owned lifecycle suffixes.
-  - The translation unit MUST enable typed metadata before including the FFI headers.
-    Entries and lifecycle functions MUST NOT register process-global functions.
-  - The shared CMake project MUST provide TVM FFI linking.
-    ANE MUST contribute only its launcher source, packaged headers and required Apple frameworks.
+  - Each entry MUST register through `ane_register` in a `TVM_FFI_STATIC_INIT_BLOCK`.
+    Registration names MUST be the dotted entry names; C++ identifiers MUST retain the core mangled symbols.
+  - The link contribution MUST add the launcher source, packaged headers, required Apple frameworks
+    and the installed TVM FFI library, and MUST name the library with the `.so` suffix.

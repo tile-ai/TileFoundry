@@ -1,13 +1,18 @@
-"""Load weights through TVM FFI and bind an owned ANE model to a compiled entry."""
+"""Build, load and close an ANE entry whose model one integer token owns."""
 
+import tempfile
+from dataclasses import replace
 from enum import IntEnum
 from functools import partial
 from pathlib import Path
 from typing import Callable
 
-from tilefoundry import runtime, target, utils
-from tilefoundry.ir import types
+from tilefoundry import codegen, runtime, target, utils
+from tilefoundry.interfaces import valuation
+from tilefoundry.ir import core, types
 from tilefoundry_apple.ane import target as ane_target
+
+tvm_ffi = utils.LazyModule("tvm_ffi")
 
 
 class Status(IntEnum):
@@ -42,54 +47,65 @@ def check(status: int, operation: str) -> None:
         raise RuntimeError(f"{operation} returned ANE status {status}")
 
 
+def entry_name(owner: core.Module, fn: core.PrimFunction) -> str:
+    """The dotted name *fn* and its lifecycle functions register under."""
+    ref = next(
+        ref for ref, reading in valuation.collect_functions(owner).items()
+        if reading.function is fn
+    )
+    return f"{owner.name}.{ref.qualified_name}"
+
+
 @target.bind(ane_target.Target, runtime.CompiledModule)
 class AneCompiledModule(runtime.CompiledModule):
-    """A root whose native entry binds one library-owned integer token."""
+    """A compiled entry whose FFI callable binds one library-owned instance token."""
 
-    functions: dict[str, Callable]
-    entry_ffi: Callable | None
-    program: int
-
-    def __init__(self, library, library_path, description) -> None:
-        super().__init__(library, library_path, description)
-        self.functions = {
-            name: self.operation(name)
-            for name in (() if self.type is None else ("create", "set_weight", "load", "cache_path", "image", "destroy"))
-        }
-        self.entry_ffi = self.fn
+    def __init__(
+        self, type: codegen.CallableSignature, fn: Callable, library_path: Path
+    ) -> None:
+        super().__init__(type, partial(unavailable, "must be loaded before forward"), library_path)
+        self.entry_fn = fn
+        try:
+            self.functions = {
+                name: tvm_ffi.get_global_func(f"{type.name}.{name}")
+                for name in (
+                    "create", "weights", "set_weight", "load", "cache_path", "image", "destroy"
+                )
+            }
+        except ValueError as error:
+            raise RuntimeError(
+                f"ANE library {library_path} lacks registrations for entry {type.name!r}"
+            ) from error
+        self.weights = tuple(self.functions["weights"]())
         self.program = 0
-        if self.type is not None:
-            self.fn = partial(unavailable, "must be loaded before forward")
+        self.closed = False
 
-    def entry_schema(self) -> tuple[str, ...]:
-        """State the bound token and DLPack tensor ABI of the native entry."""
-        if self.type.leading:
-            raise RuntimeError(f"library {self.library_path}: {self.name}: ANE unit ids is not decoded yet")
-        return ("None", "int", *("DLTensor*" for _ in self.type.params))
-
-    def operation(self, name: str):
-        """Bind a library-local lifecycle function and verify its exact typed ABI."""
-        schemas = {
-            "create": ("int",), "set_weight": ("None", "int", "ffi.String", "DLTensor*"),
-            "load": ("int", "int"), "cache_path": ("ffi.String", "int"),
-            "image": ("ffi.Bytes", "int"), "destroy": ("None", "int"),
-        }
-        kinds = schemas.get(name)
-        if kinds is None:
-            raise RuntimeError(f"library {self.library_path}: {self.name}.{name} is not decoded yet")
-        return super().operation(name, expected=kinds)
+    @classmethod
+    def create(cls, tgt, mod: core.Module, options) -> "AneCompiledModule":
+        """Emit the lowered entry with the launcher, link it with clang++ and bind it."""
+        fn = mod.entry_function()
+        if not isinstance(fn, core.PrimFunction) or fn.target != tgt:
+            raise ValueError(f"tilefoundry.build: Module.entry {mod.entry!r} is not a lowered ANE entry")
+        signature = codegen.signature.called_as(fn, codegen.mangle(mod, fn), target=tgt)
+        ctx = codegen.EmitContext(codegen.registry, symbols={id(fn): signature}, target=tgt)
+        linked = codegen.link_modules(
+            (tgt.resolve(codegen.LinkableModule, mod, (fn,), ctx),),
+            workdir=tempfile.mkdtemp(prefix=f"tilefoundry_build_{mod.entry}_"),
+            lib_name=mod.name,
+            functions=(),
+            host=tgt,
+            host_cxx="clang++",
+        )
+        return cls.from_library(linked.library_path, replace(signature, name=entry_name(mod, fn)))
 
     def load(
         self, resource: runtime.Resource, *, placement: "types.Placement | None" = None
     ) -> None:
-        """Assemble private weights and bind a successfully loaded candidate token."""
+        """Write the weights into a new instance and bind it once its model loads."""
         if self.closed:
             raise RuntimeError(f"{self.name}: ANE module is closed")
         if placement is not None:
             raise ValueError(f"{self.name}: ANE placement is not decoded yet")
-        if self.type is None:
-            super().load(resource)
-            return
         self.fn = partial(unavailable, "must be loaded before forward")
         previous, self.program = self.program, 0
         self.functions["destroy"](previous)
@@ -100,7 +116,11 @@ class AneCompiledModule(runtime.CompiledModule):
                     tensor = resource.load(name)
                 except KeyError as error:
                     raise KeyError(f"{self.name}: missing weight {name!r}") from error
-                if not isinstance(tensor, utils.torch.Tensor) or tensor.device.type != "cpu" or tensor.dtype != utils.torch.float16:
+                if (
+                    not isinstance(tensor, utils.torch.Tensor)
+                    or tensor.device.type != "cpu"
+                    or tensor.dtype != utils.torch.float16
+                ):
                     raise ValueError(f"{self.name}: weight {name} must be a CPU fp16 tensor")
                 self.functions["set_weight"](candidate, name, tensor.contiguous())
             status = self.functions["load"](candidate)
@@ -114,16 +134,14 @@ class AneCompiledModule(runtime.CompiledModule):
             self.functions["destroy"](candidate)
             raise
         self.program = candidate
-        self.fn = partial(self.entry_ffi, candidate)
+        self.fn = partial(self.entry_fn, candidate)
 
     def close(self) -> None:
-        """Disable calls and release the token once, even if unloading fails."""
-        if self.closed:
-            return
+        """Unbind the entry and release the instance; repeated calls are safe."""
+        self.fn = partial(unavailable, "is closed")
+        self.closed = True
         previous, self.program = self.program, 0
-        super().close()
-        if previous:
-            self.functions["destroy"](previous)
+        self.functions["destroy"](previous)
 
 
-__all__ = ["AneCompiledModule", "ProvisionRequiredError", "Status"]
+__all__ = ["AneCompiledModule", "ProvisionRequiredError", "Status", "entry_name"]

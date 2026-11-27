@@ -5,8 +5,6 @@ Its ``type`` is the signature codegen produced for that function. See
 """
 from __future__ import annotations
 
-import inspect
-
 from tilefoundry import codegen
 
 
@@ -27,25 +25,4 @@ class Function:
         )
 
 
-class CompiledFunction(Function):
-    """A named entry that follows its owner's current resource and native binding."""
-
-    def __init__(self, owner, name, signature) -> None:
-        super().__init__(signature)
-        self.owner = owner
-        self.__name__ = name
-        self.__qualname__ = f"{owner.name}.{name}"
-        self.__doc__ = None
-        self.__signature__ = inspect.Signature(tuple(
-            inspect.Parameter(
-                param.name, inspect.Parameter.POSITIONAL_ONLY, annotation=param.type,
-                default=None if index >= signature.input_count else inspect.Parameter.empty,
-            )
-            for index, param in enumerate(signature.params) if param.name not in owner.weights
-        ))
-
-    def __call__(self, *args):
-        return self.owner.forward(*args)
-
-
-__all__ = ["CompiledFunction", "Function"]
+__all__ = ["Function"]

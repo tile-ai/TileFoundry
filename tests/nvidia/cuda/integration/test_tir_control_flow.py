@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import torch
+import tvm_ffi
 
 import tilefoundry
 from tests.core._corpus import Case, case, check_case, special
@@ -19,8 +19,7 @@ class ControlFlowCase(Case):
         x = torch.randn(128, dtype=torch.float32, device="cuda")
         expected = x.square()
         runtime = tilefoundry.compile(state, target=cuda.Target("nvidia.h200_sxm"))
-        assert runtime.name == state.name
-        assert runtime.entry == "square_host"
+        assert runtime.name == f"{state.name}.square_host"
         runtime(x)
         torch.cuda.synchronize()
         torch.testing.assert_close(x, expected, rtol=0, atol=0)
@@ -41,8 +40,7 @@ class MultipleHosts(ControlFlowCase):
         super().guard(state, problems)
         second = torch.randn(128, dtype=torch.float32, device="cuda")
         expected = second.square()
-        runtime = tilefoundry.compile(replace(state, entry="secondary_host"), target=cuda.Target("nvidia.h200_sxm"))
-        runtime.secondary_host(second)
+        tvm_ffi.get_global_func(f"{state.name}.secondary_host")(second)
         torch.cuda.synchronize()
         torch.testing.assert_close(second, expected, rtol=0, atol=0)
 

@@ -16,6 +16,7 @@
 #include <objc/runtime.h>
 #include <string>
 #include <sys/sysctl.h>
+#include <tvm/ffi/container/array.h>
 #include <vector>
 
 extern "C" void *objc_autoreleasePoolPush(void);
@@ -544,4 +545,32 @@ void ane_token_destroy(int64_t token) {
     programs.owned.erase(token);
     auto *program = owned.release();
     ane_check_status(ane_destroy(&program), "ane_destroy");
+}
+
+void ane_register(const char *name, const AneEntry *entry,
+                  tvm::ffi::Function launch) {
+    using tvm::ffi::Function;
+    const std::string prefix(name);
+    Function::SetGlobal(prefix, launch, true);
+    Function::SetGlobal(prefix + ".create", Function::FromTyped([entry]() {
+                            return ane_token_create(entry);
+                        }),
+                        true);
+    Function::SetGlobal(prefix + ".weights", Function::FromTyped([entry]() {
+                            tvm::ffi::Array<tvm::ffi::String> names;
+                            for (int i = 0; i < entry->n_weights; ++i)
+                                names.push_back(entry->weights[i].name);
+                            return names;
+                        }),
+                        true);
+    Function::SetGlobal(prefix + ".set_weight",
+                        Function::FromTyped(ane_token_set_weight), true);
+    Function::SetGlobal(prefix + ".load", Function::FromTyped(ane_token_load),
+                        true);
+    Function::SetGlobal(prefix + ".cache_path",
+                        Function::FromTyped(ane_token_cache_path), true);
+    Function::SetGlobal(prefix + ".image", Function::FromTyped(ane_token_image),
+                        true);
+    Function::SetGlobal(prefix + ".destroy",
+                        Function::FromTyped(ane_token_destroy), true);
 }

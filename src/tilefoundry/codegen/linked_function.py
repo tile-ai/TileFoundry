@@ -1,4 +1,4 @@
-"""A linked function's logical identity, DLL symbol and host calling convention."""
+"""A linked function's registration identity and host calling convention."""
 
 from dataclasses import dataclass
 
@@ -7,16 +7,15 @@ from .signature import CallableSignature
 
 @dataclass(frozen=True)
 class LinkedFunction:
-    """One library export with distinct logical and native names."""
+    """One library export, preserving its C++ signature separately from its registration name."""
 
     name: str
-    symbol: str
     signature: CallableSignature
 
     @classmethod
     def create(cls, target, symbol) -> "LinkedFunction":
-        """Keep the logical name, native symbol and host signature of a resolved symbol."""
-        return cls(name=symbol.export_name, symbol=symbol.symbol, signature=symbol.callable)
+        """Keep the export name and host signature of a resolved symbol as distinct identities."""
+        return cls(name=symbol.export_name, signature=symbol.callable)
 
 
 __all__ = ["LinkedFunction"]

@@ -13,12 +13,10 @@ def run_scaffold(source: str, out_dir: str) -> int:
     if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
         raise ValueError(f"scaffold: output directory {destination} must be empty")
     module = load_authored_ir(source)
-    declaration = codegen.artifact.describe_root(module)
     codegen.link_program(
         passes.default_pipeline(module, passes.Options(lower=False)).run(module),
         workdir=destination,
         options=codegen.Options(emit="skeleton"),
-        declaration=declaration,
     )
     return 0
 

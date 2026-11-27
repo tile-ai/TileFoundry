@@ -26,7 +26,7 @@ def host_entry(
             host_symbol=sig.name,
             params=ctx.parameters(sig),
             body_lines=body_lines,
-            ffi_symbol=(sig.name if entry is ctx.codegen_context.module.entry_function() else None),
+            entry_name=ctx.codegen_context.symbols.by_function[id(entry)].export_name,
         ),
     )
 

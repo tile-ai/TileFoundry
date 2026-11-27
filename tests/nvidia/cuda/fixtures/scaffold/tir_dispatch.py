@@ -1,6 +1,7 @@
 """A device prototype with three ranges and an authored CPU entry."""
 
 import torch
+import tvm_ffi
 
 from tilefoundry import runtime
 from tilefoundry.dsl import *
@@ -13,7 +14,7 @@ CUDA = cuda.Target("nvidia.h200_sxm")
 
 @module(entry="main", target=CUDA, topologies=(Topology("thread", 32),))
 class Root:
-    @prim_func(target=CUDA, output_count=0)
+    @prim_func(target=CUDA)
     def run(x: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]):
         pass
 
@@ -29,7 +30,7 @@ class Root:
     def large(x: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]):
         pass
 
-    @prim_func(target=cpu.Target(), output_count=0)
+    @prim_func(target=cpu.Target())
     def main(x: Tensor[(S, 8), "f32"], w: ConstTensor[(8,), "f32"]):
         launch(run, x, w, grid=(1, 1, 1), block=(32, 1, 1))
 
@@ -37,11 +38,10 @@ class Root:
 class Runtime(runtime.Module):
     def __init__(self, library_path):
         super().__init__("Root", entry="main")
-        self.library = runtime.CompiledModule.from_library(library_path)
+        self.library = tvm_ffi.load_module(str(library_path))
         self.weight = torch.randn(8, device="cuda")
-        self.host_fn = self.library.main
-        self.library.load(runtime.DictResource({"w": self.weight}))
+        self.host_fn = tvm_ffi.get_global_func("Root.main")
 
     def forward(self, x):
-        self.host_fn(x)
+        self.host_fn(x, self.weight)
         return x

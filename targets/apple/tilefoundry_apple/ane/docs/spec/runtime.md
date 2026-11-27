@@ -6,21 +6,23 @@ Scope: a linked ANE entry, instance-owned weight images and persistent model exe
 
 ```python
 class AneCompiledModule(runtime.CompiledModule):
-    def __init__(self, library, library_path, description) -> None: ...
+    def __init__(self, type: codegen.CallableSignature, fn: Callable, library_path: Path) -> None: ...
+    @classmethod
+    def create(cls, tgt, mod: core.Module, options) -> AneCompiledModule: ...
     def load(self, resource: runtime.Resource, *, placement: types.Placement | None = None) -> None: ...
     def close(self) -> None: ...
 ```
 
 - constraints:
-  - `tf.build` MUST accept a lowered ANE root. `tf.compile` MUST accept an ANE root with the required analysis and scheduling.
-    Both MUST return `AneCompiledModule` through the existing Target binding.
-  - Export and reload MUST use the core library protocol
+  - `AneCompiledModule` is bound to `ane.Target` as its `runtime.CompiledModule`.
+    `tf.build` and `tf.compile` of a lowered ANE entry MUST return it through `create`.
+    `create` MUST emit the entry with the launcher, link it with clang++ and bind it.
+  - Export and reload MUST use the core library pair
     ([runtime §1.1](../../../../../../docs/spec/runtime.md#11-runtimemodulepy)).
-    Reload MUST select `AneCompiledModule` without original IR or a Target instance.
-  - The signature MUST contain only activations and trailing outputs. Weights MUST come from the root Resource.
+    `AneCompiledModule.from_library(path)` MUST read the weight names from the library.
+  - The signature MUST contain only activations and trailing outputs. Weights MUST come from the Resource.
     Entry calls MUST retain the inherited positional calling convention.
-  - Each successful load MUST bind its token to the library-local entry.
-    Named entry calls MUST use the node's current binding.
+  - Each successful load MUST bind its token to the entry.
   - A non-None placement MUST report `is not decoded yet` before replacing the current instance.
   - Load MUST unbind the entry and destroy the previous token before creating a candidate.
     It MUST read CPU fp16 weights and pass contiguous OIHW tensors to the generated writers.
@@ -35,25 +37,28 @@ class AneCompiledModule(runtime.CompiledModule):
 
 ## 2. FFI interface and native implementation
 
-The manifest lists the entry separately from its six lifecycle operations.
+`ane_register` registers each entry and its lifecycle under the entry's dotted name
+with `Function::SetGlobal(..., override=true)`, as core registers CPU entries
+([runtime §1.4](../../../../../../docs/spec/runtime.md#14-runtimeloaderpy)).
 
-| Operation | Typed arguments | Result |
+| Registration | Arguments | Result |
 |---|---|---|
-| entry | `int64 token`, flattened activation and output tensors | Evaluate the loaded instance |
-| `create` | None | Positive `int64` token owning a validated skeleton copy |
-| `set_weight` | `int64 token`, String name, `DLTensor*` tensor | Write the compiled weight |
-| `load` | `int64 token` | Numeric `AneStatus`, including `NOT_PROVISIONED` |
-| `cache_path` | `int64 token` | String containing the daemon cache path |
-| `image` | `int64 token` | Owned Bytes containing the complete image |
-| `destroy` | `int64 token` | Unload and release the instance; zero is a no-op |
+| `<entry>` | `int64 token`, flattened activation and output tensors | Evaluate the loaded instance |
+| `<entry>.create` | None | Positive `int64` token owning a validated skeleton copy |
+| `<entry>.weights` | None | Array of the compiled weight names, in writer order |
+| `<entry>.set_weight` | `int64 token`, String name, `DLTensor*` tensor | Write the compiled weight |
+| `<entry>.load` | `int64 token` | Numeric `AneStatus`, including `NOT_PROVISIONED` |
+| `<entry>.cache_path` | `int64 token` | String containing the daemon cache path |
+| `<entry>.image` | `int64 token` | Owned Bytes containing the complete image |
+| `<entry>.destroy` | `int64 token` | Unload and release the instance; zero is a no-op |
 
 - constraints:
-  - Entry and lifecycle lookup MUST remain library-local. Typed DLL exports MUST include ABI metadata.
-    Each entry's create wrapper MUST reference its own immutable `AneEntry`.
+  - A node MUST capture all of its functions right after its library loads.
+    A later registration of the same name MUST NOT change an existing node.
+  - Each entry's `create` MUST reference its own immutable `AneEntry`.
   - The token table MUST own each `AneProgram` and allocate monotonically increasing positive integers without reuse.
     Unknown, negative or expired tokens MUST be rejected. Only destroy MUST accept zero.
-  - Token identity MUST be the pair of owning library and integer.
-    Different libraries MAY allocate equal integers. Nodes MUST use their token with operations from the owning library.
+  - Each library owns its token table. A node MUST use its token only with the functions it captured.
   - Native lookup, use and destruction MUST be synchronized so destruction cannot free an instance in use.
     A pointer MUST NOT be reinterpreted as a token. No pointer handle or custom C++ object MUST cross FFI.
   - Invalid weights MUST identify the required unloaded instance, compiled name, CPU fp16 dtype, contiguous OIHW shape and bounded offsets.

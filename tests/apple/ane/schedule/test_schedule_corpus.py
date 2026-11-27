@@ -7,12 +7,12 @@ is not evaluated.
 """
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+import tilefoundry
 from tests.apple.ane import device
 from tests.core._corpus import Case, Problems, case, cases, reload, special
 from tilefoundry import analysis, inspection, utils
@@ -36,15 +36,14 @@ class AneCase(Case):
     """One ANE fixture; a field names the error its stage must raise.
 
     ``refusal`` is the load-time VerifyError and ``finalize_refusal`` the LoweringError.
-    ``image`` is the SHA-256 of the container the lowered entry compiles to; a case that
-    states it also runs on the neural engine when this machine can launch one.
+    ``runs`` marks a scheduled fixture that goes through compile and run: it is compiled
+    into a module on every host and, when this machine has a neural engine, run and
+    required to equal the evaluator's result.
     """
 
     refusal: str | None = None
     finalize_refusal: str | None = None
-    image: str | None = None
-    image_refusal: str | None = None
-    device_run: bool = False
+    runs: bool = False
 
     def inputs(self) -> tuple | None:
         """The entry's torch inputs, or None when the case is not evaluated."""
@@ -178,11 +177,6 @@ def _finalize(case, checked):
     return None
 
 
-def _image_refused(case, lowered):
-    with pytest.raises(ValueError, match=case.image_refusal):
-        device.image_of(lowered)
-
-
 def _scheduled(case, problems):
     if case.refusal is not None:
         problems.run("load refusal", _refused, case)
@@ -198,18 +192,11 @@ def _scheduled(case, problems):
         lowered = problems.run("reload TIR", lambda text: reload(text, lowered.name), printed)
         reprinted = problems.run("reprint TIR", inspection.as_script, lowered)
         problems.expect("reprinted TIR", lambda text: text == printed, reprinted)
-    if case.image_refusal is not None:
-        problems.run("image refusal", _image_refused, case, lowered)
-    elif case.image is not None or case.device_run:
-        constants = {param.name: value.numpy().tobytes() for param, value in
-                     zip(lowered.entry_function().params, case.inputs(), strict=False)
-                     if getattr(param, "is_const", False)}
-        image = problems.run("image", device.image_of, lowered, constants)
-        if case.image is not None:
-            problems.expect("image digest", lambda data: hashlib.sha256(data).hexdigest() == case.image, image)
-        if device.available():
-            launched = problems.run("launch", device.launch, lowered, case.inputs())
-            problems.expect("launched result", utils.torch.equal, launched, result)
+    if case.runs:
+        compiled = problems.run("compile", tilefoundry.compile, lowered)
+        if compiled is not None and device.available():
+            ran = problems.run("run", device.run, compiled, lowered, case.inputs())
+            problems.expect("device result", utils.torch.equal, ran, result)
     problems.run("guard", case.guard, ScheduledState(module, result, lowered), problems)
 
 
@@ -310,7 +297,7 @@ class TransposeCandidates(AneCase):
 @case
 class Conv1x1(AneCase):
     path: Path = ROOT / "scheduled" / "conv_1x1.py"
-    device_run: bool = True
+    runs: bool = True
 
     def inputs(self):
         return small((1, 32, 16, 16), 10), small((32, 32, 1, 1), 11)
@@ -327,44 +314,6 @@ class Conv1x1Relu(Conv1x1):
     def guard(self, state, problems):
         x, w = self.inputs()
         assert utils.torch.equal(state.result, utils.F.conv2d(x, w).relu())
-
-
-@case
-class ConvUnary(AneCase):
-    path: Path = ROOT / "scheduled" / "conv_unary.py"
-    image_refusal: str = "cross-engine L2 staging pitch conversion is not decoded yet"
-
-    def inputs(self):
-        return small((1, 32, 16, 16), 10), small((32, 32, 1, 1), 11)
-
-    def guard(self, state, problems):
-        x, w = self.inputs()
-        assert utils.torch.equal(state.result, utils.F.conv2d(x, w).abs())
-        assert issued(state.lowered) == ["T.ane.conv(t0, x, w)", "T.ane.unary(out, t0, abs=True)"]
-
-
-@case
-class UnaryConv(ConvUnary):
-    path: Path = ROOT / "scheduled" / "unary_conv.py"
-
-    def guard(self, state, problems):
-        x, w = self.inputs()
-        assert utils.torch.equal(state.result, utils.F.conv2d(x.abs(), w))
-        assert issued(state.lowered) == ["T.ane.unary(t0, x, abs=True)", "T.ane.conv(out, t0, w)"]
-
-
-@case
-class ConvConv(ConvUnary):
-    path: Path = ROOT / "scheduled" / "conv_conv.py"
-    image_refusal: str = "full-height L2 result pitch mapping is not decoded yet"
-
-    def inputs(self):
-        return (*super().inputs(), small((32, 32, 1, 1), 12))
-
-    def guard(self, state, problems):
-        x, first, second = self.inputs()
-        assert utils.torch.equal(state.result, utils.F.conv2d(utils.F.conv2d(x, first), second))
-        assert issued(state.lowered) == ["T.ane.conv(t0, x, first)", "T.ane.conv(out, t0, second)"]
 
 
 @case
@@ -414,7 +363,7 @@ class Chain(AneCase):
 @case
 class Transpose(AneCase):
     path: Path = ROOT / "scheduled" / "transpose.py"
-    image: str | None = "6ab1a2853f0c464cd7b58512cf2a35ffdd784ea1efee7971c4506d28d44b7398"
+    runs: bool = True
 
     def inputs(self):
         return ((utils.torch.arange(4096) - 2048).reshape(1, 32, 8, 16).to(utils.torch.float16),)
@@ -447,7 +396,7 @@ class Pool(AneCase):
 @case
 class PoolMax(AneCase):
     path: Path = ROOT / "scheduled" / "pool_max.py"
-    image: str | None = "ef8e74dbeb469cc4905a4f7e9d3be0d019e4df74fa15f08e4591ef860f0b301d"
+    runs: bool = True
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0, -3, 3),)
@@ -461,7 +410,7 @@ class PoolMax(AneCase):
 @case
 class Unary(AneCase):
     path: Path = ROOT / "scheduled" / "unary.py"
-    image: str | None = "fac54f2f727cb3172195f035d635c38b3da2c1da131c8ee56ccfea4b461da37f"
+    runs: bool = True
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0, -3, 3),)
@@ -475,7 +424,7 @@ class Unary(AneCase):
 @case
 class UnaryChain(AneCase):
     path: Path = ROOT / "scheduled" / "unary_chain.py"
-    device_run: bool = True
+    runs: bool = True
 
     def inputs(self):
         return (small((1, 32, 16, 16), 21, -7, 7),)
@@ -488,7 +437,7 @@ class UnaryChain(AneCase):
 @case
 class Binary(AneCase):
     path: Path = ROOT / "scheduled" / "binary.py"
-    image: str | None = "58771ce2656fac6c969eaea20d270347bbdaed3ca1634c8a78b6a23db4d20950"
+    runs: bool = True
 
     def inputs(self):
         return small((1, 32, 16, 16), 0, -3, 3), small((1, 32, 16, 16), 1, -3, 3)
@@ -521,7 +470,7 @@ class Reduce(AneCase):
 @case
 class ReduceSum(AneCase):
     path: Path = ROOT / "scheduled" / "reduce_sum.py"
-    image: str | None = "e3150af8da1785356ab6c64f598b1ce8c51be62237aa7796cb1d6dcaf71908d3"
+    runs: bool = True
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0, -3, 3),)

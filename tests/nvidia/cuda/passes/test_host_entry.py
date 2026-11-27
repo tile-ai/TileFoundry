@@ -34,7 +34,7 @@ class MissingHostEntry(HostEntryCase):
 
     def guard(self, state, problems):
         assert passes_transforms.insert_default_host_entry(state) is state
-        with pytest.raises(ValueError, match=r"nothing launches.*geometry"):
+        with pytest.raises(ValueError, match=r"tilefoundry.build: Module.entry .* is not a CPU host entry"):
             tilefoundry.compile(state)
 
 
@@ -44,7 +44,7 @@ class ChildHostWithoutRootHost(HostEntryCase):
     name: str | None = "NoRootHost"
 
     def guard(self, state, problems):
-        with pytest.raises(ValueError, match=r"nothing launches.*geometry"):
+        with pytest.raises(ValueError, match=r"Module.entry 'device' is not a CPU host entry"):
             tilefoundry.build(state)
 
 

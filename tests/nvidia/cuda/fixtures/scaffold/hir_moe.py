@@ -1,8 +1,7 @@
 """HIR dispatch plus a child whose weights enter only through orchestration."""
 
-from dataclasses import replace
-
 import torch
+import tvm_ffi
 
 from tilefoundry import runtime
 from tilefoundry.dsl import *
@@ -38,33 +37,28 @@ class Root:
         return self.router.run(x)
 
 
-RouterRoot = replace(Router, target=Root.target, topologies=Root.topologies)
-
-
 class RouterRuntime(runtime.Module):
     def __init__(self, library):
         super().__init__("router", entry="run")
         self.library = library
         self.weight = torch.randn(8, device="cuda")
-        self.run_fn = library.run
-        library.load(runtime.DictResource({"w": self.weight}))
+        self.run_fn = tvm_ffi.get_global_func("Root.router.run")
 
     def forward(self, x):
         out = torch.empty_like(x)
-        self.run_fn(x, out)
+        self.run_fn(x, self.weight, out)
         return out
 
 
 class Runtime(runtime.Module):
-    def __init__(self, library_path, child_library_path):
-        self.library = runtime.CompiledModule.from_library(library_path)
-        self.router = RouterRuntime(runtime.CompiledModule.from_library(child_library_path))
+    def __init__(self, library_path):
+        self.library = tvm_ffi.load_module(str(library_path))
+        self.router = RouterRuntime(self.library)
         super().__init__("Root", entry="forward", children={"router": self.router})
         self.weight = torch.randn(8, device="cuda")
-        self.run_fn = self.library.model
-        self.library.load(runtime.DictResource({"w": self.weight}))
+        self.run_fn = tvm_ffi.get_global_func("Root.model")
 
     def forward(self, x):
         out = torch.empty_like(x)
-        self.run_fn(x, out)
+        self.run_fn(x, self.weight, out)
         return self.router(out)
