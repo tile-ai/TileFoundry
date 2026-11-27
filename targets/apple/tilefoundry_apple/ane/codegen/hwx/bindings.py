@@ -1,19 +1,11 @@
-"""H14 HWX tensor binding encoding."""
+"""Named I/O surfaces of an HWX image: role, virtual address and loader-bound reservation."""
 
 from dataclasses import dataclass
 
 from tilefoundry_apple.ane import isa
 from tilefoundry_apple.ane.isa import arith
 
-from .macho import (
-    PAGE,
-    SECT_ALIGN_IO,
-    SECT_CONST_FLAGS,
-    SECT_DATA_FLAGS,
-    SEG_FVMLIB_FLAGS,
-    Section,
-    Segment,
-)
+from .macho import PAGE, SG_FVMLIB, SG_NORELOC, Section, Segment
 
 BINDING_ROLE_INPUT = 1
 BINDING_ROLE_OUTPUT = 2
@@ -43,42 +35,20 @@ class TensorBinding:
             raise ValueError(f"{self.name}: {error}") from error
 
     @property
-    def section_name(self) -> bytes:
-        """The __FVMLIB section that reserves this surface."""
-        return b"__data" if self.role == BINDING_ROLE_OUTPUT else b"__const"
-
-    @property
     def tensor_symbol(self) -> str:
         """The label recorded in the binding record."""
         if self.role == BINDING_ROLE_OUTPUT:
             return f"{self.name}@output"
         return self.name
 
-
-def binding_segment(binding: TensorBinding) -> Segment:
-    """Reserve one loader-bound I/O section with its role's protection bits."""
-    protection = 2 if binding.role == BINDING_ROLE_OUTPUT else 1
-    return Segment(
-        b"__FVMLIB",
-        binding.address,
-        binding.size,
-        0,
-        0,
-        protection,
-        protection,
-        SEG_FVMLIB_FLAGS,
-        (
-            Section(
-                binding.section_name,
-                b"__FVMLIB",
-                binding.address,
-                binding.desc.storage_bytes,
-                0,
-                SECT_ALIGN_IO,
-                SECT_DATA_FLAGS if binding.role == BINDING_ROLE_OUTPUT else SECT_CONST_FLAGS,
-            ),
-        ),
-    )
+    def segment(self) -> Segment:
+        """Reserve the surface for the loader: an output as ``__data``, an input as ``__const``."""
+        output = self.role == BINDING_ROLE_OUTPUT
+        name, protection, kind = (b"__data", 2, 0x23) if output else (b"__const", 1, 0x21)
+        section = Section(name, self.address, self.desc.storage_bytes, PAGE, kind)
+        return Segment(
+            b"__FVMLIB", self.address, self.size, protection, (section,), SG_FVMLIB | SG_NORELOC
+        )
 
 
-__all__ = ["BINDING_ROLE_INPUT", "BINDING_ROLE_OUTPUT", "TensorBinding", "binding_segment"]
+__all__ = ["BINDING_ROLE_INPUT", "BINDING_ROLE_OUTPUT", "TensorBinding"]

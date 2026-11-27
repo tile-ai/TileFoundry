@@ -38,14 +38,14 @@ flowchart TD
     Packets --> TD["TD.from_values · rules.check"]
     TD --> Header["header.apply · replace positional headers"]
     Header --> Image["module.function_image · hwx.Image + zero or supplied weights"]
-    Image --> Validate["Image.validate · metadata + I/O geometry"]
-    Validate --> Layout["records + symbols + relocations + segments"]
-    Layout --> Bytes["Image.to_bytes · HWX"]
+    Image --> Validate["validation.validate · metadata + I/O geometry + bindings"]
+    Validate --> Parts["segments + records + symbols + relocations"]
+    Parts --> Bytes["Image.to_bytes · placement + HWX bytes"]
 ```
 
 Validation follows the representation: `BitField.put` checks individual fields,
 `TD.validate` checks cross-field relations, and the HWX assembler checks metadata,
-I/O geometry, complete DMA ranges and segment bounds. `Image.validate` MUST invoke
+I/O geometry, complete DMA ranges and segment bounds. `validation.validate` MUST invoke
 every TD's validation, including directly constructed descriptors. Each invalid input raises before serialization
 can produce a container. The field formulas and their confidence are described in
 [isa §8](./isa.md#8-field-formulas-and-staging).
@@ -132,13 +132,13 @@ All paths below are relative to `ane/codegen/`.
 | `tir/pe/{binary,pool,reduce,unary}.py` | Registered planar-engine emitters |
 | `program.py` | Reset-image word elision and task IDs assigned at construction |
 | `header.py` | Stream-position header policy; returns replacement descriptors |
-| `hwx/macho.py` | Binary structures, section and segment commands, file placement |
-| `hwx/bindings.py` | Named I/O bindings and loader-bound segments |
-| `hwx/records.py` | Buffer references, procedure/binding records and provenance |
+| `hwx/macho.py` | `Field`/`Record` fixed layouts, Mach-O records, segments, symbol table, first page |
+| `hwx/bindings.py` | Named I/O bindings and their loader-bound segments |
+| `hwx/records.py` | ANE load commands, element catalog, shape stabs and symbol entries |
 | `hwx/coefficients.py` | Coefficient lane layouts, LUTs and coefficient section packing |
-| `hwx/relocations.py` | Base-address payload offsets and relocation packet integrity |
-| `hwx/symbols.py` | Symbol table, element catalog and shape stabs |
-| `hwx/image.py` | Metadata validation and ordered assembly of the container |
+| `hwx/relocations.py` | Base-address payload offsets, relocation packet integrity, relocation table |
+| `hwx/validation.py` | Every check an image passes before it is laid out |
+| `hwx/image.py` | Role assignment, virtual and file placement, byte assembly |
 | `module.py` | Validated skeleton images, FFI entries and shared linker contributions |
 
 ## 4. HWX layout
@@ -168,9 +168,18 @@ and task counts, the trait mask at `+0x844` and bookkeeping at `+0x860`.
 code, the largest TD cycle estimate supplies it. Binding records carry shape,
 element code, byte strides, total extent and procedure/symbol strings.
 
+Every fixed-layout structure, Mach-O or ANE, is one `macho.Record` declaration
+whose fields state their offset, format and default once. A constant whose meaning
+is not decoded is the default of an unnamed field and appears nowhere else. A field
+name declared at two offsets stores one value twice. A load command's `size` covers
+its fields and variable tail, rounded up to eight bytes. A section with relocations
+carries `S_ATTR_LOC_RELOC`, and its segment drops `SG_NORELOC`.
+
 Commands, symbols, strings and text relocations precede the first file segment.
 The preferred file offset is `0x4000` for at most two surfaces and `0x8000`
 otherwise; placement may advance through `0x10000` and `0x20000` to clear metadata.
+A mapped segment's file offset is its virtual address plus one slide, the text file
+offset minus the text address.
 The allocation retains the trailing kernel reservation even for an image without
 coefficients, preserving the container's file extent.
 
@@ -237,7 +246,7 @@ The decoded geometry, singleton handling and L2 relationships are specified in
 
 Procedure names including NUL MUST fit the five-byte fixed region before the
 binding symbol. Distinct I/O names MUST remain distinct after eight-byte buffer
-reference truncation. `records.py` validates both constraints before assembly.
+reference truncation. `validation.validate` checks both constraints before assembly.
 
 Every coefficient slot has an explicit `CoefficientReloc` naming its block.
 `require_relocated` rejects missing blocks or slots, duplicate bindings,

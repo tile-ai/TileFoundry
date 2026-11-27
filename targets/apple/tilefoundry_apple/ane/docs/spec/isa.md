@@ -278,7 +278,7 @@ Every overlapping live interval MUST be rejected, including equal-geometry 1×1
 convolution source/result intervals with alias bits set. Alias bits do not establish
 permission to overlap buffers. Their existing encoding is retained.
 The result address field is `L2.l2_result_address` at `0x0534[20:4]` in 16-byte units.
-`Image.validate` MUST also
+`validation.validate` MUST also
 require each L2 source to match an earlier result interval and shape that no
 intervening DMA staging or result write has overwritten.
 

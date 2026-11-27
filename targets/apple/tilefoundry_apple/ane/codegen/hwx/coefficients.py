@@ -148,15 +148,10 @@ class Coefficient:
 
 
 def coefficient_section(coefficients: tuple[Coefficient, ...]) -> bytes:
-    """Pack consecutive coefficient blocks using their planned section offsets."""
-    out = bytearray()
-    for coefficient in coefficients:
-        if coefficient.layout.base != len(out):
-            raise ValueError(
-                "coefficient blocks must follow first-use order without gaps or overlaps"
-            )
-        out.extend(coefficient.pack())
-    return bytes(out)
+    """Pack the blocks back to back; each block's planned base is its offset in the section."""
+    return b"".join(coefficient.pack() for coefficient in coefficients)
 
 
-__all__ = ["LUT_SLOTS", "Coefficient", "CoefficientLayout", "coefficient_section"]
+__all__ = [
+    "COEFF_LANE_ALIGN", "LUT_SLOTS", "Coefficient", "CoefficientLayout", "coefficient_section",
+]

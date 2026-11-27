@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from tilefoundry_apple.ane import isa
 from tilefoundry_apple.ane.isa import arith
 
+from .macho import RELOCATION
+
 DMA_BASES = (
     isa.TileDMASrc.tile_dma_src_base_addr_lo.addr,
     isa.TileDMASrc.tile_dma_src2_base_addr_lo.addr,
@@ -69,12 +71,6 @@ def base_slots(program: isa.Program) -> dict[int, tuple[int, int, int]]:
     return slots
 
 
-def coeff_slots(program: isa.Program) -> dict[int, int]:
-    """Map each coefficient payload word offset to the register it programs."""
-    return {word: addr for word, (_, addr, _) in base_slots(program).items()
-            if addr in isa.COEFFICIENT_RELOCATIONS}
-
-
 def coefficient_relocations(
     program: isa.Program, consumers: Mapping[int, int]
 ) -> tuple[CoefficientReloc, ...]:
@@ -90,4 +86,24 @@ def coefficient_relocations(
     return relocs
 
 
-__all__ = ["DMA_BASES", "CoefficientReloc", "Reloc", "base_slots", "coeff_slots", "coefficient_relocations"]
+def relocation_table(
+    program: isa.Program, relocs: tuple[CoefficientReloc, ...], section: int
+) -> bytes:
+    """Encode one Mach-O relocation per coefficient slot, in stream order.
+
+    Each entry addresses the slot's byte offset in the stream and keeps the encoded
+    addend; its info word holds the section ordinal, ``r_pcrel`` and the log2 width.
+    """
+    slots = base_slots(program)
+    entries = []
+    for word in sorted(reloc.word_offset for reloc in relocs):
+        width = isa.COEFFICIENT_RELOCATIONS[slots[word][1]]
+        info = section | 1 << 24 | (width.bit_length() - 1) << 25
+        entries.append(RELOCATION.pack(address=word * 4, info=info))
+    return b"".join(entries)
+
+
+__all__ = [
+    "DMA_BASES", "CoefficientReloc", "Reloc", "base_slots", "coefficient_relocations",
+    "relocation_table",
+]
