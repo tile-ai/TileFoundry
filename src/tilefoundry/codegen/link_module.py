@@ -14,6 +14,7 @@ from tilefoundry.interfaces import valuation
 from tilefoundry.ir import core
 from tilefoundry.target import cpu
 
+from .artifact import bind_root, describe_root, render_description
 from .context import EmitContext
 from .context_builder import EmissionGroup, build_context
 from .linkable_module import LinkableModule
@@ -76,6 +77,7 @@ class CMakeProject:
         cmake_text = env.get_template("CMakeLists.txt.j2").render(
             name=self.lib_name, includes=self.includes, appended=self.appended,
             languages=self.languages, sources=self.sources,
+            tvm_ffi_library=tvm_ffi.libinfo.find_libtvm_ffi(),
         )
         (self.workdir / "CMakeLists.txt").write_text(cmake_text)
         build_dir = self.workdir / "build"
@@ -105,7 +107,7 @@ class CMakeProject:
             raise RuntimeError(f"link_modules: cmake build did not produce {lib}")
         return LinkedModule(
             library_path=lib,
-            source="\n".join(f"// {name}\n{source}" for name, source in self.sources.items()),
+            source="\n".join(f"/** {name} */\n{source}" for name, source in self.sources.items()),
             functions=functions,
         )
 
@@ -123,30 +125,43 @@ def link_modules(
 
 def link_program(
     mod: core.Module, *, workdir: str | Path,
-    options: Options = Options(),
+    options: Options = Options(), declaration: dict | None = None,
 ) -> LinkedModule:
     """Generate code for the whole Module tree and link it into one library."""
+    declaration = describe_root(mod) if declaration is None else declaration
+    if mod.entry is None:
+        if mod.children:
+            raise ValueError(f"{mod.name}: compiled module tree is not decoded yet")
+        project = CMakeProject(workdir, mod.name)
+        project.add_source("artifact.cpp", render_description({"format": 1, "root": declaration}))
+        return project.build(())
     codegen = build_context(mod, options)
+    root_entry = mod.entry_function() if mod.entry is not None else None
     entries = tuple(sorted(
         (context.function for context in valuation.collect_functions(mod).values()
          if isinstance(context.function, core.PrimFunction) and isinstance(context.function.target, cpu.Target)),
-        key=lambda fn: fn.name != mod.entry,
+        key=lambda fn: fn is not root_entry,
     ))
-    if not entries:
-        raise ValueError("link_program: expected at least one CPU host entry")
     groups = (
         *(group for group in codegen.groups if not isinstance(group.target, cpu.Target)),
-        EmissionGroup(mod, entries[0].target, entries),
+        *((EmissionGroup(mod, entries[0].target, entries),) if entries else ()),
     )
     modules = []
     for group in groups:
         ctx = group.target.resolve(EmitContext, codegen.for_group(group))
+        if isinstance(group.target, cpu.Target) and ctx.stmt_handler(core.FunctionRef) is None:
+            for function in group.functions:
+                if isinstance(function.body, core.Sequential) and any(isinstance(stmt, core.Evaluate) and isinstance(stmt.callable, core.FunctionRef) for stmt in function.body.body):
+                    raise ValueError(f"{mod.name}.{function.name}: compiled function call is not decoded yet")
         modules.append(group.target.resolve(LinkableModule, group.owner, group.functions, ctx))
-    functions = tuple(
-        entry.target.resolve(LinkedFunction, codegen.symbols.by_function[id(entry)]) for entry in entries
-    )
+    entry = root_entry.target.resolve(LinkedFunction, codegen.symbols.by_function[id(root_entry)])
+    operations = {name: symbol for module in modules for name, symbol in getattr(module, "operations", {}).items()}
+    root = bind_root(declaration, entry.signature, entry.symbol, operations)
+    modules.append(LinkableModule(
+        target="artifact", language="cpp", preamble=render_description({"format": 1, "root": root}),
+    ))
     return link_modules(
-        tuple(modules), workdir=workdir, lib_name=mod.name, functions=functions, host=entries[0].target,
+        tuple(modules), workdir=workdir, lib_name=mod.name, functions=(entry,), host=root_entry.target,
     )
 
 

@@ -1,0 +1,10 @@
+#define TVM_FFI_DLL_EXPORT_INCLUDE_METADATA 1
+#include <tvm/ffi/container/array.h>
+#include <tvm/ffi/container/map.h>
+#include <tvm/ffi/function.h>
+
+static tvm::ffi::Map<tvm::ffi::String, tvm::ffi::Any> manifest_impl() {
+    return {{ value }};
+}
+
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(tilefoundry_manifest, manifest_impl);

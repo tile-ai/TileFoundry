@@ -32,7 +32,8 @@ def normalize_to_module(fn_or_mod: core.Function | core.Module) -> core.Module:
             entry=fn_or_mod.name,
         )
     if isinstance(fn_or_mod, core.Module):
-        fn_or_mod.entry_function()
+        if fn_or_mod.entry is not None:
+            fn_or_mod.entry_function()
         return fn_or_mod
     raise TypeError(
         f"normalize_to_module: expected Function or Module, got {type(fn_or_mod).__name__}"
@@ -73,43 +74,50 @@ def resolve_options(
     return options
 
 
+def preflight(mod: core.Module) -> None:
+    """Check the authored namespace before lowering or native compilation."""
+    implementation = tilefoundry_target.bindings.get((type(mod.target), runtime.CompiledModule), runtime.CompiledModule)
+    runtime.validate_names((*[function.name for function in mod.functions], *mod.children), implementation, mod.name)
+    if mod.entry is None and mod.children:
+        raise ValueError(f"{mod.name}: compiled module tree is not decoded yet")
+    for child in mod.children.values():
+        for node in child if isinstance(child, tuple) else (child,):
+            preflight(node)
+
+
+def build_module(mod: core.Module, *, options: Options, declaration: dict) -> runtime.CompiledModule:
+    """Link a lowered root using the declaration captured before transformation."""
+    if mod.entry is not None:
+        entry = mod.entry_function()
+        if not isinstance(entry, core.PrimFunction):
+            raise ValueError(f"tilefoundry.build: {mod.name}.{entry.name}: entry requires lowering")
+        if not isinstance(entry.target, cpu.Target) and entry.target != options.target:
+            raise ValueError(f"tilefoundry.build: {mod.name}.{entry.name}: entry Target conflicts with the root Target")
+    workdir = tempfile.mkdtemp(prefix=f"tilefoundry_build_{mod.name}_")
+    return runtime.load_linked_module(codegen.link_program(
+        mod, workdir=workdir, options=options.codegen, declaration=declaration,
+    ))
+
+
 def build(
     mod: core.Module,
     /,
     *,
     target: tilefoundry_target.Target | None = None,
     options: Options | None = None,
-) -> "runtime.Module":
-    """Codegen + compile + load *mod* and return a fully-loaded ``runtime.Module``.
-
-    *mod* must be a ``Module``. *target* defaults to ``mod.metadata["target"]``.
-    Raises ``ValueError`` if missing or if explicit *target* conflicts. *options*
-    gives the codegen stage its part.
-    """
+) -> "runtime.CompiledModule":
+    """Build a lowered root and bind its standalone compiled library."""
     if not isinstance(mod, core.Module):
         raise TypeError(f"tilefoundry.build: expected Module, got {type(mod).__name__}.")
-    if target is not None:
-        target = tilefoundry_target.instance(target)
     try:
         module_target = mod.resolve_target()
     except ValueError as error:
-        raise ValueError(
-            "tilefoundry.build: module has no Target; declare one on the Module"
-        ) from error
-    if target is not None and target != module_target:
-        raise ValueError(
-            f"tilefoundry.build: explicit target {tilefoundry_target.summary(target)} "
-            f"conflicts with the Module Target {tilefoundry_target.summary(module_target)}"
-        )
-
-    entry = mod.entry_function()
-    if not (isinstance(entry, core.PrimFunction) and isinstance(entry.target, cpu.Target)):
-        raise ValueError(f"tilefoundry.build: Module.entry {entry.name!r} is not a CPU host entry")
-    workdir = tempfile.mkdtemp(prefix=f"tilefoundry_build_{mod.entry}_split_")
-    codegen_options = codegen.Options() if options is None else options.codegen
-    return runtime.load_linked_module(
-        codegen.link_program(mod, workdir=workdir, options=codegen_options)
-    )
+        raise ValueError("tilefoundry.build: module has no Target; declare one on the Module") from error
+    if target is not None and tilefoundry_target.instance(target) != module_target:
+        raise ValueError(f"tilefoundry.build: explicit target {tilefoundry_target.summary(target)} conflicts with the Module Target {tilefoundry_target.summary(module_target)}")
+    options = resolve_options("build", mod, target, options)
+    preflight(mod)
+    return build_module(mod, options=options, declaration=codegen.artifact.describe_root(mod))
 
 
 def compile(
@@ -118,16 +126,16 @@ def compile(
     *,
     target: tilefoundry_target.Target | None = None,
     options: Options | None = None,
-) -> "runtime.Module":
-    """Run the shared pass pipeline, then build the resulting Module.
-
-    *mod* must be a ``Module``.  Meshes are derived from the IR body. Each stage
-    receives its part of *options*.
-    """
+) -> "runtime.CompiledModule":
+    """Capture the root declaration, lower its entry and build its library."""
+    if not isinstance(mod, core.Module):
+        raise TypeError(f"tilefoundry.compile: expected Module, got {type(mod).__name__}.")
     options = resolve_options("compile", mod, target, options)
+    preflight(mod)
+    declaration = codegen.artifact.describe_root(mod, target=options.target)
     with dump.Scope(flags=options.dump):
-        prepared = passes.default_pipeline(mod, options.passes).run(mod)
-        return build(prepared, target=target, options=options)
+        prepared = passes.default_pipeline(mod, options.passes).run(mod) if mod.entry is not None else mod
+        return build_module(prepared, options=options, declaration=declaration)
 
 
 __all__ = ["build", "compile", "normalize_to_module", "resolve_options"]

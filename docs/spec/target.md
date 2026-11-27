@@ -211,6 +211,10 @@ def load() -> Mapping[str, type[Target]]: ...
     After loading targets, `tilefoundry spec` MUST discover those files through
     `importlib.resources.files(entry_point.value)` in source and installed modes,
     naming each topic `<entry_point.name>/<filename stem>`.
+  - `runtime.CompiledModule` MAY be bound with `@bind(TargetClass, runtime.CompiledModule)`.
+    Library loading MUST select this class through `registered()` and `bindings`.
+    Its constructor MUST accept the library, path and validated root description.
+    Loading MUST NOT construct a Target, read hardware documents or add a runtime registry.
   - `EmitContext`, `LinkableModule`, `LinkedFunction` and `LinkedModule` MAY be
     subclassed and bound with `@bind(TargetClass, BaseClass)`. The implementation's
     `create(target, *args)` MUST provide the instance selected by `resolve`.

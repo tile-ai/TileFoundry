@@ -83,11 +83,35 @@ class Module:
 ```python
 # src/tilefoundry/runtime/module.py
 class CompiledModule(Module):
-    def __init__(self, type: codegen.CallableSignature, fn: Callable) -> None: ...
+    library: object
+    library_path: Path
+    type: codegen.CallableSignature | None
+    fn: Callable | None
+    weights: dict[str, types.TensorType]
+    operations: dict[str, str]
+    resource: Resource | None
+    placement: types.Placement | None
+    bound: dict[str, object]
+    closed: bool
+
+    def __init__(self, library, library_path, description) -> None: ...
+
+    @classmethod
+    def from_library(cls, path) -> CompiledModule: ...
+
+    def entry_schema(self) -> tuple[str, ...]: ...
+
+    def export_library(self, path) -> None: ...
 
     def load(self, resource: Resource, *, placement: "types.Placement | None" = None) -> None: ...
 
+    def close(self) -> None: ...
+
+    def operation(self, name: str): ...
+
     def unit_ids(self) -> tuple: ...
+
+    def weight_of(self, name: str): ...
 
     def forward(self, *args): ...
 
@@ -95,22 +119,44 @@ class CompiledModule(Module):
 ```
 <!-- /generated -->
 
-`CompiledModule.forward(*args)` uses the out-param ABI (`type.output_count`
-trailing params are outputs):
+- constraints:
+  - `name` and `entry` MUST retain the source root and entry names.
+    `children` MUST be empty and `module` MUST be `None`.
+  - The node MUST install only its entry as a `CompiledFunction` attribute.
+    Other functions, children and Python methods MUST NOT become attributes.
+  - Entry and child names MUST NOT shadow fields or methods declared by `Module`, `CompiledModule` or the selected subclass.
+    Compilation MUST reject conflicts before native compilation. Loading MUST reject conflicts before attribute installation.
+  - `from_library` MUST select the node class through the registered Target class and its existing `CompiledModule` binding.
+    An unbound provider MUST use `CompiledModule`. An unknown provider MUST report `is not decoded yet`.
+    Loading MUST NOT construct a Target or read hardware documents.
+  - `from_library` MUST restore the root without IR or in-memory linked signatures.
+    The restored node MUST start without resources, bound weights or placement.
+  - `export_library` MUST copy only the compiled library.
+    Copying onto the source file MUST be a no-op. Another existing destination MUST raise `FileExistsError`.
+    Copy failure MUST preserve the original node's call behavior.
+  - Default `CompiledModule.load` MUST replace the resource and placement and clear bound weights.
+    Static root weights MUST be read lazily, checked for exact shape and dtype, and retained by the node.
+    Default node calls MUST inject weights at their native parameter positions without dtype conversion.
+    Target subclasses MAY bind weights through their documented native lifecycle.
+  - A missing or unloaded weight in the default node MUST raise `KeyError` naming the root and weight.
+    A shape or dtype mismatch MUST raise `ValueError`. A failed read MUST clear partial bindings.
+    Dynamic or sharded weights MUST report `is not decoded yet`.
+  - Public input arguments MUST exclude const weights and retain explicit scratch tensors.
+    Calls MUST accept all inputs alone or all inputs followed by all outputs.
+    Partial outputs or extra arguments MUST raise `TypeError`.
+  - Automatic allocation MUST use declared static output shapes and dtypes and an input tensor's device.
+    Dynamic outputs MUST require preallocated tensors. Automatic allocation MUST report `is not decoded yet` for dynamic outputs.
+  - A single output MUST return a tensor. Zero or multiple outputs MUST return a tuple.
+  - Leading unit ids MUST come from the placement supplied to `load`.
+    Missing placement MUST raise `ValueError` when the entry requires unit ids.
+  - `close` MUST clear resources, bound weights and the native binding. Repeated closure MUST be safe.
+    Call or load after closure MUST raise `RuntimeError`. Closure MUST NOT force library unloading.
+  - A root without an entry MUST remain exportable and reloadable.
+    Calling it MUST report no entry and list its functions.
+  - Missing `operation(name)` MUST identify the library, root and operation and report `is not decoded yet`.
 
-- **Auto-alloc**: `len(args) == type.input_count` — allocates the outputs on
-  the device of the first `torch.Tensor` among the inputs, calls the entry,
-  returns result(s). With no `torch.Tensor` input it raises `TypeError`.
-- **Pre-alloc**: `len(args) == len(type.params)` — uses the provided output
-  tensors and returns them. Any other argument count raises `TypeError`.
-- **Return**: single output → bare tensor; multiple outputs → `tuple`.
-- **Unit ids**: when `type.leading` is non-empty, the call passes the unit ids of those topologies
-  ahead of the arguments. It reads them from the `Placement` given to `load`. With no `Placement` the call raises `ValueError`.
-
-Output shape and dtype come from `CallableSignature.output_params` (set by
-codegen from lowered IR, never guessed at runtime). This convention is specific
-to `CompiledModule`; other `runtime.Module.forward` implementations are not
-bound by it.
+Output shapes and dtypes come from the decoded host signature
+([codegen §6](./codegen.md#6-self-describing-library)).
 
 ### 1.2 `runtime/function.py`
 
@@ -128,6 +174,12 @@ class Function:
     def __init__(self, type: codegen.CallableSignature) -> None: ...
 
     def __call__(self, *args): ...
+
+
+class CompiledFunction(Function):
+    def __init__(self, owner, name, signature) -> None: ...
+
+    def __call__(self, *args): ...
 ```
 <!-- /generated -->
 
@@ -135,6 +187,15 @@ class Function:
   - the base `__call__` raises; every usable body is a subclass. Agents may
     write any subclass whose `__call__` runs (torch or another implementation / …).
   - codegen produces the signature, and the runtime takes it as input. [codegen §4.4](./codegen.md#44-signatures) defines it. This spec MUST NOT redefine it.
+
+`CompiledFunction` represents the compiled node's named entry.
+
+- constraints:
+  - `__call__` MUST delegate to the owner's current `forward` binding and accept positional arguments.
+  - `__name__` MUST equal the entry name. `__qualname__` MUST be `<Module name>.<entry name>`.
+  - `__signature__` MUST expose non-const native inputs, including scratch, with tensor type annotations.
+    Trailing output parameters MUST be optional positional parameters. `__doc__` MAY be `None`.
+  - The named callable MUST retain its owner and library.
 
 ### 1.3 `runtime/decorator.py`
 
@@ -322,47 +383,36 @@ LinkedModule → load → CompiledModule (fully-loaded, public, callable runtime
 `LinkedModule` is a codegen product
 ([codegen §4.3](./codegen.md#43-linkedmodule)); the loader that turns it into a
 `CompiledModule` is owned here. The loader and `LinkedModule` are not public
-API; only `CompiledModule` (a `runtime.Module`) is. `load_linked_module` returns
-`CompiledModule(type=replace(entry.signature, name=entry.name), fn=entry_callable)`,
-where `entry` is the first `LinkedFunction` (codegen sorts the `Module.entry`
-host first); `name` / `entry` are its registration name. Its `forward`
-implements the out-param calling convention directly
-([§1.1](#11-runtimemodulepy)). The compiled path has no `resource` / `weights`
-(weights are ordinary entry arguments), so `load` only records the
-`Placement` and recurses into no children.
+API; only `CompiledModule` (a `runtime.Module`) is.
+The loader reads and validates the root manifest once
+([codegen §6](./codegen.md#6-self-describing-library)).
+It resolves the declared symbol from that library and checks typed metadata against the declared ABI.
+It decodes the host signature and constructs the selected node from the manifest alone.
+Its `forward` implements the out-param calling convention directly ([§1.1](#11-runtimemodulepy)).
+The node binds root weights through `load` ([§1.1](#11-runtimemodulepy)).
 
 #### Launcher ABI
 
-`tilefoundry.build(mod)` runs codegen, links the artifact (see
-[codegen](./codegen.md)), loads it and binds the entry. It MUST raise
-`ValueError` when `Module.entry` is not a CPU host `PrimFunction`. Users interact
-only with `runtime.Module.__call__` / `runtime.Function.__call__`.
+`tilefoundry.build(mod)` runs codegen, links the artifact, loads it and binds the entry.
+Users call the result through `runtime.Module.__call__`.
 
-Load contract:
-
-- codegen produces the `LinkedModule` artifact
-  ([codegen §4.3](./codegen.md#43-linkedmodule))
-- loading uses `tvm_ffi.load_module(...)`
-- immediately after loading, entry binding uses
-  `tvm_ffi.get_global_func(entry.name)`; `runtime.Module.entry` is this
-  dotted registration name
-- the loader keeps every library it loads until process exit, because the
-  global registration table does not keep the shared library loaded
-- host registration allows override: another load replaces the global entry,
-  while an existing `CompiledModule` retains its own callable
-- a library that lacks the entry's registration is a `RuntimeError` naming the
-  library and the entry
-- callable arguments are DLPack-compatible tensors; `torch.Tensor` is one
-  supported caller-side provider but is not the semantic contract itself
-
-Generated host wrappers register entry functions with TVM FFI:
-
-```cpp
-TVM_FFI_STATIC_INIT_BLOCK() {
-  tvm::ffi::Function::SetGlobal(export_name,
-      tvm::ffi::Function::FromTyped(entry_function, export_name), /*override=*/true);
-}
-```
+- constraints:
+  - A present entry MUST be a `PrimFunction` for `build`. An HIR entry MUST report that it requires lowering.
+    A non-CPU entry MUST use the root Target. The target factory MUST accept or refuse its entry convention.
+  - The selected node MUST check entry metadata against its own `entry_schema`.
+    The default schema MUST contain unit ids followed by tensors. A target-owned token MUST NOT become a unit id.
+  - The loader MUST call `tvm_ffi.load_module(path, keep_module_alive=False)`.
+  - Manifest and entry lookup MUST use `get_function(symbol, query_imports=False)` on the loaded library.
+    Lookup MUST NOT fall back to process-global functions.
+  - `runtime.Module.name` MUST use `root.name`. `runtime.Module.entry` MUST use `root.entry`, or `None` when omitted.
+  - The typed callable MUST retain its owning library after external module references are released.
+    Loading another library MUST NOT replace an existing callable.
+  - Missing manifest, local symbol or metadata MUST raise `RuntimeError` naming the library and missing symbol.
+    A missing manifest MUST require recompilation.
+  - Malformed descriptions and mismatched ABI metadata MUST fail before a compiled object is returned.
+    Errors MUST identify the library and invalid field or symbol.
+  - Callable arguments MUST be DLPack-compatible tensors.
+    `torch.Tensor` is one supported caller-side provider.
 
 The exported function accepts flattened input/output tensor arguments. HIR
 functions may be written as `Function(params) -> tensor`, but by the runtime
@@ -426,7 +476,7 @@ def build(
     *,
     target: tilefoundry_target.Target | None = None,
     options: Options | None = None,
-) -> "runtime.Module": ...
+) -> "runtime.CompiledModule": ...
 
 
 def compile(
@@ -435,7 +485,7 @@ def compile(
     *,
     target: tilefoundry_target.Target | None = None,
     options: Options | None = None,
-) -> "runtime.Module": ...
+) -> "runtime.CompiledModule": ...
 ```
 <!-- /generated -->
 
@@ -443,18 +493,18 @@ def compile(
 # src/tilefoundry/compiler/jit_cache.py: `jit` is the one instance of `Jit`
 def jit(
     fn_or_mod, /, *, target: Target | None = None, options: Options | None = None, **kwargs
-) -> "runtime.Module": ...
+) -> "runtime.CompiledModule": ...
 
 
 class Jit:
-    def __call__(self, fn_or_mod, /, *, target=None, options=None, **kwargs) -> "runtime.Module": ...
+    def __call__(self, fn_or_mod, /, *, target=None, options=None, **kwargs) -> "runtime.CompiledModule": ...
     def cache_clear(self) -> None: ...
     def cache_info(self) -> dict: ...  # {"size": N}
 ```
 
 `tilefoundry.jit(fn_or_mod, *, target=None, options=None)` is the JIT
 entry point. It accepts a `core.Function` or `Module`, normalizes to a
-`Module`, compiles with cache, and returns a callable `runtime.Module`.
+`Module`, compiles with cache, and returns a `runtime.CompiledModule`.
 
 **Input contract**:
 - Only TileFoundry IR objects (`Function` / `Module`) are accepted; anything
@@ -476,14 +526,20 @@ entry point. It accepts a `core.Function` or `Module`, normalizes to a
 A bare `Function` input is wrapped into a single-function `Module` that
 declares no execution context.
 
-**Cache**: in-process dict cache, held by the `jit` object, keyed by
-`sha256(canonical_module_text + "\0" + repr(options))`; the `repr` of the frozen
-`compiler.Options` names the Target and every stage's option.
-`canonical_module_text` includes functions, declared topology hierarchies, and
-`with Mesh` scopes. Independently compiled Modules declare their execution
-context ([core-ir §1](./core-ir.md#1-module)). No Python object identity
-participates in the key.
+**Cache**: the `jit` object holds one in-process dictionary.
+The key includes entry text, effective topologies, options and the root export description.
+The description distinguishes root names, entry names, tensor signatures and weight roles.
+An empty root uses only its description and options.
 `jit.cache_clear()` evicts; `jit.cache_info()` returns `{"size": N}`.
+
+- constraints:
+  - `compile` MUST capture the root declaration before running passes.
+    Automatic host names MUST NOT replace the source entry name in the manifest.
+  - `build` MUST snapshot the current lowered declaration and MUST NOT run passes.
+  - A root without an entry and without children MUST produce a manifest-only library and skip execution passes.
+    A root without an entry and with children MUST report `compiled module tree is not decoded yet`.
+  - JIT MUST NOT create an automatic disk cache. Export and reload MUST remain explicit actions.
+  - JIT MUST preserve the source declaration across pipeline mutations so repeated requests retain their key.
 
 ### 1.8 `runtime/resource.py`
 

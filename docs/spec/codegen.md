@@ -2,7 +2,7 @@
 
 Codegen turns verified, lowered `core.PrimFunction`s into a loadable artifact.
 It emits per-target source. It assembles the translation unit of each target.
-It links the units into one host-callable shared library.
+It links the units into one callable shared library.
 [runtime](./runtime.md) owns the loading of that artifact as a `runtime.Module`.
 
 ```mermaid
@@ -80,8 +80,10 @@ class LinkableModule:
     Bindings select classes, never strings.
   - A factory writes each function twice: once as the declaration a caller sees,
     without entering the body, and once as the definition, by walking it.
+  - Core MUST resolve actual Launch edges without requiring a Launch for every device group.
+    A target factory MUST validate the geometry and entry convention it requires.
   - A second unequal device Target group MUST fail before any factory emits.
-    One linked artifact supports one device architecture only.
+    One linked artifact supports zero or one device architecture.
   - EmitContext and Linkable/Linked products MAY be subclassed through bindings.
     The compile-wide `codegen.Context` and `LinkableFunction` have no resolution
     hook in this interface.
@@ -254,19 +256,20 @@ user-callable.
 
 The link output: a loadable artifact plus the host-visible metadata the loader
 needs. Defined in `codegen/linked_module.py`.
-`codegen/linked_function.py` separates each registration name from its C++ host
-signature:
+`codegen/linked_function.py` separates logical names, DLL symbols and host signatures:
 
 ```python
 class LinkedFunction:
-    """One linked function's registration name and host signature.
+    """One linked function's logical name, DLL symbol and host signature.
 
     Attributes:
-        name: attribute; the dotted registration name.
+        name: attribute; the dotted logical name.
+        symbol: attribute; the library-local FFI symbol.
         signature: attribute; the host C++ calling convention and name.
     """
 
     name: str
+    symbol: str
     signature: CallableSignature
 
 class LinkedModule:
@@ -284,21 +287,21 @@ class LinkedModule:
 ```
 
 - constraints:
-  - `LinkedFunction.name` MUST be the dotted registration name;
-    `signature` MUST retain the host C++ calling convention and its C++ name
-    ([§4.4](#44-signatures)). `LinkedFunction.create` builds this pair from a resolved `FunctionSymbol`.
-  - `LinkedModule.functions` MUST list all CPU hosts on the Module's call paths.
-    It MUST put the `Module.entry` host first when present. The loader binds the
-    first host ([runtime §1.4](./runtime.md#14-runtimeloaderpy)).
-  - MUST carry the assembled host + device source — the diagnostic source the
-    runtime exposes as `runtime.Module.source` ([runtime](./runtime.md)).
+  - `LinkedFunction.name` MUST be the dotted logical name.
+    `symbol` MUST be the C identifier used by the typed DLL export.
+    `signature` MUST retain the host calling convention and C++ name
+    ([§4.4](#44-signatures)). `LinkedFunction.create` reads these values from a resolved `FunctionSymbol`.
+  - `LinkedModule.functions` MUST list only the root entry, or be empty when the root has no entry.
+    Other CPU hosts MAY remain internal code dependencies.
+  - `source` MUST carry the assembled source, including the manifest translation unit.
+    It remains an in-memory diagnostic.
 
 `codegen/link_module.py` exposes the whole-program and translation-unit entries:
 
 ```python
 def link_program(
     mod: core.Module, *, workdir: str | Path,
-    options: Options = Options(),
+    options: Options = Options(), declaration: dict | None = None,
 ) -> LinkedModule: ...
 
 
@@ -319,8 +322,9 @@ class CMakeProject:
 
 - constraints:
   - `link_program` MUST emit one `LinkableModule` per device context group.
-    It MUST combine all selected CPU entries into one host group and
-    one `host.cpp`.
+    When CPU entries exist, it MUST combine them into one host group and one `host.cpp`.
+    A device root MAY provide its entry without a CPU host or Launch.
+    Linking MUST use the root entry Target's `LinkedModule` implementation.
   - `link_modules` MUST create one `CMakeProject`, invoke each module's
     `link(project)`, then call `host.resolve(LinkedModule, project, functions)`.
     The default `LinkedModule.create` MUST call `project.build(functions)`; it
@@ -336,13 +340,15 @@ class CMakeProject:
   - Each target MUST directly include its packaged runtime header. Runtime
     include directories MUST be located through `importlib.resources`.
 
-`link_program` emits and links all CPU hosts on the Module's call paths without
-loading, placing the `Module.entry` host first when present, with launcher
-declarations deduplicated. Sources are written directly in `workdir`; the
-library is `workdir/build/lib<root Module name>.so`. The concrete compiler
-commands are not part of the contract. `build()` chooses a fresh work directory
-([runtime §1.6](./runtime.md#16-compiler)); the scaffold command chooses its
-output directory ([cli](./cli.md#scaffold)).
+`link_program` emits the CPU hosts on the Module's call paths and deduplicates launcher declarations.
+It exports only the root entry through TVM FFI.
+A root without an entry produces only the manifest translation unit.
+Sources are written directly in `workdir`; the library is `workdir/build/lib<root Module name>.so`.
+The concrete compiler commands are not part of the contract.
+`build()` chooses a fresh work directory ([runtime §1.6](./runtime.md#16-compiler)).
+The scaffold command chooses its output directory ([cli](./cli.md#scaffold)).
+The shared project links the installed TVM FFI library.
+It applies `-static-libstdc++` only on non-Apple hosts.
 
 ### 4.4 Signatures
 
@@ -439,8 +445,10 @@ class CallableSignature(Signature):
   - parameters codegen inserts (`tilefoundry_placement`,
     `tilefoundry_<topology>_unit_id`) and unit-owned state MUST carry the
     `tilefoundry_` prefix. Their spellings belong to their respective targets.
-  - host wrappers use `export_name(root, fn)` registration names, registering
-    through `Function::SetGlobal` with override enabled.
+  - The root entry and implemented lifecycle functions MUST use `TVM_FFI_DLL_EXPORT_TYPED_FUNC` with legal C identifiers.
+    The translation unit MUST enable `TVM_FFI_DLL_EXPORT_INCLUDE_METADATA` before including `function.h`.
+    Generated entries and lifecycle functions MUST NOT register process-global functions.
+    Dotted logical names belong in the manifest ([§6](#6-self-describing-library)).
   - User parameter names are used verbatim. They MUST be C identifiers. They
     MUST NOT be C++ keywords. They MUST NOT start with `tilefoundry_`. They MUST
     NOT collide with another parameter. They MUST NOT collide with a derived
@@ -448,9 +456,9 @@ class CallableSignature(Signature):
     parameter's `<name>_mesh`). Errors name
     the function path and parameter.
   - The entry that the loader receives ([§4.3](#43-linkedmodule)) is a fourth
-    value of the same shape. Its `name` is the TVM FFI registration name. The
-    loader combines it with the `signature` of the `LinkedFunction` to obtain
-    the entry. Each `leading` entry is a `UnitIdSignature`. Its `topology`
+    value of the same shape. Its `name` is the manifest entry name. The
+    loader combines the manifest identity with the linked host signature.
+    Each `leading` entry is a `UnitIdSignature`. Its `topology`
     names the topology whose unit id the host supplies. That caller reads the id
     out of a `Placement` ([shard §5](./shard.md#5-mesh)). It does not write a
     C++ declaration.
@@ -517,3 +525,53 @@ variant runs is decided on the device.
     the call already carries -- the parameter the open axis expands into. A
     shape outside every variant's range is a call-contract violation and the
     kernel traps.
+
+## 6. Self-describing library
+
+```python
+def describe_root(module, *, target=None) -> dict: ...
+def describe_signature(signature, source_params) -> dict: ...
+def bind_root(declaration, signature, symbol: str, operations) -> dict: ...
+def decode_tensor(tensor) -> types.TensorType: ...
+def decode_signature(function) -> CallableSignature: ...
+def validate_description(description) -> dict: ...
+def render_description(description) -> str: ...
+```
+
+- constraints:
+  - `codegen.artifact` MUST encode only standard values. It MUST NOT serialize IR objects or evaluate Python text.
+  - Every root library MUST export `tilefoundry_manifest()` through typed TVM FFI.
+    The getter MUST return `Map<String, Any>` with the fields below.
+  - The manifest MUST describe only the root entry. It MUST NOT contain Python methods or docstrings.
+  - `describe_root` MUST use an available target callee convention to describe the source tensor ABI.
+    Target conventions MUST express host shapes and dtypes without copying device storage layouts into the manifest.
+  - `bind_root` MUST accept implemented operations from the target's generated product.
+    It MUST associate the source declaration with the actual lowered host signature and symbol.
+    The source root and entry names MUST remain unchanged.
+    Native inputs absent from the source declaration MUST retain the `scratch` role.
+  - Decoding MUST construct host signature data from validated tensor records without importing or executing authored Python.
+    It MUST NOT require the original IR or reconstruct device layouts.
+  - A root without an entry MUST use `functions=[]` and omit `entry`.
+    Generation MUST skip codegen contexts for its unexported functions.
+  - Tensor encoding MUST accept plain HOST or GMEM tensors with compact layouts or no layout.
+    Unsupported layouts, storage and dimension expressions MUST report their field path and `is not decoded yet`.
+  - Validation MUST reject unknown fields, versions, dtypes, duplicate names, duplicate symbols and invalid output order before entry binding.
+  - All referenced symbols MUST be C identifiers. Each symbol MUST identify one local typed export with metadata.
+  - Entry calls MUST retain flattened typed tensor parameters and the target's implemented scalar prefix.
+    CPU/CUDA unit ids MUST remain in `unit_ids`. Target-owned instance tokens MUST remain outside the manifest signature.
+    Manifest containers MUST NOT wrap entry arguments.
+
+| Field | Value and rule |
+|---|---|
+| `format` | Integer `1`; other versions are rejected. |
+| `root.name`, `root.target` | Nonempty Module name and registered Target class name. |
+| `root.entry` | Entry name; omission requires an empty `functions` array. |
+| `root.functions` | Array with at most one record containing `name`, `symbol`, and `signature`; `name` equals `root.entry`. |
+| `signature.params` | Ordered array of records containing `name`, `tensor`, and `role`. Names are unique. |
+| `role` | `input`, `weight`, `scratch`, or `output`; outputs occupy exactly the trailing output positions. |
+| `signature.output_count` | Integer from zero through the parameter count. |
+| `signature.unit_ids` | Ordered array of unique topology names. |
+| `tensor.dtype` | A name from `DType`. |
+| `tensor.shape` | Array of nonnegative integer extents or records with `name`, `lo`, and `hi`; bounds satisfy `0 <= lo <= hi`. |
+| `root.weights` | Map from weight names to tensor records; matching parameter declarations agree. |
+| `root.operations` | Map from implemented operation names to distinct typed symbols; CPU/CUDA use an empty map. |

@@ -262,11 +262,11 @@ class CudaLinkableModule(codegen.LinkableModule):
         kernels = tuple(fn for fn in functions if ctx.codegen_context.targets[id(fn)] == tgt)
         if not kernels:
             raise ValueError(f"emit_cuda_module: module {module.name!r} has no CUDA device kernels")
+        geometry = one_geometry(kernels, ctx)
         functions = (
             *device_functions(kernels, ctx),
             *(emit_function(fn, ctx) for fn in kernels),
         )
-        geometry = one_geometry(kernels, ctx)
         preamble = render(
             "cuda_preamble.cu.j2",
             program_topology=topology_enumerator(

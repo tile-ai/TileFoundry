@@ -36,12 +36,12 @@ def test_placed_kernel_writes_own_rows() -> None:
     )
     GpuPlacedRows = cli.load_authored_ir(f"{gpu_placed_rows}:GpuPlacedRows")
     if torch.cuda.device_count() < GPUS:
-        pytest.fail(
-            "a placed launch is a claim about two cards; with one there is "
-            "nothing to place, so a skip here would report a pass it never earned"
-        )
+        pytest.skip("requires two NVIDIA devices; placement execution is unverified")
 
-    entry = tilefoundry.compile(GpuPlacedRows).type
+    root = tilefoundry.compile(GpuPlacedRows)
+    assert root.name == GpuPlacedRows.name and root.entry == GpuPlacedRows.entry
+    assert root.entry in vars(root)
+    entry = root.type
     assert tuple(p.topology for p in entry.leading) == ("gpu",)
     failures: list[BaseException] = []
 

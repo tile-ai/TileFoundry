@@ -132,10 +132,13 @@ step.
 
 - constraints:
   - When `entry` is present, it MUST name a function in `functions`.
-    `entry_function()` MUST return that function. `tilefoundry.build(...)` and the emitter MUST start there. Other functions enter the output only when
+    `entry_function()` MUST return that function. Execution compilation and emission MUST start there. Other functions enter the output only when
     reachable from `entry`.
   - When `entry` is omitted (`None`), the Module MUST have no default step.
     `entry_function()` and an unqualified evaluator call MUST be refused. The refusal MUST name the Module's functions and explain that the caller selects one by name. Each function remains reachable by name. A Module that composes children in an orchestration method has no single step to nominate. The caller invokes that host Python method by name and does not select it as an evaluator target.
+  - `build` and `compile` MAY produce a non-callable container when `entry=None` and `children` is empty.
+    Calling that container MUST report no entry.
+    A container without an entry but with children MUST report `compiled module tree is not decoded yet`.
 
 ### 1.1 Function access
 

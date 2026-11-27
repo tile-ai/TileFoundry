@@ -9,7 +9,7 @@ checkpoint ``runtime.Resource``s, and ``check``. See
 from __future__ import annotations
 
 from .decorator import func, module
-from .function import Function
+from .function import CompiledFunction, Function
 from .loader import load_linked_module
 from .measure import (
     PREDICATES,
@@ -28,7 +28,7 @@ from .measure import (
     check,
     flatten_outputs,
 )
-from .module import CompiledModule, Module
+from .module import CompiledModule, Module, validate_names
 from .placement import placement_from_env
 from .prepare import prepare, prepare_into
 from .resource import (

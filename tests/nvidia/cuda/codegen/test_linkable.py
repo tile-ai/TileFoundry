@@ -32,9 +32,11 @@ def _host_unit(square) -> codegen.LinkableModule:
     root = codegen.build_context(square)
     group = next(group for group in root.groups if entry in group.functions)
     view = root.for_group(group)
-    return entry.target.resolve(
+    unit = entry.target.resolve(
         codegen.LinkableModule, square, (entry,), entry.target.resolve(codegen.EmitContext, view)
     )
+    linked = entry.target.resolve(codegen.LinkedFunction, root.symbols.by_function[id(entry)])
+    return unit, linked
 
 
 def test_unit_orders_declarations_before_definitions() -> None:
@@ -66,16 +68,19 @@ class SquareHostUnit(LinkableCase):
     path: Path = SQUARE
 
     def guard(self, state, problems):
-        unit = _host_unit(state)
-        problems.run("declaration matches definition", self.declaration_matches_definition, unit)
+        unit, linked = _host_unit(state)
+        problems.run("declaration matches definition", self.declaration_matches_definition, unit, linked)
         problems.run(
             "entry declared before defined", self.entry_declared_before_defined, unit, state
         )
 
     @staticmethod
-    def declaration_matches_definition(unit):
+    def declaration_matches_definition(unit, linked):
         entry = unit.functions[0]
         assert _param_types(entry.declaration) == _param_types(entry.definition.split("{")[0])
+        assert linked.symbol == linked.signature.name
+        assert linked.symbol in entry.declaration
+        assert linked.name.endswith(f".{entry.name}")
 
     @staticmethod
     def entry_declared_before_defined(unit, program):
