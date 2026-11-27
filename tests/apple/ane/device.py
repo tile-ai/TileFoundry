@@ -28,7 +28,7 @@ def available() -> bool:
 
 
 def emit(lowered: core.Module) -> str:
-    """Generate the translation unit of the lowered entry, which produces and validates its image."""
+    """Generate the entry's translation unit, which produces and validates its image."""
     fn = lowered.entry_function()
     signature = codegen.signature.called_as(fn, codegen.mangle(lowered, fn), target=fn.target)
     ctx = codegen.EmitContext(codegen.registry, symbols={id(fn): signature}, target=fn.target)
