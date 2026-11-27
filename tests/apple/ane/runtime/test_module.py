@@ -18,6 +18,9 @@ from tilefoundry_apple.ane import runtime as ane_runtime
 from tilefoundry_apple.ane.codegen import module as ane_module
 
 ROOT = Path(__file__).parents[1] / "fixtures" / "scheduled"
+pytestmark = pytest.mark.skipif(
+    sys.platform != "darwin", reason="the ANE launcher links macOS frameworks"
+)
 
 
 @pytest.fixture(params=("conv_1x1", "conv_1x1_relu", "multi_weight"))

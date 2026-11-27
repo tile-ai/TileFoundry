@@ -15,8 +15,9 @@ The ANE TIR Ops are the tasks that one Apple Neural Engine runs. Each Op is one 
   Its W stride MUST be 1 when `W` is above 1. The engine addresses a feature map by row, channel, depth and group
   strides and has no element stride. An Op may further constrain the layout.
 - `weight` and `bias` are in `gmem`. The kernel height and width of a `weight` are at most 32.
-- The nonlinear modes are `NONE` and `RELU` ([Nonlinear](#nonlinear)).
-  A lookup-table nonlinear, such as sigmoid or tanh, is not an instruction mode. Pairing gives it no `T.ane` candidate.
+- The public nonlinear modes are `NONE` and `RELU` ([Nonlinear](#nonlinear)).
+  Pairing gives SiLU, sigmoid and tanh no `T.ane` candidate.
+  SiLU LUT content and lookup arithmetic are not decoded yet, including for `[1, 32, 16, 16]`.
 - Single-operator runs on `apple.m2_pro.ane` checked the value ranges of this page. Its architecture is `apple.h14`.
   No other ANE generation is checked.
 

@@ -201,6 +201,11 @@ All table slots must be supplied. Shapes exceeding that weight range are rejecte
 before packing. The header, table slots and weight offset share the same layout
 rules; weights cannot be silently truncated.
 
+This layout defines storage, not activation sample points or lookup arithmetic.
+The supplied table slots overwrite their header and trailer defaults.
+Those defaults alone do not define a SiLU table.
+The public nonlinear modes remain those in [tir §1](./tir.md#1-common-constraints).
+
 Coefficient slot addresses and relocation widths come from
 `isa.fields.COEFFICIENT_RELOCATIONS`. Packet flags select only the forms emitted
 as extended packets; the width table also covers ordinary single-word and paired
