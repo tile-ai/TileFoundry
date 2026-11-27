@@ -1,11 +1,13 @@
 """H14 ANE task descriptors and their configuration fields."""
 
-from . import intrinsic
+from . import arith, dma, fields, intrinsic, rules
 from .fields import (
+    COEFFICIENT_RELOCATIONS,
     CONFIG_BLOCKS,
     L2,
     NE,
     PE,
+    RESET_IMAGE,
     BitField,
     Block,
     Common,
@@ -24,8 +26,6 @@ from .fields import (
     TileDMASrc,
 )
 from .intrinsic import (
-    Engine,
-    TensorDesc,
     activation,
     coefficient_dma,
     compute_ne,
@@ -38,7 +38,7 @@ from .intrinsic import (
     splice,
     staged_copy,
     store,
-    tensor_desc,
 )
-from .serialize import Packet, serialize
+from .serialize import RELOCATION_SLOTS, Packet, serialize
 from .td import MAX_TASK_WORDS, PREAMBLE, TD, Program
+from .tensor_desc import SURFACE_ROW_ALIGN, Engine, TensorDesc

@@ -173,8 +173,6 @@ src = ["src", "targets/nvidia", "targets/apple"]
 # The user entry points re-export names of other directories (D57, D58).
 "src/tilefoundry/__init__.py" = ["C3", "C11"]
 "src/tilefoundry/dsl/__init__.py" = ["C3", "C11"]
-# The ANE byte layer exposes TD.build and TD.decode as named constructors.
-"targets/apple/tilefoundry_apple/ane/isa/td.py" = ["S2"]
 # Plugin loading points import modules by name.
 "src/tilefoundry/target/registry.py" = ["S5"]
 "src/tilefoundry/cli/target.py" = ["S5"]

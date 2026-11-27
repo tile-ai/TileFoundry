@@ -3,10 +3,13 @@
 import struct
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from .fields import (
+    COEFFICIENT_RELOCATIONS,
     CONFIG_BLOCKS,
     BitField,
+    KernelDMA,
     TileDMADst,
     TileDMASrc,
     block_at,
@@ -16,45 +19,31 @@ from .fields import (
 WORD_BYTES = struct.calcsize("<I")
 TASK_ALIGN_GRANULE = 16
 DESCRIPTOR_ALIGN = 64
-
-# A packet header is one 32-bit word that these fields fully describe.  A RUN
-# carries a base word address, a 6-bit (count - 1) and 10 relocation-flag bits;
-# a MASK sets the tag bit and replaces the count and flags with a 16-bit window.
-PKT_BASE = BitField(0, 14, 0)     # base word address
-PKT_COUNT = BitField(0, 20, 15)   # RUN: words - 1
-PKT_FLAGS = BitField(0, 30, 21)   # RUN: relocation flags
-PKT_WINDOW = BitField(0, 30, 15)  # MASK: 16-bit offset window
-PKT_TAG = BitField(0, 31, 31)     # 1 = MASK, 0 = RUN
-ADDR_MASK = PKT_BASE.mask                        # 0x7FFF
-RUN_MAX = (PKT_COUNT.mask >> PKT_COUNT.lo) + 1   # 64 consecutive words
-MASK_WIDTH = PKT_WINDOW.hi - PKT_WINDOW.lo + 1   # 16 window offsets
-RELOCATION_SLOTS = {
-    0x1110: 0x114,
-    0x1128: 0x118,
-    0x1508: 0x110,
-    0x1908: 0x118,
-    0x1A00: 0x118,
-}
-RELOCATION_SINGLES = {0x19F4: 0x118}
-"""Base-address word pairs that are patched after emission, keyed by their low word.
-
-Each relocated base address is a 64-bit value in two adjacent words.  The pair
-travels as one flagged run packet of its own, after the ordinary words and after
-the padding sentinels, so the patcher can rewrite both halves without disturbing
-a neighbouring packet.  The flag names the relocation slot the pair belongs to.
-"""
-#: The relocated base-address pairs travel in pipeline order too: the kernel
-#: coefficient stream and its tables first, then the two sources, then the
-#: destination.  Each entry is the low word of a 64-bit base the patcher rewrites.
-EXTENDED_ORDER = (
-    0x1908,  # kernel coefficient-stream base (low)
-    0x19F8,  # kernel DMA relocation slot (low)
-    0x1A00,  # kernel DMA relocation slot (low)
-    TileDMASrc.tile_dma_src_base_addr_lo.addr,   # 0x1110  source
-    TileDMASrc.tile_dma_src2_base_addr_lo.addr,  # 0x1128  second source
-    TileDMADst.tile_dma_dst_base_addr_lo.addr,   # 0x1508  destination
+PKT_BASE = BitField(0, 14, 0)
+PKT_COUNT = BitField(0, 20, 15)
+PKT_FLAGS = BitField(0, 30, 21)
+PKT_WINDOW = BitField(0, 30, 15)
+PKT_TAG = BitField(0, 31, 31)
+ADDR_MASK = PKT_BASE.mask
+RUN_MAX = (PKT_COUNT.mask >> PKT_COUNT.lo) + 1
+MASK_WIDTH = PKT_WINDOW.hi - PKT_WINDOW.lo + 1
+RELOCATION_SLOTS = MappingProxyType(
+    {
+        TileDMASrc.tile_dma_src_base_addr_lo.addr: 0x114,
+        TileDMASrc.tile_dma_src2_base_addr_lo.addr: 0x118,
+        TileDMADst.tile_dma_dst_base_addr_lo.addr: 0x110,
+        KernelDMA.kernel_dma_src_base_lo.addr: 0x118,
+        KernelDMA.kernel_dma_aux_base_lo.addr: 0x118,
+    }
 )
-MARKER_ADDR = 0x1524
+RELOCATION_SINGLES = MappingProxyType({KernelDMA.kernel_dma_lut_base.addr: 0x118})
+EXTENDED_ORDER = (
+    *(addr for addr, width in COEFFICIENT_RELOCATIONS.items() if width == 8),
+    TileDMASrc.tile_dma_src_base_addr_lo.addr,
+    TileDMASrc.tile_dma_src2_base_addr_lo.addr,
+    TileDMADst.tile_dma_dst_base_addr_lo.addr,
+)
+MARKER_ADDR = TileDMADst.tile_dma_dst_marker.addr
 PAD_SENTINEL = 0xDEAD
 
 
@@ -78,6 +67,8 @@ class Packet:
             for addr in addrs
         ):
             raise ValueError("packet address outside the word address space")
+        if block_at(addrs[0]) is None or any(block_at(addr) is not block_at(addrs[0]) for addr in addrs):
+            raise ValueError("packet addresses must lie inside one declared configuration block")
         start = addrs[0]
         base = PKT_BASE.put(0, start // WORD_BYTES)
         if self.kind == "run":
@@ -103,29 +94,6 @@ class Packet:
             check_word(value)
         return (head, *(value for _, value in self.writes))
 
-    @classmethod
-    def from_words(cls, words: tuple[int, ...], off: int) -> tuple["Packet", int]:
-        """Decode a packet and return the index after its last value."""
-        if not 0 <= off < len(words):
-            raise ValueError(f"missing packet header at word {off}")
-        head = words[off]
-        base = PKT_BASE.get(head)
-        if PKT_TAG.get(head):
-            window = PKT_WINDOW.get(head)
-            addrs = [base, *(base + 1 + bit for bit in range(MASK_WIDTH) if window >> bit & 1)]
-            kind, flags = "mask", 0
-        else:
-            count = PKT_COUNT.get(head) + 1
-            addrs = range(base, base + count)
-            kind, flags = "run", PKT_FLAGS.get(head)
-        end = off + 1 + len(addrs)
-        if end > len(words) or addrs[-1] > ADDR_MASK:
-            raise ValueError(f"invalid packet at word {off}: payload or address range overrun")
-        return cls(
-            kind,
-            tuple((WORD_BYTES * addr, value) for addr, value in zip(addrs, words[off + 1 : end])),
-            flags,
-        ), end
 
 def serialize(image: Mapping[int, int]) -> list[Packet]:
     """Group words by block, choosing RUN on a tie with the MASK window."""
@@ -147,7 +115,7 @@ def serialize(image: Mapping[int, int]) -> list[Packet]:
         pending = sorted(
             addr for addr in image if block.base <= addr < block.end and addr not in paired
         )
-        packets.extend(_block_packets(pending, image))
+        packets.extend(block_packets(pending, image))
     packets.extend(pairs)
     packets.extend(
         Packet("run", ((addr, image[addr]),), flag) for addr, flag in sorted(singles.items())
@@ -155,14 +123,10 @@ def serialize(image: Mapping[int, int]) -> list[Packet]:
     return packets
 
 
-#: The blocks are emitted in pipeline order, not address order: coefficients
-#: first, then the shared configuration, the source DMA and its trigger, the
-#: L2 read setup, the compute engine (PE or NE), and the destination DMA.  That
-#: order lives once, as each block's ``pipeline_rank``; this is just them sorted.
 STAGE_ORDER = tuple(sorted(CONFIG_BLOCKS, key=lambda block: block.pipeline_rank))
 
 
-def _block_packets(pending: list[int], image: Mapping[int, int]) -> list[Packet]:
+def block_packets(pending: list[int], image: Mapping[int, int]) -> list[Packet]:
     """Pack one block's words into RUN and MASK packets.
 
     A window that holds every pending word becomes a single MASK unless the whole

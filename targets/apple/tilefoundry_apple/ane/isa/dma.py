@@ -1,0 +1,224 @@
+"""Decode verified tile transfers and their register-only memory relationships."""
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+
+from . import fields
+from .arith import align_up
+from .tensor_desc import neural_staging_row
+
+L2_CAPACITY = 2 * 1024 * 1024
+
+
+def value(image: Mapping[int, int], field: fields.BitField) -> int:
+    """Read a field from an effective register image."""
+    return field.get(image.get(field.addr, 0))
+
+
+@dataclass(frozen=True)
+class Transfer:
+    """One enabled tile DMA's effective fp16 geometry and byte strides."""
+
+    name: str
+    register: int
+    channels: int
+    height: int
+    width: int
+    row: int
+    channel: int
+
+    @property
+    def end(self) -> int:
+        """Exclusive end of the effective elements relative to the DMA base."""
+        return (self.channels - 1) * self.channel + (self.height - 1) * self.row + self.width * 2
+
+
+def transfers(image: Mapping[int, int]) -> tuple[Transfer, ...]:
+    """Decode active readers and writers, refusing modes with undetermined footprints."""
+    common, l2 = fields.Common, fields.L2
+    access = value(image, l2.l2_src_type)
+    second = value(image, l2.l2_src_second_stream)
+    enabled = value(image, fields.TileDMADst.tile_dma_dst_enable)
+    if not (access or second or enabled):
+        if any(value(image, field) for field in (l2.l2_src_channel_stride, l2.l2_src_row_stride,
+                                                l2.l2_result_channel_stride, l2.l2_result_row_stride)):
+            raise ValueError("L2-only transfer mapping is not decoded yet")
+        return ()
+    if access != fields.L2Access.DMA_READ or not enabled:
+        raise ValueError("tile DMA access mapping is not decoded yet")
+    for field in (common.pe_src1_transpose, common.pe_src2_transpose,
+                  common.pe_output_cto_w, common.small_source_mode, l2.l2_src_dependent):
+        if value(image, field):
+            raise ValueError(f"tile DMA mode at {field.addr:#x}[{field.hi}:{field.lo}] is not decoded yet")
+    if (value(image, l2.l2_result_type) != fields.L2Access.DMA_READ
+            or not value(image, l2.l2_result_buffer_mode)):
+        raise ValueError("L2 result DMA mapping is not decoded yet")
+    task = value(image, common.task_type)
+    if task not in (fields.TaskType.NE, fields.TaskType.PE_POOL_UNARY,
+                    fields.TaskType.PE_EW_UNARY, fields.TaskType.PE_EW_BINARY,
+                    fields.TaskType.PE_EW_REDUCE_UNARY):
+        raise ValueError(f"task_type {task} DMA geometry is not decoded yet")
+    binary = task == fields.TaskType.PE_EW_BINARY
+    if second != binary:
+        raise ValueError("second-stream task mapping is not decoded yet")
+    if value(image, common.source_routing) != (3 if binary else 1):
+        raise ValueError("source_routing DMA mapping is not decoded yet")
+    if binary and value(image, fields.PE.second_source) != 2:
+        raise ValueError("PE second_source DMA mapping is not decoded yet")
+    for field in (common.din, common.dout):
+        if value(image, field) != 1:
+            raise ValueError("tile DMA depth other than one is not decoded yet")
+    for field in (common.common_in_fmt, common.common_src2_in_fmt, common.common_out_fmt):
+        if value(image, field) != 2:
+            raise ValueError("tile DMA common format is not decoded yet")
+    source = tuple(value(image, field) for field in (common.cin, common.hin, common.win))
+    result = tuple(value(image, field) for field in (common.cout, common.hout, common.wout))
+    if min(*source, *result) <= 0:
+        raise ValueError("tile DMA geometry must have positive channel, height and width")
+    tile = value(image, common.tile_height)
+    if not 1 <= tile <= result[1]:
+        raise ValueError(f"tile_height {tile} must be within [1, {result[1]}]")
+    transpose = value(image, common.output_transpose)
+    if not transpose and value(image, common.fill_lower_nodes_first):
+        raise ValueError("fill_lower_nodes_first DMA mapping is not decoded yet")
+    if transpose:
+        if (task != fields.TaskType.NE or value(image, fields.NE.op) != fields.NEOp.BYPASS
+                or value(image, common.unicast_cin) != 2
+                or not value(image, common.fill_lower_nodes_first) or source != result):
+            raise ValueError("output transpose DMA mapping is not decoded yet")
+        result = result[2], result[1], result[0]
+    elif task in (fields.TaskType.PE_EW_UNARY, fields.TaskType.PE_EW_BINARY,
+                  fields.TaskType.PE_EW_REDUCE_UNARY) and source != result:
+        raise ValueError("elementwise and reduction declared output geometry must equal input")
+    if task == fields.TaskType.PE_EW_REDUCE_UNARY:
+        result = result[0], 1, 1
+    if task in (fields.TaskType.PE_POOL_UNARY, fields.TaskType.NE):
+        neural_op = value(image, fields.NE.op)
+        if task == fields.TaskType.NE and neural_op not in (fields.NEOp.CONV, fields.NEOp.BYPASS):
+            raise ValueError("neural operation DMA geometry is not decoded yet")
+        if task == fields.TaskType.NE and neural_op == fields.NEOp.BYPASS:
+            if (value(image, common.num_groups) != 1 or not value(image, common.unicast_en)
+                    or value(image, common.unicast_cin) != (2 if transpose else 1)):
+                raise ValueError("bypass unicast DMA mapping is not decoded yet")
+        if task == fields.TaskType.PE_POOL_UNARY and source[0] != result[0]:
+            raise ValueError("pool output channels must equal input channels")
+        if task == fields.TaskType.PE_POOL_UNARY or neural_op == fields.NEOp.CONV:
+            if (value(image, common.out_offset_x), value(image, common.out_offset_y)) != (1, 1):
+                raise ValueError("kernel output offset DMA mapping is not decoded yet")
+            if value(image, common.pad_left) or value(image, common.pad_top):
+                raise ValueError("padded DMA footprint is not decoded yet")
+            kw, kh, sx, sy = (value(image, f) for f in (common.kw, common.kh, common.sx, common.sy))
+            if min(kw, kh, sx, sy) <= 0:
+                raise ValueError("kernel window and strides must be positive")
+            if result[1:] != ((source[1] - kh) // sy + 1, (source[2] - kw) // sx + 1):
+                raise ValueError("output geometry contradicts the kernel window and strides")
+        elif not transpose and source != result:
+            raise ValueError("bypass output geometry must equal input")
+    decoded = [decode(image, "src", source), decode(image, "dst", result)]
+    if second:
+        decoded.insert(1, decode(image, "src2", source))
+    return tuple(decoded)
+
+
+def decode(image: Mapping[int, int], name: str, shape: tuple[int, int, int]) -> Transfer:
+    """Decode the verified tiled fp16 format and check non-overlapping DMA strides."""
+    block = fields.TileDMADst if name == "dst" else fields.TileDMASrc
+    prefix = f"tile_dma_{name}_"
+    for suffix, expected in (("format_mode", 1), ("trunc", 3), ("shift", 0),
+                             ("memory_format", 2), ("offset_ch", 0), ("interleave", 1),
+                             ("cmp_vec", 0)):
+        field = block.fields[prefix + suffix]
+        if value(image, field) != expected:
+            raise ValueError(f"{prefix}{suffix}={value(image, field)} is not decoded yet")
+    if name == "dst":
+        for suffix in ("zero_pad_first", "zero_pad_last", "fifo_mode"):
+            if value(image, block.fields[prefix + suffix]) != 1:
+                raise ValueError(f"{prefix}{suffix} mode is not decoded yet")
+    if name != "src2":
+        for suffix in ("depth_stride", "group_stride"):
+            if value(image, block.fields[prefix + suffix]):
+                raise ValueError(f"{prefix}{suffix} mapping is not decoded yet")
+    channels, height, width = shape
+    row = value(image, block.fields[prefix + "row_stride"]) * 64
+    if not row and min(shape) == 1:
+        row = align_up(width * 2, 64)
+    channel = value(image, block.fields[prefix + "channel_stride"]) * 64
+    if row < width * 2:
+        raise ValueError(f"{prefix}row_stride {row} does not cover width {width} fp16 elements")
+    if channel < height * row:
+        raise ValueError(f"{prefix}channel_stride {channel} does not cover a {height * row} byte plane")
+    return Transfer(name, block.fields[prefix + "base_addr_lo"].addr,
+                    channels, height, width, row, channel)
+
+
+def check_l2(image: Mapping[int, int], decoded: tuple[Transfer, ...]) -> None:
+    """Check verified tile pitches, live intervals and the sampled streaming alias."""
+    if not decoded:
+        return
+    common, l2 = fields.Common, fields.L2
+    source, result = decoded[0], decoded[-1]
+    task = value(image, common.task_type)
+    tile = value(image, common.tile_height)
+    source_rows = tile
+    if task == fields.TaskType.PE_POOL_UNARY:
+        source_rows = (tile - 1) * value(image, common.sy) + value(image, common.kh)
+    neural = task == fields.TaskType.NE
+    if neural and (result.channels, result.width) != (source.channels, source.width) and not (
+        value(image, common.output_transpose)
+        and (result.channels, result.width) == (source.width, source.channels)
+    ):
+        raise ValueError("neural L2 result guard for this geometry is not decoded yet")
+    intervals = []
+    source_row = 0
+    for transfer in decoded:
+        name = "result" if transfer.name == "dst" else transfer.name
+        prefix = f"l2_{name}_"
+        base_field = l2.l2_result_base_addr if name == "result" else l2.fields[prefix + "base_address"]
+        base = value(image, base_field) * 16
+        channels, width = transfer.channels, transfer.width
+        rows = min(tile, transfer.height) if name == "result" else source_rows
+        channel = align_up(width * 2, 16)
+        row = channels * channel + 32
+        if neural:
+            row = neural_staging_row(
+                channels, width, tile == source.height,
+                transpose=name == "result" and bool(value(image, common.output_transpose)),
+            )
+        if name == "result" and task == fields.TaskType.PE_EW_REDUCE_UNARY:
+            row = source_row
+        for suffix, expected in (("channel_stride", channel), ("row_stride", row),
+                                 ("depth_stride", channels * channel),
+                                 ("group_stride", channels * channel)):
+            actual = value(image, l2.fields[prefix + suffix]) * 16
+            if name == "result" and not actual:
+                continue
+            if actual != expected:
+                raise ValueError(f"{prefix}{suffix} {actual} tile pitch is not decoded yet; expected {expected}")
+        for suffix, expected in (("interleave", 1), ("compression", 0),
+                                 ("dma_fmt" if name == "result" else "dma_format", 1)):
+            if name != "src2" and value(image, l2.fields[prefix + suffix]) != expected:
+                raise ValueError(f"{prefix}{suffix} mode is not decoded yet")
+        if name == "src":
+            source_row = row
+        end = base + rows * row
+        if end > L2_CAPACITY:
+            raise ValueError(f"L2 {name} range [{base}, {end}) exceeds capacity {L2_CAPACITY}")
+        intervals.append((name, base, end))
+    alias = (neural and value(image, fields.NE.op) == fields.NEOp.CONV
+             and source.channels == result.channels and source.height == result.height
+             and source.width == result.width
+             and value(image, common.kw) == value(image, common.kh) == 1
+             and intervals[-1][1] == intervals[0][1] + source.channels * 18)
+    for index, (name, start, end) in enumerate(intervals):
+        for other, low, high in intervals[:index]:
+            if start < high and low < end and not (alias and (other, name) == ("src", "result")):
+                raise ValueError(f"L2 {other} and {name} ranges overlap")
+
+
+def check_coefficient_lanes(lanes: int, enabled_slots: int) -> None:
+    """Require equal packed-lane and enabled-slot counts in a coefficient stream."""
+    if lanes != enabled_slots:
+        raise ValueError(f"coefficient lane count {lanes} with {enabled_slots} DMA slots is not decoded yet")
+
+
+__all__ = ["L2_CAPACITY", "Transfer", "check_coefficient_lanes", "check_l2", "transfers"]

@@ -147,7 +147,7 @@ def feature_dma_strides(type_: types.TensorType) -> tuple[int, int]:
         step = expr.static_dim_value(plain.strides[axis])
         if step is None or step < 0 or (step == 0 and type_.shape[axis] != 1):
             raise ValueError(f"{label} stride must be static and positive for a non-singleton axis")
-        step_bytes = step * (type_.dtype.bit_width // 8)
+        step_bytes = 0 if type_.shape[axis] == 1 else step * (type_.dtype.bit_width // 8)
         if step_bytes % alignment:
             raise ValueError(f"{label} stride {step_bytes} bytes must be a multiple of {alignment}")
         values.append(step_bytes)
@@ -193,6 +193,8 @@ __all__ = [
     "matrix_layout",
     "one_of",
     "require_strides",
+    "require_strides_or_dense",
+    "require_innermost_contiguous",
     "rows",
     "stored",
     "strided",

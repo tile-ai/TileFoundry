@@ -1,20 +1,20 @@
 """Represent one ANE device translation unit and its C entry points."""
 
-import hashlib
 import json
 import shutil
 from collections.abc import Mapping
 from importlib.resources import files
 
 from tilefoundry import codegen, target
-from tilefoundry.ir import core, expr, types
-from tilefoundry_apple.ane import isa
+from tilefoundry.ir import core
+from tilefoundry_apple.ane import isa, runtime
 from tilefoundry_apple.ane import target as ane_target
+from tilefoundry_apple.ane.codegen.tir.ne import conv
 
-from . import emit
-from .image import Image, IODesc, Reloc, address_slots, coeff_slots
+from . import hwx, program, tir
 
 PREAMBLE = '#include "tilefoundry/runtime/ane/launcher.h"'
+LAUNCHER = "ane_launcher.cpp"
 
 
 @codegen.register(ane_target.Target, codegen.Role.CALLEE, core.PrimFunction)
@@ -31,64 +31,52 @@ def called_as(
     )
 
 
-def describe(param: expr.Var) -> IODesc:
-    """Read the logical geometry of one static unary feature map."""
-    type_ = param.type
-    if not isinstance(type_, types.TensorType) or not isinstance(type_.layout, types.Layout):
-        raise ValueError(f"{param.name}: ANE I/O needs a flat tensor layout")
-    shape = tuple(expr.static_dim_value(n) for n in type_.shape)
-    strides = tuple(expr.static_dim_value(n) for n in type_.layout.strides)
-    return IODesc(param.name, type_.dtype.name, shape, strides)
-
-
-def function_image(fn: core.PrimFunction, constants: Mapping[str, bytes] | None = None) -> Image:
-    """Assemble the TD stream and bind its base-address placeholders to I/O symbols.
-
-    The first DMA source slot takes the first input, the second source slot the
-    second input when the entry has one, and the destination slot the output.
-    """
-    program = emit.build_program(fn)
-    constants = dict(constants or {})
-    coefficient = [param for param in fn.params if getattr(param, "is_const", False)]
-    if coefficient:
-        if len(coefficient) != 1:
-            raise ValueError(f"{fn.name}: expected at most one constant coefficient tensor")
-        weight = coefficient[0]
-        if weight.name not in constants:
-            raise ValueError(f"{fn.name}: no bytes supplied for constant {weight.name}")
-        io = tuple(describe(param) for param in fn.params if param is not weight)
-    else:
-        weight = None
-        io = tuple(describe(param) for param in fn.params)
-    output_count = fn.output_count if fn.output_count else 1
-    if not 0 < output_count <= len(io):
-        raise ValueError(f"{fn.name}: output count {output_count} does not fit {len(io)} parameters")
-    inputs, outputs = io[:-output_count], io[-output_count:]
-    slots = address_slots(program)
-    bindings = [
-        (isa.TileDMASrc.tile_dma_src_base_addr_lo.addr, inputs[0]),
-        (isa.TileDMADst.tile_dma_dst_base_addr_lo.addr, outputs[0]),
-    ]
-    if len(inputs) > 1:
-        bindings.insert(1, (isa.TileDMASrc.tile_dma_src2_base_addr_lo.addr, inputs[1]))
-    if len(inputs) > 2 or len(outputs) > 1:
-        raise ValueError(f"{fn.name}: more than two inputs or one output is not bindable yet")
+def function_image(
+    fn: core.PrimFunction, constants: Mapping[str, bytes] | None = None
+) -> hwx.Image:
+    """Assemble an entry with supplied weights, or zero weights for its compiled skeleton."""
+    ctx = tir.build_context(fn)
+    stream = program.to_program(ctx.passes)
+    io = tuple(
+        hwx.TensorBinding(param.name, ctx.binding_desc(param))
+        for param in fn.params
+        if not getattr(param, "is_const", False)
+    )
+    outputs = fn.output_count
+    if not 0 < outputs <= len(io):
+        raise ValueError(f"{fn.name}: output count {outputs} does not fit {len(io)} parameters")
+    if len(io) - outputs > 2 or outputs > 1:
+        raise ValueError(f"{fn.name}: more than two inputs or one output is not decoded yet")
+    operands = {
+        isa.TileDMASrc.tile_dma_src_base_addr_lo.addr: 1,
+        isa.TileDMASrc.tile_dma_src2_base_addr_lo.addr: 2,
+        isa.TileDMADst.tile_dma_dst_base_addr_lo.addr: 0,
+    }
     relocs = []
-    for addr, desc in bindings:
-        places = slots[addr]
-        if len(places) != 1:
-            raise ValueError(f"{fn.name}: expected one address slot for {desc.name}")
-        relocs.append(Reloc(places[0], desc.name))
-    if weight is None:
-        return Image(program.to_bytes(), b"", io, tuple(relocs))
-    shape = tuple(expr.static_dim_value(n) for n in weight.type.shape)
-    return Image(
-        program.to_bytes(),
-        constants[weight.name],
+    for word, (index, register, _) in hwx.base_slots(stream).items():
+        if register in isa.COEFFICIENT_RELOCATIONS:
+            continue
+        operand = ctx.operands[index][operands[register]]
+        source = ctx.symbols.get(operand, operand)
+        relocs.append(hwx.Reloc(word, source.name))
+    coefficients = []
+    for weight, layout in ctx.coefficients.items():
+        if constants is not None and weight.name not in constants:
+            raise ValueError(f"{fn.name}: no bytes supplied for constant {weight.name}")
+        values = (
+            bytes(layout.lanes * layout.lane_bytes) if constants is None else constants[weight.name]
+        )
+        coefficients.append(hwx.Coefficient(layout, values))
+    consumers = {
+        index: tuple(ctx.coefficients).index(weight) for weight, index, _ in ctx.weight_uses
+    }
+    return hwx.Image(
+        stream,
         io,
         tuple(relocs),
-        kernel_shape=shape,
-        kernel_reloc=tuple(sorted(coeff_slots(program))),
+        output_count=outputs,
+        coefficients=tuple(coefficients),
+        coefficient_relocs=hwx.coefficient_relocations(stream, consumers),
     )
 
 
@@ -100,33 +88,43 @@ def byte_rows(image: bytes) -> str:
     )
 
 
-def io_row(desc: IODesc) -> str:
+def tensor_row(desc: isa.TensorDesc) -> str:
     """Render one initializer compatible with the launcher header."""
     shape = ", ".join(map(str, desc.shape))
     strides = ", ".join(map(str, desc.strides))
-    return f"  {{{json.dumps(desc.name)}, {json.dumps(desc.dtype)}, {{{shape}}}, {{{strides}}}}},"
+    return f"  {{{json.dumps(desc.dtype)}, {{{shape}}}, {{{strides}}}, {desc.storage_bytes}}},"
 
 
 def emit_function(
     fn: core.PrimFunction, sig: codegen.CallableSignature
 ) -> codegen.LinkableFunction:
-    """Emit a C ABI entry that forwards the embedded image and I/O arrays."""
+    """Export a validated skeleton, I/O descriptors and per-weight generated writers."""
     image = function_image(fn)
     payload = image.to_bytes()
     symbol = sig.name
-    image_name = f"{symbol}_image"
-    io_name = f"{symbol}_io"
-    digest = hashlib.sha256(payload).hexdigest()
-    declaration = f'extern "C" int {symbol}(DLTensor** inputs, DLTensor** outputs)'
-    rows = "\n".join(map(io_row, image.io))
+    ctx = tir.build_context(fn)
+    writers, weights = [], []
+    for index, (weight, layout) in enumerate(ctx.coefficients.items()):
+        writer = f"{symbol}_weight_{index}"
+        writers.append(conv.weight_writer(writer, layout))
+        weights.append(f"  {{{json.dumps(weight.name)}, {writer}}},")
+    offset = hwx.coefficient_offset(payload) if weights else 0
+    declaration = f'extern "C" const AneEntry *{symbol}()'
+    rows = "\n".join(tensor_row(binding.desc) for binding in image.io)
     definition = (
-        f"static const uint8_t {image_name}[] = {{\n{byte_rows(payload)}\n}};\n"
-        f"static const IODesc {io_name}[] = {{\n{rows}\n}};\n\n"
-        f"{declaration} {{\n"
-        f"  return ane_launch({image_name}, sizeof({image_name}),\n"
-        f'                    "{digest}",\n'
-        f"                    {io_name}, {len(image.io)}, inputs, outputs);\n"
-        "}\n"
+        f"static const uint8_t {symbol}_image[] = {{\n{byte_rows(payload)}\n}};\n"
+        f"static const TensorDesc {symbol}_io[] = {{\n{rows}\n}};\n"
+        + "\n".join(writers)
+        + (
+            f"static const AneWeight {symbol}_weights[] = {{\n" + "\n".join(weights) + "\n};\n"
+            if weights
+            else ""
+        )
+        + f"static const AneEntry {symbol}_entry = {{\n"
+        f"  {symbol}_image, sizeof({symbol}_image), {offset},\n"
+        f"  {symbol}_io, {len(image.io) - image.output_count}, {image.output_count},\n"
+        + (f"  {symbol}_weights, {len(weights)}\n" if weights else "  nullptr, 0\n")
+        + f"}};\n{declaration} {{ return &{symbol}_entry; }}\n"
     )
     return codegen.LinkableFunction(fn.name, declaration + ";", definition)
 
@@ -158,14 +156,15 @@ class AneLinkableModule(codegen.LinkableModule):
             raise RuntimeError("ANE link: 'clang++' not on PATH")
         super().link(project)
         project.include(files(__package__).joinpath("include"))
+        if LAUNCHER not in project.sources:
+            project.add_source(LAUNCHER, files(runtime).joinpath("launcher.cpp").read_text())
         project.append(
             'if(NOT APPLE OR NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")\n'
             '  message(FATAL_ERROR "ANE linking requires clang++ on macOS")\n'
             "endif()\n"
             'set_target_properties(${PROJECT_NAME} PROPERTIES SUFFIX ".so")\n'
-            "target_link_options(${PROJECT_NAME} PRIVATE -F/System/Library/PrivateFrameworks)\n"
             'target_link_libraries(${PROJECT_NAME} PRIVATE "-framework CoreFoundation"\n'
-            '  "-framework IOSurface" "-framework AppleNeuralEngine" objc)\n'
+            '  "-framework IOSurface" "-framework Security" objc)\n'
         )
 
 

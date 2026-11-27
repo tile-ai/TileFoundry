@@ -1,48 +1,20 @@
-"""Hardware primitives: the second layer between TIR and a task descriptor.
-
-A task descriptor bundles the data movement and the arithmetic of one engine pass
-into a single VLIW instruction.  The primitives below each program one group of
-configuration words and return them as ``{byte address: word}``:
-
-``load(surface)``       read a feature map: the L2 source buffer and the source DMA
-``store(surface)``      write a feature map: the L2 result buffer and the result DMA
-``compute_pe(kind, ...)``  planar engine arithmetic
-``compute_ne(op, ...)``    neural engine arithmetic
-
-Words produced by different primitives that land on the same address are combined
-with :func:`splice`, which ORs them; the fields of one word never overlap, so the
-result is the same as programming them one after another.
-
-Every value here is expressed through :mod:`tilefoundry_apple.ane.isa.fields`, so
-a bit position appears exactly once, in the field declaration.
-
-A feature map has one canonical surface geometry: rows are padded to 64 bytes,
-channels are ``height`` rows apart, and the extent is ``channels * channel``.
-L2 staging uses the same shape with 16-byte padded rows and one extra channel of
-slack, which is what the staged buffer needs for the engine's read-ahead.
-"""
+"""Encode feature-map transfers and engine operations as configuration register maps."""
 
 import struct
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
-from enum import IntEnum
 
 from . import fields
-from ._arith import align_up
+from .arith import align_up
+from .tensor_desc import NE_CHANNEL_GROUP, STAGING_ROW_GUARD, SURFACE_ROW_ALIGN, Engine, TensorDesc
 
 FP16_BYTES = 2
-SURFACE_ROW_ALIGN = 64
-L2_ROW_ALIGN = 16
 L2_UNIT = 16
-STAGING_ROW_GUARD = 32
 STREAM_TAG = 1
 DEST_TAG = 1
 DATA_SET_ID = 14
 PLANAR_MIN_ROW_BYTES = 32
 NEURAL_MIN_ROW_BYTES = 16
-NE_ROW_GUARD = 16
-NE_GUARD_PERIOD = 1024
-#: The neural engine expresses a row width as a power-of-two subdivision of this.
+
 NE_WIDTH_UNIT = 256
 NE_PIPELINE_CODE = 7
 NE_OUTPUT_SELECT = 1
@@ -58,16 +30,6 @@ FIFO_MODE = 1
 KERNEL_ARMED = 1
 COMMON_FORMAT_F16 = 2
 
-
-class Engine(IntEnum):
-    """The engine a staged buffer is prepared for."""
-
-    PLANAR = 0
-    NEURAL = 1
-
-
-#: Channels one neural-engine pass covers.
-NE_CHANNEL_GROUP = 16
 
 L2 = fields.L2()
 PE = fields.PE()
@@ -85,170 +47,52 @@ def fp16(value: float, name: str) -> int:
         raise ValueError(f"{name} {value} does not fit fp16") from error
 
 
-def splice(*parts: Mapping[int, int]) -> dict[int, int]:
-    """Combine primitive words; words at the same address are OR-ed."""
-    image: dict[int, int] = {}
+def splice(*parts: Mapping[int, int]) -> fields.Writes:
+    """Combine primitive fields, rejecting different values for overlapping writes."""
+    image = fields.Writes()
     for part in parts:
-        for addr, word in part.items():
-            image[addr] = image.get(addr, 0) | word
+        image.merge(part)
     return image
 
 
-@dataclass(frozen=True)
-class TensorDesc:
-    """A feature map's memory layout: the strides and extents the DMA and L2 address it by.
-
-    A primitive takes a surface as its ``source`` or ``destination`` because what
-    it programs is this layout -- the row and channel strides and the staged
-    extent -- not the tensor's values.  :func:`tensor_desc` derives the canonical
-    fp16 layout; the fields below are the byte strides each engine reads.
-    """
-
-    channels: int
-    height: int
-    width: int
-    row: int
-    channel: int
-    tile_pitch: int | None = None
-
-    @property
-    def extent(self) -> int:
-        """Bytes the DRAM surface spans."""
-        return self.channels * self.channel
-
-    @property
-    def dram_row_stride(self) -> int:
-        """The row stride a DMA programs.
-
-        The row stride is only meaningful while every extent of the surface is
-        greater than one; a surface with a one-extent leaves the field at zero,
-        which is what the reference descriptors do for a reduced result.
-        """
-        return 0 if min(self.width, self.height, self.channels) == 1 else self.row
-
-    @property
-    def element_strides(self) -> tuple[int, int, int, int]:
-        """The strides a caller declares for this surface, in elements."""
-        return (0, self.channel // FP16_BYTES, self.row // FP16_BYTES, 1)
-
-    @property
-    def l2_channel(self) -> int:
-        """Bytes between adjacent staged channels.
-
-        A tile narrower than the feature map stages its columns into the L2
-        image, so ``tile_pitch`` overrides the dense row while the declared
-        window and the DRAM strides keep the logical width.
-        """
-        if self.tile_pitch is not None:
-            return self.tile_pitch
-        return align_up(self.width * FP16_BYTES, L2_ROW_ALIGN)
-
-    def staged(self, width: int | None = None, rows: int | None = None) -> "TensorDesc":
-        """Return the same feature map staged as a tile of ``width`` and ``rows``.
-
-        A descriptor that stages a tile narrower than the logical feature map
-        keeps the declared geometry for its window and uses the tile for the L2
-        layout, so the staged image is a separate surface.
-        """
-        if width is None or width == self.width:
-            return self
-        if width < 1:
-            raise ValueError(f"tile_width must be a positive column count, got {width}")
-        if width > self.width:
-            raise ValueError(
-                f"tile_width {width} exceeds the {self.width}-column surface it stages"
-            )
-        return replace(self, tile_pitch=align_up(width * FP16_BYTES, L2_ROW_ALIGN))
-
-    def staging_row(self, engine: Engine = Engine.PLANAR, rows: int | None = None) -> int:
-        """Bytes between adjacent staged rows for one engine.
-
-        The planar engine stages one channel slab of ``channels * l2_channel``
-        bytes followed by a constant ``STAGING_ROW_GUARD`` band.
-
-        The neural guard band below is **known incomplete**: it reproduces the
-        thirteen shapes it was read from, and is refuted outside them (for
-        example a 31x15x32 image stages 144 guard bytes, not the 0 this predicts,
-        while a 24x11x64 image stages none, not the 16).  The band is produced by
-        the L2 tile allocator, which sits upstream of the descriptor, so a closed
-        form has to come from that allocator rather than from more samples.
-        """
-        partial = rows is not None and rows < self.height
-        depth = self.channels * self.l2_channel
-        if engine is Engine.PLANAR:
-            return depth + STAGING_ROW_GUARD
-        if engine is not Engine.NEURAL:
-            raise ValueError(f"unknown engine {engine!r}")
-        if partial:
-            return depth
-        slack = self.l2_channel if self.channels % NE_CHANNEL_GROUP == 0 else 0
-        guard = NE_ROW_GUARD if depth % NE_GUARD_PERIOD == 0 else 0
-        return depth + slack + guard
-
-    def staging_extent(self, engine: Engine = Engine.PLANAR, rows: int | None = None) -> int:
-        """Bytes the staged buffer spans.
-
-        ``rows`` is the number of rows one descriptor stages, which is the tile
-        height rather than the whole surface.
-        """
-        return self.staging_row(engine, rows) * (self.height if rows is None else rows)
-
-    @property
-    def l2_row(self) -> int:
-        """Bytes between adjacent staged rows for the planar engine."""
-        return self.staging_row(Engine.PLANAR)
-
-    @property
-    def l2_extent(self) -> int:
-        """Bytes the planar engine's staged buffer spans."""
-        return self.staging_extent(Engine.PLANAR)
-
-
-def tensor_desc(channels: int, height: int, width: int) -> TensorDesc:
-    """Derive the canonical fp16 surface of one feature map."""
-    if min(channels, height, width) < 1:
-        raise ValueError(f"feature map {channels}x{height}x{width} has an empty extent")
-    row = align_up(width * FP16_BYTES, SURFACE_ROW_ALIGN)
-    return TensorDesc(channels, height, width, row, height * row)
-
-
-def require_row_width(surface: TensorDesc, minimum: int) -> None:
+def require_row_width(desc: TensorDesc, minimum: int) -> None:
     """Reject a feature map whose dense row selects an undecoded format entry."""
-    dense = surface.width * FP16_BYTES
+    desc.validate_feature()
+    dense = desc.width * FP16_BYTES
     if dense < minimum:
         raise ValueError(
-            f"feature map {surface.channels}x{surface.height}x{surface.width} has a {dense} "
-            f"byte dense row; the format entry for rows below {minimum} bytes is not decoded"
+            f"feature map {desc.channels}x{desc.height}x{desc.width} has a {dense} "
+            f"byte dense row; the format entry for rows below {minimum} bytes is not decoded yet"
         )
 
 
 def row_stride(name: str, byte_stride: int) -> dict[str, int]:
-    """The row-stride field, omitted for a surface whose extent the hardware ignores."""
-    return {} if byte_stride == 0 else {name: _dram_units(byte_stride)}
+    """The row-stride field, omitted for a feature map whose extent the hardware ignores."""
+    return {} if byte_stride == 0 else {name: dram_units(byte_stride)}
 
 
-def _dram_units(byte_stride: int) -> int:
+def dram_units(byte_stride: int) -> int:
     """Express a DRAM stride in the unit its field holds."""
     if byte_stride % SURFACE_ROW_ALIGN:
         raise ValueError(f"stride {byte_stride} is not a multiple of {SURFACE_ROW_ALIGN}")
     return byte_stride // SURFACE_ROW_ALIGN
 
 
-def _l2_units(byte_stride: int) -> int:
+def l2_units(byte_stride: int) -> int:
     """Express an L2 stride in the unit its field holds."""
     if byte_stride % L2_UNIT:
         raise ValueError(f"stride {byte_stride} is not a multiple of {L2_UNIT}")
     return byte_stride // L2_UNIT
 
 
-def _split_address(address: int) -> tuple[int, int]:
+def split_address(address: int) -> tuple[int, int]:
     """Split a byte address into the low and high words the DMA programs."""
     if not 0 <= address < (1 << 64):
         raise ValueError(f"address {address:#x} does not fit 64 bits")
     return address & 0xFFFFFFFF, address >> 32
 
 
-def _staged_flags(fresh: bool, planar_result: bool = False) -> dict[str, int]:
+def staged_flags(fresh: bool, planar_result: bool = False) -> dict[str, int]:
     """Return the buffer-reuse bits a descriptor programs for its staged slots.
 
     A descriptor that stages into fresh L2 buffers marks each slot as first use;
@@ -269,12 +113,12 @@ def _staged_flags(fresh: bool, planar_result: bool = False) -> dict[str, int]:
     }
 
 
-def _src_tags(fresh: bool) -> dict[str, int]:
+def src_tags(fresh: bool) -> dict[str, int]:
     """Return the stream tag a descriptor stamps on its first source transfer."""
     return {"tile_dma_src_user_tag": 0 if fresh else STREAM_TAG}
 
 
-def _dst_tags(fresh: bool) -> dict[str, int]:
+def dst_tags(fresh: bool) -> dict[str, int]:
     """Return the stream tag a descriptor stamps on its result transfer."""
     return {"tile_dma_dst_user_tag": 0 if fresh else STREAM_TAG}
 
@@ -286,15 +130,16 @@ def load(
     address: int = 0,
     fresh: bool = True,
     rows: int | None = None,
+    width: int | None = None,
     planar_result: bool = False,
 ) -> dict[int, int]:
     """Program reading one feature map: the L2 source buffer and the source DMA."""
     require_row_width(
         source, NEURAL_MIN_ROW_BYTES if engine is Engine.NEURAL else PLANAR_MIN_ROW_BYTES
     )
-    low, high = _split_address(address)
-    # The planar engine states the window and the input formats; the neural
-    # engine leaves them at their reset value and carries the window in the DMA.
+    low, high = split_address(address)
+
+
     window = dict(win=source.width, hin=source.height, din=1)
     if engine is Engine.PLANAR:
         window.update(common_in_fmt=COMMON_FORMAT_F16, common_src2_in_fmt=COMMON_FORMAT_F16)
@@ -302,23 +147,23 @@ def load(
         COMMON.pack(cin=source.channels, **window),
         L2.pack(
             l2_src_type=fields.L2Access.DMA_READ,
-            **_staged_flags(fresh, planar_result),
+            **staged_flags(fresh, planar_result),
             l2_src_dma_format=fields.TensorFormatMode.COMPRESSED,
             l2_src_interleave=INTERLEAVE,
-            l2_src_channel_stride=_l2_units(source.l2_channel),
-            l2_src_row_stride=_l2_units(source.staging_row(engine, rows)),
-            l2_src_depth_stride=_l2_units(source.channels * source.l2_channel),
-            l2_src_group_stride=_l2_units(source.channels * source.l2_channel),
+            l2_src_channel_stride=l2_units(source.staging_channel(width)),
+            l2_src_row_stride=l2_units(source.staging_row(engine, rows, width)),
+            l2_src_depth_stride=l2_units(source.channels * source.staging_channel(width)),
+            l2_src_group_stride=l2_units(source.channels * source.staging_channel(width)),
         ),
         SRC_DMA.pack(
-            **_src_tags(fresh),
+            **src_tags(fresh),
             tile_dma_src_hint=SOURCE_HINT,
             tile_dma_src_base_addr_lo=low,
             tile_dma_src_base_addr_hi=high,
             tile_dma_src_data_set_id=DATA_SET_ID,
             tile_dma_src_cache_hint=SOURCE_CACHE_HINT,
             **row_stride("tile_dma_src_row_stride", source.dram_row_stride),
-            tile_dma_src_channel_stride=_dram_units(source.channel),
+            tile_dma_src_channel_stride=dram_units(source.channel),
             tile_dma_src_format_mode=fields.TensorFormatMode.COMPRESSED,
             tile_dma_src_trunc=F16_TRUNC,
             tile_dma_src_memory_format=fields.TensorMemoryFormat.TILED,
@@ -328,27 +173,29 @@ def load(
 
 
 def slot_offset(
-    surface: TensorDesc,
+    desc: TensorDesc,
     slots: int,
     engine: Engine = Engine.PLANAR,
     rows: int | None = None,
+    width: int | None = None,
     *,
     separated: bool = False,
 ) -> int:
     """Return the byte offset a staged slot starts at.
 
     Slots are one staged image apart.  A tile that stages fewer rows than the
-    surface spans carries an extra guard band between slots, which the compiler
+    feature map spans carries an extra guard band between slots, which the compiler
     emits so that adjacent staged images stay on separate row boundaries.
     """
-    extent = surface.staging_extent(engine, rows)
-    partial = rows is not None and rows < surface.height
+    extent = desc.staging_extent(engine, rows, width)
+    partial = rows is not None and rows < desc.height
     separator = STAGING_ROW_GUARD if separated and partial else 0
     return slots * extent + separator
 
 
 def load_chained(
-    source: TensorDesc, engine: Engine = Engine.PLANAR, *, rows: int | None = None
+    source: TensorDesc, engine: Engine = Engine.PLANAR, *,
+    rows: int | None = None, width: int | None = None
 ) -> dict[int, int]:
     """Read a source the previous descriptor left staged instead of reloading it.
 
@@ -358,8 +205,8 @@ def load_chained(
     descriptor carrying no source DMA block, which is what this encodes.
     """
     require_row_width(source, PLANAR_MIN_ROW_BYTES)
-    # The planar engine states the window and the input formats; the neural
-    # engine leaves them at their reset value and carries the window in the DMA.
+
+
     window = dict(win=source.width, hin=source.height, din=1)
     if engine is Engine.PLANAR:
         window.update(common_in_fmt=COMMON_FORMAT_F16, common_src2_in_fmt=COMMON_FORMAT_F16)
@@ -367,10 +214,10 @@ def load_chained(
         COMMON.pack(cin=source.channels, **window),
         L2.pack(
             l2_src_type=fields.L2Access.L2_READ,
-            **_staged_flags(False, planar_result=True),
+            **staged_flags(False, planar_result=True),
             l2_src_interleave=INTERLEAVE,
-            l2_src_channel_stride=_l2_units(source.l2_channel),
-            l2_src_row_stride=_l2_units(source.staging_row(engine, rows)),
+            l2_src_channel_stride=l2_units(source.staging_channel(width)),
+            l2_src_row_stride=l2_units(source.staging_row(engine, rows, width)),
         ),
     )
 
@@ -380,24 +227,25 @@ def load_second(
     engine: Engine = Engine.PLANAR,
     *,
     rows: int | None = None,
+    width: int | None = None,
     address: int = 0,
     fresh: bool = True,
 ) -> dict[int, int]:
     """Program a second staged source, placed one staged slot after the first."""
     require_row_width(source, PLANAR_MIN_ROW_BYTES)
-    low, high = _split_address(address)
-    offset = _l2_units(slot_offset(source, 1, engine, rows, separated=True))
+    low, high = split_address(address)
+    offset = l2_units(slot_offset(source, 1, engine, rows, width=width, separated=True))
     return splice(
         L2.pack(
             l2_src_second_stream=1,
             l2_src2_base_address=offset,
-            l2_src2_channel_stride=_l2_units(source.l2_channel),
-            l2_src2_row_stride=_l2_units(source.staging_row(engine, rows)),
-            l2_src2_depth_stride=_l2_units(source.channels * source.l2_channel),
-            l2_src2_group_stride=_l2_units(source.channels * source.l2_channel),
+            l2_src2_channel_stride=l2_units(source.staging_channel(width)),
+            l2_src2_row_stride=l2_units(source.staging_row(engine, rows, width)),
+            l2_src2_depth_stride=l2_units(source.channels * source.staging_channel(width)),
+            l2_src2_group_stride=l2_units(source.channels * source.staging_channel(width)),
         ),
         SRC_DMA.pack(
-            **_src_tags(fresh),
+            **src_tags(fresh),
             tile_dma_src2_user_tag=0 if fresh else STREAM_TAG,
             tile_dma_src2_hint=SECOND_SOURCE_HINT,
             tile_dma_src2_data_set_id=DATA_SET_ID,
@@ -405,7 +253,7 @@ def load_second(
             tile_dma_src2_base_addr_lo=low,
             tile_dma_src2_base_addr_hi=high,
             **row_stride("tile_dma_src2_row_stride", source.dram_row_stride),
-            tile_dma_src2_channel_stride=_dram_units(source.channel),
+            tile_dma_src2_channel_stride=dram_units(source.channel),
             tile_dma_src2_format_mode=fields.TensorFormatMode.COMPRESSED,
             tile_dma_src2_trunc=F16_TRUNC,
             tile_dma_src2_memory_format=fields.TensorMemoryFormat.TILED,
@@ -421,6 +269,7 @@ def store(
     staged: int = 1,
     staging: TensorDesc | None = None,
     rows: int | None = None,
+    width: int | None = None,
     guard: bool = False,
     address: int = 0,
     fresh: bool = True,
@@ -432,9 +281,14 @@ def store(
     """Program writing one feature map: the L2 result buffer and the result DMA.
 
     The result buffer starts after the staged images, so ``staging`` names the
-    surface whose staged extent locates it; it defaults to the destination.
+    feature map whose staged extent locates it; it defaults to the destination.
     """
-    low, high = _split_address(address)
+    destination.validate_feature()
+    if staging is not None:
+        staging.validate_feature()
+    if declared is not None:
+        declared.validate_feature()
+    low, high = split_address(address)
     return splice(
         COMMON.pack(
             **(
@@ -452,32 +306,32 @@ def store(
         L2.pack(
             l2_result_type=fields.L2Access.DMA_READ,
             l2_result_buffer_mode=1,
-            **_staged_flags(fresh),
+            **staged_flags(fresh),
             l2_result_dma_fmt=fields.TensorFormatMode.COMPRESSED,
             l2_result_interleave=INTERLEAVE,
-            l2_result_base_addr=_l2_units(
+            l2_result_base_addr=l2_units(
                 slot_offset(
                     staging or destination,
                     staged,
                     engine,
                     rows,
+                    width=width,
                     separated=staged >= 2 if separated is None else separated,
                 )
             ),
         ),
         DST_DMA.pack(
-            **_dst_tags(fresh),
+            **dst_tags(fresh),
             tile_dma_dst_enable=1,
             tile_dma_dst_base_addr_lo=low,
             tile_dma_dst_base_addr_hi=high,
             tile_dma_dst_hint=DEST_HINT,
             tile_dma_dst_data_set_id=DATA_SET_ID,
             tile_dma_dst_fifo_mode=FIFO_MODE,
-            # DRAM strides in 64-byte units: the row stride is dropped for a
-            # one-extent surface (TensorDesc.dram_row_stride), the channel stride is
-            # the bytes between channels of the destination feature map.
+
+
             **row_stride("tile_dma_dst_row_stride", destination.dram_row_stride),
-            tile_dma_dst_channel_stride=_dram_units(destination.channel),
+            tile_dma_dst_channel_stride=dram_units(destination.channel),
             tile_dma_dst_format_mode=fields.TensorFormatMode.COMPRESSED,
             tile_dma_dst_trunc=F16_TRUNC,
             tile_dma_dst_memory_format=fields.TensorMemoryFormat.TILED,
@@ -519,7 +373,7 @@ def coefficient_dma(
         -(-payload // KERNEL_DMA_MIN_BLOCK) * KERNEL_DMA_MIN_BLOCK,
     )
     if stride is not None:
-        # A caller that knows the packed coefficient lanes states their stride.
+
         block = stride
     image = KERNEL_DMA.pack(
         kernel_dma_src_enable=1,
@@ -533,8 +387,8 @@ def coefficient_dma(
             (KERNEL_DMA.kernel_dma_src_coeff_dma_en, int(active)),
             (KERNEL_DMA.kernel_dma_src_coeff_loaded, int(active)),
             (KERNEL_DMA.kernel_dma_src_coeff_tag, index if active else 0),
-            (KERNEL_DMA.kernel_dma_src_coeff_base_offset, _dram_units(slot * block)),
-            (KERNEL_DMA.kernel_dma_src_coeff_mem_buffer_size, _dram_units(block)),
+            (KERNEL_DMA.kernel_dma_src_coeff_base_offset, dram_units(slot * block)),
+            (KERNEL_DMA.kernel_dma_src_coeff_mem_buffer_size, dram_units(block)),
         ):
             field = group[slot]
             if value == 0 and field.lo != 16:
@@ -544,7 +398,7 @@ def coefficient_dma(
                 and block == KERNEL_DMA_MIN_BLOCK
             ):
                 continue
-            image[field.addr] = field.put(image.get(field.addr, 0), value)
+            image.put(field, value)
     return image
 
 
@@ -555,15 +409,10 @@ def staged_copy(
     result_base: int | None = None,
     address: int = 0,
 ) -> dict[int, int]:
-    """Copy a feature map into the L2 buffer, transposed and without a result DMA.
-
-    The reference copy descriptor of a matmul chain declares the channels on the
-    fast axis, so the source and result strides are both ``channels * 2`` bytes
-    and the result stride stays at one sixteen-byte unit.  The pass ends in L2:
-    the chain's next descriptor reads it and the last one writes DRAM.
-    """
+    """Program a staged copy between feature maps using the selected engine."""
+    source.validate_feature()
     channels = source.channels
-    low, high = _split_address(address)
+    low, high = split_address(address)
     return splice(
         COMMON.pack(
             win=source.width,
@@ -590,19 +439,19 @@ def staged_copy(
             l2_src_interleave=INTERLEAVE,
             l2_src_alias_planar_src=1,
             l2_src_alias_planar_rslt=1,
-            l2_src_base_address=_l2_units(channels * 16 if source_base is None else source_base),
-            l2_src_channel_stride=_l2_units(channels * FP16_BYTES),
-            l2_src_row_stride=_l2_units(channels * FP16_BYTES),
-            l2_src_depth_stride=_l2_units(channels * FP16_BYTES),
-            l2_src_group_stride=_l2_units(channels * FP16_BYTES),
+            l2_src_base_address=l2_units(channels * 16 if source_base is None else source_base),
+            l2_src_channel_stride=l2_units(channels * FP16_BYTES),
+            l2_src_row_stride=l2_units(channels * FP16_BYTES),
+            l2_src_depth_stride=l2_units(channels * FP16_BYTES),
+            l2_src_group_stride=l2_units(channels * FP16_BYTES),
             l2_result_type=fields.L2Access.L2_READ,
             l2_result_alias_src=1,
             l2_result_alias_rslt=1,
             l2_result_interleave=INTERLEAVE,
             l2_result_alias_planar_src=1,
             l2_result_alias_planar_rslt=1,
-            **({} if result_base is None else {"l2_result_base_addr": _l2_units(result_base)}),
-            l2_result_channel_stride=_l2_units(STAGING_ROW_GUARD // 2),
+            **({} if result_base is None else {"l2_result_base_addr": l2_units(result_base)}),
+            l2_result_channel_stride=l2_units(STAGING_ROW_GUARD // 2),
         ),
         SRC_DMA.pack(
             tile_dma_src_hint=SOURCE_HINT,
@@ -626,7 +475,11 @@ def convolution(
     ocg_size: int,
     coeff_stride: int | None = None,
     tile_height: int | None = None,
+    width: int | None = None,
     kernel_width: int = 1,
+    kernel_height: int = 1,
+    stride: tuple[int, int] = (1, 1),
+    padding: tuple[int, int] = (0, 0),
     active_nodes: int = 4,
     multi_tile: bool = False,
     coeff_base: int = 0,
@@ -645,11 +498,14 @@ def convolution(
     and no source relocation are programmed.  Its result lands one channel slab
     after the staged source.
     """
-    low, high = _split_address(address)
+    source.validate_feature()
+    destination.validate_feature()
+    low, high = split_address(address)
     return splice(
-        {0x1908: coeff_base & 0xFFFFFFFF, 0x190C: coeff_base >> 32},
-        # The neural engine carries the window in its DMA, so the pass states the
-        # channel counts and the engine configuration only.
+        {fields.KernelDMA.kernel_dma_src_base_lo.addr: coeff_base & 0xFFFFFFFF,
+         fields.KernelDMA.kernel_dma_src_base_hi.addr: coeff_base >> 32},
+
+
         COMMON.pack(
             cin=source.channels,
             cout=destination.channels,
@@ -675,7 +531,18 @@ def convolution(
             node_id=1,
             **({"output_transpose": 1, "small_source_mode": 1} if staged_source else {}),
         ),
-        {} if staged_source else {0x0020: NE_RASTER_WORD},
+        {}
+        if staged_source
+        else COMMON.pack(
+            kw=kernel_width,
+            kh=kernel_height,
+            sx=stride[1],
+            sy=stride[0],
+            pad_left=padding[1],
+            pad_top=padding[0],
+            out_offset_x=1,
+            out_offset_y=1,
+        ),
         L2.pack(
             **(
                 {}
@@ -689,8 +556,8 @@ def convolution(
                     ),
                 }
             ),
-            **({} if not staged_source else {"l2_src_base_address": _l2_units(source_base)}),
-            l2_src_channel_stride=_l2_units(source.l2_channel),
+            **({} if not staged_source else {"l2_src_base_address": l2_units(source_base)}),
+            l2_src_channel_stride=l2_units(source.staging_channel(width)),
             l2_result_type=(fields.L2Access.DMA_READ if to_dram else fields.L2Access.L2_READ),
             **({} if not to_dram else {"l2_result_buffer_mode": 1}),
             l2_result_dma_fmt=fields.TensorFormatMode.COMPRESSED,
@@ -699,7 +566,7 @@ def convolution(
                 {}
                 if result_base is None and not to_dram
                 else {
-                    "l2_result_base_addr": _l2_units(
+                    "l2_result_base_addr": l2_units(
                         source_base + source.channels * 18 if result_base is None else result_base
                     )
                 }
@@ -710,13 +577,13 @@ def convolution(
             ne_pipeline_code=NE_PIPELINE_CODE,
             arg_output_select=NE_OUTPUT_SELECT,
             post_scale=fp16(1.0, "post_scale"),
-            **({} if not activate else {"nonlinear_mode": fields.NENonlinear.LUT}),
+            **({} if not activate else {"nonlinear_mode": fields.NENonlinear.RELU}),
         ),
         coefficient_dma(
             destination.channels,
             source.channels,
             index=index,
-            lut_bytes=NE_LUT_BYTES if activate else 0,
+            lut_bytes=0,
             armed=armed if armed is not None else to_dram,
             stride=coeff_stride,
         ),
@@ -741,15 +608,13 @@ def convolution(
                 if staged_source
                 else {
                     **row_stride("tile_dma_dst_row_stride", destination.dram_row_stride),
-                    "tile_dma_dst_channel_stride": _dram_units(destination.channel),
+                    "tile_dma_dst_channel_stride": dram_units(destination.channel),
                 }
             ),
         ),
     )
 
 
-#: Raster configuration word the convolution passes state (constant per task kind).
-NE_RASTER_WORD = 0x5042A0C3
 NE_LUT_BYTES = 128
 
 
@@ -767,10 +632,11 @@ def activation(
     only its size and enable.  Every stride here is the dense row of the staged
     row, and the result lands one row along.
     """
-    low, high = _split_address(address)
-    dest_low, dest_high = _split_address(dest_address)
+    source.validate_feature()
+    low, high = split_address(address)
+    dest_low, dest_high = split_address(dest_address)
     row = source.width * FP16_BYTES
-    column = _l2_units(row)
+    column = l2_units(row)
     return splice(
         COMMON.pack(
             win=source.width,
@@ -853,7 +719,7 @@ def activation(
             kernel_dma_coeff_tag=1,
             nonlinear_lut_enable=1,
             nonlinear_lut_loaded=1,
-            nonlinear_lut_size=_dram_units(lut_bytes),
+            nonlinear_lut_size=dram_units(lut_bytes),
         ),
         KERNEL_DMA.pack(
             kernel_dma_lut_base=0,
@@ -889,8 +755,8 @@ def multiply(
     only the register encoding is derived here.  ``result_config`` carries the
     allocator's L2 result configuration word when it is not the plain read form.
     """
-    low, high = _split_address(address)
-    dest_low, dest_high = _split_address(second_address)
+    low, high = split_address(address)
+    dest_low, dest_high = split_address(second_address)
     return splice(
         COMMON.pack(
             win=width,
@@ -913,7 +779,7 @@ def multiply(
             l2_src_type=fields.L2Access.L2_READ,
             l2_src_alias_conv_rslt=1,
             l2_src_interleave=INTERLEAVE,
-            l2_src2_base_address=_l2_units(second_base),
+            l2_src2_base_address=l2_units(second_base),
             **({} if not read_config else {"l2_src_channel_stride": read_config}),
             **(
                 {}
@@ -927,11 +793,11 @@ def multiply(
                     "l2_result_interleave": INTERLEAVE,
                 }
             ),
-            l2_result_base_addr=_l2_units(result_base),
+            l2_result_base_addr=l2_units(result_base),
             **(
                 {}
                 if result_stride is None
-                else {"l2_result_channel_stride": _l2_units(result_stride)}
+                else {"l2_result_channel_stride": l2_units(result_stride)}
             ),
         ),
         PE.pack(op=fields.PEOp.MUL, second_source=2),
@@ -991,8 +857,11 @@ def compute_pe(
     source_relu: bool = False,
 ) -> dict[int, int]:
     """Program one planar engine pass over an already loaded feature map."""
+    output.validate_feature()
     geometry_in = output if declared_in is None else declared_in
     geometry_out = output if declared_out is None else declared_out
+    geometry_in.validate_feature()
+    geometry_out.validate_feature()
     shape = (
         {}
         if window is None
@@ -1070,24 +939,32 @@ def compute_ne(
     """Program one neural engine pass over an already staged feature map.
 
     ``kernel_format`` stays unset for a descriptor without a coefficient stream,
-    which is what the reference containers do.
+    which is what the reference containers do. ``declared`` is the geometry
+    before the output transpose, including the row that selects the width code.
     """
+    output.validate_feature()
     if output.channels < NE_CHANNEL_GROUP:
         raise ValueError(
-            f"neural engine pass over {output.channels} channels is below one "
-            f"{NE_CHANNEL_GROUP}-channel group; that configuration is not decoded"
+            f"neural engine pass over {output.channels} channels is not decoded yet"
         )
-    if width_code is None:
-        ratio = NE_WIDTH_UNIT // (output.width * FP16_BYTES)
-        if ratio < 1 or ratio & (ratio - 1):
-            raise ValueError(
-                f"feature map row {output.width * FP16_BYTES} bytes is not a power-of-two "
-                f"divisor of {NE_WIDTH_UNIT}; the neural width code is not decoded"
-            )
-        width_code = ratio.bit_length() - 1
     shown = output if declared is None else declared
+    shown.validate_feature()
+    dense_row = shown.width * FP16_BYTES
+    ratio = NE_WIDTH_UNIT // dense_row
+    if NE_WIDTH_UNIT % dense_row or ratio < 1 or ratio & (ratio - 1):
+        raise ValueError(f"neural width code for dense row {dense_row} bytes is not decoded yet")
+    expected = ratio.bit_length() - 1
+    if width_code is None:
+        width_code = expected
+    elif type(width_code) is not int or not 0 <= width_code <= 4:
+        raise ValueError(f"width_code {width_code!r} must be within [0, 4]")
+    elif width_code != expected:
+        raise ValueError(f"width_code {width_code} contradicts dense row {dense_row}; expected {expected}")
     return splice(
         COMMON.pack(
+            common_in_fmt=COMMON_FORMAT_F16,
+            common_src2_in_fmt=COMMON_FORMAT_F16,
+            common_out_fmt=COMMON_FORMAT_F16,
             win=shown.width,
             hin=shown.height,
             wout=shown.width,
@@ -1122,17 +999,21 @@ def compute_ne(
 
 
 __all__ = [
-    "Engine",
-    "TensorDesc",
+    "NE_LUT_BYTES",
+    "activation",
     "align_up",
+    "coefficient_dma",
     "compute_ne",
     "compute_pe",
-    "require_row_width",
+    "convolution",
+    "end_of_network",
     "fp16",
     "load",
     "load_chained",
     "load_second",
+    "multiply",
+    "require_row_width",
     "splice",
+    "staged_copy",
     "store",
-    "tensor_desc",
 ]

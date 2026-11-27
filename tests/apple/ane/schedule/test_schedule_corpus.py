@@ -7,14 +7,15 @@ is not evaluated.
 """
 from __future__ import annotations
 
-import re
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+from tests.apple.ane import device
 from tests.core._corpus import Case, Problems, case, cases, reload, special
-from tilefoundry import analysis, codegen, inspection, utils
+from tilefoundry import analysis, inspection, utils
 from tilefoundry.interfaces import evaluator, schedule
 from tilefoundry.ir import core, expr
 from tilefoundry.passes import transforms
@@ -35,10 +36,14 @@ class AneCase(Case):
     """One ANE fixture; a field names the error its stage must raise.
 
     ``refusal`` is the load-time VerifyError and ``finalize_refusal`` the LoweringError.
+    ``image`` is the SHA-256 of the container the lowered entry compiles to; a case that
+    states it also runs on the neural engine when this machine can launch one.
     """
 
     refusal: str | None = None
     finalize_refusal: str | None = None
+    image: str | None = None
+    device_run: bool = False
 
     def inputs(self) -> tuple | None:
         """The entry's torch inputs, or None when the case is not evaluated."""
@@ -187,6 +192,16 @@ def _scheduled(case, problems):
         lowered = problems.run("reload TIR", lambda text: reload(text, lowered.name), printed)
         reprinted = problems.run("reprint TIR", inspection.as_script, lowered)
         problems.expect("reprinted TIR", lambda text: text == printed, reprinted)
+    if case.image is not None or case.device_run:
+        constants = {param.name: value.numpy().tobytes() for param, value in
+                     zip(lowered.entry_function().params, case.inputs(), strict=False)
+                     if getattr(param, "is_const", False)}
+        image = problems.run("image", device.image_of, lowered, constants)
+        if case.image is not None:
+            problems.expect("image digest", lambda data: hashlib.sha256(data).hexdigest() == case.image, image)
+        if device.available():
+            launched = problems.run("launch", device.launch, lowered, case.inputs())
+            problems.expect("launched result", utils.torch.equal, launched, result)
     problems.run("guard", case.guard, ScheduledState(module, result, lowered), problems)
 
 
@@ -285,6 +300,28 @@ class TransposeCandidates(AneCase):
 
 
 @case
+class Conv1x1(AneCase):
+    path: Path = ROOT / "scheduled" / "conv_1x1.py"
+    device_run: bool = True
+
+    def inputs(self):
+        return small((1, 32, 16, 16), 10), small((32, 32, 1, 1), 11)
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(x, w))
+
+
+@case
+class Conv1x1Relu(Conv1x1):
+    path: Path = ROOT / "scheduled" / "conv_1x1_relu.py"
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(x, w).relu())
+
+
+@case
 class ConvRelu(AneCase):
     path: Path = ROOT / "scheduled" / "conv_relu.py"
 
@@ -331,6 +368,7 @@ class Chain(AneCase):
 @case
 class Transpose(AneCase):
     path: Path = ROOT / "scheduled" / "transpose.py"
+    image: str | None = "6ab1a2853f0c464cd7b58512cf2a35ffdd784ea1efee7971c4506d28d44b7398"
 
     def inputs(self):
         return ((utils.torch.arange(4096) - 2048).reshape(1, 32, 8, 16).to(utils.torch.float16),)
@@ -361,8 +399,23 @@ class Pool(AneCase):
 
 
 @case
+class PoolMax(AneCase):
+    path: Path = ROOT / "scheduled" / "pool_max.py"
+    image: str | None = "ef8e74dbeb469cc4905a4f7e9d3be0d019e4df74fa15f08e4591ef860f0b301d"
+
+    def inputs(self):
+        return (small((1, 32, 16, 16), 0, -3, 3),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.max_pool2d(x, 2, 2))
+        assert issued(state.lowered) == ["T.ane.pool(out, x, kernel_size=(2, 2), stride=(2, 2), kind=MAX)"]
+
+
+@case
 class Unary(AneCase):
     path: Path = ROOT / "scheduled" / "unary.py"
+    image: str | None = "fac54f2f727cb3172195f035d635c38b3da2c1da131c8ee56ccfea4b461da37f"
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0, -3, 3),)
@@ -370,22 +423,13 @@ class Unary(AneCase):
     def guard(self, state, problems):
         (x,) = self.inputs()
         assert utils.torch.equal(state.result, (2 * x.float() + 3).clamp(0, 6).to(utils.torch.float16))
-        fn = state.lowered.entry_function()
-        symbol = codegen.mangle(state.lowered, fn)
-        signature = codegen.signature.called_as(fn, symbol, target=fn.target)
-        ctx = codegen.EmitContext(codegen.registry, symbols={id(fn): signature}, target=fn.target)
-        unit = fn.target.resolve(codegen.LinkableModule, state.lowered, (fn,), ctx)
-        source = unit.source
-        assert '#include "tilefoundry/runtime/ane/launcher.h"' in source
-        assert f'extern "C" int {symbol}(DLTensor** inputs, DLTensor** outputs)' in source
-        assert f"return ane_launch({symbol}_image, sizeof({symbol}_image)," in source
-        assert re.search(rf"const uint8_t {symbol}_image\[\] = \{{[^}}]*\}};", source) is not None
         assert issued(state.lowered) == ["T.ane.unary(out, x, pre_scale=2.0, bias=3.0, clamp=(0.0, 6.0))"]
 
 
 @case
 class Binary(AneCase):
     path: Path = ROOT / "scheduled" / "binary.py"
+    image: str | None = "58771ce2656fac6c969eaea20d270347bbdaed3ca1634c8a78b6a23db4d20950"
 
     def inputs(self):
         return small((1, 32, 16, 16), 0, -3, 3), small((1, 32, 16, 16), 1, -3, 3)
@@ -413,6 +457,20 @@ class Reduce(AneCase):
         assert issued(state.lowered) == [
             "T.ane.reduce(out, x, axes=(2, 3), keepdim=True, kind=SUM, scale=0.00390625)"
         ]
+
+
+@case
+class ReduceSum(AneCase):
+    path: Path = ROOT / "scheduled" / "reduce_sum.py"
+    image: str | None = "e3150af8da1785356ab6c64f598b1ce8c51be62237aa7796cb1d6dcaf71908d3"
+
+    def inputs(self):
+        return (small((1, 32, 16, 16), 0, -3, 3),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, x.sum((2, 3), keepdim=True))
+        assert issued(state.lowered) == ["T.ane.reduce(out, x, axes=(2, 3), keepdim=True, kind=SUM)"]
 
 
 @case

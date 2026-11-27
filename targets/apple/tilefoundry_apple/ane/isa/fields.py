@@ -1,8 +1,9 @@
 """Bit fields and configuration blocks for the H14 ANE."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import IntEnum
+from types import MappingProxyType
 from typing import ClassVar
 
 
@@ -46,13 +47,36 @@ class BitField:
         return (word & ~self.mask) | (val << self.lo)
 
 
+class Writes(dict[int, int]):
+    """Configuration words with the bit ranges explicitly written by their owner."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.masks: dict[int, int] = {}
+
+    def put(self, field: BitField, value: int) -> None:
+        """Write a named field and retain its mask, including explicit zero values."""
+        self[field.addr] = field.put(self.get(field.addr, 0), value)
+        self.masks[field.addr] = self.masks.get(field.addr, 0) | field.mask
+
+    def merge(self, part: Mapping[int, int]) -> None:
+        """Combine disjoint or equal writes and reject contradictory field values."""
+        for addr, word in part.items():
+            mask = part.masks[addr] if isinstance(part, Writes) else 0xFFFFFFFF
+            overlap = self.masks.get(addr, 0) & mask
+            if (self.get(addr, 0) ^ word) & overlap:
+                raise ValueError(f"conflicting primitive writes at {addr:#06x}, mask {overlap:#010x}")
+            self[addr] = self.get(addr, 0) | word
+            self.masks[addr] = self.masks.get(addr, 0) | mask
+
+
 class Block:
     """A contiguous range of configuration words with named fields."""
 
     base: ClassVar[int]
     end: ClassVar[int]
-    #: Rank in the descriptor's emission pipeline (coefficients first, destination
-    #: last); :data:`serialize.STAGE_ORDER` is the blocks sorted by it.
+
+
     pipeline_rank: ClassVar[int]
     fields: ClassVar[dict[str, BitField]]
 
@@ -82,12 +106,11 @@ class Block:
                 fields[field_name] = field
         cls.fields = fields
 
-    def pack(self, **name_val: int) -> dict[int, int]:
+    def pack(self, **name_val: int) -> Writes:
         """Combine named field values into words starting from zero."""
-        image: dict[int, int] = {}
+        image = Writes()
         for name, val in name_val.items():
-            field = self.fields[name]
-            image[field.addr] = field.put(image.get(field.addr, 0), val)
+            image.put(self.fields[name], val)
         return image
 
 
@@ -388,6 +411,12 @@ class KernelDMA(Block, base=0x1900, end=0x1A18, pipeline_rank=0):
     kernel_dma_armed = BitField(0x1900, 7, 7)
     kernel_dma_coeff_present = BitField(0x1900, 9, 9)
     kernel_dma_coeff_tag = BitField(0x1900, 23, 16)
+    kernel_dma_src_base_lo = BitField(0x1908, 31, 0)
+    kernel_dma_src_base_hi = BitField(0x190C, 31, 0)
+    kernel_dma_table_base = BitField(0x19E8, 31, 0)
+    kernel_dma_palette_base = BitField(0x19EC, 31, 0)
+    kernel_dma_table_base_lo = BitField(0x19F8, 31, 0)
+    kernel_dma_table_base_hi = BitField(0x19FC, 31, 0)
     kernel_stride_registers = (BitField(0x1910, 31, 6), BitField(0x1914, 31, 6))
     kernel_dma_src_coeff_dma_en = tuple(BitField(addr, 0, 0) for addr in range(0x1918, 0x1958, 4))
     kernel_dma_src_coeff_loaded = tuple(BitField(addr, 5, 5) for addr in range(0x1918, 0x1958, 4))
@@ -401,12 +430,21 @@ class KernelDMA(Block, base=0x1900, end=0x1A18, pipeline_rank=0):
     nonlinear_lut_enable = BitField(0x19E4, 0, 0)
     nonlinear_lut_loaded = BitField(0x19E4, 5, 5)
     nonlinear_lut_size = BitField(0x1A14, 31, 6)
-    # Relocated base-address words the patcher fills in; an activation pass
-    # states them as zero so the relocation slots exist for the patcher.
+
+
     kernel_dma_lut_base = BitField(0x19F4, 31, 0)
     kernel_dma_aux_base_lo = BitField(0x1A00, 31, 0)
     kernel_dma_aux_base_hi = BitField(0x1A04, 31, 0)
 
+
+COEFFICIENT_RELOCATIONS = MappingProxyType({
+    KernelDMA.kernel_dma_src_base_lo.addr: 8,
+    KernelDMA.kernel_dma_table_base_lo.addr: 8,
+    KernelDMA.kernel_dma_aux_base_lo.addr: 8,
+    KernelDMA.kernel_dma_table_base.addr: 4,
+    KernelDMA.kernel_dma_palette_base.addr: 4,
+    KernelDMA.kernel_dma_lut_base.addr: 4,
+})
 
 CONFIG_BLOCKS = (Common, L2, PE, NE, TileDMASrc, TileDMADst, KernelDMA)
 
@@ -418,12 +456,38 @@ def block_at(addr: int) -> type[Block] | None:
     return next((block for block in CONFIG_BLOCKS if block.base <= addr < block.end), None)
 
 
-# --- task descriptor header -------------------------------------------------
-# The 8-word task header is a second address space, separate from the
-# configuration register map above: these offsets index the header words (task
-# id, size, flags, dependency), not a configuration block, so they are plain
-# BitFields rather than members of a Block.  Both are numbered from zero, so a
-# header offset like 0x1C and the register word at 0x1C are unrelated.
+def check_configuration_word(addr: int, word: int) -> None:
+    """Check a raw configuration word against its declared fields and reserved bits."""
+    block = block_at(addr)
+    if block is None:
+        raise ValueError(f"{addr!r} is not a configuration word address")
+    check_word(word)
+    mask = 0
+    for field in block.fields.values():
+        if field.addr == addr:
+            field.put(word, field.get(word))
+            mask |= field.mask
+    if word & ~mask:
+        raise ValueError(f"configuration reserved bits at {addr:#x} are not decoded yet")
+
+
+RESET_IMAGE: Mapping[int, int] = MappingProxyType(
+    {
+        Common.din.addr: 0x00000001,
+        Common.common_in_fmt.addr: 0x0000002A,
+        Common.cin.addr: 0x00000010,
+        Common.cout.addr: 0x00000010,
+        Common.dout.addr: 0x00000001,
+        L2.pe_src1_re_lu.addr: 0x00000000,
+        L2.l2_src_base_address.addr: 0x00000000,
+        PE.op.addr: 0x00000000,
+        PE.scale.addr: 0x3C000000,
+        PE.pre_scale.addr: 0x3C000000,
+        PE.clamp_low.addr: 0x7C000000,
+        NE.op.addr: 0x00000000,
+    }
+)
+
 TID = BitField(0, 15, 0)
 TASK_SIZE = BitField(0, 26, 16)
 FLAGS = BitField(0, 31, 27)
@@ -432,28 +496,35 @@ DEPENDENCY_ID = BitField(0x20, 15, 0)
 
 
 __all__ = [
+    "BitField",
+    "Block",
     "CONFIG_BLOCKS",
+    "COEFFICIENT_RELOCATIONS",
+    "Common",
     "DEPENDENCY_ENABLE",
     "DEPENDENCY_ID",
     "FLAGS",
-    "TASK_SIZE",
-    "TID",
-    "BitField",
-    "Block",
-    "Common",
     "KernelDMA",
     "KernelFormat",
     "L2",
+    "L2Access",
     "NE",
     "NENonlinear",
     "NEOp",
     "PE",
+    "RESET_IMAGE",
     "PENonlinear",
     "PEOp",
     "PoolMode",
+    "TASK_SIZE",
+    "TID",
     "TaskType",
+    "TensorFormatMode",
+    "TensorMemoryFormat",
     "TileDMADst",
     "TileDMASrc",
+    "Writes",
     "block_at",
     "check_word",
+    "check_configuration_word",
 ]
