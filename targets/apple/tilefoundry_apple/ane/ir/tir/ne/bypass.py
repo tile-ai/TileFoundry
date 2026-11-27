@@ -31,18 +31,41 @@ class Bypass(expr.Op):
     hir_matches = (
         schedule.HirMatch(nn.ReLU, attributes={"nonlinear": Nonlinear.RELU}, operands=OPERANDS),
         *(
-            schedule.HirMatch(tensor.Transpose, when={"perm": (0, *(1 + axis for axis in perm))},
-                              attributes={"perm": perm}, operands=OPERANDS)
+            schedule.HirMatch(
+                tensor.Transpose,
+                when={"perm": (0, *(1 + axis for axis in perm))},
+                attributes={"perm": perm},
+                operands=OPERANDS,
+            )
             for perm in PERMS[1:]
         ),
-        schedule.HirMatch(tensor.Transpose, when={"perm": pattern.Wildcard("perm")}, operands=OPERANDS),
+        schedule.HirMatch(
+            tensor.Transpose, when={"perm": pattern.Wildcard("perm")}, operands=OPERANDS
+        ),
     )
 
-    perm = expr.ParamDef(kind="attribute", annotation=tuple, pattern=layout.one_of("perm", PERMS), default=IDENTITY)
+    perm = expr.ParamDef(
+        kind="attribute", annotation=tuple, pattern=layout.one_of("perm", PERMS), default=IDENTITY
+    )
     nonlinear = expr.ParamDef(
-        kind="attribute", annotation=Nonlinear, pattern=pattern.Wildcard("nonlinear"), default=Nonlinear.NONE)
-    dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.forms("dst", DST))
-    src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.forms("src", SRC))
+        kind="attribute",
+        annotation=Nonlinear,
+        pattern=pattern.Wildcard("nonlinear"),
+        default=Nonlinear.NONE,
+    )
+    tile_height = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    tile_width = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
+    width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    unicast_channels = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
+    dst = expr.ParamDef(
+        kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.forms("dst", DST)
+    )
+    src = expr.ParamDef(
+        kind="input", effect=expr.MemoryEffect.READ, pattern=layout.forms("src", SRC)
+    )
 
 
 @typeinfer.register(Bypass)
@@ -59,7 +82,9 @@ def axes(op, rank: int) -> tuple:
 def _(call, ctx):
     src = ctx.type_of(call.args[1])
     hir = tensor.Transpose(perm=axes(call.target, len(src.shape)))
-    read, written = access.relations_of(expr.Call(hir, call.args[1:], type=types.TupleType.Void), ctx)
+    read, written = access.relations_of(
+        expr.Call(hir, call.args[1:], type=types.TupleType.Void), ctx
+    )
     return written, read, written
 
 
@@ -68,7 +93,9 @@ def _(call, ctx) -> None:
     op = call.target
     dst, src = (ctx.type_of(arg) for arg in call.args)
     if len(dst.shape) != len(src.shape):
-        ctx.error(call, f"dst shape {tuple(dst.shape)} and src shape {tuple(src.shape)} differ in rank")
+        ctx.error(
+            call, f"dst shape {tuple(dst.shape)} and src shape {tuple(src.shape)} differ in rank"
+        )
     if len(src.shape) == 2:
         if tuple(op.perm) != SWAP:
             ctx.error(call, f"perm {tuple(op.perm)} must be {SWAP} for a matrix")

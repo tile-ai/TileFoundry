@@ -1,7 +1,7 @@
 # TileFoundry ANE Spec — Target
 
 The ANE target describes the Apple Neural Engine of an Apple silicon chip.
-It has no code generation and no runtime.
+The [codegen](./codegen.md) emits descriptor images and C++ entry points.
 
 ## 1. `ane.Architecture`
 
@@ -138,11 +138,11 @@ Instruction selection reads `Architecture.capabilities` directly.
 | Memory level | Scope | Owner | Capacity |
 |---|---|---|---|
 | `gmem` | `device` | `target` | `Device.unified_memory_capacity_bytes` |
-| `smem` | `engine` | `engine` | `None` |
+| `smem` | `engine` | `engine` | `2 MiB` |
 
 - constraints:
   - `gmem` MUST name the unified memory. The CPU shares it, so no topology owns it.
   - `smem` MUST name the on-chip L2 buffer of the engine.
-  - The capacity of `smem` MUST stay `None`. No source states the L2 capacity.
+  - The capacity of `smem` MUST be 2 MiB, the 21-bit L2 byte-address window.
   - Throughput and service Facts MUST raise `UnsupportedCapabilityError`. No ANE throughput is measured.
   - Apple publishes 15.8 trillion operations per second without a data type. A projection MUST NOT convert it to a rate.

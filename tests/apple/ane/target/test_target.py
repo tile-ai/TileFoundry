@@ -32,7 +32,7 @@ def test_target_constructs_and_reads_back():
 
 
 def test_topology_facts():
-    """One engine of size 1 runs a program; its L2 is owned by the engine and has no capacity."""
+    """One engine of size 1 runs a program; its L2 is owned by the engine with 2 MiB capacity."""
     tgt = ane.Target()
     facts = tgt.get_facts(target.TopologyFacts)
     assert facts.topologies == (target.TopologyLimits("engine", 1, 1),)
@@ -45,7 +45,7 @@ def test_topology_facts():
     }
     assert {level.name: level.capacity_bytes for level in hierarchy.explicit_levels} == {
         "gmem": 34359738368,
-        "smem": None,
+        "smem": 2 * 1024 * 1024,
     }
     assert tgt.storage_owners.order == ("engine",)
     assert tgt.device.f16_throughput == 16_710_000_000_000

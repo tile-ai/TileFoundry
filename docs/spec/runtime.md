@@ -83,7 +83,19 @@ class Module:
 ```python
 # src/tilefoundry/runtime/module.py
 class CompiledModule(Module):
-    def __init__(self, type: codegen.CallableSignature, fn: Callable) -> None: ...
+    def __init__(
+        self, type: codegen.CallableSignature, fn: Callable, library_path: Path
+    ) -> None: ...
+
+    @classmethod
+    def create(cls, target, mod: core.Module, options) -> CompiledModule: ...
+
+    @classmethod
+    def from_library(
+        cls, path: str | Path, type: codegen.CallableSignature | None = None
+    ) -> CompiledModule: ...
+
+    def export_library(self, path: str | Path) -> None: ...
 
     def load(self, resource: Resource, *, placement: "types.Placement | None" = None) -> None: ...
 
@@ -111,6 +123,16 @@ Output shape and dtype come from `CallableSignature.output_params` (set by
 codegen from lowered IR, never guessed at runtime). This convention is specific
 to `CompiledModule`; other `runtime.Module.forward` implementations are not
 bound by it.
+
+- **Target build**: `tilefoundry.build` hands a Module whose entry is not a CPU
+  host `PrimFunction` to `target.resolve(CompiledModule, mod, options)`. The class a
+  Target binds to `CompiledModule` builds and returns it from its `create`. The base
+  `create` raises `ValueError` naming the entry as not a CPU host entry.
+- **Export**: `export_library(path)` copies the shared library to `path` and writes
+  the entry's `CallableSignature` beside it. The signature is pickled to `<path>.pkl`.
+- **Reload**: `cls.from_library(path)` reads that signature and binds the entry as
+  the loader does ([§1.4](#14-runtimeloaderpy)). The caller picks the class; a
+  subclass's extra state comes from its own library.
 
 ### 1.2 `runtime/function.py`
 
@@ -323,7 +345,7 @@ LinkedModule → load → CompiledModule (fully-loaded, public, callable runtime
 ([codegen §4.3](./codegen.md#43-linkedmodule)); the loader that turns it into a
 `CompiledModule` is owned here. The loader and `LinkedModule` are not public
 API; only `CompiledModule` (a `runtime.Module`) is. `load_linked_module` returns
-`CompiledModule(type=replace(entry.signature, name=entry.name), fn=entry_callable)`,
+`CompiledModule.from_library(linked.library_path, replace(entry.signature, name=entry.name))`,
 where `entry` is the first `LinkedFunction` (codegen sorts the `Module.entry`
 host first); `name` / `entry` are its registration name. Its `forward`
 implements the out-param calling convention directly
@@ -334,8 +356,9 @@ implements the out-param calling convention directly
 #### Launcher ABI
 
 `tilefoundry.build(mod)` runs codegen, links the artifact (see
-[codegen](./codegen.md)), loads it and binds the entry. It MUST raise
-`ValueError` when `Module.entry` is not a CPU host `PrimFunction`. Users interact
+[codegen](./codegen.md)), loads it and binds the entry. When `Module.entry` is not a
+CPU host `PrimFunction` it delegates to the Target's `CompiledModule` class
+([§1.1](#11-runtimemodulepy)). Users interact
 only with `runtime.Module.__call__` / `runtime.Function.__call__`.
 
 Load contract:

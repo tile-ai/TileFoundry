@@ -8,13 +8,15 @@ from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir.hir import math
 from tilefoundry_apple.ane.ir.tir import evaluation, layout
 
-KINDS = MappingProxyType({
-    expr.BinaryKind.ADD: lambda lhs, rhs: lhs + rhs,
-    expr.BinaryKind.SUB: lambda lhs, rhs: lhs - rhs,
-    expr.BinaryKind.MUL: lambda lhs, rhs: lhs * rhs,
-    expr.BinaryKind.MIN: lambda lhs, rhs: lhs.minimum(rhs),
-    expr.BinaryKind.MAX: lambda lhs, rhs: lhs.maximum(rhs),
-})
+KINDS = MappingProxyType(
+    {
+        expr.BinaryKind.ADD: lambda lhs, rhs: lhs + rhs,
+        expr.BinaryKind.SUB: lambda lhs, rhs: lhs - rhs,
+        expr.BinaryKind.MUL: lambda lhs, rhs: lhs * rhs,
+        expr.BinaryKind.MIN: lambda lhs, rhs: lhs.minimum(rhs),
+        expr.BinaryKind.MAX: lambda lhs, rhs: lhs.maximum(rhs),
+    }
+)
 
 
 @expr.register_op(dialect="T", category="pe", namespace="ane", name="binary")
@@ -24,11 +26,22 @@ class Binary(expr.Op):
     capability = expr.OpCapability("pe.binary")
     execution_mesh = layout.ENGINE
     hir_matches = (
-        schedule.HirMatch(math.Binary, when={"kind": pattern.Wildcard("kind")},
-                          operands={"dst": "result", "lhs": "lhs", "rhs": "rhs"}),
+        schedule.HirMatch(
+            math.Binary,
+            when={"kind": pattern.Wildcard("kind")},
+            operands={"dst": "result", "lhs": "lhs", "rhs": "rhs"},
+        ),
     )
 
-    kind = expr.ParamDef(kind="attribute", annotation=expr.BinaryKind, pattern=layout.one_of("kind", KINDS))
+    kind = expr.ParamDef(
+        kind="attribute", annotation=expr.BinaryKind, pattern=layout.one_of("kind", KINDS)
+    )
+    tile_height = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    tile_width = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
+    width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
     dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.feature("dst"))
     lhs = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("lhs"))
     rhs = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("rhs"))

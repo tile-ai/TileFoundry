@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import pickle
+import shutil
+from pathlib import Path
 from typing import Callable
 
 from tilefoundry import codegen, utils
@@ -15,6 +18,8 @@ from tilefoundry.ir import core, types
 from .resource import Resource
 
 __all__ = ["CompiledModule", "Module"]
+
+tvm_ffi = utils.LazyModule("tvm_ffi")
 
 
 class Module:
@@ -78,11 +83,43 @@ class CompiledModule(Module):
     ``rm(x, out)`` writes into the ones given.
     """
 
-    def __init__(self, type: codegen.CallableSignature, fn: Callable) -> None:
+    def __init__(self, type: codegen.CallableSignature, fn: Callable, library_path: Path) -> None:
         super().__init__(name=type.name, entry=type.name)
         self.type = type
         self.fn = fn
+        self.library_path = library_path
         self.placement: "types.Placement | None" = None
+
+    @classmethod
+    def create(cls, target, mod: core.Module, options) -> CompiledModule:
+        """Refuse an entry that no class bound to *target* builds."""
+        raise ValueError(f"tilefoundry.build: Module.entry {mod.entry!r} is not a CPU host entry")
+
+    @classmethod
+    def from_library(
+        cls, path: str | Path, type: codegen.CallableSignature | None = None
+    ) -> CompiledModule:
+        """Load the library at *path* for the life of the process and bind its entry.
+
+        The registration is process-global and outlives this module, so the
+        library stays loaded. *type* is the entry's signature, named by its
+        registration; it defaults to the one ``export_library`` wrote beside *path*.
+        """
+        path = Path(path)
+        if type is None:
+            type = pickle.loads(signature_file(path).read_bytes())
+        tvm_ffi.load_module(str(path), keep_module_alive=True)
+        try:
+            fn = tvm_ffi.get_global_func(type.name)
+        except ValueError as error:
+            raise RuntimeError(f"library {path} has no registration {type.name!r}") from error
+        return cls(type, fn, path)
+
+    def export_library(self, path: str | Path) -> None:
+        """Copy the library to *path* and pickle the entry signature beside it."""
+        path = Path(path)
+        shutil.copyfile(self.library_path, path)
+        signature_file(path).write_bytes(pickle.dumps(self.type))
 
     def load(self, resource: Resource, *, placement: "types.Placement | None" = None) -> None:
         """Remember which unit this is; a compiled entry holds no weights."""
@@ -133,3 +170,8 @@ class CompiledModule(Module):
             utils.torch.empty(p.type.shape, dtype=evaluator.to_torch_dtype(p.type.dtype), device=device)
             for p in self.type.output_params
         )
+
+
+def signature_file(library: Path) -> Path:
+    """The file beside *library* that holds its pickled entry signature."""
+    return library.with_name(library.name + ".pkl")

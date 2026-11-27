@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+import tilefoundry
+from tests.apple.ane import device
 from tests.core._corpus import Case, Problems, case, cases, reload, special
 from tilefoundry import analysis, inspection, utils
 from tilefoundry.interfaces import evaluator, schedule
@@ -34,10 +36,14 @@ class AneCase(Case):
     """One ANE fixture; a field names the error its stage must raise.
 
     ``refusal`` is the load-time VerifyError and ``finalize_refusal`` the LoweringError.
+    ``runs`` marks a scheduled fixture that goes through the whole flow: every host
+    generates its code, and a machine with a neural engine also compiles it, runs it
+    and requires the result to equal the evaluator's.
     """
 
     refusal: str | None = None
     finalize_refusal: str | None = None
+    runs: bool = False
 
     def inputs(self) -> tuple | None:
         """The entry's torch inputs, or None when the case is not evaluated."""
@@ -186,6 +192,12 @@ def _scheduled(case, problems):
         lowered = problems.run("reload TIR", lambda text: reload(text, lowered.name), printed)
         reprinted = problems.run("reprint TIR", inspection.as_script, lowered)
         problems.expect("reprinted TIR", lambda text: text == printed, reprinted)
+    if case.runs:
+        problems.run("emit", device.emit, lowered)
+        if device.available():
+            compiled = problems.run("compile", tilefoundry.compile, lowered)
+            ran = problems.run("run", device.run, compiled, lowered, case.inputs())
+            problems.expect("device result", utils.torch.equal, ran, result)
     problems.run("guard", case.guard, ScheduledState(module, result, lowered), problems)
 
 
@@ -284,6 +296,28 @@ class TransposeCandidates(AneCase):
 
 
 @case
+class Conv1x1(AneCase):
+    path: Path = ROOT / "scheduled" / "conv_1x1.py"
+    runs: bool = True
+
+    def inputs(self):
+        return small((1, 32, 16, 16), 10), small((32, 32, 1, 1), 11)
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(x, w))
+
+
+@case
+class Conv1x1Relu(Conv1x1):
+    path: Path = ROOT / "scheduled" / "conv_1x1_relu.py"
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(x, w).relu())
+
+
+@case
 class ConvRelu(AneCase):
     path: Path = ROOT / "scheduled" / "conv_relu.py"
 
@@ -330,6 +364,7 @@ class Chain(AneCase):
 @case
 class Transpose(AneCase):
     path: Path = ROOT / "scheduled" / "transpose.py"
+    runs: bool = True
 
     def inputs(self):
         return ((utils.torch.arange(4096) - 2048).reshape(1, 32, 8, 16).to(utils.torch.float16),)
@@ -360,8 +395,23 @@ class Pool(AneCase):
 
 
 @case
+class PoolMax(AneCase):
+    path: Path = ROOT / "scheduled" / "pool_max.py"
+    runs: bool = True
+
+    def inputs(self):
+        return (small((1, 32, 16, 16), 0, -3, 3),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.max_pool2d(x, 2, 2))
+        assert issued(state.lowered) == ["T.ane.pool(out, x, kernel_size=(2, 2), stride=(2, 2), kind=MAX)"]
+
+
+@case
 class Unary(AneCase):
     path: Path = ROOT / "scheduled" / "unary.py"
+    runs: bool = True
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0, -3, 3),)
@@ -373,8 +423,22 @@ class Unary(AneCase):
 
 
 @case
+class UnaryChain(AneCase):
+    path: Path = ROOT / "scheduled" / "unary_chain.py"
+    runs: bool = True
+
+    def inputs(self):
+        return (small((1, 32, 16, 16), 21, -7, 7),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, (x.abs() + 1) * 2)
+
+
+@case
 class Binary(AneCase):
     path: Path = ROOT / "scheduled" / "binary.py"
+    runs: bool = True
 
     def inputs(self):
         return small((1, 32, 16, 16), 0, -3, 3), small((1, 32, 16, 16), 1, -3, 3)
@@ -402,6 +466,20 @@ class Reduce(AneCase):
         assert issued(state.lowered) == [
             "T.ane.reduce(out, x, axes=(2, 3), keepdim=True, kind=SUM, scale=0.00390625)"
         ]
+
+
+@case
+class ReduceSum(AneCase):
+    path: Path = ROOT / "scheduled" / "reduce_sum.py"
+    runs: bool = True
+
+    def inputs(self):
+        return (small((1, 32, 16, 16), 0, -3, 3),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, x.sum((2, 3), keepdim=True))
+        assert issued(state.lowered) == ["T.ane.reduce(out, x, axes=(2, 3), keepdim=True, kind=SUM)"]
 
 
 @case
@@ -433,16 +511,16 @@ REFUSED = ROOT / "ops" / "refused.py"
 
 @case
 class UnaryOrder(OpCase):
-    """The last input makes ``1 - x`` an fp16 tie, which rounds away from zero before the square."""
+    """The last input makes ``x + 1`` an fp16 tie, rounded before the square."""
 
     path: Path = VALUES
     name: str | None = "UnaryOrder"
 
     def inputs(self):
-        return (utils.torch.tensor([-4, -3, -2, -1, 0, 1, 2, -(2**-11)]).reshape(1, 1, 1, 8).to(utils.torch.float16),)
+        return (utils.torch.tensor([-4, -3, -2, -1, 0, 1, 2, 2**-11]).reshape(1, 1, 1, 8).to(utils.torch.float16),)
 
     def expected(self):
-        return utils.torch.tensor([10, 10, 9, 4, 1, 0, 1, 1 + 2**-9]).reshape(1, 1, 1, 8)
+        return utils.torch.tensor([9, 4, 1, 0, 1, 4, 9, 1 + 2**-9]).reshape(1, 1, 1, 8)
 
 
 @case

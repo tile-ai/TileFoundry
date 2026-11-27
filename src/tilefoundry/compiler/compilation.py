@@ -84,7 +84,8 @@ def build(
 
     *mod* must be a ``Module``. *target* defaults to ``mod.metadata["target"]``.
     Raises ``ValueError`` if missing or if explicit *target* conflicts. *options*
-    gives the codegen stage its part.
+    gives the codegen stage its part. An entry that is not a CPU host entry is
+    built by ``CompiledModule.create`` of the class the Target binds.
     """
     if not isinstance(mod, core.Module):
         raise TypeError(f"tilefoundry.build: expected Module, got {type(mod).__name__}.")
@@ -104,7 +105,7 @@ def build(
 
     entry = mod.entry_function()
     if not (isinstance(entry, core.PrimFunction) and isinstance(entry.target, cpu.Target)):
-        raise ValueError(f"tilefoundry.build: Module.entry {entry.name!r} is not a CPU host entry")
+        return module_target.resolve(runtime.CompiledModule, mod, options)
     workdir = tempfile.mkdtemp(prefix=f"tilefoundry_build_{mod.entry}_split_")
     codegen_options = codegen.Options() if options is None else options.codegen
     return runtime.load_linked_module(

@@ -13,10 +13,11 @@ The ANE TIR Ops are the tasks that one Apple Neural Engine runs. Each Op is one 
   The names are `ne.conv`, `ne.bypass`, `pe.pool`, `pe.unary`, `pe.binary` and `pe.reduce`.
 - A feature map is `[1, C, H, W]` in `gmem` or `smem`, with `C <= 65536`, `H <= 16384` and `W <= 16384`.
   Its W stride MUST be 1 when `W` is above 1. The engine addresses a feature map by row, channel, depth and group
-  strides and has no element stride. The other strides are not constrained.
+  strides and has no element stride. An Op may further constrain the layout.
 - `weight` and `bias` are in `gmem`. The kernel height and width of a `weight` are at most 32.
-- The nonlinear modes are `NONE` and `RELU` ([Nonlinear](#nonlinear)).
-  A lookup-table nonlinear, such as sigmoid or tanh, is not an instruction mode. Pairing gives it no `T.ane` candidate.
+- The public nonlinear modes are `NONE` and `RELU` ([Nonlinear](#nonlinear)).
+  Pairing gives SiLU, sigmoid and tanh no `T.ane` candidate.
+  SiLU LUT content and lookup arithmetic are not decoded yet, including for `[1, 32, 16, 16]`.
 - Single-operator runs on `apple.m2_pro.ane` checked the value ranges of this page. Its architecture is `apple.h14`.
   No other ANE generation is checked.
 
@@ -134,6 +135,11 @@ class Conv(Op):
   - In the matrix form, `src` is `[M, K]`, `weight` is `[K, N]` and `dst` is `[M, N]`. The strides follow [§1.2](#12-matrix-forms).
   - The matrix form MUST have `stride=(1, 1)`, `padding=(0, 0)` and `groups=1`.
   - `dst`, `src` and `weight` MUST be all feature maps or all matrices.
+  - Schedules MUST declare intermediate storage through tensor types. L2 addresses
+    MUST come from codegen buffer allocation, with disjoint source and result ranges.
+  - Full-height feature-map L2 source small-source mapping and L2 result pitches
+    are not decoded yet. Codegen MUST reject these requests; the evaluator retains
+    the reference semantics for SMEM operands.
 
 #### Bypass
 
@@ -210,12 +216,12 @@ class Pool(Op):
 
 ```python
 class Unary(Op):
-    """Effect form; dst = clamp(square(abs(src * pre_scale * scale + bias))).
+    """Effect form; pre_scale and bias precede either square or scale, then abs and clamp.
 
     Attributes:
         pre_scale: attribute; the first factor.
-        scale: attribute; the second factor.
-        bias: attribute; the addend.
+        scale: attribute; the factor after the bias; must be 1 when square is true.
+        bias: attribute; the addend after pre_scale.
         abs: attribute; apply the absolute value.
         square: attribute; apply the square.
         clamp: attribute; (low, high) bounds, or None.
@@ -238,18 +244,42 @@ class Unary(Op):
 
     ```text
     v = f16(src * pre_scale)
-    v = f16(v * scale)
     v = f16(v + bias)
-    v = abs(v)                      when abs
-    v = f16(v * v)                  when square
+    if square:
+        v = f16(v * v)
+    else:
+        v = f16(v * scale)
+        v = abs(v)                 when abs
     v = f16(clamp(v, low, high))    when clamp = (low, high)
     dst = v
     ```
 
-  - The three affine steps always apply. Their defaults leave the value unchanged.
-  - `abs`, `square` and `clamp` are optional. Each applies only when set. `abs` does not round.
+  - `pre_scale` and `bias` always apply. `square` replaces the scale step.
+    Codegen and the evaluator MUST reject `square=True` with `scale != 1`:
+    hardware square mode ignores scale and cannot implement a non-default factor.
+  - `f16` retains the evaluator's existing per-step round-to-nearest with ties away from zero.
+    `abs` does not round. Some probes distinguish only operation order: their away/even and
+    per-step/final candidates coincide. Those results do not establish hardware rounding
+    for every admitted option combination.
+  - `abs` with `square` MUST be rejected as not decoded yet, including by the evaluator.
+  - Codegen and the evaluator MUST reject option combinations outside the following table
+    as not decoded yet.
+    An affine attribute not listed in a row MUST have its default value. Within a listed
+    set, each attribute may independently have a non-default value.
+
+    | Enabled options | Admitted non-default affine attributes |
+    |---|---|
+    | none | `pre_scale`, `bias`, `scale` |
+    | `clamp` | `pre_scale`, `bias`, `scale` |
+    | `abs` | `pre_scale`, `bias`, `scale` |
+    | `abs`, `clamp` | either `{bias}` or `{scale}` |
+    | `square` | `pre_scale`, `bias` |
+    | `square`, `clamp` | `pre_scale`, `bias` |
+
   - `clamp` MUST satisfy `low <= high`.
   - `dst` MUST have the shape of `src`.
+  - Each operand MUST have a flat layout and static row and channel strides.
+  - These strides MUST be multiples of 64 bytes in `gmem` and 16 bytes in `smem`.
   - Pairing sets `abs=True` for ABS, `square=True` for SQUARE and `scale=-1.0` for NEG.
   - Every other `UnaryKind` has no `T.ane.unary` candidate.
 

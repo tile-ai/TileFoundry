@@ -43,7 +43,9 @@ class Target(target.Target):
     @cached_property
     def selected_device(self) -> hardware.ResolvedResource:
         """The device document and the Device it builds."""
-        return target.select(self.device_id, Device, role="ane.Target.device", hardware=self.hardware)
+        return target.select(
+            self.device_id, Device, role="ane.Target.device", hardware=self.hardware
+        )
 
     @cached_property
     def selected_architecture(self) -> hardware.ResolvedResource:
@@ -51,7 +53,9 @@ class Target(target.Target):
         named = target.architecture_of(
             self.device_id, device_type=Device, role="ane.Target.device", hardware=self.hardware
         )
-        return target.select(named, Architecture, role="ane.Target.architecture", hardware=self.hardware)
+        return target.select(
+            named, Architecture, role="ane.Target.architecture", hardware=self.hardware
+        )
 
     @property
     def device(self) -> Device:
@@ -88,13 +92,12 @@ class Target(target.Target):
             return target.facts_result(self, facts_type, self.topology_facts())
         if facts_type is target.MemoryExecutionFacts and query is None:
             return target.facts_result(
-                self, facts_type,
+                self,
+                facts_type,
                 target.MemoryExecutionFacts((self.topology_facts().topologies[-1].name,)),
             )
         if facts_type is target.TopologyLimits:
-            limits = self.topology_facts().topology(
-                query if isinstance(query, str) else None
-            )
+            limits = self.topology_facts().topology(query if isinstance(query, str) else None)
             if limits is not None:
                 return target.facts_result(self, facts_type, limits)
             return super().get_facts(facts_type, query)

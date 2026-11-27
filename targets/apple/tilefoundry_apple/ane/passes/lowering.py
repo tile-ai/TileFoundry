@@ -14,18 +14,27 @@ class Lowering(transforms.Lowering):
             return super().default_visit_T(call, op, operands, ctx)
         mesh = ctx.innermost_mesh()
         if mesh is None:
-            raise transforms.LoweringError(f"{transforms.label(call)} instruction issue has no lexical mesh")
+            raise transforms.LoweringError(
+                f"{transforms.label(call)} instruction issue has no lexical mesh"
+            )
         plan, type_list, owner = ctx.issues.plan(call, op, mesh)
         params = plan.params
         (destination,) = (param for param in params if param.effect & expr.MemoryEffect.WRITE)
         scheduled = isinstance(call.target, hir.schedule.ScheduleOp)
-        supplied = params if scheduled else tuple(p for p in params if p.effect & expr.MemoryEffect.READ)
+        supplied = (
+            params if scheduled else tuple(p for p in params if p.effect & expr.MemoryEffect.READ)
+        )
         values = {param.name: value for param, value in zip(supplied, operands, strict=True)}
         if destination.name not in values:
             values[destination.name] = ctx.result(call)
-        with ctx.builder.region(mesh=owner, binding=expr.Var(ctx.names.fresh("engine"), type=transforms.BINDING)):
+        with ctx.builder.region(
+            mesh=owner, binding=expr.Var(ctx.names.fresh("engine"), type=transforms.BINDING)
+        ):
             issued = tuple(
-                ctx.builder.value(ctx.storage.operand(values[param.name], type_, stem=f"{param.name}_view"), ctx=ctx)
+                ctx.builder.value(
+                    ctx.storage.operand(values[param.name], type_, stem=f"{param.name}_view"),
+                    ctx=ctx,
+                )
                 for param, type_ in zip(params, type_list, strict=True)
             )
             ctx.builder.add(core.Evaluate(op, issued))

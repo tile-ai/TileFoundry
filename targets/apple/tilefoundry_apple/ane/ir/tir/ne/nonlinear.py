@@ -14,10 +14,12 @@ class Nonlinear(Enum):
     RELU = "relu"
 
 
-KINDS = MappingProxyType({
-    Nonlinear.NONE: lambda value: value,
-    Nonlinear.RELU: lambda value: value.relu(),
-})
+KINDS = MappingProxyType(
+    {
+        Nonlinear.NONE: lambda value: value,
+        Nonlinear.RELU: lambda value: value.relu(),
+    }
+)
 
 
 def apply(kind: Nonlinear, x):

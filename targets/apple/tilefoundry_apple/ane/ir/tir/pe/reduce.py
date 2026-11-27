@@ -22,20 +22,28 @@ class Post(Enum):
 
 AXES = ((2, 3), (3,), (1, 2, 3), (1, 3))
 KINDS = (expr.ReduceKind.SUM, expr.ReduceKind.MAX, expr.ReduceKind.MIN)
-REDUCTIONS = MappingProxyType({
-    expr.ReduceKind.SUM: lambda value, axes, keepdim: value.sum(axes, keepdim),
-    expr.ReduceKind.MAX: lambda value, axes, keepdim: value.amax(axes, keepdim),
-    expr.ReduceKind.MIN: lambda value, axes, keepdim: value.amin(axes, keepdim),
-})
-POSTS = MappingProxyType({
-    Post.NONE: lambda value: value,
-    Post.INVERSE: lambda value: value.reciprocal(),
-    Post.SQRT: lambda value: value.sqrt(),
-    Post.RSQRT: lambda value: value.rsqrt(),
-})
-KEEPDIM = pattern.Wildcard("keepdim", predicates=(
-    pattern.In(pattern.Wildcard("keepdim"), (True,)) | pattern.In(pattern.Wildcard("axes"), ((2, 3),)),
-))
+REDUCTIONS = MappingProxyType(
+    {
+        expr.ReduceKind.SUM: lambda value, axes, keepdim: value.sum(axes, keepdim),
+        expr.ReduceKind.MAX: lambda value, axes, keepdim: value.amax(axes, keepdim),
+        expr.ReduceKind.MIN: lambda value, axes, keepdim: value.amin(axes, keepdim),
+    }
+)
+POSTS = MappingProxyType(
+    {
+        Post.NONE: lambda value: value,
+        Post.INVERSE: lambda value: value.reciprocal(),
+        Post.SQRT: lambda value: value.sqrt(),
+        Post.RSQRT: lambda value: value.rsqrt(),
+    }
+)
+KEEPDIM = pattern.Wildcard(
+    "keepdim",
+    predicates=(
+        pattern.In(pattern.Wildcard("keepdim"), (True,))
+        | pattern.In(pattern.Wildcard("axes"), ((2, 3),)),
+    ),
+)
 RESULT = layout.feature("dst")
 BOUND = MappingProxyType({name: pattern.Wildcard(name) for name in ("axes", "keepdim", "kind")})
 
@@ -55,14 +63,33 @@ class Reduce(expr.Op):
 
     axes = expr.ParamDef(kind="attribute", annotation=tuple, pattern=layout.one_of("axes", AXES))
     keepdim = expr.ParamDef(kind="attribute", annotation=bool, pattern=KEEPDIM)
-    kind = expr.ParamDef(kind="attribute", annotation=expr.ReduceKind, pattern=layout.one_of("kind", KINDS))
-    square = expr.ParamDef(kind="attribute", annotation=bool, pattern=pattern.Or(False, True), default=False)
+    kind = expr.ParamDef(
+        kind="attribute", annotation=expr.ReduceKind, pattern=layout.one_of("kind", KINDS)
+    )
+    square = expr.ParamDef(
+        kind="attribute", annotation=bool, pattern=pattern.Or(False, True), default=False
+    )
     scale = expr.ParamDef(kind="attribute", annotation=float, default=1.0)
     post = expr.ParamDef(kind="attribute", annotation=Post, default=Post.NONE)
-    dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=pattern.Switch("keepdim", {
-        True: RESULT,
-        False: RESULT.replace(shape=(1, layout.extent("dst.shape[1]", layout.MAX_CHANNELS)), layout=None),
-    }))
+    dst = expr.ParamDef(
+        kind="input",
+        effect=expr.MemoryEffect.WRITE,
+        pattern=pattern.Switch(
+            "keepdim",
+            {
+                True: RESULT,
+                False: RESULT.replace(
+                    shape=(1, layout.extent("dst.shape[1]", layout.MAX_CHANNELS)), layout=None
+                ),
+            },
+        ),
+    )
+    tile_height = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    tile_width = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
+    width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
     src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("src"))
 
 
@@ -75,7 +102,9 @@ def _(call, ctx) -> types.TupleType:
 def _(call, ctx):
     op = call.target
     hir = tensor.Reduce(axes=op.axes, keepdim=op.keepdim, kind=op.kind)
-    read, written = access.relations_of(expr.Call(hir, call.args[1:], type=types.TupleType.Void), ctx)
+    read, written = access.relations_of(
+        expr.Call(hir, call.args[1:], type=types.TupleType.Void), ctx
+    )
     return written, read, written
 
 

@@ -8,6 +8,7 @@ service facts stay unsupported rather than guessed.
 from __future__ import annotations
 
 from tilefoundry import target
+from tilefoundry_apple.ane import isa
 
 
 def memory_hierarchy(tgt: target.Target, query: object = None) -> target.MemoryHierarchyFacts:
@@ -23,7 +24,7 @@ def memory_hierarchy(tgt: target.Target, query: object = None) -> target.MemoryH
             ),
             target.ExplicitMemoryLevelFacts(
                 name="smem",
-                capacity_bytes=None,
+                capacity_bytes=isa.dma.L2_CAPACITY,
                 scope="engine",
                 owner="engine",
             ),
