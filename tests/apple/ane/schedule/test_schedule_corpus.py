@@ -374,6 +374,29 @@ class Conv3x3Pad1(Conv1x1):
 
 
 @case
+class Conv3x3Valid(Conv1x1):
+    path: Path = ROOT / "scheduled" / "conv_3x3_valid.py"
+
+    def inputs(self):
+        return small((1, 32, 16, 16), 10), small((32, 32, 3, 3), 11)
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(x, w))
+
+
+@case
+class ConvUnaryAdd(Conv1x1):
+    """A planar addition reads one convolution result and one planar result from L2."""
+
+    path: Path = ROOT / "scheduled" / "conv_unary_add.py"
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(x, w) + (x - 2))
+
+
+@case
 class ConvDepthwise(Conv1x1):
     path: Path = ROOT / "scheduled" / "conv_depthwise.py"
 
@@ -617,10 +640,17 @@ class Pool(AneCase):
 
 @case
 class PoolUnaryChain(AneCase):
-    """No Apple stream keeps a pool result in L2; only a reduction does."""
+    """A pool result stays in L2 and a planar pass reads it, confirmed on the device."""
 
     path: Path = ROOT / "scheduled" / "pool_unary_chain.py"
-    emit_refusal: str = "L2 continuation access mapping is not decoded yet"
+    runs: bool = True
+
+    def inputs(self):
+        return (small((1, 32, 16, 16), 0, -3, 3),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, (utils.F.max_pool2d(x, 2, 2) + 1) * 2)
 
 
 @case

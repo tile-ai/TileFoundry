@@ -242,11 +242,11 @@ source routing 1 for unary or 3 for binary, and second-stream plus PE second-sou
 2 (add, multiply, min, max) or 3 (subtract: first minus second source) for binary.
 Complete-height unary and neural-engine continuation additionally accepts L2_READ
 source, result or both, and so does a binary whose two sources are both L2_READ,
-with the second stream off and source routing 1. A pool accepts
-an L2_READ source when its result DMA writes out; such a result kept in L2 is not
-decoded yet. A spatial reduction accepts an L2_READ source and either result. A pool's L2
-source keeps the task words of its DMA-source form, confirmed on the device. A convolution
-that reads L2 may change the channel count; its height and width stay equal. A descriptor
+with the second stream off and source routing 1. A pool and a spatial reduction
+accept an L2_READ source and either result; a pool's L2 source keeps the task words of
+its DMA-source form, confirmed on the device. A convolution that reads L2 may change
+the channel count; one whose kernel is taller than one row may also shrink the map, and
+reads the source rows its windows cover. A descriptor
 with neither DMA nor
 a second stream that programs an L2 channel or row pitch keeps both in L2; its
 geometry comes from the common block alone.

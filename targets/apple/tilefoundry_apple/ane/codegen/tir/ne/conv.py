@@ -48,8 +48,6 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             f"T.ane.conv: grouped convolution other than a depthwise {DEPTHWISE_KERNEL} kernel "
             f"over {DEPTHWISE_CHANNELS} channels is not decoded yet"
         )
-    if src.height != dst.height:
-        raise ValueError("T.ane.conv: unequal-height convolution is not decoded yet")
     ocg_size = 0 if depthwise else isa.rules.channel_groups(dst.channels)
     if op.ocg_size is not None:
         if type(op.ocg_size) is not int or op.ocg_size != ocg_size:

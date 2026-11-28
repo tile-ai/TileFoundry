@@ -1,4 +1,4 @@
-"""A pool result read by a planar pass from L2: no Apple stream shows it, so it is refused."""
+"""A pool result read by a planar pass from L2, confirmed on the device."""
 from tilefoundry.dsl import *
 from tilefoundry_apple import ane
 

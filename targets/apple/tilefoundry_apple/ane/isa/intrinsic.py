@@ -100,20 +100,20 @@ def split_address(address: int) -> tuple[int, int]:
     return address & 0xFFFFFFFF, address >> 32
 
 
-def staged_flags(fresh: bool, producer: Engine | None = None) -> dict[str, int]:
+def staged_flags(fresh: bool, *producers: Engine | None) -> dict[str, int]:
     """Return the buffer-reuse bits a descriptor programs for its staged slots.
 
     A descriptor that stages into fresh L2 buffers marks each slot as first use;
     a descriptor that continues a stream reuses the buffers its predecessor left
     behind, so it clears those bits and tags its DMA words with the stream index.
-    A source read from the result of ``producer`` keeps that engine's result bit set.
+    A source read from the results of ``producers`` keeps each of those engines' result bits set.
     """
     alias = 1 if fresh else 0
     return {
         "l2_src_alias_conv_src": alias,
-        "l2_src_alias_conv_rslt": 1 if producer is Engine.NEURAL else alias,
+        "l2_src_alias_conv_rslt": 1 if Engine.NEURAL in producers else alias,
         "l2_src_alias_planar_src": alias,
-        "l2_src_alias_planar_rslt": 1 if producer is Engine.PLANAR else alias,
+        "l2_src_alias_planar_rslt": 1 if Engine.PLANAR in producers else alias,
         "l2_result_alias_src": alias,
         "l2_result_alias_rslt": alias,
         "l2_result_alias_planar_src": alias,
@@ -173,7 +173,8 @@ def load(source: TensorDesc, *, address: int = 0, fresh: bool = True, l2_base: i
 
 
 def load_chained(
-    source: TensorDesc, engine: Engine = Engine.PLANAR, *, producer: Engine, address: int = 0
+    source: TensorDesc, engine: Engine = Engine.PLANAR, *, producer: Engine, second: Engine | None = None,
+    address: int = 0,
 ) -> dict[int, int]:
     """Read a source the previous descriptor left staged instead of reloading it.
 
@@ -181,7 +182,8 @@ def load_chained(
     source DMA at all and leaves the access type at L2 read.  The reference
     streams for an add-then-pool and an abs-then-add chain both show a chained
     descriptor carrying no source DMA block, which is what this encodes.
-    ``producer`` is the engine whose pass filled the buffer. A planar pass reads rows
+    ``producer`` is the engine whose pass filled the buffer, ``second`` the one that
+    filled a second source. A planar pass reads rows
     of any width; the Apple streams show 16 byte and 2 byte rows read from L2.
     """
     if engine is not Engine.PLANAR:
@@ -194,7 +196,7 @@ def load_chained(
         L2.pack(
             l2_src_type=fields.L2Access.L2_READ,
             l2_src_base_address=l2_units(address),
-            **staged_flags(False, producer),
+            **staged_flags(False, producer, second),
             l2_src_interleave=INTERLEAVE,
             l2_src_channel_stride=l2_units(source.l2_channel),
             l2_src_row_stride=l2_units(source.l2_row),
@@ -225,6 +227,7 @@ def store(
     declare: bool = True,
     declared: TensorDesc | None = None,
     producer: Engine | None = None,
+    second: Engine | None = None,
     to_dram: bool = True,
     swap_pitches: bool = False,
 ) -> dict[int, int]:
@@ -259,7 +262,7 @@ def store(
         L2.pack(
             l2_result_type=fields.L2Access.DMA_READ if to_dram else fields.L2Access.L2_READ,
             **({"l2_result_buffer_mode": 1} if to_dram else {}),
-            **staged_flags(fresh, producer),
+            **staged_flags(fresh, producer, second),
             l2_result_dma_fmt=fields.TensorFormatMode.COMPRESSED,
             l2_result_interleave=INTERLEAVE,
             **(

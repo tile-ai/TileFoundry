@@ -46,11 +46,9 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     engine_op, second_source = OPS[op.kind]
     base, producer = ctx.source(lhs)
     second, other = ctx.source(rhs)
-    if other is not producer:
-        raise ValueError("T.ane.binary: L2 sources of two engines is not decoded yet")
     result_base, stored = ctx.result(destination)
     ctx.emit(
-        intrinsic.load_chained(left, producer=producer, address=base),
+        intrinsic.load_chained(left, producer=producer, second=other, address=base),
         intrinsic.load_second_chained(right, address=second),
         intrinsic.compute_pe(
             isa.TaskType.PE_EW_BINARY,
@@ -61,7 +59,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         ),
         intrinsic.store(
             context.written(dst, stored), result_base=result_base, address=ctx.address_of(stored),
-            fresh=ctx.fresh, producer=producer, to_dram=stored is not None,
+            fresh=ctx.fresh, producer=producer, second=other, to_dram=stored is not None,
         ),
     )
 

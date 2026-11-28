@@ -174,16 +174,17 @@ preceding producer. A convolution reads its L2 source through `load_chained`, wi
 neither small-source mode nor output transpose; so does a Bypass, whose output MAY be
 transposed. Bypass and Conv are neural producers. A Binary reads both sources from
 L2: its second source programs `0x051C` and its pitches with the second stream off
-and source routing 1, and both sources MUST come from tasks of one engine. A task that reads an L2 buffer
+and source routing 1. A task that reads an L2 buffer
 MUST set the source alias bit of the engine that produced it:
 `l2_src_alias_conv_rslt` after a neural producer and `l2_src_alias_planar_rslt`
-after a planar one. A Pool or Reduce reads L2 when a store writes its result out; a
+after a planar one; a Binary whose sources come from both engines sets both, confirmed
+on the device.
 A `T.ane.load` pass MUST set all eight alias bits, whatever its position in the stream:
 its DMA read reuses a block that earlier passes may still hold.
-Pool keeps the task words of its DMA-source form, confirmed on the device. A Reduce
-result may stay in L2: it programs the result pitches of its `(C, 1, 1)` map and a
-planar pass reads it, rows of any width included. A Pool result kept in L2 is not
-decoded yet, and [isa §9](./isa.md#9-verified-transfer-validation) rejects its task.
+A Pool or Reduce reads L2 with the task words of its DMA-source form and may keep its
+result in L2, confirmed on the device: it programs the result pitches of its map and a
+planar pass reads it, rows of any width included. A convolution whose kernel is taller
+than one row reads the source rows its windows cover and may shrink the map.
 
 ## 3. Module responsibilities
 

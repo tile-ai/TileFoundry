@@ -58,13 +58,12 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
     resident_binary = binary and access == fields.L2Access.L2_READ and not second
     pool = task == fields.TaskType.PE_POOL_UNARY
     reduce = task == fields.TaskType.PE_EW_REDUCE_UNARY
-    written_pool = pool and enabled
     if continuation:
         if (access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
                 or result_access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
                 or enabled != (result_access == fields.L2Access.DMA_READ)
                 or task not in (fields.TaskType.PE_EW_UNARY, fields.TaskType.NE)
-                and not resident_binary and not written_pool and not reduce):
+                and not resident_binary and not pool and not reduce):
             raise ValueError("L2 continuation access mapping is not decoded yet")
     elif access != fields.L2Access.DMA_READ or not enabled:
         raise ValueError("tile DMA access mapping is not decoded yet")
@@ -98,7 +97,8 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
     tile = value(image, common.tile_height)
     if not 1 <= tile <= result[1]:
         raise ValueError(f"tile_height {tile} must be within [1, {result[1]}]")
-    if continuation and (tile != result[1] if pool else tile != source[1] or source[1:] != result[1:]):
+    windowed = pool or task == fields.TaskType.NE and value(image, common.kh) > 1
+    if continuation and (tile != result[1] if windowed else tile != source[1] or source[1:] != result[1:]):
         raise ValueError("partial or unequal L2 continuation geometry is not decoded yet")
     transpose = value(image, common.output_transpose)
     if not transpose and value(image, common.fill_lower_nodes_first):
@@ -236,7 +236,7 @@ def check_l2(image: Mapping[int, int], decoded: tuple[Transfer, ...]) -> tuple[t
     task = value(image, common.task_type)
     tile = value(image, common.tile_height)
     source_rows = tile
-    if task == fields.TaskType.PE_POOL_UNARY:
+    if task == fields.TaskType.PE_POOL_UNARY or task == fields.TaskType.NE and value(image, common.kh) > 1:
         source_rows = (tile - 1) * value(image, common.sy) + value(image, common.kh)
     intervals = []
     source_row = 0
