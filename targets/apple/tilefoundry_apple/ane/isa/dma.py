@@ -33,15 +33,18 @@ class Transfer:
 
 
 def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
-    """Decode active readers and writers, refusing modes with undetermined footprints."""
+    """Decode active readers and writers, refusing modes with undetermined footprints.
+
+    A descriptor without DMA that programs L2 pitches keeps its source and result in
+    L2; the common block alone gives their geometry.
+    """
     common, l2 = fields.Common, fields.L2
     access = value(image, l2.l2_src_type)
     second = value(image, l2.l2_src_second_stream)
     enabled = value(image, fields.TileDMADst.tile_dma_dst_enable)
-    if not (access or second or enabled):
-        if any(value(image, field) for field in (l2.l2_src_channel_stride, l2.l2_src_row_stride,
-                                                l2.l2_result_channel_stride, l2.l2_result_row_stride)):
-            raise ValueError("L2-only transfer mapping is not decoded yet")
+    pitched = any(value(image, field) for field in (l2.l2_src_channel_stride, l2.l2_src_row_stride,
+                                                   l2.l2_result_channel_stride, l2.l2_result_row_stride))
+    if not (access or second or enabled or pitched):
         return ()
     task = value(image, common.task_type)
     result_access = value(image, l2.l2_result_type)

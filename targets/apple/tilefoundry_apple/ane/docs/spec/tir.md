@@ -142,8 +142,9 @@ class Conv(Op):
   - In the matrix form, `src` is `[M, K]`, `weight` is `[K, N]` and `dst` is `[M, N]`. The strides follow [§1.2](#12-matrix-forms).
   - The matrix form MUST have `stride=(1, 1)`, `padding=(0, 0)` and `groups=1`.
   - `dst`, `src` and `weight` MUST be all feature maps or all matrices.
-  - Schedules MUST declare intermediate storage through tensor types. L2 addresses
-    MUST come from codegen buffer allocation, with disjoint source and result ranges.
+  - Schedules MUST declare intermediate storage through tensor types. SMEM L2 addresses
+    MUST come from the framework's memory analysis and transient staging from codegen,
+    with disjoint source and result ranges.
   - Full-height feature-map L2 source small-source mapping and L2 result pitches
     are not decoded yet. Codegen MUST reject these requests; the evaluator retains
     the reference semantics for SMEM operands.

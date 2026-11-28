@@ -10,12 +10,10 @@ from collections.abc import Mapping
 
 from tilefoundry import codegen, dispatch
 from tilefoundry.ir import expr, types
-from tilefoundry.ir.tir import memory
 from tilefoundry_apple.ane import isa, target
 from tilefoundry_apple.ane.ir import tir
 
 from . import hwx
-from .allocation import Interval, allocate
 
 FULL_PLANE_PATCH = (4, 4)
 SINGLE_ROW_PATCH = (5, 0)
@@ -33,6 +31,7 @@ class Context:
         self.weight_uses: list[tuple[expr.Expr, int, hwx.CoefficientLayout]] = []
         self.staging: dict[tuple[int, int], int] = {}
         self.producers: dict[expr.Expr, isa.Engine] = {}
+        self.l2_end = 0
 
     @property
     def fresh(self) -> bool:
@@ -60,70 +59,67 @@ class Context:
         return layout
 
     def bind(self, var: expr.Expr, source: expr.Expr, address: int) -> None:
-        """Record the root tensor and accumulate the parent view's byte displacement."""
-        address += self.address_of(source)
+        """Record the root tensor and accumulate the parent view's byte displacement.
+
+        An SMEM allocation keeps the byte offset the framework assigned it as its L2 base.
+        """
+        if var.type.storage is expr.StorageKind.SMEM and isinstance(source, expr.Call):
+            desc = tensor_desc_of(var.type, var.name)
+            extent = desc.staging_extent()
+            if address < 0 or address % isa.intrinsic.L2_UNIT:
+                raise ValueError(f"{var.name}: SMEM offset {address} must be a nonnegative "
+                                 f"multiple of {isa.intrinsic.L2_UNIT}")
+            if desc.storage_bytes != extent:
+                raise ValueError(f"{var.name}: SMEM storage {desc.storage_bytes} bytes must equal "
+                                 f"its L2 staging extent {extent}")
+            self.addresses[var] = address
+            self.symbols[var] = var
+            self.l2_end = max(self.l2_end, address + extent)
+            return
         if var.type.storage is expr.StorageKind.SMEM and address:
             raise ValueError("offset SMEM view continuation is not decoded yet")
-        if var.type.storage is expr.StorageKind.SMEM and isinstance(source, expr.Call):
-            if (not isinstance(source.target, memory.TensorView) or not source.args
-                    or not isinstance(source.args[0], expr.Constant) or source.args[0].value != 0):
-                raise ValueError("SMEM view allocation mapping is not decoded yet")
-            self.addresses[var] = 0
-            self.symbols[var] = var
-        else:
-            self.addresses[var] = address
-            self.symbols[var] = self.symbols.get(source, source)
+        self.addresses[var] = address + self.address_of(source)
+        self.symbols[var] = self.symbols.get(source, source)
 
     def plan(self, calls: list[expr.Call]) -> None:
-        """Allocate SMEM lifetimes and each pass's transient DMA staging together."""
+        """Check each SMEM tensor's producer and readers, then place each pass's DMA staging.
+
+        SMEM tensors keep their framework offsets. A pass stages its DRAM source from the
+        end of the highest SMEM tensor and its DRAM result directly after that source.
+        """
         resident = any(arg.type.storage is expr.StorageKind.SMEM for call in calls for arg in call.args)
         if not resident and not any(isinstance(call.target, tir.Conv) for call in calls):
             return
-        lifetimes = {}
-        intervals = []
         for index, call in enumerate(calls):
             if not isinstance(call.target, (tir.Unary, tir.Conv)):
                 if resident:
                     raise ValueError("L2 continuation for this operation is not decoded yet")
                 continue
+            slot = self.l2_end
             for position in (1, 0):
                 operand = call.args[position]
                 desc = tensor_desc_of(operand.type, "L2 operand")
                 rows = tile_rows(call.target, desc)
                 if resident and (rows != desc.height or call.target.tile_width is not None):
                     raise ValueError("partial L2 continuation is not decoded yet")
-                size = desc.staging_extent(rows, call.target.tile_width)
-                if operand.type.storage is expr.StorageKind.SMEM:
-                    root = self.symbols.get(operand, operand)
-                    if position == 0:
-                        if root in lifetimes:
-                            raise ValueError("L2 tensor must have exactly one producer")
-                        lifetimes[root] = Interval(root, index, index, size)
-                        self.producers[root] = (
-                            isa.Engine.NEURAL if isinstance(call.target, tir.Conv) else isa.Engine.PLANAR
-                        )
-                    else:
-                        previous = lifetimes.get(root)
-                        if previous is None or previous.first == index:
-                            raise ValueError("L2 source requires a preceding producer")
-                        if root.type != operand.type:
-                            raise ValueError("L2 source must match producer geometry and layout")
-                        lifetimes[root] = Interval(root, previous.first, index, size)
-                else:
-                    intervals.append(Interval((index, position), index, index, size))
-        addresses = allocate((*lifetimes.values(), *intervals))
-        for operand in tuple(self.addresses):
-            root = self.symbols.get(operand, operand)
-            if root in lifetimes:
-                self.addresses[operand] = addresses[root]
-        for root in lifetimes:
-            self.addresses[root] = addresses[root]
-        for index, call in enumerate(calls):
-            for position, operand in enumerate(call.args):
-                if operand.type.storage is expr.StorageKind.SMEM:
-                    self.staging[index, position] = self.address_of(operand)
-                elif (index, position) in addresses:
-                    self.staging[index, position] = addresses[index, position]
+                if operand.type.storage is not expr.StorageKind.SMEM:
+                    self.staging[index, position] = slot
+                    slot += desc.staging_extent(rows, call.target.tile_width)
+                    continue
+                root = self.symbols.get(operand, operand)
+                if root not in self.addresses:
+                    raise ValueError("SMEM operand requires a framework L2 offset")
+                if position == 0:
+                    if root in self.producers:
+                        raise ValueError("L2 tensor must have exactly one producer")
+                    self.producers[root] = (
+                        isa.Engine.NEURAL if isinstance(call.target, tir.Conv) else isa.Engine.PLANAR
+                    )
+                elif root not in self.producers:
+                    raise ValueError("L2 source requires a preceding producer")
+                elif root.type != operand.type:
+                    raise ValueError("L2 source must match producer geometry and layout")
+                self.staging[index, position] = self.address_of(operand)
 
     def staging_address(self, position: int) -> int | None:
         """Return the current pass's allocated slot, or its legacy implicit placement."""

@@ -90,7 +90,7 @@ def splice(*parts: Mapping[int, int]) -> Writes: ...
   - `compute_ne` MUST program the neural engine op and MUST arm the kernel DMA path.
   - A primitive MUST build its words from declared fields only. It MUST NOT shift a value into
     position by hand.
-  - DRAM bases MUST remain relocatable addends; L2 bases MUST use allocated byte offsets.
+  - DRAM bases MUST remain relocatable addends; L2 bases MUST use the planned byte offsets.
   - `splice` MUST combine disjoint field writes and accept repeated equal assignments.
     Different values on overlapping masks MUST raise `ValueError`, including explicit zero
     assignments. Nested splices MUST preserve masks. A plain mapping assigns complete words.
@@ -233,7 +233,9 @@ the table and the weights.
 `isa/dma.py` decodes enabled tile DMA from access types and routing, independently
 of base-word presence. It accepts DMA_READ source/result, an enabled destination,
 source routing 1 for unary or 3 for binary, and second-stream plus PE second-source
-2 for binary. Complete-height unary continuation additionally accepts L2_READ source or result.
+2 for binary. Complete-height unary continuation additionally accepts L2_READ source,
+result or both. A descriptor with neither DMA nor a second stream that programs an L2
+channel or row pitch keeps both in L2; its geometry comes from the common block alone.
 An L2 result MUST disable destination DMA and buffer mode; an L2 source MUST omit
 source DMA. Its channel and row pitches MUST be explicit; depth/group pitches
 and source DMA format MUST stay at reset zero, matching the decoded

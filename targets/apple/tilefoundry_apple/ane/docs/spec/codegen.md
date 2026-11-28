@@ -80,7 +80,7 @@ Bypass unicast MUST be 1 for identity and 2 for C/W transpose; zero is an error.
 Bypass MAY omit OCG only when the inferred value equals its reset value of zero
 and no explicit OCG is given. Other omission combinations are not decoded yet.
 
-Conv source and result bases MUST come from the Context allocation plan, with
+Conv source and result bases MUST come from the Context staging plan, with
 16-byte alignment. Effective range and overlap checks still apply at descriptor validation.
 
 Conv with a bias operand MUST be rejected as not decoded yet. Bypass MUST emit only
@@ -92,24 +92,33 @@ its access-type field; convolution does not overwrite that field when using the 
 
 ### 2.2 L2 buffer placement
 
-`Context.plan` MUST place each SMEM tensor from its producing pass through its last
-consumer, inclusive. Transient DMA staging MUST participate in the same placement.
-Conv MUST allocate both its transient source and result even with only GMEM operands.
-Coefficient tensors MUST NOT reserve feature-map staging slots.
-Reservations MUST use `TensorDesc.staging_extent`
-and MUST be disjoint while live and end within `isa.dma.L2_CAPACITY` (2 MiB).
-Expired reservations MAY be reused. Capacity overflow MUST fail before emission.
-Schedules MUST declare SMEM with `tf.empty`; they supply no L2 addresses.
+The framework's memory analysis places every SMEM tensor. `Context.bind` MUST use
+the constant byte offset of its lowered `T.tensor_view(..., storage="smem")` as the
+tensor's L2 base, and MUST refuse an offset that is negative or not a multiple of 16
+and a tensor whose `storage_bytes` differs from its `TensorDesc.staging_extent`.
+Codegen MUST NOT move an SMEM tensor. An SMEM operand without such an offset MUST be
+rejected. Schedules MUST declare SMEM with `tf.empty`; they supply no L2 addresses.
 
-`Context.address_of` MUST return the assigned SMEM byte base. The emitter MUST
+Transient DMA staging is not a tensor. `Context.plan` MUST place each pass's staging
+from the end of the highest SMEM tensor: the GMEM source first, then the GMEM result
+directly after the source's staged extent. Every pass reuses that region.
+Conv MUST place both its transient source and result even with only GMEM operands.
+Coefficient tensors MUST NOT reserve feature-map staging slots.
+Codegen does not check SMEM lifetimes: the transfer validation of
+[isa §9](./isa.md#9-verified-transfer-validation) keeps every interval within
+`isa.dma.L2_CAPACITY` (2 MiB) and disjoint within a pass, and requires each L2 source
+to match an unmodified earlier result. Capacity overflow MUST fail before emission.
+
+`Context.address_of` MUST return the SMEM byte base. The emitter MUST
 select source DMA for GMEM and `load_chained` for SMEM, and select destination DMA
-only for GMEM. Producer result and consumer source MUST use the same allocated
+only for GMEM. Producer result and consumer source MUST use the same framework
 base, shape and pitches. SMEM logical layouts MAY use 16-byte aligned rows;
 the physical L2 pitches MUST come from staging geometry. L2-only planar results
 MUST explicitly program the channel and row pitches read by their consumers.
 An SMEM read MUST have
-a preceding producer. Two-pass planar Unary chains with complete tiles are
-supported, and so is a convolution whose L2 result a Unary reads. A pass that
+a preceding producer. Planar Unary chains with complete tiles are supported,
+including a Unary that reads its source from L2 and keeps its result there, and so
+is a convolution whose L2 result a Unary reads. A pass that
 reads an L2 buffer MUST set the source alias bit of the engine that produced it:
 `l2_src_alias_conv_rslt` after a neural producer and `l2_src_alias_planar_rslt`
 after a planar one.
@@ -118,8 +127,9 @@ source needs the small-source/transpose mapping, which is not decoded yet and
 MUST be rejected; an L2 result programs its channel and row pitches explicitly. The historical staged-source convolution
 uses 1×1 small-source geometry; it does not establish an NCHW continuation contract.
 Other continuation modes are not decoded yet.
-The Context owns placement because it already owns resolved views, ordered passes
-and hardware staging; core lowering retains the storage declaration.
+The Context owns staging placement because it already owns resolved views, ordered
+passes and hardware staging; core lowering retains the storage declaration and the
+SMEM offsets.
 
 ## 3. Module responsibilities
 
@@ -127,7 +137,7 @@ All paths below are relative to `ane/codegen/`.
 
 | Module | Responsibility |
 |---|---|
-| `context.py` | Pass order, L2 lifetimes, staging placement, operand addresses and tile geometry |
+| `context.py` | Pass order, SMEM bases and producers, staging placement, operand addresses and tile geometry |
 | `tir/prim_function.py` | Lowered function walker and descriptor-program construction |
 | `tir/ne/{conv,bypass}.py` | Registered neural-engine emitters |
 | `tir/pe/{binary,pool,reduce,unary}.py` | Registered planar-engine emitters |

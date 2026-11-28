@@ -457,6 +457,15 @@ class UnaryChain(AneCase):
 
 
 @case
+class UnaryChain3(UnaryChain):
+    path: Path = ROOT / "scheduled" / "unary_chain3.py"
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, (x.abs() - 2 + 1) * 2)
+
+
+@case
 class Binary(AneCase):
     path: Path = ROOT / "scheduled" / "binary.py"
     runs: bool = True
