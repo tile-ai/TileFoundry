@@ -22,7 +22,9 @@ GROUPS = pattern.Wildcard("groups", predicates=(pattern.Range(lo=1),))
 SRC = (layout.feature_layout("src"), layout.matrix_layout("src", layout.ACTIVATION_LIMITS))
 DST = (layout.feature_layout("dst"), layout.matrix_layout("dst", layout.ACTIVATION_LIMITS))
 WEIGHT = (layout.kernel_layout("weight"), layout.matrix_layout("weight", layout.WEIGHT_LIMITS))
-ACCUMULATOR_STEP = 2.0**-16
+ACCUMULATOR_EXPONENT = -16
+ACCUMULATOR_STEP = 2.0**ACCUMULATOR_EXPONENT
+FP16_MIN_EXPONENT = -14
 ACCUMULATOR_LIMIT = 2.0**15
 
 
@@ -30,8 +32,9 @@ ACCUMULATOR_LIMIT = 2.0**15
 class Conv(expr.Op):
     """dst = nonlinear(conv2d(src, weight) + bias), the result rounded once to fp16.
 
-    The sum is held in signed 16.16 fixed point: each product is rounded to 2**-16 and
-    a total outside [-2**15, 2**15) becomes infinite.
+    The sum is held in signed 16.16 fixed point: each product is rounded to 2**-16, a
+    product whose operands' exponents sum below -16 is dropped, and a partial sum
+    outside [-2**15, 2**15) makes the result infinite.
 
     The feature form convolves [1, C, H, W] with [O, C / groups, KH, KW] weights. The
     matrix form multiplies the channel-outer [M, K] src (K channels, M wide) by the
@@ -199,15 +202,31 @@ def _(call, ctx) -> None:
     check(call, ctx, dst, src, weight, held[0] if held else None)
 
 
-def accumulate(products, axis: int):
-    """Sum products along *axis* as the engine's signed 16.16 fixed-point accumulator does.
+def exponent(value):
+    """The binary exponent an fp16 operand carries; subnormals share the smallest normal's."""
+    return utils.torch.frexp(value)[1].sub(1).clamp_min(FP16_MIN_EXPONENT)
+
+
+def accumulate(inputs, weights, axis: int):
+    """Sum inputs * weights along *axis* as the engine's signed 16.16 fixed-point accumulator does.
 
     Each product is rounded to a multiple of 2**-16, a tie away from zero, and the
-    rounded products add exactly.
+    rounded products add exactly in index order. A product whose operands' exponents
+    sum below -16 contributes nothing, whatever its mantissas. The first partial sum
+    outside [-2**15, 2**15) makes the result infinite with that sum's sign.
     """
     torch = utils.torch
+    products = inputs * weights
+    if (products.abs() >= ACCUMULATOR_LIMIT).any():
+        raise evaluator.EvalError("T.ane.conv: a product of magnitude 2**15 or more is not decoded yet")
     steps = torch.copysign(torch.floor(products.abs() / ACCUMULATOR_STEP + 0.5), products)
-    return steps.sum(axis) * ACCUMULATOR_STEP
+    kept = exponent(inputs) + exponent(weights) >= ACCUMULATOR_EXPONENT
+    partial = torch.where(kept, steps, 0.0).cumsum(axis) * ACCUMULATOR_STEP
+    outside = (partial >= ACCUMULATOR_LIMIT) | (partial < -ACCUMULATOR_LIMIT)
+    first = outside.to(torch.int8).argmax(axis, keepdim=True)
+    overflow = torch.copysign(torch.full_like(partial, torch.inf), partial).gather(axis, first)
+    total = partial.select(axis, -1)
+    return torch.where(outside.any(axis), overflow.squeeze(axis), total)
 
 
 @evaluator.register(Conv)
@@ -221,7 +240,7 @@ def _(ctx):
         kernels = weight.reshape(op.groups, weight.shape[0] // op.groups, -1)
         value = torch.stack(
             [
-                accumulate(columns[:, group] * kernel[:, None], 1)
+                accumulate(columns[:, group], kernel[:, None], 1)
                 for group in range(op.groups)
                 for kernel in kernels[group]
             ],
@@ -231,12 +250,9 @@ def _(ctx):
         value = value.unflatten(2, (height, -1))
         bias = held[0].reshape(1, -1, 1, 1) if held else 0.0
     else:
-        value = accumulate(src[:, :, None] * weight, 1)
+        value = accumulate(src[:, :, None], weight, 1)
         bias = held[0] if held else 0.0
-    value = value + bias
-    value = torch.where(value >= ACCUMULATOR_LIMIT, torch.inf, value)
-    value = torch.where(value < -ACCUMULATOR_LIMIT, -torch.inf, value)
-    return evaluation.write(ctx, apply(op.nonlinear, evaluation.f16(value.to(torch.float32))))
+    return evaluation.write(ctx, apply(op.nonlinear, evaluation.f16((value + bias).to(torch.float32))))
 
 
 __all__ = ["Conv"]

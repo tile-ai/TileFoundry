@@ -130,7 +130,7 @@ class Conv(Op):
 
 - constraints:
   - The feature form is `dst = nonlinear(f16(conv2d(src, weight) + bias))`. The matrix form is `dst = nonlinear(f16(src @ weight + bias))`.
-  - The sum is held in signed 16.16 fixed point: each product is rounded to a multiple of `2**-16`, a tie away from zero, and the rounded products add exactly. A total outside `[-2**15, 2**15)` becomes infinite.
+  - The sum is held in signed 16.16 fixed point: each product is rounded to a multiple of `2**-16`, a tie away from zero, and the rounded products add exactly. A product whose operands' binary exponents sum below -16 contributes nothing; an fp16 subnormal carries the exponent -14. The products add in channel order; the first partial sum outside `[-2**15, 2**15)` makes the result infinite with that sum's sign. A single product of magnitude `2**15` or more MUST be rejected by the evaluator as not decoded yet.
   - The Op rounds once, after it adds `bias`. `nonlinear` applies to the rounded value; a table rounds again.
   - `bias` is optional and part of the instruction. Its shape MUST be `(O,)` in the feature form and `(N,)` in the matrix form.
   - In the feature form, `src` is `[1, C, H, W]`, `weight` is `[O, C / groups, KH, KW]` and `dst` is `[1, O, H', W']`.
