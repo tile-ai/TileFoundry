@@ -221,7 +221,9 @@ in [§9](#9-verified-transfer-validation).
 The neural width code is a power-of-two subdivision of 256 bytes. The dense row
 MUST divide 256 exactly before its ratio is tested for a power of two. An explicit
 code MUST lie in 0–4 and equal the shape-derived code. Other row subdivisions are
-rejected as not decoded yet; contradictory explicit codes are errors.
+rejected as not decoded yet; contradictory explicit codes are errors. A transposing
+bypass programs the preferred, minimum and maximum shift slices of `0x0038` to the
+code; an identity bypass programs only the maximum slice.
 A convolution reading from DRAM programs its kernel height and width, horizontal
 and vertical stride, and left/top padding through the declared kernel-window
 fields. Its output offsets are both one. A bias selects `0x0D04[4] = 1` and is read

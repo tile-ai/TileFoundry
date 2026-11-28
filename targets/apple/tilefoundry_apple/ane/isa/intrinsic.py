@@ -984,6 +984,8 @@ def compute_ne(
     ``kernel_format`` stays unset for a descriptor without a coefficient stream,
     which is what the reference containers do. ``declared`` is the geometry
     before the output transpose, including the row that selects the width code.
+    A transposing pass sets every shift slice to the width code; a pass that keeps
+    its axes sets only the maximum slice, as the reference identity bypasses do.
     """
     output.validate_feature()
     if output.channels < NE_CHANNEL_GROUP:
@@ -1021,8 +1023,7 @@ def compute_ne(
             source_routing=1,
             task_type=fields.TaskType.NE,
             shift_maximum=width_code,
-            shift_minimum=width_code,
-            shift_preferred=width_code,
+            **({"shift_minimum": width_code, "shift_preferred": width_code} if transpose else {}),
             active_nodes=active_nodes,
             output_transpose=1 if transpose else 0,
             fill_lower_nodes_first=1 if transpose and unicast_channels > 1 else 0,

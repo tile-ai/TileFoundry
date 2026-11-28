@@ -85,7 +85,9 @@ divides by the window size, except that padding left out by
 map; both pad with zero. Reduce programs a SUM `scale` other than 1 as the fp32
 final scale `0x090C`, so a mean is a sum scaled by the reciprocal of its count; a
 scale with MAX or MIN, `square` and `post` are not decoded yet.
-OCG MUST equal `rules.channel_groups` for the relevant channels. Conv MUST reject
+OCG MUST equal `rules.channel_groups` for the relevant channels, except that an
+identity Bypass programs OCG zero; an identity Bypass over more than 32 channels
+is not decoded yet. Conv MUST reject
 an explicit OCG above 64 output channels because that field is omitted in that mode.
 Bypass unicast MUST be 1 for identity and `rules.unicast_channels` of the source
 channels for C/W transpose: the 16-channel groups rounded up to a power of two, at
@@ -135,8 +137,8 @@ a preceding producer. Planar Unary chains with complete tiles are supported,
 including a Unary that reads its source from L2 and keeps its result there, and so
 is a convolution whose L2 result a Unary reads. A convolution reads a complete-height
 L2 source produced by a Unary, a convolution or a Bypass through `load_chained`, with
-neither small-source mode nor output transpose. A Bypass MAY keep its result in L2;
-an L2 Bypass source is not decoded yet. Bypass and Conv are neural producers. A Binary
+neither small-source mode nor output transpose, and so does a Bypass. A Bypass MAY
+keep its result in L2. Bypass and Conv are neural producers. A Binary
 reads both sources by DMA or both from L2; one L2 and one DRAM source is not decoded
 yet. Its L2 second source programs `0x051C` and its pitches with the second stream
 off and source routing 1, and both L2 sources MUST come from passes of one engine.

@@ -16,6 +16,7 @@ NONLINEAR = MappingProxyType(
     }
 )
 IDENTITY = (0, 1, 2)
+IDENTITY_CHANNELS = 32
 
 
 @codegen.register(target.Target, codegen.Role.EMIT, tir.Bypass)
@@ -28,8 +29,6 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     if op.nonlinear not in NONLINEAR:
         raise ValueError(f"T.ane.bypass: nonlinear={op.nonlinear.name} is not decoded yet")
     destination, source = call.args
-    if source.type.storage is expr.StorageKind.SMEM:
-        raise ValueError("T.ane.bypass: L2 source is not decoded yet")
     perm = tuple(op.perm)
     if sorted(perm) != list(IDENTITY):
         raise ValueError(f"T.ane.bypass: perm {perm} must be a permutation of {IDENTITY}")
@@ -44,7 +43,9 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         raise ValueError("T.ane.bypass: dst shape must equal src shape")
     rows = context.tile_rows(op, dst)
     declared = src if permuted else None
-    ocg_size = isa.rules.channel_groups(src.channels)
+    if not permuted and src.channels > IDENTITY_CHANNELS:
+        raise ValueError(f"T.ane.bypass: identity over {src.channels} channels is not decoded yet")
+    ocg_size = isa.rules.channel_groups(src.channels) if permuted else 0
     if op.ocg_size is not None and (type(op.ocg_size) is not int or op.ocg_size != ocg_size):
         raise ValueError(f"T.ane.bypass: ocg_size {op.ocg_size!r} contradicts channels; expected {ocg_size}")
     if type(op.omit_ocg) is not bool:
@@ -70,9 +71,15 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         ocg_size=None if op.omit_ocg else ocg_size,
         address=ctx.address_of(destination),
     )
+    producer = ctx.producer_of(source)
+    load = (
+        intrinsic.load_chained(src, isa.Engine.NEURAL, producer=producer, address=ctx.staging_address(1))
+        if source.type.storage is expr.StorageKind.SMEM
+        else intrinsic.load(src, isa.Engine.NEURAL, address=ctx.address_of(source), fresh=ctx.fresh,
+                            l2_base=ctx.staging_address(1))
+    )
     ctx.emit(
-        intrinsic.load(src, isa.Engine.NEURAL, address=ctx.address_of(source), fresh=ctx.fresh,
-                       l2_base=ctx.staging_address(1)),
+        load,
         compute,
         intrinsic.store(
             dst,
@@ -81,6 +88,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             address=ctx.address_of(destination),
             fresh=ctx.fresh,
             declared=declared,
+            producer=producer,
             result_base=ctx.staging_address(0),
             to_dram=destination.type.storage is expr.StorageKind.GMEM,
         ),

@@ -384,6 +384,15 @@ class UnaryConvChain(Conv1x1):
 
 
 @case
+class ConvBypassChain(Conv1x1):
+    path: Path = ROOT / "scheduled" / "conv_bypass_chain.py"
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(x, w))
+
+
+@case
 class ConvConvChain(Conv1x1):
     path: Path = ROOT / "scheduled" / "conv_conv_chain.py"
 
@@ -612,6 +621,24 @@ class UnaryChain3(UnaryChain):
     def guard(self, state, problems):
         (x,) = self.inputs()
         assert utils.torch.equal(state.result, (x.abs() - 2 + 1) * 2)
+
+
+@case
+class UnaryBypassChain(UnaryChain):
+    path: Path = ROOT / "scheduled" / "unary_bypass_chain.py"
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, x.abs())
+
+
+@case
+class BypassUnaryChain(UnaryChain):
+    path: Path = ROOT / "scheduled" / "bypass_unary_chain.py"
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, (x + 1) * 2)
 
 
 @case
