@@ -22,11 +22,16 @@ GROUPS = pattern.Wildcard("groups", predicates=(pattern.Range(lo=1),))
 SRC = (layout.feature_layout("src"), layout.matrix_layout("src", layout.ACTIVATION_LIMITS))
 DST = (layout.feature_layout("dst"), layout.matrix_layout("dst", layout.ACTIVATION_LIMITS))
 WEIGHT = (layout.kernel_layout("weight"), layout.matrix_layout("weight", layout.WEIGHT_LIMITS))
+ACCUMULATOR_STEP = 2.0**-16
+ACCUMULATOR_LIMIT = 2.0**15
 
 
 @expr.register_op(dialect="T", category="ne", namespace="ane", name="conv")
 class Conv(expr.Op):
     """dst = nonlinear(conv2d(src, weight) + bias), the result rounded once to fp16.
+
+    The sum is held in signed 16.16 fixed point: each product is rounded to 2**-16 and
+    a total outside [-2**15, 2**15) becomes infinite.
 
     The feature form convolves [1, C, H, W] with [O, C / groups, KH, KW] weights. The
     matrix form multiplies the channel-outer [M, K] src (K channels, M wide) by the
@@ -194,18 +199,44 @@ def _(call, ctx) -> None:
     check(call, ctx, dst, src, weight, held[0] if held else None)
 
 
+def accumulate(products, axis: int):
+    """Sum products along *axis* as the engine's signed 16.16 fixed-point accumulator does.
+
+    Each product is rounded to a multiple of 2**-16, a tie away from zero, and the
+    rounded products add exactly.
+    """
+    torch = utils.torch
+    steps = torch.copysign(torch.floor(products.abs() / ACCUMULATOR_STEP + 0.5), products)
+    return steps.sum(axis) * ACCUMULATOR_STEP
+
+
 @evaluator.register(Conv)
 def _(ctx):
     op = ctx.op
-    src, weight, *held = (arg.data.to(utils.torch.float32) for arg in ctx.args[1:])
-    bias = held[0] if held else None
+    torch = utils.torch
+    src, weight, *held = (arg.data.to(torch.float64) for arg in ctx.args[1:])
     if src.dim() == 4:
-        value = utils.F.conv2d(
-            src, weight, bias, stride=op.stride, padding=op.padding, groups=op.groups
+        columns = utils.F.unfold(src, weight.shape[2:], padding=op.padding, stride=op.stride)
+        columns = columns.unflatten(1, (op.groups, -1))
+        kernels = weight.reshape(op.groups, weight.shape[0] // op.groups, -1)
+        value = torch.stack(
+            [
+                accumulate(columns[:, group] * kernel[:, None], 1)
+                for group in range(op.groups)
+                for kernel in kernels[group]
+            ],
+            1,
         )
+        height = (src.shape[2] + 2 * op.padding[0] - weight.shape[2]) // op.stride[0] + 1
+        value = value.unflatten(2, (height, -1))
+        bias = held[0].reshape(1, -1, 1, 1) if held else 0.0
     else:
-        value = src @ weight if bias is None else src @ weight + bias
-    return evaluation.write(ctx, apply(op.nonlinear, evaluation.f16(value)))
+        value = accumulate(src[:, :, None] * weight, 1)
+        bias = held[0] if held else 0.0
+    value = value + bias
+    value = torch.where(value >= ACCUMULATOR_LIMIT, torch.inf, value)
+    value = torch.where(value < -ACCUMULATOR_LIMIT, -torch.inf, value)
+    return evaluation.write(ctx, apply(op.nonlinear, evaluation.f16(value.to(torch.float32))))
 
 
 __all__ = ["Conv"]

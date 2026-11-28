@@ -397,15 +397,9 @@ class ConvConvChain(Conv1x1):
 
 @case
 class Ffn(Conv1x1):
-    """The four passes stay within 0.5 of the block computed with an exact SiLU.
-
-    The device differs from the evaluator by a few fp16 steps in the last convolution,
-    whose accumulator precision over non-integer inputs is not decoded yet, so the case
-    stops after code generation.
-    """
+    """The four passes stay within 0.5 of the block computed with an exact SiLU."""
 
     path: Path = ROOT / "scheduled" / "ffn.py"
-    runs: bool = False
 
     def inputs(self):
         return (small((1, 32, 16, 16), 10), small((32, 32, 1, 1), 11),
