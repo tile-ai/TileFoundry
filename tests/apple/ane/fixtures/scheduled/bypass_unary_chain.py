@@ -1,4 +1,4 @@
-"""A pass-through task loads a feature map into the engine's L2 buffer for a planar pass."""
+"""A pass-through task hands a feature map to a planar pass in the engine's L2 buffer."""
 from tilefoundry.dsl import *
 from tilefoundry_apple import ane
 
@@ -8,11 +8,7 @@ class Program:
     @func
     def bypass_unary_chain(x: Tensor[(1, 32, 16, 16), "f16", ((1, 32, 16, 16), (16384, 512, 32, 1)), "gmem"]):
         with Mesh(("engine",), layout=(1,), names=("engine",)) as _engine:
-            h = tf.schedule(
-                (tf.empty(Tensor[(1, 32, 16, 16), "f16", ((1, 32, 16, 16), (8192, 256, 16, 1)), "smem"]), x),
-                op=T.ane.bypass(),
-            )
-            return tf.schedule(
-                (tf.empty(Tensor[(1, 32, 16, 16), "f16", ((1, 32, 16, 16), (16384, 512, 32, 1)), "gmem"]), h),
-                op=T.ane.unary(scale=2.0, bias=1.0),
-            )
+            xs = tf.schedule((x, tf.empty(Tensor[(1, 32, 16, 16), "f16", ((1, 32, 16, 16), (8192, 256, 16, 1)), "smem"])), op=T.ane.load())
+            h = tf.schedule((xs, tf.empty(Tensor[(1, 32, 16, 16), "f16", ((1, 32, 16, 16), (8192, 256, 16, 1)), "smem"])), op=T.ane.bypass())
+            y = tf.schedule((h, tf.empty(Tensor[(1, 32, 16, 16), "f16", ((1, 32, 16, 16), (8192, 256, 16, 1)), "smem"])), op=T.ane.unary(scale=2.0, bias=1.0))
+            return tf.schedule((y, tf.empty(Tensor[(1, 32, 16, 16), "f16", ((1, 32, 16, 16), (16384, 512, 32, 1)), "gmem"])), op=T.ane.store())

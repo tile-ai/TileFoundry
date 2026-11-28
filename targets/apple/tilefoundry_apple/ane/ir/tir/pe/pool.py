@@ -48,7 +48,7 @@ class Pool(expr.Op):
     capability = expr.OpCapability("pe.pool")
     execution_mesh = layout.ENGINE
     hir_matches = (
-        schedule.HirMatch(nn.Pool2D, when=BOUND, operands={"dst": "result", "src": "input"}),
+        schedule.HirMatch(nn.Pool2D, when=BOUND, operands={"src": "input", "dst": "result"}),
     )
 
     kernel_size = expr.ParamDef(kind="attribute", annotation=tuple, pattern=KERNEL)
@@ -65,14 +65,12 @@ class Pool(expr.Op):
     kind = expr.ParamDef(
         kind="attribute", annotation=expr.PoolKind, pattern=layout.one_of("kind", KINDS)
     )
-    tile_height = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
-    tile_width = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
     width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
-    dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.feature("dst"))
-    src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("src"))
+    src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("src", layout.SMEM_ONLY))
+    dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.feature("dst", layout.SMEM_ONLY))
 
 
 def windows(size: int, kernel: int, stride: int, padding: int, ceil_mode: bool) -> int:
@@ -98,15 +96,15 @@ def _(call, ctx):
         kind=op.kind,
     )
     reached, written = access.relations_of(
-        expr.Call(hir, call.args[1:], type=types.TupleType.Void), ctx
+        expr.Call(hir, call.args[:1], type=types.TupleType.Void), ctx
     )
-    return written, reached, written
+    return reached, written, written
 
 
 @verify.register(Pool)
 def _(call, ctx) -> None:
     op = call.target
-    dst, src = (ctx.type_of(arg) for arg in call.args)
+    src, dst = (ctx.type_of(arg) for arg in call.args)
     expected = (
         *src.shape[:2],
         *(
@@ -123,10 +121,11 @@ def _(call, ctx) -> None:
 @evaluator.register(Pool)
 def _(ctx):
     op = ctx.op
-    src = ctx.args[1].data.to(utils.torch.float32)
+    source, dst = ctx.args
+    src = source.data.to(utils.torch.float32)
     window = (op.kernel_size, op.stride, op.padding)
     if op.kind is expr.PoolKind.MAX:
-        return evaluation.write(ctx, utils.F.max_pool2d(src, *window, ceil_mode=op.ceil_mode))
+        return evaluation.write(dst, utils.F.max_pool2d(src, *window, ceil_mode=op.ceil_mode))
     sums = evaluation.f16(
         utils.F.avg_pool2d(src, *window, ceil_mode=op.ceil_mode, divisor_override=1)
     )
@@ -134,7 +133,7 @@ def _(ctx):
     if not op.count_include_pad:
         ones = utils.torch.ones_like(src[:1, :1])
         count = utils.F.avg_pool2d(ones, *window, ceil_mode=op.ceil_mode, divisor_override=1)
-    return evaluation.write(ctx, evaluation.f16(sums * evaluation.f16(1 / count)))
+    return evaluation.write(dst, evaluation.f16(sums * evaluation.f16(1 / count)))
 
 
 __all__ = ["Pool"]

@@ -36,7 +36,6 @@ from .intrinsic import (
     load_chained,
     multiply,
     splice,
-    staged_copy,
     store,
 )
 from .serialize import RELOCATION_SLOTS, Packet, io_relocation, serialize

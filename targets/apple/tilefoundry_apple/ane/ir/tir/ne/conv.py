@@ -19,8 +19,8 @@ PADDING = pattern.Sequence(
     *(pattern.Wildcard(f"padding_{axis}", predicates=(pattern.Range(lo=0),)) for axis in "hw")
 )
 GROUPS = pattern.Wildcard("groups", predicates=(pattern.Range(lo=1),))
-SRC = (layout.feature_layout("src"), layout.matrix_layout("src", layout.ACTIVATION_LIMITS))
-DST = (layout.feature_layout("dst"), layout.matrix_layout("dst", layout.ACTIVATION_LIMITS))
+SRC = layout.activation("src", layout.SMEM_ONLY)
+DST = layout.activation("dst", layout.SMEM_ONLY)
 WEIGHT = (layout.kernel_layout("weight"), layout.matrix_layout("weight", layout.WEIGHT_LIMITS))
 ACCUMULATOR_EXPONENT = -16
 ACCUMULATOR_STEP = 2.0**ACCUMULATOR_EXPONENT
@@ -47,12 +47,12 @@ class Conv(expr.Op):
         schedule.HirMatch(
             nn.Conv2D,
             when=BOUND,
-            operands={"dst": "result", "src": "input", "weight": "weight", "bias": "bias"},
+            operands={"src": "input", "weight": "weight", "dst": "result", "bias": "bias"},
         ),
         schedule.HirMatch(
             nn.MatMul,
             when={"a_layout": "MK", "b_layout": "KN"},
-            operands={"dst": "result", "src": "lhs", "weight": "rhs"},
+            operands={"src": "lhs", "weight": "rhs", "dst": "result"},
         ),
     )
 
@@ -71,23 +71,17 @@ class Conv(expr.Op):
         pattern=pattern.Wildcard("nonlinear"),
         default=Nonlinear.NONE,
     )
-    tile_height = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
-    tile_width = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
     width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
-    dst = expr.ParamDef(
-        kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.forms("dst", DST)
-    )
-    src = expr.ParamDef(
-        kind="input", effect=expr.MemoryEffect.READ, pattern=layout.forms("src", SRC)
-    )
+    src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=SRC)
     weight = expr.ParamDef(
         kind="input",
         effect=expr.MemoryEffect.READ,
         pattern=layout.forms("weight", WEIGHT, layout.GMEM_ONLY),
     )
+    dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=DST)
     bias = expr.ParamDef(
         kind="input",
         effect=expr.MemoryEffect.READ,
@@ -109,7 +103,7 @@ def _(call, ctx) -> types.TupleType:
 @access.register_relation(Conv)
 def _(call, ctx):
     op = call.target
-    src, weight = (ctx.type_of(arg) for arg in call.args[1:3])
+    src, weight = (ctx.type_of(arg) for arg in call.args[:2])
     if len(src.shape) == 2:
         lhs, rhs, written = access.matmul_relations(src.shape, weight.shape, MATRIX_AXES)
         rows, columns = src.shape[0], weight.shape[1]
@@ -119,9 +113,9 @@ def _(call, ctx):
             stride=op.stride, padding=op.padding, dilation=op.dilation, groups=op.groups
         )
         *reads, written = access.relations_of(
-            expr.Call(hir, call.args[1:], type=types.TupleType.Void), ctx
+            expr.Call(hir, (*call.args[:2], *call.args[3:]), type=types.TupleType.Void), ctx
         )
-    return written, *reads[: len(call.args) - 1], written
+    return *reads[:2], written, *reads[2 : len(call.args) - 1], written
 
 
 def spatial(size: int, kernel: int, stride: int, padding: int) -> int:
@@ -191,7 +185,7 @@ def check_matrix(call, ctx, dst, src, weight, bias) -> None:
 
 @verify.register(Conv)
 def _(call, ctx) -> None:
-    dst, src, weight, *held = (ctx.type_of(arg) for arg in call.args)
+    src, weight, dst, *held = (ctx.type_of(arg) for arg in call.args)
     ranks = tuple(len(type_.shape) for type_ in (dst, src, weight))
     if len(set(ranks)) != 1:
         ctx.error(
@@ -233,7 +227,8 @@ def accumulate(inputs, weights, axis: int):
 def _(ctx):
     op = ctx.op
     torch = utils.torch
-    src, weight, *held = (arg.data.to(torch.float64) for arg in ctx.args[1:])
+    src, weight, dst, *held = ctx.args
+    src, weight, *held = (arg.data.to(torch.float64) for arg in (src, weight, *held))
     if src.dim() == 4:
         columns = utils.F.unfold(src, weight.shape[2:], padding=op.padding, stride=op.stride)
         columns = columns.unflatten(1, (op.groups, -1))
@@ -252,7 +247,7 @@ def _(ctx):
     else:
         value = accumulate(src[:, :, None], weight, 1)
         bias = held[0] if held else 0.0
-    return evaluation.write(ctx, apply(op.nonlinear, evaluation.f16((value + bias).to(torch.float32))))
+    return evaluation.write(dst, apply(op.nonlinear, evaluation.f16((value + bias).to(torch.float32))))
 
 
 __all__ = ["Conv"]

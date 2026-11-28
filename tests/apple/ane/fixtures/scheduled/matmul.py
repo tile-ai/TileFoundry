@@ -14,11 +14,7 @@ class Program:
         b: Tensor[(16, 16), "f16", ((16, 16), (16, 1)), "gmem"],
     ):
         with Mesh(("engine",), layout=(1,), names=("engine",)) as _engine:
-            outer = tf.schedule(
-                (tf.empty(Tensor[(8, 16), "f16", ((8, 16), (1, 8)), "smem"]), a),
-                op=T.ane.bypass(perm=(2, 1, 0)),
-            )
-            return tf.schedule(
-                (tf.empty(Tensor[(8, 16), "f16", ((8, 16), (16, 1)), "gmem"]), outer, b),
-                op=T.ane.conv(),
-            )
+            al = tf.schedule((a, tf.empty(Tensor[(8, 16), "f16", ((8, 16), (16, 1)), "smem"])), op=T.ane.load())
+            outer = tf.schedule((al, tf.empty(Tensor[(8, 16), "f16", ((8, 16), (1, 8)), "smem"])), op=T.ane.bypass(perm=(2, 1, 0)))
+            y = tf.schedule((outer, b, tf.empty(Tensor[(8, 16), "f16", ((8, 16), (16, 1)), "smem"])), op=T.ane.conv())
+            return tf.schedule((y, tf.empty(Tensor[(8, 16), "f16", ((8, 16), (16, 1)), "gmem"])), op=T.ane.store())

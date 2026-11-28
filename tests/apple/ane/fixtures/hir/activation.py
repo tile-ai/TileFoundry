@@ -10,8 +10,8 @@ from tilefoundry_apple import ane
 class Program:
     @func
     def hir_activation(
-        x: Tensor[(1, 32, 16, 16), "f16", ((1, 32, 16, 16), (8192, 256, 16, 1)), "gmem"],
-        xs: Tensor[(1, 32, 16, 16), "f32", ((1, 32, 16, 16), (8192, 256, 16, 1)), "gmem"],
+        x: Tensor[(1, 32, 16, 16), "f16", ((1, 32, 16, 16), (8192, 256, 16, 1)), "smem"],
+        xs: Tensor[(1, 32, 16, 16), "f32", ((1, 32, 16, 16), (8192, 256, 16, 1)), "smem"],
     ):
         with Mesh(("engine",), layout=(1,), names=("engine",)) as _engine:
             rectified = tf.relu(x)

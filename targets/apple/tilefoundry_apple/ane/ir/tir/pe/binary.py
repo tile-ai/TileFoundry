@@ -29,25 +29,23 @@ class Binary(expr.Op):
         schedule.HirMatch(
             math.Binary,
             when={"kind": pattern.Wildcard("kind")},
-            operands={"dst": "result", "lhs": "lhs", "rhs": "rhs"},
+            operands={"lhs": "lhs", "rhs": "rhs", "dst": "result"},
         ),
     )
 
     kind = expr.ParamDef(
         kind="attribute", annotation=expr.BinaryKind, pattern=layout.one_of("kind", KINDS)
     )
-    tile_height = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
-    tile_width = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
     width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
-    dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.feature("dst"))
-    lhs = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("lhs"))
-    rhs = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("rhs"))
+    lhs = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("lhs", layout.SMEM_ONLY))
+    rhs = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("rhs", layout.SMEM_ONLY))
+    dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.feature("dst", layout.SMEM_ONLY))
     between = (
-        pattern.SameConstraint("shape", "dst", "lhs"),
-        pattern.SameConstraint("shape", "dst", "rhs"),
+        pattern.SameConstraint("shape", "lhs", "dst"),
+        pattern.SameConstraint("shape", "rhs", "dst"),
     )
 
 
@@ -61,8 +59,9 @@ access.register_relation(Binary)(access.identity_relations)
 
 @evaluator.register(Binary)
 def _(ctx):
-    lhs, rhs = (arg.data.to(utils.torch.float32) for arg in ctx.args[1:])
-    return evaluation.write(ctx, evaluation.f16(KINDS[ctx.op.kind](lhs, rhs)))
+    *sources, dst = ctx.args
+    lhs, rhs = (arg.data.to(utils.torch.float32) for arg in sources)
+    return evaluation.write(dst, evaluation.f16(KINDS[ctx.op.kind](lhs, rhs)))
 
 
 __all__ = ["Binary"]

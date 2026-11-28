@@ -10,10 +10,10 @@ from tilefoundry_apple import ane
 class Program:
     @func
     def hir_matmul(
-        a: Tensor[(256, 2048), "f16", ((256, 2048), (1, 256)), "gmem"],
-        ar: Tensor[(256, 2048), "f16", ((256, 2048), (2048, 1)), "gmem"],
+        a: Tensor[(256, 2048), "f16", ((256, 2048), (1, 256)), "smem"],
+        ar: Tensor[(256, 2048), "f16", ((256, 2048), (2048, 1)), "smem"],
         b: Tensor[(2048, 2048), "f16", ((2048, 2048), (2048, 1)), "gmem"],
-        a32: Tensor[(256, 2048), "f32", ((256, 2048), (1, 256)), "gmem"],
+        a32: Tensor[(256, 2048), "f32", ((256, 2048), (1, 256)), "smem"],
         b32: Tensor[(2048, 2048), "f32", ((2048, 2048), (2048, 1)), "gmem"],
     ):
         with Mesh(("engine",), layout=(1,), names=("engine",)) as _engine:

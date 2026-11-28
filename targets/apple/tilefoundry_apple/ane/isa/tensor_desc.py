@@ -157,21 +157,20 @@ class TensorDesc:
         """The DMA row-stride field, left clear when any feature extent is one."""
         return 0 if min(self.shape[1:]) == 1 else self.row
 
-    def staging_channel(self, width: int | None = None) -> int:
-        """L2 channel pitch for the scheduled tile width."""
-        if width is None:
-            width = self.width
-        if type(width) is not int or not 1 <= width <= self.width:
-            raise ValueError(f"tile_width {width} is outside [1, {self.width}]")
-        return align_up(width * self.element_bytes, L2_ROW_ALIGN)
+    @property
+    def l2_channel(self) -> int:
+        """L2 channel pitch: one row, aligned to the L2 row unit."""
+        return align_up(self.width * self.element_bytes, L2_ROW_ALIGN)
 
-    def staging_row(self, width: int | None = None) -> int:
-        """L2 row stride for the scheduled tile width: every channel of one row, unpadded."""
-        return self.channels * self.staging_channel(width)
+    @property
+    def l2_row(self) -> int:
+        """L2 row stride: every channel of one row, unpadded."""
+        return self.channels * self.l2_channel
 
-    def staging_extent(self, rows: int | None = None, width: int | None = None) -> int:
-        """Bytes occupied by the scheduled tile in L2."""
-        return self.staging_row(width) * (self.height if rows is None else rows)
+    @property
+    def l2_extent(self) -> int:
+        """Bytes the whole feature map occupies in L2."""
+        return self.l2_row * self.height
 
 
 __all__ = ["Engine", "NE_CHANNEL_GROUP", "SURFACE_ROW_ALIGN", "TensorDesc"]

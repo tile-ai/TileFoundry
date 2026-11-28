@@ -1,4 +1,4 @@
-"""A canonical single-task convolution with externally supplied constant weights."""
+"""A 1x1 convolution with externally supplied constant weights."""
 from tilefoundry.dsl import *
 from tilefoundry_apple import ane
 
@@ -11,7 +11,6 @@ class Program:
         w: ConstTensor[(32, 32, 1, 1), "f16", ((32, 32, 1, 1), (32, 1, 1, 1)), "gmem"],
     ):
         with Mesh(("engine",), layout=(1,), names=("engine",)) as _engine:
-            return tf.schedule(
-                (tf.empty(Tensor[(1, 32, 16, 16), "f16", ((1, 32, 16, 16), (16384, 512, 32, 1)), "gmem"]), x, w),
-                op=T.ane.conv(),
-            )
+            xs = tf.schedule((x, tf.empty(Tensor[(1, 32, 16, 16), "f16", ((1, 32, 16, 16), (8192, 256, 16, 1)), "smem"])), op=T.ane.load())
+            y = tf.schedule((xs, w, tf.empty(Tensor[(1, 32, 16, 16), "f16", ((1, 32, 16, 16), (8192, 256, 16, 1)), "smem"])), op=T.ane.conv())
+            return tf.schedule((y, tf.empty(Tensor[(1, 32, 16, 16), "f16", ((1, 32, 16, 16), (16384, 512, 32, 1)), "gmem"])), op=T.ane.store())

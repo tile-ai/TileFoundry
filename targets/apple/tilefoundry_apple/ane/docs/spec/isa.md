@@ -79,13 +79,14 @@ def splice(*parts: Mapping[int, int]) -> Writes: ...
     and storage size MUST fill singleton axes from the padded inner geometry.
   - Declared layouts MUST have unit W stride for non-singleton W, non-overlapping rows,
     planes and batches, and a positive storage extent below 2**63 bytes.
-  - Tile staging MUST derive L2 pitch from the scheduled width without changing the logical
-    shape or DRAM strides stored in `TensorDesc`. Intrinsics MUST receive fp16, N=1 feature maps.
+  - `TensorDesc.l2_channel`, `l2_row` and `l2_extent` MUST derive the L2 pitches and extent from the
+    logical shape. Intrinsics MUST receive fp16, N=1 feature maps.
   - `TensorDesc.validate_feature` MUST own this dtype/batch precondition for intrinsics,
     TIR tensor conversion and template entry points. General descriptor geometry still admits f32
     and multiple batches.
-  - `load` MUST program the staged source buffer and the source DMA of one feature map.
-  - `store` MUST program the staged result buffer and the result DMA of one feature map.
+  - `load` MUST program the source DMA of one feature map into the planar L2 block at its given base;
+    `load_chained` MUST program an L2 source at its given base without DMA.
+  - `store` MUST program the L2 result block at its given base and, when it writes out, the result DMA.
   - `compute_pe` MUST program the planar engine options and declare the task kind.
   - `compute_ne` MUST program the neural engine op and MUST arm the kernel DMA path.
   - A primitive MUST build its words from declared fields only. It MUST NOT shift a value into
@@ -213,10 +214,8 @@ guard band is programmed.
 
 Feature-map DRAM rows align to the shared `SURFACE_ROW_ALIGN` of 64 bytes;
 L2 rows align to 16. A singleton extent causes the DMA row-stride field to
-remain zero. A narrower staged tile keeps the logical feature-map geometry
-and DRAM strides while changing its L2 pitch. Pitch generation and
-effective-register validation share `TensorDesc.staging_row` and the constraints
-in [§9](#9-verified-transfer-validation).
+remain zero. Pitch generation and effective-register validation share
+`TensorDesc.l2_row` and the constraints in [§9](#9-verified-transfer-validation).
 
 The neural width code is a power-of-two subdivision of 256 bytes. The dense row
 MUST divide 256 exactly before its ratio is tested for a power of two. An explicit
@@ -262,8 +261,8 @@ Source and second-source geometry is `(cin, hin, win)`. Destination geometry is
 `(cout, hout, wout)`, except spatial reduction writes `(cout, 1, 1)` while declaring
 the input spatial geometry. The verified NE bypass C/W transpose declares source
 geometry at both ends, uses the unicast count and fill-lower-nodes that
-`rules.check` relates to its channels, and writes
-`(wout, hout, cout)`. DMA stride fields are in 64-byte units. A zero row stride in
+`rules.check` relates to its channels, reads its source by DMA, and writes
+`(wout, hout, cout)`; a transpose that reads L2 is not decoded yet. DMA stride fields are in 64-byte units. A zero row stride in
 a singleton geometry uses its canonical padded row. Rows MUST cover width × 2;
 channel strides MUST cover height × row. `tile_height` MUST lie in `[1, hout]`.
 Elementwise declared geometries MUST agree; pool/conv output dimensions MUST
@@ -284,7 +283,10 @@ one source row for a reduction. An L2-only result MUST explicitly program its
 channel and row pitches to the staging geometry that its consumer uses. Depth
 and group extents remain one.
 Every overlapping live interval MUST be rejected, including equal-geometry 1×1
-convolution source/result intervals with alias bits set. Alias bits do not establish
+convolution source/result intervals with alias bits set. The one exception is a
+planar unary that reads its source by DMA and keeps its result in L2: its result
+MAY occupy exactly the interval its source lands in, which the device computes
+correctly; a partial overlap is still rejected. Alias bits do not establish
 permission to overlap buffers. Their existing encoding is retained.
 The result address field is `L2.l2_result_address` at `0x0534[20:4]` in 16-byte units.
 `validation.validate` MUST also

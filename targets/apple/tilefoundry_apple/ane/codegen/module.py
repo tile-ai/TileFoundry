@@ -41,8 +41,8 @@ def function_image(
 ) -> hwx.Image:
     """Assemble an entry with supplied weights and biases, or zeros for its compiled skeleton.
 
-    Each DMA base pair is flagged with the I/O segment of the buffer it reads or
-    writes; the segments hold the outputs, then the inputs.
+    Each DMA base pair is flagged with the I/O segment of the buffer its task moves;
+    the segments hold the outputs, then the inputs.
     """
     ctx = tir.build_context(fn)
     io = tuple(
@@ -55,27 +55,18 @@ def function_image(
         raise ValueError(f"{fn.name}: output count {outputs} does not fit {len(io)} parameters")
     if len(io) - outputs > 2 or outputs > 1:
         raise ValueError(f"{fn.name}: more than two inputs or one output is not decoded yet")
-    operands = {
-        isa.TileDMASrc.tile_dma_src_base_addr_lo.addr: 1,
-        isa.TileDMASrc.tile_dma_src2_base_addr_lo.addr: 2,
-        isa.TileDMADst.tile_dma_dst_base_addr_lo.addr: 0,
-    }
     split = len(io) - outputs
     segments = [binding.name for binding in (*io[split:], *io[:split])]
-    flags = []
-    for args in ctx.operands:
-        names = {register: ctx.symbols.get(args[position], args[position]).name
-                 for register, position in operands.items() if position < len(args)}
-        flags.append({register: isa.io_relocation(segments.index(name))
-                      for register, name in names.items() if name in segments})
+    flags = [
+        {register: isa.io_relocation(segments.index(tensor.name)) for register, tensor in moved.items()}
+        for moved in ctx.transfers
+    ]
     stream = program.to_program(ctx.passes, flags)
-    relocs = []
-    for word, (index, register, _) in hwx.base_slots(stream).items():
-        if register in isa.COEFFICIENT_RELOCATIONS:
-            continue
-        operand = ctx.operands[index][operands[register]]
-        source = ctx.symbols.get(operand, operand)
-        relocs.append(hwx.Reloc(word, source.name))
+    relocs = tuple(
+        hwx.Reloc(word, ctx.transfers[index][register].name)
+        for word, (index, register, _) in hwx.base_slots(stream).items()
+        if register not in isa.COEFFICIENT_RELOCATIONS
+    )
 
     def supplied(constant: expr.Expr, size: int) -> bytes:
         if constants is None:
@@ -98,7 +89,7 @@ def function_image(
     return hwx.Image(
         stream,
         io,
-        tuple(relocs),
+        relocs,
         output_count=outputs,
         coefficients=tuple(coefficients),
         coefficient_relocs=hwx.coefficient_relocations(stream, consumers),

@@ -85,7 +85,7 @@ def require_relocated(image: "Image", slots: Mapping[int, tuple[int, int, int]])
 def require_dma_bindings(
     image: "Image", slots: Mapping[int, tuple[int, int, int]], accesses: Mapping
 ) -> None:
-    """Bind each DMA base once, to the signature buffer its transfer reads or writes in range."""
+    """Bind each DMA base once, to the signature buffer whose window its transfer moves in range."""
     dma = {word for word, (_, addr, _) in slots.items() if addr in DMA_BASES}
     bound = [reloc.word_offset for reloc in image.relocs]
     if len(bound) != len(set(bound)):
@@ -114,8 +114,9 @@ def require_dma_bindings(
         desc.validate_feature()
         if not desc.is_canonical:
             raise ValueError("declared DMA tensor layout is not decoded yet")
-        if desc.shape[1:] != (transfer.channels, transfer.height, transfer.width):
-            raise ValueError(f"{transfer.name} DMA geometry contradicts TensorDesc {reloc.symbol!r}")
+        if any(extent > whole for extent, whole in
+               zip((transfer.channels, transfer.height, transfer.width), desc.shape[1:])):
+            raise ValueError(f"{transfer.name} DMA geometry leaves TensorDesc {reloc.symbol!r}")
         if (transfer.row, transfer.channel) != (desc.row, desc.channel):
             raise ValueError(f"{transfer.name} DMA strides contradict TensorDesc {reloc.symbol!r}")
         end = addend + transfer.end

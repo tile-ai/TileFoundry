@@ -61,9 +61,9 @@ def test_topology_facts():
 
 
 def test_architecture_facts():
-    """The architecture lists six instruction forms and its extent limits."""
+    """The architecture lists eight instruction forms and its extent limits."""
     architecture = ane.Target().architecture
-    assert len(architecture.capabilities) == len(set(architecture.capabilities)) == 6
-    assert all(name.startswith(("ne.", "pe.")) for name in architecture.capabilities)
+    assert len(architecture.capabilities) == len(set(architecture.capabilities)) == 8
+    assert all(name.startswith(("memory.", "ne.", "pe.")) for name in architecture.capabilities)
     assert architecture.max_channels == 65536
     assert architecture.max_kernel == 32

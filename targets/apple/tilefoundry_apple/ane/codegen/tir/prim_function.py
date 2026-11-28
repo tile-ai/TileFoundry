@@ -120,15 +120,11 @@ def emit(fn: core.PrimFunction, ctx: context.Context) -> None:
         ctx.emit_call(call, label)
     if fn.output_count != 1 or len(fn.params) < 2:
         raise ValueError(f"{label}: expected one output and at least one input parameter")
-    bound = tuple(ctx.addresses)
-    sources = (*fn.params[:-1], *bound)
-    for args in ctx.operands:
-        if len(args) < 2:
-            raise ValueError(f"{label}: every pass must name an output and a source")
-        if args[0] not in (fn.params[-1], *bound):
-            raise ValueError(f"{label}: the schedule must write the output parameter first")
-        if any(arg not in sources for arg in args[1:]):
-            raise ValueError(f"{label}: the schedule must read the function's inputs")
+    moved = [(register, buffer) for transfer in ctx.transfers for register, buffer in transfer.items()]
+    if {buffer for register, buffer in moved if register == context.RESULT} != {fn.params[-1]}:
+        raise ValueError(f"{label}: the output must be written by T.ane.store")
+    if any(buffer not in fn.params[:-1] for register, buffer in moved if register == context.SOURCE):
+        raise ValueError(f"{label}: the schedule must read the function's inputs")
 
 
 def build_context(fn: core.PrimFunction) -> context.Context:

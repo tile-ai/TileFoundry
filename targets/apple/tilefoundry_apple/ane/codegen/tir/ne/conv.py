@@ -29,14 +29,13 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         raise ValueError(f"T.ane.conv: width_code={op.width_code!r} is not decoded yet")
     if op.omit_ocg is not False:
         raise ValueError(f"T.ane.conv: omit_ocg={op.omit_ocg!r} is not decoded yet")
-    destination, source, weight, *held = call.args
+    source, weight, destination, *held = call.args
     src = context.tensor_desc_of(source.type, "src")
     dst = context.tensor_desc_of(destination.type, "dst")
     if (tuple(op.dilation), op.groups) != PLAIN:
         raise ValueError("T.ane.conv: dilated or grouped convolution encoding is not decoded yet")
-    rows = context.tile_rows(op, dst)
-    if rows != dst.height or src.height != dst.height:
-        raise ValueError("T.ane.conv: partial or unequal-height tile plan is not decoded yet")
+    if src.height != dst.height:
+        raise ValueError("T.ane.conv: unequal-height convolution is not decoded yet")
     ocg_size = isa.rules.channel_groups(dst.channels)
     if op.ocg_size is not None:
         if type(op.ocg_size) is not int or op.ocg_size != ocg_size:
@@ -52,25 +51,16 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         layout.lanes, min(src.channels, len(isa.KernelDMA.kernel_dma_src_coeff_dma_en))
     )
     shape = layout.shape
-    source_base, result_base = ctx.staging_address(1), ctx.staging_address(0)
-    if source_base is None or result_base is None:
-        raise ValueError("T.ane.conv: source and result require an allocated staging plan")
-    load = (
-        intrinsic.load_chained(src, isa.Engine.NEURAL, producer=ctx.producer_of(source), address=source_base)
-        if source.type.storage is expr.StorageKind.SMEM
-        else intrinsic.load(src, isa.Engine.NEURAL, address=ctx.address_of(source), fresh=ctx.fresh,
-                            width=op.tile_width, l2_base=source_base)
-    )
+    base, producer = ctx.source(source)
+    result_base, stored = ctx.result(destination)
     ctx.emit(
-        load,
+        intrinsic.load_chained(src, isa.Engine.NEURAL, producer=producer, address=base),
         intrinsic.convolution(
             src,
-            dst,
+            context.written(dst, stored),
             index=len(ctx.passes),
             coeff_base=layout.base,
-            width=op.tile_width,
             ocg_size=ocg_size,
-            tile_height=rows,
             read_config=False,
             coeff_stride=layout.stride,
             kernel_width=shape[3],
@@ -81,8 +71,8 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             nonlinear=NONLINEAR[op.nonlinear],
             bias=layout.bias,
             staged_source=False,
-            to_dram=destination.type.storage is expr.StorageKind.GMEM,
-            address=ctx.address_of(destination),
+            to_dram=stored is not None,
+            address=ctx.address_of(stored),
         ),
     )
 

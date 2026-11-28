@@ -20,17 +20,8 @@ NEGATIVE_INFINITY_PAD = 1
 
 
 def patch_for(rows: int) -> tuple[int, int]:
-    """The patch pair a pooling pass declares for a tile of *rows* result rows."""
+    """The patch pair a pooling pass declares for *rows* result rows."""
     return PATCH_EDGE, rules.ceil_log2(rows)
-
-
-def result_slots(rows: int, desc: isa.TensorDesc) -> int:
-    """How many staged images the pooled result starts after.
-
-    A pass that stages a whole plane writes right behind its source; a tile of
-    fewer rows keeps the source and the result in separate staged images.
-    """
-    return 1 if rows == desc.height else 2
 
 
 @codegen.register(target.Target, codegen.Role.EMIT, tir.Pool)
@@ -42,9 +33,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         raise ValueError(f"T.ane.pool: ocg_size={op.ocg_size!r} is not decoded yet")
     if op.omit_ocg is not False:
         raise ValueError(f"T.ane.pool: omit_ocg={op.omit_ocg!r} is not decoded yet")
-    destination, source = call.args
-    if any(arg.type.storage is expr.StorageKind.SMEM for arg in call.args):
-        raise ValueError("L2 operands for this operation is not decoded yet")
+    source, destination = call.args
     src = context.tensor_desc_of(source.type, "src")
     dst = context.tensor_desc_of(destination.type, "dst")
     if op.ceil_mode:
@@ -66,16 +55,17 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         mode = isa.PoolMode.NONE_OR_SUM
     else:
         mode = isa.PoolMode.AVG
-    rows = context.tile_rows(op, dst)
     if dst.width > 1 << PATCH_EDGE:
         raise ValueError(f"T.ane.pool: a result {dst.width} wide is not decoded yet")
-    patch = patch_for(rows) if op.patch is None else tuple(op.patch)
+    patch = patch_for(dst.height) if op.patch is None else tuple(op.patch)
     if len(patch) != 2 or any(type(n) is not int or not 0 <= n <= 15 for n in patch):
         raise ValueError(f"patch {patch!r} must contain two integers within [0, 15]")
-    if patch != patch_for(rows):
+    if patch != patch_for(dst.height):
         raise ValueError(f"T.ane.pool: patch {patch} for this tile is not decoded yet")
+    base, producer = ctx.source(source)
+    result_base, stored = ctx.result(destination)
     ctx.emit(
-        intrinsic.load(src, address=ctx.address_of(source), fresh=ctx.fresh, width=op.tile_width),
+        intrinsic.load_chained(src, producer=producer, address=base),
         intrinsic.compute_pe(
             isa.TaskType.PE_POOL_UNARY,
             dst,
@@ -85,19 +75,11 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             declared_out=dst,
             window=(kernel[1], kernel[0], stride[1], stride[0]),
             padding=(padding[1], padding[0]),
-            tile_height=rows,
             patch=patch,
         ),
         intrinsic.store(
-            dst,
-            staging=src,
-            width=op.tile_width,
-            rows=context.tile_rows(op, src),
-            staged=result_slots(rows, dst),
-            address=ctx.address_of(destination),
-            separated=False,
-            fresh=ctx.fresh,
-            declare=False,
+            context.written(dst, stored), result_base=result_base, address=ctx.address_of(stored),
+            fresh=ctx.fresh, producer=producer, to_dram=stored is not None, declare=False,
         ),
     )
 

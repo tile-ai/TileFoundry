@@ -22,13 +22,11 @@ IDENTITY_CHANNELS = 32
 @codegen.register(target.Target, codegen.Role.EMIT, tir.Bypass)
 def emit(call: expr.Call, ctx: context.Context) -> None:
     op = call.target
-    if op.tile_width is not None:
-        raise ValueError(f"T.ane.bypass: tile_width={op.tile_width!r} is not decoded yet")
     if op.patch is not None:
         raise ValueError(f"T.ane.bypass: patch={op.patch!r} is not decoded yet")
     if op.nonlinear not in NONLINEAR:
         raise ValueError(f"T.ane.bypass: nonlinear={op.nonlinear.name} is not decoded yet")
-    destination, source = call.args
+    source, destination = call.args
     perm = tuple(op.perm)
     if sorted(perm) != list(IDENTITY):
         raise ValueError(f"T.ane.bypass: perm {perm} must be a permutation of {IDENTITY}")
@@ -41,7 +39,6 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     expected = tuple(src.shape[1 + axis] for axis in perm)
     if extent != expected:
         raise ValueError("T.ane.bypass: dst shape must equal src shape")
-    rows = context.tile_rows(op, dst)
     declared = src if permuted else None
     if not permuted and src.channels > IDENTITY_CHANNELS:
         raise ValueError(f"T.ane.bypass: identity over {src.channels} channels is not decoded yet")
@@ -63,34 +60,20 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         dst,
         nonlinear=NONLINEAR[op.nonlinear],
         kernel_mode=1,
-        tile_height=rows,
         width_code=op.width_code,
         declared=declared,
         transpose=permuted,
         unicast_channels=unicast,
         ocg_size=None if op.omit_ocg else ocg_size,
-        address=ctx.address_of(destination),
     )
-    producer = ctx.producer_of(source)
-    load = (
-        intrinsic.load_chained(src, isa.Engine.NEURAL, producer=producer, address=ctx.staging_address(1))
-        if source.type.storage is expr.StorageKind.SMEM
-        else intrinsic.load(src, isa.Engine.NEURAL, address=ctx.address_of(source), fresh=ctx.fresh,
-                            l2_base=ctx.staging_address(1))
-    )
+    base, producer = ctx.source(source)
+    result_base, stored = ctx.result(destination)
     ctx.emit(
-        load,
+        intrinsic.load_chained(src, isa.Engine.NEURAL, producer=producer, address=base),
         compute,
         intrinsic.store(
-            dst,
-            staging=src,
-            rows=rows,
-            address=ctx.address_of(destination),
-            fresh=ctx.fresh,
-            declared=declared,
-            producer=producer,
-            result_base=ctx.staging_address(0),
-            to_dram=destination.type.storage is expr.StorageKind.GMEM,
+            context.written(dst, stored), result_base=result_base, address=ctx.address_of(stored),
+            fresh=ctx.fresh, declared=declared, producer=producer, to_dram=stored is not None,
         ),
     )
 

@@ -101,7 +101,7 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
         raise ValueError("fill_lower_nodes_first DMA mapping is not decoded yet")
     if transpose:
         if (task != fields.TaskType.NE or value(image, fields.NE.op) != fields.NEOp.BYPASS
-                or source != result):
+                or source != result or access != fields.L2Access.DMA_READ):
             raise ValueError("output transpose DMA mapping is not decoded yet")
         result = result[2], result[1], result[0]
     elif task in (fields.TaskType.PE_EW_UNARY, fields.TaskType.PE_EW_BINARY,
@@ -191,7 +191,9 @@ def check_l2(image: Mapping[int, int], decoded: tuple[Transfer, ...]) -> tuple[t
 
     A staged channel spans its 16-byte aligned row and a staged row spans every channel,
     so any row stride that covers that depth is valid. A DMA result that leaves its row
-    stride zero occupies the depth, or one source row for a reduction.
+    stride zero occupies the depth, or one source row for a reduction. A planar unary
+    that reads its source by DMA and keeps its result in L2 may write the result over
+    exactly the interval its source lands in.
     """
     if not decoded:
         return ()
@@ -238,9 +240,10 @@ def check_l2(image: Mapping[int, int], decoded: tuple[Transfer, ...]) -> tuple[t
         if end > L2_CAPACITY:
             raise ValueError(f"L2 {name} range [{base}, {end}) exceeds capacity {L2_CAPACITY}")
         intervals.append((name, base, end))
+    in_place = task == fields.TaskType.PE_EW_UNARY and decoded[0].register and not decoded[-1].register
     for index, (name, start, end) in enumerate(intervals):
         for other, low, high in intervals[:index]:
-            if start < high and low < end:
+            if start < high and low < end and not (in_place and (low, high) == (start, end)):
                 raise ValueError(f"L2 {other} and {name} ranges overlap")
     return tuple(intervals)
 

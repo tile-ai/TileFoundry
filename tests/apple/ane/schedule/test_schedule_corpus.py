@@ -35,14 +35,15 @@ def small(shape, seed, low=-1, high=1):
 class AneCase(Case):
     """One ANE fixture; a field names the error its stage must raise.
 
-    ``refusal`` is the load-time VerifyError and ``finalize_refusal`` the LoweringError.
-    ``runs`` marks a scheduled fixture that goes through the whole flow: every host
-    generates its code, and a machine with a neural engine also compiles it, runs it
-    and requires the result to equal the evaluator's.
+    ``refusal`` is the load-time VerifyError, ``finalize_refusal`` the LoweringError and
+    ``emit_refusal`` the error code generation raises. ``runs`` marks a scheduled fixture
+    that goes through the whole flow: every host generates its code, and a machine with a
+    neural engine also compiles it, runs it and requires the result to equal the evaluator's.
     """
 
     refusal: str | None = None
     finalize_refusal: str | None = None
+    emit_refusal: str | None = None
     runs: bool = False
 
     def inputs(self) -> tuple | None:
@@ -177,6 +178,11 @@ def _finalize(case, checked):
     return None
 
 
+def _unemitted(case, lowered):
+    with pytest.raises(ValueError, match=case.emit_refusal):
+        device.emit(lowered)
+
+
 def _scheduled(case, problems):
     if case.refusal is not None:
         problems.run("load refusal", _refused, case)
@@ -198,6 +204,8 @@ def _scheduled(case, problems):
             compiled = problems.run("compile", tilefoundry.compile, lowered)
             ran = problems.run("run", device.run, compiled, lowered, case.inputs())
             problems.expect("device result", utils.torch.equal, ran, result)
+    if case.emit_refusal is not None:
+        problems.run("emit refusal", _unemitted, case, lowered)
     problems.run("guard", case.guard, ScheduledState(module, result, lowered), problems)
 
 
@@ -430,7 +438,9 @@ class ConvRelu(AneCase):
     def guard(self, state, problems):
         x, w, b = (value.float() for value in self.inputs())
         assert utils.torch.equal(state.result, utils.F.conv2d(x, w, b, padding=1).relu().to(utils.torch.float16))
-        assert issued(state.lowered) == ["T.ane.conv(out, x, w, b, padding=(1, 1), nonlinear=RELU)"]
+        assert issued(state.lowered) == [
+            "T.ane.load(x, t0)", "T.ane.conv(t0, w, t1, b, padding=(1, 1), nonlinear=RELU)", "T.ane.store(t1, out)"
+        ]
 
 
 @case
@@ -443,12 +453,14 @@ class MatMul(AneCase):
     def guard(self, state, problems):
         a, b = (value.float() for value in self.inputs())
         assert utils.torch.equal(state.result, (a @ b).to(utils.torch.float16))
-        assert issued(state.lowered) == ["T.ane.bypass(t0, a, perm=(2, 1, 0))", "T.ane.conv(out, t0, b)"]
+        assert issued(state.lowered) == [
+            "T.ane.load(a, t0)", "T.ane.bypass(t0, t1, perm=(2, 1, 0))", "T.ane.conv(t1, b, t2)", "T.ane.store(t2, out)"
+        ]
 
 
 @case
 class Chain(AneCase):
-    """The first product stays in the on-chip buffer: the second reads it there, no copy out."""
+    """The first product stays in the on-chip buffer: the second reads it there."""
 
     path: Path = ROOT / "scheduled" / "chain.py"
 
@@ -458,16 +470,17 @@ class Chain(AneCase):
     def guard(self, state, problems):
         a, b, w = (value.float() for value in self.inputs())
         assert utils.torch.equal(state.result, ((a @ b) @ w).to(utils.torch.float16))
-        assert issued(state.lowered) == ["T.ane.conv(t0, a, b)", "T.ane.conv(out, t0, w)"]
-        first, second = _statements(state.lowered)
-        assert first.args[0].type.storage is expr.StorageKind.SMEM
-        assert second.args[1].type.storage is expr.StorageKind.SMEM
+        assert issued(state.lowered) == [
+            "T.ane.load(a, t0)", "T.ane.conv(t0, b, t1)", "T.ane.conv(t1, w, t2)", "T.ane.store(t2, out)"
+        ]
 
 
 @case
 class Transpose(AneCase):
+    """A transposing pass-through that reads L2 is not decoded yet."""
+
     path: Path = ROOT / "scheduled" / "transpose.py"
-    runs: bool = True
+    emit_refusal: str = "output transpose DMA mapping is not decoded yet"
 
     def inputs(self):
         return ((utils.torch.arange(4096) - 2048).reshape(1, 32, 8, 16).to(utils.torch.float16),)
@@ -475,13 +488,15 @@ class Transpose(AneCase):
     def guard(self, state, problems):
         (x,) = self.inputs()
         assert utils.torch.equal(state.result, x.permute(0, 3, 2, 1))
-        assert issued(state.lowered) == ["T.ane.bypass(out, x, perm=(2, 1, 0))"]
+        assert issued(state.lowered) == [
+            "T.ane.load(x, t0)", "T.ane.bypass(t0, t1, perm=(2, 1, 0))", "T.ane.store(t1, out)"
+        ]
 
 
 @case
 class TransposeConvChain(AneCase):
     path: Path = ROOT / "scheduled" / "transpose_conv_chain.py"
-    runs: bool = True
+    emit_refusal: str = "output transpose DMA mapping is not decoded yet"
 
     def inputs(self):
         return small((1, 32, 8, 16), 10), small((16, 16, 1, 1), 11)
@@ -489,7 +504,9 @@ class TransposeConvChain(AneCase):
     def guard(self, state, problems):
         x, w = self.inputs()
         assert utils.torch.equal(state.result, utils.F.conv2d(x.permute(0, 3, 2, 1), w))
-        assert issued(state.lowered) == ["T.ane.bypass(t0, x, perm=(2, 1, 0))", "T.ane.conv(out, t0, w)"]
+        assert issued(state.lowered) == [
+            "T.ane.load(x, t0)", "T.ane.bypass(t0, t1, perm=(2, 1, 0))", "T.ane.conv(t1, w, t2)", "T.ane.store(t2, out)"
+        ]
 
 
 @case
@@ -507,14 +524,18 @@ class Pool(AneCase):
         reciprocal = tir.evaluation.f16(utils.torch.tensor(1 / 9))
         assert utils.torch.equal(state.result, tir.evaluation.f16(sums * reciprocal).to(utils.torch.float16))
         assert issued(state.lowered) == [
-            "T.ane.pool(out, x, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), kind=AVG)"
+            "T.ane.load(x, t0)",
+            "T.ane.pool(t0, t1, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), kind=AVG)",
+            "T.ane.store(t1, out)",
         ]
 
 
 @case
 class PoolMax(AneCase):
+    """A pool that reads L2 is not decoded yet."""
+
     path: Path = ROOT / "scheduled" / "pool_max.py"
-    runs: bool = True
+    emit_refusal: str = "L2 continuation access mapping is not decoded yet"
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0, -3, 3),)
@@ -522,7 +543,9 @@ class PoolMax(AneCase):
     def guard(self, state, problems):
         (x,) = self.inputs()
         assert utils.torch.equal(state.result, utils.F.max_pool2d(x, 2, 2))
-        assert issued(state.lowered) == ["T.ane.pool(out, x, kernel_size=(2, 2), stride=(2, 2), kind=MAX)"]
+        assert issued(state.lowered) == [
+            "T.ane.load(x, t0)", "T.ane.pool(t0, t1, kernel_size=(2, 2), stride=(2, 2), kind=MAX)", "T.ane.store(t1, out)"
+        ]
 
 
 @case
@@ -530,7 +553,7 @@ class PoolMaxPad(AneCase):
     """Padding takes no part in a max: windows of negative values keep their maximum."""
 
     path: Path = ROOT / "scheduled" / "pool_max_pad.py"
-    runs: bool = True
+    emit_refusal: str = "L2 continuation access mapping is not decoded yet"
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0, -7, 1),)
@@ -539,7 +562,9 @@ class PoolMaxPad(AneCase):
         (x,) = self.inputs()
         assert utils.torch.equal(state.result, utils.F.max_pool2d(x, 3, 2, 1))
         assert issued(state.lowered) == [
-            "T.ane.pool(out, x, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), kind=MAX)"
+            "T.ane.load(x, t0)",
+            "T.ane.pool(t0, t1, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), kind=MAX)",
+            "T.ane.store(t1, out)",
         ]
 
 
@@ -548,7 +573,7 @@ class PoolAvg(AneCase):
     """Each window sum is multiplied by the fp16 reciprocal of the cells it has inside the map."""
 
     path: Path = ROOT / "scheduled" / "pool_avg.py"
-    runs: bool = True
+    emit_refusal: str = "L2 continuation access mapping is not decoded yet"
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0, -3, 3),)
@@ -572,7 +597,9 @@ class Unary(AneCase):
     def guard(self, state, problems):
         (x,) = self.inputs()
         assert utils.torch.equal(state.result, (2 * x.float() + 3).clamp(0, 6).to(utils.torch.float16))
-        assert issued(state.lowered) == ["T.ane.unary(out, x, pre_scale=2.0, bias=3.0, clamp=(0.0, 6.0))"]
+        assert issued(state.lowered) == [
+            "T.ane.load(x, t0)", "T.ane.unary(t0, t1, pre_scale=2.0, bias=3.0, clamp=(0.0, 6.0))", "T.ane.store(t1, out)"
+        ]
 
 
 @case
@@ -590,6 +617,8 @@ class UnaryWide(AneCase):
 
 @case
 class UnaryTiled(AneCase):
+    """Each tile is a load, a planar pass and a store into its window of the output."""
+
     path: Path = ROOT / "scheduled" / "unary_tiled.py"
     runs: bool = True
 
@@ -599,6 +628,9 @@ class UnaryTiled(AneCase):
     def guard(self, state, problems):
         (x,) = self.inputs()
         assert utils.torch.equal(state.result, x + 1)
+        assert issued(state.lowered)[:3] == [
+            "T.ane.load(t0, t1)", "T.ane.unary(t1, t2, bias=1.0)", "T.ane.store(t2, t3)"
+        ]
 
 
 @case
@@ -670,7 +702,9 @@ class Binary(AneCase):
     def guard(self, state, problems):
         x, y = self.inputs()
         assert utils.torch.equal(state.result, x + y)
-        assert issued(state.lowered) == ["T.ane.binary(out, x, y, kind=ADD)"]
+        assert issued(state.lowered) == [
+            "T.ane.load(x, t0)", "T.ane.load(y, t1)", "T.ane.binary(t0, t1, t2, kind=ADD)", "T.ane.store(t2, out)"
+        ]
 
 
 @case
@@ -680,15 +714,20 @@ class BinarySub(Binary):
     def guard(self, state, problems):
         x, y = self.inputs()
         assert utils.torch.equal(state.result, y - x)
-        assert issued(state.lowered) == ["T.ane.binary(out, y, x, kind=SUB)"]
+        assert issued(state.lowered) == [
+            "T.ane.load(y, t0)", "T.ane.load(x, t1)", "T.ane.binary(t0, t1, t2, kind=SUB)", "T.ane.store(t2, out)"
+        ]
 
 
 @case
 class ReduceMean(AneCase):
-    """A sum over the spatial axes scaled by the reciprocal of their extent is their mean."""
+    """A sum over the spatial axes scaled by the reciprocal of their extent is their mean.
+
+    Its [1, C, 1, 1] result has no L2 descriptor yet.
+    """
 
     path: Path = ROOT / "scheduled" / "reduce_mean.py"
-    runs: bool = True
+    emit_refusal: str = "tensor strides do not cover the tensor"
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0),)
@@ -699,14 +738,16 @@ class ReduceMean(AneCase):
         reciprocal = tir.evaluation.f16(utils.torch.tensor(1 / 256))
         assert utils.torch.equal(state.result, tir.evaluation.f16(total * reciprocal).to(utils.torch.float16))
         assert issued(state.lowered) == [
-            "T.ane.reduce(out, x, axes=(2, 3), keepdim=True, kind=SUM, scale=0.00390625)"
+            "T.ane.load(x, t0)",
+            "T.ane.reduce(t0, t1, axes=(2, 3), keepdim=True, kind=SUM, scale=0.00390625)",
+            "T.ane.store(t1, out)",
         ]
 
 
 @case
 class ReduceSum(AneCase):
     path: Path = ROOT / "scheduled" / "reduce_sum.py"
-    runs: bool = True
+    emit_refusal: str = "tensor strides do not cover the tensor"
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0, -3, 3),)
@@ -714,7 +755,9 @@ class ReduceSum(AneCase):
     def guard(self, state, problems):
         (x,) = self.inputs()
         assert utils.torch.equal(state.result, x.sum((2, 3), keepdim=True))
-        assert issued(state.lowered) == ["T.ane.reduce(out, x, axes=(2, 3), keepdim=True, kind=SUM)"]
+        assert issued(state.lowered) == [
+            "T.ane.load(x, t0)", "T.ane.reduce(t0, t1, axes=(2, 3), keepdim=True, kind=SUM)", "T.ane.store(t1, out)"
+        ]
 
 
 @case
@@ -733,15 +776,17 @@ class OpCase(AneCase):
     """One module of a fixture under ``ops/``; ``expected`` is the torch value of its result."""
 
     def expected(self):
-        """The value the entry must return, or None for a case that a load refuses."""
+        """The value the entry must return, or None for a case that is refused."""
         return None
 
     def guard(self, state, problems):
-        assert utils.torch.equal(state.result, self.expected().to(utils.torch.float16))
+        if self.expected() is not None:
+            assert utils.torch.equal(state.result, self.expected().to(utils.torch.float16))
 
 
 VALUES = ROOT / "ops" / "values.py"
 REFUSED = ROOT / "ops" / "refused.py"
+UNPLANNED = ROOT / "ops" / "unplanned.py"
 
 
 @case
@@ -848,6 +893,13 @@ class Gapped(OpCase):
 
 
 @case
+class Unloaded(OpCase):
+    path: Path = REFUSED
+    name: str | None = "Unloaded"
+    refusal: str = "src: gmem does not match smem"
+
+
+@case
 class ClampReversed(OpCase):
     path: Path = REFUSED
     name: str | None = "ClampReversed"
@@ -880,6 +932,41 @@ class GroupsUneven(OpCase):
     path: Path = REFUSED
     name: str | None = "GroupsUneven"
     refusal: str = "groups 3 must divide the input channels 4"
+
+
+@case
+class StoreLoaded(OpCase):
+    path: Path = UNPLANNED
+    name: str | None = "StoreLoaded"
+    emit_refusal: str = "T.ane.store: its source must be the result of a computation"
+
+
+@case
+class StoreRead(OpCase):
+    path: Path = UNPLANNED
+    name: str | None = "StoreRead"
+    emit_refusal: str = "T.ane.store: its source is read again after being written out"
+
+
+@case
+class Unstored(OpCase):
+    path: Path = UNPLANNED
+    name: str | None = "Unstored"
+    emit_refusal: str = "the output must be written by T.ane.store"
+
+
+@case
+class StoredTwice(OpCase):
+    path: Path = UNPLANNED
+    name: str | None = "StoredTwice"
+    emit_refusal: str = "an L2 tensor is written out once"
+
+
+@case
+class Copied(OpCase):
+    path: Path = UNPLANNED
+    name: str | None = "Copied"
+    finalize_refusal: str = "needs a copy; store the update into the window instead"
 
 
 CASES = (*cases(ROOT / "hir", ROOT / "scheduled", case_type=AneCase), *special(OpCase))

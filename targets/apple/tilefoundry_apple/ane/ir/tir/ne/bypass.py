@@ -13,9 +13,9 @@ from .nonlinear import Nonlinear, apply
 IDENTITY = (0, 1, 2)
 SWAP = (2, 1, 0)
 PERMS = tuple(permutations(IDENTITY))
-OPERANDS = MappingProxyType({"dst": "result", "src": "x"})
-SRC = (layout.feature_layout("src"), layout.matrix_layout("src", layout.ACTIVATION_LIMITS))
-DST = (layout.feature_layout("dst"), layout.matrix_layout("dst", layout.ACTIVATION_LIMITS))
+OPERANDS = MappingProxyType({"src": "x", "dst": "result"})
+SRC = layout.activation("src", layout.SMEM_ONLY)
+DST = layout.activation("dst", layout.SMEM_ONLY)
 
 
 @expr.register_op(dialect="T", category="ne", namespace="ane", name="bypass")
@@ -53,19 +53,13 @@ class Bypass(expr.Op):
         pattern=pattern.Wildcard("nonlinear"),
         default=Nonlinear.NONE,
     )
-    tile_height = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
-    tile_width = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
     width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     unicast_channels = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
-    dst = expr.ParamDef(
-        kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.forms("dst", DST)
-    )
-    src = expr.ParamDef(
-        kind="input", effect=expr.MemoryEffect.READ, pattern=layout.forms("src", SRC)
-    )
+    src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=SRC)
+    dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=DST)
 
 
 @typeinfer.register(Bypass)
@@ -80,18 +74,18 @@ def axes(op, rank: int) -> tuple:
 
 @access.register_relation(Bypass)
 def _(call, ctx):
-    src = ctx.type_of(call.args[1])
+    src = ctx.type_of(call.args[0])
     hir = tensor.Transpose(perm=axes(call.target, len(src.shape)))
     read, written = access.relations_of(
-        expr.Call(hir, call.args[1:], type=types.TupleType.Void), ctx
+        expr.Call(hir, call.args[:1], type=types.TupleType.Void), ctx
     )
-    return written, read, written
+    return read, written, written
 
 
 @verify.register(Bypass)
 def _(call, ctx) -> None:
     op = call.target
-    dst, src = (ctx.type_of(arg) for arg in call.args)
+    src, dst = (ctx.type_of(arg) for arg in call.args)
     if len(dst.shape) != len(src.shape):
         ctx.error(
             call, f"dst shape {tuple(dst.shape)} and src shape {tuple(src.shape)} differ in rank"
@@ -110,8 +104,8 @@ def _(call, ctx) -> None:
 @evaluator.register(Bypass)
 def _(ctx):
     op = ctx.op
-    src = ctx.args[1].data
-    return evaluation.write(ctx, apply(op.nonlinear, src.permute(*axes(op, src.dim()))))
+    src, dst = ctx.args
+    return evaluation.write(dst, apply(op.nonlinear, src.data.permute(*axes(op, src.data.dim()))))
 
 
 __all__ = ["Bypass"]
