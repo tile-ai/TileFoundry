@@ -21,6 +21,7 @@ from .fields import (
 from .serialize import (
     MARKER_ADDR,
     PAD_SENTINEL,
+    RELOCATION_SLOTS,
     WORD_BYTES,
     Packet,
     sentinel_packets,
@@ -73,8 +74,12 @@ class TD:
         *,
         base: Mapping[int, int] | None = None,
         tid: int = 0,
+        relocations: Mapping[int, int] = RELOCATION_SLOTS,
     ) -> "TD":
-        """Apply raw words first, overlay fields, then omit words equal to base."""
+        """Apply raw words first, overlay fields, then omit words equal to base.
+
+        *relocations* gives the flags of each base pair, as ``serialize`` takes them.
+        """
         initial = {} if base is None else base
         image: dict[int, int] = {}
         for key, value in values.items():
@@ -91,7 +96,8 @@ class TD:
         for addr, word in image.items():
             check_configuration_word(addr, word)
         td = cls(
-            serialize({addr: word for addr, word in image.items() if initial.get(addr) != word}),
+            serialize({addr: word for addr, word in image.items() if initial.get(addr) != word},
+                      relocations),
             tid=tid,
         )
         td.validate()

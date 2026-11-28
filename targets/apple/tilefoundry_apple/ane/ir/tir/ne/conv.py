@@ -19,14 +19,22 @@ PADDING = pattern.Sequence(
     *(pattern.Wildcard(f"padding_{axis}", predicates=(pattern.Range(lo=0),)) for axis in "hw")
 )
 GROUPS = pattern.Wildcard("groups", predicates=(pattern.Range(lo=1),))
-SRC = (layout.feature_layout("src"), layout.matrix_layout("src", layout.ACTIVATION_LIMITS))
-DST = (layout.feature_layout("dst"), layout.matrix_layout("dst", layout.ACTIVATION_LIMITS))
+SRC = layout.activation("src", layout.SMEM_ONLY)
+DST = layout.activation("dst", layout.SMEM_ONLY)
 WEIGHT = (layout.kernel_layout("weight"), layout.matrix_layout("weight", layout.WEIGHT_LIMITS))
+ACCUMULATOR_EXPONENT = -16
+ACCUMULATOR_STEP = 2.0**ACCUMULATOR_EXPONENT
+FP16_MIN_EXPONENT = -14
+ACCUMULATOR_LIMIT = 2.0**15
 
 
 @expr.register_op(dialect="T", category="ne", namespace="ane", name="conv")
 class Conv(expr.Op):
     """dst = nonlinear(conv2d(src, weight) + bias), the result rounded once to fp16.
+
+    The sum is held in signed 16.16 fixed point: each product is rounded to 2**-16, a
+    product whose operands' exponents sum below -16 is dropped, and a partial sum
+    outside [-2**15, 2**15) makes the result infinite.
 
     The feature form convolves [1, C, H, W] with [O, C / groups, KH, KW] weights. The
     matrix form multiplies the channel-outer [M, K] src (K channels, M wide) by the
@@ -39,12 +47,12 @@ class Conv(expr.Op):
         schedule.HirMatch(
             nn.Conv2D,
             when=BOUND,
-            operands={"dst": "result", "src": "input", "weight": "weight", "bias": "bias"},
+            operands={"src": "input", "weight": "weight", "dst": "result", "bias": "bias"},
         ),
         schedule.HirMatch(
             nn.MatMul,
             when={"a_layout": "MK", "b_layout": "KN"},
-            operands={"dst": "result", "src": "lhs", "weight": "rhs"},
+            operands={"src": "lhs", "weight": "rhs", "dst": "result"},
         ),
     )
 
@@ -63,23 +71,17 @@ class Conv(expr.Op):
         pattern=pattern.Wildcard("nonlinear"),
         default=Nonlinear.NONE,
     )
-    tile_height = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
-    tile_width = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
     width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
-    dst = expr.ParamDef(
-        kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.forms("dst", DST)
-    )
-    src = expr.ParamDef(
-        kind="input", effect=expr.MemoryEffect.READ, pattern=layout.forms("src", SRC)
-    )
+    src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=SRC)
     weight = expr.ParamDef(
         kind="input",
         effect=expr.MemoryEffect.READ,
         pattern=layout.forms("weight", WEIGHT, layout.GMEM_ONLY),
     )
+    dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=DST)
     bias = expr.ParamDef(
         kind="input",
         effect=expr.MemoryEffect.READ,
@@ -101,7 +103,7 @@ def _(call, ctx) -> types.TupleType:
 @access.register_relation(Conv)
 def _(call, ctx):
     op = call.target
-    src, weight = (ctx.type_of(arg) for arg in call.args[1:3])
+    src, weight = (ctx.type_of(arg) for arg in call.args[:2])
     if len(src.shape) == 2:
         lhs, rhs, written = access.matmul_relations(src.shape, weight.shape, MATRIX_AXES)
         rows, columns = src.shape[0], weight.shape[1]
@@ -111,9 +113,9 @@ def _(call, ctx):
             stride=op.stride, padding=op.padding, dilation=op.dilation, groups=op.groups
         )
         *reads, written = access.relations_of(
-            expr.Call(hir, call.args[1:], type=types.TupleType.Void), ctx
+            expr.Call(hir, (*call.args[:2], *call.args[3:]), type=types.TupleType.Void), ctx
         )
-    return written, *reads[: len(call.args) - 1], written
+    return *reads[:2], written, *reads[2 : len(call.args) - 1], written
 
 
 def spatial(size: int, kernel: int, stride: int, padding: int) -> int:
@@ -183,7 +185,7 @@ def check_matrix(call, ctx, dst, src, weight, bias) -> None:
 
 @verify.register(Conv)
 def _(call, ctx) -> None:
-    dst, src, weight, *held = (ctx.type_of(arg) for arg in call.args)
+    src, weight, dst, *held = (ctx.type_of(arg) for arg in call.args)
     ranks = tuple(len(type_.shape) for type_ in (dst, src, weight))
     if len(set(ranks)) != 1:
         ctx.error(
@@ -194,18 +196,58 @@ def _(call, ctx) -> None:
     check(call, ctx, dst, src, weight, held[0] if held else None)
 
 
+def exponent(value):
+    """The binary exponent an fp16 operand carries; subnormals share the smallest normal's."""
+    return utils.torch.frexp(value)[1].sub(1).clamp_min(FP16_MIN_EXPONENT)
+
+
+def accumulate(inputs, weights, axis: int):
+    """Sum inputs * weights along *axis* as the engine's signed 16.16 fixed-point accumulator does.
+
+    Each product is rounded to a multiple of 2**-16, a tie away from zero, and the
+    rounded products add exactly in index order. A product whose operands' exponents
+    sum below -16 contributes nothing, whatever its mantissas. The first partial sum
+    outside [-2**15, 2**15) makes the result infinite with that sum's sign.
+    """
+    torch = utils.torch
+    products = inputs * weights
+    if (products.abs() >= ACCUMULATOR_LIMIT).any():
+        raise evaluator.EvalError("T.ane.conv: a product of magnitude 2**15 or more is not decoded yet")
+    steps = torch.copysign(torch.floor(products.abs() / ACCUMULATOR_STEP + 0.5), products)
+    kept = exponent(inputs) + exponent(weights) >= ACCUMULATOR_EXPONENT
+    partial = torch.where(kept, steps, 0.0).cumsum(axis) * ACCUMULATOR_STEP
+    outside = (partial >= ACCUMULATOR_LIMIT) | (partial < -ACCUMULATOR_LIMIT)
+    first = outside.to(torch.int8).argmax(axis, keepdim=True)
+    overflow = torch.copysign(torch.full_like(partial, torch.inf), partial).gather(axis, first)
+    total = partial.select(axis, -1)
+    return torch.where(outside.any(axis), overflow.squeeze(axis), total)
+
+
 @evaluator.register(Conv)
 def _(ctx):
     op = ctx.op
-    src, weight, *held = (arg.data.to(utils.torch.float32) for arg in ctx.args[1:])
-    bias = held[0] if held else None
+    torch = utils.torch
+    src, weight, dst, *held = ctx.args
+    src, weight, *held = (arg.data.to(torch.float64) for arg in (src, weight, *held))
     if src.dim() == 4:
-        value = utils.F.conv2d(
-            src, weight, bias, stride=op.stride, padding=op.padding, groups=op.groups
+        columns = utils.F.unfold(src, weight.shape[2:], padding=op.padding, stride=op.stride)
+        columns = columns.unflatten(1, (op.groups, -1))
+        kernels = weight.reshape(op.groups, weight.shape[0] // op.groups, -1)
+        value = torch.stack(
+            [
+                accumulate(columns[:, group], kernel[:, None], 1)
+                for group in range(op.groups)
+                for kernel in kernels[group]
+            ],
+            1,
         )
+        height = (src.shape[2] + 2 * op.padding[0] - weight.shape[2]) // op.stride[0] + 1
+        value = value.unflatten(2, (height, -1))
+        bias = held[0].reshape(1, -1, 1, 1) if held else 0.0
     else:
-        value = src @ weight if bias is None else src @ weight + bias
-    return evaluation.write(ctx, apply(op.nonlinear, evaluation.f16(value)))
+        value = accumulate(src[:, :, None], weight, 1)
+        bias = held[0] if held else 0.0
+    return evaluation.write(dst, apply(op.nonlinear, evaluation.f16((value + bias).to(torch.float32))))
 
 
 __all__ = ["Conv"]

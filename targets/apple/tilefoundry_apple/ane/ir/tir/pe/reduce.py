@@ -44,7 +44,7 @@ KEEPDIM = pattern.Wildcard(
         | pattern.In(pattern.Wildcard("axes"), ((2, 3),)),
     ),
 )
-RESULT = layout.feature("dst")
+RESULT = layout.feature("dst", layout.SMEM_ONLY)
 BOUND = MappingProxyType({name: pattern.Wildcard(name) for name in ("axes", "keepdim", "kind")})
 
 
@@ -58,7 +58,7 @@ class Reduce(expr.Op):
     capability = expr.OpCapability("pe.reduce")
     execution_mesh = layout.ENGINE
     hir_matches = (
-        schedule.HirMatch(tensor.Reduce, when=BOUND, operands={"dst": "result", "src": "x"}),
+        schedule.HirMatch(tensor.Reduce, when=BOUND, operands={"src": "x", "dst": "result"}),
     )
 
     axes = expr.ParamDef(kind="attribute", annotation=tuple, pattern=layout.one_of("axes", AXES))
@@ -71,6 +71,11 @@ class Reduce(expr.Op):
     )
     scale = expr.ParamDef(kind="attribute", annotation=float, default=1.0)
     post = expr.ParamDef(kind="attribute", annotation=Post, default=Post.NONE)
+    patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
+    width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
+    omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
+    src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("src", layout.SMEM_ONLY))
     dst = expr.ParamDef(
         kind="input",
         effect=expr.MemoryEffect.WRITE,
@@ -84,13 +89,6 @@ class Reduce(expr.Op):
             },
         ),
     )
-    tile_height = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
-    tile_width = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
-    patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
-    width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
-    ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
-    omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
-    src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("src"))
 
 
 @typeinfer.register(Reduce)
@@ -103,9 +101,9 @@ def _(call, ctx):
     op = call.target
     hir = tensor.Reduce(axes=op.axes, keepdim=op.keepdim, kind=op.kind)
     read, written = access.relations_of(
-        expr.Call(hir, call.args[1:], type=types.TupleType.Void), ctx
+        expr.Call(hir, call.args[:1], type=types.TupleType.Void), ctx
     )
-    return written, read, written
+    return read, written, written
 
 
 def reduced_shape(op, shape) -> tuple:
@@ -119,7 +117,7 @@ def reduced_shape(op, shape) -> tuple:
 
 @verify.register(Reduce)
 def _(call, ctx) -> None:
-    dst, src = (ctx.type_of(arg) for arg in call.args)
+    src, dst = (ctx.type_of(arg) for arg in call.args)
     expected = reduced_shape(call.target, src.shape)
     if tuple(dst.shape) != expected:
         ctx.error(call, f"dst shape {tuple(dst.shape)} differs from the reduced shape {expected}")
@@ -128,11 +126,12 @@ def _(call, ctx) -> None:
 @evaluator.register(Reduce)
 def _(ctx):
     op = ctx.op
-    value = ctx.args[1].data.to(utils.torch.float32)
+    src, dst = ctx.args
+    value = src.data.to(utils.torch.float32)
     if op.square:
         value = evaluation.f16(value * value)
     reduced = evaluation.f16(REDUCTIONS[op.kind](value, op.axes, op.keepdim))
-    return evaluation.write(ctx, evaluation.f16(POSTS[op.post](evaluation.f16(op.scale * reduced))))
+    return evaluation.write(dst, evaluation.f16(POSTS[op.post](evaluation.f16(op.scale * reduced))))
 
 
 __all__ = ["Post", "Reduce"]

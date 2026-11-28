@@ -10,22 +10,7 @@ ELEMENT_BYTES = MappingProxyType({"f16": 2, "f32": 4})
 ELEMENT_CODES = MappingProxyType({"f16": 5, "f32": 6})
 SURFACE_ROW_ALIGN = 64
 L2_ROW_ALIGN = 16
-STAGING_ROW_GUARD = 32
 NE_CHANNEL_GROUP = 16
-NE_ROW_GUARD = 16
-NE_GUARD_PERIOD = 1024
-
-
-def neural_staging_row(
-    channels: int, width: int, full_height: bool, *, transpose: bool = False
-) -> int:
-    """Return the row pitch of the sampled complete-height neural staging modes."""
-    sampled = (channels, width) in ((32, 16), (32, 32)) or (transpose and (channels, width) == (16, 32))
-    if not full_height or not sampled:
-        raise ValueError("neural L2 staging guard for this tile is not decoded yet")
-    channel = align_up(width * 2, L2_ROW_ALIGN)
-    depth = channels * channel
-    return depth + channel + (NE_ROW_GUARD if depth % NE_GUARD_PERIOD == 0 else 0)
 
 
 class Engine(IntEnum):
@@ -139,7 +124,10 @@ class TensorDesc:
         )
 
     def validate(self, layout: str = "canonical") -> None:
-        """Reject unsupported dtypes, invalid extents and incompatible strides."""
+        """Reject unsupported dtypes, invalid extents and incompatible strides.
+
+        A plane covers its padded rows; a plane of one row covers only its elements.
+        """
         wanted = canonical_strides(self.dtype, self.shape)
         if len(self.strides) != 4 or any(
             type(n) is not int or not 0 <= n < 2**63 for n in self.strides
@@ -154,7 +142,8 @@ class TensorDesc:
         elif layout != "declared":
             raise ValueError(f"unknown layout policy {layout!r}")
         batch, plane, row, element = self.byte_strides
-        if element != self.element_bytes or row < self.width * element or plane < self.height * row:
+        extent = self.height * row if self.height > 1 else self.width * element
+        if element != self.element_bytes or row < self.width * element or plane < extent:
             raise ValueError("tensor strides do not cover the tensor")
         if self.shape[0] > 1 and batch < self.channels * plane:
             raise ValueError("batch stride does not cover the channels")
@@ -172,33 +161,20 @@ class TensorDesc:
         """The DMA row-stride field, left clear when any feature extent is one."""
         return 0 if min(self.shape[1:]) == 1 else self.row
 
-    def staging_channel(self, width: int | None = None) -> int:
-        """L2 channel pitch for the scheduled tile width."""
-        if width is None:
-            width = self.width
-        if type(width) is not int or not 1 <= width <= self.width:
-            raise ValueError(f"tile_width {width} is outside [1, {self.width}]")
-        return align_up(width * self.element_bytes, L2_ROW_ALIGN)
+    @property
+    def l2_channel(self) -> int:
+        """L2 channel pitch: one row, aligned to the L2 row unit."""
+        return align_up(self.width * self.element_bytes, L2_ROW_ALIGN)
 
-    def staging_row(
-        self, engine: Engine = Engine.PLANAR, rows: int | None = None, width: int | None = None
-    ) -> int:
-        """L2 row stride for the selected engine and scheduled tile."""
-        channel = self.staging_channel(width)
-        depth = self.channels * channel
-        if engine is Engine.PLANAR:
-            return depth + STAGING_ROW_GUARD
-        if engine is not Engine.NEURAL:
-            raise ValueError(f"unknown engine {engine!r}")
-        if width is not None and width != self.width:
-            raise ValueError("neural L2 staging guard for a narrower tile is not decoded yet")
-        return neural_staging_row(self.channels, self.width, rows is None or rows == self.height)
+    @property
+    def l2_row(self) -> int:
+        """L2 row stride: every channel of one row, unpadded."""
+        return self.channels * self.l2_channel
 
-    def staging_extent(
-        self, engine: Engine = Engine.PLANAR, rows: int | None = None, width: int | None = None
-    ) -> int:
-        """Bytes occupied by the scheduled tile in L2."""
-        return self.staging_row(engine, rows, width) * (self.height if rows is None else rows)
+    @property
+    def l2_extent(self) -> int:
+        """Bytes the whole feature map occupies in L2."""
+        return self.l2_row * self.height
 
 
-__all__ = ["Engine", "NE_CHANNEL_GROUP", "STAGING_ROW_GUARD", "SURFACE_ROW_ALIGN", "TensorDesc", "neural_staging_row"]
+__all__ = ["Engine", "NE_CHANNEL_GROUP", "SURFACE_ROW_ALIGN", "TensorDesc"]

@@ -16,7 +16,8 @@ def view_binding(value: expr.Expr) -> tuple[expr.Expr, int]:
     """The source tensor and byte address of a bound view.
 
     A view over a slice names that slice's first element, so the DMA programs
-    the displacement of the window instead of the tensor base.
+    the displacement of the window instead of the tensor base. An SMEM view at a
+    constant offset is an allocation; the offset is its L2 byte base.
     """
     if isinstance(value, expr.Var):
         if not isinstance(value.type, types.TensorType):
@@ -30,8 +31,8 @@ def view_binding(value: expr.Expr) -> tuple[expr.Expr, int]:
     if isinstance(pointer, expr.Constant):
         if (isinstance(value.type, types.TensorType)
                 and value.type.storage is expr.StorageKind.SMEM
-                and type(pointer.value) is int and pointer.value == 0):
-            return value, 0
+                and type(pointer.value) is int):
+            return value, pointer.value
         raise ValueError("ANE integer TensorView allocation is not decoded yet")
     if not isinstance(pointer, expr.Call) or not isinstance(pointer.target, memory.PtrOf):
         raise ValueError("ANE view pointer expression is not decoded yet")
@@ -119,15 +120,11 @@ def emit(fn: core.PrimFunction, ctx: context.Context) -> None:
         ctx.emit_call(call, label)
     if fn.output_count != 1 or len(fn.params) < 2:
         raise ValueError(f"{label}: expected one output and at least one input parameter")
-    bound = tuple(ctx.addresses)
-    sources = (*fn.params[:-1], *bound)
-    for args in ctx.operands:
-        if len(args) < 2:
-            raise ValueError(f"{label}: every pass must name an output and a source")
-        if args[0] not in (fn.params[-1], *bound):
-            raise ValueError(f"{label}: the schedule must write the output parameter first")
-        if any(arg not in sources for arg in args[1:]):
-            raise ValueError(f"{label}: the schedule must read the function's inputs")
+    moved = [(register, buffer) for transfer in ctx.transfers for register, buffer in transfer.items()]
+    if {buffer for register, buffer in moved if register == context.RESULT} != {fn.params[-1]}:
+        raise ValueError(f"{label}: the output must be written by T.ane.store")
+    if any(buffer not in fn.params[:-1] for register, buffer in moved if register == context.SOURCE):
+        raise ValueError(f"{label}: the schedule must read the function's inputs")
 
 
 def build_context(fn: core.PrimFunction) -> context.Context:

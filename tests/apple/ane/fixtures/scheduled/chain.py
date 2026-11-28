@@ -1,6 +1,7 @@
-"""Two matrix products on ANE; the first result stays in the on-chip buffer.
+"""Two matrix products ([128, 16] @ [16, 16]) @ [16, 16]; the first stays in the on-chip buffer.
 
-The second product reads it there, so it never returns to unified memory.
+The matrices are the canonical feature maps of `matmul.py`. Both convolutions read
+their source in L2, so the first product never returns to unified memory.
 """
 from tilefoundry.dsl import *
 from tilefoundry_apple import ane
@@ -10,10 +11,14 @@ from tilefoundry_apple import ane
 class Program:
     @func
     def chain(
-        a: Tensor[(8, 16), "f16", ((8, 16), (1, 8)), "gmem"],
-        b: Tensor[(16, 16), "f16", ((16, 16), (16, 1)), "gmem"],
-        w: Tensor[(16, 16), "f16", ((16, 16), (16, 1)), "gmem"],
+        a: Tensor[(1, 16, 8, 16), "f16", ((1, 16, 8, 16), (4096, 256, 32, 1)), "gmem"],
+        b: ConstTensor[(16, 16, 1, 1), "f16", ((16, 16, 1, 1), (16, 1, 1, 1)), "gmem"],
+        w: ConstTensor[(16, 16, 1, 1), "f16", ((16, 16, 1, 1), (16, 1, 1, 1)), "gmem"],
     ):
         with Mesh(("engine",), layout=(1,), names=("engine",)) as _engine:
-            h = tf.schedule((tf.empty(Tensor[(8, 16), "f16", ((8, 16), (1, 8)), "smem"]), a, b), op=T.ane.conv())
-            return tf.schedule((tf.empty(Tensor[(8, 16), "f16", ((8, 16), (16, 1)), "gmem"]), h, w), op=T.ane.conv())
+            al = tf.schedule((a, tf.empty(Tensor[(1, 16, 8, 16), "f16", ((1, 16, 8, 16), (2048, 128, 16, 1)), "smem"])), op=T.ane.load())
+            outer = tf.schedule((al, tf.empty(Tensor[(1, 16, 8, 16), "f16", ((1, 16, 8, 16), (2048, 128, 16, 1)), "smem"])), op=T.ane.bypass(perm=(2, 1, 0)))
+            h = tf.schedule((outer, b, tf.empty(Tensor[(1, 16, 8, 16), "f16", ((1, 16, 8, 16), (2048, 128, 16, 1)), "smem"])), op=T.ane.conv())
+            y = tf.schedule((h, w, tf.empty(Tensor[(1, 16, 8, 16), "f16", ((1, 16, 8, 16), (2048, 128, 16, 1)), "smem"])), op=T.ane.conv())
+            rows = tf.schedule((y, tf.empty(Tensor[(1, 16, 8, 16), "f16", ((1, 16, 8, 16), (2048, 128, 16, 1)), "smem"])), op=T.ane.bypass(perm=(2, 1, 0)))
+            return tf.schedule((rows, tf.empty(Tensor[(1, 16, 8, 16), "f16", ((1, 16, 8, 16), (4096, 256, 32, 1)), "gmem"])), op=T.ane.store())

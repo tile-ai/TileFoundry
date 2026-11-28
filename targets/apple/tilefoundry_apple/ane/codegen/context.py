@@ -1,130 +1,162 @@
 """What one ANE entry accumulates while its statements are emitted.
 
 An emitter turns one ``T.ane.*`` call into the hardware primitives of a single
-engine pass: read the operands, run the arithmetic, write the result. The context
-keeps the passes in schedule order and answers what an emitter cannot read from
-its own call: where a bound view starts and whether an earlier pass ran.
+task: read the sources, run the arithmetic, keep the result in L2 or write it
+out. A ``T.ane.store`` has no task of its own; the task that produces its source
+writes it out. The context keeps the tasks in schedule order and answers what an
+emitter cannot read from its own call: where a bound view starts, which engine
+produced an L2 source and whether a result is written out.
 """
 
 from collections.abc import Mapping
+from dataclasses import replace
 
 from tilefoundry import codegen, dispatch
 from tilefoundry.ir import expr, types
-from tilefoundry.ir.tir import memory
 from tilefoundry_apple.ane import isa, target
 from tilefoundry_apple.ane.ir import tir
 
 from . import hwx
-from .allocation import Interval, allocate
 
 FULL_PLANE_PATCH = (4, 4)
-SINGLE_ROW_PATCH = (5, 0)
+PATCH_COLUMNS = 16
+NEURAL = (tir.Conv, tir.Bypass)
+SOURCE = isa.TileDMASrc.tile_dma_src_base_addr_lo.addr
+RESULT = isa.TileDMADst.tile_dma_dst_base_addr_lo.addr
 
 
 class Context:
-    """The passes of one entry, their operands and the addresses of its bound views."""
+    """The tasks of one entry, the GMEM tensors their DMA moves and its bound view addresses."""
 
     def __init__(self) -> None:
         self.passes: list[list[Mapping[int, int]]] = []
-        self.operands: list[tuple[expr.Expr, ...]] = []
+        self.transfers: list[Mapping[int, expr.Expr]] = []
         self.addresses: dict[expr.Expr, int] = {}
         self.symbols: dict[expr.Expr, expr.Expr] = {}
         self.coefficients: dict[expr.Expr, hwx.CoefficientLayout] = {}
+        self.biases: dict[expr.Expr, expr.Expr] = {}
         self.weight_uses: list[tuple[expr.Expr, int, hwx.CoefficientLayout]] = []
-        self.staging: dict[tuple[int, int], int] = {}
+        self.producers: dict[expr.Expr, expr.Call] = {}
+        self.stores: dict[expr.Expr, expr.Expr] = {}
+        self.views: dict[expr.Expr, tuple[int, ...]] = {}
 
     @property
     def fresh(self) -> bool:
         """Whether no pass ran yet, so the next one programs every register it reads."""
         return not self.passes
 
-    def coefficient_use(self, weight: expr.Expr) -> hwx.CoefficientLayout:
-        """Plan a constant's first consumption and retain every consuming pass."""
-        source = self.symbols.get(weight, weight)
-        if source is not weight or not getattr(source, "is_const", False):
-            raise ValueError("convolution weights must be direct constant parameters")
+    def coefficient_use(
+        self,
+        weight: expr.Expr,
+        lut: bytes = b"",
+        bias: expr.Expr | None = None,
+        depthwise: bool = False,
+    ) -> hwx.CoefficientLayout:
+        """Plan a constant's first use, its lanes led by *lut* and *bias*, and retain its passes."""
+        for constant in (weight,) if bias is None else (weight, bias):
+            source = self.symbols.get(constant, constant)
+            if source is not constant or not getattr(source, "is_const", False):
+                raise ValueError("convolution weights and biases must be direct constant parameters")
         layout = self.coefficients.get(weight)
         if layout is None:
             shape = tuple(expr.static_dim_value(n) for n in weight.type.shape)
             base = sum(item.size for item in self.coefficients.values())
-            layout = hwx.CoefficientLayout(shape, base)
+            layout = hwx.CoefficientLayout(shape, base, lut, bias is not None, depthwise)
             _, inputs, kh, kw = layout.shape
             expected = (inputs * kh * kw, kh * kw, kw, 1)
             if not tir.layout.strided(weight.type, expected):
                 raise ValueError("convolution coefficients require contiguous OIHW weights")
+            if bias is not None:
+                if any(other is bias for other in self.biases.values()):
+                    raise ValueError("a bias consumed with different weights is not decoded yet")
+                if not tir.layout.strided(bias.type, (1,)):
+                    raise ValueError("convolution biases require contiguous vectors")
+                self.biases[weight] = bias
             self.coefficients[weight] = layout
+        elif (
+            layout.lut != lut
+            or layout.depthwise != depthwise
+            or self.biases.get(weight) is not bias
+        ):
+            raise ValueError(
+                "a constant consumed under different lookup tables, biases or group forms "
+                "is not decoded yet"
+            )
         self.weight_uses.append((weight, len(self.passes), layout))
         return layout
 
     def bind(self, var: expr.Expr, source: expr.Expr, address: int) -> None:
-        """Record the root tensor and accumulate the parent view's byte displacement."""
-        address += self.address_of(source)
+        """Record the root tensor and accumulate the parent view's byte displacement.
+
+        An SMEM allocation keeps the byte offset the framework assigned it as its L2 base.
+        """
+        if var.type.storage is expr.StorageKind.SMEM and isinstance(source, expr.Call):
+            desc = tensor_desc_of(var.type, var.name)
+            if address < 0 or address % isa.intrinsic.L2_UNIT:
+                raise ValueError(f"{var.name}: SMEM offset {address} must be a nonnegative "
+                                 f"multiple of {isa.intrinsic.L2_UNIT}")
+            if desc.storage_bytes != desc.l2_extent:
+                raise ValueError(f"{var.name}: SMEM storage {desc.storage_bytes} bytes must equal "
+                                 f"its L2 extent {desc.l2_extent}")
+            self.addresses[var] = address
+            self.symbols[var] = var
+            return
         if var.type.storage is expr.StorageKind.SMEM and address:
             raise ValueError("offset SMEM view continuation is not decoded yet")
-        if var.type.storage is expr.StorageKind.SMEM and isinstance(source, expr.Call):
-            if (not isinstance(source.target, memory.TensorView) or not source.args
-                    or not isinstance(source.args[0], expr.Constant) or source.args[0].value != 0):
-                raise ValueError("SMEM view allocation mapping is not decoded yet")
-            self.addresses[var] = 0
-            self.symbols[var] = var
-        else:
-            self.addresses[var] = address
-            self.symbols[var] = self.symbols.get(source, source)
+        self.addresses[var] = address + self.address_of(source)
+        self.symbols[var] = self.symbols.get(source, source)
 
     def plan(self, calls: list[expr.Call]) -> None:
-        """Allocate SMEM lifetimes and each pass's transient DMA staging together."""
-        resident = any(arg.type.storage is expr.StorageKind.SMEM for call in calls for arg in call.args)
-        if not resident and not any(isinstance(call.target, tir.Conv) for call in calls):
-            return
-        lifetimes = {}
-        intervals = []
-        for index, call in enumerate(calls):
-            if not isinstance(call.target, (tir.Unary, tir.Conv)):
-                if resident:
-                    raise ValueError("L2 continuation for this operation is not decoded yet")
-                continue
-            engine = isa.Engine.NEURAL if isinstance(call.target, tir.Conv) else isa.Engine.PLANAR
-            for position in (1, 0):
-                operand = call.args[position]
-                desc = tensor_desc_of(operand.type, "L2 operand")
-                rows = tile_rows(call.target, desc)
-                if resident and (rows != desc.height or call.target.tile_width is not None):
-                    raise ValueError("partial L2 continuation is not decoded yet")
-                size = desc.staging_extent(engine, rows, call.target.tile_width)
-                if operand.type.storage is expr.StorageKind.SMEM:
-                    root = self.symbols.get(operand, operand)
-                    if position == 0:
-                        if root in lifetimes:
-                            raise ValueError("L2 tensor must have exactly one producer")
-                        lifetimes[root] = Interval(root, index, index, size)
-                    else:
-                        previous = lifetimes.get(root)
-                        if previous is None or previous.first == index:
-                            raise ValueError("L2 source requires a preceding producer")
-                        if root.type != operand.type:
-                            raise ValueError("L2 source must match producer geometry and layout")
-                        if previous.size != size:
-                            raise ValueError("cross-engine L2 staging pitch conversion is not decoded yet")
-                        lifetimes[root] = Interval(root, previous.first, index, size)
-                else:
-                    intervals.append(Interval((index, position), index, index, size))
-        addresses = allocate((*lifetimes.values(), *intervals))
-        for operand in tuple(self.addresses):
-            root = self.symbols.get(operand, operand)
-            if root in lifetimes:
-                self.addresses[operand] = addresses[root]
-        for root in lifetimes:
-            self.addresses[root] = addresses[root]
-        for index, call in enumerate(calls):
-            for position, operand in enumerate(call.args):
-                if operand.type.storage is expr.StorageKind.SMEM:
-                    self.staging[index, position] = self.address_of(operand)
-                elif (index, position) in addresses:
-                    self.staging[index, position] = addresses[index, position]
+        """Record each SMEM tensor's producer, the store that writes it out and each task's DMA.
 
-    def staging_address(self, position: int) -> int | None:
-        """Return the current pass's allocated slot, or its legacy implicit placement."""
-        return self.staging.get((len(self.passes), position))
+        A load moves a GMEM source into its destination; any other task that produces a
+        stored tensor writes it out to the store's GMEM destination, so that tensor has
+        no other reader.
+        """
+        read = set()
+        for call in calls:
+            sources, destination = operands(call)
+            roots = tuple(self.symbols.get(operand, operand) for operand in sources)
+            for operand, root in zip(sources, roots):
+                if root not in self.producers:
+                    raise ValueError("L2 source requires a preceding producer")
+                if root.type != operand.type:
+                    raise ValueError("L2 source must match producer geometry and layout")
+            if isinstance(call.target, tir.Store):
+                (root,) = roots
+                if isinstance(self.producers[root].target, tir.Load):
+                    raise ValueError("T.ane.store: its source must be the result of a computation; "
+                                     "write T.ane.unary() between them")
+                if root in self.stores:
+                    raise ValueError("an L2 tensor is written out once")
+                self.stores[root] = destination
+                continue
+            read.update(roots)
+            root = self.symbols.get(destination, destination)
+            if root in self.producers:
+                raise ValueError("L2 tensor must have exactly one producer")
+            self.producers[root] = call
+        if read & self.stores.keys():
+            raise ValueError("T.ane.store: its source is read again after being written out; "
+                             "store a copy made by T.ane.unary()")
+        for root, call in self.producers.items():
+            loaded = isinstance(call.target, tir.Load)
+            moved = call.args[0] if loaded else self.stores.get(root)
+            register = SOURCE if loaded else RESULT
+            if moved is not None:
+                self.views[self.symbols.get(moved, moved)] = tuple(root.type.shape)
+            self.transfers.append({} if moved is None else {register: self.symbols.get(moved, moved)})
+
+    def source(self, operand: expr.Expr) -> tuple[int, isa.Engine]:
+        """The L2 base of an SMEM source and the engine that produced it."""
+        producer = self.producers[self.symbols.get(operand, operand)]
+        return self.address_of(operand), (
+            isa.Engine.NEURAL if isinstance(producer.target, NEURAL) else isa.Engine.PLANAR
+        )
+
+    def result(self, operand: expr.Expr) -> tuple[int, expr.Expr | None]:
+        """The L2 base of an SMEM result and the GMEM tensor its store writes, if any."""
+        return self.address_of(operand), self.stores.get(self.symbols.get(operand, operand))
 
     def address_of(self, operand: expr.Expr) -> int:
         """Return the allocated L2 byte base or a view's DRAM-relative byte offset."""
@@ -133,7 +165,7 @@ class Context:
     def binding_desc(self, param: expr.Var) -> isa.TensorDesc:
         """Describe an entry buffer and validate any lowered GMEM scratch views."""
         if len(param.type.shape) != 1:
-            return tensor_desc_of(param.type, param.name, strided=True)
+            return tensor_desc_of(param.type, param.name, strided=True, view=self.views.get(param))
         count = expr.static_dim_value(param.type.shape[0])
         desc = isa.TensorDesc.from_shape(param.type.dtype.name, (1, 1, 1, count))
         for operand, source in self.symbols.items():
@@ -155,19 +187,38 @@ class Context:
             name = expr.get_registered_name(type(call.target))
             raise dispatch.MissingHandlerError(f"{label}: no ANE emitter for {name}")
         handler(call, self)
-        self.operands.append(call.args)
+
+
+def feature_view(
+    type_: types.TensorType, view: tuple[int, ...] | None, name: str
+) -> types.TensorType:
+    """The feature map *view* of the [R, C] matrix *type_*: row m is row m % H of channel m // H."""
+    if view is None or len(view) != 4:
+        raise ValueError(f"{name} is a matrix; only a load or store of a feature map reads it")
+    shape = tuple(expr.static_dim_value(extent) for extent in view)
+    rows, columns = (expr.static_dim_value(extent) for extent in type_.shape)
+    if shape[0] != 1 or shape[1] * shape[2] != rows or shape[3] != columns:
+        raise ValueError(f"{name} shape [{rows}, {columns}] is not the matrix of feature map {shape}")
+    if not isinstance(type_.layout, types.Layout):
+        raise ValueError(f"{name}: ANE I/O needs a flat tensor layout")
+    step, unit = (expr.static_dim_value(stride) for stride in type_.layout.strides)
+    strides = (rows * step, shape[2] * step, step, unit)
+    return replace(type_, shape=shape, layout=types.Layout(shape, strides))
 
 
 def tensor_desc_of(
-    type_: types.TensorType, name: str, *, strided: bool = False
+    type_: types.TensorType, name: str, *, strided: bool = False, view: tuple[int, ...] | None = None
 ) -> isa.TensorDesc:
     """Read the memory layout of one static fp16 feature map.
 
     *strided* keeps the strides the type declares; otherwise the type must
-    declare the canonical feature map of its shape.
+    declare the canonical feature map of its shape. A matrix is read as the
+    feature map *view*.
     """
     if not isinstance(type_, types.TensorType):
         raise ValueError(f"{name} must be an fp16 tensor")
+    if len(type_.shape) == 2:
+        type_ = feature_view(type_, view, name)
     shape = tuple(expr.static_dim_value(extent) for extent in type_.shape)
     if len(shape) != 4 or any(extent is None for extent in shape):
         raise ValueError(f"{name} must have static shape [1, C, H, W]")
@@ -196,30 +247,37 @@ def tensor_desc_of(
     return desc
 
 
-def tile_rows(op: expr.Op, desc: isa.TensorDesc) -> int:
-    """Return the scheduled tile height, or the full feature-map height."""
-    rows = op.tile_height
-    if rows is None:
-        return desc.height
-    if type(rows) is not int or not 1 <= rows <= desc.height:
-        raise ValueError(f"tile_height {rows} is outside [1, {desc.height}]")
-    return rows
+def operands(call: expr.Call) -> tuple[tuple[expr.Expr, ...], expr.Expr]:
+    """The SMEM tensors *call* reads and the tensor it writes."""
+    params = (param for param in expr.signature_of(type(call.target)) if param.kind == "input")
+    bound = tuple(zip(params, call.args))
+    (written,) = (arg for param, arg in bound if param.effect & expr.MemoryEffect.WRITE)
+    read = tuple(
+        arg for param, arg in bound
+        if not param.effect & expr.MemoryEffect.WRITE and arg.type.storage is expr.StorageKind.SMEM
+    )
+    return read, written
 
 
-def raster_patch(op: expr.Op, rows: int, desc: isa.TensorDesc) -> tuple[int, int]:
-    """The rasterization patch: the schedule's ``patch``, else the one the tile height implies.
+def written(desc: isa.TensorDesc, stored: expr.Expr | None) -> isa.TensorDesc:
+    """The feature map a task writes: *desc* in L2, or the GMEM tensor a store writes it to."""
+    return desc if stored is None else tensor_desc_of(stored.type, "dst", strided=True, view=desc.shape)
 
-    A single staged row cannot be patched vertically, so its vertical field stays
-    clear and its horizontal field widens by one.
+
+def raster_patch(desc: isa.TensorDesc, patch: tuple | None = None) -> tuple[int, int]:
+    """The rasterization patch of a whole feature map; a stated *patch* must equal it.
+
+    A feature map wider than the 16 columns of the base patch needs the horizontal
+    field ``ceil(log2(width))``.
     """
-    expected = FULL_PLANE_PATCH if rows == desc.height else SINGLE_ROW_PATCH
-    if op.patch is not None:
-        patch = tuple(op.patch)
+    expected = (isa.rules.ceil_log2(max(desc.width, PATCH_COLUMNS)), FULL_PLANE_PATCH[1])
+    if patch is not None:
+        patch = tuple(patch)
         if len(patch) != 2 or any(type(n) is not int or not 0 <= n <= 15 for n in patch):
             raise ValueError(f"patch {patch!r} must contain two integers within [0, 15]")
         if patch != expected:
-            raise ValueError(f"patch {patch} for tile_height {rows} is not decoded yet")
+            raise ValueError(f"patch {patch} is not decoded yet")
     return expected
 
 
-__all__ = ["Context", "raster_patch", "tensor_desc_of", "tile_rows"]
+__all__ = ["RESULT", "SOURCE", "Context", "operands", "raster_patch", "tensor_desc_of", "written"]

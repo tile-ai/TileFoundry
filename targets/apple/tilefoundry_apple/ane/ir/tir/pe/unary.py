@@ -8,7 +8,7 @@ from tilefoundry.ir import expr, pattern, types
 from tilefoundry.ir.hir import math
 from tilefoundry_apple.ane.ir.tir import evaluation, layout
 
-OPERANDS = MappingProxyType({"dst": "result", "src": "x"})
+OPERANDS = MappingProxyType({"src": "x", "dst": "result"})
 CLAMP = pattern.Sequence(
     pattern.Wildcard("clamp_low"),
     pattern.Wildcard("clamp_high"),
@@ -20,10 +20,10 @@ CLAMP = pattern.Sequence(
 class Unary(expr.Op):
     """Apply pre_scale and bias, then either square or scale, then abs and clamp.
 
-    Square requires scale=1; abs with square is not decoded yet.
+    Square requires scale=1; abs with square and clamp is not decoded yet.
     Each arithmetic step retains the evaluator's fp16 ties-away rounding.
     Probes do not distinguish rounding for every admitted option combination.
-    clamp is (low, high); undecoded abs/clamp affine combinations are rejected.
+    clamp is (low, high).
     """
 
     capability = expr.OpCapability("pe.unary")
@@ -61,15 +61,13 @@ class Unary(expr.Op):
     clamp = expr.ParamDef(
         kind="attribute", annotation=tuple, optional=True, default=None, pattern=CLAMP
     )
-    tile_height = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
-    tile_width = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     patch = expr.ParamDef(kind="attribute", annotation=tuple, optional=True, default=None)
     width_code = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     ocg_size = expr.ParamDef(kind="attribute", annotation=int, optional=True, default=None)
     omit_ocg = expr.ParamDef(kind="attribute", annotation=bool, optional=True, default=False)
-    dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.feature("dst"))
-    src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("src"))
-    between = (pattern.SameConstraint("shape", "dst", "src"),)
+    src = expr.ParamDef(kind="input", effect=expr.MemoryEffect.READ, pattern=layout.feature("src", layout.SMEM_ONLY))
+    dst = expr.ParamDef(kind="input", effect=expr.MemoryEffect.WRITE, pattern=layout.feature("dst", layout.SMEM_ONLY))
+    between = (pattern.SameConstraint("shape", "src", "dst"),)
 
 
 @typeinfer.register(Unary)
@@ -82,7 +80,7 @@ access.register_relation(Unary)(access.identity_relations)
 
 @verify.register(Unary)
 def _(call, ctx) -> None:
-    for name, operand in zip(("dst", "src"), call.args, strict=True):
+    for name, operand in zip(("src", "dst"), call.args, strict=True):
         try:
             layout.feature_dma_strides(ctx.type_of(operand))
         except ValueError as error:
@@ -92,15 +90,12 @@ def _(call, ctx) -> None:
 @evaluator.register(Unary)
 def _(ctx):
     op = ctx.op
-    if op.abs and op.square:
-        raise evaluator.EvalError("T.ane.unary: abs with square is not decoded yet")
+    if op.abs and op.square and op.clamp is not None:
+        raise evaluator.EvalError("T.ane.unary: abs with square and clamp is not decoded yet")
     if op.square and op.scale != 1.0:
         raise evaluator.EvalError("T.ane.unary: square requires scale=1; hardware square mode ignores scale")
-    if op.abs and op.clamp is not None and (
-        op.pre_scale != 1.0 or (op.bias != 0.0 and op.scale != 1.0)
-    ):
-        raise evaluator.EvalError("T.ane.unary: this affine combination with abs and clamp is not decoded yet")
-    value = evaluation.f16(ctx.args[1].data.to(utils.torch.float32) * op.pre_scale)
+    src, dst = ctx.args
+    value = evaluation.f16(src.data.to(utils.torch.float32) * op.pre_scale)
     value = evaluation.f16(value + op.bias)
     if op.square:
         value = evaluation.f16(value * value)
@@ -110,7 +105,7 @@ def _(ctx):
             value = value.abs()
     if op.clamp is not None:
         value = evaluation.f16(value.clamp(*op.clamp))
-    return evaluation.write(ctx, value)
+    return evaluation.write(dst, value)
 
 
 __all__ = ["Unary"]

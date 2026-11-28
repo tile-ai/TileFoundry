@@ -1,18 +1,21 @@
 """How ANE instructions see their operands.
 
 A feature map is [1, C, H, W] in unified memory (GMEM) or in the on-chip L2
-buffer (SMEM). Its W stride is 1: the engine addresses a feature map by row,
-channel, depth and group strides and has no element stride. Weights stay in
-unified memory. A matrix is [rows, columns] with rows contiguous (column major)
-or columns contiguous (row major). A mesh layout holds one mode per topology.
+buffer (SMEM); an engine task reads and writes feature maps in SMEM. Its W stride
+is 1: the engine addresses a feature map by row, channel, depth and group strides
+and has no element stride. Weights stay in unified memory. A matrix is [rows,
+columns] with rows contiguous (column major) or columns contiguous (row major).
+A mesh layout holds one mode per topology.
 """
+
+from dataclasses import dataclass
 
 from tilefoundry.ir import expr, pattern, types
 
 ENGINE = pattern.Mesh(("engine",), pattern.Layout(((1,),), ((1,),)))
 FLOATS = (expr.DType.f16,)
-FEATURE_STORAGE = pattern.Or(expr.StorageKind.GMEM, expr.StorageKind.SMEM)
 GMEM_ONLY = pattern.Or(expr.StorageKind.GMEM)
+SMEM_ONLY = pattern.Or(expr.StorageKind.SMEM)
 STRIDES = ((1, 1), (1, 2), (2, 1), (2, 2))
 _ = pattern.Wildcard()
 
@@ -35,13 +38,13 @@ def rows(operand: str) -> dict:
     return {"strides": (_, _, _, step), "predicates": ((width == 1) | (step == 1),)}
 
 
-def stored(operand: str, choices=FEATURE_STORAGE) -> pattern.Wildcard:
+def stored(operand: str, choices) -> pattern.Wildcard:
     """The storage of *operand*, captured as its name and limited to *choices*."""
     return pattern.Wildcard(f"{operand}.storage", predicates=(choices,))
 
 
-def feature(operand: str) -> pattern.Tensor:
-    """[1, C, H, W] in GMEM or SMEM with a W stride of 1, within the architecture limits.
+def feature(operand: str, storage) -> pattern.Tensor:
+    """[1, C, H, W] in *storage* with a W stride of 1, within the architecture limits.
 
     Extents and storage are captured under *operand*; every operand shares one dtype.
     """
@@ -53,7 +56,7 @@ def feature(operand: str) -> pattern.Tensor:
             extent(f"{operand}.shape[3]", MAX_WIDTH),
         ),
         dtype=one_of("dtype", FLOATS),
-        storage=stored(operand),
+        storage=stored(operand, storage),
         layout=pattern.Layout(**rows(operand)),
     )
 
@@ -154,8 +157,8 @@ def feature_dma_strides(type_: types.TensorType) -> tuple[int, int]:
     return values[0], values[1]
 
 
-def forms(operand: str, layouts: tuple, storage=FEATURE_STORAGE) -> pattern.Tensor:
-    """An operand with the shared dtype whose layout is one of *layouts*.
+def forms(operand: str, layouts: tuple, storage) -> pattern.Tensor:
+    """An operand in *storage* with the shared dtype whose layout is one of *layouts*.
 
     Each layout states its own shape, so the rank selects the form. Pairing checks
     only dtype and storage; a shape or layout mismatch is reported against the
@@ -166,6 +169,41 @@ def forms(operand: str, layouts: tuple, storage=FEATURE_STORAGE) -> pattern.Tens
     )
 
 
+def activation(operand: str, storage) -> pattern.Tensor:
+    """A feature map or an [R, C] activation matrix in *storage*."""
+    layouts = (feature_layout(operand), matrix_layout(operand, ACTIVATION_LIMITS))
+    return forms(operand, layouts, storage)
+
+
+@dataclass(frozen=True)
+class SameFeatureConstraint(pattern.Constraint):
+    """Two shapes that are one feature map, or a feature map and the matrix it is the view of.
+
+    Row m of an [R, C] matrix is row m % H of channel m // H of the [1, R / H, H, C]
+    feature map, so both read the same elements in row-major order.
+    """
+
+    def holds(self, operands: dict) -> bool:
+        pair = self.pair(operands)
+        if pair is None:
+            return True
+        left, right = (tuple(shape) for shape in pair)
+        if len(left) == 2:
+            left, right = right, left
+        if left == right:
+            return True
+        return (
+            len(left) == 4 and len(right) == 2
+            and left[0] == 1 and left[3] == right[1] and left[1] * left[2] == right[0]
+        )
+
+    def written(self) -> str:
+        return (
+            f"{self.left}.{self.field} = {self.right}.{self.field}, or one is an [R, C] matrix "
+            "and the other its [1, R / H, H, C] feature map"
+        )
+
+
 def one_of(name: str, values) -> pattern.Wildcard:
     """A wildcard admitting exactly *values*."""
     return pattern.Wildcard(name, predicates=(pattern.Or(*values),))
@@ -173,14 +211,16 @@ def one_of(name: str, values) -> pattern.Wildcard:
 
 __all__ = [
     "ACTIVATION_LIMITS",
+    "activation",
     "ENGINE",
-    "FEATURE_STORAGE",
     "FLOATS",
     "GMEM_ONLY",
     "MAX_CHANNELS",
     "MAX_HEIGHT",
     "MAX_KERNEL",
     "MAX_WIDTH",
+    "SMEM_ONLY",
+    "SameFeatureConstraint",
     "STRIDES",
     "WEIGHT_LIMITS",
     "bounded",

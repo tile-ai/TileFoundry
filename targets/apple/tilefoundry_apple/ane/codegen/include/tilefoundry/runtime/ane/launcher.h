@@ -7,12 +7,17 @@
 #include <tvm/ffi/container/tensor.h>
 #include <tvm/ffi/function.h>
 
-/** @brief A feature map and its complete padded storage reservation. */
+/**
+ * @brief A feature map, its complete padded storage reservation and the host
+ * tensor of `ndim` axes that holds the same elements in row-major order.
+ */
 struct TensorDesc {
     const char *dtype;
     int64_t shape[4];
     int64_t strides[4];
     size_t storage_bytes;
+    int ndim;
+    int64_t host_shape[4];
 };
 
 /** @brief A named, generated coefficient writer. */
@@ -47,9 +52,9 @@ enum AneStatus {
 };
 
 extern "C" {
-/** @brief Validate a host tensor and its offset arithmetic before copying. */
-bool ane_check_tensor(const DLTensor *tensor, const int64_t *shape, int bits,
-                      bool contiguous);
+/** @brief Validate a host tensor of rank ndim and its offset arithmetic. */
+bool ane_check_tensor(const DLTensor *tensor, const int64_t *shape, int ndim,
+                      int bits, bool contiguous);
 /** @brief Copy the compiled skeleton into a new independent instance. */
 int ane_create(const AneEntry *entry, AneProgram **program);
 /** @brief Dispatch a named writer into this instance's coefficient segment. */

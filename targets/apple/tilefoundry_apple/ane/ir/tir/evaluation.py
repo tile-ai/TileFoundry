@@ -18,9 +18,8 @@ def f16(value):
     return torch.copysign(torch.where(tie, above, nearest).to(value.dtype), value)
 
 
-def write(ctx, result):
-    """Copy *result* into the destination operand, narrowing to its dtype, and return it."""
-    destination = ctx.args[0]
+def write(destination, result):
+    """Copy *result* into *destination*, narrowing to its dtype, and return it."""
     destination.data.copy_(result.to(destination.data.dtype))
     return destination
 

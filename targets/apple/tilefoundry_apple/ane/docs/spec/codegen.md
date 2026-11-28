@@ -20,7 +20,10 @@ size and canonical geometry are derived in `isa/tensor_desc.py`.
 type. An HWX `TensorBinding` binds a name, role and virtual address to a `TensorDesc`; its
 page reservation is derived from the descriptor's storage size. The C launcher
 uses the same `TensorDesc` fields in the same order, followed by the Python-derived
-`storage_bytes` reservation, without a name.
+`storage_bytes` reservation, then the rank and extents of the host tensor, without a name.
+The host tensor holds the descriptor's elements in row-major order; it is the entry
+parameter, a `[1, C, H, W]` map or an `[M, K]` matrix, and the launcher copies it element by
+element between its own strides and the descriptor's.
 `module.tensor_row` is the sole renderer of its C initializer.
 `Image` retains the `Program` directly and serializes it once during container
 assembly. The byte layer provides encoding; it has no descriptor decoding API.
@@ -30,7 +33,7 @@ assembly. The byte layer provides encoding; it has no descriptor decoding API.
 ```mermaid
 flowchart TD
     TIR["Lowered TIR"] --> Emit["codegen.register · Role.EMIT"]
-    Emit --> Context["context.Context · ordered passes + bound view addresses"]
+    Emit --> Context["context.Context · plan + ordered tasks + bound view addresses"]
     Context --> Intrinsic["isa.intrinsic · register maps"]
     Intrinsic --> Field["BitField.put · range validation"]
     Field --> Bundle["program.to_program · reset-value elision + task IDs"]
@@ -56,69 +59,132 @@ Each Op emitter MUST validate the schedule attributes it consumes and reject any
 nondefault attribute it does not consume. Refusals for undecoded hardware behavior
 MUST contain `is not decoded yet`; contradictory values MUST name the violated relation.
 
-Unary MUST reject `scale != 1` combined with `abs`, `square` or `clamp` as not
-decoded yet. Plain abs, `pre_scale` with bias/clamp at `scale=1`, and affine
-scale/bias without those options remain supported. The affine order is
-`(src * pre_scale + bias) * scale`, with fp16 rounding after each step.
+Unary MUST reject `scale != 1` combined with `square`, and `abs` combined with
+`square` and `clamp`, as not decoded yet. The order is
+`(src * pre_scale + bias) * scale` or the square of the biased value, then abs,
+then clamp, with fp16 rounding after each arithmetic step.
 
 | Op | Consumed schedule attributes | Attributes requiring defaults |
 |---|---|---|
-| Unary | `tile_height`, `tile_width`, `patch` | `width_code`, `ocg_size`, `omit_ocg` |
-| Binary | `tile_height`, `patch` | `tile_width`, `width_code`, `ocg_size`, `omit_ocg` |
-| Pool | `tile_height`, `tile_width`, `patch` | `width_code`, `ocg_size`, `omit_ocg` |
-| Reduce | `tile_height`, `tile_width`, `patch` | `width_code`, `ocg_size`, `omit_ocg` |
-| Bypass | `tile_height`, `width_code`, `ocg_size`, `unicast_channels`, `omit_ocg` | `tile_width`, `patch` |
-| Conv | `tile_height`, `tile_width`, `ocg_size` | `patch`, `width_code`, `omit_ocg` |
+| Unary | `patch` | `width_code`, `ocg_size`, `omit_ocg` |
+| Binary | `patch` | `width_code`, `ocg_size`, `omit_ocg` |
+| Pool | `patch` | `width_code`, `ocg_size`, `omit_ocg` |
+| Reduce | `patch` | `width_code`, `ocg_size`, `omit_ocg` |
+| Bypass | `width_code`, `ocg_size`, `unicast_channels`, `omit_ocg` | `patch` |
+| Conv | `ocg_size` | `patch`, `width_code`, `omit_ocg` |
 
-Explicit tile dimensions MUST be integers within the corresponding logical extent.
 A patch MUST have exactly two integer values in 0–15 and match the derived raster
-patch: `(4, 4)` for a full planar tile, `(5, 0)` for a partial tile, or the Pool
-window's `(4 + (kw > 1), 5 - sy)`. Other patch combinations are not decoded yet.
-OCG MUST equal `rules.channel_groups` for the relevant channels. Conv MUST reject
+patch: `(ceil(log2(max(width, 16))), 4)`, or for Pool `(4, ceil_log2(result rows))`.
+A Pool result wider than 16 is not decoded yet. Other patch combinations are not
+decoded yet.
+
+Pool admits kernels of 1–3 and strides of 1–2 per axis. Padding is 0, or 1 on an
+axis whose kernel is 3; other padding is not decoded yet. MAX selects pool mode 2
+and pads with negative infinity (`0x0500[3:2] = 1`). AVG selects pool mode 1, which
+divides by the window size, except that padding left out by
+`count_include_pad=False` selects pool mode 0, which divides by the cells inside the
+map; both pad with zero. A `ceil_mode` window that overhangs the map has no field of its
+own: the declared result size implies it. It is emitted without padding, for MAX and for
+an AVG that leaves padding out of its count (pool mode 0); `ceil_mode` with padding, or
+an AVG that counts padding, is not decoded yet.
+Reduce programs a SUM `scale` other than 1 as the fp32
+final scale `0x090C`, so a mean is a sum scaled by the reciprocal of its count; `square`
+selects the sum-of-squares operation `0x0900[4:2] = 4` and is admitted for SUM. A
+scale with MAX or MIN, `square` with MAX or MIN, and `post` are not decoded yet.
+OCG MUST equal `rules.channel_groups` for the relevant channels, except that an
+identity Bypass programs OCG zero; an identity Bypass over more than 32 channels
+is not decoded yet. Conv MUST reject
 an explicit OCG above 64 output channels because that field is omitted in that mode.
-Bypass unicast MUST be 1 for identity and 2 for C/W transpose; zero is an error.
+Bypass unicast MUST be 1 for identity and `rules.unicast_channels` of the source
+channels for C/W transpose: the 16-channel groups rounded up to a power of two, at
+most 8. A transpose fills the lower nodes first exactly when that count exceeds 1.
+Zero is an error.
 Bypass MAY omit OCG only when the inferred value equals its reset value of zero
 and no explicit OCG is given. Other omission combinations are not decoded yet.
 
-Conv source and result bases MUST come from the Context allocation plan, with
-16-byte alignment. Effective range and overlap checks still apply at descriptor validation.
+Every L2 source and result base MUST be the framework offset of its SMEM tensor.
+Effective range and overlap checks still apply at descriptor validation.
 
-Conv with a bias operand MUST be rejected as not decoded yet. Bypass MUST emit only
-identity or `perm=(2, 1, 0)` and MUST check the resulting shape. Other valid
-permutations are not decoded yet. Conv load and compute MUST use the same full-height
-tile plan; partial or unequal-height plans are not decoded yet. The source load owns
-its access-type field; convolution does not overwrite that field when using the load.
+Every emitted operand of a task MUST be a `[1, C, H, W]` feature map; the matrix forms of
+Conv and Bypass are not emitted. A `[M, K]` matrix whose rows are 64-byte aligned is the
+canonical `[1, M / H, H, K]` map, so a matrix product is scheduled over such maps as
+`load`, a C/W transposing Bypass, a 1x1 Conv whose `[N, K, 1, 1]` weight is the right
+operand transposed, a second transposing Bypass and `store`. Only `load` and `store` take
+the matrix in `gmem`: the other operand of the transfer states the `[1, M / H, H, K]` map,
+which gives the DMA descriptor, and `tensor_desc_of` reads a matrix only through that map.
+
+Conv with a bias operand selects the bias mode `0x0D04[4] = 1` and reads the bias
+from its coefficient lanes; the bias MUST be a direct constant parameter. Bypass MUST emit only
+identity, `perm=(2, 1, 0)` or `perm=(1, 2, 0)` and MUST check the resulting shape. The two
+permutations program the same task words; `(1, 2, 0)` exchanges the row and channel pitches
+of its result. Other valid permutations are not decoded yet. Bypass with a lookup-table nonlinear is not
+decoded yet and MUST be rejected. A Conv whose source and result heights differ is
+not decoded yet, as are a Conv stride other than (1, 1) and a dilation other than (1, 1);
+Apple programs both with a sparse kernel stream (`0x0D00[8] = 1`) that is not encoded.
+Conv emits `groups > 1` only as the depthwise form: `groups` equal to 32 source and
+result channels and a 3x3 kernel. It programs OCG zero and `0x0028 = 0x14001` (one
+group, unicast enabled, unicast count one); other grouped forms program different
+channel counts and are not decoded yet. The source load owns its access-type field; convolution does not
+overwrite that field when using the load.
 
 ### 2.2 L2 buffer placement
 
-`Context.plan` MUST place each SMEM tensor from its producing pass through its last
-consumer, inclusive. Transient DMA staging MUST participate in the same placement.
-Conv MUST allocate both its transient source and result even with only GMEM operands.
-Coefficient tensors MUST NOT reserve feature-map staging slots.
-Reservations MUST use `TensorDesc.staging_extent` for the consuming engine, including the decoded row guard,
-and MUST be disjoint while live and end within `isa.dma.L2_CAPACITY` (2 MiB).
-Expired reservations MAY be reused. Capacity overflow MUST fail before emission.
-Schedules MUST declare SMEM with `tf.empty`; they supply no L2 addresses.
+The framework's memory analysis places every SMEM tensor. `Context.bind` MUST use
+the constant byte offset of its lowered `T.tensor_view(..., storage="smem")` as the
+tensor's L2 base, and MUST refuse an offset that is negative or not a multiple of 16
+and a tensor whose `storage_bytes` differs from its `TensorDesc.l2_extent`.
+Codegen MUST NOT move an SMEM tensor. An SMEM operand without such an offset MUST be
+rejected. Schedules MUST declare SMEM with `tf.empty`; they supply no L2 addresses.
 
-`Context.address_of` MUST return the assigned SMEM byte base. The emitter MUST
-select source DMA for GMEM and `load_chained` for SMEM, and select destination DMA
-only for GMEM. Producer result and consumer source MUST use the same allocated
-base, shape and pitches. SMEM logical layouts MAY use 16-byte aligned rows;
-the physical L2 pitches MUST come from staging geometry. L2-only planar results
-MUST explicitly program the channel and row pitches read by their consumers.
-An SMEM read MUST have
-a preceding producer. Two-pass planar Unary chains with complete tiles are
-supported. Cross-engine continuations with different staging pitches MUST be rejected
-as `cross-engine L2 staging pitch conversion is not decoded yet`.
-For `(C, H, W) = (32, 16, 16)`, the planar row pitch is 1056 bytes and the neural
-row pitch is 1072 bytes; equal logical shapes do not make these layouts interchangeable.
-Conv MUST infer L2 source/result requests from operand storage. Full-height L2
-source small-source/transpose mapping and explicit L2 result pitch mapping are
-not decoded yet and MUST be rejected. The historical staged-source convolution
-uses 1×1 small-source geometry; it does not establish an NCHW continuation contract.
-Other continuation modes are not decoded yet.
-The Context owns placement because it already owns resolved views, ordered passes
-and hardware staging; core lowering retains the storage declaration.
+Every call emits one task, except `T.ane.store`, which emits none. Before emission
+`Context.plan` records, for each SMEM tensor, the call that produces it and the
+`store` that writes it out, and for each task the GMEM tensor its DMA moves:
+
+| Call | Task | L2 source | L2 result | DMA |
+|---|---|---|---|---|
+| `load(src, dst)` | identity PE unary | `dst`, where the DMA lands | `dst`, in place | reads `src` |
+| engine task | the Op | its SMEM sources | its `dst` | writes the `store` destination of `dst`, if any |
+| `store(src, dst)` | none | — | — | — |
+
+- constraints:
+  - Each emitter MUST take an L2 source's base and producing engine from `Context.source`,
+    and its L2 result base and stored GMEM tensor from `Context.result`. A load is a planar producer.
+  - A task whose result is stored MUST program a DMA result (`l2_result_type` DMA_READ, buffer mode 1)
+    with the stored tensor's geometry and strides, and keeps the result's own block as its L2 result
+    address. Any other task MUST keep its result in L2 and program its channel and row pitches.
+  - `plan` MUST reject a `store` whose source a `load` produced (`its source must be the result of a
+    computation`), a stored tensor that a task reads (`its source is read again after being written out`)
+    and a tensor stored twice (`an L2 tensor is written out once`). The entry MUST reject an output that
+    no `store` writes (`the output must be written by T.ane.store`) and a `load` of a non-input.
+  - A store destination MAY be a window of the output and a load source a window of an input; the DMA
+    base is the window's byte offset that `tir/prim_function.view_binding` resolves.
+    The ANE lowering inserts such a window through `tf.insert_slice` only when memory analysis placed
+    the update in the result's window and the result on its destination; any copy is refused.
+
+Codegen does not check SMEM lifetimes: the transfer validation of
+[isa §9](./isa.md#9-verified-transfer-validation) keeps every interval within
+`isa.dma.L2_CAPACITY` (2 MiB) and disjoint within a task, except the in-place load,
+and requires each L2 source to match an unmodified earlier result. Capacity overflow
+MUST fail before emission.
+
+Producer result and consumer source MUST use the same framework base, shape and
+pitches. SMEM logical layouts MAY use 16-byte aligned rows; the physical L2 pitches
+MUST come from `TensorDesc.l2_channel` and `l2_row`. An SMEM read MUST have a
+preceding producer. A convolution reads its L2 source through `load_chained`, with
+neither small-source mode nor output transpose; so does a Bypass, whose output MAY be
+transposed. Bypass and Conv are neural producers. A Binary reads both sources from
+L2: its second source programs `0x051C` and its pitches with the second stream off
+and source routing 1. A task that reads an L2 buffer
+MUST set the source alias bit of the engine that produced it:
+`l2_src_alias_conv_rslt` after a neural producer and `l2_src_alias_planar_rslt`
+after a planar one; a Binary whose sources come from both engines sets both, confirmed
+on the device.
+A `T.ane.load` pass MUST set all eight alias bits, whatever its position in the stream:
+its DMA read reuses a block that earlier passes may still hold.
+A Pool or Reduce reads L2 with the task words of its DMA-source form and may keep its
+result in L2, confirmed on the device: it programs the result pitches of its map and a
+planar pass reads it, rows of any width included. A convolution whose kernel is taller
+than one row reads the source rows its windows cover and may shrink the map.
 
 ## 3. Module responsibilities
 
@@ -126,8 +192,9 @@ All paths below are relative to `ane/codegen/`.
 
 | Module | Responsibility |
 |---|---|
-| `context.py` | Pass order, L2 lifetimes, staging placement, operand addresses and tile geometry |
+| `context.py` | Task order, SMEM bases, producers and stores, DMA tensors, operand addresses and raster patch |
 | `tir/prim_function.py` | Lowered function walker and descriptor-program construction |
+| `tir/memory/{load,store}.py` | Registered transfer emitters; `store` emits no task |
 | `tir/ne/{conv,bypass}.py` | Registered neural-engine emitters |
 | `tir/pe/{binary,pool,reduce,unary}.py` | Registered planar-engine emitters |
 | `program.py` | Reset-image word elision and task IDs assigned at construction |
@@ -196,24 +263,28 @@ channels, and starts on a 64-byte boundary. Blocks follow their first consumptio
 order in one section, with byte bases computed from the preceding blocks' sizes. Repeated consumption of a direct
 constant reuses its block. Each convolution uses its own pass index, block base
 and lane stride. Weight parameters must be contiguous OIHW fp16 tensors.
+A convolution with a bias leads every lane's weights with one fp16 bias word per
+lane output, in output order; the bias is a contiguous fp16 vector consumed with
+one weight only. A depthwise convolution gives output channel `slot * lanes + lane` to
+slot `slot` of lane `lane`; each slot holds its bias word, if any, and then its kernel.
+A lookup table together with a bias is not decoded yet.
 
 `CoefficientLayout` owns the shape, section base and actual LUT bytes. Its
 `weight_axes` records each loop extent and source/destination byte stride in
-lane, input channel, kernel row, kernel column and lane-output order; Python
-packing and generated C++ writer loops consume these rules directly. Lane count, stride and weight offset are
+lane, input channel, kernel row, kernel column and lane-output order, and `bias_axes`
+in lane and lane-output order; Python packing and the generated C++ weight and bias
+writer loops consume these rules directly. Lane count, stride and weight offset are
 derived by the same layout used by emitters, symbols and relocation checks.
 `Coefficient` binds values to that layout; `Image.coefficients` is the sole image
 coefficient representation. The loop axes, source/destination strides and weight offset have one definition.
 
-A LUT lane has a fixed 128-byte header followed by at most 128 weight bytes.
-All table slots must be supplied. Shapes exceeding that weight range are rejected
-before packing. The header, table slots and weight offset share the same layout
-rules; weights cannot be silently truncated.
-
-This layout defines storage, not activation sample points or lookup arithmetic.
-The supplied table slots overwrite their header and trailer defaults.
-Those defaults alone do not define a SiLU table.
-The public nonlinear modes remain those in [tir §1](./tir.md#1-common-constraints).
+A convolution with a lookup-table nonlinear leads every lane with the complete
+128-byte table of [tir Nonlinear](./tir.md#nonlinear); its weights start at the
+weight offset 128 and the lane stride is `align_up(128 + lane bytes, 64)`. The
+descriptor selects the listed nonlinear mode and reads the table through the
+coefficient stream; it enables no separate lookup-table DMA. A lane over 128 weight
+bytes with a table is not decoded yet and is rejected before packing. One constant
+consumed under different tables is not decoded yet.
 
 Coefficient slot addresses and relocation widths come from
 `isa.fields.COEFFICIENT_RELOCATIONS`. Packet flags select only the forms emitted
@@ -223,20 +294,26 @@ remain flagged packet operands for the loader to bind.
 
 Binding offsets include alignment sentinels and inter-descriptor gaps. Both
 DMA and coefficient validation share the encoded packet walk. Each enabled DMA
-MUST carry an adjacent low/high base pair with its declared relocation flags and
-exactly one binding. Orphan high words, duplicate bases and missing bindings are
+MUST carry an adjacent low/high base pair with relocation flags and exactly one
+binding. Orphan high words, duplicate bases and missing bindings are
 errors. Enable/access/routing fields determine which transfers require bases.
 
 I/O roles MUST come from entry parameter order and `output_count`, with trailing
 outputs; they MUST NOT be inferred from destination relocations. Direct `Image`
-construction defaults to one trailing output. The currently verified loader
-mapping binds src to the first input, src2 to the second and dst to the sole
-output. Other symbol mappings are rejected as not decoded yet. A GMEM intermediate
+construction defaults to one trailing output. A DMA base's relocation flags name
+the I/O segment of its buffer: `isa.io_relocation(k)` = `0x110 + 4k` for the k-th
+segment in output-then-input order. `function_image` flags each DMA base with the
+segment of the GMEM tensor that `Context.plan` records for its task.
+Validation MUST require those flags to name the bound symbol, dst to bind an output
+and src/src2 to bind inputs; other symbol mappings are rejected as not decoded yet.
+A flagged coefficient base MUST name the kernel segment, `isa.io_relocation(n)` for
+n I/O segments. A GMEM intermediate
 written by a pass but outside the signature's outputs MUST be rejected because
 its mapping is not decoded yet; it MUST NOT be promoted to an external output.
 
-For every enabled transfer, the effective register geometry and byte strides MUST
-match its bound `TensorDesc`. Only fp16 N=1 canonical layouts and the verified
+For every enabled transfer, the effective byte strides MUST match its bound
+`TensorDesc` and each extent MUST fit within it: a transfer moves the buffer or a
+window of it. Only fp16 N=1 canonical layouts and the verified
 C/W transpose to a canonical destination are accepted. Other declared layouts,
 formats and mapping combinations are rejected as not decoded yet. The exclusive
 end is `addend + (C-1)*channel_stride + (H-1)*row_stride + W*2`; the addend MUST be
@@ -251,7 +328,8 @@ reference truncation. `validation.validate` checks both constraints before assem
 Every coefficient slot has an explicit `CoefficientReloc` naming its block.
 `require_relocated` rejects missing blocks or slots, duplicate bindings,
 nonconsecutive blocks, wrong first-use order, mismatched bases and lane reads
-crossing the assigned block. Enabled coefficient readers must carry a bound
+crossing the assigned block. The listed nonlinear mode MUST agree with whether the
+read block's lanes lead with a table, and the bias mode with whether they hold bias words. Enabled coefficient readers must carry a bound
 base. LUT reads require actual table bytes and a nonempty in-range read extent;
 register forms without an established read range are rejected. All executable
 containers pass through the original `Image.to_bytes()` and its validation.
@@ -299,7 +377,7 @@ entry embeds its complete HWX skeleton and invokes the internal `ane_launch` ABI
 zero-valued weight tensors. It retains an internal `AneEntry` containing the skeleton bytes,
 coefficient segment file offset, I/O descriptors and `{name, writer}` table.
 The coefficient offset is read from the validated container's segment command.
-Fixed LUT headers remain in the skeleton. Each consuming Op owns generation of its
+Lookup tables remain in the skeleton. Each consuming Op owns generation of its
 weight writer; convolution generates a contiguous CPU fp16 OIHW writer using
 `CoefficientLayout.weight_axes` and `weight_offset` from `hwx/coefficients.py`.
 

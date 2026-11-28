@@ -6,10 +6,8 @@ from tilefoundry_apple.ane import isa
 
 from .bindings import BINDING_ROLE_OUTPUT
 from .records import NAME_BYTES, PROCEDURE_BYTES
-from .relocations import DMA_BASES, base_slots
+from .relocations import DMA_BASES, base_slots, packet_slots
 
-SRC = isa.TileDMASrc.tile_dma_src_base_addr_lo.addr
-SRC2 = isa.TileDMASrc.tile_dma_src2_base_addr_lo.addr
 DST = isa.TileDMADst.tile_dma_dst_base_addr_lo.addr
 
 
@@ -87,7 +85,7 @@ def require_relocated(image: "Image", slots: Mapping[int, tuple[int, int, int]])
 def require_dma_bindings(
     image: "Image", slots: Mapping[int, tuple[int, int, int]], accesses: Mapping
 ) -> None:
-    """Bind each DMA base once, to the signature buffer its transfer reads or writes in range."""
+    """Bind each DMA base once, to the signature buffer whose window its transfer moves in range."""
     dma = {word for word, (_, addr, _) in slots.items() if addr in DMA_BASES}
     bound = [reloc.word_offset for reloc in image.relocs]
     if len(bound) != len(set(bound)):
@@ -97,9 +95,10 @@ def require_dma_bindings(
     if set(bound) - dma:
         raise ValueError("DMA binding does not address a DMA slot")
     buffers = {item.name: item for item in image.io}
-    split = len(image.io) - image.output_count
-    inputs, outputs = image.io[:split], image.io[split:]
-    mapped = {SRC: inputs[:1], SRC2: inputs[1:2], DST: outputs}
+    bindings = image.bindings()
+    segments = [item.name for item in bindings]
+    outputs = {item.name for item in bindings if item.role == BINDING_ROLE_OUTPUT}
+    flags = {first: packet.flags for _, first, packet in packet_slots(image.program)}
     for reloc in image.relocs:
         if reloc.symbol not in buffers:
             raise ValueError(f"unknown I/O symbol {reloc.symbol!r}")
@@ -107,14 +106,17 @@ def require_dma_bindings(
         transfer = accesses.get((index, register))
         if transfer is None:
             raise ValueError(f"DMA base {register:#x} has no enabled transfer")
-        if len(mapped[register]) != 1 or mapped[register][0].name != reloc.symbol:
+        if (register == DST) != (reloc.symbol in outputs):
             raise ValueError(f"{transfer.name} DMA symbol-to-signature mapping is not decoded yet")
+        if flags[reloc.word_offset] != isa.io_relocation(segments.index(reloc.symbol)):
+            raise ValueError(f"{transfer.name} DMA relocation flags do not name {reloc.symbol!r}")
         desc = buffers[reloc.symbol].desc
         desc.validate_feature()
         if not desc.is_canonical:
             raise ValueError("declared DMA tensor layout is not decoded yet")
-        if desc.shape[1:] != (transfer.channels, transfer.height, transfer.width):
-            raise ValueError(f"{transfer.name} DMA geometry contradicts TensorDesc {reloc.symbol!r}")
+        if any(extent > whole for extent, whole in
+               zip((transfer.channels, transfer.height, transfer.width), desc.shape[1:])):
+            raise ValueError(f"{transfer.name} DMA geometry leaves TensorDesc {reloc.symbol!r}")
         if (transfer.row, transfer.channel) != (desc.row, desc.channel):
             raise ValueError(f"{transfer.name} DMA strides contradict TensorDesc {reloc.symbol!r}")
         end = addend + transfer.end
@@ -137,6 +139,10 @@ def require_coefficient_bindings(image: "Image", slots: Mapping[int, tuple[int, 
         raise ValueError("duplicate coefficient binding")
     if expected != set(bound):
         raise ValueError("coefficient base is bound to no coefficient section or slot")
+    flags = {first: packet.flags for _, first, packet in packet_slots(image.program) if packet.flags}
+    segment = isa.io_relocation(len(image.io))
+    if any(flags.get(word, segment) != segment for word in bound):
+        raise ValueError("coefficient relocation flags do not name the kernel segment")
     first_uses = tuple(dict.fromkeys(reloc.coefficient for reloc in sorted(
         image.coefficient_relocs, key=lambda item: item.word_offset
     )))
@@ -156,6 +162,10 @@ def require_coefficient_bindings(image: "Image", slots: Mapping[int, tuple[int, 
             isa.dma.check_coefficient_lanes(layout.lanes, sum(
                 field_value(values, field) for field in kernel.kernel_dma_src_coeff_dma_en
             ))
+            if (field_value(values, isa.NE.nonlinear_mode) == isa.NENonlinear.LUT) != bool(layout.lut):
+                raise ValueError("lookup-table mode disagrees with its coefficient lanes")
+            if field_value(values, isa.NE.ne_bias) != layout.bias:
+                raise ValueError("bias mode disagrees with its coefficient lanes")
             for enabled, offset, size in zip(
                 kernel.kernel_dma_src_coeff_dma_en,
                 kernel.kernel_dma_src_coeff_base_offset,

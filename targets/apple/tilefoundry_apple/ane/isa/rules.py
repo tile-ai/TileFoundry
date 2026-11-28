@@ -4,10 +4,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from . import dma, fields
-from .arith import align_up
 
 NE_CHANNEL_GROUP = 16
 SHIFT_MAX = 4
+UNICAST_MAX = 8
 
 
 def ceil_log2(x: int) -> int:
@@ -19,42 +19,17 @@ def channel_groups(channels: int) -> int:
     return 0 if groups <= 1 else (groups - 1).bit_length()
 
 
+def unicast_channels(channels: int) -> int:
+    """The unicast count of a transposing pass: its channel groups rounded up to a power of two."""
+    return min(UNICAST_MAX, 1 << ceil_log2(-(-channels // NE_CHANNEL_GROUP)))
+
+
 def active_nodes(engine_nodes: int) -> int:
     return engine_nodes - 1
 
 
 def shift(work_unit_dim: int) -> int:
     return min(ceil_log2(work_unit_dim), SHIFT_MAX)
-
-
-def guard(
-    pw: int, ch: int, channels: int, task_type: int, tile_h: int, height: int, ne_op: int
-) -> int:
-    """L2 staging guard band between rows (``row_stride - depth_stride``), in bytes.
-
-    empirical: 93.6% over the 2468-TD corpus.  The first pad-off clause (bypass
-    with a staged depth >= 2 KB) is disasm-pointed; the rest of the switch is
-    fitted.  ``pw`` is the patch width (0x0030[3:0]), ``ch`` the L2 channel stride.
-    """
-    depth = channels * ch
-    pad_off = (
-        (ne_op == 4 and depth >= 2048)
-        or ch == 256
-        or (task_type == 3 and ch == 128)
-        or (ch == 192 and channels <= 32)
-        or (ch == 96 and channels >= 33)
-        or channels <= 8
-        or (channels <= 17 and tile_h == height)
-    )
-    if pad_off:
-        return 0
-    k = 0 if (ch // 16) % 2 else 16
-    return align_up(2 * pw + k, 16)
-
-
-def row_stride(pw: int, ch: int, channels: int, task_type: int, tile_h: int, height: int, ne_op: int) -> int:
-    """disasm: the L2 source row stride is the channel depth plus the guard band."""
-    return channels * ch + guard(pw, ch, channels, task_type, tile_h, height, ne_op)
 
 
 class CheckError(ValueError):
@@ -79,11 +54,20 @@ def check(image: Mapping[int, int]) -> None:
             raise CheckError(f"shift slices out of order: min={mn} pref={pf} max={mx}")
         if mx > SHIFT_MAX:
             raise CheckError(f"shift_maximum {mx} exceeds {SHIFT_MAX}")
+        if read(image, common.small_source_mode) and not mn == pf == mx:
+            raise CheckError(f"small source mode needs equal shift slices: min={mn} pref={pf} max={mx}")
 
     row = read(image, l2.l2_src_row_stride)
     depth = read(image, l2.l2_src_depth_stride)
     if row is not None and depth is not None and row < depth:
         raise CheckError(f"l2_src_row_stride {row} is below l2_src_depth_stride {depth}")
+
+    if read(image, common.output_transpose) and read(image, fields.NE.op) == fields.NEOp.BYPASS:
+        unicast = unicast_channels(read(image, common.cin))
+        stated = (read(image, common.unicast_cin), read(image, common.fill_lower_nodes_first))
+        if stated != (unicast, int(unicast > 1)):
+            raise CheckError(f"transposing bypass unicast and fill-lower {stated} contradict "
+                             f"its channels; expected {(unicast, int(unicast > 1))}")
 
     dma.check_l2(image, dma.geometry(image))
 
@@ -92,12 +76,12 @@ __all__ = [
     "CheckError",
     "NE_CHANNEL_GROUP",
     "SHIFT_MAX",
+    "UNICAST_MAX",
     "active_nodes",
     "ceil_log2",
     "channel_groups",
     "check",
-    "guard",
     "read",
-    "row_stride",
     "shift",
+    "unicast_channels",
 ]

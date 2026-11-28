@@ -1,6 +1,8 @@
 """Codegen for ``T.ane.reduce``: one planar engine reduction over the spatial axes.
 
-``MODES`` gives each reduction kind its L2 compare code and its pooling mode.
+``MODES`` gives each reduction kind its L2 compare code and its pooling mode. A
+sum's ``scale`` is the engine's fp32 final scale, so a mean is a sum scaled by the
+reciprocal of its count.
 """
 
 from types import MappingProxyType
@@ -20,7 +22,6 @@ MODES = MappingProxyType(
     }
 )
 SPATIAL = (2, 3)
-RESULT_SLOTS = 1
 
 
 @codegen.register(target.Target, codegen.Role.EMIT, tir.Reduce)
@@ -32,9 +33,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         raise ValueError(f"T.ane.reduce: ocg_size={op.ocg_size!r} is not decoded yet")
     if op.omit_ocg is not False:
         raise ValueError(f"T.ane.reduce: omit_ocg={op.omit_ocg!r} is not decoded yet")
-    destination, source = call.args
-    if any(arg.type.storage is expr.StorageKind.SMEM for arg in call.args):
-        raise ValueError("L2 operands for this operation is not decoded yet")
+    source, destination = call.args
     src = context.tensor_desc_of(source.type, "src")
     dst = context.tensor_desc_of(destination.type, "dst")
     if tuple(op.axes) != SPATIAL or not op.keepdim:
@@ -44,36 +43,34 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             f"T.ane.reduce: expected a {src.channels}x1x1 result, got "
             f"{dst.channels}x{dst.height}x{dst.width}"
         )
-    if op.square or op.scale != 1.0 or op.post is not tir.Post.NONE:
-        raise ValueError("T.ane.reduce: square, scale and post is not decoded yet")
+    if op.post is not tir.Post.NONE:
+        raise ValueError("T.ane.reduce: post is not decoded yet")
     if op.kind not in MODES:
         raise ValueError(f"T.ane.reduce: {op.kind} has no planar engine encoding")
+    if op.square and op.kind is not expr.ReduceKind.SUM:
+        raise ValueError(f"T.ane.reduce: square with {op.kind} is not decoded yet")
+    if op.scale != 1.0 and op.kind is not expr.ReduceKind.SUM:
+        raise ValueError(f"T.ane.reduce: scale with {op.kind} is not decoded yet")
     compare, mode = MODES[op.kind]
-    rows = context.tile_rows(op, src)
+    base, producer = ctx.source(source)
+    result_base, stored = ctx.result(destination)
     ctx.emit(
-        intrinsic.load(
-            src, address=ctx.address_of(source), fresh=ctx.fresh, rows=rows,
-            width=op.tile_width, planar_result=True
-        ),
+        intrinsic.load_chained(src, producer=producer, address=base),
         intrinsic.compute_pe(
             isa.TaskType.PE_EW_REDUCE_UNARY,
             dst,
             declared_in=src,
             declared_out=src,
-            tile_height=rows,
+            tile_height=src.height,
             pool_mode=mode,
+            square=op.square,
             compare=compare,
-            patch=context.raster_patch(op, context.tile_rows(op, dst), dst),
+            final_scale=op.scale,
+            patch=context.raster_patch(dst, op.patch),
         ),
         intrinsic.store(
-            dst,
-            staging=src,
-            width=op.tile_width,
-            rows=rows,
-            staged=RESULT_SLOTS,
-            address=ctx.address_of(destination),
-            fresh=ctx.fresh,
-            declare=False,
+            context.written(dst, stored), result_base=result_base, address=ctx.address_of(stored),
+            fresh=ctx.fresh, producer=producer, to_dram=stored is not None, declare=False,
         ),
     )
 

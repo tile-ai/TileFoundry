@@ -29,7 +29,7 @@ class Architecture(target.Architecture):
 - constraints:
   - Every value MUST come from the installed architecture document ([target §10](../../../../../../docs/spec/target.md#10-installed-hardware-resources)). No field has a default.
   - Each capability MUST be an instruction mnemonic. It has the form `ne.<form>` or `pe.<form>`.
-  - The architecture `apple.h14` lists six capabilities: `ne.conv`, `ne.bypass`, `pe.pool`, `pe.unary`, `pe.binary` and `pe.reduce`.
+  - The architecture `apple.h14` lists eight capabilities: `memory.load`, `memory.store`, `ne.conv`, `ne.bypass`, `pe.pool`, `pe.unary`, `pe.binary` and `pe.reduce`.
   - The extent limits MUST come from the task descriptor field ranges of the generation.
   - A capability lists an instruction form that compiled programs use. It does not claim that the form ran on hardware.
 

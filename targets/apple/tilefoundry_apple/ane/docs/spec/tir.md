@@ -6,18 +6,21 @@ The ANE TIR Ops are the tasks that one Apple Neural Engine runs. Each Op is one 
 
 - Every Op is an instruction ([terms](../../../../../../docs/spec/terms.md)) in effect form. It writes its `dst` operand and returns `TupleType.Void`.
 - `R` and `W` below mean the READ and WRITE memory effects. Every Op has one `W` operand, `dst`.
+  The operands list the sources first and `dst` after them; an optional operand follows `dst`.
 - The execution mesh is the one `engine` unit (`ENGINE`). One call is one issue.
 - The mesh scope of a call MUST match `ENGINE`.
 - Every operand MUST be f16 (`FLOATS`).
 - An Op is admitted when `Architecture.capabilities` lists its capability name ([target §1](./target.md#1-anearchitecture)).
-  The names are `ne.conv`, `ne.bypass`, `pe.pool`, `pe.unary`, `pe.binary` and `pe.reduce`.
-- A feature map is `[1, C, H, W]` in `gmem` or `smem`, with `C <= 65536`, `H <= 16384` and `W <= 16384`.
+  The names are `memory.load`, `memory.store`, `ne.conv`, `ne.bypass`, `pe.pool`, `pe.unary`, `pe.binary` and `pe.reduce`.
+- A feature map is `[1, C, H, W]`, with `C <= 65536`, `H <= 16384` and `W <= 16384`. An engine task reads and
+  writes its feature maps and activation matrices in `smem`; `load` and `store` move them between `gmem` and `smem`.
   Its W stride MUST be 1 when `W` is above 1. The engine addresses a feature map by row, channel, depth and group
   strides and has no element stride. An Op may further constrain the layout.
+  `load` and `store` also admit an `[R, C]` matrix opposite the `[1, R / H, H, C]` map of its rows:
+  row `m` is row `m % H` of channel `m // H`, and the value written is the source in row-major order.
 - `weight` and `bias` are in `gmem`. The kernel height and width of a `weight` are at most 32.
-- The public nonlinear modes are `NONE` and `RELU` ([Nonlinear](#nonlinear)).
+- The public nonlinear modes are `NONE`, `RELU`, `SIGMOID` and `SILU` ([Nonlinear](#nonlinear)).
   Pairing gives SiLU, sigmoid and tanh no `T.ane` candidate.
-  SiLU LUT content and lookup arithmetic are not decoded yet, including for `[1, 32, 16, 16]`.
 - Single-operator runs on `apple.m2_pro.ane` checked the value ranges of this page. Its architecture is `apple.h14`.
   No other ANE generation is checked.
 
@@ -27,8 +30,8 @@ The ANE TIR Ops are the tasks that one Apple Neural Engine runs. Each Op is one 
 |---|---|---|
 | `ENGINE` | `Mesh(("engine",), Layout(((1,),), ((1,),)))` | The one `engine` unit. |
 | `FLOATS` | `(f16,)` | The dtype of every operand. |
-| `FEATURE_STORAGE` | `gmem` or `smem` | The storage of a feature map and of an activation matrix. |
-| `GMEM_ONLY` | `gmem` | The storage of `weight` and `bias`. |
+| `SMEM_ONLY` | `smem` | The storage of a feature map and of an activation matrix that an engine task reads or writes. |
+| `GMEM_ONLY` | `gmem` | The storage of `weight`, `bias`, the `src` of `load` and the `dst` of `store`. |
 | `STRIDES` | `((1, 1), (1, 2), (2, 1), (2, 2))` | The admitted `stride` of `conv` and `pool`, as (height, width). |
 | `MAX_CHANNELS` | `65536` | The largest channel extent. |
 | `MAX_HEIGHT` | `16384` | The largest height extent. |
@@ -39,9 +42,9 @@ The ANE TIR Ops are the tasks that one Apple Neural Engine runs. Each Op is one 
 
 | Form | Shape | Storage |
 |---|---|---|
-| Feature map | `(1, C, H, W)`; `C` at most `MAX_CHANNELS`, `H` at most `MAX_HEIGHT`, `W` at most `MAX_WIDTH` | `FEATURE_STORAGE` |
+| Feature map | `(1, C, H, W)`; `C` at most `MAX_CHANNELS`, `H` at most `MAX_HEIGHT`, `W` at most `MAX_WIDTH` | `SMEM_ONLY` |
 | Kernel | `(O, I, KH, KW)`; `O` and `I` at most `MAX_CHANNELS`, `KH` and `KW` at most `MAX_KERNEL` | `GMEM_ONLY` |
-| Activation matrix | `(rows, columns)`; the extents are at most `ACTIVATION_LIMITS` | `FEATURE_STORAGE` |
+| Activation matrix | `(rows, columns)`; the extents are at most `ACTIVATION_LIMITS` | `SMEM_ONLY` |
 | Weight matrix | `(rows, columns)`; the extents are at most `WEIGHT_LIMITS` | `GMEM_ONLY` |
 | Bias | `(O,)`; `O` at most `MAX_CHANNELS` | `GMEM_ONLY` |
 
@@ -66,6 +69,8 @@ A HIR pairing offers an Op as a candidate for a HIR call. An explicit `tf.schedu
 
 | DSL name | Class | Capability | Task | HIR pairing |
 |---|---|---|---|---|
+| `T.ane.load` | `Load` | `memory.load` | read from `gmem` into `smem` | none |
+| `T.ane.store` | `Store` | `memory.store` | write from `smem` out to `gmem` | none |
 | `T.ane.conv` | `Conv` | `ne.conv` | neural-engine convolution | `nn.Conv2D`; `nn.MatMul` with `a_layout="MK"` and `b_layout="KN"` |
 | `T.ane.bypass` | `Bypass` | `ne.bypass` | neural-engine pass-through | `nn.ReLU`; `tensor.Transpose` |
 | `T.ane.pool` | `Pool` | `pe.pool` | processing-engine pooling | `nn.Pool2D` |
@@ -74,6 +79,11 @@ A HIR pairing offers an Op as a candidate for a HIR call. An explicit `tf.schedu
 | `T.ane.reduce` | `Reduce` | `pe.reduce` | processing-engine reduction | `tensor.Reduce` |
 
 The capability name is the mnemonic of the instruction.
+
+- constraints:
+  - SMEM L2 addresses MUST come from the framework's memory analysis; a schedule declares each L2 block with `tf.empty`.
+  - A feature map larger than L2 MUST be cut into tiles by the schedule: each tile loads a window of `src`, runs
+    its tasks and stores into a window of the output that `tf.insert_slice` names.
 
 ### 2.1 Neural-engine Ops (`ir/tir/ne`)
 
@@ -85,12 +95,20 @@ class Nonlinear(Enum):
 
     NONE = "none"
     RELU = "relu"
+    SIGMOID = "sigmoid"
+    SILU = "silu"
 ```
 
 - constraints:
   - The DSL name is `T.ane.Nonlinear`.
-  - NONE keeps the value. RELU gives `max(x, 0)`.
-  - The nonlinear step does not round.
+  - NONE keeps the value. RELU gives `max(x, 0)`. Neither rounds.
+  - SIGMOID and SILU look `x` up in the 128-byte table the engine holds for each (`TABLES` in `ir/tir/ne/nonlinear.py`).
+    The table has 33 fp16 samples at `x * 2 + 16 == i` for `i` in 0..32. Between two samples the value is
+    interpolated linearly and rounded once to fp16. Below and above the samples a line gives
+    `f16(f16(slope * x) + offset)`. At or below `x_lo`, and at or above `x_hi`, the table's fixed outputs apply.
+  - A table approximates its function: SILU is within `2**-6` of `x * sigmoid(x)` and gives `-0.0017` at 0;
+    SIGMOID is within `2**-8` of `sigmoid(x)`.
+  - The last bit of a value interpolated between two samples is not decoded. Samples, lines and fixed outputs are.
 
 #### Conv
 
@@ -104,9 +122,9 @@ class Conv(Op):
         dilation: attribute; (height, width) spacing of the kernel taps.
         groups: attribute; number of channel groups.
         nonlinear: attribute; the step after the sum.
-        dst: input; W; feature map, or matrix.
         src: input; R; feature map, or channel-outer matrix.
         weight: input; R; kernel, or row-major matrix.
+        dst: input; W; feature map, or matrix.
         bias: input; R; one value for each output channel, or each column.
     """
 
@@ -115,15 +133,16 @@ class Conv(Op):
     dilation: tuple[int, int] = (1, 1)
     groups: int = 1
     nonlinear: Nonlinear = Nonlinear.NONE
-    dst: Tensor
     src: Tensor
     weight: Tensor
+    dst: Tensor
     bias: Tensor | None = None
 ```
 
 - constraints:
   - The feature form is `dst = nonlinear(f16(conv2d(src, weight) + bias))`. The matrix form is `dst = nonlinear(f16(src @ weight + bias))`.
-  - The Op rounds once, after it adds `bias`. `nonlinear` applies to the rounded value.
+  - The sum is held in signed 16.16 fixed point: each product is rounded to a multiple of `2**-16`, a tie away from zero, and the rounded products add exactly. A product whose operands' binary exponents sum below -16 contributes nothing; an fp16 subnormal carries the exponent -14. The products add in channel order; the first partial sum outside `[-2**15, 2**15)` makes the result infinite with that sum's sign. A single product of magnitude `2**15` or more MUST be rejected by the evaluator as not decoded yet.
+  - The Op rounds once, after it adds `bias`. `nonlinear` applies to the rounded value; a table rounds again.
   - `bias` is optional and part of the instruction. Its shape MUST be `(O,)` in the feature form and `(N,)` in the matrix form.
   - In the feature form, `src` is `[1, C, H, W]`, `weight` is `[O, C / groups, KH, KW]` and `dst` is `[1, O, H', W']`.
   - `H'` is `(H + 2 * padding[0] - KH) // stride[0] + 1`. `W'` is the same rule with the width values.
@@ -135,11 +154,6 @@ class Conv(Op):
   - In the matrix form, `src` is `[M, K]`, `weight` is `[K, N]` and `dst` is `[M, N]`. The strides follow [§1.2](#12-matrix-forms).
   - The matrix form MUST have `stride=(1, 1)`, `padding=(0, 0)` and `groups=1`.
   - `dst`, `src` and `weight` MUST be all feature maps or all matrices.
-  - Schedules MUST declare intermediate storage through tensor types. L2 addresses
-    MUST come from codegen buffer allocation, with disjoint source and result ranges.
-  - Full-height feature-map L2 source small-source mapping and L2 result pitches
-    are not decoded yet. Codegen MUST reject these requests; the evaluator retains
-    the reference semantics for SMEM operands.
 
 #### Bypass
 
@@ -150,14 +164,14 @@ class Bypass(Op):
     Attributes:
         perm: attribute; the source axis of each (channel, height, width) axis of dst.
         nonlinear: attribute; the step after the permutation.
-        dst: input; W; feature map, or channel-outer matrix.
         src: input; R; feature map, or row-major matrix.
+        dst: input; W; feature map, or channel-outer matrix.
     """
 
     perm: tuple[int, int, int] = (0, 1, 2)
     nonlinear: Nonlinear = Nonlinear.NONE
-    dst: Tensor
     src: Tensor
+    dst: Tensor
 ```
 
 - constraints:
@@ -187,8 +201,8 @@ class Pool(Op):
         ceil_mode: attribute; round the window count up.
         count_include_pad: attribute; count the padding in the average divisor.
         kind: attribute; MAX or AVG.
-        dst: input; W; feature map.
         src: input; R; feature map.
+        dst: input; W; feature map.
     """
 
     kernel_size: tuple[int, int]
@@ -197,8 +211,8 @@ class Pool(Op):
     ceil_mode: bool = False
     count_include_pad: bool = True
     kind: PoolKind
-    dst: Tensor
     src: Tensor
+    dst: Tensor
 ```
 
 - constraints:
@@ -225,8 +239,8 @@ class Unary(Op):
         abs: attribute; apply the absolute value.
         square: attribute; apply the square.
         clamp: attribute; (low, high) bounds, or None.
-        dst: input; W; feature map.
         src: input; R; feature map.
+        dst: input; W; feature map.
     """
 
     pre_scale: float = 1.0
@@ -235,8 +249,8 @@ class Unary(Op):
     abs: bool = False
     square: bool = False
     clamp: tuple[float, float] | None = None
-    dst: Tensor
     src: Tensor
+    dst: Tensor
 ```
 
 - constraints:
@@ -261,7 +275,7 @@ class Unary(Op):
     `abs` does not round. Some probes distinguish only operation order: their away/even and
     per-step/final candidates coincide. Those results do not establish hardware rounding
     for every admitted option combination.
-  - `abs` with `square` MUST be rejected as not decoded yet, including by the evaluator.
+  - `abs` with `square` and `clamp` MUST be rejected as not decoded yet, including by the evaluator.
   - Codegen and the evaluator MUST reject option combinations outside the following table
     as not decoded yet.
     An affine attribute not listed in a row MUST have its default value. Within a listed
@@ -272,14 +286,15 @@ class Unary(Op):
     | none | `pre_scale`, `bias`, `scale` |
     | `clamp` | `pre_scale`, `bias`, `scale` |
     | `abs` | `pre_scale`, `bias`, `scale` |
-    | `abs`, `clamp` | either `{bias}` or `{scale}` |
+    | `abs`, `clamp` | `pre_scale`, `bias`, `scale` |
     | `square` | `pre_scale`, `bias` |
+    | `abs`, `square` | `pre_scale`, `bias` |
     | `square`, `clamp` | `pre_scale`, `bias` |
 
   - `clamp` MUST satisfy `low <= high`.
   - `dst` MUST have the shape of `src`.
   - Each operand MUST have a flat layout and static row and channel strides.
-  - These strides MUST be multiples of 64 bytes in `gmem` and 16 bytes in `smem`.
+  - These strides MUST be multiples of 16 bytes.
   - Pairing sets `abs=True` for ABS, `square=True` for SQUARE and `scale=-1.0` for NEG.
   - Every other `UnaryKind` has no `T.ane.unary` candidate.
 
@@ -291,15 +306,15 @@ class Binary(Op):
 
     Attributes:
         kind: attribute; the operation.
-        dst: input; W; feature map.
         lhs: input; R; feature map.
         rhs: input; R; feature map.
+        dst: input; W; feature map.
     """
 
     kind: BinaryKind
-    dst: Tensor
     lhs: Tensor
     rhs: Tensor
+    dst: Tensor
 ```
 
 - constraints:
@@ -337,8 +352,8 @@ class Reduce(Op):
         square: attribute; square each element before the reduction.
         scale: attribute; the factor applied to the reduction.
         post: attribute; the step after the scale.
-        dst: input; W; feature map, or `[1, C]`.
         src: input; R; feature map.
+        dst: input; W; feature map, or `[1, C]`.
     """
 
     axes: tuple[int, ...]
@@ -347,8 +362,8 @@ class Reduce(Op):
     square: bool = False
     scale: float = 1.0
     post: Post = Post.NONE
-    dst: Tensor
     src: Tensor
+    dst: Tensor
 ```
 
 - constraints:
@@ -366,9 +381,42 @@ class Reduce(Op):
   - With `keepdim`, each reduced axis of `dst` has extent 1. Without it, `dst` is `[1, C]`.
   - `kind` MUST be SUM, MAX or MIN.
   - The last-bit rounding of the `post` step is not verified against hardware. It can differ by one unit in the last place.
+  - Rounding `r` before `scale` is not verified against hardware for a sum that fp16 does not hold exactly.
   - A reduction over only the height or only the channel axis is not one instruction. Pairing refuses it.
   - Pairing refuses the kinds MEAN and ABS_MAX.
   - Pairing leaves `square`, `scale` and `post` at their defaults.
+
+### 2.3 Transfers (`ir/tir/memory`)
+
+```python
+class Load(Op):
+    """Effect form; dst = src, read from unified memory into the L2 buffer.
+
+    Attributes:
+        src: input; R; feature map, or activation matrix, in gmem.
+        dst: input; W; feature map, or activation matrix, in smem.
+    """
+
+    src: Tensor
+    dst: Tensor
+
+
+class Store(Op):
+    """Effect form; dst = src, written from the L2 buffer out to unified memory.
+
+    Attributes:
+        src: input; R; feature map, or activation matrix, in smem.
+        dst: input; W; feature map, or activation matrix, in gmem.
+    """
+
+    src: Tensor
+    dst: Tensor
+```
+
+- constraints:
+  - `dst` MUST have the shape and dtype of `src`. The Op copies the values and does not round.
+  - The source of a `store` MUST be the result of an engine task, and that result MUST have no other reader
+    and no other `store` ([codegen §2.2](./codegen.md#22-l2-buffer-placement)).
 
 ## 3. HIR result storage
 

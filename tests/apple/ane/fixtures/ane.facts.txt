@@ -93,44 +93,60 @@ T.copy
     src.shape = dst.shape
     src.dtype = dst.dtype
 
+T.ane.load
+  target             apple.m2_pro.ane
+  target capability  memory.load
+  execution mesh     Mesh(('engine',), Layout(((1,),), ((1,),)))
+  operands
+    src  Tensor(dtype=dtype where one of {f16}, storage=any value where one of {gmem}, layout=one of {Layout((1, src.shape[1], src.shape[2], src.shape[3]), (_, _, _, src.strides[3])) where src.shape[1] <= 65536; src.shape[2] <= 16384; src.shape[3] <= 16384; (src.shape[3] == 1) | (src.strides[3] == 1); Layout((src.shape[0], src.shape[1]), src.layout) where src.shape[0] <= 16384; src.shape[1] <= 65536})
+    dst  Tensor(dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=one of {Layout((1, dst.shape[1], dst.shape[2], dst.shape[3]), (_, _, _, dst.strides[3])) where dst.shape[1] <= 65536; dst.shape[2] <= 16384; dst.shape[3] <= 16384; (dst.shape[3] == 1) | (dst.strides[3] == 1); Layout((dst.shape[0], dst.shape[1]), dst.layout) where dst.shape[0] <= 16384; dst.shape[1] <= 65536})
+  between operands
+    src.shape = dst.shape, or one is an [R, C] matrix and the other its [1, R / H, H, C] feature map
+
+T.ane.store
+  target             apple.m2_pro.ane
+  target capability  memory.store
+  execution mesh     Mesh(('engine',), Layout(((1,),), ((1,),)))
+  operands
+    src  Tensor(dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=one of {Layout((1, src.shape[1], src.shape[2], src.shape[3]), (_, _, _, src.strides[3])) where src.shape[1] <= 65536; src.shape[2] <= 16384; src.shape[3] <= 16384; (src.shape[3] == 1) | (src.strides[3] == 1); Layout((src.shape[0], src.shape[1]), src.layout) where src.shape[0] <= 16384; src.shape[1] <= 65536})
+    dst  Tensor(dtype=dtype where one of {f16}, storage=any value where one of {gmem}, layout=one of {Layout((1, dst.shape[1], dst.shape[2], dst.shape[3]), (_, _, _, dst.strides[3])) where dst.shape[1] <= 65536; dst.shape[2] <= 16384; dst.shape[3] <= 16384; (dst.shape[3] == 1) | (dst.strides[3] == 1); Layout((dst.shape[0], dst.shape[1]), dst.layout) where dst.shape[0] <= 16384; dst.shape[1] <= 65536})
+  between operands
+    src.shape = dst.shape, or one is an [R, C] matrix and the other its [1, R / H, H, C] feature map
+
 T.ane.bypass
   target             apple.m2_pro.ane
   target capability  ne.bypass
   execution mesh     Mesh(('engine',), Layout(((1,),), ((1,),)))
   parameters
     perm              any value where one of {(0, 1, 2); (0, 2, 1); (1, 0, 2); (1, 2, 0); (2, 0, 1); (2, 1, 0)} (type tuple) (default (0, 1, 2))
-    nonlinear         any value in {T.ane.Nonlinear.NONE, T.ane.Nonlinear.RELU} (default T.ane.Nonlinear.NONE)
-    tile_height       any value (type int) or None (default None)
-    tile_width        any value (type int) or None (default None)
+    nonlinear         any value in {T.ane.Nonlinear.NONE, T.ane.Nonlinear.RELU, T.ane.Nonlinear.SIGMOID, T.ane.Nonlinear.SILU} (default T.ane.Nonlinear.NONE)
     patch             any value (type tuple) or None (default None)
     width_code        any value (type int) or None (default None)
     unicast_channels  any value (type int) or None (default None)
     ocg_size          any value (type int) or None (default None)
     omit_ocg          any value (type bool) or None (default False)
   operands
-    dst  Tensor(dtype=dtype where one of {f16}, storage=any value where one of {gmem; smem}, layout=one of {Layout((1, dst.shape[1], dst.shape[2], dst.shape[3]), (_, _, _, dst.strides[3])) where dst.shape[1] <= 65536; dst.shape[2] <= 16384; dst.shape[3] <= 16384; (dst.shape[3] == 1) | (dst.strides[3] == 1); Layout((dst.shape[0], dst.shape[1]), dst.layout) where dst.shape[0] <= 16384; dst.shape[1] <= 65536})
-    src  Tensor(dtype=dtype where one of {f16}, storage=any value where one of {gmem; smem}, layout=one of {Layout((1, src.shape[1], src.shape[2], src.shape[3]), (_, _, _, src.strides[3])) where src.shape[1] <= 65536; src.shape[2] <= 16384; src.shape[3] <= 16384; (src.shape[3] == 1) | (src.strides[3] == 1); Layout((src.shape[0], src.shape[1]), src.layout) where src.shape[0] <= 16384; src.shape[1] <= 65536})
+    src  Tensor(dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=one of {Layout((1, src.shape[1], src.shape[2], src.shape[3]), (_, _, _, src.strides[3])) where src.shape[1] <= 65536; src.shape[2] <= 16384; src.shape[3] <= 16384; (src.shape[3] == 1) | (src.strides[3] == 1); Layout((src.shape[0], src.shape[1]), src.layout) where src.shape[0] <= 16384; src.shape[1] <= 65536})
+    dst  Tensor(dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=one of {Layout((1, dst.shape[1], dst.shape[2], dst.shape[3]), (_, _, _, dst.strides[3])) where dst.shape[1] <= 65536; dst.shape[2] <= 16384; dst.shape[3] <= 16384; (dst.shape[3] == 1) | (dst.strides[3] == 1); Layout((dst.shape[0], dst.shape[1]), dst.layout) where dst.shape[0] <= 16384; dst.shape[1] <= 65536})
 
 T.ane.conv
   target             apple.m2_pro.ane
   target capability  ne.conv
   execution mesh     Mesh(('engine',), Layout(((1,),), ((1,),)))
   parameters
-    stride       any value where one of {(1, 1); (1, 2); (2, 1); (2, 2)} (type tuple) (default (1, 1))
-    padding      (padding_h, padding_w) where 0 <= padding (type tuple) (default (0, 0))
-    dilation     (1, 1) (type tuple) (default (1, 1))
-    groups       any value where 1 <= groups (type int) (default 1)
-    nonlinear    any value in {T.ane.Nonlinear.NONE, T.ane.Nonlinear.RELU} (default T.ane.Nonlinear.NONE)
-    tile_height  any value (type int) or None (default None)
-    tile_width   any value (type int) or None (default None)
-    patch        any value (type tuple) or None (default None)
-    width_code   any value (type int) or None (default None)
-    ocg_size     any value (type int) or None (default None)
-    omit_ocg     any value (type bool) or None (default False)
+    stride      any value where one of {(1, 1); (1, 2); (2, 1); (2, 2)} (type tuple) (default (1, 1))
+    padding     (padding_h, padding_w) where 0 <= padding (type tuple) (default (0, 0))
+    dilation    (1, 1) (type tuple) (default (1, 1))
+    groups      any value where 1 <= groups (type int) (default 1)
+    nonlinear   any value in {T.ane.Nonlinear.NONE, T.ane.Nonlinear.RELU, T.ane.Nonlinear.SIGMOID, T.ane.Nonlinear.SILU} (default T.ane.Nonlinear.NONE)
+    patch       any value (type tuple) or None (default None)
+    width_code  any value (type int) or None (default None)
+    ocg_size    any value (type int) or None (default None)
+    omit_ocg    any value (type bool) or None (default False)
   operands
-    dst     Tensor(dtype=dtype where one of {f16}, storage=any value where one of {gmem; smem}, layout=one of {Layout((1, dst.shape[1], dst.shape[2], dst.shape[3]), (_, _, _, dst.strides[3])) where dst.shape[1] <= 65536; dst.shape[2] <= 16384; dst.shape[3] <= 16384; (dst.shape[3] == 1) | (dst.strides[3] == 1); Layout((dst.shape[0], dst.shape[1]), dst.layout) where dst.shape[0] <= 16384; dst.shape[1] <= 65536})
-    src     Tensor(dtype=dtype where one of {f16}, storage=any value where one of {gmem; smem}, layout=one of {Layout((1, src.shape[1], src.shape[2], src.shape[3]), (_, _, _, src.strides[3])) where src.shape[1] <= 65536; src.shape[2] <= 16384; src.shape[3] <= 16384; (src.shape[3] == 1) | (src.strides[3] == 1); Layout((src.shape[0], src.shape[1]), src.layout) where src.shape[0] <= 16384; src.shape[1] <= 65536})
+    src     Tensor(dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=one of {Layout((1, src.shape[1], src.shape[2], src.shape[3]), (_, _, _, src.strides[3])) where src.shape[1] <= 65536; src.shape[2] <= 16384; src.shape[3] <= 16384; (src.shape[3] == 1) | (src.strides[3] == 1); Layout((src.shape[0], src.shape[1]), src.layout) where src.shape[0] <= 16384; src.shape[1] <= 65536})
     weight  Tensor(dtype=dtype where one of {f16}, storage=any value where one of {gmem}, layout=one of {Layout((weight.shape[0], weight.shape[1], weight.shape[2], weight.shape[3]), weight.layout) where weight.shape[0] <= 65536; weight.shape[1] <= 65536; weight.shape[2] <= 32; weight.shape[3] <= 32; Layout((weight.shape[0], weight.shape[1]), weight.layout) where weight.shape[0] <= 65536; weight.shape[1] <= 65536})
+    dst     Tensor(dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=one of {Layout((1, dst.shape[1], dst.shape[2], dst.shape[3]), (_, _, _, dst.strides[3])) where dst.shape[1] <= 65536; dst.shape[2] <= 16384; dst.shape[3] <= 16384; (dst.shape[3] == 1) | (dst.strides[3] == 1); Layout((dst.shape[0], dst.shape[1]), dst.layout) where dst.shape[0] <= 16384; dst.shape[1] <= 65536})
     bias    Tensor(shape=(any value where bias.shape[0] <= 65536,), dtype=dtype where one of {f16}, storage=any value where one of {gmem}, layout=any layout) or None (default None)
 
 T.relu
@@ -148,20 +164,18 @@ T.ane.binary
   target capability  pe.binary
   execution mesh     Mesh(('engine',), Layout(((1,),), ((1,),)))
   parameters
-    kind         any value where one of {BinaryKind.ADD; BinaryKind.SUB; BinaryKind.MUL; BinaryKind.MIN; BinaryKind.MAX} in {BinaryKind.ADD, BinaryKind.SUB, BinaryKind.MUL, BinaryKind.DIV, BinaryKind.FLOOR_DIV, BinaryKind.MOD, BinaryKind.MIN, BinaryKind.MAX, BinaryKind.EQ, BinaryKind.NE, BinaryKind.LT, BinaryKind.LE, BinaryKind.GT, BinaryKind.GE, BinaryKind.AND, BinaryKind.OR}
-    tile_height  any value (type int) or None (default None)
-    tile_width   any value (type int) or None (default None)
-    patch        any value (type tuple) or None (default None)
-    width_code   any value (type int) or None (default None)
-    ocg_size     any value (type int) or None (default None)
-    omit_ocg     any value (type bool) or None (default False)
+    kind        any value where one of {BinaryKind.ADD; BinaryKind.SUB; BinaryKind.MUL; BinaryKind.MIN; BinaryKind.MAX} in {BinaryKind.ADD, BinaryKind.SUB, BinaryKind.MUL, BinaryKind.DIV, BinaryKind.FLOOR_DIV, BinaryKind.MOD, BinaryKind.MIN, BinaryKind.MAX, BinaryKind.EQ, BinaryKind.NE, BinaryKind.LT, BinaryKind.LE, BinaryKind.GT, BinaryKind.GE, BinaryKind.AND, BinaryKind.OR}
+    patch       any value (type tuple) or None (default None)
+    width_code  any value (type int) or None (default None)
+    ocg_size    any value (type int) or None (default None)
+    omit_ocg    any value (type bool) or None (default False)
   operands
-    dst  Tensor(shape=(1, any value where dst.shape[1] <= 65536, any value where dst.shape[2] <= 16384, any value where dst.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {gmem; smem}, layout=Layout(dst.layout, (_, _, _, dst.strides[3])) where (dst.shape[3] == 1) | (dst.strides[3] == 1))
-    lhs  Tensor(shape=(1, any value where lhs.shape[1] <= 65536, any value where lhs.shape[2] <= 16384, any value where lhs.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {gmem; smem}, layout=Layout(lhs.layout, (_, _, _, lhs.strides[3])) where (lhs.shape[3] == 1) | (lhs.strides[3] == 1))
-    rhs  Tensor(shape=(1, any value where rhs.shape[1] <= 65536, any value where rhs.shape[2] <= 16384, any value where rhs.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {gmem; smem}, layout=Layout(rhs.layout, (_, _, _, rhs.strides[3])) where (rhs.shape[3] == 1) | (rhs.strides[3] == 1))
+    lhs  Tensor(shape=(1, any value where lhs.shape[1] <= 65536, any value where lhs.shape[2] <= 16384, any value where lhs.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=Layout(lhs.layout, (_, _, _, lhs.strides[3])) where (lhs.shape[3] == 1) | (lhs.strides[3] == 1))
+    rhs  Tensor(shape=(1, any value where rhs.shape[1] <= 65536, any value where rhs.shape[2] <= 16384, any value where rhs.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=Layout(rhs.layout, (_, _, _, rhs.strides[3])) where (rhs.shape[3] == 1) | (rhs.strides[3] == 1))
+    dst  Tensor(shape=(1, any value where dst.shape[1] <= 65536, any value where dst.shape[2] <= 16384, any value where dst.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=Layout(dst.layout, (_, _, _, dst.strides[3])) where (dst.shape[3] == 1) | (dst.strides[3] == 1))
   between operands
-    dst.shape = lhs.shape
-    dst.shape = rhs.shape
+    lhs.shape = dst.shape
+    rhs.shape = dst.shape
 
 T.ane.pool
   target             apple.m2_pro.ane
@@ -174,61 +188,55 @@ T.ane.pool
     ceil_mode          one of {False; True} (type bool) (default False)
     count_include_pad  one of {False; True} (type bool) (default True)
     kind               any value where one of {PoolKind.MAX; PoolKind.AVG} in {PoolKind.MAX, PoolKind.AVG}
-    tile_height        any value (type int) or None (default None)
-    tile_width         any value (type int) or None (default None)
     patch              any value (type tuple) or None (default None)
     width_code         any value (type int) or None (default None)
     ocg_size           any value (type int) or None (default None)
     omit_ocg           any value (type bool) or None (default False)
   operands
-    dst  Tensor(shape=(1, any value where dst.shape[1] <= 65536, any value where dst.shape[2] <= 16384, any value where dst.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {gmem; smem}, layout=Layout(dst.layout, (_, _, _, dst.strides[3])) where (dst.shape[3] == 1) | (dst.strides[3] == 1))
-    src  Tensor(shape=(1, any value where src.shape[1] <= 65536, any value where src.shape[2] <= 16384, any value where src.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {gmem; smem}, layout=Layout(src.layout, (_, _, _, src.strides[3])) where (src.shape[3] == 1) | (src.strides[3] == 1))
+    src  Tensor(shape=(1, any value where src.shape[1] <= 65536, any value where src.shape[2] <= 16384, any value where src.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=Layout(src.layout, (_, _, _, src.strides[3])) where (src.shape[3] == 1) | (src.strides[3] == 1))
+    dst  Tensor(shape=(1, any value where dst.shape[1] <= 65536, any value where dst.shape[2] <= 16384, any value where dst.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=Layout(dst.layout, (_, _, _, dst.strides[3])) where (dst.shape[3] == 1) | (dst.strides[3] == 1))
 
 T.ane.reduce
   target             apple.m2_pro.ane
   target capability  pe.reduce
   execution mesh     Mesh(('engine',), Layout(((1,),), ((1,),)))
   parameters
-    axes         any value where one of {(2, 3); (3,); (1, 2, 3); (1, 3)} (type tuple)
-    keepdim      any value where keepdim in {True} | axes in {(2, 3)} (type bool)
-    kind         any value where one of {ReduceKind.SUM; ReduceKind.MAX; ReduceKind.MIN} in {ReduceKind.MEAN, ReduceKind.SUM, ReduceKind.ABS_MAX, ReduceKind.MAX, ReduceKind.MIN}
-    square       one of {False; True} (type bool) (default False)
-    scale        any value (type float) (default 1.0)
-    post         any value in {T.ane.Post.NONE, T.ane.Post.INVERSE, T.ane.Post.SQRT, T.ane.Post.RSQRT} (default T.ane.Post.NONE)
-    tile_height  any value (type int) or None (default None)
-    tile_width   any value (type int) or None (default None)
-    patch        any value (type tuple) or None (default None)
-    width_code   any value (type int) or None (default None)
-    ocg_size     any value (type int) or None (default None)
-    omit_ocg     any value (type bool) or None (default False)
+    axes        any value where one of {(2, 3); (3,); (1, 2, 3); (1, 3)} (type tuple)
+    keepdim     any value where keepdim in {True} | axes in {(2, 3)} (type bool)
+    kind        any value where one of {ReduceKind.SUM; ReduceKind.MAX; ReduceKind.MIN} in {ReduceKind.MEAN, ReduceKind.SUM, ReduceKind.ABS_MAX, ReduceKind.MAX, ReduceKind.MIN}
+    square      one of {False; True} (type bool) (default False)
+    scale       any value (type float) (default 1.0)
+    post        any value in {T.ane.Post.NONE, T.ane.Post.INVERSE, T.ane.Post.SQRT, T.ane.Post.RSQRT} (default T.ane.Post.NONE)
+    patch       any value (type tuple) or None (default None)
+    width_code  any value (type int) or None (default None)
+    ocg_size    any value (type int) or None (default None)
+    omit_ocg    any value (type bool) or None (default False)
   operands
+    src  Tensor(shape=(1, any value where src.shape[1] <= 65536, any value where src.shape[2] <= 16384, any value where src.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=Layout(src.layout, (_, _, _, src.strides[3])) where (src.shape[3] == 1) | (src.strides[3] == 1))
     dst  switch keepdim:
-           keepdim=True: Tensor(shape=(1, any value where dst.shape[1] <= 65536, any value where dst.shape[2] <= 16384, any value where dst.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {gmem; smem}, layout=Layout(dst.layout, (_, _, _, dst.strides[3])) where (dst.shape[3] == 1) | (dst.strides[3] == 1))
-           keepdim=False: Tensor(shape=(1, any value where dst.shape[1] <= 65536), dtype=dtype where one of {f16}, storage=any value where one of {gmem; smem}, layout=any layout)
-    src  Tensor(shape=(1, any value where src.shape[1] <= 65536, any value where src.shape[2] <= 16384, any value where src.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {gmem; smem}, layout=Layout(src.layout, (_, _, _, src.strides[3])) where (src.shape[3] == 1) | (src.strides[3] == 1))
+           keepdim=True: Tensor(shape=(1, any value where dst.shape[1] <= 65536, any value where dst.shape[2] <= 16384, any value where dst.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=Layout(dst.layout, (_, _, _, dst.strides[3])) where (dst.shape[3] == 1) | (dst.strides[3] == 1))
+           keepdim=False: Tensor(shape=(1, any value where dst.shape[1] <= 65536), dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=any layout)
 
 T.ane.unary
   target             apple.m2_pro.ane
   target capability  pe.unary
   execution mesh     Mesh(('engine',), Layout(((1,),), ((1,),)))
   parameters
-    pre_scale    any value (type float) (default 1.0)
-    scale        any value (type float) (default 1.0)
-    bias         any value (type float) (default 0.0)
-    abs          one of {False; True} (type bool) (default False)
-    square       one of {False; True} (type bool) (default False)
-    clamp        (clamp_low, clamp_high) where clamp_low <= clamp_high (type tuple) or None (default None)
-    tile_height  any value (type int) or None (default None)
-    tile_width   any value (type int) or None (default None)
-    patch        any value (type tuple) or None (default None)
-    width_code   any value (type int) or None (default None)
-    ocg_size     any value (type int) or None (default None)
-    omit_ocg     any value (type bool) or None (default False)
+    pre_scale   any value (type float) (default 1.0)
+    scale       any value (type float) (default 1.0)
+    bias        any value (type float) (default 0.0)
+    abs         one of {False; True} (type bool) (default False)
+    square      one of {False; True} (type bool) (default False)
+    clamp       (clamp_low, clamp_high) where clamp_low <= clamp_high (type tuple) or None (default None)
+    patch       any value (type tuple) or None (default None)
+    width_code  any value (type int) or None (default None)
+    ocg_size    any value (type int) or None (default None)
+    omit_ocg    any value (type bool) or None (default False)
   operands
-    dst  Tensor(shape=(1, any value where dst.shape[1] <= 65536, any value where dst.shape[2] <= 16384, any value where dst.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {gmem; smem}, layout=Layout(dst.layout, (_, _, _, dst.strides[3])) where (dst.shape[3] == 1) | (dst.strides[3] == 1))
-    src  Tensor(shape=(1, any value where src.shape[1] <= 65536, any value where src.shape[2] <= 16384, any value where src.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {gmem; smem}, layout=Layout(src.layout, (_, _, _, src.strides[3])) where (src.shape[3] == 1) | (src.strides[3] == 1))
+    src  Tensor(shape=(1, any value where src.shape[1] <= 65536, any value where src.shape[2] <= 16384, any value where src.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=Layout(src.layout, (_, _, _, src.strides[3])) where (src.shape[3] == 1) | (src.strides[3] == 1))
+    dst  Tensor(shape=(1, any value where dst.shape[1] <= 65536, any value where dst.shape[2] <= 16384, any value where dst.shape[3] <= 16384), dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=Layout(dst.layout, (_, _, _, dst.strides[3])) where (dst.shape[3] == 1) | (dst.strides[3] == 1))
   between operands
-    dst.shape = src.shape
+    src.shape = dst.shape
 
 T.reduce
   target             apple.m2_pro.ane

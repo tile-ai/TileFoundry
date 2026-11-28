@@ -78,19 +78,21 @@ def splice(*parts: Mapping[int, int]) -> Writes: ...
   - Canonical validation MUST compare only axes with extent greater than one. Byte strides
     and storage size MUST fill singleton axes from the padded inner geometry.
   - Declared layouts MUST have unit W stride for non-singleton W, non-overlapping rows,
-    planes and batches, and a positive storage extent below 2**63 bytes.
-  - Tile staging MUST derive L2 pitch from the scheduled width without changing the logical
-    shape or DRAM strides stored in `TensorDesc`. Intrinsics MUST receive fp16, N=1 feature maps.
+    planes and batches, and a positive storage extent below 2**63 bytes. A plane covers its
+    padded rows; a plane of one row covers only its W elements, as an L2 `[1, C, 1, 1]` map does.
+  - `TensorDesc.l2_channel`, `l2_row` and `l2_extent` MUST derive the L2 pitches and extent from the
+    logical shape. Intrinsics MUST receive fp16, N=1 feature maps.
   - `TensorDesc.validate_feature` MUST own this dtype/batch precondition for intrinsics,
     TIR tensor conversion and template entry points. General descriptor geometry still admits f32
     and multiple batches.
-  - `load` MUST program the staged source buffer and the source DMA of one feature map.
-  - `store` MUST program the staged result buffer and the result DMA of one feature map.
+  - `load` MUST program the source DMA of one feature map into the planar L2 block at its given base;
+    `load_chained` MUST program an L2 source at its given base without DMA.
+  - `store` MUST program the L2 result block at its given base and, when it writes out, the result DMA.
   - `compute_pe` MUST program the planar engine options and declare the task kind.
   - `compute_ne` MUST program the neural engine op and MUST arm the kernel DMA path.
   - A primitive MUST build its words from declared fields only. It MUST NOT shift a value into
     position by hand.
-  - DRAM bases MUST remain relocatable addends; L2 bases MUST use allocated byte offsets.
+  - DRAM bases MUST remain relocatable addends; L2 bases MUST use the planned byte offsets.
   - `splice` MUST combine disjoint field writes and accept repeated equal assignments.
     Different values on overlapping masks MUST raise `ValueError`, including explicit zero
     assignments. Nested splices MUST preserve masks. A plain mapping assigns complete words.
@@ -195,47 +197,59 @@ Coefficient register addresses are declared once as `KernelDMA` fields.
 `COEFFICIENT_RELOCATIONS` maps their low-word addresses to patch widths: three
 64-bit pairs and three 32-bit singles. Extended-packet flags are a separate
 encoding choice, so the serializer uses the applicable subset of these slots.
+`serialize` takes the flags per base register; `RELOCATION_SLOTS` is the default.
 
 ## 8. Field formulas and staging
 
 `rules.channel_groups` computes the log2 number of 16-channel groups, returning
 zero for one group. `active_nodes` stores node count minus one. `shift` clamps
-ceil-log2 of the work dimension to 0–4. These formulas are supported by compiler
-disassembly or descriptor comparisons.
+ceil-log2 of the work dimension to 0–4. `unicast_channels` rounds the number of
+16-channel groups up to a power of two and caps it at 8; `rules.check` requires it,
+and fill-lower-nodes exactly when it exceeds 1, on a transposing bypass. These
+formulas are supported by compiler disassembly or descriptor comparisons.
 
-The staging guard formula is empirical, matching 93.6% of the measured 2468-TD
-corpus. With patch width `pw`, channel step `ch` and channel count `channels`,
-the depth is `channels × ch`. The guard is zero for bypass with depth at least
-2048, `ch = 256`, binary tasks with `ch = 128`, `ch = 192` with at most 32
-channels, `ch = 96` with at least 33 channels, at most eight channels, or at
-most 17 channels when the tile spans the complete height. Otherwise it is
-`align16(2 × pw + k)`, where `k` is zero for odd `ch / 16` and 16 for even.
-The source row stride is the depth plus that guard.
+With channel step `ch` and channel count `channels`, the staged depth is
+`channels × ch`. The L2 row stride is that depth on both engines: the device
+computes identical results for every row stride that covers the depth, so no
+guard band is programmed.
 
 Feature-map DRAM rows align to the shared `SURFACE_ROW_ALIGN` of 64 bytes;
 L2 rows align to 16. A singleton extent causes the DMA row-stride field to
-remain zero. A narrower staged tile keeps the logical feature-map geometry
-and DRAM strides while changing its L2 pitch. Planar staging adds a 32-byte
-row guard. Neural pitch generation and effective-register validation share
-`tensor_desc.neural_staging_row` and the sampled modes in [§9](#9-verified-transfer-validation).
-Other guards, partial-height neural tiles and narrower neural widths are rejected
-as not decoded yet.
+remain zero. Pitch generation and effective-register validation share
+`TensorDesc.l2_row` and the constraints in [§9](#9-verified-transfer-validation).
 
 The neural width code is a power-of-two subdivision of 256 bytes. The dense row
 MUST divide 256 exactly before its ratio is tested for a power of two. An explicit
 code MUST lie in 0–4 and equal the shape-derived code. Other row subdivisions are
-rejected as not decoded yet; contradictory explicit codes are errors.
+rejected as not decoded yet; contradictory explicit codes are errors. A transposing
+bypass programs the preferred, minimum and maximum shift slices of `0x0038` to the
+code; an identity bypass programs only the maximum slice.
 A convolution reading from DRAM programs its kernel height and width, horizontal
 and vertical stride, and left/top padding through the declared kernel-window
-fields. Its output offsets are both one. ReLU selects the native nonlinear mode
-and reserves no lookup-table bytes in the coefficient stream.
+fields. Its output offsets are both one. A bias selects `0x0D04[4] = 1` and is read
+from the coefficient lanes ahead of the weights. ReLU selects the native nonlinear mode
+and reserves no lookup-table bytes in the coefficient stream. A lookup-table
+nonlinear selects the listed mode `0x0D04[17:16] = 2`, leaves `0x0D00`, the LUT
+enable `0x19E4` and its size and bases at reset, and reads the 128-byte table at
+the start of every coefficient lane, so the lane offsets and buffer sizes cover
+the table and the weights.
 
 ## 9. Verified transfer validation
 
 `isa/dma.py` decodes enabled tile DMA from access types and routing, independently
 of base-word presence. It accepts DMA_READ source/result, an enabled destination,
 source routing 1 for unary or 3 for binary, and second-stream plus PE second-source
-2 for binary. Complete-height unary continuation additionally accepts L2_READ source or result.
+2 (add, multiply, min, max) or 3 (subtract: first minus second source) for binary.
+Complete-height unary and neural-engine continuation additionally accepts L2_READ
+source, result or both, and so does a binary whose two sources are both L2_READ,
+with the second stream off and source routing 1. A pool and a spatial reduction
+accept an L2_READ source and either result; a pool's L2 source keeps the task words of
+its DMA-source form, confirmed on the device. A convolution that reads L2 may change
+the channel count; one whose kernel is taller than one row may also shrink the map, and
+reads the source rows its windows cover. A descriptor
+with neither DMA nor
+a second stream that programs an L2 channel or row pitch keeps both in L2; its
+geometry comes from the common block alone.
 An L2 result MUST disable destination DMA and buffer mode; an L2 source MUST omit
 source DMA. Its channel and row pitches MUST be explicit; depth/group pitches
 and source DMA format MUST stay at reset zero, matching the decoded
@@ -245,37 +259,42 @@ The verified transfer format is fp16, N=1, depth=1, common formats 2 and tile fo
 `(format_mode, trunc, shift, memory_format, offset_ch, interleave, cmp_vec)` equal to
 `(1, 3, 0, 2, 0, 1, 0)`. Destination FIFO and both zero-pad flags are one.
 Depth/group DMA strides are zero. Other formats, transpose controls and padded
-footprints are rejected as not decoded yet. The transfer extent covers effective
-elements; it does not generalize to other compressed or tiled encodings.
+footprints other than the convolution and pools below are rejected as not decoded
+yet. The transfer extent covers effective elements; it does not generalize to other
+compressed or tiled encodings.
 
 Source and second-source geometry is `(cin, hin, win)`. Destination geometry is
 `(cout, hout, wout)`, except spatial reduction writes `(cout, 1, 1)` while declaring
 the input spatial geometry. The verified NE bypass C/W transpose declares source
-geometry at both ends, uses unicast count 2 and fill-lower-nodes, and writes
-`(wout, hout, cout)`. DMA stride fields are in 64-byte units. A zero row stride in
+geometry at both ends, uses the unicast count and fill-lower-nodes that
+`rules.check` relates to its channels, reads its source by DMA or from L2, and writes
+`(wout, hout, cout)` out by DMA or into L2, or `(hout, wout, cout)` when it exchanges the row
+and channel pitches of its result. DMA stride fields are in 64-byte units. A zero row stride in
 a singleton geometry uses its canonical padded row. Rows MUST cover width × 2;
 channel strides MUST cover height × row. `tile_height` MUST lie in `[1, hout]`.
 Elementwise declared geometries MUST agree; pool/conv output dimensions MUST
-match their positive kernel window and strides without padding.
+match their positive kernel window, strides and padding, a pool's one window more when a
+last partial window starts inside the map. Only top and left padding
+are encoded; the output dimensions imply equal bottom and right padding. The decoded
+padded windows are an NE convolution with a 3×3 kernel, stride 1 and padding 1, and
+the pools that the Pool emitter admits; the source DMA reads the unpadded
+`(cin, hin, win)` map. Other padded windows are rejected as not decoded yet.
 
 `L2_CAPACITY` is defined once in `isa/dma.py` as 2 MiB. For each pass, source,
 second-source and result intervals MUST end within that capacity and MUST be
 disjoint. L2 byte bases and strides are the fields multiplied by 16. The checked
-envelope reserves complete staged rows including guard bytes. A planar row is
-`channels × align16(width × 2) + 32`. Pool source rows include the kernel halo;
-reduction reserves one result row. Zero result pitches select these verified
-implicit pitches for DMA results; explicit pitches MUST match them. An allocated
-planar L2-only result MUST explicitly program its channel and row pitches to the
-same staging geometry that its consumer uses. Depth and group extents remain one.
-
-Neural full-height staging currently accepts source `(C, W)` of `(32, 16)` or
-`(32, 32)`: row pitch is depth plus one channel pitch and another 16 bytes when
-depth is divisible by 1024. Other neural guards and narrower staged widths are
-rejected as not decoded yet. This includes the known undecoded `31 × 15 × 32`
-and `24 × 11 × 64` guards. The verified C/W transpose additionally admits result
-`(C, W) = (16, 32)` when its source is `(32, 16)`; this is a result-only mode.
+envelope reserves complete staged rows. A row stride MUST cover the staged depth
+`channels × align16(width × 2)`; channel, depth and group strides MUST equal the
+staged layout. Pool source rows include the kernel halo, up to the source height;
+reduction reserves one result row. A DMA result that leaves its row stride zero occupies the depth, or
+one source row for a reduction. An L2-only result MUST explicitly program its
+channel and row pitches to the staging geometry that its consumer uses. Depth
+and group extents remain one.
 Every overlapping live interval MUST be rejected, including equal-geometry 1×1
-convolution source/result intervals with alias bits set. Alias bits do not establish
+convolution source/result intervals with alias bits set. The one exception is a
+planar unary that reads its source by DMA and keeps its result in L2: its result
+MAY occupy exactly the interval its source lands in, which the device computes
+correctly; a partial overlap is still rejected. Alias bits do not establish
 permission to overlap buffers. Their existing encoding is retained.
 The result address field is `L2.l2_result_address` at `0x0534[20:4]` in 16-byte units.
 `validation.validate` MUST also

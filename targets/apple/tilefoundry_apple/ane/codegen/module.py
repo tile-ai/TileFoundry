@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from importlib.resources import files
 
 from tilefoundry import codegen, target, utils
-from tilefoundry.ir import core
+from tilefoundry.ir import core, expr
 from tilefoundry_apple.ane import isa, runtime
 from tilefoundry_apple.ane import target as ane_target
 from tilefoundry_apple.ane.codegen.tir.ne import conv
@@ -39,9 +39,12 @@ def called_as(
 def function_image(
     fn: core.PrimFunction, constants: Mapping[str, bytes] | None = None
 ) -> hwx.Image:
-    """Assemble an entry with supplied weights, or zero weights for its compiled skeleton."""
+    """Assemble an entry with supplied weights and biases, or zeros for its compiled skeleton.
+
+    Each DMA base pair is flagged with the I/O segment of the buffer its task moves;
+    the segments hold the outputs, then the inputs.
+    """
     ctx = tir.build_context(fn)
-    stream = program.to_program(ctx.passes)
     io = tuple(
         hwx.TensorBinding(param.name, ctx.binding_desc(param))
         for param in fn.params
@@ -52,33 +55,41 @@ def function_image(
         raise ValueError(f"{fn.name}: output count {outputs} does not fit {len(io)} parameters")
     if len(io) - outputs > 2 or outputs > 1:
         raise ValueError(f"{fn.name}: more than two inputs or one output is not decoded yet")
-    operands = {
-        isa.TileDMASrc.tile_dma_src_base_addr_lo.addr: 1,
-        isa.TileDMASrc.tile_dma_src2_base_addr_lo.addr: 2,
-        isa.TileDMADst.tile_dma_dst_base_addr_lo.addr: 0,
-    }
-    relocs = []
-    for word, (index, register, _) in hwx.base_slots(stream).items():
-        if register in isa.COEFFICIENT_RELOCATIONS:
-            continue
-        operand = ctx.operands[index][operands[register]]
-        source = ctx.symbols.get(operand, operand)
-        relocs.append(hwx.Reloc(word, source.name))
+    split = len(io) - outputs
+    segments = [binding.name for binding in (*io[split:], *io[:split])]
+    flags = [
+        {register: isa.io_relocation(segments.index(tensor.name)) for register, tensor in moved.items()}
+        for moved in ctx.transfers
+    ]
+    stream = program.to_program(ctx.passes, flags)
+    relocs = tuple(
+        hwx.Reloc(word, ctx.transfers[index][register].name)
+        for word, (index, register, _) in hwx.base_slots(stream).items()
+        if register not in isa.COEFFICIENT_RELOCATIONS
+    )
+
+    def supplied(constant: expr.Expr, size: int) -> bytes:
+        if constants is None:
+            return bytes(size)
+        if constant.name not in constants:
+            raise ValueError(f"{fn.name}: no bytes supplied for constant {constant.name}")
+        return constants[constant.name]
+
     coefficients = []
     for weight, layout in ctx.coefficients.items():
-        if constants is not None and weight.name not in constants:
-            raise ValueError(f"{fn.name}: no bytes supplied for constant {weight.name}")
-        values = (
-            bytes(layout.lanes * layout.lane_bytes) if constants is None else constants[weight.name]
-        )
-        coefficients.append(hwx.Coefficient(layout, values))
+        bias = ctx.biases.get(weight)
+        coefficients.append(hwx.Coefficient(
+            layout,
+            supplied(weight, layout.lanes * layout.lane_bytes),
+            b"" if bias is None else supplied(bias, layout.lanes * layout.bias_bytes),
+        ))
     consumers = {
         index: tuple(ctx.coefficients).index(weight) for weight, index, _ in ctx.weight_uses
     }
     return hwx.Image(
         stream,
         io,
-        tuple(relocs),
+        relocs,
         output_count=outputs,
         coefficients=tuple(coefficients),
         coefficient_relocs=hwx.coefficient_relocations(stream, consumers),
@@ -93,11 +104,15 @@ def byte_rows(image: bytes) -> str:
     )
 
 
-def tensor_row(desc: isa.TensorDesc) -> str:
+def tensor_row(desc: isa.TensorDesc, host_shape: tuple[int, ...]) -> str:
     """Render one initializer compatible with the launcher header."""
     shape = ", ".join(map(str, desc.shape))
     strides = ", ".join(map(str, desc.strides))
-    return f"  {{{json.dumps(desc.dtype)}, {{{shape}}}, {{{strides}}}, {desc.storage_bytes}}},"
+    host = ", ".join(map(str, host_shape))
+    return (
+        f"  {{{json.dumps(desc.dtype)}, {{{shape}}}, {{{strides}}}, {desc.storage_bytes}, "
+        f"{len(host_shape)}, {{{host}}}}},"
+    )
 
 
 def emit_function(
@@ -113,18 +128,25 @@ def emit_function(
         writer = f"{symbol}_weight_{index}"
         writers.append(conv.weight_writer(writer, layout))
         weights.append(f"  {{{json.dumps(weight.name)}, {writer}}},")
+        if weight in ctx.biases:
+            writer = f"{symbol}_bias_{index}"
+            writers.append(conv.weight_writer(writer, layout, bias=True))
+            weights.append(f"  {{{json.dumps(ctx.biases[weight].name)}, {writer}}},")
     offset = hwx.coefficient_offset(payload) if weights else 0
     params = ", ".join(f"DLTensor *arg_{index}" for index in range(len(sig.params)))
     declaration = f"void {symbol}(int64_t token, {params})"
     inputs = ", ".join(f"arg_{index}" for index in range(sig.input_count)) or "nullptr"
     outputs = ", ".join(f"arg_{index}" for index in range(sig.input_count, len(sig.params)))
     validation = "\n".join(
-        f"  if (!ane_check_tensor(arg_{index}, {symbol}_io[{index}].shape, 16, false))\n"
+        f"  if (!ane_check_tensor(arg_{index}, {symbol}_io[{index}].host_shape, {symbol}_io[{index}].ndim, 16, false))\n"
         f'    TVM_FFI_THROW(ValueError) << "{entry_name}: {param.name} must be a CPU fp16 '
         f'tensor of shape {tuple(param.type.shape)} with nonnegative strides and bounded offsets";'
         for index, param in enumerate(sig.params)
     )
-    rows = "\n".join(tensor_row(binding.desc) for binding in image.io)
+    rows = "\n".join(
+        tensor_row(binding.desc, tuple(expr.static_dim_value(n) for n in param.type.shape))
+        for binding, param in zip(image.io, sig.params)
+    )
     definition = (
         f"static const uint8_t {symbol}_image[] = {{\n{byte_rows(payload)}\n}};\n"
         f"static const TensorDesc {symbol}_io[] = {{\n{rows}\n}};\n"

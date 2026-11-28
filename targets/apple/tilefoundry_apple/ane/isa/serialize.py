@@ -37,6 +37,8 @@ RELOCATION_SLOTS = MappingProxyType(
     }
 )
 RELOCATION_SINGLES = MappingProxyType({KernelDMA.kernel_dma_lut_base.addr: 0x118})
+IO_RELOCATION = 0x110
+IO_RELOCATION_STEP = 4
 EXTENDED_ORDER = (
     *(addr for addr, width in COEFFICIENT_RELOCATIONS.items() if width == 8),
     TileDMASrc.tile_dma_src_base_addr_lo.addr,
@@ -95,15 +97,29 @@ class Packet:
         return (head, *(value for _, value in self.writes))
 
 
-def serialize(image: Mapping[int, int]) -> list[Packet]:
-    """Group words by block, choosing RUN on a tie with the MASK window."""
+def io_relocation(segment: int) -> int:
+    """The relocation flags that bind a base to the I/O segment at index *segment*.
+
+    The flags hold the segment's memory id: the first I/O segment, which is the
+    first output, has id 4 and each later segment the next id.
+    """
+    return IO_RELOCATION + IO_RELOCATION_STEP * segment
+
+
+def serialize(
+    image: Mapping[int, int], relocations: Mapping[int, int] = RELOCATION_SLOTS
+) -> list[Packet]:
+    """Group words by block, choosing RUN on a tie with the MASK window.
+
+    *relocations* gives the flags of each base pair emitted as an extended packet.
+    """
     for addr, value in image.items():
         if block_at(addr) is None:
             raise ValueError(f"{addr!r} is not a configuration word address")
         check_word(value)
 
     packets: list[Packet] = []
-    slotted = {addr: flag for addr, flag in RELOCATION_SLOTS.items() if addr in image}
+    slotted = {addr: flag for addr, flag in relocations.items() if addr in image}
     singles = {addr: flag for addr, flag in RELOCATION_SINGLES.items() if addr in image}
     paired = set(slotted) | {addr + WORD_BYTES for addr in slotted} | set(singles)
     pairs = [
@@ -182,6 +198,7 @@ __all__ = [
     "TASK_ALIGN_GRANULE",
     "WORD_BYTES",
     "Packet",
+    "io_relocation",
     "STAGE_ORDER",
     "sentinel_packets",
     "serialize",

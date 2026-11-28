@@ -11,7 +11,7 @@ source = "ANE generation in Apple M2-family chips"
 conditions = "H14 is the ANE generation of the Apple M2 family."
 
 [facts.capabilities]
-value = ["ne.conv", "ne.bypass", "pe.pool", "pe.unary", "pe.binary", "pe.reduce"]
+value = ["memory.load", "memory.store", "ne.conv", "ne.bypass", "pe.pool", "pe.unary", "pe.binary", "pe.reduce"]
 unit = "name"
 origin = "measured"
 source = "Core ML programs compiled for Apple M2 Pro, macOS 26.6"
