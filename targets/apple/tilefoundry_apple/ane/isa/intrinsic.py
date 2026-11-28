@@ -17,7 +17,7 @@ PLANAR_MIN_ROW_BYTES = 32
 NEURAL_MIN_ROW_BYTES = 16
 
 NE_WIDTH_UNIT = 256
-NE_PIPELINE_CODE = 7
+NE_BINARY_POINT = 28
 NE_OUTPUT_SELECT = 1
 
 SOURCE_HINT = 0x21
@@ -489,6 +489,7 @@ def convolution(
     multi_tile: bool = False,
     coeff_base: int = 0,
     nonlinear: fields.NENonlinear = fields.NENonlinear.NONE,
+    bias: bool = False,
     armed: bool | None = None,
     staged_source: bool = False,
     to_dram: bool = True,
@@ -501,7 +502,8 @@ def convolution(
 
     The pass reads the source the previous descriptor staged, so no source DMA
     and no source relocation are programmed.  Its result lands one channel slab
-    after the staged source.
+    after the staged source. With ``bias`` every coefficient lane leads its weights
+    with one fp16 bias word per lane output.
     """
     source.validate_feature()
     destination.validate_feature()
@@ -587,7 +589,8 @@ def convolution(
         ),
         NE.pack(
             op=fields.NEOp.CONV,
-            ne_pipeline_code=NE_PIPELINE_CODE,
+            ne_bias=int(bias),
+            ne_binary_point=NE_BINARY_POINT,
             arg_output_select=NE_OUTPUT_SELECT,
             post_scale=fp16(1.0, "post_scale"),
             nonlinear_mode=nonlinear,
@@ -694,7 +697,7 @@ def activation(
             ne_lut_mode=1,
             op=fields.NEOp.BYPASS,
             kernel_mode=1,
-            ne_pipeline_code=NE_PIPELINE_CODE,
+            ne_binary_point=NE_BINARY_POINT,
             nonlinear_mode=fields.NENonlinear.LUT,
             arg_output_select=NE_OUTPUT_SELECT,
             post_scale=fp16(1.0, "post_scale"),
@@ -1001,7 +1004,7 @@ def compute_ne(
         NE.pack(
             op=op,
             kernel_mode=kernel_mode,
-            ne_pipeline_code=NE_PIPELINE_CODE,
+            ne_binary_point=NE_BINARY_POINT,
             nonlinear_mode=nonlinear,
             arg_output_select=NE_OUTPUT_SELECT,
             post_scale=fp16(post_scale, "post_scale"),

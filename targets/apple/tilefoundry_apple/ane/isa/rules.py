@@ -54,6 +54,8 @@ def check(image: Mapping[int, int]) -> None:
             raise CheckError(f"shift slices out of order: min={mn} pref={pf} max={mx}")
         if mx > SHIFT_MAX:
             raise CheckError(f"shift_maximum {mx} exceeds {SHIFT_MAX}")
+        if read(image, common.small_source_mode) and not mn == pf == mx:
+            raise CheckError(f"small source mode needs equal shift slices: min={mn} pref={pf} max={mx}")
 
     row = read(image, l2.l2_src_row_stride)
     depth = read(image, l2.l2_src_depth_stride)

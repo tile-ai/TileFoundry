@@ -87,7 +87,8 @@ and no explicit OCG is given. Other omission combinations are not decoded yet.
 Conv source and result bases MUST come from the Context staging plan, with
 16-byte alignment. Effective range and overlap checks still apply at descriptor validation.
 
-Conv with a bias operand MUST be rejected as not decoded yet. Bypass MUST emit only
+Conv with a bias operand selects the bias mode `0x0D04[4] = 1` and reads the bias
+from its coefficient lanes; the bias MUST be a direct constant parameter. Bypass MUST emit only
 identity or `perm=(2, 1, 0)` and MUST check the resulting shape. Other valid
 permutations are not decoded yet. Bypass with a lookup-table nonlinear is not
 decoded yet and MUST be rejected. Conv load and compute MUST use the same full-height
@@ -213,11 +214,15 @@ channels, and starts on a 64-byte boundary. Blocks follow their first consumptio
 order in one section, with byte bases computed from the preceding blocks' sizes. Repeated consumption of a direct
 constant reuses its block. Each convolution uses its own pass index, block base
 and lane stride. Weight parameters must be contiguous OIHW fp16 tensors.
+A convolution with a bias leads every lane's weights with one fp16 bias word per
+lane output, in output order; the bias is a contiguous fp16 vector consumed with
+one weight only. A lookup table together with a bias is not decoded yet.
 
 `CoefficientLayout` owns the shape, section base and actual LUT bytes. Its
 `weight_axes` records each loop extent and source/destination byte stride in
-lane, input channel, kernel row, kernel column and lane-output order; Python
-packing and generated C++ writer loops consume these rules directly. Lane count, stride and weight offset are
+lane, input channel, kernel row, kernel column and lane-output order, and `bias_axes`
+in lane and lane-output order; Python packing and the generated C++ weight and bias
+writer loops consume these rules directly. Lane count, stride and weight offset are
 derived by the same layout used by emitters, symbols and relocation checks.
 `Coefficient` binds values to that layout; `Image.coefficients` is the sole image
 coefficient representation. The loop axes, source/destination strides and weight offset have one definition.
@@ -267,7 +272,7 @@ Every coefficient slot has an explicit `CoefficientReloc` naming its block.
 `require_relocated` rejects missing blocks or slots, duplicate bindings,
 nonconsecutive blocks, wrong first-use order, mismatched bases and lane reads
 crossing the assigned block. The listed nonlinear mode MUST agree with whether the
-read block's lanes lead with a table. Enabled coefficient readers must carry a bound
+read block's lanes lead with a table, and the bias mode with whether they hold bias words. Enabled coefficient readers must carry a bound
 base. LUT reads require actual table bytes and a nonempty in-range read extent;
 register forms without an established read range are rejected. All executable
 containers pass through the original `Image.to_bytes()` and its validation.

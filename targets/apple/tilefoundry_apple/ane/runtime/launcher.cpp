@@ -123,7 +123,8 @@ IOSurfaceRef make_surface(size_t bytes) {
 }
 
 bool matches(const TensorDesc &desc, const DLTensor *tensor) {
-    return ane_check_tensor(tensor, desc.shape, 8 * element_bytes(desc), false);
+    return ane_check_tensor(tensor, desc.shape, 4, 8 * element_bytes(desc),
+                            false);
 }
 
 /** Copy every element between a DLPack tensor and its declared surface. */
@@ -270,17 +271,17 @@ std::string image_hash(const AneProgram &program) {
 }
 }
 
-bool ane_check_tensor(const DLTensor *tensor, const int64_t *shape, int bits,
-                      bool contiguous) {
+bool ane_check_tensor(const DLTensor *tensor, const int64_t *shape, int ndim,
+                      int bits, bool contiguous) {
     if (!tensor || !shape || !tensor->data || !tensor->shape ||
-        tensor->ndim != 4 || tensor->device.device_type != kDLCPU ||
+        tensor->ndim != ndim || tensor->device.device_type != kDLCPU ||
         tensor->device.device_id != 0 || tensor->dtype.code != kDLFloat ||
         tensor->dtype.bits != bits || tensor->dtype.lanes != 1 ||
         (bits != 16 && bits != 32))
         return false;
     uint64_t dense = 1, last = 0;
     constexpr uint64_t limit = INT64_MAX;
-    for (int axis = 3; axis >= 0; --axis) {
+    for (int axis = ndim - 1; axis >= 0; --axis) {
         if (shape[axis] <= 0 || tensor->shape[axis] != shape[axis])
             return false;
         const int64_t stride = tensor->strides ? tensor->strides[axis] : dense;
@@ -502,7 +503,7 @@ void ane_token_set_weight(int64_t token, tvm::ffi::String name,
             << "weight " << name
             << " must name a compiled weight of an unloaded instance "
                "and be a contiguous CPU fp16 tensor with the compiled "
-               "OIHW shape and bounded offsets";
+               "OIHW or bias shape and bounded offsets";
     ane_check_status(status, "ane_set_weight");
 }
 

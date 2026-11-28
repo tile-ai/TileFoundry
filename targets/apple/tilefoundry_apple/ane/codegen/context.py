@@ -29,6 +29,7 @@ class Context:
         self.addresses: dict[expr.Expr, int] = {}
         self.symbols: dict[expr.Expr, expr.Expr] = {}
         self.coefficients: dict[expr.Expr, hwx.CoefficientLayout] = {}
+        self.biases: dict[expr.Expr, expr.Expr] = {}
         self.weight_uses: list[tuple[expr.Expr, int, hwx.CoefficientLayout]] = []
         self.staging: dict[tuple[int, int], int] = {}
         self.producers: dict[expr.Expr, isa.Engine] = {}
@@ -39,23 +40,34 @@ class Context:
         """Whether no pass ran yet, so the next one programs every register it reads."""
         return not self.passes
 
-    def coefficient_use(self, weight: expr.Expr, lut: bytes = b"") -> hwx.CoefficientLayout:
-        """Plan a constant's first use, its lanes led by *lut*, and retain every consuming pass."""
-        source = self.symbols.get(weight, weight)
-        if source is not weight or not getattr(source, "is_const", False):
-            raise ValueError("convolution weights must be direct constant parameters")
+    def coefficient_use(
+        self, weight: expr.Expr, lut: bytes = b"", bias: expr.Expr | None = None
+    ) -> hwx.CoefficientLayout:
+        """Plan a constant's first use, its lanes led by *lut* and *bias*, and retain its passes."""
+        for constant in (weight,) if bias is None else (weight, bias):
+            source = self.symbols.get(constant, constant)
+            if source is not constant or not getattr(source, "is_const", False):
+                raise ValueError("convolution weights and biases must be direct constant parameters")
         layout = self.coefficients.get(weight)
         if layout is None:
             shape = tuple(expr.static_dim_value(n) for n in weight.type.shape)
             base = sum(item.size for item in self.coefficients.values())
-            layout = hwx.CoefficientLayout(shape, base, lut)
+            layout = hwx.CoefficientLayout(shape, base, lut, bias is not None)
             _, inputs, kh, kw = layout.shape
             expected = (inputs * kh * kw, kh * kw, kw, 1)
             if not tir.layout.strided(weight.type, expected):
                 raise ValueError("convolution coefficients require contiguous OIHW weights")
+            if bias is not None:
+                if any(other is bias for other in self.biases.values()):
+                    raise ValueError("a bias consumed with different weights is not decoded yet")
+                if not tir.layout.strided(bias.type, (1,)):
+                    raise ValueError("convolution biases require contiguous vectors")
+                self.biases[weight] = bias
             self.coefficients[weight] = layout
-        elif layout.lut != lut:
-            raise ValueError("a constant consumed under different lookup tables is not decoded yet")
+        elif layout.lut != lut or self.biases.get(weight) is not bias:
+            raise ValueError(
+                "a constant consumed under different lookup tables or biases is not decoded yet"
+            )
         self.weight_uses.append((weight, len(self.passes), layout))
         return layout
 

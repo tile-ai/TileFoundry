@@ -25,7 +25,7 @@ class AneCompiledModule(runtime.CompiledModule):
   - Each successful load MUST bind its token to the entry.
   - A non-None placement MUST report `is not decoded yet` before replacing the current instance.
   - Load MUST unbind the entry and destroy the previous token before creating a candidate.
-    It MUST read CPU fp16 weights and pass contiguous OIHW tensors to the generated writers.
+    It MUST read CPU fp16 weights and pass contiguous OIHW weights and bias vectors to the generated writers.
   - `NOT_PROVISIONED` MUST raise `ProvisionRequiredError` with owned image bytes and the absolute cache path.
     Every failed candidate MUST be destroyed and leave the node unloaded.
     Other load failures MUST identify the operation and status.
@@ -61,7 +61,7 @@ with `Function::SetGlobal(..., override=true)`, as core registers CPU entries
   - Each library owns its token table. A node MUST use its token only with the functions it captured.
   - Native lookup, use and destruction MUST be synchronized so destruction cannot free an instance in use.
     A pointer MUST NOT be reinterpreted as a token. No pointer handle or custom C++ object MUST cross FFI.
-  - Invalid weights MUST identify the required unloaded instance, compiled name, CPU fp16 dtype, contiguous OIHW shape and bounded offsets.
+  - Invalid weights MUST identify the required unloaded instance, compiled name, CPU fp16 dtype, contiguous OIHW or bias shape and bounded offsets.
   - Invalid activations and outputs MUST identify the parameter, CPU fp16 shape, nonnegative strides and bounded offsets.
   - Other native failures MUST identify the operation and status. Undecoded behavior MUST report `is not decoded yet`.
   - Internal `ane_image` MAY borrow bytes. The FFI operation MUST return an owned copy.

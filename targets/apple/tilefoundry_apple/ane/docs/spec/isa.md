@@ -223,7 +223,8 @@ code MUST lie in 0–4 and equal the shape-derived code. Other row subdivisions 
 rejected as not decoded yet; contradictory explicit codes are errors.
 A convolution reading from DRAM programs its kernel height and width, horizontal
 and vertical stride, and left/top padding through the declared kernel-window
-fields. Its output offsets are both one. ReLU selects the native nonlinear mode
+fields. Its output offsets are both one. A bias selects `0x0D04[4] = 1` and is read
+from the coefficient lanes ahead of the weights. ReLU selects the native nonlinear mode
 and reserves no lookup-table bytes in the coefficient stream. A lookup-table
 nonlinear selects the listed mode `0x0D04[17:16] = 2`, leaves `0x0D00`, the LUT
 enable `0x19E4` and its size and bases at reset, and reads the 128-byte table at
@@ -247,7 +248,7 @@ The verified transfer format is fp16, N=1, depth=1, common formats 2 and tile fo
 `(format_mode, trunc, shift, memory_format, offset_ch, interleave, cmp_vec)` equal to
 `(1, 3, 0, 2, 0, 1, 0)`. Destination FIFO and both zero-pad flags are one.
 Depth/group DMA strides are zero. Other formats, transpose controls and padded
-footprints are rejected as not decoded yet. The transfer extent covers effective
+footprints other than the convolution below are rejected as not decoded yet. The transfer extent covers effective
 elements; it does not generalize to other compressed or tiled encodings.
 
 Source and second-source geometry is `(cin, hin, win)`. Destination geometry is
@@ -259,7 +260,11 @@ geometry at both ends, uses the unicast count and fill-lower-nodes that
 a singleton geometry uses its canonical padded row. Rows MUST cover width × 2;
 channel strides MUST cover height × row. `tile_height` MUST lie in `[1, hout]`.
 Elementwise declared geometries MUST agree; pool/conv output dimensions MUST
-match their positive kernel window and strides without padding.
+match their positive kernel window, strides and padding. Only top and left padding
+are encoded; the output dimensions imply equal bottom and right padding. The one
+decoded padded window is an NE convolution with a 3×3 kernel, stride 1 and padding 1,
+whose source DMA reads the unpadded `(cin, hin, win)` map; pools and other padded
+windows are rejected as not decoded yet.
 
 `L2_CAPACITY` is defined once in `isa/dma.py` as 2 MiB. For each pass, source,
 second-source and result intervals MUST end within that capacity and MUST be

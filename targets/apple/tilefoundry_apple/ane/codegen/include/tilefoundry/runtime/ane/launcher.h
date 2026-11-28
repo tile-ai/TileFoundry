@@ -47,9 +47,9 @@ enum AneStatus {
 };
 
 extern "C" {
-/** @brief Validate a host tensor and its offset arithmetic before copying. */
-bool ane_check_tensor(const DLTensor *tensor, const int64_t *shape, int bits,
-                      bool contiguous);
+/** @brief Validate a host tensor of rank ndim and its offset arithmetic. */
+bool ane_check_tensor(const DLTensor *tensor, const int64_t *shape, int ndim,
+                      int bits, bool contiguous);
 /** @brief Copy the compiled skeleton into a new independent instance. */
 int ane_create(const AneEntry *entry, AneProgram **program);
 /** @brief Dispatch a named writer into this instance's coefficient segment. */

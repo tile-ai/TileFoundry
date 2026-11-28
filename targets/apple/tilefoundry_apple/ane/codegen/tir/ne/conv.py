@@ -29,9 +29,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         raise ValueError(f"T.ane.conv: width_code={op.width_code!r} is not decoded yet")
     if op.omit_ocg is not False:
         raise ValueError(f"T.ane.conv: omit_ocg={op.omit_ocg!r} is not decoded yet")
-    if len(call.args) == 4:
-        raise ValueError("T.ane.conv: bias operand encoding is not decoded yet")
-    destination, source, weight = call.args
+    destination, source, weight, *held = call.args
     src = context.tensor_desc_of(source.type, "src")
     dst = context.tensor_desc_of(destination.type, "dst")
     if (tuple(op.dilation), op.groups) != PLAIN:
@@ -47,7 +45,9 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             )
         if dst.channels > 64:
             raise ValueError("T.ane.conv: explicit ocg_size above 64 channels is not decoded yet")
-    layout = ctx.coefficient_use(weight, tir.ne.nonlinear.TABLES.get(op.nonlinear, b""))
+    layout = ctx.coefficient_use(
+        weight, tir.ne.nonlinear.TABLES.get(op.nonlinear, b""), held[0] if held else None
+    )
     isa.dma.check_coefficient_lanes(
         layout.lanes, min(src.channels, len(isa.KernelDMA.kernel_dma_src_coeff_dma_en))
     )
@@ -79,6 +79,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             padding=op.padding,
             result_base=result_base,
             nonlinear=NONLINEAR[op.nonlinear],
+            bias=layout.bias,
             staged_source=False,
             to_dram=destination.type.storage is expr.StorageKind.GMEM,
             address=ctx.address_of(destination),
@@ -86,15 +87,16 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     )
 
 
-def weight_writer(symbol: str, layout: hwx.CoefficientLayout) -> str:
-    """Render one OIHW writer with validated CPU fp16 source geometry."""
-    shape = ", ".join(map(str, layout.shape))
+def weight_writer(symbol: str, layout: hwx.CoefficientLayout, bias: bool = False) -> str:
+    """Render the OIHW weight writer, or its bias writer, with validated CPU fp16 geometry."""
+    dims = (layout.shape[0],) if bias else layout.shape
+    shape = ", ".join(map(str, dims))
     return (
         f"static int {symbol}(uint8_t *coefficients, const DLTensor *tensor) {{\n"
         f"  static const int64_t shape[] = {{{shape}}};\n"
-        "  if (!ane_check_tensor(tensor, shape, 16, true)) return ANE_BAD_ARGUMENT;\n"
+        f"  if (!ane_check_tensor(tensor, shape, {len(dims)}, 16, true)) return ANE_BAD_ARGUMENT;\n"
         "  const auto *source = static_cast<const uint8_t *>(tensor->data) + tensor->byte_offset;\n"
-        f"{layout.writer_body()}\n  return ANE_OK;\n}}\n"
+        f"{layout.writer_body(bias)}\n  return ANE_OK;\n}}\n"
     )
 
 

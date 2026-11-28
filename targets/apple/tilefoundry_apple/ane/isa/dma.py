@@ -7,6 +7,7 @@ from . import fields
 from .arith import align_up
 
 L2_CAPACITY = 2 * 1024 * 1024
+PADDED_CONV = (3, 3, 1, 1, 1, 1)
 
 
 def value(image: Mapping[int, int], field: fields.BitField) -> int:
@@ -36,7 +37,10 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
     """Decode active readers and writers, refusing modes with undetermined footprints.
 
     A descriptor without DMA that programs L2 pitches keeps its source and result in
-    L2; the common block alone gives their geometry.
+    L2; the common block alone gives their geometry. A zero-padded convolution encodes
+    only its top and left padding and its source DMA reads the unpadded map; the result
+    geometry implies equal bottom and right padding. ``PADDED_CONV`` is the one decoded
+    padded window: kernel, stride and padding as (kh, kw, sy, sx, top, left).
     """
     common, l2 = fields.Common, fields.L2
     access = value(image, l2.l2_src_type)
@@ -116,13 +120,14 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
         if task == fields.TaskType.PE_POOL_UNARY or neural_op == fields.NEOp.CONV:
             if (value(image, common.out_offset_x), value(image, common.out_offset_y)) != (1, 1):
                 raise ValueError("kernel output offset DMA mapping is not decoded yet")
-            if value(image, common.pad_left) or value(image, common.pad_top):
-                raise ValueError("padded DMA footprint is not decoded yet")
             kw, kh, sx, sy = (value(image, f) for f in (common.kw, common.kh, common.sx, common.sy))
+            top, left = value(image, common.pad_top), value(image, common.pad_left)
+            if (top or left) and (task != fields.TaskType.NE or (kh, kw, sy, sx, top, left) != PADDED_CONV):
+                raise ValueError("padded DMA footprint is not decoded yet")
             if min(kw, kh, sx, sy) <= 0:
                 raise ValueError("kernel window and strides must be positive")
-            if result[1:] != ((source[1] - kh) // sy + 1, (source[2] - kw) // sx + 1):
-                raise ValueError("output geometry contradicts the kernel window and strides")
+            if result[1:] != ((source[1] + 2 * top - kh) // sy + 1, (source[2] + 2 * left - kw) // sx + 1):
+                raise ValueError("output geometry contradicts the kernel window, strides and padding")
         elif not transpose and source != result:
             raise ValueError("bypass output geometry must equal input")
     decoded = [

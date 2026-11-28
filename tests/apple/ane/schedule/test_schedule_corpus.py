@@ -309,6 +309,18 @@ class Conv1x1(AneCase):
 
 
 @case
+class Conv1x1Bias(Conv1x1):
+    path: Path = ROOT / "scheduled" / "conv_1x1_bias.py"
+
+    def inputs(self):
+        return (*super().inputs(), small((32,), 12, -3, 3))
+
+    def guard(self, state, problems):
+        x, w, b = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(x, w, b))
+
+
+@case
 class Conv1x1Relu(Conv1x1):
     path: Path = ROOT / "scheduled" / "conv_1x1_relu.py"
 
@@ -327,6 +339,30 @@ class Conv1x1Silu(Conv1x1):
         x, w = self.inputs()
         silu = utils.F.silu(utils.F.conv2d(x, w).float())
         assert (state.result.float() - silu).abs().max() <= 2**-6
+
+
+@case
+class Conv1x1Sigmoid(Conv1x1):
+    """The engine's sigmoid table stays within 2**-11 of sigmoid."""
+
+    path: Path = ROOT / "scheduled" / "conv_1x1_sigmoid.py"
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        sigmoid = utils.F.conv2d(x, w).float().sigmoid()
+        assert (state.result.float() - sigmoid).abs().max() <= 2**-11
+
+
+@case
+class Conv3x3Pad1(Conv1x1):
+    path: Path = ROOT / "scheduled" / "conv_3x3_pad1.py"
+
+    def inputs(self):
+        return small((1, 32, 16, 16), 10), small((32, 32, 3, 3), 11)
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(x, w, padding=1))
 
 
 @case
