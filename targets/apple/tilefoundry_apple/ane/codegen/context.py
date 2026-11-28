@@ -9,6 +9,7 @@ produced an L2 source and whether a result is written out.
 """
 
 from collections.abc import Mapping
+from dataclasses import replace
 
 from tilefoundry import codegen, dispatch
 from tilefoundry.ir import expr, types
@@ -37,6 +38,7 @@ class Context:
         self.weight_uses: list[tuple[expr.Expr, int, hwx.CoefficientLayout]] = []
         self.producers: dict[expr.Expr, expr.Call] = {}
         self.stores: dict[expr.Expr, expr.Expr] = {}
+        self.views: dict[expr.Expr, tuple[int, ...]] = {}
 
     @property
     def fresh(self) -> bool:
@@ -44,7 +46,11 @@ class Context:
         return not self.passes
 
     def coefficient_use(
-        self, weight: expr.Expr, lut: bytes = b"", bias: expr.Expr | None = None
+        self,
+        weight: expr.Expr,
+        lut: bytes = b"",
+        bias: expr.Expr | None = None,
+        depthwise: bool = False,
     ) -> hwx.CoefficientLayout:
         """Plan a constant's first use, its lanes led by *lut* and *bias*, and retain its passes."""
         for constant in (weight,) if bias is None else (weight, bias):
@@ -55,7 +61,7 @@ class Context:
         if layout is None:
             shape = tuple(expr.static_dim_value(n) for n in weight.type.shape)
             base = sum(item.size for item in self.coefficients.values())
-            layout = hwx.CoefficientLayout(shape, base, lut, bias is not None)
+            layout = hwx.CoefficientLayout(shape, base, lut, bias is not None, depthwise)
             _, inputs, kh, kw = layout.shape
             expected = (inputs * kh * kw, kh * kw, kw, 1)
             if not tir.layout.strided(weight.type, expected):
@@ -67,9 +73,14 @@ class Context:
                     raise ValueError("convolution biases require contiguous vectors")
                 self.biases[weight] = bias
             self.coefficients[weight] = layout
-        elif layout.lut != lut or self.biases.get(weight) is not bias:
+        elif (
+            layout.lut != lut
+            or layout.depthwise != depthwise
+            or self.biases.get(weight) is not bias
+        ):
             raise ValueError(
-                "a constant consumed under different lookup tables or biases is not decoded yet"
+                "a constant consumed under different lookup tables, biases or group forms "
+                "is not decoded yet"
             )
         self.weight_uses.append((weight, len(self.passes), layout))
         return layout
@@ -132,6 +143,8 @@ class Context:
             loaded = isinstance(call.target, tir.Load)
             moved = call.args[0] if loaded else self.stores.get(root)
             register = SOURCE if loaded else RESULT
+            if moved is not None:
+                self.views[self.symbols.get(moved, moved)] = tuple(root.type.shape)
             self.transfers.append({} if moved is None else {register: self.symbols.get(moved, moved)})
 
     def source(self, operand: expr.Expr) -> tuple[int, isa.Engine]:
@@ -152,7 +165,7 @@ class Context:
     def binding_desc(self, param: expr.Var) -> isa.TensorDesc:
         """Describe an entry buffer and validate any lowered GMEM scratch views."""
         if len(param.type.shape) != 1:
-            return tensor_desc_of(param.type, param.name, strided=True)
+            return tensor_desc_of(param.type, param.name, strided=True, view=self.views.get(param))
         count = expr.static_dim_value(param.type.shape[0])
         desc = isa.TensorDesc.from_shape(param.type.dtype.name, (1, 1, 1, count))
         for operand, source in self.symbols.items():
@@ -176,16 +189,36 @@ class Context:
         handler(call, self)
 
 
+def feature_view(
+    type_: types.TensorType, view: tuple[int, ...] | None, name: str
+) -> types.TensorType:
+    """The feature map *view* of the [R, C] matrix *type_*: row m is row m % H of channel m // H."""
+    if view is None or len(view) != 4:
+        raise ValueError(f"{name} is a matrix; only a load or store of a feature map reads it")
+    shape = tuple(expr.static_dim_value(extent) for extent in view)
+    rows, columns = (expr.static_dim_value(extent) for extent in type_.shape)
+    if shape[0] != 1 or shape[1] * shape[2] != rows or shape[3] != columns:
+        raise ValueError(f"{name} shape [{rows}, {columns}] is not the matrix of feature map {shape}")
+    if not isinstance(type_.layout, types.Layout):
+        raise ValueError(f"{name}: ANE I/O needs a flat tensor layout")
+    step, unit = (expr.static_dim_value(stride) for stride in type_.layout.strides)
+    strides = (rows * step, shape[2] * step, step, unit)
+    return replace(type_, shape=shape, layout=types.Layout(shape, strides))
+
+
 def tensor_desc_of(
-    type_: types.TensorType, name: str, *, strided: bool = False
+    type_: types.TensorType, name: str, *, strided: bool = False, view: tuple[int, ...] | None = None
 ) -> isa.TensorDesc:
     """Read the memory layout of one static fp16 feature map.
 
     *strided* keeps the strides the type declares; otherwise the type must
-    declare the canonical feature map of its shape.
+    declare the canonical feature map of its shape. A matrix is read as the
+    feature map *view*.
     """
     if not isinstance(type_, types.TensorType):
         raise ValueError(f"{name} must be an fp16 tensor")
+    if len(type_.shape) == 2:
+        type_ = feature_view(type_, view, name)
     shape = tuple(expr.static_dim_value(extent) for extent in type_.shape)
     if len(shape) != 4 or any(extent is None for extent in shape):
         raise ValueError(f"{name} must have static shape [1, C, H, W]")
@@ -228,7 +261,7 @@ def operands(call: expr.Call) -> tuple[tuple[expr.Expr, ...], expr.Expr]:
 
 def written(desc: isa.TensorDesc, stored: expr.Expr | None) -> isa.TensorDesc:
     """The feature map a task writes: *desc* in L2, or the GMEM tensor a store writes it to."""
-    return desc if stored is None else tensor_desc_of(stored.type, "dst", strided=True)
+    return desc if stored is None else tensor_desc_of(stored.type, "dst", strided=True, view=desc.shape)
 
 
 def raster_patch(desc: isa.TensorDesc, patch: tuple | None = None) -> tuple[int, int]:

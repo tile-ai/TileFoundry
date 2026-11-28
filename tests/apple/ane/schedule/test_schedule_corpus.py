@@ -374,6 +374,18 @@ class Conv3x3Pad1(Conv1x1):
 
 
 @case
+class ConvDepthwise(Conv1x1):
+    path: Path = ROOT / "scheduled" / "conv_depthwise.py"
+
+    def inputs(self):
+        return small((1, 32, 16, 16), 10), small((32, 1, 3, 3), 11)
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(x, w, padding=1, groups=32))
+
+
+@case
 class ConvUnaryChain(Conv1x1):
     path: Path = ROOT / "scheduled" / "conv_unary_chain.py"
 
@@ -406,6 +418,21 @@ class ConvConvChain(Conv1x1):
 
     def inputs(self):
         return small((1, 32, 16, 16), 10), small((32, 32, 1, 1), 11), small((32, 32, 1, 1), 12)
+
+    def guard(self, state, problems):
+        x, v, w = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(utils.F.conv2d(x, v), w))
+
+
+@case
+class ConvConvRect(Conv1x1):
+    """The second convolution reads 32 channels from L2 and writes 16 out by DMA."""
+
+    path: Path = ROOT / "scheduled" / "conv_conv_rect.py"
+    runs: bool = True
+
+    def inputs(self):
+        return small((1, 16, 16, 16), 10), small((32, 16, 1, 1), 11), small((16, 32, 1, 1), 12)
 
     def guard(self, state, problems):
         x, v, w = self.inputs()
@@ -463,6 +490,26 @@ class MatMul(AneCase):
 
 
 @case
+class MatMulRect(MatMul):
+    """The contracted axis K = 16 widens to N = 32 output channels in the convolution."""
+
+    path: Path = ROOT / "scheduled" / "matmul_rect.py"
+
+    def inputs(self):
+        return small((1, 16, 8, 16), 0), small((32, 16, 1, 1), 1)
+
+
+@case
+class MatMul2D(MatMul):
+    """The same product with [M, K] matrices at the entry; load and store change rank."""
+
+    path: Path = ROOT / "scheduled" / "matmul_2d.py"
+
+    def inputs(self):
+        return small((128, 16), 0), small((16, 16, 1, 1), 1)
+
+
+@case
 class MatMulTiled(MatMul):
     """Four tiles of 16 channels share one weight constant; each stores into its output window."""
 
@@ -516,6 +563,22 @@ class Transpose(AneCase):
 
 
 @case
+class TransposeHwc(AneCase):
+    path: Path = ROOT / "scheduled" / "transpose_hwc.py"
+    runs: bool = True
+
+    def inputs(self):
+        return ((utils.torch.arange(4096) - 2048).reshape(1, 32, 8, 16).to(utils.torch.float16),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, x.permute(0, 2, 3, 1))
+        assert issued(state.lowered) == [
+            "T.ane.load(x, t0)", "T.ane.bypass(t0, t1, perm=(1, 2, 0))", "T.ane.store(t1, out)"
+        ]
+
+
+@case
 class TransposeConvChain(AneCase):
     path: Path = ROOT / "scheduled" / "transpose_conv_chain.py"
     runs: bool = True
@@ -550,6 +613,14 @@ class Pool(AneCase):
             "T.ane.pool(t0, t1, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), kind=AVG)",
             "T.ane.store(t1, out)",
         ]
+
+
+@case
+class PoolUnaryChain(AneCase):
+    """No Apple stream keeps a pool result in L2; only a reduction does."""
+
+    path: Path = ROOT / "scheduled" / "pool_unary_chain.py"
+    emit_refusal: str = "L2 continuation access mapping is not decoded yet"
 
 
 @case
@@ -602,6 +673,44 @@ class PoolAvg(AneCase):
         (x,) = self.inputs()
         sums = utils.F.avg_pool2d(x.float(), 3, 1, 1, divisor_override=1)
         inside = utils.F.avg_pool2d(utils.torch.ones(1, 1, 16, 16), 3, 1, 1, divisor_override=1)
+        expected = tir.evaluation.f16(sums * tir.evaluation.f16(1 / inside))
+        assert utils.torch.equal(state.result, expected.to(utils.torch.float16))
+
+
+@case
+class PoolMaxCeil(AneCase):
+    """The last window row and column reach past the map and take no part in a max."""
+
+    path: Path = ROOT / "scheduled" / "pool_max_ceil.py"
+    runs: bool = True
+
+    def inputs(self):
+        return (small((1, 32, 16, 16), 0, -7, -1),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.max_pool2d(x, 3, 2, ceil_mode=True))
+        assert issued(state.lowered) == [
+            "T.ane.load(x, t0)",
+            "T.ane.pool(t0, t1, kernel_size=(3, 3), stride=(2, 2), ceil_mode=True, kind=MAX)",
+            "T.ane.store(t1, out)",
+        ]
+
+
+@case
+class PoolAvgCeil(AneCase):
+    """An overhanging window divides by the cells it has inside the map."""
+
+    path: Path = ROOT / "scheduled" / "pool_avg_ceil.py"
+    runs: bool = True
+
+    def inputs(self):
+        return (small((1, 32, 16, 16), 0, -3, 3),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        sums = utils.F.avg_pool2d(x.float(), 3, 2, ceil_mode=True, divisor_override=1)
+        inside = utils.F.avg_pool2d(utils.torch.ones(1, 1, 16, 16), 3, 2, ceil_mode=True, divisor_override=1)
         expected = tir.evaluation.f16(sums * tir.evaluation.f16(1 / inside))
         assert utils.torch.equal(state.result, expected.to(utils.torch.float16))
 
@@ -762,6 +871,23 @@ class ReduceMean(AneCase):
 
 
 @case
+class ReduceUnaryChain(AneCase):
+    """A reduction result stays in L2 and a following planar pass reads it."""
+
+    path: Path = ROOT / "scheduled" / "reduce_unary_chain.py"
+    runs: bool = True
+
+    def inputs(self):
+        return (small((1, 32, 16, 16), 0),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        total = tir.evaluation.f16(x.float().sum((2, 3), keepdim=True))
+        mean = tir.evaluation.f16(total * tir.evaluation.f16(utils.torch.tensor(1 / 256)))
+        assert utils.torch.equal(state.result, ((mean + 1) * 2).to(utils.torch.float16))
+
+
+@case
 class ReduceSum(AneCase):
     path: Path = ROOT / "scheduled" / "reduce_sum.py"
     runs: bool = True
@@ -774,6 +900,26 @@ class ReduceSum(AneCase):
         assert utils.torch.equal(state.result, x.sum((2, 3), keepdim=True))
         assert issued(state.lowered) == [
             "T.ane.load(x, t0)", "T.ane.reduce(t0, t1, axes=(2, 3), keepdim=True, kind=SUM)", "T.ane.store(t1, out)"
+        ]
+
+
+@case
+class ReduceSumSquare(AneCase):
+    """The squares are summed in one pass; the engine squares each element before it adds."""
+
+    path: Path = ROOT / "scheduled" / "reduce_sum_square.py"
+    runs: bool = True
+
+    def inputs(self):
+        return (small((1, 32, 16, 16), 0, -2, 2),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, (x * x).sum((2, 3), keepdim=True))
+        assert issued(state.lowered) == [
+            "T.ane.load(x, t0)",
+            "T.ane.reduce(t0, t1, axes=(2, 3), keepdim=True, kind=SUM, square=True)",
+            "T.ane.store(t1, out)",
         ]
 
 

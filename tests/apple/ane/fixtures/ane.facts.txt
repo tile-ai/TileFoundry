@@ -101,7 +101,7 @@ T.ane.load
     src  Tensor(dtype=dtype where one of {f16}, storage=any value where one of {gmem}, layout=one of {Layout((1, src.shape[1], src.shape[2], src.shape[3]), (_, _, _, src.strides[3])) where src.shape[1] <= 65536; src.shape[2] <= 16384; src.shape[3] <= 16384; (src.shape[3] == 1) | (src.strides[3] == 1); Layout((src.shape[0], src.shape[1]), src.layout) where src.shape[0] <= 16384; src.shape[1] <= 65536})
     dst  Tensor(dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=one of {Layout((1, dst.shape[1], dst.shape[2], dst.shape[3]), (_, _, _, dst.strides[3])) where dst.shape[1] <= 65536; dst.shape[2] <= 16384; dst.shape[3] <= 16384; (dst.shape[3] == 1) | (dst.strides[3] == 1); Layout((dst.shape[0], dst.shape[1]), dst.layout) where dst.shape[0] <= 16384; dst.shape[1] <= 65536})
   between operands
-    src.shape = dst.shape
+    src.shape = dst.shape, or one is an [R, C] matrix and the other its [1, R / H, H, C] feature map
 
 T.ane.store
   target             apple.m2_pro.ane
@@ -111,7 +111,7 @@ T.ane.store
     src  Tensor(dtype=dtype where one of {f16}, storage=any value where one of {smem}, layout=one of {Layout((1, src.shape[1], src.shape[2], src.shape[3]), (_, _, _, src.strides[3])) where src.shape[1] <= 65536; src.shape[2] <= 16384; src.shape[3] <= 16384; (src.shape[3] == 1) | (src.strides[3] == 1); Layout((src.shape[0], src.shape[1]), src.layout) where src.shape[0] <= 16384; src.shape[1] <= 65536})
     dst  Tensor(dtype=dtype where one of {f16}, storage=any value where one of {gmem}, layout=one of {Layout((1, dst.shape[1], dst.shape[2], dst.shape[3]), (_, _, _, dst.strides[3])) where dst.shape[1] <= 65536; dst.shape[2] <= 16384; dst.shape[3] <= 16384; (dst.shape[3] == 1) | (dst.strides[3] == 1); Layout((dst.shape[0], dst.shape[1]), dst.layout) where dst.shape[0] <= 16384; dst.shape[1] <= 65536})
   between operands
-    src.shape = dst.shape
+    src.shape = dst.shape, or one is an [R, C] matrix and the other its [1, R / H, H, C] feature map
 
 T.ane.bypass
   target             apple.m2_pro.ane

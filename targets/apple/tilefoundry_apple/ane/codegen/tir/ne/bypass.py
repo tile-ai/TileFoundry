@@ -1,4 +1,8 @@
-"""Codegen for ``T.ane.bypass``: one neural engine pass-through, optionally permuting."""
+"""Codegen for ``T.ane.bypass``: one neural engine pass-through, optionally permuting.
+
+A permutation is the channel-width transpose of the pass, written with the pitches of
+its result axes: ``(2, 1, 0)`` and ``(1, 2, 0)`` differ only in those pitches.
+"""
 
 from types import MappingProxyType
 
@@ -16,6 +20,8 @@ NONLINEAR = MappingProxyType(
     }
 )
 IDENTITY = (0, 1, 2)
+SWAP_CHANNEL_WIDTH = (2, 1, 0)
+HEIGHT_OUTER = (1, 2, 0)
 IDENTITY_CHANNELS = 32
 
 
@@ -30,7 +36,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     perm = tuple(op.perm)
     if sorted(perm) != list(IDENTITY):
         raise ValueError(f"T.ane.bypass: perm {perm} must be a permutation of {IDENTITY}")
-    if perm not in (IDENTITY, (2, 1, 0)):
+    if perm not in (IDENTITY, SWAP_CHANNEL_WIDTH, HEIGHT_OUTER):
         raise ValueError(f"T.ane.bypass: perm {perm} is not decoded yet")
     permuted = perm != IDENTITY
     src = context.tensor_desc_of(source.type, "src")
@@ -74,6 +80,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         intrinsic.store(
             context.written(dst, stored), result_base=result_base, address=ctx.address_of(stored),
             fresh=ctx.fresh, declared=declared, producer=producer, to_dram=stored is not None,
+            swap_pitches=perm == HEIGHT_OUTER,
         ),
     )
 

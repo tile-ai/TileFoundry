@@ -24,19 +24,24 @@ class CoefficientLayout:
     """One OIHW tensor's byte range within the coefficient section.
 
     Each lane holds the optional lookup table, then one fp16 bias word per lane output
-    when the convolution adds a bias, then the weights.
+    when the convolution adds a bias, then the weights. A depthwise layout gives output
+    channel ``slot * lanes + lane`` to slot ``slot`` of lane ``lane``, and each slot holds its
+    bias word, if any, directly before its kernel.
     """
 
     shape: tuple[int, int, int, int]
     base: int = 0
     lut: bytes = b""
     bias: bool = False
+    depthwise: bool = False
 
     def __post_init__(self) -> None:
         if len(self.shape) != 4 or any(type(n) is not int or n <= 0 for n in self.shape):
             raise ValueError("coefficient shape must have four positive static extents")
         if type(self.base) is not int or self.base < 0 or self.base % COEFF_LANE_ALIGN:
             raise ValueError("coefficient base must be a nonnegative 64-byte offset")
+        if self.depthwise and self.shape[1] != 1:
+            raise ValueError("depthwise coefficients take one input channel per output channel")
         if self.shape[0] % self.lanes:
             raise ValueError(
                 f"output channels {self.shape[0]} do not split into {self.lanes} lanes"
@@ -64,7 +69,7 @@ class CoefficientLayout:
     @property
     def stride(self) -> int:
         """The aligned byte stride between consecutive lanes."""
-        return arith.align_up(self.weight_offset + self.lane_bytes, COEFF_LANE_ALIGN)
+        return arith.align_up(len(self.lut) + self.bias_bytes + self.lane_bytes, COEFF_LANE_ALIGN)
 
     @property
     def size(self) -> int:
@@ -77,15 +82,30 @@ class CoefficientLayout:
         return self.shape[0] // self.lanes * 2 if self.bias else 0
 
     @property
+    def slot_bytes(self) -> int:
+        """The bytes of one depthwise slot: its bias word, if any, and its kernel."""
+        return self.weight_offset - len(self.lut) + self.shape[2] * self.shape[3] * 2
+
+    @property
     def weight_offset(self) -> int:
         """The first weight byte within each lane, after its lookup table and bias."""
-        return len(self.lut) + self.bias_bytes
+        return len(self.lut) + (2 * self.bias if self.depthwise else self.bias_bytes)
 
     @property
     def weight_axes(self) -> tuple[PackingAxis, ...]:
-        """Loop rules in lane, input, kernel row, kernel column, lane-output order."""
+        """Loop rules in lane, input, kernel row, kernel column, lane-output order.
+
+        A depthwise layout runs lane, slot, kernel row, kernel column.
+        """
         outputs, inputs, kh, kw = self.shape
         per_lane = outputs // self.lanes
+        if self.depthwise:
+            return (
+                PackingAxis(self.lanes, kh * kw * 2, self.stride),
+                PackingAxis(per_lane, self.lanes * kh * kw * 2, self.slot_bytes),
+                PackingAxis(kh, kw * 2, kw * 2),
+                PackingAxis(kw, 2, 2),
+            )
         return (
             PackingAxis(self.lanes, per_lane * inputs * kh * kw * 2, self.stride),
             PackingAxis(inputs, kh * kw * 2, kh * kw * per_lane * 2),
@@ -97,6 +117,11 @@ class CoefficientLayout:
     @property
     def bias_axes(self) -> tuple[PackingAxis, ...]:
         """Loop rules in lane, lane-output order for the bias words; empty without a bias."""
+        if self.depthwise:
+            return (
+                PackingAxis(self.lanes, 2, self.stride),
+                PackingAxis(self.bias_bytes // 2, self.lanes * 2, self.slot_bytes),
+            )
         return (
             PackingAxis(self.lanes, self.bias_bytes, self.stride),
             PackingAxis(self.bias_bytes // 2, 2, 2),

@@ -181,11 +181,11 @@ def load_chained(
     source DMA at all and leaves the access type at L2 read.  The reference
     streams for an add-then-pool and an abs-then-add chain both show a chained
     descriptor carrying no source DMA block, which is what this encodes.
-    ``producer`` is the engine whose pass filled the buffer.
+    ``producer`` is the engine whose pass filled the buffer. A planar pass reads rows
+    of any width; the Apple streams show 16 byte and 2 byte rows read from L2.
     """
-    require_row_width(source, PLANAR_MIN_ROW_BYTES)
-
-
+    if engine is not Engine.PLANAR:
+        require_row_width(source, PLANAR_MIN_ROW_BYTES)
     window = dict(win=source.width, hin=source.height, din=1)
     if engine is Engine.PLANAR:
         window.update(common_in_fmt=COMMON_FORMAT_F16, common_src2_in_fmt=COMMON_FORMAT_F16)
@@ -226,12 +226,22 @@ def store(
     declared: TensorDesc | None = None,
     producer: Engine | None = None,
     to_dram: bool = True,
+    swap_pitches: bool = False,
 ) -> dict[int, int]:
-    """Program writing one feature map: the L2 result buffer at *result_base* and the result DMA."""
+    """Program writing one feature map: the L2 result buffer at *result_base* and the result DMA.
+
+    A transposing pass that makes the height of its source the outer axis of the result
+    programs *swap_pitches*: its row and channel pitches name the other two axes.
+    """
     destination.validate_feature()
     if declared is not None:
         declared.validate_feature()
     low, high = split_address(address)
+    l2_row, l2_channel = destination.l2_row, destination.l2_channel
+    dram_row, dram_channel = destination.dram_row_stride, destination.channel
+    if swap_pitches:
+        l2_row, l2_channel = l2_channel, l2_row
+        dram_row, dram_channel = dram_channel, dram_row
     return splice(
         COMMON.pack(
             **(
@@ -254,8 +264,8 @@ def store(
             l2_result_interleave=INTERLEAVE,
             **(
                 {} if to_dram else {
-                    "l2_result_channel_stride": l2_units(destination.l2_channel),
-                    "l2_result_row_stride": l2_units(destination.l2_row),
+                    "l2_result_channel_stride": l2_units(l2_channel),
+                    "l2_result_row_stride": l2_units(l2_row),
                 }
             ),
             l2_result_address=l2_units(result_base),
@@ -270,8 +280,8 @@ def store(
             tile_dma_dst_fifo_mode=FIFO_MODE,
 
 
-            **row_stride("tile_dma_dst_row_stride", destination.dram_row_stride),
-            tile_dma_dst_channel_stride=dram_units(destination.channel),
+            **row_stride("tile_dma_dst_row_stride", dram_row),
+            tile_dma_dst_channel_stride=dram_units(dram_channel),
             tile_dma_dst_format_mode=fields.TensorFormatMode.COMPRESSED,
             tile_dma_dst_trunc=F16_TRUNC,
             tile_dma_dst_memory_format=fields.TensorMemoryFormat.TILED,
@@ -356,6 +366,7 @@ def convolution(
     coeff_base: int = 0,
     nonlinear: fields.NENonlinear = fields.NENonlinear.NONE,
     bias: bool = False,
+    depthwise: bool = False,
     armed: bool | None = None,
     staged_source: bool = False,
     to_dram: bool = True,
@@ -369,7 +380,8 @@ def convolution(
     The pass reads the source the previous descriptor staged, so no source DMA
     and no source relocation are programmed.  Its result lands one channel slab
     after the staged source. With ``bias`` every coefficient lane leads its weights
-    with one fp16 bias word per lane output.
+    with one fp16 bias word per lane output. A ``depthwise`` pass convolves each channel
+    on its own and programs unicast.
     """
     source.validate_feature()
     destination.validate_feature()
@@ -404,6 +416,7 @@ def convolution(
             task_type=fields.TaskType.NE,
             active_nodes=active_nodes,
             node_id=1,
+            **({"num_groups": 1, "unicast_en": 1, "unicast_cin": 1} if depthwise else {}),
             **({"output_transpose": 1, "small_source_mode": 1} if staged_source else {}),
         ),
         {}
@@ -830,12 +843,12 @@ def compute_ne(
     its axes sets only the maximum slice, as the reference identity bypasses do.
     """
     output.validate_feature()
-    if output.channels < NE_CHANNEL_GROUP:
-        raise ValueError(
-            f"neural engine pass over {output.channels} channels is not decoded yet"
-        )
     shown = output if declared is None else declared
     shown.validate_feature()
+    if shown.channels < NE_CHANNEL_GROUP:
+        raise ValueError(
+            f"neural engine pass over {shown.channels} channels is not decoded yet"
+        )
     dense_row = shown.width * FP16_BYTES
     ratio = NE_WIDTH_UNIT // dense_row
     if NE_WIDTH_UNIT % dense_row or ratio < 1 or ratio & (ratio - 1):
@@ -861,7 +874,7 @@ def compute_ne(
             num_groups=1,
             unicast_en=1,
             unicast_cin=unicast_channels,
-            tile_height=output.height,
+            tile_height=shown.height,
             source_routing=1,
             task_type=fields.TaskType.NE,
             shift_maximum=width_code,

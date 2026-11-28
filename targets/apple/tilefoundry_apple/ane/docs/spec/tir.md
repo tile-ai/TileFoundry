@@ -16,6 +16,8 @@ The ANE TIR Ops are the tasks that one Apple Neural Engine runs. Each Op is one 
   writes its feature maps and activation matrices in `smem`; `load` and `store` move them between `gmem` and `smem`.
   Its W stride MUST be 1 when `W` is above 1. The engine addresses a feature map by row, channel, depth and group
   strides and has no element stride. An Op may further constrain the layout.
+  `load` and `store` also admit an `[R, C]` matrix opposite the `[1, R / H, H, C]` map of its rows:
+  row `m` is row `m % H` of channel `m // H`, and the value written is the source in row-major order.
 - `weight` and `bias` are in `gmem`. The kernel height and width of a `weight` are at most 32.
 - The public nonlinear modes are `NONE`, `RELU`, `SIGMOID` and `SILU` ([Nonlinear](#nonlinear)).
   Pairing gives SiLU, sigmoid and tanh no `T.ane` candidate.

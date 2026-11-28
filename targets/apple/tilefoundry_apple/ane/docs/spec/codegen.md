@@ -20,7 +20,10 @@ size and canonical geometry are derived in `isa/tensor_desc.py`.
 type. An HWX `TensorBinding` binds a name, role and virtual address to a `TensorDesc`; its
 page reservation is derived from the descriptor's storage size. The C launcher
 uses the same `TensorDesc` fields in the same order, followed by the Python-derived
-`storage_bytes` reservation, without a name.
+`storage_bytes` reservation, then the rank and extents of the host tensor, without a name.
+The host tensor holds the descriptor's elements in row-major order; it is the entry
+parameter, a `[1, C, H, W]` map or an `[M, K]` matrix, and the launcher copies it element by
+element between its own strides and the descriptor's.
 `module.tensor_row` is the sole renderer of its C initializer.
 `Image` retains the `Program` directly and serializes it once during container
 assembly. The byte layer provides encoding; it has no descriptor decoding API.
@@ -80,9 +83,14 @@ axis whose kernel is 3; other padding is not decoded yet. MAX selects pool mode 
 and pads with negative infinity (`0x0500[3:2] = 1`). AVG selects pool mode 1, which
 divides by the window size, except that padding left out by
 `count_include_pad=False` selects pool mode 0, which divides by the cells inside the
-map; both pad with zero. Reduce programs a SUM `scale` other than 1 as the fp32
-final scale `0x090C`, so a mean is a sum scaled by the reciprocal of its count; a
-scale with MAX or MIN, `square` and `post` are not decoded yet.
+map; both pad with zero. A `ceil_mode` window that overhangs the map has no field of its
+own: the declared result size implies it. It is emitted without padding, for MAX and for
+an AVG that leaves padding out of its count (pool mode 0); `ceil_mode` with padding, or
+an AVG that counts padding, is not decoded yet.
+Reduce programs a SUM `scale` other than 1 as the fp32
+final scale `0x090C`, so a mean is a sum scaled by the reciprocal of its count; `square`
+selects the sum-of-squares operation `0x0900[4:2] = 4` and is admitted for SUM. A
+scale with MAX or MIN, `square` with MAX or MIN, and `post` are not decoded yet.
 OCG MUST equal `rules.channel_groups` for the relevant channels, except that an
 identity Bypass programs OCG zero; an identity Bypass over more than 32 channels
 is not decoded yet. Conv MUST reject
@@ -97,18 +105,26 @@ and no explicit OCG is given. Other omission combinations are not decoded yet.
 Every L2 source and result base MUST be the framework offset of its SMEM tensor.
 Effective range and overlap checks still apply at descriptor validation.
 
-Every emitted operand MUST be a `[1, C, H, W]` feature map; the matrix forms of Conv
-and Bypass are not emitted. A row-major `[M, K]` matrix with 64-byte rows holds the
-bytes of the canonical `[1, M / H, H, K]` map, so a matrix product is scheduled over
-such maps as `load`, a C/W transposing Bypass, a 1x1 Conv whose `[N, K, 1, 1]` weight
-is the right operand transposed, a second transposing Bypass and `store`.
+Every emitted operand of a task MUST be a `[1, C, H, W]` feature map; the matrix forms of
+Conv and Bypass are not emitted. A `[M, K]` matrix whose rows are 64-byte aligned is the
+canonical `[1, M / H, H, K]` map, so a matrix product is scheduled over such maps as
+`load`, a C/W transposing Bypass, a 1x1 Conv whose `[N, K, 1, 1]` weight is the right
+operand transposed, a second transposing Bypass and `store`. Only `load` and `store` take
+the matrix in `gmem`: the other operand of the transfer states the `[1, M / H, H, K]` map,
+which gives the DMA descriptor, and `tensor_desc_of` reads a matrix only through that map.
 
 Conv with a bias operand selects the bias mode `0x0D04[4] = 1` and reads the bias
 from its coefficient lanes; the bias MUST be a direct constant parameter. Bypass MUST emit only
-identity or `perm=(2, 1, 0)` and MUST check the resulting shape. Other valid
-permutations are not decoded yet. Bypass with a lookup-table nonlinear is not
+identity, `perm=(2, 1, 0)` or `perm=(1, 2, 0)` and MUST check the resulting shape. The two
+permutations program the same task words; `(1, 2, 0)` exchanges the row and channel pitches
+of its result. Other valid permutations are not decoded yet. Bypass with a lookup-table nonlinear is not
 decoded yet and MUST be rejected. A Conv whose source and result heights differ is
-not decoded yet. The source load owns its access-type field; convolution does not
+not decoded yet, as are a Conv stride other than (1, 1) and a dilation other than (1, 1);
+Apple programs both with a sparse kernel stream (`0x0D00[8] = 1`) that is not encoded.
+Conv emits `groups > 1` only as the depthwise form: `groups` equal to 32 source and
+result channels and a 3x3 kernel. It programs OCG zero and `0x0028 = 0x14001` (one
+group, unicast enabled, unicast count one); other grouped forms program different
+channel counts and are not decoded yet. The source load owns its access-type field; convolution does not
 overwrite that field when using the load.
 
 ### 2.2 L2 buffer placement
@@ -164,9 +180,10 @@ MUST set the source alias bit of the engine that produced it:
 after a planar one. A Pool or Reduce reads L2 when a store writes its result out; a
 A `T.ane.load` pass MUST set all eight alias bits, whatever its position in the stream:
 its DMA read reuses a block that earlier passes may still hold.
-Pool keeps the task words of its DMA-source form, confirmed on the device. A Pool or
-Reduce result kept in L2 is not decoded yet, and
-[isa §9](./isa.md#9-verified-transfer-validation) rejects its task.
+Pool keeps the task words of its DMA-source form, confirmed on the device. A Reduce
+result may stay in L2: it programs the result pitches of its `(C, 1, 1)` map and a
+planar pass reads it, rows of any width included. A Pool result kept in L2 is not
+decoded yet, and [isa §9](./isa.md#9-verified-transfer-validation) rejects its task.
 
 ## 3. Module responsibilities
 
@@ -247,7 +264,9 @@ constant reuses its block. Each convolution uses its own pass index, block base
 and lane stride. Weight parameters must be contiguous OIHW fp16 tensors.
 A convolution with a bias leads every lane's weights with one fp16 bias word per
 lane output, in output order; the bias is a contiguous fp16 vector consumed with
-one weight only. A lookup table together with a bias is not decoded yet.
+one weight only. A depthwise convolution gives output channel `slot * lanes + lane` to
+slot `slot` of lane `lane`; each slot holds its bias word, if any, and then its kernel.
+A lookup table together with a bias is not decoded yet.
 
 `CoefficientLayout` owns the shape, section base and actual LUT bytes. Its
 `weight_axes` records each loop extent and source/destination byte stride in

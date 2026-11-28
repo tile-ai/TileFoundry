@@ -242,10 +242,12 @@ source routing 1 for unary or 3 for binary, and second-stream plus PE second-sou
 2 (add, multiply, min, max) or 3 (subtract: first minus second source) for binary.
 Complete-height unary and neural-engine continuation additionally accepts L2_READ
 source, result or both, and so does a binary whose two sources are both L2_READ,
-with the second stream off and source routing 1. A pool or spatial reduction accepts
+with the second stream off and source routing 1. A pool accepts
 an L2_READ source when its result DMA writes out; such a result kept in L2 is not
-decoded yet. A pool's L2 source keeps the task words of its DMA-source form, confirmed
-on the device. A descriptor with neither DMA nor
+decoded yet. A spatial reduction accepts an L2_READ source and either result. A pool's L2
+source keeps the task words of its DMA-source form, confirmed on the device. A convolution
+that reads L2 may change the channel count; its height and width stay equal. A descriptor
+with neither DMA nor
 a second stream that programs an L2 channel or row pitch keeps both in L2; its
 geometry comes from the common block alone.
 An L2 result MUST disable destination DMA and buffer mode; an L2 source MUST omit
@@ -266,11 +268,13 @@ Source and second-source geometry is `(cin, hin, win)`. Destination geometry is
 the input spatial geometry. The verified NE bypass C/W transpose declares source
 geometry at both ends, uses the unicast count and fill-lower-nodes that
 `rules.check` relates to its channels, reads its source by DMA or from L2, and writes
-`(wout, hout, cout)` out by DMA or into L2. DMA stride fields are in 64-byte units. A zero row stride in
+`(wout, hout, cout)` out by DMA or into L2, or `(hout, wout, cout)` when it exchanges the row
+and channel pitches of its result. DMA stride fields are in 64-byte units. A zero row stride in
 a singleton geometry uses its canonical padded row. Rows MUST cover width × 2;
 channel strides MUST cover height × row. `tile_height` MUST lie in `[1, hout]`.
 Elementwise declared geometries MUST agree; pool/conv output dimensions MUST
-match their positive kernel window, strides and padding. Only top and left padding
+match their positive kernel window, strides and padding, a pool's one window more when a
+last partial window starts inside the map. Only top and left padding
 are encoded; the output dimensions imply equal bottom and right padding. The decoded
 padded windows are an NE convolution with a 3×3 kernel, stride 1 and padding 1, and
 the pools that the Pool emitter admits; the source DMA reads the unpadded

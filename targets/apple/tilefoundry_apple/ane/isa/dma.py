@@ -57,13 +57,14 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
     binary = task == fields.TaskType.PE_EW_BINARY
     resident_binary = binary and access == fields.L2Access.L2_READ and not second
     pool = task == fields.TaskType.PE_POOL_UNARY
-    written_reduction = (pool or task == fields.TaskType.PE_EW_REDUCE_UNARY) and enabled
+    reduce = task == fields.TaskType.PE_EW_REDUCE_UNARY
+    written_pool = pool and enabled
     if continuation:
         if (access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
                 or result_access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
                 or enabled != (result_access == fields.L2Access.DMA_READ)
                 or task not in (fields.TaskType.PE_EW_UNARY, fields.TaskType.NE)
-                and not resident_binary and not written_reduction):
+                and not resident_binary and not written_pool and not reduce):
             raise ValueError("L2 continuation access mapping is not decoded yet")
     elif access != fields.L2Access.DMA_READ or not enabled:
         raise ValueError("tile DMA access mapping is not decoded yet")
@@ -97,7 +98,7 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
     tile = value(image, common.tile_height)
     if not 1 <= tile <= result[1]:
         raise ValueError(f"tile_height {tile} must be within [1, {result[1]}]")
-    if continuation and (tile != result[1] if pool else tile != source[1] or source != result):
+    if continuation and (tile != result[1] if pool else tile != source[1] or source[1:] != result[1:]):
         raise ValueError("partial or unequal L2 continuation geometry is not decoded yet")
     transpose = value(image, common.output_transpose)
     if not transpose and value(image, common.fill_lower_nodes_first):
@@ -106,7 +107,7 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
         if (task != fields.TaskType.NE or value(image, fields.NE.op) != fields.NEOp.BYPASS
                 or source != result):
             raise ValueError("output transpose DMA mapping is not decoded yet")
-        result = result[2], result[1], result[0]
+        result = (result[1], result[2], result[0]) if swapped_pitches(image) else (result[2], result[1], result[0])
     elif task in (fields.TaskType.PE_EW_UNARY, fields.TaskType.PE_EW_BINARY,
                   fields.TaskType.PE_EW_REDUCE_UNARY) and source != result:
         raise ValueError("elementwise and reduction declared output geometry must equal input")
@@ -133,7 +134,8 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
                 raise ValueError("padded DMA footprint is not decoded yet")
             if min(kw, kh, sx, sy) <= 0:
                 raise ValueError("kernel window and strides must be positive")
-            if result[1:] != ((source[1] + 2 * top - kh) // sy + 1, (source[2] + 2 * left - kw) // sx + 1):
+            if (result[1] not in window_counts(source[1], kh, sy, top)
+                    or result[2] not in window_counts(source[2], kw, sx, left)):
                 raise ValueError("output geometry contradicts the kernel window, strides and padding")
         elif not transpose and source != result:
             raise ValueError("bypass output geometry must equal input")
@@ -144,6 +146,34 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
     if binary:
         decoded.insert(1, decode(image, "src2", source) if second else staged("src2", source))
     return tuple(decoded)
+
+
+def swapped_pitches(image: Mapping[int, int]) -> bool:
+    """Whether a transposing pass writes its result with its row and channel pitches exchanged.
+
+    A pass that turns (channel, height, width) into (width, height, channel) writes the
+    height axis with the row pitch and the width axis with the channel pitch; one that
+    turns it into (height, width, channel) writes them with the pitches the other way
+    round. A DRAM result then has its row pitch above its channel pitch; an L2 result
+    has its channel pitch above its row pitch.
+    """
+    if not value(image, fields.Common.output_transpose):
+        return False
+    dst, l2 = fields.TileDMADst, fields.L2
+    if value(image, dst.tile_dma_dst_enable):
+        return value(image, dst.tile_dma_dst_row_stride) > value(image, dst.tile_dma_dst_channel_stride)
+    return value(image, l2.l2_result_row_stride) < value(image, l2.l2_result_channel_stride)
+
+
+def window_counts(size: int, kernel: int, stride: int, pad: int) -> tuple[int, ...]:
+    """The window counts a task may declare along one axis.
+
+    The count of whole windows, or one more when a last partial window starts inside
+    the map; the declared result size alone selects it.
+    """
+    span = size + 2 * pad - kernel
+    whole = span // stride + 1
+    return (whole, whole + 1) if span % stride and whole * stride < size + pad else (whole,)
 
 
 def staged(name: str, shape: tuple[int, int, int]) -> Transfer:
@@ -181,6 +211,8 @@ def decode(image: Mapping[int, int], name: str, shape: tuple[int, int, int]) -> 
     if not row and min(shape) == 1:
         row = align_up(width * 2, 64)
     channel = value(image, block.fields[prefix + "channel_stride"]) * 64
+    if name == "dst" and swapped_pitches(image):
+        row, channel = channel, row
     if row < width * 2:
         raise ValueError(f"{prefix}row_stride {row} does not cover width {width} fp16 elements")
     if channel < height * row:
@@ -216,13 +248,17 @@ def check_l2(image: Mapping[int, int], decoded: tuple[Transfer, ...]) -> tuple[t
         rows = min(tile if name == "result" else source_rows, transfer.height)
         channel = align_up(transfer.width * 2, 16)
         depth = transfer.channels * channel
-        row = value(image, l2.fields[prefix + "row_stride"]) * 16
+        exchanged = name == "result" and swapped_pitches(image)
+        pitch = {"row_stride": "channel_stride", "channel_stride": "row_stride"} if exchanged else {}
+        row = value(image, l2.fields[prefix + pitch.get("row_stride", "row_stride")]) * 16
+        if exchanged:
+            rows = transfer.height
         if name == "result" and not row and transfer.register:
             row = source_row if task == fields.TaskType.PE_EW_REDUCE_UNARY else depth
         if row < depth:
             raise ValueError(f"{prefix}row_stride {row} does not cover the {depth} byte staged depth")
         for suffix, expected in (("channel_stride", channel), ("depth_stride", depth), ("group_stride", depth)):
-            actual = value(image, l2.fields[prefix + suffix]) * 16
+            actual = value(image, l2.fields[prefix + pitch.get(suffix, suffix)]) * 16
             if name == "result" and not actual:
                 if not transfer.register and suffix == "channel_stride":
                     raise ValueError("l2_result_channel_stride must explicitly match the allocated L2 layout")

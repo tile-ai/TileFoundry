@@ -104,11 +104,15 @@ def byte_rows(image: bytes) -> str:
     )
 
 
-def tensor_row(desc: isa.TensorDesc) -> str:
+def tensor_row(desc: isa.TensorDesc, host_shape: tuple[int, ...]) -> str:
     """Render one initializer compatible with the launcher header."""
     shape = ", ".join(map(str, desc.shape))
     strides = ", ".join(map(str, desc.strides))
-    return f"  {{{json.dumps(desc.dtype)}, {{{shape}}}, {{{strides}}}, {desc.storage_bytes}}},"
+    host = ", ".join(map(str, host_shape))
+    return (
+        f"  {{{json.dumps(desc.dtype)}, {{{shape}}}, {{{strides}}}, {desc.storage_bytes}, "
+        f"{len(host_shape)}, {{{host}}}}},"
+    )
 
 
 def emit_function(
@@ -134,12 +138,15 @@ def emit_function(
     inputs = ", ".join(f"arg_{index}" for index in range(sig.input_count)) or "nullptr"
     outputs = ", ".join(f"arg_{index}" for index in range(sig.input_count, len(sig.params)))
     validation = "\n".join(
-        f"  if (!ane_check_tensor(arg_{index}, {symbol}_io[{index}].shape, 4, 16, false))\n"
+        f"  if (!ane_check_tensor(arg_{index}, {symbol}_io[{index}].host_shape, {symbol}_io[{index}].ndim, 16, false))\n"
         f'    TVM_FFI_THROW(ValueError) << "{entry_name}: {param.name} must be a CPU fp16 '
         f'tensor of shape {tuple(param.type.shape)} with nonnegative strides and bounded offsets";'
         for index, param in enumerate(sig.params)
     )
-    rows = "\n".join(tensor_row(binding.desc) for binding in image.io)
+    rows = "\n".join(
+        tensor_row(binding.desc, tuple(expr.static_dim_value(n) for n in param.type.shape))
+        for binding, param in zip(image.io, sig.params)
+    )
     definition = (
         f"static const uint8_t {symbol}_image[] = {{\n{byte_rows(payload)}\n}};\n"
         f"static const TensorDesc {symbol}_io[] = {{\n{rows}\n}};\n"

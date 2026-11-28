@@ -9,7 +9,8 @@ from tilefoundry_apple.ane.codegen import context, hwx
 from tilefoundry_apple.ane.ir import tir
 from tilefoundry_apple.ane.isa import intrinsic
 
-PLAIN = ((1, 1), 1)
+DEPTHWISE_CHANNELS = 32
+DEPTHWISE_KERNEL = (3, 3)
 NONLINEAR = MappingProxyType(
     {
         tir.Nonlinear.NONE: isa.NENonlinear.NONE,
@@ -32,11 +33,24 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     source, weight, destination, *held = call.args
     src = context.tensor_desc_of(source.type, "src")
     dst = context.tensor_desc_of(destination.type, "dst")
-    if (tuple(op.dilation), op.groups) != PLAIN:
-        raise ValueError("T.ane.conv: dilated or grouped convolution encoding is not decoded yet")
+    if tuple(op.dilation) != (1, 1):
+        raise ValueError("T.ane.conv: dilated convolution encoding is not decoded yet")
+    if tuple(op.stride) != (1, 1):
+        raise ValueError("T.ane.conv: strided convolution encoding is not decoded yet")
+    depthwise = op.groups > 1
+    if depthwise and (
+        op.groups != src.channels
+        or src.channels != dst.channels
+        or src.channels != DEPTHWISE_CHANNELS
+        or tuple(weight.type.shape[2:]) != DEPTHWISE_KERNEL
+    ):
+        raise ValueError(
+            f"T.ane.conv: grouped convolution other than a depthwise {DEPTHWISE_KERNEL} kernel "
+            f"over {DEPTHWISE_CHANNELS} channels is not decoded yet"
+        )
     if src.height != dst.height:
         raise ValueError("T.ane.conv: unequal-height convolution is not decoded yet")
-    ocg_size = isa.rules.channel_groups(dst.channels)
+    ocg_size = 0 if depthwise else isa.rules.channel_groups(dst.channels)
     if op.ocg_size is not None:
         if type(op.ocg_size) is not int or op.ocg_size != ocg_size:
             raise ValueError(
@@ -45,7 +59,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         if dst.channels > 64:
             raise ValueError("T.ane.conv: explicit ocg_size above 64 channels is not decoded yet")
     layout = ctx.coefficient_use(
-        weight, tir.ne.nonlinear.TABLES.get(op.nonlinear, b""), held[0] if held else None
+        weight, tir.ne.nonlinear.TABLES.get(op.nonlinear, b""), held[0] if held else None, depthwise
     )
     isa.dma.check_coefficient_lanes(
         layout.lanes, min(src.channels, len(isa.KernelDMA.kernel_dma_src_coeff_dma_en))
@@ -70,6 +84,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             result_base=result_base,
             nonlinear=NONLINEAR[op.nonlinear],
             bias=layout.bias,
+            depthwise=depthwise,
             staged_source=False,
             to_dram=stored is not None,
             address=ctx.address_of(stored),

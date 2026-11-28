@@ -43,10 +43,12 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             f"T.ane.reduce: expected a {src.channels}x1x1 result, got "
             f"{dst.channels}x{dst.height}x{dst.width}"
         )
-    if op.square or op.post is not tir.Post.NONE:
-        raise ValueError("T.ane.reduce: square and post is not decoded yet")
+    if op.post is not tir.Post.NONE:
+        raise ValueError("T.ane.reduce: post is not decoded yet")
     if op.kind not in MODES:
         raise ValueError(f"T.ane.reduce: {op.kind} has no planar engine encoding")
+    if op.square and op.kind is not expr.ReduceKind.SUM:
+        raise ValueError(f"T.ane.reduce: square with {op.kind} is not decoded yet")
     if op.scale != 1.0 and op.kind is not expr.ReduceKind.SUM:
         raise ValueError(f"T.ane.reduce: scale with {op.kind} is not decoded yet")
     compare, mode = MODES[op.kind]
@@ -61,6 +63,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             declared_out=src,
             tile_height=src.height,
             pool_mode=mode,
+            square=op.square,
             compare=compare,
             final_scale=op.scale,
             patch=context.raster_patch(dst, op.patch),

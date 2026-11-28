@@ -123,19 +123,21 @@ IOSurfaceRef make_surface(size_t bytes) {
 }
 
 bool matches(const TensorDesc &desc, const DLTensor *tensor) {
-    return ane_check_tensor(tensor, desc.shape, 4, 8 * element_bytes(desc),
-                            false);
+    return ane_check_tensor(tensor, desc.host_shape, desc.ndim,
+                            8 * element_bytes(desc), false);
 }
 
 /** Copy every element between a DLPack tensor and its declared surface. */
 bool transfer(const TensorDesc &desc, DLTensor &tensor, IOSurfaceRef surface,
               bool to_surface) {
     const size_t width = element_bytes(desc);
-    int64_t dense[4];
-    int64_t step = 1;
-    for (int axis = 3; axis >= 0; --axis) {
+    int64_t count = 1;
+    for (int axis = 0; axis < 4; ++axis)
+        count *= desc.shape[axis];
+    int64_t dense[4], step = 1;
+    for (int axis = tensor.ndim - 1; axis >= 0; --axis) {
         dense[axis] = tensor.strides ? tensor.strides[axis] : step;
-        step *= desc.shape[axis];
+        step *= desc.host_shape[axis];
     }
     auto *host = (uint8_t *)tensor.data + tensor.byte_offset;
     if (IOSurfaceLock(surface, to_surface ? 0 : kIOSurfaceLockReadOnly,
@@ -149,19 +151,20 @@ bool transfer(const TensorDesc &desc, DLTensor &tensor, IOSurfaceRef surface,
     }
     if (to_surface)
         std::memset(device, 0, IOSurfaceGetAllocSize(surface));
-    for (int64_t n = 0; n < desc.shape[0]; ++n)
-        for (int64_t c = 0; c < desc.shape[1]; ++c)
-            for (int64_t h = 0; h < desc.shape[2]; ++h)
-                for (int64_t w = 0; w < desc.shape[3]; ++w) {
-                    const int64_t at[4] = {n, c, h, w};
-                    int64_t from = 0, to = 0;
-                    for (int axis = 0; axis < 4; ++axis) {
-                        from += at[axis] * dense[axis];
-                        to += at[axis] * desc.strides[axis];
-                    }
-                    uint8_t *a = host + from * width, *b = device + to * width;
-                    std::memcpy(to_surface ? b : a, to_surface ? a : b, width);
-                }
+    for (int64_t index = 0; index < count; ++index) {
+        int64_t from = 0, to = 0, rest = index;
+        for (int axis = tensor.ndim - 1; axis >= 0; --axis) {
+            from += rest % desc.host_shape[axis] * dense[axis];
+            rest /= desc.host_shape[axis];
+        }
+        rest = index;
+        for (int axis = 3; axis >= 0; --axis) {
+            to += rest % desc.shape[axis] * desc.strides[axis];
+            rest /= desc.shape[axis];
+        }
+        uint8_t *a = host + from * width, *b = device + to * width;
+        std::memcpy(to_surface ? b : a, to_surface ? a : b, width);
+    }
     return IOSurfaceUnlock(surface, to_surface ? 0 : kIOSurfaceLockReadOnly,
                            nullptr) == kIOReturnSuccess;
 }

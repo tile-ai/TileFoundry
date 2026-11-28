@@ -8,6 +8,8 @@ columns] with rows contiguous (column major) or columns contiguous (row major).
 A mesh layout holds one mode per topology.
 """
 
+from dataclasses import dataclass
+
 from tilefoundry.ir import expr, pattern, types
 
 ENGINE = pattern.Mesh(("engine",), pattern.Layout(((1,),), ((1,),)))
@@ -173,6 +175,35 @@ def activation(operand: str, storage) -> pattern.Tensor:
     return forms(operand, layouts, storage)
 
 
+@dataclass(frozen=True)
+class SameFeatureConstraint(pattern.Constraint):
+    """Two shapes that are one feature map, or a feature map and the matrix it is the view of.
+
+    Row m of an [R, C] matrix is row m % H of channel m // H of the [1, R / H, H, C]
+    feature map, so both read the same elements in row-major order.
+    """
+
+    def holds(self, operands: dict) -> bool:
+        pair = self.pair(operands)
+        if pair is None:
+            return True
+        left, right = (tuple(shape) for shape in pair)
+        if len(left) == 2:
+            left, right = right, left
+        if left == right:
+            return True
+        return (
+            len(left) == 4 and len(right) == 2
+            and left[0] == 1 and left[3] == right[1] and left[1] * left[2] == right[0]
+        )
+
+    def written(self) -> str:
+        return (
+            f"{self.left}.{self.field} = {self.right}.{self.field}, or one is an [R, C] matrix "
+            "and the other its [1, R / H, H, C] feature map"
+        )
+
+
 def one_of(name: str, values) -> pattern.Wildcard:
     """A wildcard admitting exactly *values*."""
     return pattern.Wildcard(name, predicates=(pattern.Or(*values),))
@@ -189,6 +220,7 @@ __all__ = [
     "MAX_KERNEL",
     "MAX_WIDTH",
     "SMEM_ONLY",
+    "SameFeatureConstraint",
     "STRIDES",
     "WEIGHT_LIMITS",
     "bounded",

@@ -1,8 +1,9 @@
 """Codegen for ``T.ane.pool``: one planar engine pooling pass.
 
 A max pads with negative infinity. An average multiplies the window sum by the
-reciprocal of the window size, or, with padding that ``count_include_pad`` leaves
-out, by that of the cells the window holds inside the map. The pass reads its source
+reciprocal of the window size, or, with padding or a ``ceil_mode`` overhang that
+``count_include_pad`` leaves out, by that of the cells the window holds inside the
+map. A ceil_mode overhang is implied by the result size. The pass reads its source
 from L2 with the task words of the DMA-source form, confirmed on the device, and a
 store writes its result out.
 """
@@ -38,8 +39,6 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     source, destination = call.args
     src = context.tensor_desc_of(source.type, "src")
     dst = context.tensor_desc_of(destination.type, "dst")
-    if op.ceil_mode:
-        raise ValueError("T.ane.pool: ceil_mode is not decoded yet")
     kernel, stride = tuple(op.kernel_size), tuple(op.stride)
     if len(kernel) != 2 or len(stride) != 2:
         raise ValueError(f"T.ane.pool: kernel {kernel} and stride {stride} must be 2D")
@@ -49,11 +48,19 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     padding = tuple(op.padding) if op.padding else (0, 0)
     if any(pad not in (0, 1) or pad and size != PADDED_KERNEL for pad, size in zip(padding, kernel)):
         raise ValueError(f"T.ane.pool: padding {padding} for kernel {kernel} is not decoded yet")
+    ceiled = op.ceil_mode and any(
+        tir.pe.pool.windows(size, window, step, pad, True) != tir.pe.pool.windows(size, window, step, pad, False)
+        for size, window, step, pad in zip((src.height, src.width), kernel, stride, padding)
+    )
+    if ceiled and any(padding):
+        raise ValueError("T.ane.pool: ceil_mode with padding is not decoded yet")
     if op.kind is expr.PoolKind.MAX:
         mode = isa.PoolMode.MAX
     elif op.kind is not expr.PoolKind.AVG:
         raise ValueError(f"T.ane.pool: {op.kind} has no planar engine encoding")
-    elif any(padding) and not op.count_include_pad:
+    elif ceiled and op.count_include_pad:
+        raise ValueError("T.ane.pool: a ceil_mode average that counts padding is not decoded yet")
+    elif (ceiled or any(padding)) and not op.count_include_pad:
         mode = isa.PoolMode.NONE_OR_SUM
     else:
         mode = isa.PoolMode.AVG

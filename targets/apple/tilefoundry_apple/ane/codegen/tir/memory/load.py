@@ -14,7 +14,7 @@ from tilefoundry_apple.ane.isa import intrinsic
 @codegen.register(target.Target, codegen.Role.EMIT, tir.Load)
 def emit(call: expr.Call, ctx: context.Context) -> None:
     source, destination = call.args
-    src = context.tensor_desc_of(source.type, "src", strided=True)
+    src = context.tensor_desc_of(source.type, "src", strided=True, view=destination.type.shape)
     dst = context.tensor_desc_of(destination.type, "dst")
     base, _ = ctx.result(destination)
     ctx.emit(

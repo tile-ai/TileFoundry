@@ -7,12 +7,17 @@
 #include <tvm/ffi/container/tensor.h>
 #include <tvm/ffi/function.h>
 
-/** @brief A feature map and its complete padded storage reservation. */
+/**
+ * @brief A feature map, its complete padded storage reservation and the host
+ * tensor of `ndim` axes that holds the same elements in row-major order.
+ */
 struct TensorDesc {
     const char *dtype;
     int64_t shape[4];
     int64_t strides[4];
     size_t storage_bytes;
+    int ndim;
+    int64_t host_shape[4];
 };
 
 /** @brief A named, generated coefficient writer. */
