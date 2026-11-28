@@ -444,6 +444,19 @@ class Unary(AneCase):
 
 
 @case
+class UnaryWide(AneCase):
+    path: Path = ROOT / "scheduled" / "unary_wide.py"
+    runs: bool = True
+
+    def inputs(self):
+        return (small((1, 32, 16, 64), 3, -7, 7),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, 2 * x + 1)
+
+
+@case
 class UnaryChain(AneCase):
     path: Path = ROOT / "scheduled" / "unary_chain.py"
     runs: bool = True

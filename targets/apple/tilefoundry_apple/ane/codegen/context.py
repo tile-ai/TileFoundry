@@ -17,6 +17,7 @@ from . import hwx
 
 FULL_PLANE_PATCH = (4, 4)
 SINGLE_ROW_PATCH = (5, 0)
+PATCH_COLUMNS = 16
 
 
 class Context:
@@ -213,9 +214,14 @@ def raster_patch(op: expr.Op, rows: int, desc: isa.TensorDesc) -> tuple[int, int
     """The rasterization patch: the schedule's ``patch``, else the one the tile height implies.
 
     A single staged row cannot be patched vertically, so its vertical field stays
-    clear and its horizontal field widens by one.
+    clear and its horizontal field widens by one. A full plane wider than the 16
+    columns of the base patch needs the horizontal field ``ceil(log2(width))``.
     """
-    expected = FULL_PLANE_PATCH if rows == desc.height else SINGLE_ROW_PATCH
+    if rows != desc.height and desc.width > PATCH_COLUMNS:
+        raise ValueError(f"partial tile patch for width {desc.width} is not decoded yet")
+    expected = SINGLE_ROW_PATCH
+    if rows == desc.height:
+        expected = (isa.rules.ceil_log2(max(desc.width, PATCH_COLUMNS)), FULL_PLANE_PATCH[1])
     if op.patch is not None:
         patch = tuple(op.patch)
         if len(patch) != 2 or any(type(n) is not int or not 0 <= n <= 15 for n in patch):
