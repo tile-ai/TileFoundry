@@ -78,7 +78,8 @@ def splice(*parts: Mapping[int, int]) -> Writes: ...
   - Canonical validation MUST compare only axes with extent greater than one. Byte strides
     and storage size MUST fill singleton axes from the padded inner geometry.
   - Declared layouts MUST have unit W stride for non-singleton W, non-overlapping rows,
-    planes and batches, and a positive storage extent below 2**63 bytes.
+    planes and batches, and a positive storage extent below 2**63 bytes. A plane covers its
+    padded rows; a plane of one row covers only its W elements, as an L2 `[1, C, 1, 1]` map does.
   - `TensorDesc.l2_channel`, `l2_row` and `l2_extent` MUST derive the L2 pitches and extent from the
     logical shape. Intrinsics MUST receive fp16, N=1 feature maps.
   - `TensorDesc.validate_feature` MUST own this dtype/batch precondition for intrinsics,
@@ -241,7 +242,9 @@ source routing 1 for unary or 3 for binary, and second-stream plus PE second-sou
 2 (add, multiply, min, max) or 3 (subtract: first minus second source) for binary.
 Complete-height unary and neural-engine continuation additionally accepts L2_READ
 source, result or both, and so does a binary whose two sources are both L2_READ,
-with the second stream off and source routing 1. A descriptor with neither DMA nor
+with the second stream off and source routing 1. A spatial reduction accepts an
+L2_READ source when its result DMA writes out; a reduction result kept in L2 is not
+decoded yet, nor is a pool that reads L2. A descriptor with neither DMA nor
 a second stream that programs an L2 channel or row pitch keeps both in L2; its
 geometry comes from the common block alone.
 An L2 result MUST disable destination DMA and buffer mode; an L2 source MUST omit
@@ -261,8 +264,8 @@ Source and second-source geometry is `(cin, hin, win)`. Destination geometry is
 `(cout, hout, wout)`, except spatial reduction writes `(cout, 1, 1)` while declaring
 the input spatial geometry. The verified NE bypass C/W transpose declares source
 geometry at both ends, uses the unicast count and fill-lower-nodes that
-`rules.check` relates to its channels, reads its source by DMA, and writes
-`(wout, hout, cout)`; a transpose that reads L2 is not decoded yet. DMA stride fields are in 64-byte units. A zero row stride in
+`rules.check` relates to its channels, reads its source by DMA or from L2, and writes
+`(wout, hout, cout)` out by DMA or into L2. DMA stride fields are in 64-byte units. A zero row stride in
 a singleton geometry uses its canonical padded row. Rows MUST cover width × 2;
 channel strides MUST cover height × row. `tile_height` MUST lie in `[1, hout]`.
 Elementwise declared geometries MUST agree; pool/conv output dimensions MUST

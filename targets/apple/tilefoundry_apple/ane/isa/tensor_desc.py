@@ -124,7 +124,10 @@ class TensorDesc:
         )
 
     def validate(self, layout: str = "canonical") -> None:
-        """Reject unsupported dtypes, invalid extents and incompatible strides."""
+        """Reject unsupported dtypes, invalid extents and incompatible strides.
+
+        A plane covers its padded rows; a plane of one row covers only its elements.
+        """
         wanted = canonical_strides(self.dtype, self.shape)
         if len(self.strides) != 4 or any(
             type(n) is not int or not 0 <= n < 2**63 for n in self.strides
@@ -139,7 +142,8 @@ class TensorDesc:
         elif layout != "declared":
             raise ValueError(f"unknown layout policy {layout!r}")
         batch, plane, row, element = self.byte_strides
-        if element != self.element_bytes or row < self.width * element or plane < self.height * row:
+        extent = self.height * row if self.height > 1 else self.width * element
+        if element != self.element_bytes or row < self.width * element or plane < extent:
             raise ValueError("tensor strides do not cover the tensor")
         if self.shape[0] > 1 and batch < self.channels * plane:
             raise ValueError("batch stride does not cover the channels")

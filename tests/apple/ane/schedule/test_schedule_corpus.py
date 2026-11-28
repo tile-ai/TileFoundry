@@ -477,10 +477,8 @@ class Chain(AneCase):
 
 @case
 class Transpose(AneCase):
-    """A transposing pass-through that reads L2 is not decoded yet."""
-
     path: Path = ROOT / "scheduled" / "transpose.py"
-    emit_refusal: str = "output transpose DMA mapping is not decoded yet"
+    runs: bool = True
 
     def inputs(self):
         return ((utils.torch.arange(4096) - 2048).reshape(1, 32, 8, 16).to(utils.torch.float16),)
@@ -496,7 +494,7 @@ class Transpose(AneCase):
 @case
 class TransposeConvChain(AneCase):
     path: Path = ROOT / "scheduled" / "transpose_conv_chain.py"
-    emit_refusal: str = "output transpose DMA mapping is not decoded yet"
+    runs: bool = True
 
     def inputs(self):
         return small((1, 32, 8, 16), 10), small((16, 16, 1, 1), 11)
@@ -721,13 +719,10 @@ class BinarySub(Binary):
 
 @case
 class ReduceMean(AneCase):
-    """A sum over the spatial axes scaled by the reciprocal of their extent is their mean.
-
-    Its [1, C, 1, 1] result has no L2 descriptor yet.
-    """
+    """A sum over the spatial axes scaled by the reciprocal of their extent is their mean."""
 
     path: Path = ROOT / "scheduled" / "reduce_mean.py"
-    emit_refusal: str = "tensor strides do not cover the tensor"
+    runs: bool = True
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0),)
@@ -747,7 +742,7 @@ class ReduceMean(AneCase):
 @case
 class ReduceSum(AneCase):
     path: Path = ROOT / "scheduled" / "reduce_sum.py"
-    emit_refusal: str = "tensor strides do not cover the tensor"
+    runs: bool = True
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0, -3, 3),)

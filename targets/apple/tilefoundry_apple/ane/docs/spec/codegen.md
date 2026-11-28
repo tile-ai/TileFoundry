@@ -149,15 +149,15 @@ Producer result and consumer source MUST use the same framework base, shape and
 pitches. SMEM logical layouts MAY use 16-byte aligned rows; the physical L2 pitches
 MUST come from `TensorDesc.l2_channel` and `l2_row`. An SMEM read MUST have a
 preceding producer. A convolution reads its L2 source through `load_chained`, with
-neither small-source mode nor output transpose, and so does a Bypass. Bypass and
-Conv are neural producers. A Binary reads both sources from L2: its second source
-programs `0x051C` and its pitches with the second stream off and source routing 1,
-and both sources MUST come from tasks of one engine. A task that reads an L2 buffer
+neither small-source mode nor output transpose; so does a Bypass, whose output MAY be
+transposed. Bypass and Conv are neural producers. A Binary reads both sources from
+L2: its second source programs `0x051C` and its pitches with the second stream off
+and source routing 1, and both sources MUST come from tasks of one engine. A task that reads an L2 buffer
 MUST set the source alias bit of the engine that produced it:
 `l2_src_alias_conv_rslt` after a neural producer and `l2_src_alias_planar_rslt`
-after a planar one. A Pool or Reduce that reads L2, and a transposing Bypass that
-reads L2, are not decoded yet; [isa §9](./isa.md#9-verified-transfer-validation)
-rejects their tasks. A `[1, C, 1, 1]` SMEM result has no `TensorDesc` yet.
+after a planar one. A Reduce reads L2 when a store writes its `[1, C, 1, 1]` result
+out; a Reduce result kept in L2 and a Pool that reads L2 are not decoded yet, and
+[isa §9](./isa.md#9-verified-transfer-validation) rejects their tasks.
 
 ## 3. Module responsibilities
 

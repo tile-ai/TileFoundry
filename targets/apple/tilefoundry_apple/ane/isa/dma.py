@@ -56,11 +56,13 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
     continuation = access == fields.L2Access.L2_READ or result_access == fields.L2Access.L2_READ
     binary = task == fields.TaskType.PE_EW_BINARY
     resident_binary = binary and access == fields.L2Access.L2_READ and not second
+    written_reduction = task == fields.TaskType.PE_EW_REDUCE_UNARY and enabled
     if continuation:
         if (access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
                 or result_access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
                 or enabled != (result_access == fields.L2Access.DMA_READ)
-                or task not in (fields.TaskType.PE_EW_UNARY, fields.TaskType.NE) and not resident_binary):
+                or task not in (fields.TaskType.PE_EW_UNARY, fields.TaskType.NE)
+                and not resident_binary and not written_reduction):
             raise ValueError("L2 continuation access mapping is not decoded yet")
     elif access != fields.L2Access.DMA_READ or not enabled:
         raise ValueError("tile DMA access mapping is not decoded yet")
@@ -101,7 +103,7 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
         raise ValueError("fill_lower_nodes_first DMA mapping is not decoded yet")
     if transpose:
         if (task != fields.TaskType.NE or value(image, fields.NE.op) != fields.NEOp.BYPASS
-                or source != result or access != fields.L2Access.DMA_READ):
+                or source != result):
             raise ValueError("output transpose DMA mapping is not decoded yet")
         result = result[2], result[1], result[0]
     elif task in (fields.TaskType.PE_EW_UNARY, fields.TaskType.PE_EW_BINARY,
