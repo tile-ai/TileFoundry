@@ -7,6 +7,7 @@ from . import dma, fields
 
 NE_CHANNEL_GROUP = 16
 SHIFT_MAX = 4
+UNICAST_MAX = 8
 
 
 def ceil_log2(x: int) -> int:
@@ -16,6 +17,11 @@ def ceil_log2(x: int) -> int:
 def channel_groups(channels: int) -> int:
     groups = -(-channels // NE_CHANNEL_GROUP)
     return 0 if groups <= 1 else (groups - 1).bit_length()
+
+
+def unicast_channels(channels: int) -> int:
+    """The unicast count of a transposing pass: its channel groups rounded up to a power of two."""
+    return min(UNICAST_MAX, 1 << ceil_log2(-(-channels // NE_CHANNEL_GROUP)))
 
 
 def active_nodes(engine_nodes: int) -> int:
@@ -54,6 +60,13 @@ def check(image: Mapping[int, int]) -> None:
     if row is not None and depth is not None and row < depth:
         raise CheckError(f"l2_src_row_stride {row} is below l2_src_depth_stride {depth}")
 
+    if read(image, common.output_transpose) and read(image, fields.NE.op) == fields.NEOp.BYPASS:
+        unicast = unicast_channels(read(image, common.cin))
+        stated = (read(image, common.unicast_cin), read(image, common.fill_lower_nodes_first))
+        if stated != (unicast, int(unicast > 1)):
+            raise CheckError(f"transposing bypass unicast and fill-lower {stated} contradict "
+                             f"its channels; expected {(unicast, int(unicast > 1))}")
+
     dma.check_l2(image, dma.geometry(image))
 
 
@@ -61,10 +74,12 @@ __all__ = [
     "CheckError",
     "NE_CHANNEL_GROUP",
     "SHIFT_MAX",
+    "UNICAST_MAX",
     "active_nodes",
     "ceil_log2",
     "channel_groups",
     "check",
     "read",
     "shift",
+    "unicast_channels",
 ]

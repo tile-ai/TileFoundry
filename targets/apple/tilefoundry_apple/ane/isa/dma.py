@@ -49,13 +49,11 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
     task = value(image, common.task_type)
     result_access = value(image, l2.l2_result_type)
     continuation = access == fields.L2Access.L2_READ or result_access == fields.L2Access.L2_READ
-    dram_convolution = (task == fields.TaskType.NE and value(image, fields.NE.op) == fields.NEOp.CONV
-                        and access == fields.L2Access.DMA_READ)
     if continuation:
         if (access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
                 or result_access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
                 or enabled != (result_access == fields.L2Access.DMA_READ)
-                or task != fields.TaskType.PE_EW_UNARY and not dram_convolution):
+                or task not in (fields.TaskType.PE_EW_UNARY, fields.TaskType.NE)):
             raise ValueError("L2 continuation access mapping is not decoded yet")
     elif access != fields.L2Access.DMA_READ or not enabled:
         raise ValueError("tile DMA access mapping is not decoded yet")
@@ -97,8 +95,7 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
         raise ValueError("fill_lower_nodes_first DMA mapping is not decoded yet")
     if transpose:
         if (task != fields.TaskType.NE or value(image, fields.NE.op) != fields.NEOp.BYPASS
-                or value(image, common.unicast_cin) != 2
-                or not value(image, common.fill_lower_nodes_first) or source != result):
+                or source != result):
             raise ValueError("output transpose DMA mapping is not decoded yet")
         result = result[2], result[1], result[0]
     elif task in (fields.TaskType.PE_EW_UNARY, fields.TaskType.PE_EW_BINARY,
@@ -112,7 +109,7 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
             raise ValueError("neural operation DMA geometry is not decoded yet")
         if task == fields.TaskType.NE and neural_op == fields.NEOp.BYPASS:
             if (value(image, common.num_groups) != 1 or not value(image, common.unicast_en)
-                    or value(image, common.unicast_cin) != (2 if transpose else 1)):
+                    or not transpose and value(image, common.unicast_cin) != 1):
                 raise ValueError("bypass unicast DMA mapping is not decoded yet")
         if task == fields.TaskType.PE_POOL_UNARY and source[0] != result[0]:
             raise ValueError("pool output channels must equal input channels")

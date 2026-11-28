@@ -145,9 +145,9 @@ class Conv(Op):
   - Schedules MUST declare intermediate storage through tensor types. SMEM L2 addresses
     MUST come from the framework's memory analysis and transient staging from codegen,
     with disjoint source and result ranges.
-  - Full-height feature-map L2 source small-source mapping and L2 result pitches
-    are not decoded yet. Codegen MUST reject these requests; the evaluator retains
-    the reference semantics for SMEM operands.
+  - Codegen accepts a complete-height feature-map L2 source or result; other SMEM
+    requests are not decoded yet and MUST be rejected. The evaluator retains the
+    reference semantics for SMEM operands.
 
 #### Bypass
 

@@ -92,7 +92,7 @@ class Context:
         if not resident and not any(isinstance(call.target, tir.Conv) for call in calls):
             return
         for index, call in enumerate(calls):
-            if not isinstance(call.target, (tir.Unary, tir.Conv)):
+            if not isinstance(call.target, (tir.Unary, tir.Conv, tir.Bypass)):
                 if resident:
                     raise ValueError("L2 continuation for this operation is not decoded yet")
                 continue
@@ -114,7 +114,7 @@ class Context:
                     if root in self.producers:
                         raise ValueError("L2 tensor must have exactly one producer")
                     self.producers[root] = (
-                        isa.Engine.NEURAL if isinstance(call.target, tir.Conv) else isa.Engine.PLANAR
+                        isa.Engine.PLANAR if isinstance(call.target, tir.Unary) else isa.Engine.NEURAL
                     )
                 elif root not in self.producers:
                     raise ValueError("L2 source requires a preceding producer")

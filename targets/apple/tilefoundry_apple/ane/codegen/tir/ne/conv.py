@@ -32,8 +32,6 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     if len(call.args) == 4:
         raise ValueError("T.ane.conv: bias operand encoding is not decoded yet")
     destination, source, weight = call.args
-    if source.type.storage is expr.StorageKind.SMEM:
-        raise ValueError("T.ane.conv: full-height L2 source small_source_mode mapping is not decoded yet")
     src = context.tensor_desc_of(source.type, "src")
     dst = context.tensor_desc_of(destination.type, "dst")
     if (tuple(op.dilation), op.groups) != PLAIN:
@@ -57,15 +55,14 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     source_base, result_base = ctx.staging_address(1), ctx.staging_address(0)
     if source_base is None or result_base is None:
         raise ValueError("T.ane.conv: source and result require an allocated staging plan")
+    load = (
+        intrinsic.load_chained(src, isa.Engine.NEURAL, producer=ctx.producer_of(source), address=source_base)
+        if source.type.storage is expr.StorageKind.SMEM
+        else intrinsic.load(src, isa.Engine.NEURAL, address=ctx.address_of(source), fresh=ctx.fresh,
+                            width=op.tile_width, l2_base=source_base)
+    )
     ctx.emit(
-        intrinsic.load(
-            src,
-            isa.Engine.NEURAL,
-            address=ctx.address_of(source),
-            fresh=ctx.fresh,
-            width=op.tile_width,
-            l2_base=source_base,
-        ),
+        load,
         intrinsic.convolution(
             src,
             dst,

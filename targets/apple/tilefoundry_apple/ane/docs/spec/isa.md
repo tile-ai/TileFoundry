@@ -200,8 +200,10 @@ encoding choice, so the serializer uses the applicable subset of these slots.
 
 `rules.channel_groups` computes the log2 number of 16-channel groups, returning
 zero for one group. `active_nodes` stores node count minus one. `shift` clamps
-ceil-log2 of the work dimension to 0–4. These formulas are supported by compiler
-disassembly or descriptor comparisons.
+ceil-log2 of the work dimension to 0–4. `unicast_channels` rounds the number of
+16-channel groups up to a power of two and caps it at 8; `rules.check` requires it,
+and fill-lower-nodes exactly when it exceeds 1, on a transposing bypass. These
+formulas are supported by compiler disassembly or descriptor comparisons.
 
 With channel step `ch` and channel count `channels`, the staged depth is
 `channels × ch`. The L2 row stride is that depth on both engines: the device
@@ -233,8 +235,8 @@ the table and the weights.
 `isa/dma.py` decodes enabled tile DMA from access types and routing, independently
 of base-word presence. It accepts DMA_READ source/result, an enabled destination,
 source routing 1 for unary or 3 for binary, and second-stream plus PE second-source
-2 for binary. Complete-height unary continuation additionally accepts L2_READ source,
-result or both. A descriptor with neither DMA nor a second stream that programs an L2
+2 for binary. Complete-height unary and neural-engine continuation additionally
+accepts L2_READ source, result or both. A descriptor with neither DMA nor a second stream that programs an L2
 channel or row pitch keeps both in L2; its geometry comes from the common block alone.
 An L2 result MUST disable destination DMA and buffer mode; an L2 source MUST omit
 source DMA. Its channel and row pitches MUST be explicit; depth/group pitches
@@ -251,7 +253,8 @@ elements; it does not generalize to other compressed or tiled encodings.
 Source and second-source geometry is `(cin, hin, win)`. Destination geometry is
 `(cout, hout, wout)`, except spatial reduction writes `(cout, 1, 1)` while declaring
 the input spatial geometry. The verified NE bypass C/W transpose declares source
-geometry at both ends, uses unicast count 2 and fill-lower-nodes, and writes
+geometry at both ends, uses the unicast count and fill-lower-nodes that
+`rules.check` relates to its channels, and writes
 `(wout, hout, cout)`. DMA stride fields are in 64-byte units. A zero row stride in
 a singleton geometry uses its canonical padded row. Rows MUST cover width × 2;
 channel strides MUST cover height × row. `tile_height` MUST lie in `[1, hout]`.

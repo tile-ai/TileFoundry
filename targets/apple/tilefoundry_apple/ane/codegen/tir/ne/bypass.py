@@ -28,8 +28,8 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     if op.nonlinear not in NONLINEAR:
         raise ValueError(f"T.ane.bypass: nonlinear={op.nonlinear.name} is not decoded yet")
     destination, source = call.args
-    if any(arg.type.storage is expr.StorageKind.SMEM for arg in call.args):
-        raise ValueError("L2 operands for this operation is not decoded yet")
+    if source.type.storage is expr.StorageKind.SMEM:
+        raise ValueError("T.ane.bypass: L2 source is not decoded yet")
     perm = tuple(op.perm)
     if sorted(perm) != list(IDENTITY):
         raise ValueError(f"T.ane.bypass: perm {perm} must be a permutation of {IDENTITY}")
@@ -51,7 +51,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         raise ValueError("T.ane.bypass: omit_ocg must be a boolean")
     if op.omit_ocg and (op.ocg_size is not None or ocg_size != 0):
         raise ValueError("T.ane.bypass: omit_ocg for this channel grouping is not decoded yet")
-    unicast = 2 if permuted else 1
+    unicast = isa.rules.unicast_channels(src.channels) if permuted else 1
     if op.unicast_channels is not None:
         if type(op.unicast_channels) is not int or not 1 <= op.unicast_channels <= 65535:
             raise ValueError("T.ane.bypass: unicast_channels must be within [1, 65535]")
@@ -71,7 +71,8 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         address=ctx.address_of(destination),
     )
     ctx.emit(
-        intrinsic.load(src, isa.Engine.NEURAL, address=ctx.address_of(source), fresh=ctx.fresh),
+        intrinsic.load(src, isa.Engine.NEURAL, address=ctx.address_of(source), fresh=ctx.fresh,
+                       l2_base=ctx.staging_address(1)),
         compute,
         intrinsic.store(
             dst,
@@ -80,6 +81,8 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             address=ctx.address_of(destination),
             fresh=ctx.fresh,
             declared=declared,
+            result_base=ctx.staging_address(0),
+            to_dram=destination.type.storage is expr.StorageKind.GMEM,
         ),
     )
 

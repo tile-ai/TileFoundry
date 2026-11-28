@@ -77,7 +77,10 @@ tile no wider than 16, or the Pool window's `(4 + (kw > 1), 5 - sy)`. Other patc
 combinations are not decoded yet.
 OCG MUST equal `rules.channel_groups` for the relevant channels. Conv MUST reject
 an explicit OCG above 64 output channels because that field is omitted in that mode.
-Bypass unicast MUST be 1 for identity and 2 for C/W transpose; zero is an error.
+Bypass unicast MUST be 1 for identity and `rules.unicast_channels` of the source
+channels for C/W transpose: the 16-channel groups rounded up to a power of two, at
+most 8. A transpose fills the lower nodes first exactly when that count exceeds 1.
+Zero is an error.
 Bypass MAY omit OCG only when the inferred value equals its reset value of zero
 and no explicit OCG is given. Other omission combinations are not decoded yet.
 
@@ -119,13 +122,15 @@ MUST explicitly program the channel and row pitches read by their consumers.
 An SMEM read MUST have
 a preceding producer. Planar Unary chains with complete tiles are supported,
 including a Unary that reads its source from L2 and keeps its result there, and so
-is a convolution whose L2 result a Unary reads. A pass that
+is a convolution whose L2 result a Unary reads. A convolution reads a complete-height
+L2 source produced by a Unary, a convolution or a Bypass through `load_chained`, with
+neither small-source mode nor output transpose. A Bypass MAY keep its result in L2;
+an L2 Bypass source is not decoded yet. Bypass and Conv are neural producers. A pass that
 reads an L2 buffer MUST set the source alias bit of the engine that produced it:
 `l2_src_alias_conv_rslt` after a neural producer and `l2_src_alias_planar_rslt`
 after a planar one.
-Conv MUST infer L2 source/result requests from operand storage. A full-height L2
-source needs the small-source/transpose mapping, which is not decoded yet and
-MUST be rejected; an L2 result programs its channel and row pitches explicitly. The historical staged-source convolution
+Conv MUST infer L2 source/result requests from operand storage; an L2 result
+programs its channel and row pitches explicitly. The historical staged-source convolution
 uses 1×1 small-source geometry; it does not establish an NCHW continuation contract.
 Other continuation modes are not decoded yet.
 The Context owns staging placement because it already owns resolved views, ordered

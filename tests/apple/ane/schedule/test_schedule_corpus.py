@@ -339,6 +339,27 @@ class ConvUnaryChain(Conv1x1):
 
 
 @case
+class UnaryConvChain(Conv1x1):
+    path: Path = ROOT / "scheduled" / "unary_conv_chain.py"
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d((x + 1) * 2, w))
+
+
+@case
+class ConvConvChain(Conv1x1):
+    path: Path = ROOT / "scheduled" / "conv_conv_chain.py"
+
+    def inputs(self):
+        return small((1, 32, 16, 16), 10), small((32, 32, 1, 1), 11), small((32, 32, 1, 1), 12)
+
+    def guard(self, state, problems):
+        x, v, w = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(utils.F.conv2d(x, v), w))
+
+
+@case
 class ConvRelu(AneCase):
     path: Path = ROOT / "scheduled" / "conv_relu.py"
 
@@ -394,6 +415,20 @@ class Transpose(AneCase):
         (x,) = self.inputs()
         assert utils.torch.equal(state.result, x.permute(0, 3, 2, 1))
         assert issued(state.lowered) == ["T.ane.bypass(out, x, perm=(2, 1, 0))"]
+
+
+@case
+class TransposeConvChain(AneCase):
+    path: Path = ROOT / "scheduled" / "transpose_conv_chain.py"
+    runs: bool = True
+
+    def inputs(self):
+        return small((1, 32, 8, 16), 10), small((16, 16, 1, 1), 11)
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.conv2d(x.permute(0, 3, 2, 1), w))
+        assert issued(state.lowered) == ["T.ane.bypass(t0, x, perm=(2, 1, 0))", "T.ane.conv(out, t0, w)"]
 
 
 @case

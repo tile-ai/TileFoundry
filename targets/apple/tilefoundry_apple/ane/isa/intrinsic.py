@@ -994,7 +994,7 @@ def compute_ne(
             shift_preferred=width_code,
             active_nodes=active_nodes,
             output_transpose=1 if transpose else 0,
-            fill_lower_nodes_first=1 if transpose else 0,
+            fill_lower_nodes_first=1 if transpose and unicast_channels > 1 else 0,
             node_id=1,
         ),
         L2.pack(pe_src1_re_lu=int(source_relu)),
