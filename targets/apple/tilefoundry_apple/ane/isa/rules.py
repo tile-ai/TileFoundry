@@ -4,7 +4,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from . import dma, fields
-from .arith import align_up
 
 NE_CHANNEL_GROUP = 16
 SHIFT_MAX = 4
@@ -25,36 +24,6 @@ def active_nodes(engine_nodes: int) -> int:
 
 def shift(work_unit_dim: int) -> int:
     return min(ceil_log2(work_unit_dim), SHIFT_MAX)
-
-
-def guard(
-    pw: int, ch: int, channels: int, task_type: int, tile_h: int, height: int, ne_op: int
-) -> int:
-    """L2 staging guard band between rows (``row_stride - depth_stride``), in bytes.
-
-    empirical: 93.6% over the 2468-TD corpus.  The first pad-off clause (bypass
-    with a staged depth >= 2 KB) is disasm-pointed; the rest of the switch is
-    fitted.  ``pw`` is the patch width (0x0030[3:0]), ``ch`` the L2 channel stride.
-    """
-    depth = channels * ch
-    pad_off = (
-        (ne_op == 4 and depth >= 2048)
-        or ch == 256
-        or (task_type == 3 and ch == 128)
-        or (ch == 192 and channels <= 32)
-        or (ch == 96 and channels >= 33)
-        or channels <= 8
-        or (channels <= 17 and tile_h == height)
-    )
-    if pad_off:
-        return 0
-    k = 0 if (ch // 16) % 2 else 16
-    return align_up(2 * pw + k, 16)
-
-
-def row_stride(pw: int, ch: int, channels: int, task_type: int, tile_h: int, height: int, ne_op: int) -> int:
-    """disasm: the L2 source row stride is the channel depth plus the guard band."""
-    return channels * ch + guard(pw, ch, channels, task_type, tile_h, height, ne_op)
 
 
 class CheckError(ValueError):
@@ -96,8 +65,6 @@ __all__ = [
     "ceil_log2",
     "channel_groups",
     "check",
-    "guard",
     "read",
-    "row_stride",
     "shift",
 ]

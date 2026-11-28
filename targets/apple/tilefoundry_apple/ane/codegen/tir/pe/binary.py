@@ -51,7 +51,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     engine_op, second_source = OPS[op.kind]
     rows = context.tile_rows(op, dst)
     ctx.emit(
-        intrinsic.load(left, rows=rows, address=ctx.address_of(lhs), fresh=ctx.fresh),
+        intrinsic.load(left, address=ctx.address_of(lhs), fresh=ctx.fresh),
         intrinsic.load_second(right, rows=rows, address=ctx.address_of(rhs), fresh=ctx.fresh),
         intrinsic.compute_pe(
             isa.TaskType.PE_EW_BINARY,

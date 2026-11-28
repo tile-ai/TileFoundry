@@ -34,8 +34,6 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     destination, source, weight = call.args
     if source.type.storage is expr.StorageKind.SMEM:
         raise ValueError("T.ane.conv: full-height L2 source small_source_mode mapping is not decoded yet")
-    if destination.type.storage is expr.StorageKind.SMEM:
-        raise ValueError("T.ane.conv: full-height L2 result pitch mapping is not decoded yet")
     src = context.tensor_desc_of(source.type, "src")
     dst = context.tensor_desc_of(destination.type, "dst")
     if (tuple(op.dilation), op.groups) != PLAIN:
@@ -65,7 +63,6 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             isa.Engine.NEURAL,
             address=ctx.address_of(source),
             fresh=ctx.fresh,
-            rows=rows,
             width=op.tile_width,
             l2_base=source_base,
         ),
@@ -86,7 +83,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             result_base=result_base,
             nonlinear=NONLINEAR[op.nonlinear],
             staged_source=False,
-            to_dram=True,
+            to_dram=destination.type.storage is expr.StorageKind.GMEM,
             address=ctx.address_of(destination),
         ),
     )

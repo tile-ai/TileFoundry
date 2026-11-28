@@ -71,13 +71,10 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         address=ctx.address_of(destination),
     )
     ctx.emit(
-        intrinsic.load(
-            src, isa.Engine.NEURAL, address=ctx.address_of(source), fresh=ctx.fresh, rows=rows,
-        ),
+        intrinsic.load(src, isa.Engine.NEURAL, address=ctx.address_of(source), fresh=ctx.fresh),
         compute,
         intrinsic.store(
             dst,
-            isa.Engine.NEURAL,
             staging=src,
             rows=rows,
             address=ctx.address_of(destination),

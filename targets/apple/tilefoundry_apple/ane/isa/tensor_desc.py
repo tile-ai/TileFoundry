@@ -10,22 +10,7 @@ ELEMENT_BYTES = MappingProxyType({"f16": 2, "f32": 4})
 ELEMENT_CODES = MappingProxyType({"f16": 5, "f32": 6})
 SURFACE_ROW_ALIGN = 64
 L2_ROW_ALIGN = 16
-STAGING_ROW_GUARD = 32
 NE_CHANNEL_GROUP = 16
-NE_ROW_GUARD = 16
-NE_GUARD_PERIOD = 1024
-
-
-def neural_staging_row(
-    channels: int, width: int, full_height: bool, *, transpose: bool = False
-) -> int:
-    """Return the row pitch of the sampled complete-height neural staging modes."""
-    sampled = (channels, width) in ((32, 16), (32, 32)) or (transpose and (channels, width) == (16, 32))
-    if not full_height or not sampled:
-        raise ValueError("neural L2 staging guard for this tile is not decoded yet")
-    channel = align_up(width * 2, L2_ROW_ALIGN)
-    depth = channels * channel
-    return depth + channel + (NE_ROW_GUARD if depth % NE_GUARD_PERIOD == 0 else 0)
 
 
 class Engine(IntEnum):
@@ -180,25 +165,13 @@ class TensorDesc:
             raise ValueError(f"tile_width {width} is outside [1, {self.width}]")
         return align_up(width * self.element_bytes, L2_ROW_ALIGN)
 
-    def staging_row(
-        self, engine: Engine = Engine.PLANAR, rows: int | None = None, width: int | None = None
-    ) -> int:
-        """L2 row stride for the selected engine and scheduled tile."""
-        channel = self.staging_channel(width)
-        depth = self.channels * channel
-        if engine is Engine.PLANAR:
-            return depth + STAGING_ROW_GUARD
-        if engine is not Engine.NEURAL:
-            raise ValueError(f"unknown engine {engine!r}")
-        if width is not None and width != self.width:
-            raise ValueError("neural L2 staging guard for a narrower tile is not decoded yet")
-        return neural_staging_row(self.channels, self.width, rows is None or rows == self.height)
+    def staging_row(self, width: int | None = None) -> int:
+        """L2 row stride for the scheduled tile width: every channel of one row, unpadded."""
+        return self.channels * self.staging_channel(width)
 
-    def staging_extent(
-        self, engine: Engine = Engine.PLANAR, rows: int | None = None, width: int | None = None
-    ) -> int:
+    def staging_extent(self, rows: int | None = None, width: int | None = None) -> int:
         """Bytes occupied by the scheduled tile in L2."""
-        return self.staging_row(engine, rows, width) * (self.height if rows is None else rows)
+        return self.staging_row(width) * (self.height if rows is None else rows)
 
 
-__all__ = ["Engine", "NE_CHANNEL_GROUP", "STAGING_ROW_GUARD", "SURFACE_ROW_ALIGN", "TensorDesc", "neural_staging_row"]
+__all__ = ["Engine", "NE_CHANNEL_GROUP", "SURFACE_ROW_ALIGN", "TensorDesc"]

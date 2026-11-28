@@ -1,4 +1,4 @@
-"""Place complete guarded L2 buffers by inclusive pass lifetimes."""
+"""Place complete staged L2 buffers by inclusive pass lifetimes."""
 
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -8,7 +8,7 @@ from tilefoundry_apple.ane import isa
 
 @dataclass(frozen=True)
 class Interval:
-    """One buffer's inclusive first/last pass and guarded byte reservation."""
+    """One buffer's inclusive first/last pass and staged byte reservation."""
 
     key: object
     first: int

@@ -52,8 +52,8 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     rows = context.tile_rows(op, src)
     ctx.emit(
         intrinsic.load(
-            src, address=ctx.address_of(source), fresh=ctx.fresh, rows=rows,
-            width=op.tile_width, planar_result=True
+            src, address=ctx.address_of(source), fresh=ctx.fresh,
+            width=op.tile_width, producer=isa.Engine.PLANAR
         ),
         intrinsic.compute_pe(
             isa.TaskType.PE_EW_REDUCE_UNARY,

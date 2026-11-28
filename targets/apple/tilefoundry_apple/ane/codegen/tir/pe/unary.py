@@ -33,8 +33,9 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     rows = context.tile_rows(op, dst)
     if any(arg.type.storage is expr.StorageKind.SMEM for arg in call.args) and not ctx.staging:
         raise ValueError("L2 source and result require an allocated producer plan")
+    producer = ctx.producer_of(source)
     load = (
-        intrinsic.load_chained(src, address=ctx.address_of(source))
+        intrinsic.load_chained(src, producer=producer, address=ctx.address_of(source))
         if source.type.storage is expr.StorageKind.SMEM
         else intrinsic.load(src, address=ctx.address_of(source), fresh=ctx.fresh,
                             width=op.tile_width, l2_base=ctx.staging_address(1))
@@ -55,7 +56,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
         ),
         intrinsic.store(dst, rows=rows, address=ctx.address_of(destination), fresh=ctx.fresh,
                         width=op.tile_width, result_base=ctx.staging_address(0),
-                        planar_result=source.type.storage is expr.StorageKind.SMEM,
+                        producer=producer,
                         to_dram=destination.type.storage is expr.StorageKind.GMEM),
     )
 

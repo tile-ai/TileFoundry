@@ -96,7 +96,7 @@ its access-type field; convolution does not overwrite that field when using the 
 consumer, inclusive. Transient DMA staging MUST participate in the same placement.
 Conv MUST allocate both its transient source and result even with only GMEM operands.
 Coefficient tensors MUST NOT reserve feature-map staging slots.
-Reservations MUST use `TensorDesc.staging_extent` for the consuming engine, including the decoded row guard,
+Reservations MUST use `TensorDesc.staging_extent`
 and MUST be disjoint while live and end within `isa.dma.L2_CAPACITY` (2 MiB).
 Expired reservations MAY be reused. Capacity overflow MUST fail before emission.
 Schedules MUST declare SMEM with `tf.empty`; they supply no L2 addresses.
@@ -109,13 +109,13 @@ the physical L2 pitches MUST come from staging geometry. L2-only planar results
 MUST explicitly program the channel and row pitches read by their consumers.
 An SMEM read MUST have
 a preceding producer. Two-pass planar Unary chains with complete tiles are
-supported. Cross-engine continuations with different staging pitches MUST be rejected
-as `cross-engine L2 staging pitch conversion is not decoded yet`.
-For `(C, H, W) = (32, 16, 16)`, the planar row pitch is 1056 bytes and the neural
-row pitch is 1072 bytes; equal logical shapes do not make these layouts interchangeable.
-Conv MUST infer L2 source/result requests from operand storage. Full-height L2
-source small-source/transpose mapping and explicit L2 result pitch mapping are
-not decoded yet and MUST be rejected. The historical staged-source convolution
+supported, and so is a convolution whose L2 result a Unary reads. A pass that
+reads an L2 buffer MUST set the source alias bit of the engine that produced it:
+`l2_src_alias_conv_rslt` after a neural producer and `l2_src_alias_planar_rslt`
+after a planar one.
+Conv MUST infer L2 source/result requests from operand storage. A full-height L2
+source needs the small-source/transpose mapping, which is not decoded yet and
+MUST be rejected; an L2 result programs its channel and row pitches explicitly. The historical staged-source convolution
 uses 1×1 small-source geometry; it does not establish an NCHW continuation contract.
 Other continuation modes are not decoded yet.
 The Context owns placement because it already owns resolved views, ordered passes

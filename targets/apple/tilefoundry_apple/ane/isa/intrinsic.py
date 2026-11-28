@@ -5,10 +5,11 @@ from collections.abc import Mapping
 
 from . import fields
 from .arith import align_up
-from .tensor_desc import NE_CHANNEL_GROUP, STAGING_ROW_GUARD, SURFACE_ROW_ALIGN, Engine, TensorDesc
+from .tensor_desc import NE_CHANNEL_GROUP, SURFACE_ROW_ALIGN, Engine, TensorDesc
 
 FP16_BYTES = 2
 L2_UNIT = 16
+PARTIAL_SLOT_GAP = 32
 STREAM_TAG = 1
 DEST_TAG = 1
 DATA_SET_ID = 14
@@ -92,20 +93,20 @@ def split_address(address: int) -> tuple[int, int]:
     return address & 0xFFFFFFFF, address >> 32
 
 
-def staged_flags(fresh: bool, planar_result: bool = False) -> dict[str, int]:
+def staged_flags(fresh: bool, producer: Engine | None = None) -> dict[str, int]:
     """Return the buffer-reuse bits a descriptor programs for its staged slots.
 
     A descriptor that stages into fresh L2 buffers marks each slot as first use;
     a descriptor that continues a stream reuses the buffers its predecessor left
     behind, so it clears those bits and tags its DMA words with the stream index.
+    A source read from the result of ``producer`` keeps that engine's result bit set.
     """
     alias = 1 if fresh else 0
-    share = 1 if planar_result else alias
     return {
         "l2_src_alias_conv_src": alias,
-        "l2_src_alias_conv_rslt": alias,
+        "l2_src_alias_conv_rslt": 1 if producer is Engine.NEURAL else alias,
         "l2_src_alias_planar_src": alias,
-        "l2_src_alias_planar_rslt": share,
+        "l2_src_alias_planar_rslt": 1 if producer is Engine.PLANAR else alias,
         "l2_result_alias_src": alias,
         "l2_result_alias_rslt": alias,
         "l2_result_alias_planar_src": alias,
@@ -129,9 +130,8 @@ def load(
     *,
     address: int = 0,
     fresh: bool = True,
-    rows: int | None = None,
     width: int | None = None,
-    planar_result: bool = False,
+    producer: Engine | None = None,
     l2_base: int | None = None,
 ) -> dict[int, int]:
     """Program reading one feature map: the L2 source buffer and the source DMA."""
@@ -149,11 +149,11 @@ def load(
         L2.pack(
             l2_src_type=fields.L2Access.DMA_READ,
             **({} if l2_base is None else {"l2_src_base_address": l2_units(l2_base)}),
-            **staged_flags(fresh, planar_result),
+            **staged_flags(fresh, producer),
             l2_src_dma_format=fields.TensorFormatMode.COMPRESSED,
             l2_src_interleave=INTERLEAVE,
             l2_src_channel_stride=l2_units(source.staging_channel(width)),
-            l2_src_row_stride=l2_units(source.staging_row(engine, rows, width)),
+            l2_src_row_stride=l2_units(source.staging_row(width)),
             l2_src_depth_stride=l2_units(source.channels * source.staging_channel(width)),
             l2_src_group_stride=l2_units(source.channels * source.staging_channel(width)),
         ),
@@ -177,7 +177,6 @@ def load(
 def slot_offset(
     desc: TensorDesc,
     slots: int,
-    engine: Engine = Engine.PLANAR,
     rows: int | None = None,
     width: int | None = None,
     *,
@@ -186,18 +185,18 @@ def slot_offset(
     """Return the byte offset a staged slot starts at.
 
     Slots are one staged image apart.  A tile that stages fewer rows than the
-    feature map spans carries an extra guard band between slots, which the compiler
+    feature map spans carries an extra gap between slots, which the compiler
     emits so that adjacent staged images stay on separate row boundaries.
     """
-    extent = desc.staging_extent(engine, rows, width)
+    extent = desc.staging_extent(rows, width)
     partial = rows is not None and rows < desc.height
-    separator = STAGING_ROW_GUARD if separated and partial else 0
+    separator = PARTIAL_SLOT_GAP if separated and partial else 0
     return slots * extent + separator
 
 
 def load_chained(
     source: TensorDesc, engine: Engine = Engine.PLANAR, *,
-    rows: int | None = None, width: int | None = None, address: int = 0,
+    producer: Engine, width: int | None = None, address: int = 0,
 ) -> dict[int, int]:
     """Read a source the previous descriptor left staged instead of reloading it.
 
@@ -205,6 +204,7 @@ def load_chained(
     source DMA at all and leaves the access type at L2 read.  The reference
     streams for an add-then-pool and an abs-then-add chain both show a chained
     descriptor carrying no source DMA block, which is what this encodes.
+    ``producer`` is the engine whose pass filled the buffer.
     """
     require_row_width(source, PLANAR_MIN_ROW_BYTES)
 
@@ -217,17 +217,16 @@ def load_chained(
         L2.pack(
             l2_src_type=fields.L2Access.L2_READ,
             l2_src_base_address=l2_units(address),
-            **staged_flags(False, planar_result=True),
+            **staged_flags(False, producer),
             l2_src_interleave=INTERLEAVE,
             l2_src_channel_stride=l2_units(source.staging_channel(width)),
-            l2_src_row_stride=l2_units(source.staging_row(engine, rows, width)),
+            l2_src_row_stride=l2_units(source.staging_row(width)),
         ),
     )
 
 
 def load_second(
     source: TensorDesc,
-    engine: Engine = Engine.PLANAR,
     *,
     rows: int | None = None,
     width: int | None = None,
@@ -237,13 +236,13 @@ def load_second(
     """Program a second staged source, placed one staged slot after the first."""
     require_row_width(source, PLANAR_MIN_ROW_BYTES)
     low, high = split_address(address)
-    offset = l2_units(slot_offset(source, 1, engine, rows, width=width, separated=True))
+    offset = l2_units(slot_offset(source, 1, rows, width=width, separated=True))
     return splice(
         L2.pack(
             l2_src_second_stream=1,
             l2_src2_base_address=offset,
             l2_src2_channel_stride=l2_units(source.staging_channel(width)),
-            l2_src2_row_stride=l2_units(source.staging_row(engine, rows, width)),
+            l2_src2_row_stride=l2_units(source.staging_row(width)),
             l2_src2_depth_stride=l2_units(source.channels * source.staging_channel(width)),
             l2_src2_group_stride=l2_units(source.channels * source.staging_channel(width)),
         ),
@@ -267,19 +266,17 @@ def load_second(
 
 def store(
     destination: TensorDesc,
-    engine: Engine = Engine.PLANAR,
     *,
     staged: int = 1,
     staging: TensorDesc | None = None,
     rows: int | None = None,
     width: int | None = None,
-    guard: bool = False,
     address: int = 0,
     fresh: bool = True,
     separated: bool | None = None,
     declare: bool = True,
     declared: TensorDesc | None = None,
-    planar_result: bool = False,
+    producer: Engine | None = None,
     result_base: int | None = None,
     to_dram: bool = True,
 ) -> dict[int, int]:
@@ -311,20 +308,19 @@ def store(
         L2.pack(
             l2_result_type=fields.L2Access.DMA_READ if to_dram else fields.L2Access.L2_READ,
             **({"l2_result_buffer_mode": 1} if to_dram else {}),
-            **staged_flags(fresh, planar_result),
+            **staged_flags(fresh, producer),
             l2_result_dma_fmt=fields.TensorFormatMode.COMPRESSED,
             l2_result_interleave=INTERLEAVE,
             **(
                 {} if to_dram else {
                     "l2_result_channel_stride": l2_units(destination.staging_channel(width)),
-                    "l2_result_row_stride": l2_units(destination.staging_row(engine, rows, width)),
+                    "l2_result_row_stride": l2_units(destination.staging_row(width)),
                 }
             ),
             l2_result_address=l2_units(
                 result_base if result_base is not None else slot_offset(
                     staging or destination,
                     staged,
-                    engine,
                     rows,
                     width=width,
                     separated=staged >= 2 if separated is None else separated,
@@ -460,7 +456,7 @@ def staged_copy(
             l2_result_alias_planar_src=1,
             l2_result_alias_planar_rslt=1,
             **({} if result_base is None else {"l2_result_address": l2_units(result_base)}),
-            l2_result_channel_stride=l2_units(STAGING_ROW_GUARD // 2),
+            l2_result_channel_stride=l2_units(L2_UNIT),
         ),
         SRC_DMA.pack(
             tile_dma_src_hint=SOURCE_HINT,
@@ -573,6 +569,12 @@ def convolution(
             **({} if not to_dram else {"l2_result_buffer_mode": 1}),
             l2_result_dma_fmt=fields.TensorFormatMode.COMPRESSED,
             l2_result_interleave=INTERLEAVE,
+            **(
+                {} if to_dram else {
+                    "l2_result_channel_stride": l2_units(destination.staging_channel(width)),
+                    "l2_result_row_stride": l2_units(destination.staging_row(width)),
+                }
+            ),
             **(
                 {}
                 if result_base is None and not to_dram

@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 from . import fields
 from .arith import align_up
-from .tensor_desc import neural_staging_row
 
 L2_CAPACITY = 2 * 1024 * 1024
 
@@ -44,13 +43,16 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
                                                 l2.l2_result_channel_stride, l2.l2_result_row_stride)):
             raise ValueError("L2-only transfer mapping is not decoded yet")
         return ()
+    task = value(image, common.task_type)
     result_access = value(image, l2.l2_result_type)
     continuation = access == fields.L2Access.L2_READ or result_access == fields.L2Access.L2_READ
+    dram_convolution = (task == fields.TaskType.NE and value(image, fields.NE.op) == fields.NEOp.CONV
+                        and access == fields.L2Access.DMA_READ)
     if continuation:
         if (access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
                 or result_access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
                 or enabled != (result_access == fields.L2Access.DMA_READ)
-                or value(image, common.task_type) != fields.TaskType.PE_EW_UNARY):
+                or task != fields.TaskType.PE_EW_UNARY and not dram_convolution):
             raise ValueError("L2 continuation access mapping is not decoded yet")
     elif access != fields.L2Access.DMA_READ or not enabled:
         raise ValueError("tile DMA access mapping is not decoded yet")
@@ -61,7 +63,6 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
     if (result_access == fields.L2Access.DMA_READ and not value(image, l2.l2_result_buffer_mode)
             or result_access == fields.L2Access.L2_READ and value(image, l2.l2_result_buffer_mode)):
         raise ValueError("L2 result DMA mapping is not decoded yet")
-    task = value(image, common.task_type)
     if task not in (fields.TaskType.NE, fields.TaskType.PE_POOL_UNARY,
                     fields.TaskType.PE_EW_UNARY, fields.TaskType.PE_EW_BINARY,
                     fields.TaskType.PE_EW_REDUCE_UNARY):
@@ -177,22 +178,20 @@ def decode(image: Mapping[int, int], name: str, shape: tuple[int, int, int]) -> 
 
 
 def check_l2(image: Mapping[int, int], decoded: tuple[Transfer, ...]) -> tuple[tuple[str, int, int], ...]:
-    """Check verified tile pitches and disjoint live intervals within L2 capacity."""
+    """Check staged pitches and disjoint live intervals within L2 capacity.
+
+    A staged channel spans its 16-byte aligned row and a staged row spans every channel,
+    so any row stride that covers that depth is valid. A DMA result that leaves its row
+    stride zero occupies the depth, or one source row for a reduction.
+    """
     if not decoded:
         return ()
     common, l2 = fields.Common, fields.L2
-    source, result = decoded[0], decoded[-1]
     task = value(image, common.task_type)
     tile = value(image, common.tile_height)
     source_rows = tile
     if task == fields.TaskType.PE_POOL_UNARY:
         source_rows = (tile - 1) * value(image, common.sy) + value(image, common.kh)
-    neural = task == fields.TaskType.NE
-    if neural and (result.channels, result.width) != (source.channels, source.width) and not (
-        value(image, common.output_transpose)
-        and (result.channels, result.width) == (source.width, source.channels)
-    ):
-        raise ValueError("neural L2 result guard for this geometry is not decoded yet")
     intervals = []
     source_row = 0
     for transfer in decoded:
@@ -200,31 +199,24 @@ def check_l2(image: Mapping[int, int], decoded: tuple[Transfer, ...]) -> tuple[t
         prefix = f"l2_{name}_"
         base_field = l2.l2_result_address if name == "result" else l2.fields[prefix + "base_address"]
         base = value(image, base_field) * 16
-        channels, width = transfer.channels, transfer.width
         rows = min(tile, transfer.height) if name == "result" else source_rows
-        channel = align_up(width * 2, 16)
-        row = channels * channel + 32
-        if neural:
-            row = neural_staging_row(
-                channels, width, tile == source.height,
-                transpose=name == "result" and bool(value(image, common.output_transpose)),
-            )
-        if name == "result" and task == fields.TaskType.PE_EW_REDUCE_UNARY:
-            row = source_row
-        for suffix, expected in (("channel_stride", channel), ("row_stride", row),
-                                 ("depth_stride", channels * channel),
-                                 ("group_stride", channels * channel)):
+        channel = align_up(transfer.width * 2, 16)
+        depth = transfer.channels * channel
+        row = value(image, l2.fields[prefix + "row_stride"]) * 16
+        if name == "result" and not row and transfer.register:
+            row = source_row if task == fields.TaskType.PE_EW_REDUCE_UNARY else depth
+        if row < depth:
+            raise ValueError(f"{prefix}row_stride {row} does not cover the {depth} byte staged depth")
+        for suffix, expected in (("channel_stride", channel), ("depth_stride", depth), ("group_stride", depth)):
             actual = value(image, l2.fields[prefix + suffix]) * 16
             if name == "result" and not actual:
-                if not transfer.register and suffix in ("channel_stride", "row_stride"):
-                    raise ValueError(f"l2_result_{suffix} must explicitly match the allocated L2 layout")
+                if not transfer.register and suffix == "channel_stride":
+                    raise ValueError("l2_result_channel_stride must explicitly match the allocated L2 layout")
                 continue
-            if name == "src" and not transfer.register and suffix in (
-                "depth_stride", "group_stride"
-            ):
+            if name == "src" and not transfer.register and suffix != "channel_stride":
                 expected = 0
             if actual != expected:
-                raise ValueError(f"{prefix}{suffix} {actual} tile pitch is not decoded yet; expected {expected}")
+                raise ValueError(f"{prefix}{suffix} {actual} contradicts the staged layout; expected {expected}")
         for suffix, expected in (("interleave", 1), ("compression", 0),
                                  ("dma_fmt" if name == "result" else "dma_format", 1)):
             if name == "src" and not transfer.register and suffix == "dma_format":
@@ -245,7 +237,10 @@ def check_l2(image: Mapping[int, int], decoded: tuple[Transfer, ...]) -> tuple[t
 
 
 def check_continuations(images) -> None:
-    """Require each L2 reader to match an unmodified earlier result buffer."""
+    """Require each L2 reader to match an unmodified earlier result buffer.
+
+    Equal intervals over equal complete-height shapes give the reader the writer's pitches.
+    """
     live = []
     for image in images:
         decoded = geometry(image)

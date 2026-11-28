@@ -32,6 +32,7 @@ class Context:
         self.coefficients: dict[expr.Expr, hwx.CoefficientLayout] = {}
         self.weight_uses: list[tuple[expr.Expr, int, hwx.CoefficientLayout]] = []
         self.staging: dict[tuple[int, int], int] = {}
+        self.producers: dict[expr.Expr, isa.Engine] = {}
 
     @property
     def fresh(self) -> bool:
@@ -85,28 +86,28 @@ class Context:
                 if resident:
                     raise ValueError("L2 continuation for this operation is not decoded yet")
                 continue
-            engine = isa.Engine.NEURAL if isinstance(call.target, tir.Conv) else isa.Engine.PLANAR
             for position in (1, 0):
                 operand = call.args[position]
                 desc = tensor_desc_of(operand.type, "L2 operand")
                 rows = tile_rows(call.target, desc)
                 if resident and (rows != desc.height or call.target.tile_width is not None):
                     raise ValueError("partial L2 continuation is not decoded yet")
-                size = desc.staging_extent(engine, rows, call.target.tile_width)
+                size = desc.staging_extent(rows, call.target.tile_width)
                 if operand.type.storage is expr.StorageKind.SMEM:
                     root = self.symbols.get(operand, operand)
                     if position == 0:
                         if root in lifetimes:
                             raise ValueError("L2 tensor must have exactly one producer")
                         lifetimes[root] = Interval(root, index, index, size)
+                        self.producers[root] = (
+                            isa.Engine.NEURAL if isinstance(call.target, tir.Conv) else isa.Engine.PLANAR
+                        )
                     else:
                         previous = lifetimes.get(root)
                         if previous is None or previous.first == index:
                             raise ValueError("L2 source requires a preceding producer")
                         if root.type != operand.type:
                             raise ValueError("L2 source must match producer geometry and layout")
-                        if previous.size != size:
-                            raise ValueError("cross-engine L2 staging pitch conversion is not decoded yet")
                         lifetimes[root] = Interval(root, previous.first, index, size)
                 else:
                     intervals.append(Interval((index, position), index, index, size))
@@ -127,6 +128,10 @@ class Context:
     def staging_address(self, position: int) -> int | None:
         """Return the current pass's allocated slot, or its legacy implicit placement."""
         return self.staging.get((len(self.passes), position))
+
+    def producer_of(self, operand: expr.Expr) -> isa.Engine | None:
+        """Return the engine whose pass writes an SMEM tensor, or None for any other operand."""
+        return self.producers.get(self.symbols.get(operand, operand))
 
     def address_of(self, operand: expr.Expr) -> int:
         """Return the allocated L2 byte base or a view's DRAM-relative byte offset."""

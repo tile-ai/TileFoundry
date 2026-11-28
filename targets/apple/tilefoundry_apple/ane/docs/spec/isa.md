@@ -203,23 +203,17 @@ zero for one group. `active_nodes` stores node count minus one. `shift` clamps
 ceil-log2 of the work dimension to 0–4. These formulas are supported by compiler
 disassembly or descriptor comparisons.
 
-The staging guard formula is empirical, matching 93.6% of the measured 2468-TD
-corpus. With patch width `pw`, channel step `ch` and channel count `channels`,
-the depth is `channels × ch`. The guard is zero for bypass with depth at least
-2048, `ch = 256`, binary tasks with `ch = 128`, `ch = 192` with at most 32
-channels, `ch = 96` with at least 33 channels, at most eight channels, or at
-most 17 channels when the tile spans the complete height. Otherwise it is
-`align16(2 × pw + k)`, where `k` is zero for odd `ch / 16` and 16 for even.
-The source row stride is the depth plus that guard.
+With channel step `ch` and channel count `channels`, the staged depth is
+`channels × ch`. The L2 row stride is that depth on both engines: the device
+computes identical results for every row stride that covers the depth, so no
+guard band is programmed.
 
 Feature-map DRAM rows align to the shared `SURFACE_ROW_ALIGN` of 64 bytes;
 L2 rows align to 16. A singleton extent causes the DMA row-stride field to
 remain zero. A narrower staged tile keeps the logical feature-map geometry
-and DRAM strides while changing its L2 pitch. Planar staging adds a 32-byte
-row guard. Neural pitch generation and effective-register validation share
-`tensor_desc.neural_staging_row` and the sampled modes in [§9](#9-verified-transfer-validation).
-Other guards, partial-height neural tiles and narrower neural widths are rejected
-as not decoded yet.
+and DRAM strides while changing its L2 pitch. Pitch generation and
+effective-register validation share `TensorDesc.staging_row` and the constraints
+in [§9](#9-verified-transfer-validation).
 
 The neural width code is a power-of-two subdivision of 256 bytes. The dense row
 MUST divide 256 exactly before its ratio is tested for a power of two. An explicit
@@ -265,19 +259,13 @@ match their positive kernel window and strides without padding.
 `L2_CAPACITY` is defined once in `isa/dma.py` as 2 MiB. For each pass, source,
 second-source and result intervals MUST end within that capacity and MUST be
 disjoint. L2 byte bases and strides are the fields multiplied by 16. The checked
-envelope reserves complete staged rows including guard bytes. A planar row is
-`channels × align16(width × 2) + 32`. Pool source rows include the kernel halo;
-reduction reserves one result row. Zero result pitches select these verified
-implicit pitches for DMA results; explicit pitches MUST match them. An allocated
-planar L2-only result MUST explicitly program its channel and row pitches to the
-same staging geometry that its consumer uses. Depth and group extents remain one.
-
-Neural full-height staging currently accepts source `(C, W)` of `(32, 16)` or
-`(32, 32)`: row pitch is depth plus one channel pitch and another 16 bytes when
-depth is divisible by 1024. Other neural guards and narrower staged widths are
-rejected as not decoded yet. This includes the known undecoded `31 × 15 × 32`
-and `24 × 11 × 64` guards. The verified C/W transpose additionally admits result
-`(C, W) = (16, 32)` when its source is `(32, 16)`; this is a result-only mode.
+envelope reserves complete staged rows. A row stride MUST cover the staged depth
+`channels × align16(width × 2)`; channel, depth and group strides MUST equal the
+staged layout. Pool source rows include the kernel halo; reduction reserves one
+result row. A DMA result that leaves its row stride zero occupies the depth, or
+one source row for a reduction. An L2-only result MUST explicitly program its
+channel and row pitches to the staging geometry that its consumer uses. Depth
+and group extents remain one.
 Every overlapping live interval MUST be rejected, including equal-geometry 1×1
 convolution source/result intervals with alias bits set. Alias bits do not establish
 permission to overlap buffers. Their existing encoding is retained.

@@ -330,6 +330,15 @@ class Conv1x1Silu(Conv1x1):
 
 
 @case
+class ConvUnaryChain(Conv1x1):
+    path: Path = ROOT / "scheduled" / "conv_unary_chain.py"
+
+    def guard(self, state, problems):
+        x, w = self.inputs()
+        assert utils.torch.equal(state.result, (utils.F.conv2d(x, w) + 1) * 2)
+
+
+@case
 class ConvRelu(AneCase):
     path: Path = ROOT / "scheduled" / "conv_relu.py"
 
