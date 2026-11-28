@@ -269,7 +269,7 @@ class Unary(Op):
     `abs` does not round. Some probes distinguish only operation order: their away/even and
     per-step/final candidates coincide. Those results do not establish hardware rounding
     for every admitted option combination.
-  - `abs` with `square` MUST be rejected as not decoded yet, including by the evaluator.
+  - `abs` with `square` and `clamp` MUST be rejected as not decoded yet, including by the evaluator.
   - Codegen and the evaluator MUST reject option combinations outside the following table
     as not decoded yet.
     An affine attribute not listed in a row MUST have its default value. Within a listed
@@ -280,8 +280,9 @@ class Unary(Op):
     | none | `pre_scale`, `bias`, `scale` |
     | `clamp` | `pre_scale`, `bias`, `scale` |
     | `abs` | `pre_scale`, `bias`, `scale` |
-    | `abs`, `clamp` | either `{bias}` or `{scale}` |
+    | `abs`, `clamp` | `pre_scale`, `bias`, `scale` |
     | `square` | `pre_scale`, `bias` |
+    | `abs`, `square` | `pre_scale`, `bias` |
     | `square`, `clamp` | `pre_scale`, `bias` |
 
   - `clamp` MUST satisfy `low <= high`.

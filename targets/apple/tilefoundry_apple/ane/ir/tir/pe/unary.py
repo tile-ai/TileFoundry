@@ -20,10 +20,10 @@ CLAMP = pattern.Sequence(
 class Unary(expr.Op):
     """Apply pre_scale and bias, then either square or scale, then abs and clamp.
 
-    Square requires scale=1; abs with square is not decoded yet.
+    Square requires scale=1; abs with square and clamp is not decoded yet.
     Each arithmetic step retains the evaluator's fp16 ties-away rounding.
     Probes do not distinguish rounding for every admitted option combination.
-    clamp is (low, high); undecoded abs/clamp affine combinations are rejected.
+    clamp is (low, high).
     """
 
     capability = expr.OpCapability("pe.unary")
@@ -92,14 +92,10 @@ def _(call, ctx) -> None:
 @evaluator.register(Unary)
 def _(ctx):
     op = ctx.op
-    if op.abs and op.square:
-        raise evaluator.EvalError("T.ane.unary: abs with square is not decoded yet")
+    if op.abs and op.square and op.clamp is not None:
+        raise evaluator.EvalError("T.ane.unary: abs with square and clamp is not decoded yet")
     if op.square and op.scale != 1.0:
         raise evaluator.EvalError("T.ane.unary: square requires scale=1; hardware square mode ignores scale")
-    if op.abs and op.clamp is not None and (
-        op.pre_scale != 1.0 or (op.bias != 0.0 and op.scale != 1.0)
-    ):
-        raise evaluator.EvalError("T.ane.unary: this affine combination with abs and clamp is not decoded yet")
     value = evaluation.f16(ctx.args[1].data.to(utils.torch.float32) * op.pre_scale)
     value = evaluation.f16(value + op.bias)
     if op.square:

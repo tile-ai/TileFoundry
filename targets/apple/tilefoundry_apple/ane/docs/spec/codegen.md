@@ -56,10 +56,10 @@ Each Op emitter MUST validate the schedule attributes it consumes and reject any
 nondefault attribute it does not consume. Refusals for undecoded hardware behavior
 MUST contain `is not decoded yet`; contradictory values MUST name the violated relation.
 
-Unary MUST reject `scale != 1` combined with `abs`, `square` or `clamp` as not
-decoded yet. Plain abs, `pre_scale` with bias/clamp at `scale=1`, and affine
-scale/bias without those options remain supported. The affine order is
-`(src * pre_scale + bias) * scale`, with fp16 rounding after each step.
+Unary MUST reject `scale != 1` combined with `square`, and `abs` combined with
+`square` and `clamp`, as not decoded yet. The order is
+`(src * pre_scale + bias) * scale` or the square of the biased value, then abs,
+then clamp, with fp16 rounding after each arithmetic step.
 
 | Op | Consumed schedule attributes | Attributes requiring defaults |
 |---|---|---|
