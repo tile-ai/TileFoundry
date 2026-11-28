@@ -195,6 +195,7 @@ Coefficient register addresses are declared once as `KernelDMA` fields.
 `COEFFICIENT_RELOCATIONS` maps their low-word addresses to patch widths: three
 64-bit pairs and three 32-bit singles. Extended-packet flags are a separate
 encoding choice, so the serializer uses the applicable subset of these slots.
+`serialize` takes the flags per base register; `RELOCATION_SLOTS` is the default.
 
 ## 8. Field formulas and staging
 
@@ -236,9 +237,12 @@ the table and the weights.
 `isa/dma.py` decodes enabled tile DMA from access types and routing, independently
 of base-word presence. It accepts DMA_READ source/result, an enabled destination,
 source routing 1 for unary or 3 for binary, and second-stream plus PE second-source
-2 for binary. Complete-height unary and neural-engine continuation additionally
-accepts L2_READ source, result or both. A descriptor with neither DMA nor a second stream that programs an L2
-channel or row pitch keeps both in L2; its geometry comes from the common block alone.
+2 (add, multiply, min, max) or 3 (subtract: first minus second source) for binary.
+Complete-height unary and neural-engine continuation additionally accepts L2_READ
+source, result or both, and so does a binary whose two sources are both L2_READ,
+with the second stream off and source routing 1. A descriptor with neither DMA nor
+a second stream that programs an L2 channel or row pitch keeps both in L2; its
+geometry comes from the common block alone.
 An L2 result MUST disable destination DMA and buffer mode; an L2 source MUST omit
 source DMA. Its channel and row pitches MUST be explicit; depth/group pitches
 and source DMA format MUST stay at reset zero, matching the decoded
@@ -248,8 +252,9 @@ The verified transfer format is fp16, N=1, depth=1, common formats 2 and tile fo
 `(format_mode, trunc, shift, memory_format, offset_ch, interleave, cmp_vec)` equal to
 `(1, 3, 0, 2, 0, 1, 0)`. Destination FIFO and both zero-pad flags are one.
 Depth/group DMA strides are zero. Other formats, transpose controls and padded
-footprints other than the convolution below are rejected as not decoded yet. The transfer extent covers effective
-elements; it does not generalize to other compressed or tiled encodings.
+footprints other than the convolution and pools below are rejected as not decoded
+yet. The transfer extent covers effective elements; it does not generalize to other
+compressed or tiled encodings.
 
 Source and second-source geometry is `(cin, hin, win)`. Destination geometry is
 `(cout, hout, wout)`, except spatial reduction writes `(cout, 1, 1)` while declaring
@@ -261,18 +266,18 @@ a singleton geometry uses its canonical padded row. Rows MUST cover width × 2;
 channel strides MUST cover height × row. `tile_height` MUST lie in `[1, hout]`.
 Elementwise declared geometries MUST agree; pool/conv output dimensions MUST
 match their positive kernel window, strides and padding. Only top and left padding
-are encoded; the output dimensions imply equal bottom and right padding. The one
-decoded padded window is an NE convolution with a 3×3 kernel, stride 1 and padding 1,
-whose source DMA reads the unpadded `(cin, hin, win)` map; pools and other padded
-windows are rejected as not decoded yet.
+are encoded; the output dimensions imply equal bottom and right padding. The decoded
+padded windows are an NE convolution with a 3×3 kernel, stride 1 and padding 1, and
+the pools that the Pool emitter admits; the source DMA reads the unpadded
+`(cin, hin, win)` map. Other padded windows are rejected as not decoded yet.
 
 `L2_CAPACITY` is defined once in `isa/dma.py` as 2 MiB. For each pass, source,
 second-source and result intervals MUST end within that capacity and MUST be
 disjoint. L2 byte bases and strides are the fields multiplied by 16. The checked
 envelope reserves complete staged rows. A row stride MUST cover the staged depth
 `channels × align16(width × 2)`; channel, depth and group strides MUST equal the
-staged layout. Pool source rows include the kernel halo; reduction reserves one
-result row. A DMA result that leaves its row stride zero occupies the depth, or
+staged layout. Pool source rows include the kernel halo, up to the source height;
+reduction reserves one result row. A DMA result that leaves its row stride zero occupies the depth, or
 one source row for a reduction. An L2-only result MUST explicitly program its
 channel and row pitches to the staging geometry that its consumer uses. Depth
 and group extents remain one.

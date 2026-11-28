@@ -48,6 +48,14 @@ def fp16(value: float, name: str) -> int:
         raise ValueError(f"{name} {value} does not fit fp16") from error
 
 
+def fp32(value: float, name: str) -> int:
+    """Encode one immediate as an fp32 bit pattern."""
+    try:
+        return int.from_bytes(struct.pack("<f", value), "little")
+    except OverflowError as error:
+        raise ValueError(f"{name} {value} does not fit fp32") from error
+
+
 def splice(*parts: Mapping[int, int]) -> fields.Writes:
     """Combine primitive fields, rejecting different values for overlapping writes."""
     image = fields.Writes()
@@ -261,6 +269,20 @@ def load_second(
             tile_dma_src2_memory_format=fields.TensorMemoryFormat.TILED,
             tile_dma_src2_interleave=INTERLEAVE,
         ),
+    )
+
+
+def load_second_chained(source: TensorDesc, *, address: int) -> dict[int, int]:
+    """Read the second source from the L2 buffer an earlier descriptor filled.
+
+    Like ``load_chained`` it programs no DMA; the second stream stays off and only
+    the buffer base and its channel and row pitches are set.
+    """
+    require_row_width(source, PLANAR_MIN_ROW_BYTES)
+    return L2.pack(
+        l2_src2_base_address=l2_units(address),
+        l2_src2_channel_stride=l2_units(source.staging_channel()),
+        l2_src2_row_stride=l2_units(source.staging_row()),
     )
 
 
@@ -870,8 +892,13 @@ def compute_pe(
     square: bool = False,
     clamp: tuple[float, float] | None = None,
     source_relu: bool = False,
+    final_scale: float = 1.0,
 ) -> dict[int, int]:
-    """Program one planar engine pass over an already loaded feature map."""
+    """Program one planar engine pass over an already loaded feature map.
+
+    A reduction multiplies its result by the fp32 ``final_scale``, whose word is
+    left unwritten at one.
+    """
     output.validate_feature()
     geometry_in = output if declared_in is None else declared_in
     geometry_out = output if declared_out is None else declared_out
@@ -930,6 +957,7 @@ def compute_pe(
             bias=fp16(bias, "bias"),
             clamp_low=fp16(low, "clamp_low"),
             clamp_high=fp16(high, "clamp_high"),
+            **({} if final_scale == 1.0 else {"final_scale": fp32(final_scale, "final_scale")}),
         ),
     )
 
@@ -1023,9 +1051,11 @@ __all__ = [
     "convolution",
     "end_of_network",
     "fp16",
+    "fp32",
     "load",
     "load_chained",
     "load_second",
+    "load_second_chained",
     "multiply",
     "require_row_width",
     "splice",

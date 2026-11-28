@@ -40,7 +40,8 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
     L2; the common block alone gives their geometry. A zero-padded convolution encodes
     only its top and left padding and its source DMA reads the unpadded map; the result
     geometry implies equal bottom and right padding. ``PADDED_CONV`` is the one decoded
-    padded window: kernel, stride and padding as (kh, kw, sy, sx, top, left).
+    padded window: kernel, stride and padding as (kh, kw, sy, sx, top, left). A pool
+    pads the same way; its emitter limits the windows it admits.
     """
     common, l2 = fields.Common, fields.L2
     access = value(image, l2.l2_src_type)
@@ -53,11 +54,13 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
     task = value(image, common.task_type)
     result_access = value(image, l2.l2_result_type)
     continuation = access == fields.L2Access.L2_READ or result_access == fields.L2Access.L2_READ
+    binary = task == fields.TaskType.PE_EW_BINARY
+    resident_binary = binary and access == fields.L2Access.L2_READ and not second
     if continuation:
         if (access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
                 or result_access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
                 or enabled != (result_access == fields.L2Access.DMA_READ)
-                or task not in (fields.TaskType.PE_EW_UNARY, fields.TaskType.NE)):
+                or task not in (fields.TaskType.PE_EW_UNARY, fields.TaskType.NE) and not resident_binary):
             raise ValueError("L2 continuation access mapping is not decoded yet")
     elif access != fields.L2Access.DMA_READ or not enabled:
         raise ValueError("tile DMA access mapping is not decoded yet")
@@ -72,12 +75,11 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
                     fields.TaskType.PE_EW_UNARY, fields.TaskType.PE_EW_BINARY,
                     fields.TaskType.PE_EW_REDUCE_UNARY):
         raise ValueError(f"task_type {task} DMA geometry is not decoded yet")
-    binary = task == fields.TaskType.PE_EW_BINARY
-    if second != binary:
+    if second != (binary and not resident_binary):
         raise ValueError("second-stream task mapping is not decoded yet")
-    if value(image, common.source_routing) != (3 if binary else 1):
+    if value(image, common.source_routing) != (3 if second else 1):
         raise ValueError("source_routing DMA mapping is not decoded yet")
-    if binary and value(image, fields.PE.second_source) != 2:
+    if binary and value(image, fields.PE.second_source) not in (2, 3):
         raise ValueError("PE second_source DMA mapping is not decoded yet")
     for field in (common.din, common.dout):
         if value(image, field) != 1:
@@ -122,7 +124,9 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
                 raise ValueError("kernel output offset DMA mapping is not decoded yet")
             kw, kh, sx, sy = (value(image, f) for f in (common.kw, common.kh, common.sx, common.sy))
             top, left = value(image, common.pad_top), value(image, common.pad_left)
-            if (top or left) and (task != fields.TaskType.NE or (kh, kw, sy, sx, top, left) != PADDED_CONV):
+            if (top or left) and task != fields.TaskType.PE_POOL_UNARY and (
+                task != fields.TaskType.NE or (kh, kw, sy, sx, top, left) != PADDED_CONV
+            ):
                 raise ValueError("padded DMA footprint is not decoded yet")
             if min(kw, kh, sx, sy) <= 0:
                 raise ValueError("kernel window and strides must be positive")
@@ -134,8 +138,8 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
         decode(image, "src", source) if access == fields.L2Access.DMA_READ else staged("src", source),
         decode(image, "dst", result) if enabled else staged("dst", result),
     ]
-    if second:
-        decoded.insert(1, decode(image, "src2", source))
+    if binary:
+        decoded.insert(1, decode(image, "src2", source) if second else staged("src2", source))
     return tuple(decoded)
 
 
@@ -204,7 +208,7 @@ def check_l2(image: Mapping[int, int], decoded: tuple[Transfer, ...]) -> tuple[t
         prefix = f"l2_{name}_"
         base_field = l2.l2_result_address if name == "result" else l2.fields[prefix + "base_address"]
         base = value(image, base_field) * 16
-        rows = min(tile, transfer.height) if name == "result" else source_rows
+        rows = min(tile if name == "result" else source_rows, transfer.height)
         channel = align_up(transfer.width * 2, 16)
         depth = transfer.channels * channel
         row = value(image, l2.fields[prefix + "row_stride"]) * 16
@@ -218,7 +222,7 @@ def check_l2(image: Mapping[int, int], decoded: tuple[Transfer, ...]) -> tuple[t
                 if not transfer.register and suffix == "channel_stride":
                     raise ValueError("l2_result_channel_stride must explicitly match the allocated L2 layout")
                 continue
-            if name == "src" and not transfer.register and suffix != "channel_stride":
+            if name != "result" and not transfer.register and suffix != "channel_stride":
                 expected = 0
             if actual != expected:
                 raise ValueError(f"{prefix}{suffix} {actual} contradicts the staged layout; expected {expected}")
@@ -252,13 +256,13 @@ def check_continuations(images) -> None:
         intervals = check_l2(image, decoded)
         if not intervals:
             continue
-        source, result = decoded[0], decoded[-1]
-        signature = (source.channels, source.height, source.width)
-        source_range = intervals[0][1:]
+        result = decoded[-1]
         if value(image, fields.L2.l2_src_type) == fields.L2Access.L2_READ:
-            if (*source_range, signature) not in live:
-                raise ValueError("L2 source requires a matching unmodified preceding result")
-        writes = intervals[1:] if not source.register else intervals
+            for source, (_, low, high) in zip(decoded[:-1], intervals):
+                if (low, high, (source.channels, source.height, source.width)) not in live:
+                    raise ValueError("L2 source requires a matching unmodified preceding result")
+        writes = [interval for transfer, interval in zip(decoded, intervals)
+                  if transfer.register or transfer is result]
         for _, low, high in writes:
             live = [item for item in live if item[1] <= low or high <= item[0]]
         if value(image, fields.L2.l2_result_type) == fields.L2Access.L2_READ:

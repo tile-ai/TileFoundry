@@ -39,6 +39,6 @@ from .intrinsic import (
     staged_copy,
     store,
 )
-from .serialize import RELOCATION_SLOTS, Packet, serialize
+from .serialize import RELOCATION_SLOTS, Packet, io_relocation, serialize
 from .td import MAX_TASK_WORDS, PREAMBLE, TD, Program
 from .tensor_desc import SURFACE_ROW_ALIGN, Engine, TensorDesc

@@ -375,6 +375,7 @@ class Reduce(Op):
   - With `keepdim`, each reduced axis of `dst` has extent 1. Without it, `dst` is `[1, C]`.
   - `kind` MUST be SUM, MAX or MIN.
   - The last-bit rounding of the `post` step is not verified against hardware. It can differ by one unit in the last place.
+  - Rounding `r` before `scale` is not verified against hardware for a sum that fp16 does not hold exactly.
   - A reduction over only the height or only the channel axis is not one instruction. Pairing refuses it.
   - Pairing refuses the kinds MEAN and ABS_MAX.
   - Pairing leaves `square`, `scale` and `post` at their defaults.

@@ -39,9 +39,12 @@ def called_as(
 def function_image(
     fn: core.PrimFunction, constants: Mapping[str, bytes] | None = None
 ) -> hwx.Image:
-    """Assemble an entry with supplied weights and biases, or zeros for its compiled skeleton."""
+    """Assemble an entry with supplied weights and biases, or zeros for its compiled skeleton.
+
+    Each DMA base pair is flagged with the I/O segment of the buffer it reads or
+    writes; the segments hold the outputs, then the inputs.
+    """
     ctx = tir.build_context(fn)
-    stream = program.to_program(ctx.passes)
     io = tuple(
         hwx.TensorBinding(param.name, ctx.binding_desc(param))
         for param in fn.params
@@ -57,6 +60,15 @@ def function_image(
         isa.TileDMASrc.tile_dma_src2_base_addr_lo.addr: 2,
         isa.TileDMADst.tile_dma_dst_base_addr_lo.addr: 0,
     }
+    split = len(io) - outputs
+    segments = [binding.name for binding in (*io[split:], *io[:split])]
+    flags = []
+    for args in ctx.operands:
+        names = {register: ctx.symbols.get(args[position], args[position]).name
+                 for register, position in operands.items() if position < len(args)}
+        flags.append({register: isa.io_relocation(segments.index(name))
+                      for register, name in names.items() if name in segments})
+    stream = program.to_program(ctx.passes, flags)
     relocs = []
     for word, (index, register, _) in hwx.base_slots(stream).items():
         if register in isa.COEFFICIENT_RELOCATIONS:

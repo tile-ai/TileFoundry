@@ -7,6 +7,7 @@ its own call: where a bound view starts and whether an earlier pass ran.
 """
 
 from collections.abc import Mapping
+from types import MappingProxyType
 
 from tilefoundry import codegen, dispatch
 from tilefoundry.ir import expr, types
@@ -18,6 +19,9 @@ from . import hwx
 FULL_PLANE_PATCH = (4, 4)
 SINGLE_ROW_PATCH = (5, 0)
 PATCH_COLUMNS = 16
+PLANNED = MappingProxyType(
+    {tir.Unary: (1, 0), tir.Conv: (1, 0), tir.Bypass: (1, 0), tir.Binary: (1, 2, 0)}
+)
 
 
 class Context:
@@ -99,17 +103,21 @@ class Context:
 
         SMEM tensors keep their framework offsets. A pass stages its DRAM source from the
         end of the highest SMEM tensor and its DRAM result directly after that source.
+        A binary pass takes part only when both of its sources are SMEM tensors.
         """
         resident = any(arg.type.storage is expr.StorageKind.SMEM for call in calls for arg in call.args)
         if not resident and not any(isinstance(call.target, tir.Conv) for call in calls):
             return
         for index, call in enumerate(calls):
-            if not isinstance(call.target, (tir.Unary, tir.Conv, tir.Bypass)):
+            positions = PLANNED.get(type(call.target))
+            if positions is None or isinstance(call.target, tir.Binary) and not all(
+                arg.type.storage is expr.StorageKind.SMEM for arg in call.args[1:]
+            ):
                 if resident:
                     raise ValueError("L2 continuation for this operation is not decoded yet")
                 continue
             slot = self.l2_end
-            for position in (1, 0):
+            for position in positions:
                 operand = call.args[position]
                 desc = tensor_desc_of(operand.type, "L2 operand")
                 rows = tile_rows(call.target, desc)
@@ -126,7 +134,8 @@ class Context:
                     if root in self.producers:
                         raise ValueError("L2 tensor must have exactly one producer")
                     self.producers[root] = (
-                        isa.Engine.PLANAR if isinstance(call.target, tir.Unary) else isa.Engine.NEURAL
+                        isa.Engine.NEURAL if isinstance(call.target, (tir.Conv, tir.Bypass))
+                        else isa.Engine.PLANAR
                     )
                 elif root not in self.producers:
                     raise ValueError("L2 source requires a preceding producer")

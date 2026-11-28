@@ -55,11 +55,11 @@ def base_slots(program: isa.Program) -> dict[int, tuple[int, int, int]]:
         for low, width in widths.items():
             if width == 8 and low + 4 in addresses and low not in addresses:
                 raise ValueError(f"base register {low:#x} has an orphan high word")
-        if packet.flags and packet.flags != isa.RELOCATION_SLOTS.get(addresses[0]):
+        if (packet.flags and addresses[0] not in DMA_BASES
+                and packet.flags != isa.RELOCATION_SLOTS.get(addresses[0])):
             raise ValueError("relocation packet flags disagree with its base register")
         for index, (addr, value) in enumerate(packet.writes):
-            if addr in DMA_BASES and (packet.flags != isa.RELOCATION_SLOTS[addr]
-                                        or len(packet.writes) != 2):
+            if addr in DMA_BASES and (not packet.flags or len(packet.writes) != 2):
                 raise ValueError(f"DMA base register {addr:#x} requires its relocation packet flags")
             if addr not in widths:
                 continue
@@ -105,5 +105,5 @@ def relocation_table(
 
 __all__ = [
     "DMA_BASES", "CoefficientReloc", "Reloc", "base_slots", "coefficient_relocations",
-    "relocation_table",
+    "packet_slots", "relocation_table",
 ]

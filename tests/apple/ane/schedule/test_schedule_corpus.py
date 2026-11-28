@@ -501,6 +501,42 @@ class PoolMax(AneCase):
 
 
 @case
+class PoolMaxPad(AneCase):
+    """Padding takes no part in a max: windows of negative values keep their maximum."""
+
+    path: Path = ROOT / "scheduled" / "pool_max_pad.py"
+    runs: bool = True
+
+    def inputs(self):
+        return (small((1, 32, 16, 16), 0, -7, 1),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, utils.F.max_pool2d(x, 3, 2, 1))
+        assert issued(state.lowered) == [
+            "T.ane.pool(out, x, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), kind=MAX)"
+        ]
+
+
+@case
+class PoolAvg(AneCase):
+    """Each window sum is multiplied by the fp16 reciprocal of the cells it has inside the map."""
+
+    path: Path = ROOT / "scheduled" / "pool_avg.py"
+    runs: bool = True
+
+    def inputs(self):
+        return (small((1, 32, 16, 16), 0, -3, 3),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        sums = utils.F.avg_pool2d(x.float(), 3, 1, 1, divisor_override=1)
+        inside = utils.F.avg_pool2d(utils.torch.ones(1, 1, 16, 16), 3, 1, 1, divisor_override=1)
+        expected = tir.evaluation.f16(sums * tir.evaluation.f16(1 / inside))
+        assert utils.torch.equal(state.result, expected.to(utils.torch.float16))
+
+
+@case
 class Unary(AneCase):
     path: Path = ROOT / "scheduled" / "unary.py"
     runs: bool = True
@@ -563,6 +599,24 @@ class UnaryChain3(UnaryChain):
 
 
 @case
+class FanAddChain(UnaryChain):
+    path: Path = ROOT / "scheduled" / "fan_add_chain.py"
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, x.abs() + (x.abs() - 2))
+
+
+@case
+class FanMulChain(UnaryChain):
+    path: Path = ROOT / "scheduled" / "fan_mul_chain.py"
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, (x.abs() * (x.abs() - 2) + 1) * 2)
+
+
+@case
 class Binary(AneCase):
     path: Path = ROOT / "scheduled" / "binary.py"
     runs: bool = True
@@ -577,10 +631,21 @@ class Binary(AneCase):
 
 
 @case
-class Reduce(AneCase):
-    """A sum over the spatial axes scaled by the fp16 reciprocal of their extent is their mean."""
+class BinarySub(Binary):
+    path: Path = ROOT / "scheduled" / "binary_sub.py"
 
-    path: Path = ROOT / "scheduled" / "reduce.py"
+    def guard(self, state, problems):
+        x, y = self.inputs()
+        assert utils.torch.equal(state.result, y - x)
+        assert issued(state.lowered) == ["T.ane.binary(out, y, x, kind=SUB)"]
+
+
+@case
+class ReduceMean(AneCase):
+    """A sum over the spatial axes scaled by the reciprocal of their extent is their mean."""
+
+    path: Path = ROOT / "scheduled" / "reduce_mean.py"
+    runs: bool = True
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0),)

@@ -73,8 +73,18 @@ then clamp, with fp16 rounding after each arithmetic step.
 Explicit tile dimensions MUST be integers within the corresponding logical extent.
 A patch MUST have exactly two integer values in 0–15 and match the derived raster
 patch: `(ceil(log2(max(width, 16))), 4)` for a full planar tile,
-`(ceil(log2(max(width, 32))), 0)` for a partial tile, or the Pool window's `(4 + (kw > 1), 5 - sy)`. Other patch
-combinations are not decoded yet.
+`(ceil(log2(max(width, 32))), 0)` for a partial tile, or for Pool
+`(4, ceil_log2(tile rows))`. A Pool result wider than 16 is not decoded yet. Other
+patch combinations are not decoded yet.
+
+Pool admits kernels of 1–3 and strides of 1–2 per axis. Padding is 0, or 1 on an
+axis whose kernel is 3; other padding is not decoded yet. MAX selects pool mode 2
+and pads with negative infinity (`0x0500[3:2] = 1`). AVG selects pool mode 1, which
+divides by the window size, except that padding left out by
+`count_include_pad=False` selects pool mode 0, which divides by the cells inside the
+map; both pad with zero. Reduce programs a SUM `scale` other than 1 as the fp32
+final scale `0x090C`, so a mean is a sum scaled by the reciprocal of its count; a
+scale with MAX or MIN, `square` and `post` are not decoded yet.
 OCG MUST equal `rules.channel_groups` for the relevant channels. Conv MUST reject
 an explicit OCG above 64 output channels because that field is omitted in that mode.
 Bypass unicast MUST be 1 for identity and `rules.unicast_channels` of the source
@@ -126,7 +136,11 @@ including a Unary that reads its source from L2 and keeps its result there, and 
 is a convolution whose L2 result a Unary reads. A convolution reads a complete-height
 L2 source produced by a Unary, a convolution or a Bypass through `load_chained`, with
 neither small-source mode nor output transpose. A Bypass MAY keep its result in L2;
-an L2 Bypass source is not decoded yet. Bypass and Conv are neural producers. A pass that
+an L2 Bypass source is not decoded yet. Bypass and Conv are neural producers. A Binary
+reads both sources by DMA or both from L2; one L2 and one DRAM source is not decoded
+yet. Its L2 second source programs `0x051C` and its pitches with the second stream
+off and source routing 1, and both L2 sources MUST come from passes of one engine.
+A Binary is a planar producer. A pass that
 reads an L2 buffer MUST set the source alias bit of the engine that produced it:
 `l2_src_alias_conv_rslt` after a neural producer and `l2_src_alias_planar_rslt`
 after a planar one.
@@ -243,15 +257,20 @@ remain flagged packet operands for the loader to bind.
 
 Binding offsets include alignment sentinels and inter-descriptor gaps. Both
 DMA and coefficient validation share the encoded packet walk. Each enabled DMA
-MUST carry an adjacent low/high base pair with its declared relocation flags and
-exactly one binding. Orphan high words, duplicate bases and missing bindings are
+MUST carry an adjacent low/high base pair with relocation flags and exactly one
+binding. Orphan high words, duplicate bases and missing bindings are
 errors. Enable/access/routing fields determine which transfers require bases.
 
 I/O roles MUST come from entry parameter order and `output_count`, with trailing
 outputs; they MUST NOT be inferred from destination relocations. Direct `Image`
-construction defaults to one trailing output. The currently verified loader
-mapping binds src to the first input, src2 to the second and dst to the sole
-output. Other symbol mappings are rejected as not decoded yet. A GMEM intermediate
+construction defaults to one trailing output. A DMA base's relocation flags name
+the I/O segment of its buffer: `isa.io_relocation(k)` = `0x110 + 4k` for the k-th
+segment in output-then-input order. `function_image` flags each DMA base with the
+segment of the operand it reads or writes, so either input may feed src or src2.
+Validation MUST require those flags to name the bound symbol, dst to bind an output
+and src/src2 to bind inputs; other symbol mappings are rejected as not decoded yet.
+A flagged coefficient base MUST name the kernel segment, `isa.io_relocation(n)` for
+n I/O segments. A GMEM intermediate
 written by a pass but outside the signature's outputs MUST be rejected because
 its mapping is not decoded yet; it MUST NOT be promoted to an external output.
 

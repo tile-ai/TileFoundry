@@ -1,25 +1,27 @@
-"""Codegen for ``T.ane.pool``: one planar engine pooling pass."""
+"""Codegen for ``T.ane.pool``: one planar engine pooling pass.
 
-from types import MappingProxyType
+A max pads with negative infinity. An average multiplies the window sum by the
+reciprocal of the window size, or, with padding that ``count_include_pad`` leaves
+out, by that of the cells the window holds inside the map.
+"""
 
 from tilefoundry import codegen
 from tilefoundry.ir import expr
 from tilefoundry_apple.ane import isa, target
 from tilefoundry_apple.ane.codegen import context
 from tilefoundry_apple.ane.ir import tir
-from tilefoundry_apple.ane.isa import intrinsic
+from tilefoundry_apple.ane.isa import intrinsic, rules
 
-MODES = MappingProxyType(
-    {expr.PoolKind.MAX: isa.PoolMode.MAX, expr.PoolKind.AVG: isa.PoolMode.AVG}
-)
 PATCH_EDGE = 4
-PATCH_SWEEP = 5
-WINDOW = (1, 2)
+KERNEL = (1, 3)
+STRIDE = (1, 2)
+PADDED_KERNEL = 3
+NEGATIVE_INFINITY_PAD = 1
 
 
-def patch_for(kernel: tuple[int, int], stride: tuple[int, int]) -> tuple[int, int]:
-    """The patch pair a pooling pass declares for its window."""
-    return PATCH_EDGE + (1 if kernel[1] > 1 else 0), PATCH_SWEEP - stride[0]
+def patch_for(rows: int) -> tuple[int, int]:
+    """The patch pair a pooling pass declares for a tile of *rows* result rows."""
+    return PATCH_EDGE, rules.ceil_log2(rows)
 
 
 def result_slots(rows: int, desc: isa.TensorDesc) -> int:
@@ -50,32 +52,39 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     kernel, stride = tuple(op.kernel_size), tuple(op.stride)
     if len(kernel) != 2 or len(stride) != 2:
         raise ValueError(f"T.ane.pool: kernel {kernel} and stride {stride} must be 2D")
-    for axis, value in zip(("kernel", "stride"), (*kernel, *stride)):
-        if not WINDOW[0] <= value <= WINDOW[1]:
-            raise ValueError(f"T.ane.pool: {axis} {value} is outside [1, 2]")
+    for axis, values, (low, high) in (("kernel", kernel, KERNEL), ("stride", stride, STRIDE)):
+        if any(not low <= value <= high for value in values):
+            raise ValueError(f"T.ane.pool: {axis} {values} is outside [{low}, {high}]")
     padding = tuple(op.padding) if op.padding else (0, 0)
-    if any(padding):
-        raise ValueError("T.ane.pool: padding is not decoded yet")
-    if op.kind not in MODES:
+    if any(pad not in (0, 1) or pad and size != PADDED_KERNEL for pad, size in zip(padding, kernel)):
+        raise ValueError(f"T.ane.pool: padding {padding} for kernel {kernel} is not decoded yet")
+    if op.kind is expr.PoolKind.MAX:
+        mode = isa.PoolMode.MAX
+    elif op.kind is not expr.PoolKind.AVG:
         raise ValueError(f"T.ane.pool: {op.kind} has no planar engine encoding")
-    mode = MODES[op.kind]
+    elif any(padding) and not op.count_include_pad:
+        mode = isa.PoolMode.NONE_OR_SUM
+    else:
+        mode = isa.PoolMode.AVG
     rows = context.tile_rows(op, dst)
-    patch = patch_for(kernel, stride) if op.patch is None else tuple(op.patch)
+    if dst.width > 1 << PATCH_EDGE:
+        raise ValueError(f"T.ane.pool: a result {dst.width} wide is not decoded yet")
+    patch = patch_for(rows) if op.patch is None else tuple(op.patch)
     if len(patch) != 2 or any(type(n) is not int or not 0 <= n <= 15 for n in patch):
         raise ValueError(f"patch {patch!r} must contain two integers within [0, 15]")
-    if patch != patch_for(kernel, stride):
-        raise ValueError(f"T.ane.pool: patch {patch} for this window is not decoded yet")
+    if patch != patch_for(rows):
+        raise ValueError(f"T.ane.pool: patch {patch} for this tile is not decoded yet")
     ctx.emit(
         intrinsic.load(src, address=ctx.address_of(source), fresh=ctx.fresh, width=op.tile_width),
         intrinsic.compute_pe(
             isa.TaskType.PE_POOL_UNARY,
             dst,
             pool_mode=mode,
-            compare=1 if mode is isa.PoolMode.MAX else None,
+            compare=NEGATIVE_INFINITY_PAD if mode is isa.PoolMode.MAX else None,
             declared_in=src,
             declared_out=dst,
             window=(kernel[1], kernel[0], stride[1], stride[0]),
-            padding=padding,
+            padding=(padding[1], padding[0]),
             tile_height=rows,
             patch=patch,
         ),

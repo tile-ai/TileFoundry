@@ -1,6 +1,8 @@
 """Codegen for ``T.ane.reduce``: one planar engine reduction over the spatial axes.
 
-``MODES`` gives each reduction kind its L2 compare code and its pooling mode.
+``MODES`` gives each reduction kind its L2 compare code and its pooling mode. A
+sum's ``scale`` is the engine's fp32 final scale, so a mean is a sum scaled by the
+reciprocal of its count.
 """
 
 from types import MappingProxyType
@@ -44,10 +46,12 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             f"T.ane.reduce: expected a {src.channels}x1x1 result, got "
             f"{dst.channels}x{dst.height}x{dst.width}"
         )
-    if op.square or op.scale != 1.0 or op.post is not tir.Post.NONE:
-        raise ValueError("T.ane.reduce: square, scale and post is not decoded yet")
+    if op.square or op.post is not tir.Post.NONE:
+        raise ValueError("T.ane.reduce: square and post is not decoded yet")
     if op.kind not in MODES:
         raise ValueError(f"T.ane.reduce: {op.kind} has no planar engine encoding")
+    if op.scale != 1.0 and op.kind is not expr.ReduceKind.SUM:
+        raise ValueError(f"T.ane.reduce: scale with {op.kind} is not decoded yet")
     compare, mode = MODES[op.kind]
     rows = context.tile_rows(op, src)
     ctx.emit(
@@ -63,6 +67,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
             tile_height=rows,
             pool_mode=mode,
             compare=compare,
+            final_scale=op.scale,
             patch=context.raster_patch(op, context.tile_rows(op, dst), dst),
         ),
         intrinsic.store(
