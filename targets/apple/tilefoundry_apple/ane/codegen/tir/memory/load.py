@@ -20,7 +20,7 @@ def emit(call: expr.Call, ctx: context.Context) -> None:
     ctx.emit(
         intrinsic.load(src, address=ctx.address_of(source), fresh=ctx.fresh, l2_base=base),
         intrinsic.compute_pe(isa.TaskType.PE_EW_UNARY, dst, patch=context.raster_patch(dst)),
-        intrinsic.store(dst, result_base=base, fresh=ctx.fresh, to_dram=False),
+        intrinsic.store(dst, result_base=base, to_dram=False),
     )
 
 

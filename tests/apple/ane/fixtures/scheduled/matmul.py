@@ -1,6 +1,9 @@
-"""A bypass relays a row-major left operand channel-outer in the on-chip buffer.
+"""A [128, 16] @ [16, 16] matrix product as a load, a swap, a 1x1 convolution and a swap.
 
-A 1x1 convolution then multiplies it by the row-major right operand.
+A row-major matrix with 64-byte rows is the canonical [1, 16, 8, W] feature map whose
+row m is channel m // 8, row m % 8. The first swap of channels and width puts the
+contracted axis on the channels, the convolution with the right operand as [N, K, 1, 1]
+weights contracts it, and the second swap writes the product back row-major.
 """
 from tilefoundry.dsl import *
 from tilefoundry_apple import ane
@@ -10,11 +13,12 @@ from tilefoundry_apple import ane
 class Program:
     @func
     def matmul(
-        a: Tensor[(8, 16), "f16", ((8, 16), (16, 1)), "gmem"],
-        b: Tensor[(16, 16), "f16", ((16, 16), (16, 1)), "gmem"],
+        a: Tensor[(1, 16, 8, 16), "f16", ((1, 16, 8, 16), (4096, 256, 32, 1)), "gmem"],
+        w: ConstTensor[(16, 16, 1, 1), "f16", ((16, 16, 1, 1), (16, 1, 1, 1)), "gmem"],
     ):
         with Mesh(("engine",), layout=(1,), names=("engine",)) as _engine:
-            al = tf.schedule((a, tf.empty(Tensor[(8, 16), "f16", ((8, 16), (16, 1)), "smem"])), op=T.ane.load())
-            outer = tf.schedule((al, tf.empty(Tensor[(8, 16), "f16", ((8, 16), (1, 8)), "smem"])), op=T.ane.bypass(perm=(2, 1, 0)))
-            y = tf.schedule((outer, b, tf.empty(Tensor[(8, 16), "f16", ((8, 16), (16, 1)), "smem"])), op=T.ane.conv())
-            return tf.schedule((y, tf.empty(Tensor[(8, 16), "f16", ((8, 16), (16, 1)), "gmem"])), op=T.ane.store())
+            al = tf.schedule((a, tf.empty(Tensor[(1, 16, 8, 16), "f16", ((1, 16, 8, 16), (2048, 128, 16, 1)), "smem"])), op=T.ane.load())
+            outer = tf.schedule((al, tf.empty(Tensor[(1, 16, 8, 16), "f16", ((1, 16, 8, 16), (2048, 128, 16, 1)), "smem"])), op=T.ane.bypass(perm=(2, 1, 0)))
+            y = tf.schedule((outer, w, tf.empty(Tensor[(1, 16, 8, 16), "f16", ((1, 16, 8, 16), (2048, 128, 16, 1)), "smem"])), op=T.ane.conv())
+            rows = tf.schedule((y, tf.empty(Tensor[(1, 16, 8, 16), "f16", ((1, 16, 8, 16), (2048, 128, 16, 1)), "smem"])), op=T.ane.bypass(perm=(2, 1, 0)))
+            return tf.schedule((rows, tf.empty(Tensor[(1, 16, 8, 16), "f16", ((1, 16, 8, 16), (4096, 256, 32, 1)), "gmem"])), op=T.ane.store())

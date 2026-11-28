@@ -132,7 +132,11 @@ def dst_tags(fresh: bool) -> dict[str, int]:
 
 
 def load(source: TensorDesc, *, address: int = 0, fresh: bool = True, l2_base: int) -> dict[int, int]:
-    """Program reading one feature map by DMA into the planar engine's L2 buffer at *l2_base*."""
+    """Program reading one feature map by DMA into the planar engine's L2 buffer at *l2_base*.
+
+    The read claims its block anew, so it marks every slot as first use even when an
+    earlier descriptor used the same block; *fresh* only selects the stream tag.
+    """
     require_row_width(source, PLANAR_MIN_ROW_BYTES)
     low, high = split_address(address)
     return splice(
@@ -143,7 +147,7 @@ def load(source: TensorDesc, *, address: int = 0, fresh: bool = True, l2_base: i
         L2.pack(
             l2_src_type=fields.L2Access.DMA_READ,
             l2_src_base_address=l2_units(l2_base),
-            **staged_flags(fresh),
+            **staged_flags(True),
             l2_src_dma_format=fields.TensorFormatMode.COMPRESSED,
             l2_src_interleave=INTERLEAVE,
             l2_src_channel_stride=l2_units(source.l2_channel),

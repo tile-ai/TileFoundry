@@ -2,7 +2,9 @@
 
 A max pads with negative infinity. An average multiplies the window sum by the
 reciprocal of the window size, or, with padding that ``count_include_pad`` leaves
-out, by that of the cells the window holds inside the map.
+out, by that of the cells the window holds inside the map. The pass reads its source
+from L2 with the task words of the DMA-source form, confirmed on the device, and a
+store writes its result out.
 """
 
 from tilefoundry import codegen

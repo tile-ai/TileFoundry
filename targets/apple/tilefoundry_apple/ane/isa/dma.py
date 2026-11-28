@@ -56,7 +56,8 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
     continuation = access == fields.L2Access.L2_READ or result_access == fields.L2Access.L2_READ
     binary = task == fields.TaskType.PE_EW_BINARY
     resident_binary = binary and access == fields.L2Access.L2_READ and not second
-    written_reduction = task == fields.TaskType.PE_EW_REDUCE_UNARY and enabled
+    pool = task == fields.TaskType.PE_POOL_UNARY
+    written_reduction = (pool or task == fields.TaskType.PE_EW_REDUCE_UNARY) and enabled
     if continuation:
         if (access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
                 or result_access not in (fields.L2Access.DMA_READ, fields.L2Access.L2_READ)
@@ -96,7 +97,7 @@ def geometry(image: Mapping[int, int]) -> tuple[Transfer, ...]:
     tile = value(image, common.tile_height)
     if not 1 <= tile <= result[1]:
         raise ValueError(f"tile_height {tile} must be within [1, {result[1]}]")
-    if continuation and (tile != source[1] or source != result):
+    if continuation and (tile != result[1] if pool else tile != source[1] or source != result):
         raise ValueError("partial or unequal L2 continuation geometry is not decoded yet")
     transpose = value(image, common.output_transpose)
     if not transpose and value(image, common.fill_lower_nodes_first):

@@ -97,6 +97,12 @@ and no explicit OCG is given. Other omission combinations are not decoded yet.
 Every L2 source and result base MUST be the framework offset of its SMEM tensor.
 Effective range and overlap checks still apply at descriptor validation.
 
+Every emitted operand MUST be a `[1, C, H, W]` feature map; the matrix forms of Conv
+and Bypass are not emitted. A row-major `[M, K]` matrix with 64-byte rows holds the
+bytes of the canonical `[1, M / H, H, K]` map, so a matrix product is scheduled over
+such maps as `load`, a C/W transposing Bypass, a 1x1 Conv whose `[N, K, 1, 1]` weight
+is the right operand transposed, a second transposing Bypass and `store`.
+
 Conv with a bias operand selects the bias mode `0x0D04[4] = 1` and reads the bias
 from its coefficient lanes; the bias MUST be a direct constant parameter. Bypass MUST emit only
 identity or `perm=(2, 1, 0)` and MUST check the resulting shape. Other valid
@@ -155,9 +161,12 @@ L2: its second source programs `0x051C` and its pitches with the second stream o
 and source routing 1, and both sources MUST come from tasks of one engine. A task that reads an L2 buffer
 MUST set the source alias bit of the engine that produced it:
 `l2_src_alias_conv_rslt` after a neural producer and `l2_src_alias_planar_rslt`
-after a planar one. A Reduce reads L2 when a store writes its `[1, C, 1, 1]` result
-out; a Reduce result kept in L2 and a Pool that reads L2 are not decoded yet, and
-[isa §9](./isa.md#9-verified-transfer-validation) rejects their tasks.
+after a planar one. A Pool or Reduce reads L2 when a store writes its result out; a
+A `T.ane.load` pass MUST set all eight alias bits, whatever its position in the stream:
+its DMA read reuses a block that earlier passes may still hold.
+Pool keeps the task words of its DMA-source form, confirmed on the device. A Pool or
+Reduce result kept in L2 is not decoded yet, and
+[isa §9](./isa.md#9-verified-transfer-validation) rejects its task.
 
 ## 3. Module responsibilities
 

@@ -445,16 +445,38 @@ class ConvRelu(AneCase):
 
 @case
 class MatMul(AneCase):
+    """A row of the [1, 16, 8, K] map is a matrix row; the weights hold the right operand."""
+
     path: Path = ROOT / "scheduled" / "matmul.py"
+    runs: bool = True
 
     def inputs(self):
-        return small((8, 16), 0), small((16, 16), 1)
+        return small((1, 16, 8, 16), 0), small((16, 16, 1, 1), 1)
 
     def guard(self, state, problems):
-        a, b = (value.float() for value in self.inputs())
-        assert utils.torch.equal(state.result, (a @ b).to(utils.torch.float16))
+        a, w = (value.float() for value in self.inputs())
+        assert utils.torch.equal(state.result, (a @ w.flatten(1).T).to(utils.torch.float16))
         assert issued(state.lowered) == [
-            "T.ane.load(a, t0)", "T.ane.bypass(t0, t1, perm=(2, 1, 0))", "T.ane.conv(t1, b, t2)", "T.ane.store(t2, out)"
+            "T.ane.load(a, t0)", "T.ane.bypass(t0, t1, perm=(2, 1, 0))", "T.ane.conv(t1, w, t2)",
+            "T.ane.bypass(t2, t3, perm=(2, 1, 0))", "T.ane.store(t3, out)",
+        ]
+
+
+@case
+class MatMulTiled(MatMul):
+    """Four tiles of 16 channels share one weight constant; each stores into its output window."""
+
+    path: Path = ROOT / "scheduled" / "matmul_tiled.py"
+
+    def inputs(self):
+        return small((1, 64, 8, 16), 0), small((16, 16, 1, 1), 1)
+
+    def guard(self, state, problems):
+        a, w = (value.float() for value in self.inputs())
+        assert utils.torch.equal(state.result, (a @ w.flatten(1).T).to(utils.torch.float16))
+        assert issued(state.lowered)[:5] == [
+            "T.ane.load(t0, t1)", "T.ane.bypass(t1, t2, perm=(2, 1, 0))", "T.ane.conv(t2, w, t3)",
+            "T.ane.bypass(t3, t4, perm=(2, 1, 0))", "T.ane.store(t4, t5)",
         ]
 
 
@@ -463,15 +485,17 @@ class Chain(AneCase):
     """The first product stays in the on-chip buffer: the second reads it there."""
 
     path: Path = ROOT / "scheduled" / "chain.py"
+    runs: bool = True
 
     def inputs(self):
-        return small((8, 16), 0), small((16, 16), 1), small((16, 16), 2)
+        return small((1, 16, 8, 16), 0), small((16, 16, 1, 1), 1), small((16, 16, 1, 1), 2)
 
     def guard(self, state, problems):
         a, b, w = (value.float() for value in self.inputs())
-        assert utils.torch.equal(state.result, ((a @ b) @ w).to(utils.torch.float16))
+        assert utils.torch.equal(state.result, (a @ b.flatten(1).T @ w.flatten(1).T).to(utils.torch.float16))
         assert issued(state.lowered) == [
-            "T.ane.load(a, t0)", "T.ane.conv(t0, b, t1)", "T.ane.conv(t1, w, t2)", "T.ane.store(t2, out)"
+            "T.ane.load(a, t0)", "T.ane.bypass(t0, t1, perm=(2, 1, 0))", "T.ane.conv(t1, b, t2)",
+            "T.ane.conv(t2, w, t3)", "T.ane.bypass(t3, t4, perm=(2, 1, 0))", "T.ane.store(t4, out)",
         ]
 
 
@@ -530,10 +554,8 @@ class Pool(AneCase):
 
 @case
 class PoolMax(AneCase):
-    """A pool that reads L2 is not decoded yet."""
-
     path: Path = ROOT / "scheduled" / "pool_max.py"
-    emit_refusal: str = "L2 continuation access mapping is not decoded yet"
+    runs: bool = True
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0, -3, 3),)
@@ -551,7 +573,7 @@ class PoolMaxPad(AneCase):
     """Padding takes no part in a max: windows of negative values keep their maximum."""
 
     path: Path = ROOT / "scheduled" / "pool_max_pad.py"
-    emit_refusal: str = "L2 continuation access mapping is not decoded yet"
+    runs: bool = True
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0, -7, 1),)
@@ -571,7 +593,7 @@ class PoolAvg(AneCase):
     """Each window sum is multiplied by the fp16 reciprocal of the cells it has inside the map."""
 
     path: Path = ROOT / "scheduled" / "pool_avg.py"
-    emit_refusal: str = "L2 continuation access mapping is not decoded yet"
+    runs: bool = True
 
     def inputs(self):
         return (small((1, 32, 16, 16), 0, -3, 3),)
