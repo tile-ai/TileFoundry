@@ -528,6 +528,19 @@ class UnaryWide(AneCase):
 
 
 @case
+class UnaryTiled(AneCase):
+    path: Path = ROOT / "scheduled" / "unary_tiled.py"
+    runs: bool = True
+
+    def inputs(self):
+        return (small((1, 64, 128, 128), 5, -7, 7),)
+
+    def guard(self, state, problems):
+        (x,) = self.inputs()
+        assert utils.torch.equal(state.result, x + 1)
+
+
+@case
 class UnaryChain(AneCase):
     path: Path = ROOT / "scheduled" / "unary_chain.py"
     runs: bool = True

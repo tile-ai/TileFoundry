@@ -72,8 +72,8 @@ then clamp, with fp16 rounding after each arithmetic step.
 
 Explicit tile dimensions MUST be integers within the corresponding logical extent.
 A patch MUST have exactly two integer values in 0–15 and match the derived raster
-patch: `(ceil(log2(max(width, 16))), 4)` for a full planar tile, `(5, 0)` for a partial
-tile no wider than 16, or the Pool window's `(4 + (kw > 1), 5 - sy)`. Other patch
+patch: `(ceil(log2(max(width, 16))), 4)` for a full planar tile,
+`(ceil(log2(max(width, 32))), 0)` for a partial tile, or the Pool window's `(4 + (kw > 1), 5 - sy)`. Other patch
 combinations are not decoded yet.
 OCG MUST equal `rules.channel_groups` for the relevant channels. Conv MUST reject
 an explicit OCG above 64 output channels because that field is omitted in that mode.
